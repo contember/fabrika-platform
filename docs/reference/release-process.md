@@ -80,18 +80,14 @@ The detached runner Worker and its image must be rolled forward before Control
 when introducing the exact-source protocol
 ([ADR-0048](../decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
 Both come from the operator's pinned checkout. Custom Control compositions must
-supply immutable `resolveSource`, URL-only `prepareClone` and mandatory
-`assertRunnerSourceProtocol` collaborators. The clone result type is
+supply immutable `resolveSource` and URL-only `prepareClone` collaborators. The clone result type is
 `CloudflareCloneSource`; non-dry runner refs are complete lowercase 40-hex commits.
 
-Source admission refuses incompatible combinations before repository execution:
-
-| Combination                                        | Outcome                                                                                    |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| New Control, old runner Worker                     | Missing or incompatible authenticated capability stops external acceptance and submission. |
-| New Control/Worker, old image                      | Health capability refusal stops `/run` and immediately records a failed terminal outcome.  |
-| Old Control, new Worker/image, mutable non-dry job | Job validation refuses the request before container startup.                               |
-| Matching Control/Worker/image, non-dry job         | Exact fetch, detached HEAD comparison, then dependency installation.                       |
+Roll the runner Worker and image forward before Control. Nothing detects the
+reverse order: an outdated runner may ignore the expected commit
+([ADR-0048](../decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
+With matching components, a non-dry job fetches the exact commit, compares the
+detached HEAD, and only then installs dependencies.
 
 Local Git and package checks verify offline source identity and consumer contracts.
 Live GitHub authorization, Cloudflare RPC/image exchange and account rollout

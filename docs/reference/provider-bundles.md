@@ -139,11 +139,10 @@ packages owns provider plan semantics.
 
 `createCloudflareControlProvider` requires three separate collaborators:
 
-| Option                               | Contract                                                                                                                             |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `resolveSource(input)`               | Return the verified immutable `commitSha` through the neutral `ProviderSourceResolutionInput` / `ProviderSourceResolution` contract. |
-| `prepareClone(source, signal)`       | Return `CloudflareCloneSource`, containing only the ephemeral `repoUrl`. It cannot replace the selected ref.                         |
-| `assertRunnerSourceProtocol(signal)` | Verify the authenticated Worker capability before external acceptance or runner submission.                                          |
+| Option                         | Contract                                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `resolveSource(input)`         | Return the verified immutable `commitSha` through the neutral `ProviderSourceResolutionInput` / `ProviderSourceResolution` contract. |
+| `prepareClone(source, signal)` | Return `CloudflareCloneSource`, containing only the ephemeral `repoUrl`. It cannot replace the selected ref.                         |
 
 Custom compositions use `CloudflareCloneSource` for clone authorization. The
 `resolveSource` option selects source identity; it does not return a clone URL.
@@ -166,12 +165,9 @@ environment, outside argv, persisted Git configuration and repository children.
 Runtime release and source-map upload scope use Control's frozen release for
 that same commit. Missing or mismatched objects fail without a branch fallback.
 
-`CLOUDFLARE_SOURCE_PROTOCOL = 'git-commit-v1'` is exported by the provider root
-and `/runner` entrypoint. Control checks `sourceProtocol(runnerKey)` on the
-detached Worker. The Worker checks the image's `/health` capability before
-POSTing `/run`. A known pre-POST image refusal produces a persisted failed
-outcome in R2 that Control applies. Errors after submission
-retain recovery semantics because work may already have started.
+There is no source-protocol handshake: the runner Worker and image are rolled
+forward before Control (ADR-0048). Errors after submission retain recovery
+semantics because work may already have started.
 
 Dry mutable-ref previews retain branch/tag cloning and release-unavailable
 semantics. A dry full-SHA preview uses exact checkout verification. Dry previews

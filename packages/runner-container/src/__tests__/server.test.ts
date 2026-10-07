@@ -1,5 +1,5 @@
 import type { RunLogLine } from '@fabrika/control-contract'
-import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import type { RunnerStatus } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import type { RunnerEnv, SpawnHandlers, SpawnResult, SpawnSpec } from '../runner'
@@ -208,7 +208,7 @@ describe('runner server protocol', () => {
 		const response = await server.handle(new Request('http://container/health'))
 		expect(response.status).toBe(200)
 		const body: unknown = await response.json()
-		expect(body).toEqual({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL })
+		expect(body).toEqual({ status: 'ok', port: 8080 })
 		expect(server.current()).toBeUndefined()
 	})
 

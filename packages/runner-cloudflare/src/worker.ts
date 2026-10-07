@@ -14,7 +14,7 @@
 // reachable ONLY via the binding — but the binding is not a credential, so every method verifies
 // `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
 
-import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob, cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
+import { type CloudflareRunnerJob, cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import type { RunnerStatus } from '@fabrika/runner-contract'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
@@ -28,11 +28,6 @@ export { RunnerContainer } from './RunnerContainer'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export class VozkaRunner extends WorkerEntrypoint<Env> {
-	async sourceProtocol(runnerKey: string): Promise<typeof CLOUDFLARE_SOURCE_PROTOCOL> {
-		await assertRunnerKey(this.env.FABRIKA_RUNNER_KEY, runnerKey)
-		return CLOUDFLARE_SOURCE_PROTOCOL
-	}
-
 	/**
 	 * Execute one deploy run: address a fresh container instance for this `runId`, wait for its server
 	 * to come up, relay the job through it (logs + status → R2), and return the terminal status. The

@@ -10,7 +10,7 @@
 // they are never echoed back and (via the Runner) never reach a log line verbatim.
 
 import type { RunLogLine } from '@fabrika/control-contract'
-import { CLOUDFLARE_SOURCE_PROTOCOL, cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
+import { cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH } from '@fabrika/runner-contract'
 import { Runner, type RunnerEnv } from './runner'
 
@@ -107,7 +107,7 @@ export const createServer = (env: RunnerEnv): RunnerServer => {
 			return runner === undefined ? json({ error: 'no run started' }, 404) : json(runner.status())
 		}
 		if (request.method === 'GET' && url.pathname === RUNNER_HEALTH_PATH) {
-			return json({ status: 'ok', port: RUNNER_PORT, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL })
+			return json({ status: 'ok', port: RUNNER_PORT })
 		}
 		return json({ error: 'not found' }, 404)
 	}

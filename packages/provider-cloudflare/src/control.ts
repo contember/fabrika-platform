@@ -44,8 +44,6 @@ export const cloudflareStoredTargetCodec: ProviderCodec<CloudflareStoredTarget> 
 	},
 }
 
-export const CLOUDFLARE_SOURCE_PROTOCOL = 'git-commit-v1'
-
 /** Cloudflare-specific request carried from the control plane to the deploy runner. */
 export interface CloudflareRunnerJob {
 	readonly runId: string
@@ -164,7 +162,6 @@ export interface CloudflareControlOptions {
 	readonly reconcileSchema?: SchemaReconciler
 	resolveSource(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
 	prepareClone(source: ProviderSource, signal: AbortSignal, sourceBinding?: ProviderSourceBinding): Promise<CloudflareCloneSource>
-	assertRunnerSourceProtocol(signal: AbortSignal): Promise<void>
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
 	recoverRun?(runId: string): Promise<CloudflareRunRecovery>
@@ -357,7 +354,6 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	},
 	deploy: async (input) => {
 		const job = await buildJob(options, input)
-		await awaitWithSignal(input.signal, () => options.assertRunnerSourceProtocol(input.signal))
 		await input.events.externalId(input.runId)
 		input.signal.throwIfAborted()
 		const interrupted = Promise.withResolvers<never>()

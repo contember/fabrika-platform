@@ -265,10 +265,8 @@ executes the provider-supplied ordered plan without interpreting provider target
 data, artifact data, or step kinds.
 
 For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete
-ref, then persists the selected commit before freezing its release context. It
-checks the detached Worker's authenticated source-protocol capability before
-submitting work. `@fabrika/runner-cloudflare` starts a Cloudflare Container and
-checks the image's health capability before POSTing the job. The
+ref, then persists the selected commit before freezing its release context.
+`@fabrika/runner-cloudflare` starts a Cloudflare Container and POSTs the job. The
 `@fabrika/runner-container` process fetches the exact commit, detaches HEAD and
 compares it before installing dependencies or invoking the internal
 `fabrika-cloudflare-executor`. Unavailable or mismatched source fails before

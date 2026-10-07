@@ -1,5 +1,4 @@
 import {
-	CLOUDFLARE_SOURCE_PROTOCOL,
 	cloudflareArtifact,
 	cloudflareArtifactCodec,
 	type CloudflareRunnerJob,
@@ -7,11 +6,9 @@ import {
 	createCloudflareControlProvider,
 } from '@fabrika/provider-cloudflare'
 import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
-import { describe, expect, jest, spyOn, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
-	assertRunnerSourceProtocol,
 	cancelRunOnRunner,
 	cloudflareControlProvider,
 	cloudflareIamControlOptions,
@@ -82,7 +79,6 @@ describe('Cloudflare control IAM options', () => {
 			...cloudflareIamControlOptions(env),
 			resolveSource: async () => ({ commitSha: deployInput().app.source.ref }),
 			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			assertRunnerSourceProtocol: async () => {},
 			startRun: async (job) => {
 				jobs.push(job)
 				return { state: 'succeeded' }
@@ -98,7 +94,7 @@ describe('Cloudflare control IAM options', () => {
 })
 
 describe('the Cloudflare source composition', () => {
-	test('resolves the recorded commit or requested ref through the concrete adapter; missing runner admission refuses acceptance', async () => {
+	test('resolves the recorded commit or requested ref through the concrete adapter; a missing runner binding refuses acceptance', async () => {
 		const harness = createHarness()
 		const effects: string[] = []
 		const input = deployInput()
@@ -171,7 +167,6 @@ interface RunnerCall {
 
 function fakeRunner(calls: RunnerCall[], result: RelayResult, persisted: RunnerStatus | null = null): CloudflareRunnerService {
 	return {
-		sourceProtocol: async () => CLOUDFLARE_SOURCE_PROTOCOL,
 		startRun: async (job) => {
 			calls.push({ method: 'startRun', runId: job.runId, runnerKey: job.runnerKey })
 			return result
@@ -196,229 +191,6 @@ const job = (): CloudflareRunnerJob => ({
 })
 
 describe('the Cloudflare runner port', () => {
-	for (const lateSettlement of ['resolved', 'rejected']) {
-		test(`a pending capability times out at 15 seconds before acceptance; a late ${lateSettlement} RPC is harmless`, async () => {
-			jest.useFakeTimers()
-			const entered = Promise.withResolvers<void>()
-			const response = Promise.withResolvers<typeof CLOUDFLARE_SOURCE_PROTOCOL>()
-			const effects: string[] = []
-			const unhandled: unknown[] = []
-			const onUnhandled = (error: unknown): void => {
-				unhandled.push(error)
-			}
-			process.on('unhandledRejection', onUnhandled)
-			const svc: CloudflareRunnerService = {
-				...fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } }),
-				sourceProtocol: async (...args) => {
-					expect(args).toEqual(['test-runner-key'])
-					entered.resolve()
-					return response.promise
-				},
-			}
-			const input = deployInput()
-			const provider = createCloudflareControlProvider({
-				accountId: 'account',
-				apiToken: 'token',
-				runnerKey: 'test-runner-key',
-				resolveSource: async () => ({ commitSha: input.app.source.ref }),
-				prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-				assertRunnerSourceProtocol: (signal) => assertRunnerSourceProtocol(svc, 'test-runner-key', signal),
-				startRun: async () => {
-					effects.push('start')
-					return { state: 'succeeded' }
-				},
-				cancelRun: async () => {
-					effects.push('cancel')
-				},
-			})
-			let settled = false
-			const deploying = provider.deploy({
-				...input,
-				events: {
-					...input.events,
-					externalId: async () => {
-						effects.push('accepted')
-					},
-				},
-			}).then(
-				() => {
-					settled = true
-					return undefined
-				},
-				(error: unknown) => {
-					settled = true
-					return error
-				},
-			)
-			try {
-				await entered.promise
-				jest.advanceTimersByTime(14_999)
-				await Promise.resolve()
-				expect(settled).toBe(false)
-				jest.advanceTimersByTime(1)
-				const error = await deploying
-				if (!(error instanceof Error)) throw new Error('expected capability timeout rejection')
-				expect(error.message).toBe('Cloudflare runner source protocol is unavailable or not supported')
-				expect(effects).toEqual([])
-				expect(jest.getTimerCount()).toBe(0)
-				jest.useRealTimers()
-				if (lateSettlement === 'resolved') response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-				else response.reject(new Error('late RPC failure contains private-runner-token'))
-				await Bun.sleep(0)
-				expect(effects).toEqual([])
-				expect(unhandled).toEqual([])
-			} finally {
-				response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-				process.off('unhandledRejection', onUnhandled)
-				jest.useRealTimers()
-			}
-		})
-	}
-
-	test('the original caller abort object takes precedence over a rejected deadline wait', async () => {
-		jest.useFakeTimers()
-		const response = Promise.withResolvers<typeof CLOUDFLARE_SOURCE_PROTOCOL>()
-		const controller = new AbortController()
-		const reason = new ProviderInvocationAbort('lease_lost')
-		const removal = spyOn(controller.signal, 'removeEventListener')
-		const svc: CloudflareRunnerService = {
-			...fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } }),
-			sourceProtocol: () => response.promise,
-		}
-		try {
-			const waiting = assertRunnerSourceProtocol(svc, 'test-runner-key', controller.signal).catch((error: unknown) => error)
-			jest.advanceTimersByTime(15_000)
-			controller.abort(reason)
-			expect(await waiting).toBe(reason)
-			expect(jest.getTimerCount()).toBe(0)
-			expect(removal.mock.calls).toHaveLength(1)
-			expect(removal.mock.calls[0]?.[0]).toBe('abort')
-		} finally {
-			response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-			removal.mockRestore()
-			jest.useRealTimers()
-		}
-	})
-
-	for (const settlement of ['resolved', 'rejected', 'aborted']) {
-		test(`capability ${settlement} removes its deadline and abort listener`, async () => {
-			jest.useFakeTimers()
-			const controller = new AbortController()
-			const removal = spyOn(controller.signal, 'removeEventListener')
-			const response = Promise.withResolvers<typeof CLOUDFLARE_SOURCE_PROTOCOL>()
-			const svc: CloudflareRunnerService = {
-				...fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } }),
-				sourceProtocol: () => response.promise,
-			}
-			try {
-				const waiting = assertRunnerSourceProtocol(svc, 'test-runner-key', controller.signal).catch((error: unknown) => error)
-				expect(jest.getTimerCount()).toBe(1)
-				if (settlement === 'resolved') response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-				if (settlement === 'rejected') response.reject(new Error('capability refused'))
-				if (settlement === 'aborted') controller.abort(new ProviderInvocationAbort('cancel_requested'))
-				await waiting
-				expect(jest.getTimerCount()).toBe(0)
-				expect(removal.mock.calls).toHaveLength(1)
-				expect(removal.mock.calls[0]?.[0]).toBe('abort')
-			} finally {
-				response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-				removal.mockRestore()
-				jest.useRealTimers()
-			}
-		})
-	}
-
-	test('source admission presents only the key and requires the exact protocol literal', async () => {
-		const keys: string[] = []
-		const svc = fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } })
-		const signal = new AbortController().signal
-		await assertRunnerSourceProtocol(
-			{
-				...svc,
-				sourceProtocol: async (...args) => {
-					expect(args).toEqual(['test-runner-key'])
-					keys.push(args[0])
-					return CLOUDFLARE_SOURCE_PROTOCOL
-				},
-			},
-			'test-runner-key',
-			signal,
-		)
-		expect(keys).toEqual(['test-runner-key'])
-		const oldProtocol: typeof CLOUDFLARE_SOURCE_PROTOCOL = JSON.parse('"branch-v0"')
-		await expect(assertRunnerSourceProtocol({ ...svc, sourceProtocol: async () => oldProtocol }, 'test-runner-key', signal))
-			.rejects.toThrow('source protocol is unavailable or not supported')
-		await expect(assertRunnerSourceProtocol(
-			{
-				...svc,
-				sourceProtocol: async () => {
-					throw new Error('unknown RPC method')
-				},
-			},
-			'test-runner-key',
-			signal,
-		))
-			.rejects.toThrow('source protocol is unavailable or not supported')
-	})
-
-	test('source admission without a key never calls the Worker', async () => {
-		let calls = 0
-		const svc: CloudflareRunnerService = {
-			...fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } }),
-			sourceProtocol: async () => {
-				calls++
-				return CLOUDFLARE_SOURCE_PROTOCOL
-			},
-		}
-		for (const key of [undefined, '']) {
-			await expect(assertRunnerSourceProtocol(svc, key, new AbortController().signal)).rejects.toThrow('FABRIKA_RUNNER_KEY')
-		}
-		expect(calls).toBe(0)
-	})
-
-	test('a pre-aborted source admission preserves its reason and sends no RPC', async () => {
-		const controller = new AbortController()
-		const reason = new ProviderInvocationAbort('lease_lost')
-		controller.abort(reason)
-		let calls = 0
-		const svc: CloudflareRunnerService = {
-			...fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } }),
-			sourceProtocol: async () => {
-				calls++
-				return CLOUDFLARE_SOURCE_PROTOCOL
-			},
-		}
-		await expect(assertRunnerSourceProtocol(svc, 'test-runner-key', controller.signal)).rejects.toBe(reason)
-		expect(calls).toBe(0)
-	})
-
-	for (const settlement of ['pending', 'resolved', 'rejected']) {
-		test(`source admission preserves the caller abort object while the RPC is ${settlement}`, async () => {
-			const entered = Promise.withResolvers<void>()
-			const response = Promise.withResolvers<typeof CLOUDFLARE_SOURCE_PROTOCOL>()
-			const controller = new AbortController()
-			const reason = new ProviderInvocationAbort('lease_lost')
-			const svc = fakeRunner([], { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } })
-			const waiting = assertRunnerSourceProtocol(
-				{
-					...svc,
-					sourceProtocol: async () => {
-						entered.resolve()
-						return response.promise
-					},
-				},
-				'test-runner-key',
-				controller.signal,
-			)
-			await entered.promise
-			controller.abort(reason)
-			if (settlement === 'resolved') response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-			if (settlement === 'rejected') response.reject(new DOMException('upstream replacement', 'AbortError'))
-			await expect(waiting).rejects.toBe(reason)
-			response.resolve(CLOUDFLARE_SOURCE_PROTOCOL)
-		})
-	}
-
 	test("the executor's IAM reconcile rides back on the terminal outcome", async () => {
 		const calls: RunnerCall[] = []
 		const result: RelayResult = {
@@ -495,7 +267,6 @@ describe('the Cloudflare runner port', () => {
 			return box.v
 		}
 		const runner = (recovered: RunnerStatus | null, started: RelayResult): CloudflareRunnerService => ({
-			sourceProtocol: async () => CLOUDFLARE_SOURCE_PROTOCOL,
 			startRun: async () => started,
 			cancelRun: async () => {},
 			recoverRun: async () => recovered,

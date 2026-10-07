@@ -133,8 +133,8 @@ describe('recoverDispatched', () => {
 		expect(recovered).toEqual({ runId: RUN_ID, state: 'failed', error: NEVER_DISPATCHED, startedAt: NOW, finishedAt: NOW, dryRun: true })
 		expect(persistedStatus(objects)).toEqual(recovered)
 
-		const refused = fixture(null, { persisted: JSON.stringify(status('failed', { error: 'source protocol refused' })) })
-		expect(await recoverDispatched(refused.ports, null)).toEqual(status('failed', { error: 'source protocol refused' }))
+		const settled = fixture(null, { persisted: JSON.stringify(status('failed', { error: 'settled earlier' })) })
+		expect(await recoverDispatched(settled.ports, null)).toEqual(status('failed', { error: 'settled earlier' }))
 	})
 
 	test('a dispatched run is settled from the container itself, with the deadline counted from dispatch', async () => {

@@ -18,7 +18,7 @@ export {
 } from './collaborators'
 export { deployCloudflareConfig, loadCloudflareCommandConfig } from './command'
 export type { CloudflareCommandDeployOptions, LoadedCloudflareCommandConfig } from './command'
-export { CLOUDFLARE_SOURCE_PROTOCOL, cloudflareStoredTargetCodec, createCloudflareControlProvider } from './control'
+export { cloudflareStoredTargetCodec, createCloudflareControlProvider } from './control'
 export type { CloudflareCloneSource, CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTarget } from './control'
 export { assertAuthoredGraph, buildPlan, findMigratableDatabases, PLATFORM_RESOURCE_NAMES } from './plan'
 export type { AuthoredGraphLimits, CloudflareStep, CloudflareStepKind, MigratableDatabase } from './plan'

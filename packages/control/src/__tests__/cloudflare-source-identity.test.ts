@@ -160,7 +160,6 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		let phasesAtRunnerStart: string[] = []
 		let persistedCommitAtRunnerStart: string | null | undefined
 		let commitB: string | undefined
-		let protocolChecks = 0
 		const artifactFetch: ArtifactFetch = async (input, init) => {
 			const request = new Request(input, init)
 			uploads.push({ request, bytes: new Uint8Array(await request.arrayBuffer()) })
@@ -180,10 +179,6 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			prepareClone: async (selected, signal, sourceBinding) => {
 				const clone = await source.clone(selected.repoUrl, selected.ref, sourceBinding?.installationId, signal)
 				return { repoUrl: clone.cloneUrl }
-			},
-			assertRunnerSourceProtocol: async (signal) => {
-				signal.throwIfAborted()
-				protocolChecks++
 			},
 			startRun: async (job) => {
 				jobs.push(job)
@@ -270,7 +265,6 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			...(trigger === 'manual' ? ['/repos/acme/source-identity/git/ref/heads/main'] : []),
 			`/repos/acme/source-identity/git/commits/${commitA}`,
 		])
-		expect(protocolChecks).toBe(1)
 		expect(phasesAtRunnerStart).toEqual(['started', 'provider_accepted'])
 		expect(persistedCommitAtRunnerStart).toBe(commitA)
 		expect(jobs).toHaveLength(1)

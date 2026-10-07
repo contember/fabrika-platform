@@ -12,7 +12,6 @@ import type { IamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import {
-	CLOUDFLARE_SOURCE_PROTOCOL,
 	type CloudflareRunnerJob,
 	type CloudflareRunOutcome,
 	type CloudflareRunRecovery,
@@ -132,7 +131,6 @@ export function cfJobQueue<T>(queue: Queue<T>): JobQueue<T> {
  * structurally; naming it keeps the two adapters below reachable without a Workers RPC stub.
  */
 export interface CloudflareRunnerService {
-	sourceProtocol(runnerKey: string): Promise<typeof CLOUDFLARE_SOURCE_PROTOCOL>
 	startRun(job: CloudflareRunnerJob): Promise<RelayResult>
 	cancelRun(runId: string, runnerKey: string): Promise<unknown>
 	recoverRun(runId: string, runnerKey: string): Promise<RunnerStatus | null>
@@ -152,6 +150,14 @@ const required = (value: string | undefined, name: string): string => {
 	return value
 }
 
+// Checked before external acceptance: a run accepted without a reachable runner could never settle.
+const requireRunner = (bindings: WorkerBindings, env: Env): CloudflareRunnerService => {
+	required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
+	required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')
+	required(env.FABRIKA_RUNNER_KEY, 'FABRIKA_RUNNER_KEY')
+	return runner(bindings)
+}
+
 const prepareClone = async (
 	bindings: WorkerBindings,
 	source: ProviderSource,
@@ -165,32 +171,6 @@ const prepareClone = async (
 		signal,
 	)
 	return { repoUrl: target.cloneUrl }
-}
-
-export const assertRunnerSourceProtocol = async (
-	svc: CloudflareRunnerService,
-	runnerKey: string | undefined,
-	signal: AbortSignal,
-): Promise<void> => {
-	signal.throwIfAborted()
-	const key = required(runnerKey, 'FABRIKA_RUNNER_KEY')
-	const interrupted = Promise.withResolvers<never>()
-	const abort = (): void => interrupted.reject(signal.reason)
-	signal.addEventListener('abort', abort, { once: true })
-	const timer = setTimeout(() => interrupted.reject(new Error('Cloudflare runner source protocol request timed out')), 15_000)
-	try {
-		const protocol = await Promise.race([svc.sourceProtocol(key), interrupted.promise])
-		signal.throwIfAborted()
-		if (protocol !== CLOUDFLARE_SOURCE_PROTOCOL) {
-			throw new Error('Cloudflare runner source protocol is not supported')
-		}
-	} catch {
-		signal.throwIfAborted()
-		throw new Error('Cloudflare runner source protocol is unavailable or not supported')
-	} finally {
-		clearTimeout(timer)
-		signal.removeEventListener('abort', abort)
-	}
 }
 
 // The runner is a separately deployed Worker: parse what its RPC returns rather than trust the type.
@@ -256,14 +236,12 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 				input.signal,
 			)
 		},
-		prepareClone: (source, signal, sourceBinding) => prepareClone(bindings, source, signal, sourceBinding),
-		assertRunnerSourceProtocol: (signal) => assertRunnerSourceProtocol(runner(bindings), env.FABRIKA_RUNNER_KEY, signal),
-		startRun: (job) => {
-			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
-			required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')
-			required(env.FABRIKA_RUNNER_KEY, 'FABRIKA_RUNNER_KEY')
-			return startRunOnRunner(runner(bindings), job)
+		prepareClone: async (source, signal, sourceBinding) => {
+			const clone = await prepareClone(bindings, source, signal, sourceBinding)
+			requireRunner(bindings, env)
+			return clone
 		},
+		startRun: (job) => startRunOnRunner(requireRunner(bindings, env), job),
 		cancelRun: (runId) => cancelRunOnRunner(runner(bindings), runId, env.FABRIKA_RUNNER_KEY),
 		recoverRun: (runId) => recoverRunOnRunner(runner(bindings), runId, env.FABRIKA_RUNNER_KEY),
 	})

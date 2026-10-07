@@ -32,9 +32,8 @@ const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelop
 
 const RUN_ID = '0192f0c9-4d5e-7a10-9c3b-1f2e3d4c5b6a'
 const COMMIT_SHA = 'abcdef1234567890abcdef1234567890abcdef12'
-const sourceOptions: Pick<CloudflareControlOptions, 'resolveSource' | 'assertRunnerSourceProtocol'> = {
+const sourceOptions: Pick<CloudflareControlOptions, 'resolveSource'> = {
 	resolveSource: async () => ({ commitSha: COMMIT_SHA }),
-	assertRunnerSourceProtocol: async () => {},
 }
 
 const deployInput = (): ProviderDeployInput => ({
@@ -112,7 +111,7 @@ describe('Cloudflare control provider', () => {
 		expect(calls).toHaveLength(1)
 	})
 
-	test('clone authorization cannot retarget the selected non-dry commit and admission precedes external acceptance', async () => {
+	test('clone authorization cannot retarget the selected non-dry commit and precedes external acceptance', async () => {
 		const order: string[] = []
 		const jobs: CloudflareRunnerJob[] = []
 		const input = deployInput()
@@ -126,9 +125,6 @@ describe('Cloudflare control provider', () => {
 			prepareClone: async () => {
 				order.push('clone')
 				return { repoUrl: 'https://github.com/example/api.git', ref: 'b'.repeat(40) }
-			},
-			assertRunnerSourceProtocol: async () => {
-				order.push('admission')
 			},
 			startRun: async (job) => {
 				order.push('start')
@@ -147,7 +143,7 @@ describe('Cloudflare control provider', () => {
 				},
 			},
 		})
-		expect(order).toEqual(['clone', 'admission', 'accepted', 'start'])
+		expect(order).toEqual(['clone', 'accepted', 'start'])
 		expect(jobs[0]?.ref).toBe(COMMIT_SHA)
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
@@ -183,40 +179,7 @@ describe('Cloudflare control provider', () => {
 		expect(jobs[0]?.dryRun).toBe(true)
 	})
 
-	test('an old Worker capability refusal cannot record external acceptance or submit a job', async () => {
-		const effects: string[] = []
-		const input = deployInput()
-		const provider = createCloudflareControlProvider({
-			accountId: 'account',
-			apiToken: 'token',
-			runnerKey: 'key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			assertRunnerSourceProtocol: async () => {
-				throw new Error('unknown RPC method')
-			},
-			startRun: async () => {
-				effects.push('start')
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {
-				effects.push('cancel')
-			},
-		})
-		await expect(provider.deploy({
-			...input,
-			events: {
-				...input.events,
-				externalId: async () => {
-					effects.push('accepted')
-				},
-			},
-		}))
-			.rejects.toThrow('unknown RPC method')
-		expect(effects).toEqual([])
-	})
-
-	for (const boundary of ['resolve', 'clone', 'admission']) {
+	for (const boundary of ['resolve', 'clone']) {
 		for (const rejection of [false, true]) {
 			test(`preserves the original abort object on ${boundary} ${rejection ? 'rejection' : 'completion'}`, async () => {
 				const controller = new AbortController()
@@ -237,9 +200,6 @@ describe('Cloudflare control provider', () => {
 					prepareClone: async (source) => {
 						if (boundary === 'clone') await interrupt()
 						return { repoUrl: source.repoUrl }
-					},
-					assertRunnerSourceProtocol: async () => {
-						if (boundary === 'admission') await interrupt()
 					},
 					startRun: async () => {
 						effects.push('start')
@@ -266,46 +226,6 @@ describe('Cloudflare control provider', () => {
 			})
 		}
 	}
-
-	test('lease loss interrupts an outstanding admission probe without external cancellation', async () => {
-		const entered = Promise.withResolvers<void>()
-		const controller = new AbortController()
-		const reason = new ProviderInvocationAbort('lease_lost')
-		const effects: string[] = []
-		const input = deployInput()
-		const provider = createCloudflareControlProvider({
-			accountId: 'account',
-			apiToken: 'token',
-			runnerKey: 'key',
-			...sourceOptions,
-			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			assertRunnerSourceProtocol: async () => {
-				entered.resolve()
-				await new Promise(() => {})
-			},
-			startRun: async () => {
-				effects.push('start')
-				return { state: 'succeeded' }
-			},
-			cancelRun: async () => {
-				effects.push('cancel')
-			},
-		})
-		const deploying = provider.deploy({
-			...input,
-			signal: controller.signal,
-			events: {
-				...input.events,
-				externalId: async () => {
-					effects.push('accepted')
-				},
-			},
-		})
-		await entered.promise
-		controller.abort(reason)
-		await expect(deploying).rejects.toBe(reason)
-		expect(effects).toEqual([])
-	})
 
 	test('startup errors remain ambiguous until the runner recovery gate fences late starts', async () => {
 		let recovery: CloudflareRunRecovery = { state: 'running' }

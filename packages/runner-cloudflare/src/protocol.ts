@@ -1,13 +1,6 @@
 import { runLogLineSchema } from '@fabrika/control-contract'
-import { CLOUDFLARE_SOURCE_PROTOCOL } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_PORT, type RunnerStatus, runnerStatusSchema } from '@fabrika/runner-contract'
+import { type RunnerStatus, runnerStatusSchema } from '@fabrika/runner-contract'
 import { z } from 'zod'
-
-export const runnerHealthSchema = z.object({
-	status: z.literal('ok'),
-	port: z.literal(RUNNER_PORT),
-	sourceProtocol: z.literal(CLOUDFLARE_SOURCE_PROTOCOL),
-})
 
 export const backstopPayloadSchema = z.object({ runId: z.string(), deadline: z.number().finite() })
 
