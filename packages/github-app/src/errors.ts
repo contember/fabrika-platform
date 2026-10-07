@@ -25,3 +25,11 @@ export class GitHubBranchConflictError extends Error {
 		this.name = 'GitHubBranchConflictError'
 	}
 }
+
+/** A commit, tree or blob sha the caller named does not exist in the repository. */
+export class GitHubNotFoundError extends Error {
+	constructor() {
+		super('GitHub commit or tree was not found')
+		this.name = 'GitHubNotFoundError'
+	}
+}

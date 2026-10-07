@@ -31,7 +31,7 @@ describe('GitHub App manifest contract', () => {
 			hook_attributes: { url: 'https://control.example.test/webhooks/github', active: true },
 			redirect_url: 'https://control.example.test/admin/source/github/callback',
 			public: false,
-			default_permissions: { contents: 'read' },
+			default_permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
 			default_events: ['push'],
 		})
 	})

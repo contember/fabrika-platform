@@ -28,7 +28,18 @@ describe('GitHub response projection compatibility', () => {
 	})
 
 	test.each([
+		{ permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' }, expected: { contents: 'write', pull_requests: 'write' } },
+		{ permissions: { contents: 'write' }, expected: { contents: 'write' } },
+		{ permissions: { contents: 'read', pull_requests: 'read' }, expected: { contents: 'read', pull_requests: 'read' } },
+	])('accepts repository write authority $permissions', ({ permissions, expected }) => {
+		expect(decodeAppIdentity({ ...identity, permissions })?.permissions).toEqual(expected)
+	})
+
+	test.each([
 		{ permissions: { contents: 'read', metadata: null } },
+		{ permissions: { contents: 'write', administration: 'write' } },
+		{ permissions: { contents: 'write', workflows: 'write' } },
+		{ permissions: { contents: 'admin' } },
 		{ permissions: { contents: 'read', unknown: undefined } },
 		{ id: Number.MAX_SAFE_INTEGER + 1 },
 		{ events: ['push', null] },

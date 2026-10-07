@@ -1,20 +1,6 @@
 export { GitHubAppClient } from './client'
-export { GitHubBranchConflictError, GitHubStaleHeadError } from './errors'
+export { GitHubBranchConflictError, GitHubNotFoundError, GitHubStaleHeadError } from './errors'
 export { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from './manifest'
-export { pemToPkcs8 } from './signing'
-export type {
-	CreatedGitHubApp,
-	GitHubAppClientConfig,
-	GitHubAppFetch,
-	GitHubAppIdentity,
-	GitHubAppInstallation,
-	GitHubAppManifestExchangeOptions,
-	GitHubAppManifestInput,
-	GitHubAppWebhookConfig,
-	GitHubAppWebhookUpdate,
-	GitHubInstallationToken,
-	GitHubRepositoryTokenRequest,
-} from './types'
 export type {
 	GitHubCommit,
 	GitHubCommitFilesInput,
@@ -30,3 +16,17 @@ export type {
 	GitHubTreeEntry,
 	GitHubTreeListing,
 } from './repository-types'
+export { pemToPkcs8 } from './signing'
+export type {
+	CreatedGitHubApp,
+	GitHubAppClientConfig,
+	GitHubAppFetch,
+	GitHubAppIdentity,
+	GitHubAppInstallation,
+	GitHubAppManifestExchangeOptions,
+	GitHubAppManifestInput,
+	GitHubAppWebhookConfig,
+	GitHubAppWebhookUpdate,
+	GitHubInstallationToken,
+	GitHubRepositoryTokenRequest,
+} from './types'

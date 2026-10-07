@@ -245,6 +245,14 @@ describe('GitHubAppClient operator verification', () => {
 		expect(visibility.init?.redirect).toBe('error')
 	})
 
+	test('accepts an App with repository write authority and binds its public permissions', async () => {
+		const writer = appIdentity({ permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' } })
+		const capture = capturingFetch([Response.json(writer), Response.json(writer)])
+		expect((await (await client(capture.fetch)).getAuthenticatedApp()).permissions).toEqual({ contents: 'write', pull_requests: 'write' })
+		const mismatch = capturingFetch([Response.json(writer), Response.json(appIdentity())])
+		await expect((await client(mismatch.fetch)).getAuthenticatedApp()).rejects.toThrow('GitHub App response is invalid')
+	})
+
 	test('returns visibility and rejects missing repository authority or push delivery', async () => {
 		const publicIdentity = appIdentity({ events: ['installation', 'push'] })
 		const publicCapture = capturingFetch([Response.json(publicIdentity), Response.json(publicIdentity)])
@@ -256,7 +264,9 @@ describe('GitHubAppClient operator verification', () => {
 		for (
 			const response of [
 				appIdentity({ permissions: {} }),
-				appIdentity({ permissions: { contents: 'write' } }),
+				appIdentity({ permissions: { contents: 'write', workflows: 'write' } }),
+				appIdentity({ permissions: { contents: 'write', pull_requests: 'admin' } }),
+				appIdentity({ permissions: { pull_requests: 'write' } }),
 				appIdentity({ permissions: { contents: 'read', administration: 'write' } }),
 				appIdentity({ permissions: { contents: 'read', metadata: 'write' } }),
 				appIdentity({ events: [] }),

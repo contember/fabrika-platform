@@ -1,6 +1,8 @@
 import { configurationError, requestStatusError, responseError } from './errors'
+import { createRepositoryClient } from './repository'
+import type { GitHubRepositoryClient, GitHubRepositoryOpenRequest } from './repository-types'
 import { pemToPkcs8, signAppJwt } from './signing'
-import { createCancellation, GITHUB_ACCEPT, GITHUB_API_VERSION, readBoundedJson } from './transport'
+import { createCancellation, GITHUB_ACCEPT, GITHUB_API_VERSION, GITHUB_USER_AGENT, readBoundedJson } from './transport'
 import type {
 	GitHubAppClientConfig,
 	GitHubAppFetch,
@@ -11,7 +13,6 @@ import type {
 	GitHubInstallationToken,
 	GitHubRepositoryTokenRequest,
 } from './types'
-import type { GitHubRepositoryClient, GitHubRepositoryOpenRequest } from './repository-types'
 import {
 	decodeAppIdentity,
 	decodeWebhookConfig,
@@ -28,7 +29,6 @@ import {
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const MAX_REQUEST_TIMEOUT_MS = 120_000
-const GITHUB_USER_AGENT = 'vozka'
 const APP_ID_PATTERN = /^[1-9][0-9]*$/
 const NOT_FOUND = Symbol('not-found')
 
@@ -143,6 +143,30 @@ export class GitHubAppClient {
 
 	/** Mint a read-only token restricted to one repository in the selected installation. */
 	async mintRepositoryToken(input: GitHubRepositoryTokenRequest): Promise<GitHubInstallationToken> {
+		return this.mintToken(input, { contents: 'read' })
+	}
+
+	/**
+	 * Mint a token restricted to one repository with `contents: write` and `pull_requests: write`,
+	 * and return a client bound to it. The token never leaves the returned client.
+	 */
+	async openRepository(input: GitHubRepositoryOpenRequest): Promise<GitHubRepositoryClient> {
+		const token = await this.mintToken(input, { contents: 'write', pull_requests: 'write' })
+		return createRepositoryClient({
+			owner: input.owner,
+			repository: input.repository,
+			token,
+			now: () => this.now(),
+			apiBaseUrl: this.apiBaseUrl,
+			fetch: this.fetchImplementation,
+			timeoutMs: this.timeoutMs,
+		})
+	}
+
+	private async mintToken(
+		input: GitHubRepositoryTokenRequest,
+		permissions: Readonly<Record<string, 'read' | 'write'>>,
+	): Promise<GitHubInstallationToken> {
 		if (!isPositiveSafeInteger(input.installationId)) {
 			throw configurationError()
 		}
@@ -153,7 +177,7 @@ export class GitHubAppClient {
 			{
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ repositories: [input.repository], permissions: { contents: 'read' } }),
+				body: JSON.stringify({ repositories: [input.repository], permissions }),
 			},
 			input.signal,
 			false,
@@ -168,15 +192,6 @@ export class GitHubAppClient {
 			throw responseError()
 		}
 		return { token, expiresAt }
-	}
-
-	/**
-	 * Mint a token restricted to one repository with `contents: write` and `pull_requests: write`,
-	 * and return a client bound to it. The token never leaves the returned client.
-	 */
-	async openRepository(input: GitHubRepositoryOpenRequest): Promise<GitHubRepositoryClient> {
-		void input
-		throw new Error('not implemented')
 	}
 
 	private async requestJson(

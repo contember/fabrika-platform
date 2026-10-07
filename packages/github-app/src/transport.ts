@@ -2,6 +2,7 @@ import { responseError } from './errors'
 
 export const GITHUB_ACCEPT = 'application/vnd.github+json'
 export const GITHUB_API_VERSION = '2022-11-28'
+export const GITHUB_USER_AGENT = 'vozka'
 const MAX_RESPONSE_BYTES = 64 * 1024
 
 interface RequestCancellation {
@@ -43,10 +44,15 @@ export function createCancellation(callerSignal: AbortSignal | undefined, timeou
 	}
 }
 
-export async function readBoundedJson(response: Response, cancellation: RequestCancellation): Promise<unknown> {
+export async function readBoundedJson(
+	response: Response,
+	cancellation: RequestCancellation,
+	maxResponseBytes = MAX_RESPONSE_BYTES,
+): Promise<unknown> {
 	cancellation.throwIfCancelled()
 	const contentLength = response.headers.get('content-length')
-	if (contentLength !== null && /^[0-9]+$/.test(contentLength) && Number(contentLength) > MAX_RESPONSE_BYTES) {
+	if (contentLength !== null && /^[0-9]+$/.test(contentLength) && Number(contentLength) > maxResponseBytes) {
+		void response.body?.cancel().catch(() => {})
 		throw responseError()
 	}
 	const reader = response.body?.getReader()
@@ -62,7 +68,7 @@ export async function readBoundedJson(response: Response, cancellation: RequestC
 				break
 			}
 			total += result.value.byteLength
-			if (total > MAX_RESPONSE_BYTES) {
+			if (total > maxResponseBytes) {
 				throw responseError()
 			}
 			chunks.push(result.value)

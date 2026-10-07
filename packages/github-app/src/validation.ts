@@ -12,8 +12,12 @@ export const appReferenceSchema = z.object({
 })
 
 const appIdentitySchema = appReferenceSchema.extend({
-	// Strict for least privilege: an App granted any permission beyond read-only contents is refused.
-	permissions: z.object({ contents: z.literal('read'), metadata: z.literal('read').optional() }).strict(),
+	// Strict for least privilege: anything beyond contents, pull requests and metadata is refused.
+	permissions: z.object({
+		contents: z.enum(['read', 'write']),
+		pull_requests: z.enum(['read', 'write']).optional(),
+		metadata: z.literal('read').optional(),
+	}).strict(),
 	events: z.array(z.string().min(1).max(100)).max(100).refine((events) => events.includes('push')),
 	owner: z.object({ login: z.string().min(1).max(100).regex(REPOSITORY_COMPONENT_PATTERN), type: z.enum(['Organization', 'User']) }),
 })
@@ -78,7 +82,7 @@ export function validateWebhookSecret(value: string): void {
 export function decodeAppIdentity(value: unknown): Omit<GitHubAppIdentity, 'public'> | null {
 	const result = appIdentitySchema.safeParse(value)
 	if (!result.success) return null
-	const { id, slug, html_url: htmlUrl, permissions: { contents }, events, owner: { login, type } } = result.data
+	const { id, slug, html_url: htmlUrl, permissions: { contents, pull_requests: pullRequests }, events, owner: { login, type } } = result.data
 	let parsedHtmlUrl: URL
 	try {
 		parsedHtmlUrl = new URL(htmlUrl)
@@ -92,7 +96,8 @@ export function decodeAppIdentity(value: unknown): Omit<GitHubAppIdentity, 'publ
 	) {
 		return null
 	}
-	return { id, slug, htmlUrl, permissions: { contents }, events, owner: { login, type } }
+	const permissions = pullRequests === undefined ? { contents } : { contents, pull_requests: pullRequests }
+	return { id, slug, htmlUrl, permissions, events, owner: { login, type } }
 }
 
 export function sameAppIdentity(
@@ -101,6 +106,7 @@ export function sameAppIdentity(
 ): boolean {
 	return left.id === right.id && left.slug === right.slug && left.htmlUrl === right.htmlUrl
 		&& left.owner.login === right.owner.login && left.owner.type === right.owner.type
+		&& left.permissions.contents === right.permissions.contents && left.permissions.pull_requests === right.permissions.pull_requests
 		&& left.events.length === right.events.length && left.events.every((event, index) => event === right.events[index])
 }
 

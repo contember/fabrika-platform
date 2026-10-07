@@ -15,7 +15,7 @@ const manifestConversionSchema = appReferenceSchema.extend({
 	webhook_secret: z.string().min(1).max(4096).refine((secret) => !hasAsciiControl(secret)),
 })
 
-/** Build the one least-authority App manifest used by Fabrika repository source. */
+/** Build the one least-authority App manifest used by Fabrika repository source and MCP authoring. */
 export function buildGitHubAppManifest(input: GitHubAppManifestInput): Readonly<Record<string, unknown>> {
 	validateManifestInput(input)
 	return {
@@ -24,7 +24,7 @@ export function buildGitHubAppManifest(input: GitHubAppManifestInput): Readonly<
 		hook_attributes: { url: input.webhookUrl, active: true },
 		...(input.redirectUrl === undefined ? {} : { redirect_url: input.redirectUrl }),
 		public: input.public,
-		default_permissions: { contents: 'read' },
+		default_permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
 		default_events: ['push'],
 	}
 }

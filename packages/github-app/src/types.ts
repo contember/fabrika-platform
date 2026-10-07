@@ -31,7 +31,8 @@ export interface GitHubAppIdentity {
 	readonly htmlUrl: string
 	readonly public: boolean
 	readonly permissions: {
-		readonly contents: 'read'
+		readonly contents: 'read' | 'write'
+		readonly pull_requests?: 'read' | 'write'
 	}
 	readonly events: readonly string[]
 	readonly owner: {
