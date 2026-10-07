@@ -1,0 +1,234 @@
+<!--
+On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
+
+> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
+> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
+> <ids deleted/rescoped>. Deferred: <honest notes>.
+-->
+
+# Sprint — Simplify delivery and provider packaging (2026-10-07)
+
+**Goal.** Cut the delivery path, the provider seam and the package layout down to what a small fleet
+on Cloudflare and Zerops needs, and rewrite the decision record so it describes that system directly.
+
+**Theme.** The 2026-09-28..10-05 runs added distributed-systems machinery (fencing, checkpoint CAS,
+version-bound managed env, a source-protocol handshake) and ~17k lines of tests around it, while the
+provider-neutral core still branches on `'zerops'` and every cloud is spread over 4–5 packages. Success:
+fewer hops per deploy, no provider names in shared control code, one public package per cloud plus its
+private deployables, and an ADR set with no superseded entries. Feature set is unchanged — including
+**multiple private GitHub source connections** (ADR-0032 stays in substance).
+
+## Refs re-verified at HEAD (2026-10-07, `6090968`)
+
+- ✔ Deploy lease TTL is 30 min although renewal exists — `packages/control/src/run-ownership.ts:5`.
+- ✔ A shared Control route imports the Cloudflare runner — `packages/control/src/api/runs.ts:4`.
+- ✔ The runner Worker writes Control's `runs` row with copied SQL — `packages/control/src/db/runs.ts:258` ("DUPLICATED verbatim").
+- ✔ Shared Control code branches on the provider name — `packages/control/src/webhook.ts:65`, `packages/control/src/api/registry/apps.ts:103`.
+- ✔ Required Zerops ids/URLs default to `''` on malformed responses — `packages/provider-zerops/src/api/client.ts:31-49`.
+- ✔ Version-scoped managed secrets are never reclaimed — `docs/decisions/0044-…md:71`.
+- ✔ `source` holds GitHub App credentials as keyed env slots on its own Zerops service — `packages/source-zerops/src/config.ts:35-75`; Control drives them over RPC — `packages/control/src/node/source-connection.ts:10-47`. Control already owns a vault — `packages/control/src/vault.ts`.
+- ✔ `installation-zerops/zerops/` mixes runtime code, dev-time codegen importing private packages, and generated output; npm exclusion is a hand-kept `files` deny-list — `packages/installation-zerops/package.json:12-19`.
+- ✔ `installation-cloudflare` already relaxes the same two strict flags as `provider-cloudflare` (root `CLAUDE.md`), so merging them widens nothing.
+- ⚠ The paused readiness sprint (`sprint-2026-09-23-zerops-production-readiness.md`) records user approval of the ADR-0044 version binding. This sprint **replaces** that approach (Decision D3); its WU1 is rescoped, its other WUs stand.
+
+## Decisions
+
+- **D1 — ADRs are living until 1.0.** Rewrite a decided ADR in place when the decision changes; delete
+  superseded ADRs after folding any reasoning still worth keeping into the survivor. Numbers stay stable
+  (no renumbering — ~170 code/doc references cite them); gaps are fine. `docs/CLAUDE.md` and
+  `decisions/README.md` change accordingly. Rationale for rejected alternatives stays in each ADR's
+  Alternatives section; history stays in git.
+- **D2 — No backward compatibility for persisted delivery state.** There is no production installation.
+  Old `provider_state_json` phases, retained checkpoints, managed-env markers and the `source` service are
+  not migrated; the disposable test project is reinstalled. Schema changes are new migration files (ledger
+  identity per ADR-0017 is untouched).
+- **D3 — Version only the release identity on Zerops.** Other managed keys (IAM issuer, Operations
+  credentials) change only on platform reconfiguration and a newer value reaching older code is benign.
+  Accepted risk: a rollback runs with the current, not the historical, non-release keys.
+- **D4 — Zerops recovery does not resume.** Record `appVersionId` before upload; on restart or
+  cancellation either poll that version to a terminal state or delete it and fail/cancel the run.
+- **D5 — One lease primitive.** Holder-checked, renewed, TTL ≈ 90 s (renew every 30 s). Writes check the
+  holder; no checkpoint compare-and-swap, no per-run DB poll loop. Runs and namespace-proxy attempts use it.
+- **D6 — `source` merges into Control.** GitHub App credentials of every connection live in Control's vault,
+  as on Cloudflare. The `source` service, its RPC key, the V2 wire protocol and env-slot activation go away.
+  Keyed multi-connection semantics (ADR-0032) are kept.
+- **D7 — Keep the separate Cloudflare runner Worker.** It stays a deployable; only its contract and its
+  direct D1 write go.
+- **D8 — Package target.** Per cloud: one public `provider-<cloud>` with subpaths
+  (`.` authoring, `/control`, `/installation`, plus `/runner` on Cloudflare) and private deployables
+  (`runner-cloudflare`, `runner-container`). Zerops installation codegen moves to a private
+  `platform-artifacts`. `engine` is deleted; `installation-contract` becomes `provider-contract/installation`;
+  `runner-contract` folds into `provider-cloudflare/runner`. Package renames to `@fabrika/<cloud>` are out
+  of scope.
+
+## Work units
+
+### Phase 0 — Decision record (docs only, lands first)
+
+#### WU0.1 — Make ADRs living (S)
+
+- **Scope.** Rewrite the ADR rules in `docs/CLAUDE.md` ("Decisions", "Things NOT to do", source-of-truth
+  notes) and `docs/decisions/README.md` per D1. Template keeps `status: accepted | proposed`; drop `superseded by`.
+- **Acceptance.** No doc still says ADRs are immutable.
+
+#### WU0.2 — Consolidate and rewrite ADRs (M)
+
+Survivor keeps its number; the others are deleted after their live reasoning is folded in. Every ADR is
+written in the **target** state of this sprint (code catching up is normal per `docs/CLAUDE.md`).
+
+| Survivor                                     | Absorbs (deleted)                  | Rewrite                                                                                                                                                      |
+| -------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0022 proxy is the only enforcement point     | 0007, 0008, 0010, 0021             | Fold surviving rationale into Context/Alternatives                                                                                                           |
+| 0023 one session per host                    | 0026                               | Browser-bound handoff becomes a section                                                                                                                      |
+| 0024 canonical environment names             | 0018                               | One ADR: names + no fallback                                                                                                                                 |
+| 0011 static provider bundles                 | 0002, 0009                         | No engine, no runtime envelopes; one `deploy()`/`resolveSource()` with optional binding; capability flags instead of provider-name checks; D8 package layout |
+| 0029 GitHub sources (retitled)               | 0030, 0031, 0032, 0036, 0037, 0039 | D6: in-process in Control, vault-held keyed credentials, multiple connections, tarball streaming, creation persisted before success, binding recovery        |
+| 0044 Zerops managed configuration (retitled) | 0046, 0047                         | D3 + D4 + D5                                                                                                                                                 |
+| 0048 Cloudflare commit binding               | —                                  | SHA checkout + HEAD check; no source-protocol handshake                                                                                                      |
+| 0003 no runner on Zerops                     | —                                  | Drop the ADR-0029 amendment wording; Control runs the whole Zerops path in-process                                                                           |
+| 0001 merge propustka and vozka               | — (deleted)                        | History only; git holds it                                                                                                                                   |
+
+All others are kept and only have their cross-references fixed.
+
+- **Verify first.** `grep -rn "ADR-00NN\|00NN-"` for every deleted number across the **whole repo**.
+- **Acceptance.** No ADR has `superseded`; every reference to a deleted ADR points at its survivor;
+  `docs/INDEX.md`, `decisions/README.md`, root and package `CLAUDE.md` files updated.
+
+#### WU0.3 — Rescope related docs (S)
+
+- Readiness sprint: replace WU1's approach with D3/D4, note the dependency on this sprint.
+- Backlog: delete or rescope 37 (managed env activation → D3), 81 (keyed deploy in local stack → after
+  WU4.1), 84/95 (lease/fencing → D5), 88/89 (runner) — each checked against its text first.
+- Delete process-only docs: `docs/archive/static-validation-{territories,exceptions,local-integration}.md`.
+- Add to `docs/CLAUDE.md`: reasoning goes in commit/PR bodies; sprint docs carry a plan and a short run log, not evidence ledgers.
+
+### Phase 1 — Quick fixes (parallel, disjoint files)
+
+#### WU1.1 — Lease TTL and smoke (S)
+
+- **Scope.** TTL 90 s / renew 30 s; delete the natural-expiry smoke stage (`packages/local-stack/src/smoke.ts:339-359,459`) and `lease-wait.test.ts`.
+- **Acceptance.** A test kills the holder and re-acquires within TTL + one renew period.
+
+#### WU1.2 — Seam leaks and dead code (S)
+
+- **Scope.** Drop the `runner-cloudflare` import in `api/runs.ts`; delete unused `Cloudflare*Envelope` in `control-contract/src/index.ts:191-205`; move `provider-cloudflare` to devDependencies in `iam` and `operations`; `control/src/platform-cf.ts` imports from `provider-cloudflare/runner`; move `provider-zerops/src/namespace-command.ts` into `@fabrika/cli`; rename `control/src/node/` → `control/src/zerops/`; mark `builder` Zerops-only in its docs.
+- **Acceptance.** `bun run typecheck`, `release:validate`; `grep '@fabrika/runner-cloudflare' packages/control/src/api` is empty.
+
+#### WU1.3 — Local-stack and test cleanup (S)
+
+- **Scope.** Remove emulator snapshot back-compat (`legacy-emulator.json`, legacy branches in `zerops-emulator/snapshot.ts`); replace relative imports into other packages' `src/` with package exports; delete tests that only exercise zod (`static-validation.test.ts`, `wire-contracts.test.ts`); review the other "legacy" branches (builder/canvas draft recovery) and delete those with no installed data behind them.
+- **Acceptance.** `bun run test` green; `grep -rn "\.\./\.\./[a-z-]*/src" packages/local-stack` empty.
+
+#### WU1.4 — Unresolved webhook egress draft (S)
+
+- **Scope.** Recover the draft referenced by the readiness sprint from outside the repo into a branch, or drop it and say so in that sprint.
+
+### Phase 2 — Boundaries and types
+
+#### WU2.1 — Zerops response readers (M)
+
+- **Problem.** 47 `z.preprocess` + 8 `prop()` copies; required ids `.catch('')`.
+- **Scope.** Plain `z.object`; required fields required; `.catch(undefined)` only on optional fields; status fields as `z.enum(...).catch(undefined)`; one helper for `exactOptionalPropertyTypes` cleanup. Brand `ZeropsServiceId`/`ZeropsProjectId` at parse time.
+- **Acceptance.** A reader test: a response missing `id` fails to parse instead of yielding `''`.
+
+#### WU2.2 — One schema per shape (M)
+
+- **Scope.** App vocabulary schema once in `@fabrika/auth`; gate rule from `proxy-contract` (+ refine); run log line and runner status schemas in the contract packages with `z.infer` types; one Sentry event schema in `operations`; one `RequestError` + `instanceof` replacing 4 duck-typed checks; strip instead of `.passthrough()` on internal protocols; remove double validation (`compileFabrikaManifest`, manual key check after `.strict()`, proxy-manifest re-parse → exported invariant checks); comment `github-app` permissions strictness.
+- **Acceptance.** Each shape has one definition (grep); typecheck and tests green.
+
+#### WU2.3 — Provider-neutral Control (M)
+
+- **Scope.** Merge `*WithBinding` into `resolveSource`/`deploy` with optional `sourceBinding` and delete the `Map` side channel (`provider-zerops/src/control.ts:256,608-617`); neutral `registry.getSourceBinding()`; replace `provider === 'zerops'` in `webhook.ts`, `api/registry/apps.ts`, `db/registry.ts` (incl. SQL) with a provider-declared source mode; `transportKind` leaves `provider-contract`.
+- **Acceptance.** `grep -rn "'zerops'\|'cloudflare'" packages/control/src --include=*.ts` outside the two composition roots is empty.
+
+#### WU2.4 — Runner outcome through Control (M)
+
+- **Scope.** Runner Worker stops writing `runs` (`runner-cloudflare/src/finish-run.ts`); Control applies the outcome from the runner's `status.json` in its reconcile/poll path under the lease guard. Delete `recordFailureOverRunnerSuccess`.
+- **Acceptance.** Test: runner finishes while Control is unavailable; next reconcile settles the run once.
+
+#### WU2.5 — Console knows the provider (M)
+
+- **Scope.** RPC exposes the installation's `provider.id`; "new app" and "add environment" pick their form by it (`dashboard/src/routes/apps/new.tsx:59`, `EnvironmentsSection.tsx:249`).
+- **Acceptance.** Browser scenario for both forms on the local (Zerops) stack; unit test for the Cloudflare form selection.
+
+### Phase 3 — Delivery machinery (serial)
+
+#### WU3.1 — Shrink the provider contract, delete `engine` (L)
+
+- **Scope.** Remove `RuntimeProvider`, `ProviderModule`, `createProvider`, runtime envelopes, session/plan/job types and `dependsOn`; each provider runs its steps in a plain `deploy()`; `normalizeRegistration` optional; delete the 12-coordinate check (`run-lifecycle.ts:356-375`); Cloudflare executor CLI calls the provider directly.
+- **Acceptance.** `packages/engine` gone; CF `--dry-run` and Zerops deploy tests green; Cloudflare runner image builds.
+
+#### WU3.2 — Zerops deploy and recovery per D3/D4 (L)
+
+- **Scope.** Version only `FABRIKA_RELEASE`; plain overwrite for the other managed keys; delete ownership markers, admission (`managed-environment/protocol.ts`, `admission.ts`, `cleanup.ts`); one checkpoint (`appVersionId` + `triggered`); reconcile = poll or delete.
+- **Acceptance.** Tests: crash before trigger → version deleted, run failed; crash after trigger → run settles from poll; cancel before trigger → cancelled. Live `platform-facts` rows for version deletion still pass.
+
+#### WU3.3 — One lease primitive per D5 (M–L)
+
+- **Scope.** Collapse `RunOwnership`, `NamespaceOwnership`, `proxy-attempt.ts` and terminal-release-repair CAS onto acquire/renew/holder-checked write; read cancellation at step boundaries; make the unguarded `mutateRun` path impossible; move `control/src/zerops/zerops-proxy.ts` behind a `namespaces.republish` capability in `provider-zerops`.
+- **Acceptance.** Concurrency tests: two holders, one wins; cancel during a step stops at the next boundary; namespace republish and app deploy serialize.
+
+#### WU3.4 — Cloudflare commit binding without handshake (M)
+
+- **Scope.** Keep SHA checkout + HEAD verification in `runner-container`; delete `assertRunnerSourceProtocol` and the capability exchange; trim ref-resolution to what `resolveSource` needs.
+- **Acceptance.** Existing mismatch test (wrong HEAD fails before install) stays green.
+
+#### WU3.5 — Run logs (S–M, optional)
+
+- **Scope.** Stop rewriting the whole `logs.ndjson` per line (`run-lifecycle.ts:102-109`); batch or append-chunk.
+
+### Phase 4 — GitHub sources inside Control
+
+#### WU4.1 — Merge `source-zerops` into Control (L)
+
+- **Scope.** Move tarball streaming, metadata and keyed connections into `control/src/source/`; credentials in the vault (D6); delete `source-client.ts`, `source-connection.ts` env-slot activation, `FABRIKA_SOURCE_RPC_KEY`, the `source` service from `installation-zerops/zerops/topology.ts`, and the `source-zerops` package; regenerate `zerops.yaml` and import YAMLs; local stack drops the `source` container.
+- **Acceptance.** Local stack: private keyed deploy from two connections (closes backlog 81); upload streams without buffering (existing tar tests moved); `local:smoke` green.
+
+### Phase 5 — Packages
+
+#### WU5.1 — Private `platform-artifacts` (M)
+
+- **Scope.** Move `render.ts`, `proxy-manifest.ts`, `console-schema.ts`, `schemas/{refresh,check}.ts` out of `installation-zerops`; runtime `zerops/*` → `src/topology/`, generated TS → `src/generated/`; delete the `files` deny-list and private devDependencies; release smoke imports every public package from its tarball.
+- **Acceptance.** `gen:check`, `release:validate`, `release:pack` + smoke green.
+
+#### WU5.2 — Fold contracts (S)
+
+- **Scope.** `runner-contract` → `provider-cloudflare/runner` (update `runner-container/Dockerfile` COPY list); `installation-contract` → `provider-contract/installation`.
+
+#### WU5.3 — Merge installation into provider (M)
+
+- **Scope.** `installation-<cloud>` → `provider-<cloud>/installation`; `cli` loads `@fabrika/provider-<cloud>/installation`; keep the open installation contract.
+- **Acceptance.** `fabrika platform plan|deploy --provider=…` work from packed tarballs; `deptective` clean.
+
+### Phase 6 — Close
+
+#### WU6.1 — Reference and agent docs (M)
+
+- **Scope.** Update `docs/reference/{overview,provider-bundles,portability-surface,installing-on-zerops,local-development}.md`; shrink `zerops-platform.md` to facts still load-bearing; update root and package `CLAUDE.md` (structure, invariants); `source-zerops` and removed packages gone from every map.
+
+#### WU6.2 — Full verification (M)
+
+- **Gate.** `bun run typecheck`, `lint`, `format:check`, `test` with `FABRIKA_TEST_POSTGRES_URL` and `FABRIKA_TEST_S3_*` set, `local:smoke`, `test:browser`, `release:validate`/`:pack`/`:smoke`, live `platform-facts` against the test project. Report LOC before/after per package.
+
+## Out of scope (explicit)
+
+- Folding the Cloudflare runner Worker into Control (D7).
+- Moving composition roots out of `@fabrika/control`; renaming packages to `@fabrika/<cloud>`.
+- Typing `canvas-kernel/src/engine/compiler.ts`; broad branded ids beyond the Zerops boundary.
+- The readiness sprint's HA topology, source-map and webhook work, apart from WU1.4.
+
+## Sequencing
+
+| Order | Units                                            | Parallel?                                                      |
+| ----- | ------------------------------------------------ | -------------------------------------------------------------- |
+| 1     | Phase 0 (WU0.1 → WU0.2 → WU0.3)                  | serial, one author                                             |
+| 2     | WU1.1–1.4                                        | parallel                                                       |
+| 3     | WU2.1, WU2.2, WU2.4, WU2.5                       | parallel; WU2.3 after WU2.1 (same Zerops files)                |
+| 4     | WU3.1 → WU3.2 → WU3.3; WU3.4 and WU3.5 alongside | serial core                                                    |
+| 5     | WU4.1                                            | after Phase 3 (shares Zerops deploy code)                      |
+| 6     | WU5.1 → WU5.2 → WU5.3                            | serial (WU5.3 needs WU5.1 to avoid a control ↔ provider cycle) |
+| 7     | WU6.1, WU6.2                                     | last                                                           |
+
+## Run log
+
+<!-- Append as you work. -->
