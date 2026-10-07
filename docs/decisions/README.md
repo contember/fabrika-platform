@@ -64,3 +64,4 @@ a commit message suffices.
 | [0044](0044-zerops-delivery-ownership-and-recovery.md)                  | Zerops delivery binds the release, recovers by poll or delete, and runs under one lease |
 | [0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)   | Upload immutable installation and namespace proxy sources                               |
 | [0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)         | Bind Cloudflare delivery to the recorded application commit                             |
+| [0049](0049-author-applications-through-mcp-in-control.md)              | Author applications through an MCP endpoint in Control over Git workspaces              |

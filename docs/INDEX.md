@@ -19,7 +19,9 @@ fabrika-platform is and how the pieces fit — then skim
 
 ## Active sprints
 
-None. The [second simplification pass](archive/sprint-2026-10-08-second-simplification-pass.md)
+[MCP application authoring](sprints/sprint-2026-10-07-mcp-authoring.md) is active: MCP in Control, IAM OAuth for Claude/ChatGPT, Git workspaces, stage deploys and pull requests on Zerops ([ADR-0049](decisions/0049-author-applications-through-mcp-in-control.md)).
+
+The [second simplification pass](archive/sprint-2026-10-08-second-simplification-pass.md)
 shipped on 2026-10-08.
 
 ## What's hot
