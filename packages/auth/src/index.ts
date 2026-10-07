@@ -30,6 +30,8 @@ export type { VerifyResult } from './verify'
 // Deploy-time helper: reconcile an app's declared AppSchema (authz vocabulary) into IAM (an
 // HTTP admin call, NOT over the service binding). Import from a deploy/provisioning step.
 export { reconcileSchema, ReconcileSchemaError } from './provision'
+// The one schema for an app's declared vocabulary; every reader of an `AppSchema` parses with it.
+export { appSchemaSchema } from './app-schema'
 export type { ReconcileSchemaOptions } from './provision'
 export type {
 	AuthContext,

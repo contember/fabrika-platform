@@ -22,6 +22,7 @@
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",
+		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/email": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",

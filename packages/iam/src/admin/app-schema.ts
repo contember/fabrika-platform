@@ -1,4 +1,5 @@
-import { type AppSchema, isActionAllowed, type RoleDef } from '@fabrika/auth-core'
+import { appSchemaSchema } from '@fabrika/auth'
+import type { RoleDef } from '@fabrika/auth-core'
 
 import {
 	type AppDto,
@@ -9,7 +10,7 @@ import {
 	type RoleDto,
 	type SetReturnOriginsRequest,
 } from '@fabrika/iam-contract'
-import { z } from 'zod'
+import type { z } from 'zod'
 import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
 import { adminAudit, type AdminContext, fail } from './context'
@@ -58,56 +59,20 @@ export async function listRolesUseCase(c: AdminContext, input: ListRolesInput): 
 	return { items }
 }
 
-/**
- * Validate that a value is a well-formed `AppSchema` (scopes/actions/roles arrays of
- * the right shape) and return it normalized, or an error message. Each role's
- * permission patterns are validated against the body's OWN action catalog via
- * `isActionAllowed` — an unknown action is a 400.
- */
-const vocabularyEnvelopeSchema = z.object({ scopes: z.array(z.unknown()), actions: z.array(z.unknown()), roles: z.record(z.unknown()) })
-const scopesSchema = z.array(
-	z.object({ type: z.string(), label: z.string().optional().catch(undefined) }).transform(({ type, label }) => ({
-		type,
-		...(label === undefined ? {} : { label }),
-	})),
-)
-const actionsSchema = z.array(
-	z.object({ action: z.string(), description: z.string().optional().catch(undefined) }).transform(({ action, description }) => ({
-		action,
-		...(description === undefined ? {} : { description }),
-	})),
-)
-const roleSchema = z.object({ name: z.string(), permissions: z.array(z.string()), description: z.string().optional().catch(undefined) })
-
-function parseAppSchema(body: unknown): { ok: true; schema: AppSchema } | { ok: false; message: string } {
-	const envelope = vocabularyEnvelopeSchema.safeParse(body)
-	if (!envelope.success) {
-		return {
-			ok: false,
-			message: envelope.error.issues[0]?.path[0] === 'roles' ? 'roles must be an object (role_key -> def)' : 'scopes and actions must be arrays',
-		}
+/** The 400 message for a refused vocabulary, naming the envelope field or the role at fault. */
+function appSchemaError(issues: readonly z.ZodIssue[]): string {
+	// A wrong envelope is the more useful report than the first bad element inside it.
+	const issue = issues.find((candidate) => candidate.path.length === 1) ?? issues[0]
+	const [field, key] = issue?.path ?? []
+	if (field === 'roles') {
+		if (typeof key !== 'string') return 'roles must be an object (role_key -> def)'
+		if (issue?.code === 'custom' && issue.path.length > 2) return issue.message
+		return `role '${key}' needs a non-empty name and a permissions array, and a usable key`
 	}
-	const scopes = scopesSchema.safeParse(envelope.data.scopes)
-	if (!scopes.success) return { ok: false, message: 'each scope needs a string `type`' }
-	const actions = actionsSchema.safeParse(envelope.data.actions)
-	if (!actions.success) return { ok: false, message: 'each action needs a string `action`' }
-	const catalog = actions.data.map(({ action }) => action)
-	const roles: AppSchema['roles'] = {}
-	for (const [key, defRaw] of Object.entries(envelope.data.roles)) {
-		const parsed = roleSchema.safeParse(defRaw)
-		if (!parsed.success) {
-			return { ok: false, message: `role '${key}' needs a string name and a permissions array` }
-		}
-		const { name, permissions, description } = parsed.data
-		for (const pattern of permissions) {
-			if (!isActionAllowed(pattern, catalog)) {
-				return { ok: false, message: `role '${key}' references unknown action: ${pattern}` }
-			}
-		}
-		roles[key] = { name, permissions, ...(description !== undefined ? { description } : {}) }
-	}
-
-	return { ok: true, schema: { scopes: scopes.data, actions: actions.data, roles } }
+	if (key === undefined) return 'scopes and actions must be arrays'
+	return field === 'scopes'
+		? 'each scope needs a non-empty `type` and, when present, a non-empty `label`'
+		: 'each action needs a non-empty `action` and, when present, a non-empty `description`'
 }
 
 /**
@@ -120,11 +85,11 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 	// No knownApps gate: an app's FIRST schema reconcile is how it REGISTERS itself (this endpoint is
 	// admin-gated). After this, `db.listKnownApps()` surfaces the app id across the schema tables.
 	const body = await readJson(c.request)
-	const parsed = parseAppSchema(body)
-	if (!parsed.ok) {
-		return error(400, parsed.message)
+	const parsed = appSchemaSchema.safeParse(body)
+	if (!parsed.success) {
+		return error(400, appSchemaError(parsed.error.issues))
 	}
-	const { schema } = parsed
+	const schema = parsed.data
 	// A role key an admin already owns as a custom policy is a CONFLICT, not something to overwrite.
 	// The rule was one-directional: `createPolicyUseCase` 409s on an existing key so an admin can never
 	// clobber an app role, but a deploy silently flipped a custom policy to origin='app' — after which

@@ -9,7 +9,7 @@ Keep Caddy generation, HTTP authorization, and process behavior in
 manifest.
 
 **A host is a NAME, never a pattern.** `isProxyHost` is the rule — a literal
-lower-cased LDH hostname, labels 1–63 chars, ≤ 253 total — and `parseProxyApp`
+lower-cased LDH hostname, labels 1–63 chars, ≤ 253 total — and `proxyAppSchema`
 rejects the whole manifest when a host fails it. It is enforced here because the
 manifest is the authority on hosts (ADR-0022) and Caddy's `host` matcher reads
 `*` as a wildcard label: on Zerops one proxy fronts every app in a namespace, so

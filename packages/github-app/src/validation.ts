@@ -12,6 +12,7 @@ export const appReferenceSchema = z.object({
 })
 
 const appIdentitySchema = appReferenceSchema.extend({
+	// Strict for least privilege: an App granted any permission beyond read-only contents is refused.
 	permissions: z.object({ contents: z.literal('read'), metadata: z.literal('read').optional() }).strict(),
 	events: z.array(z.string().min(1).max(100)).max(100).refine((events) => events.includes('push')),
 	owner: z.object({ login: z.string().min(1).max(100).regex(REPOSITORY_COMPONENT_PATTERN), type: z.enum(['Organization', 'User']) }),

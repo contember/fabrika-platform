@@ -1,5 +1,7 @@
+import { appSchemaSchema } from '@fabrika/auth'
 import type { AppSchema } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
+import { normalizeGateRule, proxyGateRuleFieldsSchema } from '@fabrika/proxy-contract'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
@@ -50,7 +52,7 @@ export interface FabrikaManifest {
 		/** The exact repository-root build descriptor used for this artifact. */
 		sourceDescriptor: ZeropsArtifactSourceDescriptor
 		/** The canonical document used both for resource claims and the Zerops API payload. */
-		importDocument: FabrikaImportDocument
+		importDocument: FabrikaManifestImportDocument
 		deployService: string
 		zeropsSetup?: string
 		proxy?: ZeropsProxySpec
@@ -72,8 +74,6 @@ export const assertFabrikaManifestCoordinates = (app: Pick<FabrikaManifest['app'
 	}
 }
 
-const prop = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
-
 const manifestJsonSchema: z.ZodType<JsonValue, z.ZodTypeDef, unknown> = z.lazy(() =>
 	z.union([
 		z.null(),
@@ -94,99 +94,38 @@ const jsonValue = (value: unknown): JsonValue => {
 	return parsed.data
 }
 
-const jsonObject = (value: unknown, label: string): { [key: string]: JsonValue } => {
-	const parsed = jsonValue(value)
-	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-		throw new Error(`invalid fabrika manifest ${label}`)
-	}
-	return parsed
-}
+const nonEmptyStringsSchema = z.array(z.string().min(1))
+// Unlike the proxy wire contract, the manifest refuses a null service credential.
+const manifestGateSchema = proxyGateRuleFieldsSchema
+	.refine((rule) => rule.kind !== 'service' || rule.credential !== null)
+	.transform(normalizeGateRule)
+const manifestProxySchema = z.object({ upstream: z.string().min(1), gates: z.object({ rules: z.array(manifestGateSchema) }) })
+const namespaceResourcesSchema = z.array(z.object({
+	resourceKey: z.literal('service:postgres'),
+	hostname: z.literal('postgres'),
+	connectionString: z.literal(SHARED_POSTGRES_CONNECTION_STRING),
+})).max(1)
 
-// Hooks historically share pipeline/permission arrays with the decoded artifact; Zod arrays would clone them.
-const referencedStringArraySchema = z.custom<string[]>((value: unknown): value is string[] =>
-	Array.isArray(value) && value.every((entry: unknown) => typeof entry === 'string' && entry !== '')
-)
-const scopeSchema = z.preprocess(
-	(value) => ({ type: prop(value, 'type'), label: prop(value, 'label') }),
-	z.object({ type: z.string().min(1), label: z.string().min(1).optional() })
-		.transform(({ type, label }) => label === undefined ? { type } : { type, label }),
-)
-const actionSchema = z.preprocess(
-	(value) => ({ action: prop(value, 'action'), description: prop(value, 'description') }),
-	z.object({ action: z.string().min(1), description: z.string().min(1).optional() })
-		.transform(({ action, description }) => description === undefined ? { action } : { action, description }),
-)
-const roleSchema = z.preprocess(
-	(value) => ({ name: prop(value, 'name'), description: prop(value, 'description'), permissions: prop(value, 'permissions') }),
-	z.object({ name: z.string().min(1), description: z.string().min(1).optional(), permissions: referencedStringArraySchema })
-		.transform(({ name, description, permissions }) => description === undefined ? { name, permissions } : { name, description, permissions }),
-)
-const rolesSchema = z.preprocess((value) =>
-	typeof value === 'object' && value !== null && !Array.isArray(value)
-		? Object.fromEntries(Object.entries(value))
-		: value, z.record(z.string().min(1), roleSchema))
-const appSchema = z.preprocess(
-	(value) => ({ scopes: prop(value, 'scopes'), actions: prop(value, 'actions'), roles: prop(value, 'roles') }),
-	z.object({ scopes: z.array(scopeSchema), actions: z.array(actionSchema), roles: rolesSchema }),
-)
+const manifestAppSchema = z.object({
+	id: z.string().min(1),
+	env: z.string().min(1),
+	schema: appSchemaSchema.optional(),
+	pipeline: z.object({ secrets: nonEmptyStringsSchema, vars: nonEmptyStringsSchema }),
+})
+const manifestEnvelopeSchema = z.object({ manifestVersion: z.literal(FABRIKA_MANIFEST_VERSION), app: manifestAppSchema, target: z.unknown() })
 
-// Unlike proxy wire gates, authoring accepts inherited fields and rejects a null credential.
-const manifestCredentialSchema = z.preprocess(
-	(value) => ({ in: prop(value, 'in'), name: prop(value, 'name') }),
-	z.object({ in: z.enum(['header', 'query', 'cookie']), name: z.string().min(1) }),
-)
-const manifestGateSchema = z.preprocess(
-	(value) => ({ path: prop(value, 'path'), kind: prop(value, 'kind'), credential: prop(value, 'credential') }),
-	z.discriminatedUnion('kind', [
-		z.object({ path: z.string().startsWith('/'), kind: z.literal('public') }),
-		z.object({ path: z.string().startsWith('/'), kind: z.literal('human') }),
-		z.object({ path: z.string().startsWith('/'), kind: z.literal('service'), credential: manifestCredentialSchema.optional() }),
-	]).transform((rule) => {
-		if (rule.kind === 'service' && rule.credential === undefined) delete rule.credential
-		return rule
-	}),
-)
-const manifestProxySchema = z.preprocess(
-	(value) => ({ upstream: prop(value, 'upstream'), gates: { rules: prop(prop(value, 'gates'), 'rules') } }),
-	z.object({ upstream: z.string().min(1), gates: z.object({ rules: z.array(manifestGateSchema) }) }),
-)
-const namespaceResourcesSchema = z.array(z.preprocess(
-	(value) => ({
-		resourceKey: prop(value, 'resourceKey'),
-		hostname: prop(value, 'hostname'),
-		connectionString: prop(value, 'connectionString'),
-	}),
-	z.object({
-		resourceKey: z.literal('service:postgres'),
-		hostname: z.literal('postgres'),
-		connectionString: z.literal(SHARED_POSTGRES_CONNECTION_STRING),
-	}),
-)).max(1)
-
-const appMetadataSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		env: prop(value, 'env'),
-		pipeline: { secrets: prop(prop(value, 'pipeline'), 'secrets'), vars: prop(prop(value, 'pipeline'), 'vars') },
-	}),
-	z.object({
-		id: z.string().min(1),
-		env: z.string().min(1),
-		pipeline: z.object({ secrets: referencedStringArraySchema, vars: referencedStringArraySchema }),
-	}),
-)
 export const zeropsArtifactSourceDescriptorSchema = z.object({
 	path: z.literal('zerops.yaml'),
 	contents: z.string().min(1).refine((contents) => new TextEncoder().encode(contents).byteLength <= ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES),
 	sha256: z.string().regex(SHA256_PATTERN),
 }).strict()
-const targetMetadataSchema = z.preprocess(
-	(value) => ({ platform: prop(value, 'platform'), deployService: prop(value, 'deployService') }),
-	z.object({ platform: z.literal('zerops'), deployService: z.string().min(1) }),
-)
-const setupSelectorSchema = z.string().min(1).optional()
-const importDocumentSchema = z.object({ project: z.record(manifestJsonSchema).optional(), services: z.array(z.record(manifestJsonSchema)).min(1) })
-	.strict()
+
+/** Refuse fields fabrika owns, so an authored document can never set them. */
+const forbidFields = (fields: readonly string[], message: string) => (record: Record<string, JsonValue>, ctx: z.RefinementCtx): void => {
+	for (const field of fields) {
+		if (Object.hasOwn(record, field)) ctx.addIssue({ code: 'custom', path: [field], message })
+	}
+}
 const importServiceSchema = z.intersection(
 	z.record(manifestJsonSchema),
 	z.object({
@@ -194,10 +133,10 @@ const importServiceSchema = z.intersection(
 		type: z.string().min(1),
 		envIsolation: z.literal(ENV_ISOLATION),
 		override: z.literal(OVERRIDE),
-		envSecrets: z.never().optional(),
-		dotEnvSecrets: z.never().optional(),
 	}),
-)
+).superRefine(forbidFields(['envSecrets', 'dotEnvSecrets'], 'invalid fabrika manifest: Zerops import contains a forbidden environment field'))
+const importProjectSchema = z.intersection(z.record(manifestJsonSchema), z.object({ envIsolation: z.literal(ENV_ISOLATION) }))
+	.superRefine(forbidFields(['envVariables'], 'invalid fabrika manifest: Zerops import contains a forbidden project environment field'))
 
 /** The first foreign host referenced by any string leaf OR key of `value`, however deeply nested. */
 const foreignReferenceInValue = (value: unknown, allowed: ReadonlySet<string>): string | null => {
@@ -212,82 +151,85 @@ const foreignReferenceInValue = (value: unknown, allowed: ReadonlySet<string>): 
 		return null
 	}
 	if (typeof value === 'object' && value !== null) {
-		for (const key of Object.keys(value)) {
-			const host = foreignReferenceHost(key, allowed) ?? foreignReferenceInValue(prop(value, key), allowed)
+		for (const [key, entry] of Object.entries(value)) {
+			const host = foreignReferenceHost(key, allowed) ?? foreignReferenceInValue(entry, allowed)
 			if (host !== null) return host
 		}
 	}
 	return null
 }
 
-const parseImportDocument = (value: unknown): FabrikaImportDocument => {
-	if (value === undefined) {
-		throw new Error('invalid fabrika manifest Zerops import document')
-	}
-	const raw = jsonObject(value, 'Zerops import document')
-	const result = importDocumentSchema.safeParse(raw)
-	if (!result.success) {
-		const issue = result.error.issues[0]
-		if (issue?.code === 'unrecognized_keys') throw new Error(`invalid fabrika manifest Zerops import document field \`${issue.keys[0]}\``)
-		throw new Error(`invalid fabrika manifest Zerops import ${issue?.path[0] === 'project' ? 'project' : 'services'}`)
-	}
-	const rawServices = result.data.services
-	const parsed: Array<[string, { readonly [key: string]: JsonValue }]> = []
-	const hostnames = new Set<string>()
-	for (const [index, rawService] of rawServices.entries()) {
-		const parsedService = importServiceSchema.safeParse(rawService)
-		if (!parsedService.success) {
-			const key = parsedService.error.issues[0]?.path[0]
-			if (key === 'hostname') throw new Error(`invalid fabrika manifest Zerops service hostname at index ${index}`)
-			if (key === 'envSecrets' || key === 'dotEnvSecrets') {
-				throw new Error('invalid fabrika manifest: Zerops import contains a forbidden environment field')
+const importDocumentSchema = z.object({ project: importProjectSchema.optional(), services: z.array(importServiceSchema).min(1) })
+	.strict()
+	.superRefine(({ services }, ctx) => {
+		const hostnames = services.map((service) => service.hostname)
+		const duplicate = hostnames.find((hostname, index) => hostnames.indexOf(hostname) !== index)
+		if (duplicate !== undefined) {
+			ctx.addIssue({ code: 'custom', message: `invalid fabrika manifest: duplicate Zerops service hostname \`${duplicate}\`` })
+			return
+		}
+		// A `${host_KEY}` reference crosses `envIsolation: service` by design, so the declared hostnames are the
+		// boundary. They are never rewritten at deploy: a shared namespace's app prefix is authored INTO the
+		// hostname (`service-names.ts`), which `registrationResourceClaims` then enforces.
+		const allowed = allowedReferenceHosts(hostnames)
+		for (const service of services) {
+			const foreign = foreignReferenceInValue(service, allowed)
+			if (foreign !== null) {
+				ctx.addIssue({
+					code: 'custom',
+					message: `invalid fabrika manifest: Zerops service \`${service.hostname}\` references service \`${foreign}\`, which this app does not own`,
+				})
+				return
 			}
-			throw new Error(`invalid fabrika manifest Zerops service ${key === 'type' ? 'type' : 'invariants'} for \`${rawService['hostname']}\``)
 		}
-		const service = parsedService.data
-		const hostname = service.hostname
-		if (hostnames.has(hostname)) {
-			throw new Error(`invalid fabrika manifest: duplicate Zerops service hostname \`${hostname}\``)
-		}
-		hostnames.add(hostname)
-		parsed.push([hostname, service])
+	})
+
+/** The import document a manifest carries: every service already holds the ADR-0004 invariants. */
+export type FabrikaManifestImportDocument = z.infer<typeof importDocumentSchema>
+
+const manifestTargetSchema = z.object({
+	sourceDescriptor: zeropsArtifactSourceDescriptorSchema,
+	platform: z.literal('zerops'),
+	deployService: z.string().min(1),
+	importDocument: importDocumentSchema,
+	zeropsSetup: z.string().min(1).optional(),
+	proxy: manifestProxySchema.optional(),
+	namespaceResources: namespaceResourcesSchema.optional(),
+})
+
+const importDocumentError = (issue: z.ZodIssue, path: readonly (string | number)[]): string => {
+	const [section, index, field] = path
+	if (issue.code === 'custom') return issue.message
+	if (issue.code === 'unrecognized_keys' && section === undefined) return `invalid fabrika manifest Zerops import document field \`${issue.keys[0]}\``
+	if (section === 'project') {
+		return index === 'envIsolation'
+			? 'invalid fabrika manifest: Zerops import contains a forbidden project environment field'
+			: 'invalid fabrika manifest Zerops import project'
 	}
-	// A `${host_KEY}` reference crosses `envIsolation: service` by design, so the declared hostnames are the
-	// boundary. They are never rewritten at deploy: a shared namespace's app prefix is authored INTO the
-	// hostname (`service-names.ts`), which `registrationResourceClaims` then enforces.
-	const allowed = allowedReferenceHosts([...hostnames])
-	for (const [hostname, service] of parsed) {
-		const foreign = foreignReferenceInValue(service, allowed)
-		if (foreign !== null) {
-			throw new Error(`invalid fabrika manifest: Zerops service \`${hostname}\` references service \`${foreign}\`, which this app does not own`)
-		}
-	}
-	const services = parsed.map(([, service]) => service)
-	const rawProject = result.data.project
-	let project: { readonly [key: string]: JsonValue } | undefined
-	if (rawProject !== undefined) {
-		project = rawProject
-		if (project['envIsolation'] !== ENV_ISOLATION || project['envVariables'] !== undefined) {
-			throw new Error('invalid fabrika manifest: Zerops import contains a forbidden project environment field')
-		}
-	}
-	return project === undefined ? { services } : { project, services }
+	if (typeof index !== 'number') return 'invalid fabrika manifest Zerops import services'
+	if (field === 'hostname') return `invalid fabrika manifest Zerops service hostname at index ${index}`
+	return `invalid fabrika manifest Zerops service ${field === 'type' ? 'type' : 'invariants'} at index ${index}`
 }
 
-const parseSourceDescriptor = (value: unknown): ZeropsArtifactSourceDescriptor => {
-	if (value === undefined) {
-		throw new Error('invalid fabrika manifest Zerops source descriptor')
+const targetError = (issue: z.ZodIssue | undefined): string => {
+	const [section, ...rest] = issue?.path ?? []
+	if (issue === undefined) return 'invalid fabrika manifest Zerops target'
+	switch (section) {
+		case 'sourceDescriptor':
+			return issue.code === 'unrecognized_keys' && rest.length === 0
+				? `invalid fabrika manifest Zerops source descriptor field \`${issue.keys[0]}\``
+				: 'invalid fabrika manifest Zerops source descriptor'
+		case 'importDocument':
+			return importDocumentError(issue, rest)
+		case 'zeropsSetup':
+			return 'invalid fabrika manifest zeropsSetup'
+		case 'proxy':
+			return 'invalid fabrika manifest proxy declaration'
+		case 'namespaceResources':
+			return 'invalid fabrika manifest namespace resources'
+		default:
+			return 'invalid fabrika manifest Zerops target'
 	}
-	const raw = jsonObject(value, 'Zerops source descriptor')
-	const unknownKeys = Object.keys(raw).filter((key) => key !== 'path' && key !== 'contents' && key !== 'sha256')
-	if (unknownKeys.length > 0) {
-		throw new Error(`invalid fabrika manifest Zerops source descriptor field \`${unknownKeys[0]}\``)
-	}
-	const result = zeropsArtifactSourceDescriptorSchema.safeParse(raw)
-	if (!result.success) {
-		throw new Error('invalid fabrika manifest Zerops source descriptor')
-	}
-	return result.data
 }
 
 export const createZeropsArtifactSourceDescriptor = async (contents: string): Promise<ZeropsArtifactSourceDescriptor> => {
@@ -311,13 +253,7 @@ export const verifyZeropsArtifactSourceDescriptor = async (descriptor: ZeropsArt
 }
 
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>
-	manifest.target.importDocument.services.map((service) => {
-		const hostname = service['hostname']
-		if (typeof hostname !== 'string') {
-			throw new Error('invalid canonical Zerops service hostname')
-		}
-		return hostname
-	})
+	manifest.target.importDocument.services.map((service) => service.hostname)
 
 export const renderFabrikaImportYaml = (manifest: FabrikaManifest): string => renderYaml(manifest.target.importDocument)
 
@@ -329,47 +265,26 @@ export const renderFabrikaProvisioningYaml = (manifest: FabrikaManifest): string
 	})
 
 export function parseFabrikaManifest(value: unknown, expected: ManifestExpectation = {}): FabrikaManifest {
-	if (prop(value, 'manifestVersion') !== FABRIKA_MANIFEST_VERSION) {
-		throw new Error(`unsupported fabrika manifest version (expected ${FABRIKA_MANIFEST_VERSION})`)
+	const envelope = manifestEnvelopeSchema.safeParse(value)
+	if (!envelope.success) {
+		const [section, field] = envelope.error.issues[0]?.path ?? []
+		if (section !== 'app') throw new Error(`unsupported fabrika manifest version (expected ${FABRIKA_MANIFEST_VERSION})`)
+		throw new Error(field === 'schema' ? 'invalid fabrika manifest schema' : 'invalid fabrika manifest app metadata')
 	}
-	const rawApp = prop(value, 'app')
-	const metadata = appMetadataSchema.safeParse(rawApp)
-	if (!metadata.success) {
-		throw new Error('invalid fabrika manifest app metadata')
-	}
-	const { id, env, pipeline: { secrets, vars } } = metadata.data
+	const { id, env, schema, pipeline: { secrets, vars } } = envelope.data.app
 	assertFabrikaManifestCoordinates({ id, env }, expected)
-	const rawSchema = prop(rawApp, 'schema')
-	let schema: AppSchema | undefined
-	if (rawSchema !== undefined) {
-		const parsed = appSchema.safeParse(rawSchema)
-		if (!parsed.success) {
-			throw new Error('invalid fabrika manifest schema')
-		}
-		schema = parsed.data
-	}
 
-	const rawTarget = prop(value, 'target')
-	const sourceDescriptor = parseSourceDescriptor(prop(rawTarget, 'sourceDescriptor'))
-	const rawImportDocument = prop(rawTarget, 'importDocument')
-	const targetMetadata = targetMetadataSchema.safeParse(rawTarget)
-	if (!targetMetadata.success) {
-		throw new Error('invalid fabrika manifest Zerops target')
+	const target = manifestTargetSchema.safeParse(envelope.data.target)
+	if (!target.success) {
+		throw new Error(targetError(target.error.issues[0]))
 	}
-	const { deployService } = targetMetadata.data
-	const importDocument = parseImportDocument(rawImportDocument)
+	const { sourceDescriptor, deployService, importDocument, zeropsSetup, proxy, namespaceResources } = target.data
 	assertAuthoredManagedDocument(importDocument.services)
 	if (importDocument.project !== undefined) assertAuthoredManagedDocument(importDocument.project)
 	assertAuthoredManagedInputs({ variableNames: vars, secretNames: secrets })
 	const parsedDescriptor = parseZeropsDescriptor(sourceDescriptor.contents)
 	assertAuthoredManagedDocument(parsedDescriptor.document)
-	const serviceHostnames = importDocument.services.map((service) => {
-		const hostname = service['hostname']
-		if (typeof hostname !== 'string') {
-			throw new Error('invalid fabrika manifest Zerops service hostname')
-		}
-		return hostname
-	})
+	const serviceHostnames = importDocument.services.map((service) => service.hostname)
 	if (!serviceHostnames.includes(deployService)) {
 		throw new Error('invalid fabrika manifest Zerops deploy service')
 	}
@@ -380,34 +295,13 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (foreignInDescriptor !== null) {
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
-	const selector = setupSelectorSchema.safeParse(prop(rawTarget, 'zeropsSetup'))
-	if (!selector.success) {
-		throw new Error('invalid fabrika manifest zeropsSetup')
-	}
-	const zeropsSetup = selector.data
 	selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
-	const rawProxy = prop(rawTarget, 'proxy')
-	let proxy: ZeropsProxySpec | undefined
-	if (rawProxy !== undefined) {
-		const parsed = manifestProxySchema.safeParse(rawProxy)
-		if (!parsed.success) {
-			throw new Error('invalid fabrika manifest proxy declaration')
-		}
-		proxy = parsed.data
+	if (proxy !== undefined) {
 		const separator = proxy.upstream.indexOf(':')
 		const upstreamHostname = separator === -1 ? proxy.upstream : proxy.upstream.slice(0, separator)
 		if (!serviceHostnames.includes(upstreamHostname)) {
 			throw new Error(`invalid fabrika manifest: proxy upstream service \`${upstreamHostname}\` is not owned by this app`)
 		}
-	}
-	const rawNamespaceResources = prop(rawTarget, 'namespaceResources')
-	let namespaceResources: ZeropsNamespaceResourceRequirement[] | undefined
-	if (rawNamespaceResources !== undefined) {
-		const parsed = namespaceResourcesSchema.safeParse(rawNamespaceResources)
-		if (!parsed.success) {
-			throw new Error('invalid fabrika manifest namespace resources')
-		}
-		namespaceResources = parsed.data
 	}
 	if (namespaceResources?.some((resource) => serviceHostnames.includes(resource.hostname)) === true) {
 		throw new Error('invalid fabrika manifest: an app cannot declare a namespace-owned service')
@@ -450,31 +344,21 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string, sou
 		if (deployService === undefined || !serviceHostnames.includes(deployService)) {
 			throw new Error('fabrika app build: a multi-service Zerops app must name a valid deployService')
 		}
-		if (config.target.namespaceResources?.some((resource) => serviceHostnames.includes(resource.hostname)) === true) {
-			throw new Error('fabrika app build: an app cannot declare a namespace-owned service')
-		}
-		const manifest: FabrikaManifest = {
+		const candidate = {
 			manifestVersion: FABRIKA_MANIFEST_VERSION,
-			app: {
-				id: config.id,
-				env,
-				...(config.schema !== undefined ? { schema: config.schema } : {}),
-				pipeline: {
-					secrets: [...(config.pipeline?.secrets ?? [])],
-					vars: [...declaredVars],
-				},
-			},
+			app: { id: config.id, env, schema: config.schema, pipeline: { secrets: config.pipeline?.secrets ?? [], vars: declaredVars } },
 			target: {
 				platform: 'zerops',
 				sourceDescriptor,
-				importDocument: parseImportDocument(document),
+				importDocument: document,
 				deployService,
-				...(config.target.zeropsSetup !== undefined ? { zeropsSetup: config.target.zeropsSetup } : {}),
-				...(config.target.proxy !== undefined ? { proxy: config.target.proxy } : {}),
-				...(config.target.namespaceResources !== undefined ? { namespaceResources: [...config.target.namespaceResources] } : {}),
+				zeropsSetup: config.target.zeropsSetup,
+				proxy: config.target.proxy,
+				namespaceResources: config.target.namespaceResources,
 			},
 		}
-		return parseFabrikaManifest(manifest, { appId: config.id, env })
+		// The JSON copy is the artifact's own form: authored objects lose inherited fields and undefined keys once, here.
+		return parseFabrikaManifest(jsonValue(candidate), { appId: config.id, env })
 	} finally {
 		for (const name of declaredVars) {
 			const value = prior[name]

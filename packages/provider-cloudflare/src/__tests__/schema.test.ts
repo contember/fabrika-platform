@@ -27,9 +27,9 @@ describe('parseAppSchema', () => {
 	test('refuses a malformed shape, naming the field', () => {
 		expect(refusal({ scopes: {}, actions: [], roles: {} })).toContain('scopes and actions must be arrays')
 		expect(refusal({ scopes: [], actions: [], roles: [] })).toContain('roles must be an object')
-		expect(refusal({ scopes: [{ type: 'team', label: 42 }], actions: [], roles: {} })).toContain('each scope needs a string `type`')
-		expect(refusal({ scopes: [{}], actions: [], roles: {} })).toContain('each scope needs a string `type`')
-		expect(refusal({ scopes: [], actions: [{ action: 42 }], roles: {} })).toContain('each action needs a string `action`')
+		expect(refusal({ scopes: [{ type: 'team', label: 42 }], actions: [], roles: {} })).toContain('each scope needs a non-empty `type`')
+		expect(refusal({ scopes: [{}], actions: [], roles: {} })).toContain('each scope needs a non-empty `type`')
+		expect(refusal({ scopes: [], actions: [{ action: 42 }], roles: {} })).toContain('each action needs a non-empty `action`')
 	})
 
 	test('refuses a role key the object cannot hold, and a permission that is not a string', () => {
@@ -37,10 +37,10 @@ describe('parseAppSchema', () => {
 		// JSON.parse, not a literal: only there is `__proto__` an OWN key, which is how it arrives here.
 		expect(refusal(JSON.parse('{"scopes":[],"actions":[],"roles":{"__proto__":{"name":"X","permissions":[]}}}'))).toContain('is not usable')
 		expect(refusal({ scopes: [], actions: [], roles: { editor: { name: 'Editor', permissions: [42] } } })).toContain(
-			'needs a string name and an array of non-empty permissions',
+			'needs a non-empty name and an array of non-empty permissions',
 		)
 		expect(refusal({ scopes: [], actions: [], roles: { editor: { name: 'Editor', permissions: 'notes.read' } } })).toContain(
-			'needs a string name and an array of non-empty permissions',
+			'needs a non-empty name and an array of non-empty permissions',
 		)
 	})
 

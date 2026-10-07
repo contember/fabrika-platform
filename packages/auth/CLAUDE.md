@@ -83,6 +83,7 @@ the service that owns identity.
   (`fabrika.config.ts`). Nothing in this package reads them.
 - The authz vocabulary each app declares (`AppSchema`: scope dimensions, action catalog, roles) is the
   app's own; the first reconcile is also how it registers itself in IAM.
+- `appSchemaSchema` (`src/app-schema.ts`) is the ONE parser for that vocabulary — both providers and IAM use it.
 - `src/verify.ts` no longer verifies anything itself: `@fabrika/jwks` owns the one implementation and
   `@fabrika/proxy-core` wraps the same class. The proxy must not depend on the app SDK and
   `@fabrika/auth-core` is deliberately jose-free, which is why the shared code has its own package.

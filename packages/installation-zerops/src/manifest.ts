@@ -28,7 +28,7 @@
 // to some other app. A genuinely misplaced application therefore goes dark and is reported, instead of
 // quietly being served by the console.
 
-import { parseProxyManifest, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
+import { findDuplicateProxyHost, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
 
 /** The composed document plus what happened to every live entry that was not the platform's. */
 export interface MergedProxyManifest {
@@ -66,13 +66,13 @@ export const mergePlatformProxyManifest = (platform: ProxyManifest, live: ProxyM
 		carried.push(app.id)
 		apps.push(app)
 	}
-	// Back through the proxy's own parser, so a duplicate host between two APPLICATION entries — which
-	// this function cannot fix — is refused here rather than at the proxy's next build.
-	const manifest = parseProxyManifest({ apps })
-	if (manifest === null) {
+	// Both inputs are already parsed manifests, so a duplicate host is the one invariant composing can break.
+	// A duplicate host between two APPLICATION entries — which this function cannot fix — is refused
+	// here rather than at the proxy's next build.
+	if (findDuplicateProxyHost(apps) !== null) {
 		throw new Error('the composed proxy manifest is not one the proxy would accept — two application entries claim one host')
 	}
-	return { manifest, carried, superseded }
+	return { manifest: { apps }, carried, superseded }
 }
 
 /**

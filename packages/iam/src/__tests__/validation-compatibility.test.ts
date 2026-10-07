@@ -79,14 +79,14 @@ describe('REST provisioning tolerance', () => {
 		expect(() => parseProvisionApiKeyRequest({ label: 'agent', type: 'user' })).toThrow('label and type=service required')
 	})
 
-	test('vocabulary reconciliation strips extensions and malformed optional descriptions', async () => {
+	test('vocabulary reconciliation strips extensions and refuses malformed or empty fields', async () => {
 		const h = createHarness()
 		try {
 			const response = await putAppSchema(
 				context(h, {
-					scopes: [{ type: '', label: 7 }],
-					actions: [{ action: 'read', description: null, extra: true }],
-					roles: { reader: { name: '', permissions: ['read'], description: false } },
+					scopes: [{ type: 'team', label: 'Team' }],
+					actions: [{ action: 'read', extra: true }],
+					roles: { reader: { name: 'Reader', permissions: ['read'] } },
 					extra: true,
 				}),
 				'example',
@@ -95,16 +95,32 @@ describe('REST provisioning tolerance', () => {
 			const decoded: unknown = await response.json()
 			expect(decoded).toEqual({
 				app: 'example',
-				scopes: [{ type: '' }],
+				scopes: [{ type: 'team', label: 'Team' }],
 				actions: [{ action: 'read' }],
-				roles: { reader: { name: '', permissions: ['read'] } },
+				roles: { reader: { name: 'Reader', permissions: ['read'] } },
 			})
+			const refused: [unknown, string][] = [
+				[{ scopes: [{ type: '' }], actions: [], roles: {} }, 'each scope needs a non-empty `type`'],
+				[{ scopes: [{ type: 'team', label: 7 }], actions: [], roles: {} }, 'each scope needs a non-empty `type`'],
+				[{ scopes: [], actions: [{ action: 'read', description: null }], roles: {} }, 'each action needs a non-empty `action`'],
+				[{ scopes: [], actions: [{ action: 'read' }], roles: { reader: { name: '', permissions: ['read'] } } }, "role 'reader' needs"],
+				[
+					{ scopes: [], actions: [{ action: 'read' }], roles: { reader: { name: 'R', permissions: ['read'], description: false } } },
+					"role 'reader' needs",
+				],
+			]
+			for (const [body, message] of refused) {
+				const bad = await putAppSchema(context(h, body), 'example')
+				expect(bad.status).toBe(400)
+				const error: unknown = await bad.json()
+				expect(JSON.stringify(error)).toContain(message)
+			}
 		} finally {
 			h.sqlite.close()
 		}
 	})
 
-	test('vocabulary errors keep envelope and per-role domain precedence', async () => {
+	test('vocabulary errors report the envelope first, then the first malformed role, then unknown actions', async () => {
 		const h = createHarness()
 		try {
 			const badEnvelope = await putAppSchema(context(h, { scopes: [null], actions: [], roles: [] }), 'example')
@@ -119,7 +135,13 @@ describe('REST provisioning tolerance', () => {
 				'example',
 			)
 			const roleError: unknown = await badRole.json()
-			expect(roleError).toEqual({ error: "role 'first' references unknown action: write" })
+			expect(roleError).toEqual({ error: "role 'second' needs a non-empty name and a permissions array, and a usable key" })
+			const unknownAction = await putAppSchema(
+				context(h, { scopes: [], actions: [{ action: 'read' }], roles: { first: { name: 'first', permissions: ['write'] } } }),
+				'example',
+			)
+			const actionError: unknown = await unknownAction.json()
+			expect(actionError).toEqual({ error: 'role `first` references unknown action: `write`' })
 		} finally {
 			h.sqlite.close()
 		}

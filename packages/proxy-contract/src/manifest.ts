@@ -1,6 +1,5 @@
 import type { AppGates, CredentialLocation, GateRule } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { prop } from './json'
 
 export const FABRIKA_PROXY_MANIFEST_JSON = 'FABRIKA_PROXY_MANIFEST_JSON'
 
@@ -28,73 +27,55 @@ export function isProxyHost(host: string): boolean {
 	return host.length > 0 && host.length <= 253 && host.split('.').every((label) => label.length <= 63 && HOST_LABEL.test(label))
 }
 
-// Project own fields before parsing: inherited routing fields have never been part of this wire contract.
-export const proxyCredentialLocationSchema = z.preprocess(
-	(value) => ({ in: prop(value, 'in'), name: prop(value, 'name') }),
-	z.object({
-		in: z.enum(['header', 'query', 'cookie']),
-		name: z.string().min(1),
-	}),
-) satisfies z.ZodType<CredentialLocation, z.ZodTypeDef, unknown>
+export const proxyCredentialLocationSchema = z.object({
+	in: z.enum(['header', 'query', 'cookie']),
+	name: z.string().min(1),
+}) satisfies z.ZodType<CredentialLocation, z.ZodTypeDef, unknown>
 
 const gatePathSchema = z.string().startsWith('/')
-export const proxyGateRuleSchema = z.preprocess(
-	(value) => ({
-		path: prop(value, 'path'),
-		kind: prop(value, 'kind'),
-		credential: prop(value, 'credential'),
-	}),
-	z.discriminatedUnion('kind', [
-		z.object({ path: gatePathSchema, kind: z.literal('public') }),
-		z.object({ path: gatePathSchema, kind: z.literal('human') }),
-		z.object({ path: gatePathSchema, kind: z.literal('service'), credential: proxyCredentialLocationSchema.nullish() }),
-	]).transform((rule) => {
-		if (rule.kind !== 'service') return rule
-		return { path: rule.path, kind: rule.kind, ...(rule.credential == null ? {} : { credential: rule.credential }) }
-	}),
-) satisfies z.ZodType<GateRule, z.ZodTypeDef, unknown>
+/** A gate rule's fields before normalization; a producer adds its own refinements on top. */
+export const proxyGateRuleFieldsSchema = z.discriminatedUnion('kind', [
+	z.object({ path: gatePathSchema, kind: z.literal('public') }),
+	z.object({ path: gatePathSchema, kind: z.literal('human') }),
+	z.object({ path: gatePathSchema, kind: z.literal('service'), credential: proxyCredentialLocationSchema.nullish() }),
+])
 
-export const proxyAppGatesSchema = z.preprocess(
-	(value) => ({ rules: prop(value, 'rules') }),
-	z.object({
-		rules: z.array(proxyGateRuleSchema),
-	}),
-) satisfies z.ZodType<AppGates, z.ZodTypeDef, unknown>
+/** Drop an absent service credential, so a rule without one carries no `credential` key at all. */
+export const normalizeGateRule = (rule: z.infer<typeof proxyGateRuleFieldsSchema>): GateRule => {
+	if (rule.kind !== 'service') return rule
+	return { path: rule.path, kind: rule.kind, ...(rule.credential == null ? {} : { credential: rule.credential }) }
+}
 
-export const proxyAppSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		hosts: prop(value, 'hosts'),
-		upstream: prop(value, 'upstream'),
-		gates: prop(value, 'gates'),
-		scheme: prop(value, 'scheme'),
-	}),
-	z.object({
-		id: z.string().min(1),
-		hosts: z.array(z.string().toLowerCase().refine(isProxyHost)).min(1),
-		upstream: z.string().min(1),
-		gates: proxyAppGatesSchema,
-		scheme: z.preprocess((value) => typeof value === 'string' ? value : undefined, z.enum(['http', 'https']).default('https')),
-	}),
-) satisfies z.ZodType<ProxyApp, z.ZodTypeDef, unknown>
+export const proxyGateRuleSchema = proxyGateRuleFieldsSchema.transform(normalizeGateRule) satisfies z.ZodType<GateRule, z.ZodTypeDef, unknown>
 
-export const proxyManifestSchema = z.preprocess(
-	(value) => ({ apps: prop(value, 'apps') }),
-	z.object({
-		apps: z.array(proxyAppSchema),
-	}).superRefine(({ apps }, ctx) => {
-		const ids = new Set<string>()
-		const hosts = new Set<string>()
-		for (const app of apps) {
-			if (ids.has(app.id)) ctx.addIssue({ code: 'custom', message: 'duplicate proxy app id' })
-			ids.add(app.id)
-			for (const host of app.hosts) {
-				if (hosts.has(host)) ctx.addIssue({ code: 'custom', message: 'duplicate proxy host' })
-				hosts.add(host)
-			}
-		}
-	}),
-) satisfies z.ZodType<ProxyManifest, z.ZodTypeDef, unknown>
+export const proxyAppGatesSchema = z.object({
+	rules: z.array(proxyGateRuleSchema),
+}) satisfies z.ZodType<AppGates, z.ZodTypeDef, unknown>
+
+export const proxyAppSchema = z.object({
+	id: z.string().min(1),
+	hosts: z.array(z.string().toLowerCase().refine(isProxyHost)).min(1),
+	upstream: z.string().min(1),
+	gates: proxyAppGatesSchema,
+	scheme: z.preprocess((value) => typeof value === 'string' ? value : undefined, z.enum(['http', 'https']).default('https')),
+}) satisfies z.ZodType<ProxyApp, z.ZodTypeDef, unknown>
+
+/** The first host two apps (or one app twice) claim, or null. A host belongs to exactly one app. */
+export function findDuplicateProxyHost(apps: readonly Pick<ProxyApp, 'hosts'>[]): string | null {
+	const hosts = new Set<string>()
+	for (const host of apps.flatMap((app) => app.hosts)) {
+		if (hosts.has(host)) return host
+		hosts.add(host)
+	}
+	return null
+}
+
+export const proxyManifestSchema = z.object({
+	apps: z.array(proxyAppSchema),
+}).superRefine(({ apps }, ctx) => {
+	if (new Set(apps.map((app) => app.id)).size !== apps.length) ctx.addIssue({ code: 'custom', message: 'duplicate proxy app id' })
+	if (findDuplicateProxyHost(apps) !== null) ctx.addIssue({ code: 'custom', message: 'duplicate proxy host' })
+}) satisfies z.ZodType<ProxyManifest, z.ZodTypeDef, unknown>
 
 export function parseProxyManifest(value: unknown): ProxyManifest | null {
 	const result = proxyManifestSchema.safeParse(value)

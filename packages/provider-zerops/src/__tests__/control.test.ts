@@ -881,7 +881,7 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
-	test('preserves baseline hook aliasing: detached import edits and shared pipeline edits in runtime artifact identity', async () => {
+	test('detaches hook edits, import and pipeline alike, from the runtime artifact identity', async () => {
 		const manifest = compileFabrikaManifest(
 			{
 				...config,
@@ -917,10 +917,10 @@ describe('Zerops ControlProvider lifecycle', () => {
 			},
 			execute: async (provider, run) => {
 				const artifact = zeropsArtifactCodec.decode(run.artifact.payload)
-				expect(artifact.app.pipeline).toEqual({ secrets: ['TOKEN', 'HOOK_SECRET'], vars: ['IMAGE_TAG', 'HOOK_VAR'] })
+				expect(artifact.app.pipeline).toEqual({ secrets: ['TOKEN'], vars: ['IMAGE_TAG'] })
 				expect(artifact.target).toEqual(manifest.target)
 				runtimeHash = await hashFabrikaManifest(artifact)
-				expect(runtimeHash).not.toBe(originalHash)
+				expect(runtimeHash).toBe(originalHash)
 				return executeProvider(provider, run)
 			},
 		})
@@ -1301,15 +1301,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
 		const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)
-		const service = manifest.target.importDocument.services[0]
-		if (service === undefined) throw new Error('expected a service')
-		const drifted = {
-			...manifest,
-			target: {
-				...manifest.target,
-				importDocument: { services: [{ ...service, override: false }] },
-			},
-		}
+		// The manifest type cannot carry the drift, so it is spliced into the encoded artifact.
+		const drifted: JsonValue = JSON.parse(JSON.stringify(zeropsArtifactCodec.encode(manifest)).replace('"override":true', '"override":false'))
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
@@ -1324,7 +1317,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 				artifact: {
 					provider: 'zerops',
 					version: zeropsArtifactCodec.version,
-					payload: zeropsArtifactCodec.encode(drifted),
+					payload: drifted,
 				},
 			}),
 		})).rejects.toThrow('invariants')

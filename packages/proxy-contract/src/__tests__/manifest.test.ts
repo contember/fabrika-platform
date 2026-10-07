@@ -146,10 +146,8 @@ describe('parseProxyManifest — rejects', () => {
 		expect(parseProxyManifestJson('{')).toBeNull()
 	})
 
-	test('uses only own fields, strips extensions and omits absent service credentials', () => {
-		expect(parseProxyManifest(Object.create(VALID))).toBeNull()
+	test('strips extensions and omits absent service credentials', () => {
 		const app = { id: 'a', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }
-		expect(parseProxyManifest({ apps: [Object.create(app)] })).toBeNull()
 		for (const credential of [undefined, null]) {
 			const result = parseProxyManifest({
 				apps: [{ ...app, extra: true, gates: { extra: true, rules: [{ kind: 'service', path: '/*', credential, extra: true }] } }],
