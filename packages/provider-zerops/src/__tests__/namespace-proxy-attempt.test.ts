@@ -1,9 +1,12 @@
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-contract'
 import { expect, test } from 'bun:test'
-import { ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
+import { createZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
 import { createZeropsArtifactSourceDescriptor } from '../manifest'
+import { createZeropsNamespaceCapabilities } from '../namespace'
 import { zeropsNamespaceTargetCodec } from '../namespace/codec'
-import { runZeropsProxyAttempt, type ZeropsProxyAttemptApi, type ZeropsProxyAttemptInput } from '../namespace/proxy-attempt'
+import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE } from '../namespace/constants'
+import { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from '../namespace/proxy-attempt'
 import type { ZeropsNamespaceTarget } from '../namespace/types'
 import type { ZeropsSourceClient } from '../source'
 
@@ -12,9 +15,10 @@ const pin = {
 	commitSha: 'a'.repeat(40),
 	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
 }
-const changedManifest = JSON.stringify({
+const EMPTY: ProxyManifest = { apps: [] }
+const CHANGED: ProxyManifest = {
 	apps: [{ id: 'app', hosts: ['app.example.test'], upstream: 'app:3000', gates: { rules: [{ path: '/*', kind: 'public' }] }, scheme: 'https' }],
-})
+}
 
 function fixture() {
 	const calls: string[] = []
@@ -22,8 +26,8 @@ function fixture() {
 	let status: ZeropsAppVersionStatus = 'ACTIVE'
 	let sequence = 0
 	const deleted = new Set<string>()
-	const api: ZeropsProxyAttemptApi = {
-		listServiceEnv: async () => [],
+	const api: ZeropsProxyApi = {
+		listServiceEnv: async () => [{ id: 'issuer', key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, content: 'https://iam.stale.example' }],
 		putServiceEnv: async input => {
 			calls.push(`env:${input.key}`)
 		},
@@ -47,14 +51,10 @@ function fixture() {
 			if (deleted.has(input.appVersionId)) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
 			return { id: input.appVersionId, status }
 		},
-		cancelBuild: async input => {
-			calls.push(`cancelBuild:${input.appVersionId}`)
-		},
 	}
 	const source: ZeropsSourceClient = {
 		resolve: async input => {
 			calls.push('resolve')
-			expect(input.repository).toEqual(pin.repository)
 			expect(input.requestedRef).toBe(pin.commitSha)
 			expect(input.expectedCommitSha).toBe(pin.commitSha)
 			return { runId: input.runId, commitSha: pin.commitSha, descriptorSha256: pin.descriptor.sha256 }
@@ -62,8 +62,6 @@ function fixture() {
 		upload: async input => {
 			calls.push(`upload:${input.appVersionId}`)
 			expect(input.archiveKind).toBe('platform')
-			expect(input.githubInstallationId).toBeUndefined()
-			expect(input.uploadUrl).toBe('https://upload.example.test?secret=redacted')
 			return { runId: input.runId, appVersionId: input.appVersionId, commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }
 		},
 		cancel: async input => {
@@ -71,9 +69,9 @@ function fixture() {
 		},
 	}
 	const controller = new AbortController()
-	const input = (): ZeropsProxyAttemptInput => ({
+	const input = (): ZeropsProxyRepublishInput => ({
 		target,
-		manifest: '{"apps":[]}',
+		manifest: EMPTY,
 		source,
 		api,
 		iamUrl: 'https://iam.example.test',
@@ -81,6 +79,9 @@ function fixture() {
 		signal: controller.signal,
 		wait: 'started',
 		sleep: async () => {},
+		boundary: async () => {
+			calls.push('boundary')
+		},
 		checkpoint: async next => {
 			target = zeropsNamespaceTargetCodec.decode(zeropsNamespaceTargetCodec.encode(next))
 		},
@@ -98,143 +99,120 @@ function fixture() {
 	}
 }
 
-test('started waits for upload and positive build acceptance on the same reserved version', async () => {
+const effects = (calls: string[]) => calls.filter(call => !/^(boundary|resolve|observe:)/.test(call))
+
+test('started publishes routing and IAM before the build and returns once the build is accepted', async () => {
 	const f = fixture()
-	const uploading = Promise.withResolvers<void>()
-	const finishUpload = Promise.withResolvers<void>()
-	let completed = false
-	const work = runZeropsProxyAttempt({
-		...f.input(),
-		source: {
-			...f.source,
-			upload: async input => {
-				uploading.resolve()
-				await finishUpload.promise
-				return f.source.upload(input)
-			},
-		},
-	}).then(result => {
-		completed = true
-		return result
-	})
-	await uploading.promise
-	expect(completed).toBe(false)
-	expect(f.calls.some(call => call.startsWith('build:'))).toBe(false)
-	finishUpload.resolve()
-	const result = await work
-	expect(f.calls.filter(call => /reserve:|upload:|build:/.test(call))).toEqual(['reserve:v1', 'upload:v1', 'build:v1'])
-	expect(result.proxyBuild?.phase).toBe('build_triggered')
-	expect(result.proxyBuild?.manifestSha256).toMatch(/^[a-f0-9]{64}$/)
+	const result = await republishProxy(f.input())
+	expect(effects(f.calls)).toEqual([
+		`env:${FABRIKA_PROXY_MANIFEST_JSON}`,
+		'env:FABRIKA_PROXY_SESSION_OWNER_JSON',
+		`env:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`,
+		`env:${ZEROPS_NAMESPACE_IAM_KEY_VARIABLE}`,
+		'reserve:v1',
+		'upload:v1',
+		'build:v1',
+	])
+	expect(f.calls.some(call => call.startsWith('observe:'))).toBe(false)
+	expect(result.proxyBuild).toEqual({ appVersionId: 'v1', triggered: true, manifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+	expect(JSON.stringify(f.target())).not.toContain('not-logged')
 })
 
-test('ambiguous UPLOADING blocks another invocation across durable roundtrip without retry or deletion', async () => {
+test('active polls the exact version to ACTIVE and records it as the deployment of that manifest', async () => {
+	const f = fixture()
+	const result = await republishProxy({ ...f.input(), wait: 'active' })
+	expect(result.proxyBuild).toBeUndefined()
+	expect(result.proxyDeployment).toEqual({
+		appVersionId: 'v1',
+		repository: pin.repository,
+		commitSha: pin.commitSha,
+		descriptorSha256: pin.descriptor.sha256,
+		manifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+	})
+	expect(f.calls.indexOf('observe:v1')).toBeGreaterThan(f.calls.indexOf('build:v1'))
+})
+
+test('an inherited untriggered attempt is deleted, never built, and replaced by a fresh one', async () => {
+	const f = fixture()
+	await f.input().checkpoint({ ...f.target(), proxyBuild: { appVersionId: 'v0', triggered: false } })
+	const result = await republishProxy(f.input())
+	expect(effects(f.calls).slice(0, 2)).toEqual(['delete:v0', `env:${FABRIKA_PROXY_MANIFEST_JSON}`])
+	expect(f.calls).not.toContain('build:v0')
+	expect(result.proxyBuild?.appVersionId).toBe('v1')
+})
+
+test('an inherited untriggered attempt whose deletion is unconfirmed stays recorded and blocks a new one', async () => {
+	const f = fixture()
+	await f.input().checkpoint({ ...f.target(), proxyBuild: { appVersionId: 'v0', triggered: false } })
+	f.api.deleteAppVersion = async () => {
+		throw new Error('deletion unknown')
+	}
+	await expect(republishProxy(f.input())).rejects.toThrow('v0 remains unresolved')
+	expect(f.target().proxyBuild).toEqual({ appVersionId: 'v0', triggered: false })
+	expect(f.calls.some(call => /reserve:|build:/.test(call))).toBe(false)
+})
+
+test('an inherited triggered attempt is polled, never deleted; a newer manifest waits until it settles', async () => {
+	const f = fixture()
+	f.status('BUILDING')
+	const first = await republishProxy(f.input())
+	const priorDigest = first.proxyBuild?.manifestSha256
+	f.calls.length = 0
+	await expect(republishProxy({ ...f.input(), manifest: CHANGED })).rejects.toThrow('v1 remains unresolved')
+	expect(f.calls).toEqual(['boundary', 'observe:v1'])
+	f.status('ACTIVE')
+	const second = await republishProxy({ ...f.input(), manifest: CHANGED })
+	expect(second.proxyDeployment?.appVersionId).toBe('v1')
+	expect(second.proxyDeployment?.manifestSha256).toBe(priorDigest)
+	expect(second.proxyBuild?.appVersionId).toBe('v2')
+	expect(second.proxyBuild?.manifestSha256).not.toBe(priorDigest)
+	expect(f.calls.some(call => call.startsWith('delete:'))).toBe(false)
+})
+
+test('an inherited triggered attempt of the same manifest settles without another build', async () => {
+	const f = fixture()
+	await republishProxy(f.input())
+	f.calls.length = 0
+	const result = await republishProxy({ ...f.input(), wait: 'active' })
+	expect(result.proxyDeployment?.appVersionId).toBe('v1')
+	expect(effects(f.calls)).toEqual([])
+})
+
+for (const rotation of ['issuer', 'key'] as const) {
+	test(`a rotated IAM ${rotation} rebuilds after an inherited attempt of the same manifest settles`, async () => {
+		const f = fixture()
+		await republishProxy(f.input())
+		f.calls.length = 0
+		const input = f.input()
+		const result = await republishProxy({
+			...input,
+			wait: 'active',
+			...(rotation === 'issuer' ? { iamUrl: 'https://iam.rotated.example.test' } : { iamKey: 'rotated-key' }),
+		})
+		expect(result.proxyDeployment?.appVersionId).toBe('v2')
+		expect(f.calls).toContain(`env:${ZEROPS_NAMESPACE_IAM_KEY_VARIABLE}`)
+		expect(f.calls).toContain('build:v2')
+		expect(JSON.stringify(f.target())).not.toContain('rotated-key')
+	})
+}
+
+test('a lost build response stays a triggered attempt that is observed, never deleted or resubmitted', async () => {
 	const f = fixture()
 	f.status('UPLOADING')
 	f.api.buildAndDeployAppVersion = async input => {
 		f.calls.push(`build:${input.appVersionId}`)
 		throw new Error('response lost')
 	}
-	await expect(runZeropsProxyAttempt(f.input())).rejects.toThrow('v1 remains unresolved')
-	expect(f.target().proxyBuild?.phase).toBe('build_trigger_requested')
+	await expect(republishProxy(f.input())).rejects.toThrow('v1 remains unresolved')
+	expect(f.target().proxyBuild).toMatchObject({ appVersionId: 'v1', triggered: true })
 	f.calls.length = 0
-	await expect(runZeropsProxyAttempt({ ...f.input(), manifest: changedManifest })).rejects.toThrow('v1 remains unresolved')
-	expect(f.calls).toEqual(['observe:v1'])
+	await expect(republishProxy(f.input())).rejects.toThrow('v1 remains unresolved')
+	expect(effects(f.calls)).toEqual([])
 })
 
-test('positive exact-version observation proves started after a lost response', async () => {
+test('a failure before the build request deletes the reserved version and clears the attempt', async () => {
 	const f = fixture()
-	f.status('BUILDING')
-	f.api.buildAndDeployAppVersion = async () => {
-		throw new Error('response lost')
-	}
-	const result = await runZeropsProxyAttempt(f.input())
-	expect(result.proxyBuild?.appVersionId).toBe('v1')
-	expect(result.proxyBuild?.phase).toBe('build_trigger_requested')
-	expect(f.calls).not.toContain('delete:v1')
-})
-
-test('new manifest intent cannot overwrite an unresolved attempt and is published only after old version settles', async () => {
-	const f = fixture()
-	f.status('BUILDING')
-	const first = await runZeropsProxyAttempt(f.input())
-	const priorDigest = first.proxyBuild?.manifestSha256
-	const changed = changedManifest
-	f.calls.length = 0
-	await expect(runZeropsProxyAttempt({ ...f.input(), manifest: changed })).rejects.toThrow('remains unresolved')
-	expect(f.calls).toEqual(['observe:v1'])
-	f.status('ACTIVE')
-	const second = await runZeropsProxyAttempt({ ...f.input(), manifest: changed })
-	expect(second.proxyDeployment?.appVersionId).toBe('v1')
-	expect(second.proxyDeployment?.manifestSha256).toBe(priorDigest)
-	expect(second.proxyBuild?.appVersionId).toBe('v2')
-	expect(second.proxyBuild?.manifestSha256).not.toBe(priorDigest)
-})
-
-test('source_uploaded retry cannot report a newer manifest started while its old intent is building', async () => {
-	const f = fixture()
-	await runZeropsProxyAttempt(f.input())
-	const target = f.target()
-	if (target.proxyBuild === undefined) throw new Error('missing attempt')
-	f.status('BUILDING')
-	await expect(runZeropsProxyAttempt({
-		...f.input(),
-		target: { ...target, proxyBuild: { ...target.proxyBuild, phase: 'source_uploaded', processId: undefined } },
-		manifest: changedManifest,
-	})).rejects.toThrow('remains unresolved')
-	expect(f.calls.filter(call => call.startsWith('reserve:'))).toHaveLength(1)
-})
-
-test('resolution failure and invalid descriptor digest cause no external writes', async () => {
-	const f = fixture()
-	await expect(runZeropsProxyAttempt({
-		...f.input(),
-		source: {
-			...f.source,
-			resolve: async () => {
-				throw new Error('source unavailable')
-			},
-		},
-	})).rejects.toThrow('source unavailable')
-	expect(f.calls).toEqual([])
-	await expect(
-		runZeropsProxyAttempt({
-			...f.input(),
-			target: { ...f.target(), proxySource: { ...pin, descriptor: { ...pin.descriptor, sha256: '0'.repeat(64) } } },
-		}),
-	).rejects.toThrow()
-	expect(f.calls).toEqual([])
-})
-
-test('deployment evidence without a manifest digest never proves current routing', async () => {
-	const f = fixture()
-	await runZeropsProxyAttempt({ ...f.input(), wait: 'active' })
-	const target = f.target()
-	if (target.proxyDeployment === undefined) throw new Error('missing deployment')
-	const result = await runZeropsProxyAttempt({
-		...f.input(),
-		target: {
-			...target,
-			proxyDeployment: { ...target.proxyDeployment, manifestSha256: undefined },
-		},
-	})
-	expect(result.proxyBuild?.appVersionId).toBe('v2')
-	expect(f.calls.filter(call => call.startsWith('reserve:'))).toEqual(['reserve:v1', 'reserve:v2'])
-})
-
-test('an unpinned legacy target is refused before any source or platform call', async () => {
-	const f = fixture()
-	await expect(
-		runZeropsProxyAttempt({
-			...f.input(),
-			target: { ...f.target(), proxySource: undefined, proxyBuildFromGit: 'https://github.com/example/platform' },
-		}),
-	).rejects.toThrow('unpinned')
-	expect(f.calls).toEqual([])
-})
-
-test('upload failure cancels source before deleting the inert version and never builds', async () => {
-	const f = fixture()
-	await expect(runZeropsProxyAttempt({
+	await expect(republishProxy({
 		...f.input(),
 		source: {
 			...f.source,
@@ -243,97 +221,43 @@ test('upload failure cancels source before deleting the inert version and never 
 			},
 		},
 	})).rejects.toThrow('upload failed')
-	expect(f.calls.slice(-3)).toEqual(['cancelSource:v1', 'delete:v1', 'observe:v1'])
+	expect(effects(f.calls).slice(-1)).toEqual(['delete:v1'])
+	expect(f.calls).not.toContain('build:v1')
+	expect(f.calls.some(call => call.startsWith('cancelSource:'))).toBe(false)
+	expect(f.target().proxyBuild).toBeUndefined()
+})
+
+test('a cancellation read before the build request deletes the reserved version', async () => {
+	const f = fixture()
+	const input = f.input()
+	await expect(republishProxy({
+		...input,
+		boundary: async () => {
+			if (f.calls.includes('upload:v1')) throw new ProviderInvocationAbort('cancel_requested')
+		},
+	})).rejects.toMatchObject({ kind: 'cancel_requested' })
+	expect(f.calls).toContain('delete:v1')
 	expect(f.calls).not.toContain('build:v1')
 	expect(f.target().proxyBuild).toBeUndefined()
 })
 
-test('failed source cancellation does not prevent exact inert deletion settlement', async () => {
+test('a cancellation after the build request leaves the triggered attempt recorded for reconciliation', async () => {
 	const f = fixture()
-	await expect(runZeropsProxyAttempt({
+	f.status('BUILDING')
+	await expect(republishProxy({
 		...f.input(),
-		source: {
-			...f.source,
-			upload: async () => {
-				throw new Error('upload failed')
-			},
-			cancel: async () => {
-				throw new Error('cancellation lost')
-			},
+		wait: 'active',
+		boundary: async () => {
+			if (f.calls.includes('build:v1')) throw new ProviderInvocationAbort('cancel_requested')
 		},
-	})).rejects.toThrow('upload failed')
-	expect(f.calls.slice(-2)).toEqual(['delete:v1', 'observe:v1'])
-	expect(f.target().proxyBuild).toBeUndefined()
+	})).rejects.toMatchObject({ kind: 'cancel_requested' })
+	expect(f.target().proxyBuild).toMatchObject({ appVersionId: 'v1', triggered: true })
+	expect(f.calls.some(call => call.startsWith('delete:'))).toBe(false)
 })
 
-for (const failure of ['delete-response', 'read-response', 'still-present', 'unverified-absence']) {
-	test(`inert cleanup retains its checkpoint after ${failure}`, async () => {
-		const f = fixture()
-		if (failure === 'delete-response') {
-			f.api.deleteAppVersion = async () => {
-				throw new Error('unknown delete result')
-			}
-		}
-		if (failure === 'read-response') {
-			f.api.getAppVersion = async () => {
-				throw new Error('unknown read result')
-			}
-		}
-		if (failure === 'still-present') f.api.getAppVersion = async ({ appVersionId }) => ({ id: appVersionId, status: 'UPLOADING' })
-		if (failure === 'unverified-absence') {
-			f.api.getAppVersion = async () => {
-				throw new ZeropsApiError('absent', 404, 'appVersionNotFound')
-			}
-		}
-		await expect(runZeropsProxyAttempt({
-			...f.input(),
-			source: {
-				...f.source,
-				upload: async () => {
-					throw new Error('upload failed')
-				},
-			},
-		})).rejects.toThrow('remains unresolved')
-		expect(f.target().proxyBuild?.phase).toBe('version_created')
-		expect(f.calls).not.toContain('build:v1')
-	})
-}
-
-test('a delayed successful upload cannot trigger the deleted inert reservation', async () => {
+test('lease loss during upload neither deletes nor builds, and leaves the untriggered attempt to the next owner', async () => {
 	const f = fixture()
-	const lateUpload = Promise.withResolvers<void>()
-	let completed = false
-	const late = lateUpload.promise.then(() => {
-		completed = true
-	})
-	await expect(runZeropsProxyAttempt({
-		...f.input(),
-		source: {
-			...f.source,
-			upload: async () => {
-				throw new Error('upload response lost')
-			},
-			cancel: async () => {
-				throw new Error('cancellation lost')
-			},
-		},
-	})).rejects.toThrow('upload response lost')
-	expect(f.target().proxyBuild).toBeUndefined()
-	lateUpload.resolve()
-	await late
-	expect(completed).toBe(true)
-	await expect(f.api.getAppVersion({ appVersionId: 'v1', signal: new AbortController().signal })).rejects.toMatchObject({
-		status: 400,
-		code: 'appVersionNotFound',
-	})
-	await runZeropsProxyAttempt(f.input())
-	expect(f.calls).not.toContain('build:v1')
-	expect(f.calls).toContain('build:v2')
-})
-
-test('lease loss during upload preserves checkpoint without cancellation, deletion or build', async () => {
-	const f = fixture()
-	await expect(runZeropsProxyAttempt({
+	await expect(republishProxy({
 		...f.input(),
 		source: {
 			...f.source,
@@ -342,143 +266,84 @@ test('lease loss during upload preserves checkpoint without cancellation, deleti
 				throw f.controller.signal.reason
 			},
 		},
-	})).rejects.toThrow()
+	})).rejects.toMatchObject({ kind: 'lease_lost' })
 	expect(f.calls.some(call => /delete:|cancel|build:/.test(call))).toBe(false)
-	expect(f.target().proxyBuild?.phase).toBe('version_created')
+	expect(f.target().proxyBuild).toMatchObject({ appVersionId: 'v1', triggered: false })
 })
 
-test('namespace ownership loss wins over an earlier application cancellation during upload', async () => {
+test('userDataSyncRunning restores the untriggered checkpoint before retrying the same version', async () => {
 	const f = fixture()
-	const ownership = new AbortController()
-	await expect(runZeropsProxyAttempt({
+	const recorded: Array<boolean | undefined> = []
+	let refusals = 1
+	const build = f.api.buildAndDeployAppVersion
+	f.api.buildAndDeployAppVersion = async input => {
+		if (refusals-- > 0) throw new ZeropsApiError('sync running', 400, 'userDataSyncRunning')
+		return build(input)
+	}
+	const input = f.input()
+	await republishProxy({
+		...input,
+		checkpoint: async next => {
+			recorded.push(next.proxyBuild?.triggered)
+			await input.checkpoint(next)
+		},
+	})
+	expect(recorded).toEqual([false, true, false, true])
+	expect(f.calls.filter(call => call.startsWith('reserve:'))).toEqual(['reserve:v1'])
+})
+
+test('resolution failure, an invalid descriptor digest and an unpinned target cause no external writes', async () => {
+	const f = fixture()
+	await expect(republishProxy({
 		...f.input(),
-		ownershipSignal: ownership.signal,
 		source: {
 			...f.source,
-			upload: async () => {
-				f.controller.abort(new ProviderInvocationAbort('cancel_requested'))
-				ownership.abort(new ProviderInvocationAbort('lease_lost'))
-				throw f.controller.signal.reason
+			resolve: async () => {
+				throw new Error('source unavailable')
 			},
 		},
-	})).rejects.toThrow()
-	expect(f.calls.some(call => /delete:|cancel|build:/.test(call))).toBe(false)
-	expect(f.target().proxyBuild?.phase).toBe('version_created')
-})
-
-test('caller cancellation during reservation records its identity and cleans only that inert version', async () => {
-	const f = fixture()
-	const reserve = f.api.createAppVersion
-	f.api.createAppVersion = async input => {
-		const result = await reserve(input)
-		f.controller.abort(new ProviderInvocationAbort('cancel_requested'))
-		return result
-	}
-	await expect(runZeropsProxyAttempt(f.input())).rejects.toThrow()
-	expect(f.target().proxyBuild).toBeUndefined()
-	expect(f.calls.slice(-3)).toEqual(['cancelSource:v1', 'delete:v1', 'observe:v1'])
-	expect(f.calls.some(call => /build:|upload:/.test(call))).toBe(false)
-})
-
-for (const phase of ['source_uploaded', 'build_trigger_requested']) {
-	test(`cancellation during ${phase} checkpoint clears confirmed inert deletion and allows retry`, async () => {
-		const f = fixture()
-		const ownership = new AbortController()
-		const input = f.input()
-		await expect(runZeropsProxyAttempt({
-			...input,
-			ownershipSignal: ownership.signal,
-			checkpoint: async next => {
-				await input.checkpoint(next)
-				if (next.proxyBuild?.phase === phase) f.controller.abort(new ProviderInvocationAbort('cancel_requested'))
-			},
-		})).rejects.toThrow()
-		expect(f.calls.slice(-3)).toEqual(['cancelSource:v1', 'delete:v1', 'observe:v1'])
-		expect(f.calls).not.toContain('build:v1')
-		expect(f.target().proxyBuild).toBeUndefined()
-		await runZeropsProxyAttempt({ ...f.input(), signal: new AbortController().signal, ownershipSignal: ownership.signal })
-		expect(f.target().proxyBuild?.appVersionId).toBe('v2')
-		expect(f.calls).toContain('build:v2')
-	})
-}
-
-test('unconfirmed deletion after checkpoint cancellation retains a recoverable inert checkpoint', async () => {
-	const f = fixture()
-	const input = f.input()
-	f.api.deleteAppVersion = async () => {
-		throw new Error('deletion unknown')
-	}
-	await expect(runZeropsProxyAttempt({
-		...input,
-		ownershipSignal: new AbortController().signal,
-		checkpoint: async next => {
-			await input.checkpoint(next)
-			if (next.proxyBuild?.phase === 'build_trigger_requested') f.controller.abort(new ProviderInvocationAbort('cancel_requested'))
-		},
-	})).rejects.toThrow('remains unresolved')
-	expect(f.target().proxyBuild?.phase).toBe('version_created')
-	expect(f.calls).not.toContain('build:v1')
-})
-
-test('lease loss after inert deletion cannot clear the ledger; a new owner can recover the cleanup checkpoint', async () => {
-	const f = fixture()
-	const ownership = new AbortController()
-	const input = f.input()
-	const remove = f.api.deleteAppVersion
-	f.api.deleteAppVersion = async value => {
-		await remove(value)
-		ownership.abort(new ProviderInvocationAbort('lease_lost'))
-	}
-	await expect(runZeropsProxyAttempt({
-		...input,
-		ownershipSignal: ownership.signal,
-		checkpoint: async next => {
-			await input.checkpoint(next)
-			if (next.proxyBuild?.phase === 'build_trigger_requested') f.controller.abort(new ProviderInvocationAbort('cancel_requested'))
-		},
-	})).rejects.toThrow()
-	expect(f.target().proxyBuild?.phase).toBe('version_created')
-	f.api.deleteAppVersion = remove
-	await runZeropsProxyAttempt({ ...f.input(), signal: new AbortController().signal, ownershipSignal: new AbortController().signal })
-	expect(f.target().proxyBuild?.appVersionId).toBe('v2')
-})
-
-test('an explicit IAM rotation cannot report an inherited uploaded attempt as the new configuration', async () => {
-	const f = fixture()
-	await runZeropsProxyAttempt(f.input())
-	const target = f.target()
-	if (target.proxyBuild === undefined) throw new Error('missing attempt')
-	f.status('BUILDING')
-	await expect(runZeropsProxyAttempt({
+	})).rejects.toThrow('source unavailable')
+	await expect(republishProxy({
 		...f.input(),
-		iamKey: 'rotated-key',
-		target: {
-			...target,
-			proxyBuild: { ...target.proxyBuild, phase: 'source_uploaded', processId: undefined },
-		},
-	})).rejects.toThrow('remains unresolved')
-	f.status('ACTIVE')
-	await runZeropsProxyAttempt({ ...f.input(), iamKey: 'rotated-key' })
-	expect(f.target().proxyBuild?.appVersionId).toBe('v2')
+		target: { ...f.target(), proxySource: { ...pin, descriptor: { ...pin.descriptor, sha256: '0'.repeat(64) } } },
+	})).rejects.toThrow()
+	await expect(republishProxy({ ...f.input(), target: { ...f.target(), proxySource: undefined } })).rejects.toThrow('unpinned')
+	expect(effects(f.calls)).toEqual([])
 })
 
-for (const change of ['issuer', 'key', 'unchanged']) {
-	test(`explicit ${change} IAM sync activates a fresh version without relying on secret read-back`, async () => {
-		const f = fixture()
-		await runZeropsProxyAttempt({ ...f.input(), wait: 'active' })
-		const input = f.input()
-		const iamUrl = change === 'issuer' ? 'https://new-iam.example.test' : input.iamUrl
-		const iamKey = change === 'key' ? 'rotated-key' : input.iamKey
-		// Even a prewritten desired value is not evidence of what the running version loaded.
-		f.api.listServiceEnv = async () => [
-			{ id: 'issuer', key: 'FABRIKA_IAM_ISSUER', content: iamUrl },
-			{ id: 'key', key: 'FABRIKA_IAM_KEY', content: iamKey },
-		]
-		f.calls.length = 0
-		await runZeropsProxyAttempt({ ...input, iamUrl, iamKey })
-		expect(f.calls).toContain('env:FABRIKA_IAM_KEY')
-		expect(f.calls).toContain('build:v2')
-		expect(f.target().proxyBuild?.appVersionId).toBe('v2')
-		expect(JSON.stringify(f.target())).not.toContain(iamKey)
+test('the republish capability refuses a namespace with no proxy or one that is not ready, before any platform call', async () => {
+	const calls: string[] = []
+	const capabilities = createZeropsNamespaceCapabilities({
+		clientId: 'client',
+		iamUrl: 'https://iam.example.test',
+		iamKey: 'not-logged',
+		api: {
+			...createZeropsApi({
+				token: 'unused',
+				fetchImpl: async (url) => {
+					calls.push(String(url))
+					throw new Error('no platform call expected')
+				},
+			}),
+		},
 	})
-}
+	const republish = capabilities.republish
+	if (republish === undefined) throw new Error('republish capability missing')
+	for (
+		const target of [{ proxySource: pin, projectId: 'project', ready: true }, {
+			proxySource: pin,
+			projectId: 'project',
+			proxyServiceId: 'proxy',
+			ready: false,
+		}]
+	) {
+		await expect(republish({
+			namespace: { id: 'apps-prod', env: 'prod', target: { provider: 'zerops', version: 1, payload: zeropsNamespaceTargetCodec.encode(target) } },
+			members: [],
+			wait: 'started',
+			signal: new AbortController().signal,
+			events: { checkpoint: async () => {}, boundary: async () => {} },
+		})).rejects.toThrow('not ready')
+	}
+	expect(calls).toEqual([])
+})

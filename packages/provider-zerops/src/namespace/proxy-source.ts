@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { prepareZeropsDescriptor } from '../descriptor'
 import { verifyZeropsArtifactSourceDescriptor, zeropsArtifactSourceDescriptorSchema } from '../manifest'
 import { commitShaSchema, parseSourceWire, repositorySchema } from '../source/validation'
@@ -19,9 +20,3 @@ export const verifyZeropsNamespaceProxySource = async (source: ZeropsNamespacePr
 	const parsed = decodeZeropsNamespaceProxySource(source)
 	await verifyZeropsArtifactSourceDescriptor(parsed.descriptor)
 }
-
-export const equalProxySources = (left: ZeropsNamespaceProxySource, right: ZeropsNamespaceProxySource): boolean =>
-	left.repository.owner === right.repository.owner && left.repository.name === right.repository.name
-	&& left.commitSha === right.commitSha && left.descriptor.path === right.descriptor.path
-	&& left.descriptor.contents === right.descriptor.contents && left.descriptor.sha256 === right.descriptor.sha256
-import { z } from 'zod'

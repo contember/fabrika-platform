@@ -369,13 +369,25 @@ const run = async (
 ): Promise<ProviderDeploymentNamespace> =>
 	capabilities[operation]({
 		namespace: value,
+		members: [],
 		signal: new AbortController().signal,
 		events: {
 			checkpoint: async (checkpoint) => {
 				checkpoints.push(checkpoint)
 			},
+			boundary: async () => {},
 		},
 	})
+
+const proxyBuildOf = (entry: ProviderDeploymentNamespace | undefined) =>
+	entry === undefined ? undefined : zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild
+
+/** The first checkpoint that recorded the attempt with this `triggered` value. */
+const attemptCheckpoint = (checkpoints: ProviderDeploymentNamespace[], triggered: boolean): ProviderDeploymentNamespace => {
+	const saved = checkpoints.find((entry) => proxyBuildOf(entry)?.triggered === triggered)
+	if (saved === undefined) throw new Error('checkpoint missing')
+	return saved
+}
 
 describe('immutable namespace proxy sources', () => {
 	test('copies the selected default only into new plans and preserves persisted pins', () => {
@@ -402,7 +414,7 @@ describe('immutable namespace proxy sources', () => {
 		expect(state.calls).toEqual([])
 	})
 
-	test('rejects malformed pins, byte digest mismatch and conflicting checkpoints before writes', async () => {
+	test('rejects malformed pins, byte digest mismatch and legacy checkpoints before writes', async () => {
 		for (
 			const invalid of [
 				{ ...PIN, extra: true },
@@ -417,14 +429,22 @@ describe('immutable namespace proxy sources', () => {
 		await expect(run(capabilities, namespace({ proxySource: { ...PIN, descriptor: { ...PIN.descriptor, sha256: '0'.repeat(64) } } }), [])).rejects
 			.toThrow('digest mismatch')
 		await expect(run(capabilities, namespace({ proxyBaselineSequence: 1 }), [])).rejects.toThrow('Legacy proxy operational')
-		await expect(
-			run(
-				capabilities,
-				namespace({ proxyBuild: { runId: 'run', appVersionId: 'v', phase: 'source_uploaded', source: { ...PIN, commitSha: 'b'.repeat(40) } } }),
-				[],
-			),
-		).rejects.toThrow('conflicts')
 		expect(state.calls).toEqual([])
+	})
+
+	test('refuses a proxy attempt recorded in the retired phase shape', () => {
+		const phased = {
+			runId: 'run',
+			appVersionId: 'v',
+			phase: 'build_triggered',
+			source: { repository: { ...PIN.repository }, commitSha: PIN.commitSha },
+		}
+		expect(() => zeropsNamespaceTargetCodec.decode({ proxyBuild: phased })).toThrow('proxyBuild')
+		expect(() => zeropsNamespaceTargetCodec.decode({ proxyBuild: { appVersionId: 'v', triggered: true, phase: 'build_triggered' } })).toThrow()
+		expect(zeropsNamespaceTargetCodec.decode({ proxyBuild: { appVersionId: 'v', triggered: false } }).proxyBuild).toEqual({
+			appVersionId: 'v',
+			triggered: false,
+		})
 	})
 
 	test('resolves and uploads the persisted public commit, builds canonical descriptor on its exact reservation', async () => {
@@ -462,38 +482,44 @@ describe('immutable namespace proxy sources', () => {
 		})
 		const checkpoints: ProviderDeploymentNamespace[] = []
 		await run(capabilities, namespace({}), checkpoints)
-		expect(checkpoints.map((entry) => zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild?.phase).filter(Boolean)).toEqual([
-			'version_created',
-			'source_uploaded',
-			'build_trigger_requested',
-			'build_triggered',
+		expect(checkpoints.map((entry) => proxyBuildOf(entry)?.triggered)).toContainEqual(false)
+		expect(checkpoints.map((entry) => proxyBuildOf(entry)).filter((build) => build !== undefined)).toEqual([
+			{ appVersionId: 'uploaded-version-1', triggered: false, manifestSha256: expect.any(String) },
+			{ appVersionId: 'uploaded-version-1', triggered: true, manifestSha256: expect.any(String) },
 		])
 		expect(state.calls.some((call) => call.startsWith('trigger:'))).toBe(false)
 	})
 
-	for (const phase of ['version_created', 'source_uploaded', 'build_trigger_requested', 'build_triggered']) {
-		test(`recovers ${phase} without adopting a newer version or reimporting codeless code`, async () => {
-			const state = freshState()
-			const capabilities = createZeropsNamespaceCapabilities(options(state))
-			const checkpoints: ProviderDeploymentNamespace[] = []
-			await run(capabilities, namespace({}), checkpoints)
-			const saved = checkpoints.find((entry) => zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild?.phase === phase)
-			if (saved === undefined) throw new Error('checkpoint missing')
-			state.calls.length = 0
-			state.versions.get(proxyId)?.push({ id: 'unrelated', status: 'ACTIVE', sequence: 999 })
-			await run(capabilities, saved, [])
-			if (phase === 'version_created') {
-				expect(state.calls.indexOf('cancelSource:uploaded-version-1')).toBeLessThan(state.calls.indexOf('deleteAppVersion:uploaded-version-1'))
-				expect(state.calls).toContain(`createAppVersion:${proxyId}`)
-			} else {
-				expect(state.calls).not.toContain(`createAppVersion:${proxyId}`)
-				expect(state.calls).not.toContain('deleteAppVersion:uploaded-version-1')
-			}
-			expect(state.calls).not.toContain('buildAndDeployAppVersion:unrelated')
-			if (phase !== 'version_created') expect(state.calls.filter((call) => call.startsWith('put:'))).toEqual([])
-			else expect(state.calls).toContain(`put:${proxyId}:${FABRIKA_PROXY_MANIFEST_JSON}`)
+	test('recovers an untriggered attempt by deleting its exact version before building a fresh one', async () => {
+		const state = freshState()
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+		const checkpoints: ProviderDeploymentNamespace[] = []
+		await run(capabilities, namespace({}), checkpoints)
+		const saved = attemptCheckpoint(checkpoints, false)
+		state.calls.length = 0
+		state.versions.get(proxyId)?.push({ id: 'unrelated', status: 'ACTIVE', sequence: 999 })
+		await run(capabilities, saved, [])
+		expect(state.calls.indexOf('deleteAppVersion:uploaded-version-1')).toBeLessThan(state.calls.indexOf(`createAppVersion:${proxyId}`))
+		expect(state.calls).toContain(`put:${proxyId}:${FABRIKA_PROXY_MANIFEST_JSON}`)
+		expect(state.calls).not.toContain('buildAndDeployAppVersion:uploaded-version-1')
+		expect(state.calls).not.toContain('buildAndDeployAppVersion:unrelated')
+	})
+
+	test('recovers a triggered attempt by polling it, without source availability, deletion or another build', async () => {
+		const state = freshState()
+		const base = options(state)
+		const checkpoints: ProviderDeploymentNamespace[] = []
+		await run(createZeropsNamespaceCapabilities(base), namespace({}), checkpoints)
+		const saved = attemptCheckpoint(checkpoints, true)
+		state.calls.length = 0
+		state.versions.get(proxyId)?.push({ id: 'unrelated', status: 'ACTIVE', sequence: 999 })
+		const result = await run(createZeropsNamespaceCapabilities({ ...base, source: undefined }), saved, [])
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload)).toMatchObject({
+			ready: true,
+			proxyDeployment: { appVersionId: 'uploaded-version-1' },
 		})
-	}
+		expect(state.calls).toEqual([])
+	})
 
 	test('rejects transport identity mismatches before submission', async () => {
 		const state = freshState()
@@ -516,48 +542,8 @@ describe('immutable namespace proxy sources', () => {
 		const checkpoints: ProviderDeploymentNamespace[] = []
 		await expect(run(wrongUpload, namespace({}), checkpoints)).rejects.toThrow('upload identity mismatch')
 		expect(state.triggerCount).toBe(0)
-		expect(state.calls).toContain('cancelSource:uploaded-version-1')
 		expect(state.calls).toContain('deleteAppVersion:uploaded-version-1')
 		expect(zeropsNamespaceTargetCodec.decode(checkpoints.at(-1)?.target.payload ?? {}).proxyBuild).toBeUndefined()
-	})
-
-	test('source cancellation failure permits cleanup but new reservation waits for exact GET absence', async () => {
-		const state = freshState()
-		const base = options(state)
-		const source = base.source
-		if (source === undefined) throw new Error('source missing')
-		const checkpoints: ProviderDeploymentNamespace[] = []
-		await run(createZeropsNamespaceCapabilities(base), namespace({}), checkpoints)
-		const saved = checkpoints.find((entry) => zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild?.phase === 'version_created')
-		if (saved === undefined) throw new Error('checkpoint missing')
-		state.calls.length = 0
-		let uncertain = true
-		const capabilities = createZeropsNamespaceCapabilities({
-			...base,
-			api: {
-				...base.api,
-				getAppVersion: async (input) => {
-					state.calls.push(`getAppVersion:${input.appVersionId}`)
-					if (uncertain) throw new Error('observation unavailable')
-					return base.api.getAppVersion(input)
-				},
-			},
-			source: {
-				...source,
-				cancel: async () => {
-					throw new Error('source cancellation unresolved')
-				},
-			},
-		})
-		await expect(run(capabilities, saved, [])).rejects.toThrow('remains unresolved')
-		expect(state.calls).toEqual(['deleteAppVersion:uploaded-version-1', 'getAppVersion:uploaded-version-1'])
-		uncertain = false
-		state.calls.length = 0
-		const result = await run(capabilities, saved, [])
-		expect(state.calls.slice(0, 2)).toEqual(['deleteAppVersion:uploaded-version-1', 'getAppVersion:uploaded-version-1'])
-		expect(state.calls.indexOf(`createAppVersion:${proxyId}`)).toBeGreaterThan(1)
-		expect(state.calls).not.toContain('buildAndDeployAppVersion:uploaded-version-1')
-		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).proxyDeployment?.appVersionId).toBe('uploaded-version-2')
 	})
 
 	test('an ambiguous UPLOADING version times out unresolved without deletion or resubmission', async () => {
@@ -582,7 +568,7 @@ describe('immutable namespace proxy sources', () => {
 			await expect(run(capabilities, namespace({}), checkpoints)).rejects.toThrow('remains unresolved')
 			const saved = checkpoints.at(-1)
 			if (saved === undefined) throw new Error('checkpoint missing')
-			expect(zeropsNamespaceTargetCodec.decode(saved.target.payload).proxyBuild?.phase).toBe('build_trigger_requested')
+			expect(proxyBuildOf(saved)?.triggered).toBe(true)
 			state.calls.length = 0
 			await expect(run(capabilities, saved, [])).rejects.toThrow('remains unresolved')
 			expect(state.calls.filter((call) => /createAppVersion|deleteAppVersion|buildAndDeploy/.test(call))).toEqual([])
@@ -592,7 +578,7 @@ describe('immutable namespace proxy sources', () => {
 	})
 
 	for (const kind of ['lease_lost', 'cancel_requested']) {
-		test(`retains durable work on ${kind} and never deletes a potentially accepted version`, async () => {
+		test(`retains a triggered attempt on ${kind}: no deletion and no build cancellation`, async () => {
 			if (kind !== 'lease_lost' && kind !== 'cancel_requested') throw new Error('invalid abort')
 			const state = freshState()
 			const base = options(state)
@@ -614,16 +600,18 @@ describe('immutable namespace proxy sources', () => {
 			const checkpoints: ProviderDeploymentNamespace[] = []
 			await expect(capabilities.provision({
 				namespace: namespace({}),
+				members: [],
 				signal: abort.signal,
 				events: {
 					checkpoint: async (value) => {
 						checkpoints.push(value)
 					},
+					boundary: async () => {},
 				},
 			})).rejects.toThrow()
-			expect(state.calls.includes('cancelBuild')).toBe(kind === 'cancel_requested')
+			expect(state.calls).not.toContain('cancelBuild')
 			expect(state.calls.some((call) => call.startsWith('deleteAppVersion'))).toBe(false)
-			expect(zeropsNamespaceTargetCodec.decode(checkpoints.at(-1)?.target.payload ?? {}).proxyBuild?.phase).toBe('build_trigger_requested')
+			expect(proxyBuildOf(checkpoints.at(-1))?.triggered).toBe(true)
 		})
 	}
 })
@@ -635,7 +623,7 @@ describe('namespace deployed source evidence and settlement', () => {
 		const initial = await run(createZeropsNamespaceCapabilities(base), namespace({}), [])
 		const evidence = zeropsNamespaceTargetCodec.decode(initial.target.payload).proxyDeployment
 		expect(evidence).toEqual({
-			manifestSha256: 'c7fa47689d28b34c369a8a8239429a6a18698ee431afa7d0938c9a7240ae1b9a',
+			manifestSha256: 'e4023a65145620889331fd17cb3e09ddcd9684cf7a6ca0f34e3cf8e74898580f',
 			appVersionId: 'uploaded-version-1',
 			repository: PIN.repository,
 			commitSha: PIN.commitSha,
@@ -776,113 +764,96 @@ describe('namespace deployed source evidence and settlement', () => {
 		})
 	}
 
-	test('userDataSyncRunning durably restores source_uploaded and retries the same version without source availability', async () => {
+	test('userDataSyncRunning retries the same version until the variables settle', async () => {
 		const state = freshState()
 		const base = options(state)
-		const rejected = createZeropsNamespaceCapabilities({
+		let refusals = 2
+		const capabilities = createZeropsNamespaceCapabilities({
+			...base,
+			api: {
+				...base.api,
+				buildAndDeployAppVersion: async (input) => {
+					if (refusals-- > 0) throw new ZeropsApiError('sync running', 400, 'userDataSyncRunning')
+					return base.api.buildAndDeployAppVersion(input)
+				},
+			},
+		})
+		const checkpoints: ProviderDeploymentNamespace[] = []
+		const result = await run(capabilities, namespace({}), checkpoints)
+		expect(state.calls.filter((call) => call.startsWith('createAppVersion:'))).toHaveLength(1)
+		expect(checkpoints.map((entry) => proxyBuildOf(entry)?.triggered).filter((triggered) => triggered !== undefined)).toEqual([
+			false,
+			true,
+			false,
+			true,
+			false,
+			true,
+		])
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).proxyDeployment?.appVersionId).toBe('uploaded-version-1')
+	})
+
+	test('userDataSyncRunning that never settles deletes the version it never built', async () => {
+		const state = freshState()
+		const base = options(state)
+		let attempts = 0
+		const capabilities = createZeropsNamespaceCapabilities({
 			...base,
 			api: {
 				...base.api,
 				buildAndDeployAppVersion: async () => {
+					attempts++
 					throw new ZeropsApiError('sync running', 400, 'userDataSyncRunning')
 				},
 			},
 		})
 		const checkpoints: ProviderDeploymentNamespace[] = []
-		await expect(run(rejected, namespace({}), checkpoints)).rejects.toThrow('retry the uploaded version')
-		const saved = checkpoints.at(-1)
-		if (saved === undefined) throw new Error('checkpoint missing')
-		expect(zeropsNamespaceTargetCodec.decode(saved.target.payload).proxyBuild?.phase).toBe('source_uploaded')
-		state.calls.length = 0
-		const result = await run(createZeropsNamespaceCapabilities({ ...base, source: undefined }), saved, [])
-		expect(state.calls).not.toContain(`createAppVersion:${proxyId}`)
-		expect(state.calls).toContain('buildAndDeployAppVersion:uploaded-version-1')
-		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).proxyDeployment?.appVersionId).toBe('uploaded-version-1')
+		await expect(run(capabilities, namespace({}), checkpoints)).rejects.toThrow('still synchronizing')
+		expect(attempts).toBe(10)
+		expect(state.calls).toContain('deleteAppVersion:uploaded-version-1')
+		expect(proxyBuildOf(checkpoints.at(-1))).toBeUndefined()
 	})
 
-	for (const phase of ['build_trigger_requested', 'build_triggered']) {
-		test(`recovers ${phase} without GitHub or source availability`, async () => {
-			const state = freshState()
-			const base = options(state)
-			const checkpoints: ProviderDeploymentNamespace[] = []
-			await run(createZeropsNamespaceCapabilities(base), namespace({}), checkpoints)
-			const saved = checkpoints.find((entry) => zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild?.phase === phase)
-			if (saved === undefined) throw new Error('checkpoint missing')
-			state.calls.length = 0
-			const result = await run(createZeropsNamespaceCapabilities({ ...base, source: undefined }), saved, [])
-			expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
-			expect(state.calls).toEqual([])
+	test('an inherited untriggered attempt is replaced only after its deletion is confirmed', async () => {
+		const state = freshState()
+		const base = options(state)
+		const checkpoints: ProviderDeploymentNamespace[] = []
+		await run(createZeropsNamespaceCapabilities(base), namespace({}), checkpoints)
+		const saved = attemptCheckpoint(checkpoints, false)
+		let deletionError = new ZeropsApiError('unclassified refusal', 400, 'unknown')
+		const deletionApi = createZeropsApi({
+			token: 'test-token',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async (url, init) => {
+				expect(url).toBe('https://zerops.test/app-version/uploaded-version-1')
+				expect(init?.method).toBe('DELETE')
+				return Response.json({ meta: [{ error: 'upstream-secret-must-not-leak', code: deletionError.code, metadata: null }] }, {
+					status: deletionError.status,
+				})
+			},
 		})
-	}
-
-	for (const loss of ['response', 'checkpoint']) {
-		test(`lost deletion ${loss} recovers only after confirmed appVersionNotFound`, async () => {
-			const state = freshState()
-			const base = options(state)
-			const checkpoints: ProviderDeploymentNamespace[] = []
-			await run(createZeropsNamespaceCapabilities(base), namespace({}), checkpoints)
-			const saved = checkpoints.find((entry) => zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild?.phase === 'version_created')
-			if (saved === undefined) throw new Error('checkpoint missing')
-			let deleted = false
-			let absenceError = new ZeropsApiError('unclassified refusal', 400, 'unknown')
-			const deletionApi = createZeropsApi({
-				token: 'test-token',
-				baseUrl: 'https://zerops.test',
-				fetchImpl: async (url, init) => {
-					expect(url).toBe('https://zerops.test/app-version/uploaded-version-1')
-					expect(init?.method).toBe('DELETE')
-					return Response.json({ meta: [{ error: 'upstream-secret-must-not-leak', code: absenceError.code, metadata: null }] }, {
-						status: absenceError.status,
-					})
-				},
-			})
-			const capabilities = createZeropsNamespaceCapabilities({
-				...base,
-				api: {
-					...base.api,
-					deleteAppVersion: async (input) => {
-						if (deleted) return deletionApi.deleteAppVersion(input)
-						await base.api.deleteAppVersion(input)
-						deleted = true
-						if (loss === 'response') throw new Error('response lost')
-					},
-				},
-			})
-			await expect(capabilities.provision({
-				namespace: saved,
-				signal: new AbortController().signal,
-				events: {
-					checkpoint: async (value) => {
-						if (deleted && zeropsNamespaceTargetCodec.decode(value.target.payload).proxyBuild === undefined) throw new Error('checkpoint lost')
-					},
-				},
-			})).rejects.toThrow()
-			state.calls.length = 0
-			for (
-				const error of [
-					new ZeropsApiError('unclassified refusal', 400, 'unknown'),
-					new ZeropsApiError('not found', 404, 'unknown'),
-					new ZeropsApiError('wrong status', 404, 'appVersionNotFound'),
-				]
-			) {
-				absenceError = error
-				await expect(run(capabilities, saved, [])).rejects.toThrow('remains unresolved')
-				expect(state.calls).not.toContain(`createAppVersion:${proxyId}`)
-				expect(state.calls.some((call) => call.startsWith('buildAndDeployAppVersion:'))).toBe(false)
-			}
-			absenceError = new ZeropsApiError('App version not found', 400, 'appVersionNotFound')
-			state.calls.length = 0
-			const recoveredCheckpoints: ProviderDeploymentNamespace[] = []
-			const result = await run(capabilities, saved, recoveredCheckpoints)
-			expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
-			expect(state.calls.indexOf('cancelSource:uploaded-version-1')).toBeLessThan(state.calls.indexOf(`createAppVersion:${proxyId}`))
-			expect(recoveredCheckpoints.some((entry) =>
-				zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild === undefined
-				&& zeropsNamespaceTargetCodec.decode(entry.target.payload).ready === false
-			)).toBe(true)
-			expect(state.calls.some((call) => call.startsWith('buildAndDeployAppVersion:'))).toBe(true)
-		})
-	}
+		const capabilities = createZeropsNamespaceCapabilities({ ...base, api: { ...base.api, deleteAppVersion: deletionApi.deleteAppVersion } })
+		state.calls.length = 0
+		for (
+			const error of [
+				new ZeropsApiError('unclassified refusal', 400, 'unknown'),
+				new ZeropsApiError('not found', 404, 'unknown'),
+				new ZeropsApiError('wrong status', 404, 'appVersionNotFound'),
+			]
+		) {
+			deletionError = error
+			await expect(run(capabilities, saved, [])).rejects.toThrow('remains unresolved')
+			expect(state.calls).not.toContain(`createAppVersion:${proxyId}`)
+			expect(state.calls.some((call) => call.startsWith('buildAndDeployAppVersion:'))).toBe(false)
+		}
+		deletionError = new ZeropsApiError('App version not found', 400, 'appVersionNotFound')
+		const recovered: ProviderDeploymentNamespace[] = []
+		const result = await run(capabilities, saved, recovered)
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
+		const cleared = recovered.findIndex((entry) => proxyBuildOf(entry) === undefined)
+		expect(cleared).toBeGreaterThanOrEqual(0)
+		expect(cleared).toBeLessThan(recovered.findIndex((entry) => proxyBuildOf(entry)?.appVersionId === 'uploaded-version-2'))
+		expect(state.calls).toContain('buildAndDeployAppVersion:uploaded-version-2')
+	})
 })
 
 describe('Zerops namespace policy and topology', () => {
@@ -1211,7 +1182,7 @@ describe('Zerops namespace lifecycle', () => {
 		await expect(run(capabilities, adopted, [])).rejects.toThrow('contains unmanaged service')
 	})
 
-	test('reconciles namespace-owned services and disables session ownership without replacing an existing app proxy manifest', async () => {
+	test('reconciles namespace-owned services, disables session ownership and publishes the manifest its members compile to', async () => {
 		const state = freshState()
 		const manifest = JSON.stringify({
 			apps: [{ id: 'notes', hosts: ['notes.example.test'], upstream: 'notes:3000', gates: { rules: [{ path: '/*', kind: 'human' }] }, scheme: 'https' }],
@@ -1221,7 +1192,7 @@ describe('Zerops namespace lifecycle', () => {
 		ensureServiceEnv(state, proxyId).set(FABRIKA_PROXY_MANIFEST_JSON, {
 			id: 'manifest',
 			key: FABRIKA_PROXY_MANIFEST_JSON,
-			content: manifest,
+			content: '{"apps":[]}',
 		})
 		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, {
 			id: 'iam-url',
@@ -1246,7 +1217,30 @@ describe('Zerops namespace lifecycle', () => {
 			ready: true,
 		})
 
-		const result = await run(capabilities, ready, [], 'reconcile')
+		const notes = compileFabrikaManifest(
+			{
+				id: 'notes',
+				target: {
+					platform: 'zerops',
+					services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
+					proxy: { upstream: 'notes:3000', gates: { rules: [{ path: '/*', kind: 'human' }] } },
+				},
+			},
+			'prod',
+			SOURCE_DESCRIPTOR,
+		)
+
+		const result = await capabilities.reconcile({
+			namespace: ready,
+			members: [{
+				appId: 'notes',
+				env: 'prod',
+				domain: 'Notes.Example.Test',
+				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
+			}],
+			signal: new AbortController().signal,
+			events: { checkpoint: async () => {}, boundary: async () => {} },
+		})
 
 		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe(manifest)
@@ -1622,9 +1616,11 @@ describe('Zerops namespace failure classes', () => {
 
 		const error = await failure(capabilities.provision({
 			namespace: provisionNamespace(),
+			members: [],
 			signal: new AbortController().signal,
 			events: {
 				checkpoint: () => Promise.reject(raised),
+				boundary: async () => {},
 			},
 		}))
 

@@ -1,7 +1,7 @@
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
-import type { ControlRepositories, RunRepository } from '../../db'
-import { LEASE_TTL_MS, type LeaseFence, runLeaseKey } from '../../lease'
+import type { ControlRepositories, DeploymentNamespaceState, RunRepository } from '../../db'
+import { LEASE_TTL_MS, type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../../lease'
 import { harnessDatabase } from './harness'
 
 /** The production lease store over a test harness's database. */
@@ -42,5 +42,34 @@ export function fixtureRuns(runs: RunRepository, locks: DeployLocks, now: () => 
 		finish: (id: string, status: 'succeeded' | 'failed', exitCode: number | null = null) =>
 			owned(id, (fence) => runs.markRunFinished(id, status, exitCode, fence)),
 		finishCancellation: (id: string, status: 'succeeded' | 'failed') => owned(id, (fence) => runs.markRunCancellationFinished(id, status, fence)),
+	}
+}
+
+/** Write a namespace row the way its lease holder does: take the lease as a fixture holder, one fenced write, release. */
+export async function fixtureNamespaceWrite(
+	repositories: ControlRepositories,
+	id: string,
+	state: DeploymentNamespaceState,
+	options: { providerTargetJson?: string; lastError?: string } = {},
+): Promise<void> {
+	const row = await repositories.registry.getDeploymentNamespace(id)
+	if (row === null) throw new Error(`fixture namespace ${id} is missing`)
+	const locks = makeFakeLock(repositories)
+	const key = namespaceLeaseKey(id)
+	const holder = `fixture-${id}`
+	if (!(await locks.acquire(key, holder, LEASE_TTL_MS))) throw new Error(`fixture lease ${key} is held`)
+	try {
+		const written = await repositories.registry.writeDeploymentNamespace({
+			id,
+			createdAt: row.created_at,
+			fence: { holder, nowMs: Date.now() },
+			providerTargetJson: options.providerTargetJson ?? row.provider_target_json,
+			state,
+			lastError: options.lastError ?? null,
+			claim: true,
+		})
+		if (!written) throw new Error(`fixture namespace ${id} write was refused`)
+	} finally {
+		await locks.release(key, holder)
 	}
 }

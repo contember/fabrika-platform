@@ -1,5 +1,6 @@
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { ProviderSourceBinding, ProviderSourceCapabilities } from '@fabrika/provider-contract'
+import { type LeaseFence, namespaceLeaseKey } from '../lease'
 import {
 	type AppEnvInput,
 	type AppEnvRow,
@@ -248,56 +249,52 @@ export class ControlRegistryRepository {
 			)
 	}
 
-	async checkpointDeploymentNamespace(input: {
-		expected: DeploymentNamespaceRow
-		holder: string
-		nowMs: number
+	/** One namespace write by the holder of its `namespace:<id>` lease; `created_at` pins the row's identity. */
+	async writeDeploymentNamespace(input: {
+		id: string
+		createdAt: number
+		fence: LeaseFence
 		providerTargetJson: string
 		state: DeploymentNamespaceState
 		lastError: string | null
-	}): Promise<DeploymentNamespaceRow | null> {
-		const row = input.expected
-		const exclusive = row.exclusive_app_id === null ? 'exclusive_app_id IS NULL' : 'exclusive_app_id = ?'
-		const exclusiveValues = row.exclusive_app_id === null ? [] : [row.exclusive_app_id]
-		// Lock the lease row until the target CAS commits; EXISTS alone races Postgres takeover.
-		const results = await this.d1.batch<DeploymentNamespaceRow>([
-			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
-				WHERE lock_key = ? AND holder = ? AND expires_at > ?`)
-				.bind(`namespace:${row.id}`, input.holder, input.nowMs),
-			this.d1.prepare(`UPDATE deployment_namespaces SET provider_target_json = ?, state = ?, last_error = ?
-				WHERE id = ? AND env = ? AND provider = ? AND ${exclusive}
-					AND created_at = ? AND state = ? AND provider_target_json = ?
+		/** Only the job that claims a `pending` row may move it; any other write leaves a requeue in place. */
+		claim: boolean
+	}): Promise<boolean> {
+		const key = namespaceLeaseKey(input.id)
+		// The lease row must stay locked through the mutation: an EXISTS alone races takeover on Postgres.
+		const results = await this.d1.batch<{ id: string }>([
+			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?')
+				.bind(key, input.fence.holder, input.fence.nowMs),
+			this.d1.prepare(`UPDATE deployment_namespaces
+				SET provider_target_json = ?, state = CASE WHEN state = 'pending' AND ? = 0 THEN 'pending' ELSE ? END, last_error = ?
+				WHERE id = ? AND created_at = ?
 					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
-				RETURNING *`)
+				RETURNING id`)
 				.bind(
 					input.providerTargetJson,
+					input.claim ? 1 : 0,
 					input.state,
 					input.lastError,
-					row.id,
-					row.env,
-					row.provider,
-					...exclusiveValues,
-					row.created_at,
-					row.state,
-					row.provider_target_json,
-					`namespace:${row.id}`,
-					input.holder,
-					input.nowMs,
+					input.id,
+					input.createdAt,
+					key,
+					input.fence.holder,
+					input.fence.nowMs,
 				),
 		])
-		return results[1]?.results[0] ?? null
+		return (results[1]?.results.length ?? 0) > 0
 	}
 
 	/**
-	 * Queue a SETTLED namespace for another provider mutation. Guarded to the terminal states and it
-	 * never writes `provider_target_json`, so a request that arrives while a job is in flight cannot
-	 * overwrite a checkpoint the worker has just written. NULL = it was not settled; leave it alone.
+	 * Queue a namespace for another provider mutation. It never writes `provider_target_json`, so a request
+	 * that arrives while a job is in flight cannot roll back a checkpoint the worker has just written; the
+	 * job keeps the `pending` state (only a claim moves it) and the queued job runs after it. NULL = already pending.
 	 */
 	async requeueDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
 		return this.d1
 			.prepare(`UPDATE deployment_namespaces
 				SET state = 'pending', last_error = NULL
-				WHERE id = ? AND state IN ('ready', 'failed') RETURNING *`)
+				WHERE id = ? AND state IN ('ready', 'failed', 'provisioning') RETURNING *`)
 			.bind(id)
 			.first<DeploymentNamespaceRow>()
 	}

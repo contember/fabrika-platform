@@ -14,7 +14,6 @@
 // the local stack read the same code and are not subject to the platform's reservation, so one name
 // works everywhere.
 
-import type { DeployLocks, JobQueue } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
@@ -29,13 +28,8 @@ import {
 	type ZeropsSourceCredentialManager,
 	type ZeropsSourceCredentialManagerV2,
 } from '@fabrika/provider-zerops'
-import { encodeProxyManifestJson } from '@fabrika/proxy-contract'
-import type { NamespaceProxyChanged } from '../api/namespaces'
 import type { Env } from '../env'
-import type { ControlJobMessage } from '../run-lifecycle'
-import { locks, repositories } from '../services'
 import { HttpZeropsSourceClient } from './source-client'
-import { compileNamespaceProxyManifest, type NamespaceProxyRegistry, syncNamespaceProxy, syncZeropsProxy } from './zerops-proxy'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]
@@ -110,44 +104,6 @@ export function zeropsSourceConnectionAdmin(
 	})
 }
 
-/** The one Zerops API client shape both the provider and the namespace proxy sync are built from. */
-const zeropsApi = (source: Record<string, string | undefined>) =>
-	createZeropsApi({
-		token: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
-		...((): { baseUrl?: string } => {
-			const baseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
-			return baseUrl === undefined ? {} : { baseUrl }
-		})(),
-	})
-
-/**
- * The control-side republish of a namespace's proxy manifest, for the registry changes no deploy
- * follows — a deleted app, a deleted environment, a moved or renamed host (ADR-0022: the manifest is
- * the live authorization state). Built lazily so a misconfigured value still fails at the same boot
- * check `zeropsControlProvider` performs.
- */
-export function zeropsNamespaceProxySync(
-	source: Record<string, string | undefined>,
-	db: NamespaceProxyRegistry,
-	lock: DeployLocks,
-	queue: JobQueue<ControlJobMessage>,
-	sourceClient: ZeropsSourceClient = zeropsSourceClient(source),
-): NamespaceProxyChanged {
-	return async (namespaceId) => {
-		const namespaces = zeropsNamespaceProcessConfig(source)
-		await syncNamespaceProxy({
-			db,
-			lock,
-			queue,
-			source: sourceClient,
-			api: zeropsApi(source),
-			namespaceId,
-			iamUrl: namespaces.iamUrl,
-			iamKey: namespaces.iamKey,
-		})
-	}
-}
-
 /** Compose the only provider available in the process installation. */
 export function zeropsControlProvider(
 	env: Env,
@@ -166,22 +122,6 @@ export function zeropsControlProvider(
 		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
 			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
-		namespaces: {
-			...namespaces,
-			proxyManifest: async namespaceId => encodeProxyManifestJson(await compileNamespaceProxyManifest(repositories(env).registry, namespaceId)),
-		},
-		beforeDeploy: async (input) => {
-			await syncZeropsProxy({
-				db: repositories(env).registry,
-				lock: locks(env),
-				source: sourceClient,
-				api: input.api,
-				namespaceId: input.namespaceId,
-				proxySource: input.target.proxySource,
-				iamUrl: namespaces.iamUrl,
-				iamKey: namespaces.iamKey,
-				signal: input.signal,
-			})
-		},
+		namespaces,
 	})
 }

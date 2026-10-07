@@ -6,7 +6,7 @@ import {
 	operationsManagedEnvironmentCollisions,
 } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
-import type { BlobStore, DeployLocks } from '@fabrika/platform'
+import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
 import {
 	type ControlProvider,
 	type ProviderApp,
@@ -20,6 +20,7 @@ import {
 	type ProviderSourceBinding,
 	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
+import { republishUnderLease } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import {
 	type AppEnvRow,
@@ -33,7 +34,7 @@ import {
 	type RunRow,
 	serializeProviderJson,
 } from './db'
-import { acquireLease, type Lease, type LeaseClock, type LeaseFence, runLeaseKey } from './lease'
+import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
@@ -47,6 +48,8 @@ export interface RunDeps {
 	provider: ControlProvider
 	lock: DeployLocks
 	leaseClock?: LeaseClock
+	/** Where a namespace rebuild a deploy could not settle is handed to a `reconcile` job. */
+	queue?: Pick<JobQueue<ControlJobMessage>, 'send'>
 	logs: Pick<BlobStore, 'put'>
 	operations?: OperationsReleaseProjectionDeps
 	/**
@@ -408,11 +411,20 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 	const dryRun = message.dryRun === true
 	const runs = deps.repositories.runs
 	let accepted = false
+	// Lock order is always app/env, then namespace: a namespace path never takes an app/env lease.
+	let namespaceLease: Lease | null = null
 
 	try {
 		const run = await invocation.read()
 		if (run === null || run.status !== 'pending') return { runId, status: 'skipped' }
 		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
+		const namespaceId = dryRun || deps.provider.namespaces?.republish === undefined
+			? null
+			: (await deps.repositories.registry.getAppEnv(run.app_id, run.env))?.namespace_id ?? null
+		if (namespaceId !== null) {
+			namespaceLease = await acquireLease(deps.lock, namespaceLeaseKey(namespaceId), deps.leaseClock)
+			if (namespaceLease === null) return { runId, status: 'deferred' }
+		}
 		if (!(await startRun(deps, invocation, run))) {
 			const latest = await runs.getRun(runId)
 			return { runId, status: latest?.status === 'pending' ? 'deferred' : 'skipped' }
@@ -514,6 +526,20 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				await runLogs.flush()
 			}
 			await invocation.boundary()
+			if (namespaceLease !== null && namespaceId !== null) {
+				const queue = deps.queue
+				if (queue === undefined) throw new Error('a namespace republish needs the control queue')
+				// The proxy routes what the registry holds before the app it fronts changes (ADR-0022).
+				await republishUnderLease({ ...deps, queue }, namespaceLease, namespaceId, {
+					wait: 'active',
+					signal: invocation.work.signal,
+					boundary: async () => {
+						await invocation.boundary()
+					},
+				})
+				await namespaceLease.release()
+				namespaceLease = null
+			}
 			const deployInput: ProviderDeployInput = {
 				runId,
 				app: registration.app,
@@ -573,6 +599,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		await projectTerminalRun(deps, runId, dryRun, 'failed')
 		return { runId, status: 'failed' }
 	} finally {
+		await namespaceLease?.release()
 		await invocation.release()
 	}
 }

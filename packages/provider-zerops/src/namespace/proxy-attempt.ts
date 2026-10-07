@@ -1,311 +1,223 @@
-import { ProviderInvocationAbort, ProviderNamespaceError } from '@fabrika/provider-contract'
-import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-contract'
+import { followLeaseLoss, isLeaseLoss, ProviderNamespaceError } from '@fabrika/provider-contract'
+import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-contract'
 import { ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, ZeropsApiError, type ZeropsAppVersion } from '../api'
-import { defaultSleep, type Sleeper } from '../collaborators'
+import type { Sleeper } from '../collaborators'
 import { prepareZeropsDescriptor } from '../descriptor'
 import type { ZeropsSourceClient } from '../source'
+import { deleteVersion } from '../version-attempt'
 import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE } from './constants'
-import { equalProxySources, verifyZeropsNamespaceProxySource } from './proxy-source'
-import type { NamespaceProxyIamInput, ZeropsNamespaceTarget } from './types'
+import { verifyZeropsNamespaceProxySource } from './proxy-source'
+import type { ZeropsNamespaceProxyBuild, ZeropsNamespaceTarget } from './types'
 
-export type ZeropsProxyAttemptApi = Pick<
+export type ZeropsProxyApi = Pick<
 	ZeropsApi,
-	'listServiceEnv' | 'putServiceEnv' | 'createAppVersion' | 'deleteAppVersion' | 'buildAndDeployAppVersion' | 'getAppVersion' | 'cancelBuild'
+	'listServiceEnv' | 'putServiceEnv' | 'createAppVersion' | 'deleteAppVersion' | 'buildAndDeployAppVersion' | 'getAppVersion'
 >
 
-export interface ZeropsProxyAttemptInput {
+export interface ZeropsProxyRepublishInput {
 	readonly target: ZeropsNamespaceTarget
-	readonly manifest: string
+	readonly manifest: ProxyManifest
 	readonly source?: ZeropsSourceClient
-	readonly api: ZeropsProxyAttemptApi
+	readonly api: ZeropsProxyApi
 	readonly iamUrl: string
 	readonly iamKey: string
+	/** Aborts with `lease_lost` when the namespace lease goes, and with `cancel_requested` when a deploy is cancelled. */
 	readonly signal: AbortSignal
-	readonly ownershipSignal?: AbortSignal
-	/** Explicit syncs activate IAM configuration even when source and routing are unchanged. */
-	readonly refresh?: boolean
+	readonly wait: 'started' | 'active'
+	/** Persist the target; the caller fences the write on the namespace lease. */
 	readonly checkpoint: (target: ZeropsNamespaceTarget) => Promise<void>
-	readonly wait?: 'started' | 'active'
-	readonly sleep?: Sleeper
+	readonly boundary: () => Promise<void>
+	readonly sleep: Sleeper
 }
 
+const POLL_INTERVAL_MS = 3000
+const POLL_DEADLINE_MS = 70 * 60 * 1000
+const USER_DATA_SYNC_ATTEMPTS = 10
+const SESSION_OWNER_VARIABLE = 'FABRIKA_PROXY_SESSION_OWNER_JSON'
+
 const unresolved = (id: string): ProviderNamespaceError =>
-	new ProviderNamespaceError(
-		`Proxy version ${id} remains unresolved; reconcile this namespace before another build`,
-		'proxyAttemptUnresolved',
-		true,
-	)
+	new ProviderNamespaceError(`Proxy version ${id} remains unresolved; reconcile this namespace before another build`, 'proxyAttemptUnresolved', true)
+
 const digest = async (text: string): Promise<string> =>
 	Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), byte => byte.toString(16).padStart(2, '0')).join(
 		'',
 	)
 
-const SESSION_OWNER_VARIABLE = 'FABRIKA_PROXY_SESSION_OWNER_JSON'
-
-export const ensureNamespaceProxyIam = async (input: NamespaceProxyIamInput): Promise<void> => {
-	const variables = await input.api.listServiceEnv({ serviceId: input.proxyServiceId, signal: input.signal })
+const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string): Promise<void> => {
+	const { api, signal } = input
+	const variables = await api.listServiceEnv({ serviceId, signal })
 	if (variables.find(variable => variable.key === SESSION_OWNER_VARIABLE)?.content !== 'null') {
-		await input.api.putServiceEnv({ serviceId: input.proxyServiceId, key: SESSION_OWNER_VARIABLE, value: 'null', signal: input.signal })
+		await api.putServiceEnv({ serviceId, key: SESSION_OWNER_VARIABLE, value: 'null', signal })
 	}
-	const issuer = variables.find(variable => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)
-	if (issuer?.content !== input.iamUrl) {
-		await input.api.putServiceEnv({
-			serviceId: input.proxyServiceId,
-			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
-			value: input.iamUrl,
-			signal: input.signal,
-		})
+	if (variables.find(variable => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)?.content !== input.iamUrl) {
+		await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, value: input.iamUrl, signal })
 	}
 	// Secret read-back is not trustworthy, so overwrite it without inspecting its value.
-	await input.api.putServiceEnv({ serviceId: input.proxyServiceId, key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE, value: input.iamKey, signal: input.signal })
+	await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE, value: input.iamKey, signal })
 }
 
-/** Caller holds the renewable namespace lease and persists every checkpoint with a fenced CAS. */
-export async function runZeropsProxyAttempt(input: ZeropsProxyAttemptInput): Promise<ZeropsNamespaceTarget> {
-	let target = input.target
-	let settledAttempt = false
-	let inheritedAttempt = target.proxyBuild !== undefined
-	const pin = target.proxySource
-	const serviceId = target.proxyServiceId
+/**
+ * Rebuild the namespace proxy with `manifest` (ADR-0044). The attempt is recorded as `proxyBuild` and never
+ * resumed: an inherited attempt not yet `triggered` is deleted, a triggered one is polled to a terminal state.
+ * A lost lease deletes nothing; a cancelled deploy leaves a triggered attempt recorded for reconciliation.
+ */
+export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<ZeropsNamespaceTarget> {
+	const pin = input.target.proxySource
+	const serviceId = input.target.proxyServiceId
 	if (pin === undefined) throw new Error('Zerops namespace proxy source is unpinned; explicit migration is required')
-	await verifyZeropsNamespaceProxySource(pin)
 	if (serviceId === undefined) throw new Error('Zerops namespace has no proxy service id')
-	if (target.proxyBuild !== undefined && !equalProxySources(pin, target.proxyBuild.source)) {
-		throw new Error('Proxy build source conflicts with namespace pin')
-	}
-	input.signal.throwIfAborted()
-	const parsedManifest = parseProxyManifestJson(input.manifest)
-	if (parsedManifest === null) throw new Error('Invalid namespace proxy manifest')
-	const manifest = encodeProxyManifestJson(parsedManifest)
-	const manifestSha256 = await digest(manifest)
-	const sleep = input.sleep ?? defaultSleep
-	const leaseLost = (): boolean =>
-		input.ownershipSignal?.aborted === true
-		|| (input.signal.reason instanceof ProviderInvocationAbort && input.signal.reason.kind === 'lease_lost')
-	const cleanupSignal = (ms: number): AbortSignal =>
-		input.ownershipSignal === undefined
-			? AbortSignal.timeout(ms)
-			: AbortSignal.any([input.ownershipSignal, AbortSignal.timeout(ms)])
-	const save = async (next: ZeropsNamespaceTarget, ownershipOnly = false): Promise<void> => {
-		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
-		if (!ownershipOnly) input.signal.throwIfAborted()
+	await verifyZeropsNamespaceProxySource(pin)
+	const manifest = encodeProxyManifestJson(input.manifest)
+	// The attempt's identity covers the IAM configuration too, so a rotated issuer or key forces a rebuild.
+	const manifestSha256 = await digest(`${manifest}\n${input.iamUrl}\n${await digest(input.iamKey)}`)
+	let target = input.target
+
+	const save = async (next: ZeropsNamespaceTarget): Promise<void> => {
 		await input.checkpoint(next)
 		target = next
-		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
-		if (!ownershipOnly) input.signal.throwIfAborted()
 	}
-	const observe = async (id: string, wait: boolean) => {
-		const deadline = Date.now() + 70 * 60 * 1000
+
+	/** Observe one version until terminal; with `started`, a running build of this manifest is answer enough. */
+	const settle = async (build: ZeropsNamespaceProxyBuild): Promise<'settled' | 'running'> => {
+		const deadline = Date.now() + POLL_DEADLINE_MS
 		for (;;) {
+			await input.boundary()
 			input.signal.throwIfAborted()
 			let version: ZeropsAppVersion
 			try {
-				version = await input.api.getAppVersion({ appVersionId: id, signal: input.signal })
+				version = await input.api.getAppVersion({ appVersionId: build.appVersionId, signal: input.signal })
 			} catch {
 				input.signal.throwIfAborted()
-				throw unresolved(id)
+				throw unresolved(build.appVersionId)
 			}
 			if (
-				version.id !== id || (version.serviceStackId !== undefined && version.serviceStackId !== serviceId)
-				|| (version.projectId !== undefined && target.projectId !== undefined && version.projectId !== target.projectId)
-			) throw unresolved(id)
-			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return version
-			if (!wait || Date.now() >= deadline) throw unresolved(id)
-			await sleep(3000, input.signal)
-		}
-	}
-	const settle = async (): Promise<void> => {
-		const build = target.proxyBuild
-		if (build === undefined) return
-		const version = await observe(build.appVersionId, input.wait !== 'started')
-		await save({
-			...target,
-			proxyBuild: undefined,
-			ready: version.status === ZEROPS_ACTIVE ? target.ready : false,
-			proxyDeployment: version.status === ZEROPS_ACTIVE
-				? {
-					appVersionId: version.id,
-					repository: pin.repository,
-					commitSha: pin.commitSha,
-					descriptorSha256: pin.descriptor.sha256,
-					...(build.manifestSha256 === undefined ? {} : { manifestSha256: build.manifestSha256 }),
-				}
-				: undefined,
-		})
-		if (version.status !== ZEROPS_ACTIVE) {
-			throw new ProviderNamespaceError(`Proxy version ${version.id} finished as ${version.status}`, 'proxyDeployFailed', false)
-		}
-		settledAttempt = true
-	}
-	const discardInert = async (): Promise<void> => {
-		const build = target.proxyBuild
-		if (build === undefined) return
-		// Source cancellation is best effort; only exact version absence settles an inert reservation.
-		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
-		// Persist cleanup intent before deletion, so a crash cannot leave a deleted version marked as submitted.
-		if (build.phase !== 'version_created') await save({ ...target, proxyBuild: { ...build, phase: 'version_created', processId: undefined } }, true)
-		if (input.source === undefined) throw unresolved(build.appVersionId)
-		const cancellation = new AbortController()
-		const timeout = new AbortController()
-		try {
-			const source = input.source
-			await Promise.race([
-				Promise.resolve().then(() =>
-					source.cancel({ runId: build.runId, appVersionId: build.appVersionId, signal: AbortSignal.any([cleanupSignal(5000), cancellation.signal]) })
-				).catch(() => {}),
-				sleep(5000, timeout.signal).catch(() => {}),
-			])
-		} finally {
-			timeout.abort()
-			cancellation.abort()
-		}
-		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
-		const signal = cleanupSignal(30_000)
-		try {
-			await input.api.deleteAppVersion({ appVersionId: build.appVersionId, signal })
-		} catch (cause) {
-			if (!(cause instanceof ZeropsApiError && cause.status === 400 && cause.code === 'appVersionNotFound')) throw unresolved(build.appVersionId)
-		}
-		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
-		let absent = false
-		try {
-			await input.api.getAppVersion({ appVersionId: build.appVersionId, signal })
-		} catch (cause) {
-			absent = cause instanceof ZeropsApiError && cause.status === 400 && cause.code === 'appVersionNotFound'
-		}
-		if (!absent) throw unresolved(build.appVersionId)
-		await save({ ...target, proxyBuild: undefined }, true)
-	}
-
-	let ownsInert = false
-	try {
-		if (target.proxyBuild?.phase === 'version_created') await discardInert()
-		if (target.proxyBuild?.phase === 'build_trigger_requested' || target.proxyBuild?.phase === 'build_triggered') await settle()
-		// An older pre-trigger checkpoint has no frozen routing identity: discard rather than attribute new intent.
-		if (target.proxyBuild?.phase === 'source_uploaded' && target.proxyBuild.manifestSha256 === undefined) await discardInert()
-		const deployed = target.proxyDeployment
-		if (target.proxyBuild === undefined && deployed !== undefined) {
-			const version = await observe(deployed.appVersionId, false)
-			if (
-				input.refresh === false && settledAttempt && version.status === ZEROPS_ACTIVE && deployed.manifestSha256 === manifestSha256
-				&& deployed.repository.owner === pin.repository.owner && deployed.repository.name === pin.repository.name
-				&& deployed.commitSha === pin.commitSha && deployed.descriptorSha256 === pin.descriptor.sha256
-			) {
-				return target
-			}
-		}
-
-		if (target.proxyBuild === undefined) {
-			if (input.source === undefined) throw new Error('Zerops namespace source client is required')
-			const runId = crypto.randomUUID()
-			const resolved = await input.source.resolve({
-				runId,
-				repository: pin.repository,
-				requestedRef: pin.commitSha,
-				expectedCommitSha: pin.commitSha,
-				descriptorSha256: pin.descriptor.sha256,
-				signal: input.signal,
-			})
-			if (resolved.runId !== runId || resolved.commitSha !== pin.commitSha || resolved.descriptorSha256 !== pin.descriptor.sha256) {
-				throw new Error('Proxy source resolution identity mismatch')
-			}
-			input.signal.throwIfAborted()
-			await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, signal: input.signal })
-			await ensureNamespaceProxyIam({ api: input.api, proxyServiceId: serviceId, iamUrl: input.iamUrl, iamKey: input.iamKey, signal: input.signal })
-			input.signal.throwIfAborted()
-			const reserved = await input.api.createAppVersion({ serviceId, name: runId, signal: input.signal })
-			if (reserved.id === '') throw new Error('Proxy reservation returned an empty id')
-			// A completed reservation remains ours to record and clean after caller cancellation, never after lease loss.
-			await save({ ...target, proxyBuild: { runId, appVersionId: reserved.id, source: pin, phase: 'version_created', manifestSha256 } }, true)
-			ownsInert = true
-			inheritedAttempt = false
-			input.signal.throwIfAborted()
-			const uploaded = await input.source.upload({
-				runId,
-				appVersionId: reserved.id,
-				repository: pin.repository,
-				commitSha: pin.commitSha,
-				descriptor: { path: pin.descriptor.path, sha256: pin.descriptor.sha256 },
-				uploadUrl: reserved.uploadUrl,
-				archiveKind: 'platform',
-				signal: input.signal,
-			})
-			if (
-				uploaded.runId !== runId || uploaded.appVersionId !== reserved.id || uploaded.commitSha !== pin.commitSha
-				|| uploaded.descriptorSha256 !== pin.descriptor.sha256
-			) throw new Error('Proxy source upload identity mismatch')
-			await save({ ...target, proxyBuild: { runId, appVersionId: reserved.id, source: pin, phase: 'source_uploaded', manifestSha256 } })
-		}
-		let build = target.proxyBuild
-		if (build === undefined) throw new Error('Proxy attempt checkpoint is missing')
-		if (build.phase === 'source_uploaded') {
-			const descriptor = prepareZeropsDescriptor(pin.descriptor.contents, 'proxy')
-			for (let attempt = 0;; attempt++) {
-				ownsInert = true
-				await save({ ...target, proxyBuild: { ...build, phase: 'build_trigger_requested' } })
-				ownsInert = false
-				try {
-					const process = await input.api.buildAndDeployAppVersion({
-						appVersionId: build.appVersionId,
-						zeropsYaml: descriptor.contents,
-						zeropsYamlSetup: 'proxy',
-						signal: input.signal,
-					})
-					if (process.appVersionId !== undefined && process.appVersionId !== build.appVersionId) throw unresolved(build.appVersionId)
-					build = { ...build, phase: 'build_triggered', processId: process.id }
-					await save({ ...target, proxyBuild: build })
-					break
-				} catch (cause) {
-					if (cause instanceof ZeropsApiError && cause.status === 400 && cause.code === 'userDataSyncRunning') {
-						ownsInert = true
-						await save({ ...target, proxyBuild: { ...build, phase: 'source_uploaded' } }, true)
-						input.signal.throwIfAborted()
-						ownsInert = false
-						if (attempt >= 9) {
-							throw new ProviderNamespaceError(
-								`Proxy version ${build.appVersionId}: retry the uploaded version after service variables synchronize`,
-								'userDataSyncRunning',
-								true,
-							)
-						}
-						await sleep(3000, input.signal)
-						continue
-					}
-					input.signal.throwIfAborted()
-					// A timeout is not rejection; observe only this exact version and never resubmit it.
-					break
-				}
-			}
-		}
-		if (input.wait === 'started') {
-			const freshConfigurationRequired = input.refresh !== false && inheritedAttempt
-			if (!freshConfigurationRequired && target.proxyBuild?.phase === 'build_triggered' && build.manifestSha256 === manifestSha256) return target
-			const version = await input.api.getAppVersion({ appVersionId: build.appVersionId, signal: input.signal }).catch(() => null)
-			input.signal.throwIfAborted()
-			if (version?.id !== build.appVersionId || version.status === undefined || version.status === 'UPLOADING') throw unresolved(build.appVersionId)
-			if (
-				(version.serviceStackId !== undefined && version.serviceStackId !== serviceId)
+				version.id !== build.appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== serviceId)
 				|| (version.projectId !== undefined && target.projectId !== undefined && version.projectId !== target.projectId)
 			) throw unresolved(build.appVersionId)
-			if (!ZEROPS_TERMINAL.has(version.status)) {
-				if (freshConfigurationRequired || build.manifestSha256 !== manifestSha256) throw unresolved(build.appVersionId)
-				return target
+			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
+				const active = version.status === ZEROPS_ACTIVE
+				await save({
+					...target,
+					proxyBuild: undefined,
+					...(active
+						? {
+							proxyDeployment: {
+								appVersionId: version.id,
+								repository: pin.repository,
+								commitSha: pin.commitSha,
+								descriptorSha256: pin.descriptor.sha256,
+								...(build.manifestSha256 === undefined ? {} : { manifestSha256: build.manifestSha256 }),
+							},
+						}
+						: { ready: false }),
+				})
+				if (!active) throw new ProviderNamespaceError(`Proxy version ${version.id} finished as ${version.status}`, 'proxyDeployFailed', false)
+				return 'settled'
+			}
+			if (input.wait === 'started') {
+				if (build.manifestSha256 === manifestSha256 && version.status !== 'UPLOADING') return 'running'
+				throw unresolved(build.appVersionId)
+			}
+			if (Date.now() >= deadline) throw unresolved(build.appVersionId)
+			await input.sleep(POLL_INTERVAL_MS, input.signal)
+		}
+	}
+
+	const inherited = target.proxyBuild
+	if (inherited !== undefined && !inherited.triggered) {
+		input.signal.throwIfAborted()
+		try {
+			await deleteVersion(input.api, inherited.appVersionId, input.signal)
+		} catch {
+			input.signal.throwIfAborted()
+			throw unresolved(inherited.appVersionId)
+		}
+		await save({ ...target, proxyBuild: undefined })
+	} else if (inherited !== undefined) {
+		if (await settle(inherited) === 'running') return target
+		if (inherited.manifestSha256 === manifestSha256) return target
+	}
+
+	if (input.source === undefined) throw new Error('Zerops namespace source client is required')
+	const runId = crypto.randomUUID()
+	const resolved = await input.source.resolve({
+		runId,
+		repository: pin.repository,
+		requestedRef: pin.commitSha,
+		expectedCommitSha: pin.commitSha,
+		descriptorSha256: pin.descriptor.sha256,
+		signal: input.signal,
+	})
+	if (resolved.runId !== runId || resolved.commitSha !== pin.commitSha || resolved.descriptorSha256 !== pin.descriptor.sha256) {
+		throw new Error('Proxy source resolution identity mismatch')
+	}
+	await input.boundary()
+	await input.api.putServiceEnv({ serviceId, key: FABRIKA_PROXY_MANIFEST_JSON, value: manifest, signal: input.signal })
+	await writeProxyIam(input, serviceId)
+	input.signal.throwIfAborted()
+	const reserved = await input.api.createAppVersion({ serviceId, name: runId, signal: input.signal })
+	let build: ZeropsNamespaceProxyBuild = { appVersionId: reserved.id, triggered: false, manifestSha256 }
+	let accepted = false
+	try {
+		await save({ ...target, proxyBuild: build })
+		input.signal.throwIfAborted()
+		const uploaded = await input.source.upload({
+			runId,
+			appVersionId: reserved.id,
+			repository: pin.repository,
+			commitSha: pin.commitSha,
+			descriptor: { path: pin.descriptor.path, sha256: pin.descriptor.sha256 },
+			uploadUrl: reserved.uploadUrl,
+			archiveKind: 'platform',
+			signal: input.signal,
+		})
+		if (
+			uploaded.runId !== runId || uploaded.appVersionId !== reserved.id || uploaded.commitSha !== pin.commitSha
+			|| uploaded.descriptorSha256 !== pin.descriptor.sha256
+		) throw new Error('Proxy source upload identity mismatch')
+		const descriptor = prepareZeropsDescriptor(pin.descriptor.contents, 'proxy')
+		// Once triggered, only a lost lease stops the build request; a cancelled deploy leaves it to reconcile.
+		const buildSignal = followLeaseLoss(input.signal)
+		for (let attempt = 1;; attempt++) {
+			await input.boundary()
+			build = { ...build, triggered: true }
+			await save({ ...target, proxyBuild: build })
+			buildSignal.throwIfAborted()
+			try {
+				const process = await input.api.buildAndDeployAppVersion({
+					appVersionId: reserved.id,
+					zeropsYaml: descriptor.contents,
+					zeropsYamlSetup: 'proxy',
+					signal: buildSignal,
+				})
+				if (process.appVersionId !== undefined && process.appVersionId !== reserved.id) throw unresolved(reserved.id)
+				accepted = true
+				break
+			} catch (cause) {
+				buildSignal.throwIfAborted()
+				if (!(cause instanceof ZeropsApiError && cause.status === 400 && cause.code === 'userDataSyncRunning')) break
+				// A definitive refusal: the version is inert again, so a failure from here deletes it.
+				build = { ...build, triggered: false }
+				await save({ ...target, proxyBuild: build })
+				if (attempt >= USER_DATA_SYNC_ATTEMPTS) {
+					throw new ProviderNamespaceError(`Proxy version ${reserved.id}: service variables are still synchronizing`, 'userDataSyncRunning', true)
+				}
+				await input.sleep(POLL_INTERVAL_MS, input.signal)
 			}
 		}
-		await settle()
-		// A resumed upload belongs to its original manifest; settle it before publishing newer routing.
-		if ((input.refresh !== false && inheritedAttempt) || target.proxyDeployment?.manifestSha256 !== manifestSha256) {
-			return runZeropsProxyAttempt({ ...input, target })
-		}
-		return target
 	} catch (cause) {
-		if (ownsInert && !leaseLost()) await discardInert()
-		if (input.signal.aborted && !leaseLost() && target.proxyBuild !== undefined && !ownsInert) {
+		if (!build.triggered && !isLeaseLoss(input.signal.reason) && !isLeaseLoss(cause)) {
+			const cleanup = AbortSignal.any([followLeaseLoss(input.signal), AbortSignal.timeout(30_000)])
 			try {
-				if (target.proxyBuild.phase === 'version_created' || target.proxyBuild.phase === 'source_uploaded') await discardInert()
-				else await input.api.cancelBuild({ appVersionId: target.proxyBuild.appVersionId, signal: cleanupSignal(10_000) })
-			} catch { /* Retain the attempt until its exact version is observed terminal. */ }
+				await deleteVersion(input.api, reserved.id, cleanup)
+				await save({ ...target, proxyBuild: undefined })
+			} catch {
+				// The recorded attempt is deleted by the next owner.
+			}
 		}
 		throw cause
 	}
+	if (input.wait === 'started' && accepted) return target
+	await settle(build)
+	return target
 }

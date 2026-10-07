@@ -145,6 +145,19 @@ export class ProviderInvocationAbort extends Error {
 	}
 }
 
+export const isLeaseLoss = (reason: unknown): boolean => reason instanceof ProviderInvocationAbort && reason.kind === 'lease_lost'
+
+/** A signal that aborts with `signal`'s reason only when the lease is lost, never on a cancel. */
+export const followLeaseLoss = (signal: AbortSignal): AbortSignal => {
+	const controller = new AbortController()
+	const follow = (): void => {
+		if (isLeaseLoss(signal.reason)) controller.abort(signal.reason)
+	}
+	if (signal.aborted) follow()
+	else signal.addEventListener('abort', follow, { once: true })
+	return controller.signal
+}
+
 /** Resolve after `ms`, or reject with the signal's reason once it aborts. */
 export const abortableWait = (ms: number, signal: AbortSignal): Promise<void> =>
 	new Promise((resolve, reject) => {
@@ -250,13 +263,37 @@ export class ProviderSecretError extends Error {
 /** Persist a canonical namespace target immediately after one external mutation succeeds. */
 export interface ProviderNamespaceEvents {
 	checkpoint(namespace: ProviderDeploymentNamespace): Promise<void>
+	/** A step boundary: Control checks the namespace lease and, for a deploy, the run's cancellation request. */
+	boundary(): Promise<void>
+}
+
+/** One app environment assigned to a namespace, as its proxy routes it. */
+export interface ProviderNamespaceMember {
+	readonly appId: string
+	readonly env: string
+	readonly domain?: string
+	readonly artifact: ProviderEnvelope
 }
 
 /** One idempotent namespace lifecycle invocation. */
 export interface ProviderNamespaceMutationInput {
 	readonly namespace: ProviderDeploymentNamespace
+	/** Every app environment assigned to the namespace, read under its lease. */
+	readonly members: readonly ProviderNamespaceMember[]
 	readonly signal: AbortSignal
 	readonly events: ProviderNamespaceEvents
+}
+
+/** `settled` is false while the rebuild is still in flight; core then hands it to a `reconcile` job. */
+export interface ProviderNamespaceRepublishResult {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly settled: boolean
+}
+
+/** Rebuild a ready namespace's entry point from its current members. */
+export interface ProviderNamespaceRepublishInput extends ProviderNamespaceMutationInput {
+	/** `started`: return once the rebuild is submitted. `active`: return once it is live. */
+	readonly wait: 'started' | 'active'
 }
 
 /** One registration whose provider coordinates do not exist until namespace services are prepared. */
@@ -344,6 +381,8 @@ export interface ProviderNamespaceCapabilities {
 	prepareRegistration?(input: ProviderRegistrationPreparationInput): Promise<ProviderRegistration>
 	provision(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
+	/** Absent means the namespace has no entry point that follows its members. */
+	republish?(input: ProviderNamespaceRepublishInput): Promise<ProviderNamespaceRepublishResult>
 	readonly operator?: ProviderNamespaceOperator
 }
 

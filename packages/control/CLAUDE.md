@@ -227,8 +227,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   The job holds a `namespace:<id>` lease in the same `deploy_locks` table, on the same TTL — a namespace
   left `provisioning` is deliberately RESUMABLE, so unlike a run
   nothing else refuses a redelivery and the renewed lease is the only guard against one.
-  `reconcile` on a namespace that is still settling ONLY enqueues: it must never rewrite
-  `provider_target_json`, or a checkpoint the running job just wrote is rolled back under it.
+  `reconcile` on a namespace that is still settling moves its STATE back to `pending` and enqueues; it
+  must never rewrite `provider_target_json`, or a checkpoint the running job just wrote is rolled back
+  under it. Only a job's claim moves a `pending` row, so the running job leaves it `pending` and the
+  queued job runs after it.
 - **A failure keeps its CLASS, redacted rather than discarded** (backlog 72). A provider raises
   `ProviderNamespaceError` (stable `code`, safe summary, the upstream's words in `detail`); core stores
   `<code>: <message>` in the one `last_error` column — redacted and bounded — and projects the two halves
@@ -236,12 +238,17 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   untyped throw is `internal`. Core's own checkpoint invariants carry core's `checkpointInvariant` code,
   never a provider's vocabulary. Never store or log the error OBJECT.
 - **The namespace proxy FOLLOWS the registry.** The proxy manifest, not the registry, is the live
-  authorization state (ADR-0022), and `beforeDeploy` only republishes it when something in the namespace
-  deploys. So `deleteApp`, `deleteAppEnv`, a changed `domain` and a changed namespace assignment all await
-  `namespaceProxyChanged` (`src/api/namespaces.ts`), and `namespaces.reconcile` republishes a `ready`
-  namespace as the operator's repair verb. The hook is the `NAMESPACE_PROXY` PORT (`src/services.ts`),
-  filled by the process root alone (`src/node/runtime.ts` → `zeropsNamespaceProxySync`) because the shared
-  layer must not name a provider package. It waits for the manifest to PUBLISH and the roll to start, not
+  authorization state (ADR-0022). Every rebuild goes through core `republishNamespace` /
+  `republishUnderLease` (`src/api/namespaces.ts`), which holds the `namespace:<id>` lease, hands the
+  provider's optional `namespaces.republish` capability the members read under it, writes every
+  checkpoint fenced (`writeDeploymentNamespace`), and leaves a rebuild it did not see go live
+  `provisioning` with a `reconcile` job queued (ADR-0044). Three callers: `executeDeploy` takes the
+  namespace lease AFTER the run lease (lock order is always app/env → namespace; a namespace path never
+  takes an app/env lease), defers when it is busy, republishes with `wait: 'active'` and releases it
+  before `provider.deploy`; `deleteApp`, `deleteAppEnv`, a changed `domain` and a changed namespace
+  assignment await `namespaceProxyChanged`, wired in `buildControlRpcDeps` only when the provider declares
+  `republish`; and `namespaces.reconcile` republishes a `ready` namespace as the operator's repair verb.
+  The registry hook waits for the manifest to PUBLISH and the roll to start (`wait: 'started'`), not
   for the build — a proxy build takes minutes and this runs inside a request. Every affected namespace is
   attempted before anything is reported; a republish failure is a 502 that LEAVES the registry change in
   place (the row is already the truth), and `reconcile` still queues the provider mutation when its own

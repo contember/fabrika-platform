@@ -33,7 +33,6 @@ import {
 } from './manifest'
 import {
 	createZeropsNamespaceCapabilities,
-	verifyZeropsNamespaceProxySource,
 	type ZeropsNamespaceProxySource,
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
@@ -73,22 +72,6 @@ const envelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
 	payload: codec.encode(value),
 })
 
-export interface ZeropsBeforeDeployInput {
-	readonly appId: string
-	readonly env: string
-	readonly namespaceId: string
-	readonly target: ZeropsStoredTarget & {
-		readonly projectId: string
-		readonly proxyServiceId: string
-		readonly proxySource: ZeropsNamespaceProxySource
-	}
-	readonly artifact: FabrikaManifest
-	readonly api: ZeropsApi
-	readonly signal: AbortSignal
-}
-
-export type ZeropsBeforeDeploy = (input: ZeropsBeforeDeployInput) => Promise<void>
-
 export interface ZeropsControlProviderOptions {
 	readonly accessToken: string
 	readonly apiBaseUrl?: string
@@ -98,12 +81,10 @@ export interface ZeropsControlProviderOptions {
 	readonly source: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
-	readonly beforeDeploy?: ZeropsBeforeDeploy
 	readonly namespaces?: {
 		readonly clientId: string
 		readonly proxySource?: ZeropsNamespaceProxySource
 		readonly proxyBuildFromGit?: string
-		readonly proxyManifest?: (namespaceId: string) => Promise<string>
 		readonly iamUrl: string
 		readonly iamKey: string
 	}
@@ -146,7 +127,7 @@ const decodeNamespace = (
 const resolvedEnvironment = (
 	environment: ProviderEnvironment,
 	options: { requireReady: boolean },
-): DecodedZeropsEnvironment & { projectId: string; proxyServiceId?: string; proxySource?: ZeropsNamespaceProxySource } => {
+): DecodedZeropsEnvironment & { projectId: string } => {
 	const decoded = decodeEnvironment(environment)
 	const projectId = decoded.namespaceTarget.projectId
 	if (projectId === undefined) {
@@ -155,20 +136,7 @@ const resolvedEnvironment = (
 	if (options.requireReady && decoded.namespaceTarget.ready !== true) {
 		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` is not ready`)
 	}
-	const proxyServiceId = decoded.namespaceTarget.proxyServiceId
-	if (options.requireReady && proxyServiceId === undefined) {
-		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no proxy service id`)
-	}
-	const proxySource = decoded.namespaceTarget.proxySource
-	if (options.requireReady && proxySource === undefined) {
-		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` is unpinned; explicit migration is required`)
-	}
-	return {
-		...decoded,
-		projectId,
-		...(proxyServiceId === undefined ? {} : { proxyServiceId }),
-		...(proxySource === undefined ? {} : { proxySource }),
-	}
+	return { ...decoded, projectId }
 }
 
 const assertEnvironmentOfApp = (app: ProviderApp, environment: ProviderEnvironment): void => {
@@ -381,15 +349,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
 			const placement = resolvedEnvironment(input.environment, { requireReady: true })
-			const proxyServiceId = placement.proxyServiceId
-			if (proxyServiceId === undefined) {
-				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy service id`)
-			}
-			const proxySource = placement.proxySource
-			if (proxySource === undefined) {
-				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` is unpinned; explicit migration is required`)
-			}
-			await verifyZeropsNamespaceProxySource(proxySource)
 			const artifact = artifactFor(input.environment)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			let source: ZeropsRuntimeTarget['source']
@@ -403,23 +362,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					commitSha: input.app.source.ref,
 					...(binding === undefined ? {} : { privateBinding: binding }),
 				}
-			}
-			if (!input.dryRun) {
-				await options.beforeDeploy?.({
-					appId: input.app.id,
-					env: input.environment.env,
-					namespaceId: placement.namespace.id,
-					target: {
-						serviceId: placement.target.serviceId,
-						projectId: placement.projectId,
-						proxyServiceId,
-						proxySource,
-					},
-					// A clone: what the hook sees must not reach the import document or the artifact hash.
-					artifact: structuredClone(artifact),
-					api,
-					signal: input.signal,
-				})
 			}
 			const runtimeTarget: ZeropsRuntimeTarget = {
 				projectId: placement.projectId,

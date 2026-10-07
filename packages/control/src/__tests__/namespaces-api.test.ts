@@ -1,13 +1,28 @@
 import { ConflictError } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
-import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
+import type {
+	ControlProvider,
+	ProviderDeploymentNamespace,
+	ProviderEnvelope,
+	ProviderNamespaceRepublishInput,
+	ProviderRegistrationInput,
+} from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { type NamespaceJobResult, type NamespaceUseCaseContext, reconcileNamespaceUseCase, runNamespaceJob } from '../api/namespaces'
+import {
+	enqueueUnsettledNamespaces,
+	type NamespaceJobResult,
+	type NamespaceUseCaseContext,
+	reconcileNamespaceUseCase,
+	republishNamespace,
+	runNamespaceJob,
+} from '../api/namespaces'
+import { acquireLease, namespaceLeaseKey } from '../lease'
 import { FakeRepoSource } from '../repo-source'
-import type { ControlJobMessage } from '../run-lifecycle'
+import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
+import { EnvSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
-import { fixtureRuns, makeFakeLock } from './helpers/lock'
+import { fixtureNamespaceWrite, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const target = (phase: string): ProviderEnvelope => ({
@@ -805,6 +820,324 @@ describe('reconcile is the operator’s repair verb for a stale proxy manifest',
 		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
 		expect(harness.audits.map((audit) => audit.action)).toContain('namespace.reconcile')
 		expect((await harness.deps.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('pending')
+	})
+})
+
+describe('a namespace republish rebuilds the entry point from the registry under the namespace lease', () => {
+	interface Republishing {
+		calls: Array<{ wait: ProviderNamespaceRepublishInput['wait']; members: string[] }>
+		/** Held open to keep a republish in flight while the test looks at the world around it. */
+		gate: Promise<void> | null
+		entered: () => void
+		fail: boolean
+		/** A `started` rebuild that finds nothing left in flight. */
+		settledWhenStarted: boolean
+		deploys: string[]
+		/** Held open inside source resolution, while the deploy holds the namespace lease but has not republished. */
+		resolving: Promise<void> | null
+	}
+
+	function republishingProvider(record: Republishing): ControlProvider {
+		const provider = namespacedProvider(providerRecording())
+		const namespaces = provider.namespaces
+		if (namespaces === undefined) throw new Error('test provider must support namespaces')
+		return {
+			...provider,
+			async resolveSource() {
+				if (record.resolving !== null) await record.resolving
+				return { commitSha: 'a'.repeat(40) }
+			},
+			async deploy(input) {
+				record.deploys.push(input.runId)
+				return { state: 'succeeded' }
+			},
+			namespaces: {
+				...namespaces,
+				async republish(input) {
+					record.calls.push({ wait: input.wait, members: input.members.map((member) => `${member.appId}/${member.env}@${member.domain ?? '-'}`) })
+					record.entered()
+					const checkpoint = withTarget(input.namespace, target('rebuilding'))
+					await input.events.checkpoint(checkpoint)
+					if (record.gate !== null) await record.gate
+					await input.events.boundary()
+					if (record.fail) throw new Error('platform said no')
+					return { namespace: withTarget(checkpoint, target('rebuilt')), settled: input.wait === 'active' || record.settledWhenStarted }
+				},
+			},
+		}
+	}
+
+	function republishing(): Republishing {
+		return { calls: [], gate: null, entered: () => {}, fail: false, settledWhenStarted: false, deploys: [], resolving: null }
+	}
+
+	async function seed(harness: NamespaceHarness, apps: string[] = ['alpha']): Promise<void> {
+		await harness.deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('ready')),
+			state: 'ready',
+		}, ['service:proxy'])
+		for (const app of apps) await register(harness, app)
+	}
+
+	async function register(harness: NamespaceHarness, app: string): Promise<void> {
+		await harness.deps.repositories.registry.createApp({ id: app, repoUrl: `github.com/acme/${app}` })
+		const put = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: app, env: 'prod', environment: { ...registrationBody('apps-prod'), domain: `${app}.example.test` } }),
+			harness.deps,
+		)
+		expect(put.status).toBe(200)
+	}
+
+	const republishDeps = (harness: NamespaceHarness) => ({
+		repositories: harness.deps.repositories,
+		provider: harness.deps.provider,
+		lock: makeFakeLock(harness.deps.repositories),
+		queue: harness.deps.queue,
+	})
+
+	const state = async (harness: NamespaceHarness) => (await harness.deps.repositories.registry.getDeploymentNamespace('apps-prod'))?.state
+
+	test('hands the provider every member as the registry holds it now', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness, ['alpha'])
+		await republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'active' })
+		await register(harness, 'beta')
+		await republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'active' })
+
+		expect(record.calls.map((call) => call.members)).toEqual([
+			['alpha/prod@alpha.example.test'],
+			['alpha/prod@alpha.example.test', 'beta/prod@beta.example.test'],
+		])
+		expect(await state(harness)).toBe('ready')
+		expect(harness.sent).toEqual([])
+	})
+
+	test('a started rebuild stays provisioning and is settled by a reconcile job, even across a lost enqueue', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })
+		expect(await state(harness)).toBe('provisioning')
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+
+		harness.sent.splice(0)
+		await enqueueUnsettledNamespaces(harness.deps.repositories.registry, harness.deps.queue)
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+		expect(await state(harness)).toBe('ready')
+	})
+
+	test('a failed rebuild keeps the registry change, leaves the namespace provisioning and queues a reconcile', async () => {
+		const record = republishing()
+		record.fail = true
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('platform said no')
+		expect(await state(harness)).toBe('provisioning')
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+		expect((await harness.deps.repositories.registry.listAppEnvsByNamespace('apps-prod')).map((row) => row.app_id)).toEqual(['alpha'])
+	})
+
+	test('refuses an unknown or failed namespace before the provider is asked', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('not found')
+		await seed(harness)
+		await fixtureNamespaceWrite(harness.deps.repositories, 'apps-prod', 'failed')
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('not ready')
+		expect(record.calls).toEqual([])
+	})
+
+	test('a rebuild, a namespace job and an app deploy serialize on the namespace lease', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		const run = 'run-alpha'
+		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		const runDeps = {
+			...republishDeps(harness),
+			secrets: new EnvSecretResolver({}),
+			logs: { put: () => Promise.resolve() },
+		}
+		const release = Promise.withResolvers<void>()
+		const entered = Promise.withResolvers<void>()
+		record.gate = release.promise
+		record.entered = entered.resolve
+		const registryChange = republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })
+		await entered.promise
+
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('busy')
+		expect(await runNamespaceJob(republishDeps(harness), { kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' })).toEqual({
+			namespaceId: 'apps-prod',
+			status: 'deferred',
+		})
+		expect(await executeDeploy(runDeps, { runId: run })).toEqual({ runId: run, status: 'deferred' })
+		expect((await harness.deps.repositories.runs.getRun(run))?.status).toBe('pending')
+
+		release.resolve()
+		record.gate = null
+		await registryChange
+		await harness.drain()
+		expect(await executeDeploy(runDeps, { runId: run })).toEqual({ runId: run, status: 'succeeded' })
+		expect(record.calls.map((call) => call.wait)).toEqual(['started', 'active'])
+		expect(await state(harness)).toBe('ready')
+		expect(await heldLeases(harness.deps.repositories)).toEqual([])
+	})
+
+	test('a deploy cancelled during its rebuild leaves the rebuild to a reconcile job and settles the run', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		const run = 'run-alpha'
+		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		record.entered = () => {
+			void harness.deps.repositories.runs.requestRunCancellation(run)
+		}
+		const result = await executeDeploy({
+			...republishDeps(harness),
+			secrets: new EnvSecretResolver({}),
+			logs: { put: () => Promise.resolve() },
+		}, { runId: run })
+
+		expect(result).toEqual({ runId: run, status: 'skipped' })
+		expect((await harness.deps.repositories.runs.getRun(run))?.status).toBe('failed')
+		expect(await state(harness)).toBe('provisioning')
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+	})
+
+	const runDepsOf = (harness: NamespaceHarness) => ({
+		...republishDeps(harness),
+		secrets: new EnvSecretResolver({}),
+		logs: { put: () => Promise.resolve() },
+	})
+
+	test('a started rebuild that leaves nothing in flight ends ready without a reconcile job', async () => {
+		const record = republishing()
+		record.settledWhenStarted = true
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })
+		expect(await state(harness)).toBe('ready')
+		expect(harness.sent).toEqual([])
+	})
+
+	test('a registry change that finds the namespace busy requeues it and queues a reconcile', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		const holder = await acquireLease(makeFakeLock(harness.deps.repositories), namespaceLeaseKey('apps-prod'))
+		if (holder === null) throw new Error('lease missing')
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('busy')
+		await holder.release()
+		expect(await state(harness)).toBe('pending')
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+		expect(record.calls).toEqual([])
+	})
+
+	test('a registry change while a namespace job runs is published by the reconcile queued after it', async () => {
+		const record = republishing()
+		const base = republishingProvider(record)
+		const namespaces = base.namespaces
+		if (namespaces === undefined) throw new Error('test provider must support namespaces')
+		const reconciled: string[][] = []
+		const inJob = Promise.withResolvers<void>()
+		const finish = Promise.withResolvers<void>()
+		let first = true
+		const harness = makeDeps({
+			...base,
+			namespaces: {
+				...namespaces,
+				async reconcile(input) {
+					reconciled.push(input.members.map((member) => member.appId))
+					if (first) {
+						first = false
+						inJob.resolve()
+						await finish.promise
+					}
+					return withTarget(input.namespace, target('reconciled'))
+				},
+			},
+		})
+		await seed(harness)
+		await fixtureNamespaceWrite(harness.deps.repositories, 'apps-prod', 'provisioning')
+		const job = runNamespaceJob(republishDeps(harness), { kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' })
+		await inJob.promise
+
+		// The registry write itself, as a delete or a domain change makes it, while the job holds the lease.
+		await harness.deps.repositories.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await harness.deps.repositories.registry.upsertAppEnv({
+			appId: 'beta',
+			env: 'prod',
+			namespaceId: 'apps-prod',
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify(target('app')),
+			providerArtifactJson: JSON.stringify(artifact()),
+		})
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('busy')
+		finish.resolve()
+
+		expect(await job).toEqual({ namespaceId: 'apps-prod', status: 'ready' })
+		expect(await state(harness)).toBe('pending')
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+		expect(reconciled).toEqual([['alpha'], ['alpha', 'beta']])
+		expect(await state(harness)).toBe('ready')
+	})
+
+	test('a reconcile requested while a deploy holds the namespace lease still runs after the deploy', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		const resolving = Promise.withResolvers<void>()
+		record.resolving = resolving.promise
+		const deploy = executeDeploy(runDepsOf(harness), { runId: 'run-alpha' })
+		for (let i = 0; i < 100 && (await heldLeases(harness.deps.repositories)).length < 2; i++) await Bun.sleep(1)
+
+		await reconcileNamespaceUseCase(
+			{
+				repositories: harness.deps.repositories,
+				provider: harness.deps.provider,
+				auth: harness.deps.auth,
+				signal: new AbortController().signal,
+				queue: harness.deps.queue,
+			},
+			'apps-prod',
+		)
+		resolving.resolve()
+
+		expect(await deploy).toEqual({ runId: 'run-alpha', status: 'succeeded' })
+		expect(await state(harness)).toBe('pending')
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+	})
+
+	test('a failed active rebuild stops the deploy before the provider deploys, fails the run and queues a reconcile', async () => {
+		const record = republishing()
+		record.fail = true
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+
+		expect(await executeDeploy(runDepsOf(harness), { runId: 'run-alpha' })).toEqual({ runId: 'run-alpha', status: 'failed' })
+		expect(record.deploys).toEqual([])
+		expect((await harness.deps.repositories.runs.getRun('run-alpha'))?.status).toBe('failed')
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+	})
+
+	test('a deploy into a republishing namespace without the control queue fails closed', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		const { queue: _unused, ...withoutQueue } = runDepsOf(harness)
+
+		expect(await executeDeploy(withoutQueue, { runId: 'run-alpha' })).toEqual({ runId: 'run-alpha', status: 'failed' })
+		expect(record.calls).toEqual([])
+		expect(record.deploys).toEqual([])
 	})
 })
 

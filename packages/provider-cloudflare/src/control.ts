@@ -14,7 +14,7 @@ import type {
 	ProviderTerminalOutcome,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
-import { abortableWait, decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
 import { type RunnerIamReconcile, runnerIamReconcileSchema } from '@fabrika/runner-contract'
 import { z } from 'zod'
@@ -182,8 +182,6 @@ const readBoundaries = async (events: ProviderDeployInput['events'], sleep: Clou
 		// `stop` aborted: the runner answered.
 	}
 }
-
-const isLeaseLoss = (reason: unknown): boolean => reason instanceof ProviderInvocationAbort && reason.kind === 'lease_lost'
 
 const encodeEnvelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
 	provider: 'cloudflare',

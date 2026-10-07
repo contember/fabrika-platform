@@ -9,7 +9,9 @@ import { zeropsControlProvider, zeropsNamespaceProcessConfig, zeropsSourceConnec
 import { createRuntime } from '../node/runtime'
 import { zeropsSourceConnectionPort } from '../node/source-connection'
 import { FakeRepoSource } from '../repo-source'
+import { buildControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
+import { allowAllAuth } from './helpers/iam'
 
 const PIN = {
 	repository: { owner: 'example', name: 'platform' },
@@ -221,7 +223,7 @@ describe('the Zerops namespace process configuration', () => {
 		await runtime.shutdown()
 	})
 
-	test('the process composition fills the namespace-proxy port a Cloudflare composition leaves undefined', async () => {
+	test('the process provider republishes namespaces, so the registry hook is wired from its capability', async () => {
 		const runtime = createRuntime({
 			...namespaceEnvironment(),
 			FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
@@ -235,9 +237,10 @@ describe('the Zerops namespace process configuration', () => {
 			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
 			ENVIRONMENT: 'stage',
 		})
+		const deps = buildControlRpcDeps(runtime.env, runtime.provider, allowAllAuth())
 		// Addressed by namespace id alone, and a namespace it cannot read is a refusal, never a silent no-op.
-		expect(typeof runtime.env.NAMESPACE_PROXY).toBe('function')
-		await expect(runtime.env.NAMESPACE_PROXY?.('nope')).rejects.toThrow()
+		expect(typeof deps.namespaceProxyChanged).toBe('function')
+		await expect(deps.namespaceProxyChanged?.('nope')).rejects.toThrow()
 		await runtime.shutdown()
 	})
 

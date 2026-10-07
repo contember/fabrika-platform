@@ -20,17 +20,16 @@ import {
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
 	type ProviderNamespaceHost,
+	type ProviderNamespaceMember,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespacePresentation,
+	type ProviderNamespaceRepublishInput,
 } from '@fabrika/provider-contract'
-import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
-import { NamespaceOwnership } from '../namespace-ownership'
+import { type ControlRepositories, type DeploymentNamespaceRow, type DeploymentNamespaceState, NamespaceResourceClaimConflictError } from '../db'
+import { acquireLease, type Lease, type LeaseClock, namespaceLeaseKey } from '../lease'
 import type { ControlJobMessage, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
-import { uuidv7 } from '../uuid'
 import { fail } from './domain'
 import { parseStoredEnvelope } from './provider-envelope'
-
-export { namespaceLockKey } from '../namespace-ownership'
 
 /** Repairs the durable-checkpoint/queue-send crash gap; the namespace lease makes duplicate deliveries harmless. */
 export async function enqueueUnsettledNamespaces(
@@ -50,18 +49,10 @@ export async function enqueueUnsettledNamespaces(
  */
 export type NamespaceProxyChanged = (namespaceId: string) => Promise<void>
 
-/**
- * What the WORKER needs. No `auth` and no request signal: the mutation runs behind the queue, long
- * after the caller that asked for it has gone (backlog 74), so the audit happens in the request and
- * the abort signal is the job's own.
- */
-export interface NamespaceJobContext {
+export interface NamespaceUseCaseContext {
 	readonly repositories: ControlRepositories
 	readonly provider: ControlProvider
 	readonly signal: AbortSignal
-}
-
-export interface NamespaceUseCaseContext extends NamespaceJobContext {
 	readonly auth: AuthContext
 	readonly queue: JobQueue<ControlJobMessage>
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
@@ -326,6 +317,42 @@ export interface NamespaceJobDeps {
 	readonly repositories: ControlRepositories
 	readonly provider: ControlProvider
 	readonly lock: DeployLocks
+	readonly leaseClock?: LeaseClock
+}
+
+/**
+ * Persist one namespace row as the holder of its lease; a write the fence refused ends the lease. Only a
+ * job's `claim` moves a `pending` row: any other write keeps an operator's requeue for the queued job.
+ */
+async function writeNamespace(
+	repositories: ControlRepositories,
+	lease: Lease,
+	row: DeploymentNamespaceRow,
+	namespace: ProviderDeploymentNamespace,
+	state: DeploymentNamespaceState,
+	options: { lastError?: string; claim?: true } = {},
+): Promise<void> {
+	lease.assertWritten(
+		await repositories.registry.writeDeploymentNamespace({
+			id: row.id,
+			createdAt: row.created_at,
+			fence: lease.fence(),
+			providerTargetJson: JSON.stringify(namespace.target),
+			state,
+			lastError: options.lastError ?? null,
+			claim: options.claim === true,
+		}),
+	)
+}
+
+/** Every app environment the namespace's entry point routes, read under its lease. */
+async function namespaceMembers(repositories: ControlRepositories, namespaceId: string): Promise<ProviderNamespaceMember[]> {
+	return (await repositories.registry.listAppEnvsByNamespace(namespaceId)).map((row) => ({
+		appId: row.app_id,
+		env: row.env,
+		...(row.domain === null ? {} : { domain: row.domain }),
+		artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
+	}))
 }
 
 /**
@@ -334,7 +361,7 @@ export interface NamespaceJobDeps {
  * The state guard is what makes redelivery safe: a namespace that already settled (`ready`/`failed`),
  * belongs to another provider, or no longer exists is a NO-OP, while one left `provisioning` by a
  * crashed worker is RESUMED — the provider's checkpoints exist precisely so a re-run picks up where it
- * stopped instead of repeating the work (see `provision` in `@fabrika/provider-zerops`'s namespace.ts).
+ * stopped instead of repeating the work.
  *
  * The lease serializes two workers against one namespace; `control` runs more than one container, so
  * the sequential in-process consumer is not on its own enough.
@@ -344,18 +371,17 @@ export async function runNamespaceJob(deps: NamespaceJobDeps, message: Namespace
 	const runnable = (row: DeploymentNamespaceRow | null): row is DeploymentNamespaceRow =>
 		row !== null && row.provider === deps.provider.id && (row.state === 'pending' || row.state === 'provisioning')
 	if (!runnable(await deps.repositories.registry.getDeploymentNamespace(message.namespaceId))) return skipped
-	const owner = await NamespaceOwnership.acquire(deps.repositories.registry, deps.lock, message.namespaceId)
-	if (owner === null) return { namespaceId: message.namespaceId, status: 'deferred' }
+	const lease = await acquireLease(deps.lock, namespaceLeaseKey(message.namespaceId), deps.leaseClock)
+	if (lease === null) return { namespaceId: message.namespaceId, status: 'deferred' }
 	try {
 		// Re-read UNDER the lease, as `executeDeploy` re-verifies its run: the first read raced whoever held
 		// it, so both the guard and the target handed to the provider have to come from after the acquire.
-		const row = owner.row
+		const row = await deps.repositories.registry.getDeploymentNamespace(message.namespaceId)
+		lease.assertHeld()
 		if (!runnable(row)) return skipped
-		// The signal belongs to the JOB, never to a request — a caller that hangs up must not cancel this.
-		const context: NamespaceJobContext = { repositories: deps.repositories, provider: deps.provider, signal: owner.signal }
-		return { namespaceId: row.id, status: await mutateNamespace(context, row, message.mutation, owner) }
+		return { namespaceId: row.id, status: await mutateNamespace(deps, row, message.mutation, lease) }
 	} finally {
-		await owner.close()
+		await lease.release()
 	}
 }
 
@@ -367,42 +393,127 @@ type NamespaceMutationStatus = 'ready' | 'failed' | 'skipped'
  * burns the retry budget, and the row already carries what an operator reads.
  */
 async function mutateNamespace(
-	c: NamespaceJobContext,
+	deps: NamespaceJobDeps,
 	row: DeploymentNamespaceRow,
 	mutation: NamespaceJobMutation,
-	owner: NamespaceOwnership,
+	lease: Lease,
 ): Promise<NamespaceMutationStatus> {
-	const capabilities = c.provider.namespaces
+	const capabilities = deps.provider.namespaces
 	if (capabilities === undefined) return 'skipped'
 	let current = toProviderNamespace(row)
-	await owner.checkpoint(JSON.stringify(current.target), 'provisioning')
-	const providerInput = (): ProviderNamespaceMutationInput => ({
+	await writeNamespace(deps.repositories, lease, row, current, 'provisioning', { claim: true })
+	const providerInput: ProviderNamespaceMutationInput = {
 		namespace: current,
-		signal: c.signal,
+		members: await namespaceMembers(deps.repositories, row.id),
+		// The signal belongs to the JOB, never to a request — a caller that hangs up must not cancel this.
+		signal: lease.signal,
 		events: {
 			checkpoint: async (namespace) => {
-				if (!sameCoordinates(namespace, current, c.provider.id)) {
+				if (!sameCoordinates(namespace, current, deps.provider.id)) {
 					throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
 				}
 				current = namespace
-				await owner.checkpoint(JSON.stringify(current.target), 'provisioning')
+				await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 			},
+			boundary: async () => lease.assertHeld(),
 		},
-	})
+	}
 	try {
-		const result = mutation === 'provision' ? await capabilities.provision(providerInput()) : await capabilities.reconcile(providerInput())
-		if (!sameCoordinates(result, current, c.provider.id)) throw new Error('provider result changed namespace coordinates')
+		const result = mutation === 'provision' ? await capabilities.provision(providerInput) : await capabilities.reconcile(providerInput)
+		if (!sameCoordinates(result, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
 		current = result
-		await owner.checkpoint(JSON.stringify(current.target), 'ready')
+		await writeNamespace(deps.repositories, lease, row, current, 'ready')
 		return 'ready'
 	} catch (cause) {
-		owner.assertOwned()
+		lease.assertHeld()
 		const failure = namespaceFailure(cause, mutation)
 		console.error(`namespace ${mutation} failed for ${row.id}: ${failure.code}: ${failure.log}`)
 		const state = asProviderNamespaceError(cause)?.retryable === true ? 'provisioning' : 'failed'
-		await owner.checkpoint(JSON.stringify(current.target), state, encodeNamespaceError(failure.code, failure.message))
+		await writeNamespace(deps.repositories, lease, row, current, state, { lastError: encodeNamespaceError(failure.code, failure.message) })
 		return 'failed'
 	}
+}
+
+export interface NamespaceRepublishDeps extends NamespaceJobDeps {
+	/** Where an unsettled rebuild is handed to a namespace `reconcile` job. */
+	readonly queue: Pick<JobQueue<ControlJobMessage>, 'send'>
+}
+
+export interface NamespaceRepublishOptions {
+	readonly wait: ProviderNamespaceRepublishInput['wait']
+	readonly signal?: AbortSignal
+	/** The caller's own step boundary, e.g. a deploy's cancellation read. */
+	readonly boundary?: () => Promise<void>
+}
+
+/**
+ * Rebuild one namespace's entry point from the registry (ADR-0044). The namespace stays `provisioning`
+ * until the rebuild is live; one that ends any other way is handed to a `reconcile` job. A provider
+ * without the capability has nothing to republish.
+ */
+export async function republishNamespace(deps: NamespaceRepublishDeps, namespaceId: string, options: NamespaceRepublishOptions): Promise<void> {
+	if (deps.provider.namespaces?.republish === undefined) return
+	const lease = await acquireLease(deps.lock, namespaceLeaseKey(namespaceId), deps.leaseClock)
+	if (lease === null) {
+		// The holder may have read the members before this change; a queued reconcile publishes it after.
+		await deps.repositories.registry.requeueDeploymentNamespace(namespaceId)
+		await deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
+		throw new Error(`Namespace ${namespaceId} proxy is busy; a reconcile is queued`)
+	}
+	try {
+		await republishUnderLease(deps, lease, namespaceId, options)
+	} finally {
+		await lease.release()
+	}
+}
+
+/** `republishNamespace` for a caller that already holds the namespace lease. */
+export async function republishUnderLease(
+	deps: NamespaceRepublishDeps,
+	lease: Lease,
+	namespaceId: string,
+	options: NamespaceRepublishOptions,
+): Promise<void> {
+	const capabilities = deps.provider.namespaces
+	if (capabilities?.republish === undefined) return
+	const row = await deps.repositories.registry.getDeploymentNamespace(namespaceId)
+	lease.assertHeld()
+	if (row === null) throw new Error(`deployment namespace ${namespaceId} not found`)
+	if (row.provider !== deps.provider.id || row.state === 'failed') throw new Error(`Namespace ${namespaceId} is not ready`)
+	let current = toProviderNamespace(row)
+	const members = await namespaceMembers(deps.repositories, row.id)
+	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
+	const reconcileLater = (): Promise<void> => deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
+	let settled: boolean
+	try {
+		const result = await capabilities.republish({
+			namespace: current,
+			members,
+			wait: options.wait,
+			signal: options.signal === undefined ? lease.signal : AbortSignal.any([lease.signal, options.signal]),
+			events: {
+				checkpoint: async (namespace) => {
+					if (!sameCoordinates(namespace, current, deps.provider.id)) {
+						throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
+					}
+					current = namespace
+					await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
+				},
+				boundary: async () => {
+					lease.assertHeld()
+					await options.boundary?.()
+				},
+			},
+		})
+		if (!sameCoordinates(result.namespace, current, deps.provider.id)) throw new Error('provider result changed namespace coordinates')
+		current = result.namespace
+		settled = result.settled
+	} catch (cause) {
+		await reconcileLater().catch(() => console.error(`namespace ${namespaceId}: the reconcile job could not be queued`))
+		throw cause
+	}
+	await writeNamespace(deps.repositories, lease, row, current, settled ? 'ready' : 'provisioning')
+	if (!settled) await reconcileLater()
 }
 
 /**
@@ -547,11 +658,9 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 			republishFailed = true
 		}
 	}
-	// A SETTLED namespace goes back to `pending` so the worker's claim still means something. One that is
-	// already `pending`/`provisioning` is left completely alone — the request must not touch
-	// `provider_target_json`, or a checkpoint the running job just wrote would be rolled back under it.
-	// The enqueue is still worth it: it re-arms a namespace whose job was abandoned, and if a job is in
-	// flight the new message simply finds the namespace settled and skips.
+	// The namespace goes back to `pending`, state only: rewriting `provider_target_json` would roll back a
+	// checkpoint a running job just wrote. That job keeps `pending` (only a claim moves it), so the queued
+	// reconcile runs after it with fresh members; it also re-arms a namespace whose job was abandoned.
 	const queued = await c.repositories.registry.requeueDeploymentNamespace(row.id)
 	const current = queued ?? await c.repositories.registry.getDeploymentNamespace(row.id)
 	if (current === null) fail(404, 'deployment namespace not found')

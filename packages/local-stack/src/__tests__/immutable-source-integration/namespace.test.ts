@@ -1,7 +1,8 @@
+import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
 	createZeropsArtifactSourceDescriptor,
-	runZeropsProxyAttempt,
+	republishProxy,
 	ZeropsApiError,
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
@@ -36,7 +37,8 @@ async function fixture() {
 		fetchImpl: (url, init) => handler(new Request(url, init)),
 		sleep: async () => {},
 	})
-	const signal = AbortSignal.timeout(10_000)
+	const lease = new AbortController()
+	const signal = AbortSignal.any([lease.signal, AbortSignal.timeout(10_000)])
 	const imported = await api.importProject({
 		clientId: 'client',
 		yaml: 'project: {name: integration}\nservices: [{hostname: proxy, startWithoutCode: true}]',
@@ -85,17 +87,19 @@ async function fixture() {
 		manifest,
 		state,
 		checkpoint,
+		lease,
 		target: () => persisted,
 		input: () => ({
 			target: persisted,
 			api,
 			source,
-			manifest: '{"apps":[]}',
+			manifest: { apps: [] },
 			iamUrl: 'https://iam.example.test',
 			iamKey: 'test-key',
 			signal,
 			checkpoint,
-			refresh: false,
+			boundary: async () => {},
+			sleep: (ms: number) => Bun.sleep(ms),
 		}),
 		restart: async () => {
 			now = 200
@@ -104,15 +108,12 @@ async function fixture() {
 	}
 }
 
-test('real authenticated namespace source attempt resumes its durable submitted version without reserving or building again', async () => {
+test('real authenticated namespace source attempt settles its durable triggered version by polling, without reserving or building again', async () => {
 	const f = await fixture()
-	const submitted = await runZeropsProxyAttempt({ ...f.input(), wait: 'started' })
+	const submitted = await republishProxy({ ...f.input(), wait: 'started' })
 	const build = submitted.proxyBuild
 	if (build === undefined) throw new Error('submitted checkpoint missing')
-	expect(build.phase).toBe('build_triggered')
-	expect(submitted.proxySource).toEqual(build.source)
-	expect(build.source.commitSha).toBe(f.manifest.platform.commitSha)
-	expect(build.source.descriptor.sha256).toBe(f.manifest.platform.descriptorSha256)
+	expect(build.triggered).toBe(true)
 	const before = await f.state()
 	const upload = f.uploads[0]
 	if (upload === undefined) throw new Error('real source did not upload')
@@ -126,9 +127,9 @@ test('real authenticated namespace source attempt resumes its durable submitted 
 			compressedSha256: createHash('sha256').update(upload).digest('hex'),
 		},
 	}])
-	expect(before.processes.filter(item => item.actionName === 'stack.build')).toMatchObject([{ id: build.processId, appVersionId: build.appVersionId }])
+	expect(before.processes.filter(item => item.actionName === 'stack.build')).toMatchObject([{ appVersionId: build.appVersionId }])
 	await f.restart()
-	const recovered = await runZeropsProxyAttempt({ ...f.input(), wait: 'active' })
+	const recovered = await republishProxy({ ...f.input(), wait: 'active' })
 	expect(recovered.proxyBuild).toBeUndefined()
 	expect(recovered.proxyDeployment).toMatchObject({
 		appVersionId: build.appVersionId,
@@ -144,27 +145,25 @@ test('real authenticated namespace source attempt resumes its durable submitted 
 	expect(f.uploads).toHaveLength(1)
 })
 
-test('lease loss after reservation leaves a durable inert version that recovery deletes before its replacement', async () => {
+test('lease loss after reservation leaves a durable untriggered version that recovery deletes before its replacement', async () => {
 	const f = await fixture()
 	const previousActive = (await f.state()).services.find(item => item.id === f.target().proxyServiceId)?.activeAppVersionId
 	expect(previousActive).toBeDefined()
-	const ownership = new AbortController()
-	await expect(runZeropsProxyAttempt({
+	await expect(republishProxy({
 		...f.input(),
-		ownershipSignal: ownership.signal,
 		wait: 'started',
 		checkpoint: async target => {
 			await f.checkpoint(target)
-			if (target.proxyBuild?.phase === 'version_created') ownership.abort()
+			if (target.proxyBuild?.triggered === false) f.lease.abort(new ProviderInvocationAbort('lease_lost'))
 		},
 	})).rejects.toMatchObject({ kind: 'lease_lost' })
 	const inert = f.target().proxyBuild
 	if (inert === undefined) throw new Error('inert checkpoint missing')
-	expect(inert.phase).toBe('version_created')
+	expect(inert.triggered).toBe(false)
 	expect(f.uploads).toHaveLength(0)
 	expect((await f.state()).processes.filter(item => item.actionName === 'stack.build')).toHaveLength(0)
 	await f.restart()
-	const resumed = await runZeropsProxyAttempt({ ...f.input(), wait: 'started' })
+	const resumed = await republishProxy({ ...f.input(), signal: AbortSignal.timeout(10_000), wait: 'started' })
 	expect(resumed.proxyBuild?.appVersionId).not.toBe(inert.appVersionId)
 	try {
 		await f.api.getAppVersion({ appVersionId: inert.appVersionId, signal: AbortSignal.timeout(1000) })
@@ -191,7 +190,7 @@ test('an unknown pinned commit fails real source admission before namespace rese
 	const target = f.target()
 	if (target.proxySource === undefined) throw new Error('fixture pin missing')
 	const before = await f.state()
-	await expect(runZeropsProxyAttempt({
+	await expect(republishProxy({
 		...f.input(),
 		target: { ...target, proxySource: { ...target.proxySource, commitSha: 'f'.repeat(40) } },
 		wait: 'started',

@@ -15,13 +15,7 @@ import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type Zerop
 import { useSharedPostgres } from '../authoring'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
 import type { ManagedValues } from '../managed-env'
-import {
-	compileFabrikaManifest,
-	createZeropsArtifactSourceDescriptor,
-	hashFabrikaManifest,
-	renderFabrikaImportYaml,
-	zeropsArtifactCodec,
-} from '../manifest'
+import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
@@ -36,7 +30,6 @@ interface Recorded {
 	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
 	envWrites: Array<{ serviceId: string; key: string; value: string }>
 	envDeletes: string[]
-	beforeDeploy: string[]
 	imports: Array<{ projectId: string; yaml: string }>
 }
 
@@ -47,7 +40,6 @@ const fresh = (): Recorded => ({
 	triggers: [],
 	envWrites: [],
 	envDeletes: [],
-	beforeDeploy: [],
 	imports: [],
 })
 
@@ -326,15 +318,11 @@ describe('Zerops ControlProvider registration', () => {
 			const control = createTestControlProvider({
 				accessToken: 'zt-secret',
 				api: makeApi(recorded),
-				beforeDeploy: async () => {
-					recorded.beforeDeploy.push('called')
-				},
 			})
 			expect(() => control.normalizeRegistration({ app, environment: invalidEnvironment })).toThrow('zerops.yaml')
 			await expect(control.deploy({ ...deployInput(recorded), environment: invalidEnvironment })).rejects.toThrow('zerops.yaml')
 			expect(recorded.calls).toEqual([])
 			expect(recorded.envWrites).toEqual([])
-			expect(recorded.beforeDeploy).toEqual([])
 		})
 	}
 	test('normalizes a stored target and static artifact without persisting credentials', () => {
@@ -353,9 +341,6 @@ describe('Zerops ControlProvider registration', () => {
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			source: makeSource(sourceCalls),
-			beforeDeploy: async () => {
-				recorded.beforeDeploy.push('called')
-			},
 		})
 		const failures: Array<{ input: ProviderRegistrationInput; message: string }> = [
 			{ input: { app: { ...app, id: 'other' }, environment: environment() }, message: 'Zerops environment belongs to app `notes`, expected `other`' },
@@ -396,7 +381,6 @@ describe('Zerops ControlProvider registration', () => {
 		expect(sourceCalls).toEqual([])
 		expect(recorded.calls).toEqual([])
 		expect(recorded.envWrites).toEqual([])
-		expect(recorded.beforeDeploy).toEqual([])
 	})
 
 	test('exposes namespace lifecycle only when its installation configuration is composed', () => {
@@ -835,58 +819,6 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
-	test('detaches hook edits, import and pipeline alike, from the runtime artifact identity', async () => {
-		const manifest = compileFabrikaManifest(
-			{
-				...config,
-				pipeline: { secrets: ['TOKEN'], vars: ['IMAGE_TAG'] },
-				target: { ...config.target, services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3', verticalAutoscaling: { minRam: 0.25 } }] },
-			},
-			'prod',
-			SOURCE_DESCRIPTOR,
-		)
-		const input = {
-			...deployInput(recorded),
-			environment: environment({
-				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
-			}),
-		}
-		const originalPayload = structuredClone(input.environment.artifact.payload)
-		const originalHash = await hashFabrikaManifest(manifest)
-		let checkpoint: JsonValue | undefined
-		let hookCalls = 0
-		const control = createTestControlProvider({
-			accessToken: 'token',
-			api: makeApi(recorded),
-			beforeDeploy: async ({ artifact }) => {
-				hookCalls++
-				expect(artifact).toEqual(manifest)
-				expect(await hashFabrikaManifest(artifact)).toBe(originalHash)
-				artifact.app.pipeline.secrets.push('HOOK_SECRET')
-				artifact.app.pipeline.vars.push('HOOK_VAR')
-				const sizing: unknown = Reflect.get(artifact.target.importDocument.services[0] ?? {}, 'verticalAutoscaling')
-				if (typeof sizing !== 'object' || sizing === null || Array.isArray(sizing)) throw new Error('expected service sizing')
-				Reflect.set(sizing, 'minRam', 1)
-			},
-		})
-		const separatelyNormalizedArtifact = control.normalizeRegistration(input).environment.artifact
-		expect(
-			await control.deploy({
-				...input,
-				events: {
-					...input.events,
-					checkpoint: async (value) => {
-						checkpoint = value
-					},
-				},
-			}),
-		).toEqual({ state: 'succeeded' })
-		expect(hookCalls).toBe(1)
-		expect(input.environment.artifact.payload).toEqual(originalPayload)
-		expect(separatelyNormalizedArtifact.payload).toEqual(originalPayload)
-		expect(recorded.imports[0]?.yaml).toBe(renderFabrikaImportYaml(manifest))
-		expect(checkpoint).toEqual({ appVersionId: 'version-1', triggered: true })
-	})
 	for (const name of ['FABRIKA_RELEASE', 'FABRIKA_SERVICE_KEY']) {
 		test(`refuses reserved secret ${name} on put and delete before mutation`, async () => {
 			const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
@@ -1258,16 +1190,13 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual([])
 	})
 
-	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
+	test('rejects structured manifest drift before the Zerops API', async () => {
 		const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)
 		// The manifest type cannot carry the drift, so it is spliced into the encoded artifact.
 		const drifted: JsonValue = JSON.parse(JSON.stringify(zeropsArtifactCodec.encode(manifest)).replace('"override":true', '"override":false'))
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
-			beforeDeploy: async () => {
-				recorded.beforeDeploy.push('called')
-			},
 		})
 
 		await expect(control.deploy({
@@ -1280,11 +1209,10 @@ describe('Zerops ControlProvider lifecycle', () => {
 				},
 			}),
 		})).rejects.toThrow('invariants')
-		expect(recorded.beforeDeploy).toEqual([])
 		expect(recorded.calls).toEqual([])
 	})
 
-	test('composes ephemeral credentials, runs beforeDeploy, and routes run events', async () => {
+	test('composes ephemeral credentials and routes run events', async () => {
 		const uploads: unknown[] = []
 		const reconciles: unknown[] = []
 		const control = createTestControlProvider({
@@ -1303,10 +1231,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 			reconcileSchema: async ({ url, app, adminKey }) => {
 				reconciles.push({ url, app, adminKey })
 			},
-			beforeDeploy: async ({ appId, namespaceId, target }) => {
-				recorded.beforeDeploy.push(`${appId}:${namespaceId}:${target.projectId}:${target.proxyServiceId}`)
-				recorded.calls.push('beforeDeploy')
-			},
 		})
 		const withSchema = compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)
 		const outcome = await control.deploy({
@@ -1319,12 +1243,10 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.imports.map((entry) => entry.projectId)).toEqual(['project-1'])
 		expect(uploads).toEqual([{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA }])
 		expect(reconciles).toEqual([{ url: 'https://iam.test', app: 'notes', adminKey: 'px-secret' }])
-		expect(recorded.beforeDeploy).toEqual(['notes:apps-prod:project-1:proxy-service-1'])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.triggers).toEqual([])
 		expect(recorded.calls).toContain('createAppVersion:service-1')
 		expect(recorded.calls).toContain('buildAndDeployAppVersion:version-1')
-		expect(recorded.calls.indexOf('beforeDeploy')).toBeLessThan(recorded.calls.indexOf('importServices'))
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
 	})
@@ -1393,9 +1315,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
-			beforeDeploy: async () => {
-				recorded.beforeDeploy.push('called')
-			},
 		})
 
 		for (const repoUrl of unsafe) {
@@ -1405,7 +1324,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 			})).rejects.toThrow('source repository URL')
 		}
 
-		expect(recorded.beforeDeploy).toEqual([])
 		expect(recorded.calls).toEqual([])
 		expect(recorded.envWrites).toEqual([])
 		expect(recorded.logs.join('\n')).not.toContain('credential-must-not-leak')
@@ -1446,9 +1364,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			source: makeSource(sourceCalls),
-			beforeDeploy: async () => {
-				recorded.beforeDeploy.push('called')
-			},
 		})
 		await control.deploy({
 			...deployInput(recorded),
@@ -1457,7 +1372,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		})
 		expect(recorded.envWrites).toEqual([])
 		expect(recorded.calls).toEqual([])
-		expect(recorded.beforeDeploy).toEqual([])
 		expect(sourceCalls).toEqual([])
 		expect(recorded.logs.join('\n')).toContain('[dry-run]')
 		expect(recorded.logs.join('\n')).not.toContain(dsn)
@@ -1556,9 +1470,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
-			beforeDeploy: async () => {
-				recorded.beforeDeploy.push('called')
-			},
 		})
 		await expect(control.deploy({
 			...deployInput(recorded),
@@ -1578,7 +1489,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 				},
 			}),
 		})).rejects.toThrow('is not ready')
-		expect(recorded.beforeDeploy).toEqual([])
 		expect(recorded.calls).toEqual([])
 	})
 

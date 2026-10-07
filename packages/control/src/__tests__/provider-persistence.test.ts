@@ -1,11 +1,10 @@
-import { SqlDeployLocks } from '@fabrika/platform'
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseProviderJson, serializeProviderJson } from '../db/runs'
 import { createHarness, queryRows } from './helpers/harness'
-import { fixtureRuns, makeFakeLock } from './helpers/lock'
+import { fixtureNamespaceWrite, fixtureRuns, makeFakeLock } from './helpers/lock'
 
 const targetJson = JSON.stringify({ provider: 'harbor', version: 2, payload: { region: 'eu-west' } })
 const artifactJson = JSON.stringify({ provider: 'harbor', version: 4, payload: { image: 'registry.example/app:v4' } })
@@ -123,7 +122,7 @@ describe('generic provider persistence', () => {
 	})
 
 	test('round-trips namespaces and namespace-owned or app-owned resource claims', async () => {
-		const { db, d1 } = createHarness()
+		const { db } = createHarness()
 		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
 		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
 		const namespace = await db.registry.createDeploymentNamespace({
@@ -147,21 +146,11 @@ describe('generic provider persistence', () => {
 			ownerAppId: 'alpha',
 			ownerEnv: 'prod',
 		})
-		const locks = new SqlDeployLocks(d1)
-		const lockKey = `namespace:${namespace.id}`
-		expect(await locks.acquire(lockKey, 'namespace-worker', 60_000)).toBe(true)
-		const ready = await db.registry.checkpointDeploymentNamespace({
-			expected: namespace,
-			holder: 'namespace-worker',
-			nowMs: Date.now(),
+		await fixtureNamespaceWrite(db, namespace.id, 'ready', {
 			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 3, payload: { dock: '7' } }),
-			state: 'ready',
-			lastError: null,
 		})
-		await locks.release(lockKey, 'namespace-worker')
 
-		expect((await db.registry.listDeploymentNamespaces()).map((row) => row.id)).toEqual(['apps-prod'])
-		expect(ready?.state).toBe('ready')
+		expect((await db.registry.listDeploymentNamespaces()).map((row) => [row.id, row.state])).toEqual([['apps-prod', 'ready']])
 		expect((await db.registry.getDeploymentNamespace(namespace.id))?.provider_target_json)
 			.toBe(JSON.stringify({ provider: 'harbor', version: 3, payload: { dock: '7' } }))
 		expect((await db.registry.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('apps-prod')

@@ -367,7 +367,7 @@ const operations: ZeropsYamlSetupSpec = {
  * for secrets, so the manifest travels as a service variable and the build materializes it to a file.
  *
  * The control plane writes `FABRIKA_PROXY_MANIFEST_JSON` through the service-level env API and rolls
- * this service before each app deploy (`packages/control/src/node/zerops-proxy.ts`).
+ * this service before each app deploy (`republishProxy`, `packages/provider-zerops/src/namespace/proxy-attempt.ts`).
  *
  * That live-account fact is now settled, and the answer was the bad one: **a build container sees none
  * of its service's env-API variables.** Read directly, `${FABRIKA_PROXY_MANIFEST_JSON}` in a build

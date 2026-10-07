@@ -1105,7 +1105,7 @@ the committed `zerops/generated/platform-proxy-manifest.ts` by `bun run --filter
 bound at deploy time by `resolvePlatformProxyManifest` (`packages/installation-zerops/src/proxy-manifest.ts`).
 `localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local
 hosts, so the two compositions can no longer disagree; `compileNamespaceProxyManifest`
-(`packages/control/src/node/zerops-proxy.ts`) remains separate — it builds an APP namespace's manifest
+(`republishProxy` in `packages/provider-zerops/src/namespace/proxy-attempt.ts`) remains separate — it builds an APP namespace's manifest
 from the control registry.
 
 IAM's app id on a deployed installation is `iam`. The live document said `iam-local` until this

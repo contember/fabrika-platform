@@ -49,7 +49,7 @@ export {
 } from './compile'
 export type { CompileInput, ZeropsImportDocument, ZeropsJsonImportDocument } from './compile'
 export { createZeropsControlProvider, parseZeropsCheckpoint, zeropsStoredTargetCodec } from './control'
-export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsStoredTarget } from './control'
+export type { ZeropsControlProviderOptions, ZeropsStoredTarget } from './control'
 export { type PreparedZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
 export {
 	assertFabrikaManifestCoordinates,
@@ -70,8 +70,7 @@ export {
 	createZeropsNamespaceCapabilities,
 	createZeropsNamespaceOperator,
 	decodeZeropsNamespaceProxySource,
-	ensureNamespaceProxyIam,
-	runZeropsProxyAttempt,
+	republishProxy,
 	verifyZeropsNamespaceProxySource,
 	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
@@ -82,7 +81,6 @@ export {
 	zeropsNamespaceTargetCodec,
 } from './namespace'
 export type {
-	NamespaceProxyIamInput,
 	ZeropsNamespaceOperatorOptions,
 	ZeropsNamespaceOptions,
 	ZeropsNamespacePlanOptions,
@@ -94,8 +92,8 @@ export type {
 	ZeropsNamespacePublicAccess,
 	ZeropsNamespaceTarget,
 	ZeropsNamespaceTopology,
-	ZeropsProxyAttemptApi,
-	ZeropsProxyAttemptInput,
+	ZeropsProxyApi,
+	ZeropsProxyRepublishInput,
 } from './namespace'
 export { postgresSchema as zeropsNamespacePostgresSchema } from './namespace/codec'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'

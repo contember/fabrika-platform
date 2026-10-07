@@ -13,13 +13,11 @@ export interface ZeropsNamespaceProxySource {
 	readonly descriptor: ZeropsArtifactSourceDescriptor
 }
 
+/** The proxy attempt in flight (ADR-0044): a version not `triggered` is deleted, a triggered one is polled. */
 export interface ZeropsNamespaceProxyBuild {
-	readonly manifestSha256?: string
-	readonly runId: string
 	readonly appVersionId: string
-	readonly source: ZeropsNamespaceProxySource
-	readonly phase: 'version_created' | 'source_uploaded' | 'build_trigger_requested' | 'build_triggered'
-	readonly processId?: string
+	readonly triggered: boolean
+	readonly manifestSha256?: string
 }
 
 export interface ZeropsNamespaceProxyDeployment {
@@ -75,7 +73,6 @@ export interface NormalizedZeropsNamespaceTarget extends ZeropsNamespaceTarget {
 }
 
 export interface ZeropsNamespaceOptions {
-	readonly proxyManifest?: (namespaceId: string) => Promise<string>
 	readonly proxySource?: ZeropsNamespaceProxySource
 	readonly source?: ZeropsSourceClient
 	readonly clientId: string
@@ -116,13 +113,4 @@ export interface ZeropsNamespacePlanOptions {
 	readonly corePackage?: ZeropsProjectMode
 	readonly publicAccess?: ZeropsNamespacePublicAccess
 	readonly postgres?: ZeropsNamespacePostgres
-}
-
-export interface NamespaceProxyIamInput {
-	readonly api: Pick<ZeropsApi, 'listServiceEnv' | 'putServiceEnv'>
-	readonly proxyServiceId: string
-	/** The public IAM origin the proxy compares a token's `iss` against. */
-	readonly iamUrl: string
-	readonly iamKey: string
-	readonly signal: AbortSignal
 }

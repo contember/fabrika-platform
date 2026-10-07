@@ -17,16 +17,10 @@ const encodeSource = (source: ZeropsNamespaceProxySource): JsonValue => ({
 })
 
 const proxyBuildSchema = z.object({
-	manifestSha256: sha256Schema.optional(),
-	runId: identifierSchema,
 	appVersionId: identifierSchema,
-	source: namespaceProxySourceSchema,
-	phase: z.enum(['version_created', 'source_uploaded', 'build_trigger_requested', 'build_triggered']),
-	processId: identifierSchema.optional(),
-}).strict().superRefine(rejectExplicitUndefined).refine(
-	(value) => value.processId === undefined || value.phase === 'build_triggered',
-	'Proxy process conflicts with build phase',
-)
+	triggered: z.boolean(),
+	manifestSha256: sha256Schema.optional(),
+}).strict().superRefine(rejectExplicitUndefined)
 
 const proxyDeploymentSchema = z.object({
 	manifestSha256: sha256Schema.optional(),
@@ -92,12 +86,9 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 		...(target.proxySource === undefined ? {} : { proxySource: encodeSource(target.proxySource) }),
 		...(target.proxyBuild === undefined ? {} : {
 			proxyBuild: {
-				...(target.proxyBuild.manifestSha256 === undefined ? {} : { manifestSha256: target.proxyBuild.manifestSha256 }),
-				runId: target.proxyBuild.runId,
 				appVersionId: target.proxyBuild.appVersionId,
-				source: encodeSource(target.proxyBuild.source),
-				phase: target.proxyBuild.phase,
-				...(target.proxyBuild.processId === undefined ? {} : { processId: target.proxyBuild.processId }),
+				triggered: target.proxyBuild.triggered,
+				...(target.proxyBuild.manifestSha256 === undefined ? {} : { manifestSha256: target.proxyBuild.manifestSha256 }),
 			},
 		}),
 		...(target.projectName !== undefined ? { projectName: target.projectName } : {}),

@@ -33,6 +33,7 @@ export interface Lease {
 }
 
 export const runLeaseKey = (appId: string, env: string): string => `${appId}:${env}`
+export const namespaceLeaseKey = (namespaceId: string): string => `namespace:${namespaceId}`
 export const CATALOG_LEASE_KEY = 'operations-catalog-projection'
 
 const systemClock: LeaseClock = { now: Date.now, wait: abortableWait }

@@ -25,11 +25,10 @@ import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { LocalGitHubRepoEvents } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { locks, type NamespaceProxyEnv } from '../services'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
-import { zeropsControlProvider, zeropsNamespaceProxySync, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
+import { zeropsControlProvider, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
 import { zeropsSourceConnectionPort } from './source-connection'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -41,7 +40,7 @@ export interface ProcessConfig {
 }
 
 export interface Runtime {
-	env: Env & NamespaceProxyEnv
+	env: Env
 	/** The single provider selected by this process composition root. */
 	provider: ControlProvider
 	/** Privileged provider-owned GitHub connection lifecycle, consumed by the authenticated admin route. */
@@ -111,7 +110,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const sourceConnection = zeropsSourceConnectionPort(sourceConnectionAdmin)
 	const controlRepositories = createControlRepositories(db)
 
-	const env: Env & NamespaceProxyEnv = {
+	const env: Env = {
 		DB: db,
 		REPOSITORIES: controlRepositories,
 		// SPA fallback on: the dashboard is client-routed, so `/apps/foo` must serve index.html.
@@ -139,7 +138,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	}
-	env.NAMESPACE_PROXY = zeropsNamespaceProxySync(source, controlRepositories.registry, locks(env), queue, sourceClient)
 
 	return {
 		env,

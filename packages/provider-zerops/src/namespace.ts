@@ -16,11 +16,10 @@ export {
 } from './namespace/errors'
 export { createZeropsNamespaceOperator } from './namespace/operator'
 export { createZeropsNamespaceCapabilities } from './namespace/provisioning'
-export { ensureNamespaceProxyIam, runZeropsProxyAttempt, type ZeropsProxyAttemptApi, type ZeropsProxyAttemptInput } from './namespace/proxy-attempt'
+export { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from './namespace/proxy-attempt'
 export { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from './namespace/proxy-source'
 export { compileZeropsNamespaceTopology, zeropsNamespacePreset } from './namespace/topology'
 export type {
-	NamespaceProxyIamInput,
 	ZeropsNamespaceOperatorOptions,
 	ZeropsNamespaceOptions,
 	ZeropsNamespacePlanOptions,

@@ -2,7 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { BuilderPairingIam } from './api/builder-pairing'
-import type { NamespaceProxyChanged } from './api/namespaces'
+import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
@@ -108,6 +108,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 			...(env.FABRIKA_CONTROL_VAULT_KEY !== undefined ? { vault: await vault(env) } : {}),
 		}),
 		lock: locks(env),
+		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
@@ -117,15 +118,6 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
 	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env) }, run)
-}
-
-/**
- * The one runtime handle a Cloudflare composition never fills: republishing a deployment namespace's
- * proxy manifest. It is a PORT for the same reason every other handle in `env.ts` is one — the shared
- * layer must not name a provider package (ADR-0011), and the process composition root supplies it.
- */
-export interface NamespaceProxyEnv {
-	NAMESPACE_PROXY?: NamespaceProxyChanged
 }
 
 export interface ControlRpcDeps {
@@ -143,7 +135,7 @@ export interface ControlRpcDeps {
 }
 
 /** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
-export function buildControlRpcDeps(env: Env & NamespaceProxyEnv, provider: ControlProvider, auth: AuthContext): ControlRpcDeps {
+export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: AuthContext): ControlRpcDeps {
 	return {
 		repositories: repositories(env),
 		auth,
@@ -154,6 +146,11 @@ export function buildControlRpcDeps(env: Env & NamespaceProxyEnv, provider: Cont
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),
 		catalogChanged: () => scheduleOperationsCatalogChange(env),
-		...(env.NAMESPACE_PROXY === undefined ? {} : { namespaceProxyChanged: env.NAMESPACE_PROXY }),
+		...(provider.namespaces?.republish === undefined
+			? {}
+			: {
+				namespaceProxyChanged: (namespaceId: string) =>
+					republishNamespace({ repositories: repositories(env), provider, lock: locks(env), queue: env.DEPLOY_QUEUE }, namespaceId, { wait: 'started' }),
+			}),
 	}
 }

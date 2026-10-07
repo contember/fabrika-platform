@@ -280,7 +280,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		expect(JSON.parse(row?.provider_target_json ?? '{}')).toEqual(target('checkpoint'))
 	})
 
-	test('a reconcile of a settling namespace only enqueues, and never rewrites the checkpoint', async () => {
+	test('a reconcile of a settling namespace requeues its state and enqueues, but never rewrites the checkpoint', async () => {
 		const record = recording()
 		const harness = createHarness()
 		const provider = namespacedProvider(record)
@@ -300,10 +300,10 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 
 		expect(response.status).toBe(200)
 		const body: { state: string; target: ProviderEnvelope } = await response.json()
-		expect(body.state).toBe('provisioning')
-		// The request left the row alone: rewriting it here would roll back the in-flight job's checkpoint.
+		expect(body.state).toBe('pending')
+		// The request left the target alone: rewriting it here would roll back the in-flight job's checkpoint.
 		const row = await harness.repositories.registry.getDeploymentNamespace('apps-prod')
-		expect(row?.state).toBe('provisioning')
+		expect(row?.state).toBe('pending')
 		expect(JSON.parse(row?.provider_target_json ?? '{}')).toEqual(target('checkpoint'))
 		expect(body.target).toEqual(target('checkpoint'))
 		expect(sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])

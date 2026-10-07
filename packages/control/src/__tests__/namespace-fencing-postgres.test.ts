@@ -1,7 +1,7 @@
 import { SqlDeployLocks } from '@fabrika/platform'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createControlRepositories, type DeploymentNamespaceRow } from '../db'
+import { createControlRepositories } from '../db'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) console.warn(`namespace-fencing-postgres.test.ts ${skipReason}`)
@@ -14,34 +14,6 @@ afterAll(async () => {
 })
 
 describe.skipIf(!hasPostgres)('namespace fencing on Postgres', () => {
-	test('concurrent target CAS writes have one winner', async () => {
-		if (postgresUrl === null) throw new Error('Postgres not configured')
-		const pool = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 2 })
-		try {
-			const { registry } = createControlRepositories(pool)
-			const expected = await registry.createDeploymentNamespace({
-				id: 'cas',
-				env: 'prod',
-				provider: 'test',
-				exclusiveAppId: null,
-				providerTargetJson: '{}',
-				state: 'ready',
-			})
-			await new SqlDeployLocks(pool, { now: () => 100 }).acquire('namespace:cas', 'owner', 100)
-			const input = { expected, holder: 'owner', nowMs: 100, state: 'provisioning', lastError: null, providerTargetJson: '{}' } satisfies Parameters<
-				typeof registry.checkpointDeploymentNamespace
-			>[0]
-			const results = await Promise.all([
-				registry.checkpointDeploymentNamespace({ ...input, providerTargetJson: '{"attempt":1}' }),
-				registry.checkpointDeploymentNamespace({ ...input, providerTargetJson: '{"attempt":2}' }),
-			])
-			expect(results.filter(row => row !== null)).toHaveLength(1)
-			expect((await registry.getDeploymentNamespace('cas'))?.provider_target_json).toBe(results[0] === null ? '{"attempt":2}' : '{"attempt":1}')
-		} finally {
-			await pool.close()
-		}
-	})
-
 	test('lease takeover waits for the production namespace mutation transaction', async () => {
 		if (postgresUrl === null) throw new Error('Postgres not configured')
 		const mutationName = `${fixture.schema}_mutation`
@@ -52,11 +24,11 @@ describe.skipIf(!hasPostgres)('namespace fencing on Postgres', () => {
 		const locked = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		let holding: Promise<unknown> | undefined
-		let mutation: Promise<DeploymentNamespaceRow | null> | undefined
+		let mutation: Promise<boolean> | undefined
 		let takeover: Promise<boolean> | undefined
 		try {
 			const { registry } = createControlRepositories(mutationPool)
-			const expected = await registry.createDeploymentNamespace({
+			const created = await registry.createDeploymentNamespace({
 				id: 'takeover',
 				env: 'prod',
 				provider: 'test',
@@ -78,33 +50,33 @@ describe.skipIf(!hasPostgres)('namespace fencing on Postgres', () => {
 				await release.promise
 			})
 			await Promise.race([locked.promise, holding])
-			mutation = registry.checkpointDeploymentNamespace({
-				expected,
-				holder: 'owner',
-				nowMs: 100,
+			mutation = registry.writeDeploymentNamespace({
+				id: 'takeover',
+				createdAt: created.created_at,
+				fence: { holder: 'owner', nowMs: 100 },
 				providerTargetJson: '{"reserved":"v1"}',
 				state: 'provisioning',
 				lastError: null,
+				claim: true,
 			})
 			await waitForLock(mutationName)
 			takeover = new SqlDeployLocks(takeoverPool, { now: () => 200 }).acquire('namespace:takeover', 'next', 100)
 			await waitForLock(takeoverName)
 			release.resolve()
-			expect(await mutation).not.toBeNull()
+			expect(await mutation).toBe(true)
 			expect(await takeover).toBe(true)
-			const current = await registry.getDeploymentNamespace('takeover')
-			if (current === null) throw new Error('missing namespace')
 			expect(
-				await registry.checkpointDeploymentNamespace({
-					expected: current,
-					holder: 'owner',
-					nowMs: 200,
+				await registry.writeDeploymentNamespace({
+					id: 'takeover',
+					createdAt: created.created_at,
+					fence: { holder: 'owner', nowMs: 200 },
 					providerTargetJson: '{"stale":true}',
 					state: 'ready',
 					lastError: null,
+					claim: true,
 				}),
-			).toBeNull()
-			expect(current.provider_target_json).toBe('{"reserved":"v1"}')
+			).toBe(false)
+			expect((await registry.getDeploymentNamespace('takeover'))?.provider_target_json).toBe('{"reserved":"v1"}')
 		} finally {
 			release.resolve()
 			await Promise.allSettled([holding, mutation, takeover])

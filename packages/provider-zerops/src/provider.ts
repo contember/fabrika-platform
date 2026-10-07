@@ -10,6 +10,8 @@
 
 import {
 	type DeployStepResult,
+	followLeaseLoss,
+	isLeaseLoss,
 	type JsonValue,
 	ProviderInvocationAbort,
 	type ProviderManagedEnvironment,
@@ -281,19 +283,6 @@ const requireVersion = (env: StepEnv, step: string): string => {
 	const appVersionId = env.attempt.appVersionId
 	if (appVersionId === undefined) throw new Error(`zerops: ${step} has no reserved app-version (reserve-version did not run)`)
 	return appVersionId
-}
-
-const isLeaseLoss = (reason: unknown): boolean => reason instanceof ProviderInvocationAbort && reason.kind === 'lease_lost'
-
-/** A signal that aborts with `signal` only when the run lost its lease, never on a cancel. */
-const followLeaseLoss = (signal: AbortSignal): AbortSignal => {
-	const controller = new AbortController()
-	const follow = (): void => {
-		if (isLeaseLoss(signal.reason)) controller.abort(signal.reason)
-	}
-	if (signal.aborted) follow()
-	else signal.addEventListener('abort', follow, { once: true })
-	return controller.signal
 }
 
 /** Best-effort: the caller is already giving up, so a failed cancellation must not replace the reason. */

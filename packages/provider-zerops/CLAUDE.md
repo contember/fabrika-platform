@@ -79,8 +79,7 @@ bun test
   (`src/control.ts`), which lands on the same resolver.
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider's `deploy` decodes the artifact ONCE and runs `createZeropsDeployer` in-process**
-  on that typed value. `beforeDeploy` gets a `structuredClone`, so a hook cannot change what is imported
-  or built.
+  on that typed value.
 - **Only `FABRIKA_RELEASE` is bound to a version (ADR-0044).** `overlayRelease` (`src/managed-env.ts`)
   writes it as a LITERAL into the selected setup's `run.envVariables` of the execution descriptor; it is
   never a service variable, and `write-service-env` deletes a stray one. The other five managed keys are
@@ -92,3 +91,10 @@ bun test
   `appVersionNotFound` counts as deleted). `triggered: true` → settle ONLY by polling, never by deletion;
   past run start + 75 min a non-terminal version is abandoned with a best-effort `cancelBuild`. A lost lease
   deletes and cancels nothing. Any other checkpoint shape fails the run without a platform call.
+- **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
+  `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
+  refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with
+  `wait: 'started'` a running build of the same manifest is answer enough. A fresh attempt writes the
+  manifest (compiled from the members core passes, `src/namespace/manifest.ts`) and the IAM variables,
+  records the version untriggered, uploads, records `triggered`, then sends the build on a signal that only
+  a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for `reconcile`.
