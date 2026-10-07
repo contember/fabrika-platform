@@ -106,6 +106,18 @@ for (const backend of backends) {
 				expect((await w.repositories.registry.getAppEnv('plain', 'stage'))?.authoring).toBe(0)
 			})
 
+			test('allows one authoring environment per app', async () => {
+				const w = await world()
+				const registry = registryContext(w.repositories)
+				await expect(putAppEnvUseCase(registry, 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true })).rejects.toMatchObject({
+					httpStatus: 409,
+				})
+				expect((await w.repositories.registry.getAppEnv('shop', 'prod'))?.authoring).toBe(0)
+				expect((await putAppEnvUseCase(registry, 'shop', 'stage', { ...zeropsEnvelopes(), authoring: true })).authoring).toBe(true)
+				await putAppEnvUseCase(registry, 'shop', 'stage', { ...zeropsEnvelopes(), authoring: false })
+				expect((await putAppEnvUseCase(registry, 'shop', 'prod', { ...zeropsEnvelopes(), authoring: true })).authoring).toBe(true)
+			})
+
 			test('refuses a provider other than Zerops', async () => {
 				const w = await world()
 				await expect(

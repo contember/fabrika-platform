@@ -24,7 +24,12 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	const app = await requireApp(c, appId)
 	assertProxyDomain(input.domain)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
-	if (input.authoring === true) assertAuthoringTarget(c.provider.id, app)
+	if (input.authoring === true) {
+		assertAuthoringTarget(c.provider.id, app)
+		// ADR-0049: one stage environment per app.
+		const other = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.authoring === 1 && row.env !== env)
+		if (other !== undefined) fail(409, `app ${appId} already authors environment ${other.env}; clear its authoring flag first`)
+	}
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
 	const nextNamespaceId = namespace?.id ?? null
