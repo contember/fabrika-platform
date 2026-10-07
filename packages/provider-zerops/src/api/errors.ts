@@ -1,25 +1,16 @@
 import { z } from 'zod'
-import { prop } from './readers'
 
-const errorCodeSchema = z.preprocess((value) => ({ code: prop(value, 'code') }), z.object({ code: z.string().optional().catch(undefined) }))
-const errorDetailSchema = z.preprocess(
-	(value) => ({ code: prop(value, 'code'), message: prop(value, 'message'), meta: prop(value, 'meta') }),
-	z.object({
-		code: z.string().optional().catch(undefined),
-		message: z.string().optional().catch(undefined),
-		meta: z.array(errorCodeSchema).catch([]),
-	}),
-)
-const errorEnvelopeSchema = z.preprocess(
-	(value) => ({ outer: value, inner: prop(value, 'error') }),
-	z.object({
-		outer: errorDetailSchema,
-		inner: errorDetailSchema,
-	}),
-)
+const errorDetailShape = {
+	code: z.string().optional().catch(undefined),
+	message: z.string().optional().catch(undefined),
+	// An element that is not an object still counts: `isAppVersionNotFoundResponse` requires exactly one.
+	meta: z.array(z.object({ code: z.string().optional().catch(undefined) }).catch({})).catch([]),
+}
+const errorDetailSchema = z.object(errorDetailShape).catch({ meta: [] })
+const errorEnvelopeSchema = z.object({ ...errorDetailShape, error: errorDetailSchema }).catch({ meta: [], error: { meta: [] } })
 
 export const isAppVersionNotFoundResponse = (value: unknown): boolean => {
-	const { outer, inner } = errorEnvelopeSchema.parse(value)
+	const { error: inner, ...outer } = errorEnvelopeSchema.parse(value)
 	const metadata = [...outer.meta, ...inner.meta]
 	return inner.code === 'appVersionNotFound' || outer.code === 'appVersionNotFound'
 		|| (metadata.length === 1 && metadata[0]?.code === 'appVersionNotFound')
@@ -51,7 +42,7 @@ export const ZEROPS_SERVICE_NOT_HTTP = 'serviceStackIsNotHttp'
  * tell a duplicate key from a missing service.
  */
 export const apiError = (label: string, status: number, body: unknown, redactDetail: boolean): ZeropsApiError => {
-	const { outer, inner } = errorEnvelopeSchema.parse(body)
+	const { error: inner, ...outer } = errorEnvelopeSchema.parse(body)
 	const code = inner.code ?? outer.code ?? ''
 	const message = redactDetail ? '' : (inner.message ?? outer.message ?? '')
 	const detail = [code, message].filter((part) => part !== '').join(': ')

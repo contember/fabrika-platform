@@ -1285,3 +1285,65 @@ describe('Zerops build-log window', () => {
 		expect(lines.map((line) => line.message)).toEqual(['2026-08-21T10:00:11.000000000Z zerops@zerops notes-api listening'])
 	})
 })
+
+describe('Zerops response readers', () => {
+	const apiAnswering = (body: unknown) =>
+		createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: async () => jsonResponse(body) })
+
+	test('refuses a response missing a required id instead of reading it as an empty string', async () => {
+		await expect(apiAnswering({ status: 'ACTIVE' }).getAppVersion({ appVersionId: 'version-1', signal: signal() })).rejects.toThrow(
+			'zerops: get app-version returned an invalid response',
+		)
+		await expect(apiAnswering({ name: 'proxy', status: 'ACTIVE' }).getService({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
+			'zerops: get service returned an invalid response',
+		)
+		await expect(apiAnswering({ id: '', name: 'apps-prod' }).getProject({ projectId: 'project-1', signal: signal() })).rejects.toThrow(
+			'zerops: get project returned an invalid response',
+		)
+		await expect(apiAnswering({ status: 'FINISHED' }).getProcess({ processId: 'process-1', signal: signal() })).rejects.toThrow(
+			'zerops: get process returned an invalid response',
+		)
+		await expect(
+			apiAnswering({ projectId: 'project-1', serviceStacks: [{ name: 'proxy', processes: [] }] }).importServices({
+				projectId: 'project-1',
+				yaml: 'services: []\n',
+				signal: signal(),
+			}),
+		).rejects.toThrow('zerops: service-stack import returned an invalid response')
+	})
+
+	test('refuses a log grant without its access token and never echoes the grant', async () => {
+		const urlPlain = 'https://logs.test/plain?signature=must-not-leak'
+		const error = await apiAnswering({ url: '', urlPlain, urlInfo: '', urlUi: '', expiration: '2026-10-07T10:00:00Z' })
+			.getLogAccess({ projectId: 'project-1', signal: signal() })
+			.catch((cause: unknown) => cause)
+		expect(error instanceof Error ? error.message : '').toBe('zerops: get log access returned an invalid response')
+		expect(error instanceof Error ? error.message : '').not.toContain(urlPlain)
+	})
+
+	test('refuses an app-version reservation without its upload URL', async () => {
+		await expect(
+			apiAnswering({ id: 'version-1', serviceStackId: 'service-1' }).createAppVersion({ serviceId: 'service-1', signal: signal() }),
+		).rejects.toThrow('zerops: create app-version returned an invalid response')
+	})
+
+	test('refuses a minted integration token response without the token', async () => {
+		await expect(
+			apiAnswering({ id: 'token-1', name: 'fabrika-control', projects: [] }).createIntegrationToken({
+				clientId: 'client-1',
+				name: 'fabrika-control',
+				projects: [],
+				signal: signal(),
+			}),
+		).rejects.toThrow('zerops: create integration token returned an invalid response')
+	})
+
+	test('reads an absent optional field sent as null, and a status this build does not know, as absent', async () => {
+		await expect(
+			apiAnswering({ id: 'service-1', name: 'proxy', status: 'SERVICE_TELEPORTING', base: null, activeAppVersion: null }).getService({
+				serviceId: 'service-1',
+				signal: signal(),
+			}),
+		).resolves.toEqual({ id: 'service-1', name: 'proxy' })
+	})
+})

@@ -1,6 +1,7 @@
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING } from './namespace'
 export { zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './service-names'
 import { APP_PROVIDER, isProviderAuthoredApp, type ProviderAuthoredApp } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import type { ZeropsAppConfig, ZeropsSharedPostgresBinding } from './types'
 
 /** Declare consumption of the namespace-owned `postgres` service without resolving its credential. */
@@ -20,14 +21,10 @@ export const defineApp = (config: ZeropsAppConfig): ZeropsAuthoredAppConfig => {
 	return { ...config, [APP_PROVIDER]: 'zerops' }
 }
 
-const property = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+const zeropsAppConfigSchema = z.object({
+	id: z.string().refine((id) => id.trim() !== ''),
+	target: z.object({ platform: z.literal('zerops'), services: z.function() }),
+})
 
-export const isZeropsAppConfig = (value: unknown): value is ZeropsAuthoredAppConfig => {
-	const id = property(value, 'id')
-	const target = property(value, 'target')
-	return isProviderAuthoredApp(value, 'zerops')
-		&& typeof id === 'string'
-		&& id.trim() !== ''
-		&& property(target, 'platform') === 'zerops'
-		&& typeof property(target, 'services') === 'function'
-}
+export const isZeropsAppConfig = (value: unknown): value is ZeropsAuthoredAppConfig =>
+	isProviderAuthoredApp(value, 'zerops') && zeropsAppConfigSchema.safeParse(value).success

@@ -2,6 +2,7 @@
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { z } from 'zod'
 import { isZeropsAppConfig } from './authoring'
 import { parseZeropsCliArgs } from './cli-args'
 import {
@@ -24,12 +25,12 @@ Options:
   -h, --help                     Show this help.
 `
 
-const property = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+const configModuleSchema = z.object({ default: z.unknown() })
 
 const loadConfig = async (path: string): Promise<ZeropsAppConfig> => {
 	const absolute = resolve(process.cwd(), path)
 	const loaded: unknown = await import(absolute)
-	const config = property(loaded, 'default')
+	const config = configModuleSchema.safeParse(loaded).data?.default
 	if (!isZeropsAppConfig(config)) {
 		throw new Error(`Config at ${absolute} must default-export defineApp({ target: { platform: 'zerops', ... } })`)
 	}

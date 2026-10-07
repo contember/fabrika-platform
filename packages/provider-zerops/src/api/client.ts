@@ -1,9 +1,22 @@
+import { z } from 'zod'
 import type { Sleeper } from '../collaborators'
 import { apiError, isAppVersionNotFoundResponse, ZeropsApiError } from './errors'
 import { waitForProcess } from './polling'
-import { prop, readAppVersion, readIntegrationToken, readProcess, readProject, readService, readServiceEnv } from './readers'
+import {
+	appVersionListSchema,
+	appVersionSchema,
+	importResultSchema,
+	integrationTokenSchema,
+	logAccessSchema,
+	processSchema,
+	projectMatchesSchema,
+	projectSchema,
+	readResponse,
+	serviceEnvSchema,
+	serviceSchema,
+} from './readers'
 import { parseServiceEnvResponse } from './service-env-response'
-import type { ZeropsApi, ZeropsApiOptions, ZeropsAppVersion, ZeropsImportResult, ZeropsLogLine } from './types'
+import type { ZeropsApi, ZeropsApiOptions, ZeropsAppVersion, ZeropsLogLine } from './types'
 
 /**
  * `sensitive` on every user-data WRITE, create and update alike. Required by the platform — omitting it answers
@@ -22,44 +35,8 @@ const appVersionReservationSchema = z.object({
 	uploadUrl: z.string().refine((value) => value.trim() !== ''),
 	serviceStackId: z.string().refine((value) => value.trim() !== ''),
 })
-const pageSchema = z.preprocess(
-	(value) => ({ list: prop(value, 'list'), totalCount: prop(value, 'totalCount') }),
-	z.object({ list: z.array(z.unknown()).catch([]), totalCount: z.number().int().nonnegative() }),
-)
-const importServiceSchema = z.preprocess(
-	(value) => ({ id: prop(value, 'id'), name: prop(value, 'name'), processes: prop(value, 'processes') }),
-	z.object({ id: z.string().catch(''), name: z.string().catch(''), processes: z.array(z.unknown().transform(readProcess)).catch([]) }),
-)
-const importResultSchema = z.preprocess(
-	(value) => ({ projectId: prop(value, 'projectId'), projectName: prop(value, 'projectName'), services: prop(value, 'serviceStacks') }),
-	z.object({ projectId: z.string().catch(''), projectName: z.string().optional().catch(undefined), services: z.array(importServiceSchema).catch([]) }),
-)
-const logAccessSchema = z.preprocess(
-	(value) => ({
-		url: prop(value, 'url'),
-		urlPlain: prop(value, 'urlPlain'),
-		urlInfo: prop(value, 'urlInfo'),
-		urlUi: prop(value, 'urlUi'),
-		accessToken: prop(value, 'accessToken'),
-		expiration: prop(value, 'expiration'),
-	}),
-	z.object({
-		url: z.string().catch(''),
-		urlPlain: z.string().catch(''),
-		urlInfo: z.string().catch(''),
-		urlUi: z.string().catch(''),
-		accessToken: z.string().catch(''),
-		expiration: z.string().catch(''),
-	}),
-)
-const appVersionsSchema = z.preprocess(
-	(value) => ({ list: prop(value, 'list') }),
-	z.object({ list: z.array(z.unknown().transform(readAppVersion)).catch([]) }),
-)
-const projectsSchema = z.preprocess(
-	(value) => ({ projects: prop(value, 'projects') }),
-	z.object({ projects: z.array(z.unknown().transform(readProject)).catch([]) }),
-)
+const triggerPipelineSchema = z.object({ process: processSchema.nullish() })
+const deleteAppVersionSchema = z.object({ success: z.literal(true) })
 
 // ── default (real) implementation ───────────────────────────────────────────────
 
@@ -214,26 +191,21 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 	const invalidResponse = (label: string): Error => new Error(`zerops: ${label} returned an invalid response`)
 
-	const readImportResult = (payload: unknown): ZeropsImportResult => importResultSchema.parse(payload)
-
 	const PAGE_SIZE = 100
 	const readAllPages = async <Item>(
 		label: string,
 		path: string,
 		signal: AbortSignal,
-		readItem: (value: unknown) => Item,
+		itemSchema: z.ZodType<Item, z.ZodTypeDef, unknown>,
 	): Promise<Item[]> => {
+		const pageSchema = z.object({ list: z.array(itemSchema), totalCount: z.number().int().nonnegative() })
 		const items: Item[] = []
 		let offset = 0
 		while (true) {
 			const separator = path.includes('?') ? '&' : '?'
 			const payload = await request(label, 'GET', `${path}${separator}limit=${PAGE_SIZE}&offset=${offset}`, { signal })
-			const parsed = pageSchema.safeParse(payload)
-			if (!parsed.success) {
-				throw new Error(`zerops: ${label} returned an invalid totalCount`)
-			}
-			const { list: page, totalCount } = parsed.data
-			items.push(...page.map(readItem))
+			const { list: page, totalCount } = readResponse(label, pageSchema, payload)
+			items.push(...page)
 			if (items.length >= totalCount) {
 				return items
 			}
@@ -261,7 +233,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 	}
 
 	const getProcess: ZeropsApi['getProcess'] = async ({ processId, signal }) =>
-		readProcess(await request('get process', 'GET', `/process/${processId}`, { signal }))
+		readResponse('get process', processSchema, await request('get process', 'GET', `/process/${processId}`, { signal }))
 
 	/**
 	 * Wait out the `stack.updateUserData` process every user-data write answers with.
@@ -276,19 +248,27 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 	 * left alone — nothing then says the write is still settling.
 	 */
 	const awaitUserDataSync = async (payload: unknown, label: string, signal: AbortSignal): Promise<void> => {
-		const { id: processId, actionName: action } = readProcess(payload)
-		if (processId.trim() === '' || action === undefined || action.trim() === '') {
+		const started = processSchema.safeParse(payload)
+		if (!started.success || started.data.actionName === undefined || started.data.actionName.trim() === '') {
 			return
 		}
-		await waitForProcess({ api: { getProcess }, processId, sleep, signal, label })
+		await waitForProcess({ api: { getProcess }, processId: started.data.id, sleep, signal, label })
 	}
 
 	return {
 		importServices: async ({ projectId, yaml, signal }) =>
-			readImportResult(await request('service-stack import', 'POST', `/project/${projectId}/service-stack/import`, { body: { yaml }, signal })),
+			readResponse(
+				'service-stack import',
+				importResultSchema,
+				await request('service-stack import', 'POST', `/project/${projectId}/service-stack/import`, { body: { yaml }, signal }),
+			),
 
 		importProject: async ({ clientId, yaml, signal }) =>
-			readImportResult(await request('project import', 'POST', `/client/${clientId}/project/import`, { body: { yaml }, signal })),
+			readResponse(
+				'project import',
+				importResultSchema,
+				await request('project import', 'POST', `/client/${clientId}/project/import`, { body: { yaml }, signal }),
+			),
 
 		triggerPipeline: async ({ serviceId, buildFromGit, zeropsYaml, zeropsSetup, signal }) => {
 			const body: Record<string, unknown> = {}
@@ -302,8 +282,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				body['zeropsSetup'] = zeropsSetup
 			}
 			const payload = await request('trigger-pipeline', 'PUT', `/service-stack/${serviceId}/trigger-pipeline`, { body, signal })
-			const process = prop(payload, 'process')
-			return process === undefined || process === null ? null : readProcess(process)
+			return readResponse('trigger-pipeline', triggerPipelineSchema, payload).process ?? null
 		},
 
 		createAppVersion: async ({ serviceId, name, signal }) => {
@@ -333,10 +312,8 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				signal,
 				redactDetail: true,
 			})
-			const process = readProcess(payload)
-			if (
-				process.id.trim() === '' || (process.appVersionId !== undefined && (process.appVersionId.trim() === '' || process.appVersionId !== appVersionId))
-			) {
+			const process = readResponse('build and deploy app-version', processSchema, payload)
+			if (process.appVersionId !== undefined && process.appVersionId !== appVersionId) {
 				throw invalidResponse('build and deploy app-version')
 			}
 			return { ...process, appVersionId }
@@ -348,17 +325,15 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				omitErrorResponseDetails: true,
 				preserveAppVersionNotFound: true,
 			})
-			if (prop(payload, 'success') !== true) {
-				throw invalidResponse('delete app-version')
-			}
+			readResponse('delete app-version', deleteAppVersionSchema, payload)
 		},
 
 		getAppVersion: async ({ appVersionId, signal }) =>
-			readAppVersion(await request('get app-version', 'GET', `/app-version/${appVersionId}`, { signal })),
+			readResponse('get app-version', appVersionSchema, await request('get app-version', 'GET', `/app-version/${appVersionId}`, { signal })),
 
 		latestAppVersion: async ({ serviceId, signal }) => {
 			const payload = await request('list app-versions', 'GET', `/service-stack/${serviceId}/app-version?limit=25`, { signal })
-			const versions = appVersionsSchema.parse(payload).list
+			const versions = readResponse('list app-versions', appVersionListSchema, payload).list
 			// Highest `sequence` wins — the list's order is not documented, the sequence's meaning is.
 			return versions.reduce<ZeropsAppVersion | null>(
 				(best, version) => (best === null || (version.sequence ?? -1) > (best.sequence ?? -1) ? version : best),
@@ -377,11 +352,16 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			await request('enable subdomain access', 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`, { signal })
 		},
 
-		getService: async ({ serviceId, signal }) => readService(await request('get service', 'GET', `/service-stack/${serviceId}`, { signal })),
+		getService: async ({ serviceId, signal }) =>
+			readResponse('get service', serviceSchema, await request('get service', 'GET', `/service-stack/${serviceId}`, { signal })),
 
 		findService: async ({ projectId, hostname, signal }) => {
 			try {
-				return readService(await request('find service', 'GET', `/service-stack-by-name/${projectId}/${encodeURIComponent(hostname)}`, { signal }))
+				return readResponse(
+					'find service',
+					serviceSchema,
+					await request('find service', 'GET', `/service-stack-by-name/${projectId}/${encodeURIComponent(hostname)}`, { signal }),
+				)
 			} catch (error) {
 				// A missing service is an answer, not a failure; anything else propagates. The live platform
 				// says it as 400 `serviceStackNotFound` (docs/reference/zerops-platform.md), not as a 404.
@@ -394,10 +374,10 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		getProject: async ({ projectId, signal }) => {
 			const payload = await request('get project', 'GET', `/project/${projectId}`, { signal })
-			return readProject(payload)
+			return readResponse('get project', projectSchema, payload)
 		},
 
-		listProjects: async ({ clientId, signal }) => readAllPages('list projects', `/client/${clientId}/project`, signal, readProject),
+		listProjects: async ({ clientId, signal }) => readAllPages('list projects', `/client/${clientId}/project`, signal, projectSchema),
 
 		findProjects: async ({ clientId, name, signal }) => {
 			const payload = await request(
@@ -406,11 +386,11 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				`/client/${clientId}/projects-by-name/${encodeURIComponent(name)}`,
 				{ signal },
 			)
-			return projectsSchema.parse(payload).projects
+			return readResponse('find projects', projectMatchesSchema, payload).projects
 		},
 
 		listProjectServices: async ({ projectId, signal }) =>
-			readAllPages('list project services', `/project/${projectId}/service-stack`, signal, readService),
+			readAllPages('list project services', `/project/${projectId}/service-stack`, signal, serviceSchema),
 
 		listServiceEnv,
 
@@ -469,12 +449,14 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		},
 
 		getProjectEnv: async ({ projectEnvId, signal }) =>
-			readServiceEnv(await request('get project env', 'GET', `/project-env/${projectEnvId}`, { signal })),
+			readResponse('get project env', serviceEnvSchema, await request('get project env', 'GET', `/project-env/${projectEnvId}`, { signal })),
 
 		createIntegrationToken: async ({ clientId, name, projects, roleCode, canCreateProjects, signal }) =>
 			// `redactDetail`: unlike every other write here the SECRET is in the RESPONSE, not the request, so
 			// this is the one error envelope that could quote a minted token back at us.
-			readIntegrationToken(
+			readResponse(
+				'create integration token',
+				integrationTokenSchema,
 				await request('create integration token', 'POST', `/client/${clientId}/integration-token`, {
 					body: {
 						name,
@@ -491,7 +473,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		getLogAccess: async ({ projectId, signal }) => {
 			const payload = await request('get log access', 'GET', `/project/${projectId}/log`, { signal })
-			return logAccessSchema.parse(payload)
+			return readResponse('get log access', logAccessSchema, payload)
 		},
 
 		readBuildLog: async ({ access, serviceId, appVersionId, since, limit, signal }) => {
@@ -538,4 +520,3 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		},
 	}
 }
-import { z } from 'zod'

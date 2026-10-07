@@ -15,19 +15,7 @@ const serviceEnvEntrySchema = z.object({
 }).superRefine((entry, ctx) => {
 	if (Object.values(entry).some((value) => value === undefined)) ctx.addIssue({ code: 'custom', message: 'present fields must have values' })
 })
-const serviceEnvResponseSchema = z.object({
-	items: z.array(z.preprocess((value) => {
-		if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
-		return {
-			id: Reflect.get(value, 'id'),
-			key: Reflect.get(value, 'key'),
-			content: Reflect.get(value, 'content'),
-			...(Object.hasOwn(value, 'serviceStackId') ? { serviceStackId: Reflect.get(value, 'serviceStackId') } : {}),
-			...(Object.hasOwn(value, 'type') ? { type: Reflect.get(value, 'type') } : {}),
-			...(Object.hasOwn(value, 'sensitive') ? { sensitive: Reflect.get(value, 'sensitive') } : {}),
-		}
-	}, serviceEnvEntrySchema)),
-})
+const serviceEnvResponseSchema = z.object({ items: z.array(serviceEnvEntrySchema) })
 
 /** Parse at the raw HTTP boundary, before permissive legacy readers can coerce a malformed field. */
 export function parseServiceEnvResponse(value: unknown, serviceId: string): ZeropsServiceEnv[] {

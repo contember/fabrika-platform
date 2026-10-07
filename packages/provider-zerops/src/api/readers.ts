@@ -1,7 +1,10 @@
+import { z } from 'zod'
 import type {
 	ZeropsAppVersion,
 	ZeropsAppVersionStatus,
+	ZeropsImportResult,
 	ZeropsIntegrationToken,
+	ZeropsLogAccess,
 	ZeropsProcess,
 	ZeropsProject,
 	ZeropsProjectMode,
@@ -12,252 +15,171 @@ import type {
 	ZeropsServiceStatus,
 } from './types'
 
-/** Read a property off an unknown value without asserting anything about the value's shape. */
-export const prop = (
-	value: unknown,
-	key: string,
-): unknown => (typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined)
+/** Zerops sends `null` for an absent optional field; nothing reads one of these as required, so a malformed one reads as absent. */
+const optional = <Schema extends z.ZodTypeAny>(schema: Schema) => schema.optional().catch(undefined)
 
-const optionalTextSchema = z.string().optional().catch(undefined)
-const textSchema = z.string().catch('')
-const optionalNumberSchema = z.union([z.number(), z.nan()]).optional().catch(undefined)
-const optionalBooleanSchema = z.boolean().optional().catch(undefined)
+const nonBlankSchema = z.string().refine((value) => value.trim() !== '')
+const idSchema = nonBlankSchema
 
-/** Every valid `ZeropsAppVersionStatus`, in pipeline order. The array's element type keeps it exhaustive. */
-const STATUSES: readonly ZeropsAppVersionStatus[] = [
-	'UPLOADING',
-	'WAITING_TO_BUILD',
-	'BUILDING',
-	'BUILD_FAILED',
-	'BUILD_VALIDATION_FAILED',
-	'WAITING_TO_DEPLOY',
-	'DEPLOYING',
-	'DEPLOY_FAILED',
-	'PREPARING_RUNTIME',
-	'PREPARING_RUNTIME_FAILED',
-	'ACTIVE',
-	'BACKUP',
-	'CANCELLED',
-]
-
-const PROJECT_STATUSES: readonly ZeropsProjectStatus[] = [
-	'NEW',
-	'CREATING',
-	'ACTIVE',
-	'DELETING',
-	'FAILED',
-	'STOPPING',
-	'STOPPED',
-	'STARTING',
-]
-
-const PROJECT_MODES: readonly ZeropsProjectMode[] = ['LIGHT', 'SERIOUS']
-
-const SERVICE_STATUSES: readonly ZeropsServiceStatus[] = [
-	'NEW',
-	'CREATING',
-	'ACTIVE',
-	'STOPPING',
-	'STOPPED',
-	'STARTING',
-	'RESTARTING',
-	'RELOADING',
-	'DELETING',
-	'DELETED',
-	'FAILED',
-	'ACTION_FAILED',
-	'UPGRADING',
-	'READY_TO_DEPLOY',
-	'SERVICE_CREATING',
-	'SERVICE_ACTIVE',
-	'SERVICE_STOPPING',
-	'SERVICE_STOPPED',
-	'SERVICE_STARTING',
-	'SERVICE_RESTARTING',
-	'SERVICE_RELOADING',
-	'SERVICE_DELETING',
-	'SERVICE_DELETED',
-	'SERVICE_FAILED',
-	'SERVICE_ACTION_FAILED',
-	'SERVICE_REPAIRING',
-	'SERVICE_CONTAINER_FAILED',
-	'SERVICE_MOVING_CONTAINER',
-	'SERVICE_UPGRADING',
-	'SERVICE_SCALING',
-	'SERVICE_REPAIR_FAILED',
-	'REPAIRING',
-	'CONTAINER_FAILED',
-	'MOVING_CONTAINER',
-	'SCALING',
-	'REPAIR_FAILED',
-]
-
-/**
- * Narrow a wire string to a known status. `undefined` means Zerops sent something this build does not
- * know — which the poll loop must treat as "keep waiting", never as success or failure.
- */
-export const asAppVersionStatus = (value: unknown): ZeropsAppVersionStatus | undefined => STATUSES.find((status) => status === value)
-
-const asProjectStatus = (value: unknown): ZeropsProjectStatus | undefined => PROJECT_STATUSES.find((status) => status === value)
-
-const asProjectMode = (value: unknown): ZeropsProjectMode | undefined => PROJECT_MODES.find((mode) => mode === value)
-
-const asServiceStatus = (value: unknown): ZeropsServiceStatus | undefined => SERVICE_STATUSES.find((status) => status === value)
-
-const buildSchema = z.preprocess(
-	(value) =>
-		typeof value !== 'object' || value === null ? undefined : {
-			startDate: prop(value, 'startDate'),
-			endDate: prop(value, 'endDate'),
-			pipelineStart: prop(value, 'pipelineStart'),
-			pipelineFinish: prop(value, 'pipelineFinish'),
-			pipelineFailed: prop(value, 'pipelineFailed'),
-		},
-	z.object({
-		startDate: optionalTextSchema,
-		endDate: optionalTextSchema,
-		pipelineStart: optionalTextSchema,
-		pipelineFinish: optionalTextSchema,
-		pipelineFailed: optionalTextSchema,
-	}).optional(),
+/** Every valid `ZeropsAppVersionStatus`, in pipeline order. */
+const appVersionStatusSchema = z.enum(
+	[
+		'UPLOADING',
+		'WAITING_TO_BUILD',
+		'BUILDING',
+		'BUILD_FAILED',
+		'BUILD_VALIDATION_FAILED',
+		'WAITING_TO_DEPLOY',
+		'DEPLOYING',
+		'DEPLOY_FAILED',
+		'PREPARING_RUNTIME',
+		'PREPARING_RUNTIME_FAILED',
+		'ACTIVE',
+		'BACKUP',
+		'CANCELLED',
+	] satisfies [ZeropsAppVersionStatus, ...ZeropsAppVersionStatus[]],
 )
-const appVersionSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		status: prop(value, 'status'),
-		serviceStackId: prop(value, 'serviceStackId'),
-		projectId: prop(value, 'projectId'),
-		sequence: prop(value, 'sequence'),
-		build: prop(value, 'build'),
-	}),
-	z.object({
-		id: textSchema,
-		status: z.unknown().transform(asAppVersionStatus),
-		serviceStackId: optionalTextSchema,
-		projectId: optionalTextSchema,
-		sequence: optionalNumberSchema,
-		build: buildSchema,
-	}),
-)
-export const readAppVersion = (value: unknown): ZeropsAppVersion => appVersionSchema.parse(value)
 
-const processSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		status: prop(value, 'status'),
-		actionName: prop(value, 'actionName'),
-		serviceStackId: prop(value, 'serviceStackId'),
-		appVersionId: prop(prop(value, 'appVersion'), 'id'),
-	}),
-	z.object({
-		id: textSchema,
-		status: optionalTextSchema,
-		actionName: optionalTextSchema,
-		serviceStackId: optionalTextSchema,
-		appVersionId: optionalTextSchema,
-	}),
+const projectStatusSchema = z.enum(
+	['NEW', 'CREATING', 'ACTIVE', 'DELETING', 'FAILED', 'STOPPING', 'STOPPED', 'STARTING'] satisfies [
+		ZeropsProjectStatus,
+		...ZeropsProjectStatus[],
+	],
 )
-export const readProcess = (value: unknown): ZeropsProcess => processSchema.parse(value)
 
-const serviceSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		name: prop(value, 'name'),
-		projectId: prop(value, 'projectId'),
-		status: prop(value, 'status'),
-		base: prop(value, 'base'),
-		activeAppVersionId: prop(prop(value, 'activeAppVersion'), 'id'),
-		subdomainAccess: prop(value, 'subdomainAccess'),
-		autoscalingProfileId: prop(value, 'autoscalingProfileId'),
-	}),
-	z.object({
-		id: textSchema,
-		name: textSchema,
-		projectId: optionalTextSchema,
-		status: z.unknown().transform(asServiceStatus),
-		base: optionalTextSchema,
-		activeAppVersionId: optionalTextSchema,
-		subdomainAccess: optionalBooleanSchema,
-		autoscalingProfileId: optionalTextSchema,
-	}).transform((service) => {
-		if (service.subdomainAccess === undefined) delete service.subdomainAccess
-		if (service.autoscalingProfileId === undefined) delete service.autoscalingProfileId
-		return service
-	}),
+const projectModeSchema = z.enum(['LIGHT', 'SERIOUS'] satisfies [ZeropsProjectMode, ...ZeropsProjectMode[]])
+
+const serviceStatusSchema = z.enum(
+	[
+		'NEW',
+		'CREATING',
+		'ACTIVE',
+		'STOPPING',
+		'STOPPED',
+		'STARTING',
+		'RESTARTING',
+		'RELOADING',
+		'DELETING',
+		'DELETED',
+		'FAILED',
+		'ACTION_FAILED',
+		'UPGRADING',
+		'READY_TO_DEPLOY',
+		'SERVICE_CREATING',
+		'SERVICE_ACTIVE',
+		'SERVICE_STOPPING',
+		'SERVICE_STOPPED',
+		'SERVICE_STARTING',
+		'SERVICE_RESTARTING',
+		'SERVICE_RELOADING',
+		'SERVICE_DELETING',
+		'SERVICE_DELETED',
+		'SERVICE_FAILED',
+		'SERVICE_ACTION_FAILED',
+		'SERVICE_REPAIRING',
+		'SERVICE_CONTAINER_FAILED',
+		'SERVICE_MOVING_CONTAINER',
+		'SERVICE_UPGRADING',
+		'SERVICE_SCALING',
+		'SERVICE_REPAIR_FAILED',
+		'REPAIRING',
+		'CONTAINER_FAILED',
+		'MOVING_CONTAINER',
+		'SCALING',
+		'REPAIR_FAILED',
+	] satisfies [ZeropsServiceStatus, ...ZeropsServiceStatus[]],
 )
-export const readService = (value: unknown): ZeropsService => serviceSchema.parse(value)
 
-const projectSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		name: prop(value, 'name'),
-		status: prop(value, 'status'),
-		mode: prop(value, 'mode'),
-		description: prop(value, 'description'),
-		tagList: prop(value, 'tagList'),
-	}),
-	z.object({
-		id: textSchema,
-		name: textSchema,
-		status: z.unknown().transform(asProjectStatus),
-		mode: z.unknown().transform(asProjectMode),
-		description: optionalTextSchema,
-		tagList: z.array(z.string()).optional().catch(undefined),
-	}).transform((project) => {
-		if (project.description === undefined) delete project.description
-		if (project.tagList === undefined) delete project.tagList
-		return project
-	}),
-)
-export const readProject = (value: unknown): ZeropsProject => projectSchema.parse(value)
+const roleCodeSchema = z.enum(['OWNER', 'ADMIN', 'BASIC_USER', 'READ_ONLY', 'NO_ACCESS'] satisfies [ZeropsRoleCode, ...ZeropsRoleCode[]])
 
-const ROLE_CODES: readonly ZeropsRoleCode[] = ['OWNER', 'ADMIN', 'BASIC_USER', 'READ_ONLY', 'NO_ACCESS']
+// Absent or null reads as absent, but a blank id fails the parse: build-and-deploy must not accept `appVersion: { id: '' }`.
+const nestedIdSchema = z.object({ id: idSchema }).nullish()
 
-/** `undefined` means Zerops sent a role this build does not know — reported as absent, never as a guess. */
-const asRoleCode = (value: unknown): ZeropsRoleCode | undefined => ROLE_CODES.find((role) => role === value)
+export const appVersionSchema = z.object({
+	id: idSchema,
+	// Unknown statuses read as absent: the poll loop keeps waiting rather than guessing an outcome.
+	status: optional(appVersionStatusSchema),
+	serviceStackId: optional(idSchema),
+	projectId: optional(idSchema),
+	sequence: optional(z.number()),
+	build: optional(z.object({
+		startDate: optional(z.string()),
+		endDate: optional(z.string()),
+		pipelineStart: optional(z.string()),
+		pipelineFinish: optional(z.string()),
+		pipelineFailed: optional(z.string()),
+	})),
+}) satisfies z.ZodType<ZeropsAppVersion, z.ZodTypeDef, unknown>
 
-const integrationGrantSchema = z.preprocess(
-	(value) => ({ projectId: prop(value, 'projectId'), roleCode: prop(value, 'roleCode') }),
-	z.object({ projectId: textSchema, roleCode: z.unknown().transform(asRoleCode) }),
-)
-const integrationTokenSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		name: prop(value, 'name'),
-		token: prop(value, 'token'),
-		projects: prop(value, 'projects'),
-		roleCode: prop(value, 'roleCode'),
-	}),
-	z.object({
-		id: textSchema,
-		name: textSchema,
-		token: textSchema,
-		projects: z.array(integrationGrantSchema).catch([]),
-		roleCode: z.unknown().transform(asRoleCode),
-	}),
-)
-export const readIntegrationToken = (value: unknown): ZeropsIntegrationToken => integrationTokenSchema.parse(value)
+export const processSchema = z.object({
+	id: idSchema,
+	status: optional(z.string()),
+	actionName: optional(z.string()),
+	serviceStackId: optional(idSchema),
+	appVersion: nestedIdSchema,
+}).transform(({ appVersion, ...process }): ZeropsProcess => ({ ...process, appVersionId: appVersion?.id }))
 
-const serviceEnvSchema = z.preprocess(
-	(value) => ({
-		id: prop(value, 'id'),
-		key: prop(value, 'key'),
-		content: prop(value, 'content'),
-		serviceStackId: prop(value, 'serviceStackId'),
-		type: prop(value, 'type'),
-		sensitive: prop(value, 'sensitive'),
-	}),
-	z.object({
-		id: textSchema,
-		key: textSchema,
-		content: textSchema,
-		serviceStackId: optionalTextSchema,
-		type: optionalTextSchema,
-		sensitive: optionalBooleanSchema,
-	}).transform((entry) => {
-		if (entry.sensitive === undefined) delete entry.sensitive
-		return entry
-	}),
-)
-export const readServiceEnv = (value: unknown): ZeropsServiceEnv => serviceEnvSchema.parse(value)
-import { z } from 'zod'
+export const serviceSchema = z.object({
+	id: idSchema,
+	name: z.string(),
+	projectId: optional(idSchema),
+	status: optional(serviceStatusSchema),
+	base: optional(z.string()),
+	activeAppVersion: nestedIdSchema,
+	subdomainAccess: optional(z.boolean()),
+	autoscalingProfileId: optional(z.string()),
+}).transform(({ activeAppVersion, ...service }): ZeropsService => ({ ...service, activeAppVersionId: activeAppVersion?.id }))
+
+export const projectSchema = z.object({
+	id: idSchema,
+	name: z.string(),
+	status: optional(projectStatusSchema),
+	mode: optional(projectModeSchema),
+	description: optional(z.string()),
+	tagList: optional(z.array(z.string())),
+}) satisfies z.ZodType<ZeropsProject, z.ZodTypeDef, unknown>
+
+export const integrationTokenSchema = z.object({
+	id: idSchema,
+	name: z.string(),
+	token: nonBlankSchema,
+	// An unknown role reads as absent, never as a guess.
+	projects: z.array(z.object({ projectId: idSchema, roleCode: optional(roleCodeSchema) })),
+	roleCode: optional(roleCodeSchema),
+}) satisfies z.ZodType<ZeropsIntegrationToken, z.ZodTypeDef, unknown>
+
+export const serviceEnvSchema = z.object({
+	id: idSchema,
+	key: nonBlankSchema,
+	content: z.string(),
+	serviceStackId: optional(idSchema),
+	type: optional(z.string()),
+	sensitive: optional(z.boolean()),
+}) satisfies z.ZodType<ZeropsServiceEnv, z.ZodTypeDef, unknown>
+
+export const importResultSchema = z.object({
+	projectId: idSchema,
+	projectName: optional(z.string()),
+	serviceStacks: z.array(z.object({ id: idSchema, name: z.string(), processes: z.array(processSchema) })),
+}).transform(({ serviceStacks, ...result }): ZeropsImportResult => ({ ...result, services: serviceStacks }))
+
+export const logAccessSchema = z.object({
+	url: z.string(),
+	urlPlain: z.string(),
+	urlInfo: z.string(),
+	urlUi: z.string(),
+	accessToken: z.string(),
+	expiration: z.string(),
+}) satisfies z.ZodType<ZeropsLogAccess, z.ZodTypeDef, unknown>
+
+/** Parse a response, never echoing it: an issue can quote the value it rejected, and these carry credentials. */
+export const readResponse = <Output>(label: string, schema: z.ZodType<Output, z.ZodTypeDef, unknown>, value: unknown): Output => {
+	const result = schema.safeParse(value)
+	if (!result.success) {
+		throw new Error(`zerops: ${label} returned an invalid response`)
+	}
+	return result.data
+}
+
+export const appVersionListSchema = z.object({ list: z.array(appVersionSchema) })
+export const projectMatchesSchema = z.object({ projects: z.array(projectSchema) })

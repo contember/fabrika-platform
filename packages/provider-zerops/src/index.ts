@@ -1,5 +1,4 @@
 export {
-	asAppVersionStatus,
 	createZeropsApi,
 	waitForProcess,
 	ZEROPS_ACTIVE,

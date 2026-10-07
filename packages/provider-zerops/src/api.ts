@@ -1,7 +1,6 @@
 export { createZeropsApi, ZEROPS_API_BASE } from './api/client'
 export { ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from './api/errors'
 export { waitForProcess } from './api/polling'
-export { asAppVersionStatus } from './api/readers'
 export {
 	type FetchLike,
 	ZEROPS_ACTIVE,
