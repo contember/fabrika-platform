@@ -48,7 +48,7 @@ export {
 	renderYaml,
 } from './compile'
 export type { CompileInput, ZeropsImportDocument, ZeropsJsonImportDocument } from './compile'
-export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
+export { createZeropsControlProvider, parseZeropsCheckpoint, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsStoredTarget } from './control'
 export { type PreparedZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
 export {

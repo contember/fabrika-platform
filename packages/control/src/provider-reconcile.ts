@@ -55,10 +55,12 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 			if (run.status !== 'pending' && run.status !== 'running') continue
 			if (run.cancel_requested_at !== null) {
 				summary.checked++
-				if (await settleRunCancellation(deps, owner)) {
-					summary.failed++
-					await project(deps, run.id, 'failed')
-				} else summary.inProgress++
+				const settled = await settleRunCancellation(deps, owner)
+				if (settled === null) summary.inProgress++
+				else {
+					summary[settled]++
+					await project(deps, run.id, settled)
+				}
 				continue
 			}
 			if (run.external_run_id === null) {
@@ -90,8 +92,8 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 				environment,
 				signal: owner.work.signal,
 				...(run.provider_state_json === null ? {} : { providerState: parseProviderJson(run.provider_state_json, 'provider state') }),
+				startedAtMs: (run.started_at ?? run.created_at) * 1000,
 				...(returnOrigins === undefined ? {} : { returnOrigins }),
-				checkpoint: (state) => owner.mutate((guard) => deps.repositories.runs.checkpointRunProviderState(run.id, state, guard), state),
 				log: async (line) => {
 					console.info(`deploy run ${run.id}: ${line}`)
 					if (deps.runLogs === undefined || run.log_key === null) return
@@ -101,8 +103,9 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 			await owner.drain()
 			await owner.refreshCancellation()
 			if (owner.work.signal.aborted) {
-				if (await settleRunCancellation(deps, owner).catch(() => false)) summary.failed++
-				else summary.inProgress++
+				const settled = await settleRunCancellation(deps, owner).catch(() => null)
+				if (settled === null) summary.inProgress++
+				else summary[settled]++
 				continue
 			}
 			if (outcome.state === 'running') {

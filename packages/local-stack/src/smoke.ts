@@ -1,3 +1,4 @@
+import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { normalizeRepoUrl } from '@fabrika/control/repo-source'
 import { DEPLOY_LEASE_TTL_MS } from '@fabrika/control/run-ownership'
 import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
@@ -15,15 +16,15 @@ import {
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
+	parseZeropsCheckpoint,
 	zeropsArtifactCodec,
 	zeropsNamespaceTargetCodec,
+	type ZeropsRunState,
 } from '@fabrika/provider-zerops'
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { confirmStagedManagedBinding } from '../../provider-zerops/src/managed-environment/admission'
-import { type ManagedCheckpoint, type ManagedKey, verifyManagedCheckpoint } from '../../provider-zerops/src/managed-environment/protocol'
 import {
 	LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
 	LOCAL_SOURCE_FIXTURE_DIRECTORY,
@@ -331,10 +332,20 @@ const emulatorSnapshot = async () =>
 		'Zerops emulator state',
 	))
 
-const readRunCheckpoint = async (runId: string): Promise<ManagedCheckpoint | null> => {
+const readRunCheckpoint = async (runId: string): Promise<ZeropsRunState | null> => {
 	const output =
 		(await postgresOutput('control', `SELECT provider_state_json FROM runs WHERE id = convert_from(decode('${hex(runId)}', 'hex'), 'UTF8')`)).trim()
-	return output === '' ? null : verifyManagedCheckpoint(parseJson(output, 'provider checkpoint'))
+	if (output === '') return null
+	const checkpoint = parseZeropsCheckpoint(parseJson(output, 'provider checkpoint'))
+	if (checkpoint === null) throw new Error(`Deploy ${runId} recorded an unrecognised provider checkpoint`)
+	return checkpoint
+}
+
+const notesServiceId = (snapshot: Awaited<ReturnType<typeof emulatorSnapshot>>): string => {
+	const services = snapshot.services.filter((service) => service.name === NOTES_DEPLOY_SERVICE)
+	const service = services[0]
+	if (services.length !== 1 || service === undefined) throw new Error('Zerops emulator does not contain exactly one notes deploy service')
+	return service.id
 }
 
 const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceManifest): Promise<void> => {
@@ -372,53 +383,54 @@ const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceMan
 const proveRestartReconciliation = async (
 	machineKey: string,
 	fixtures: LocalSourceManifest,
-): Promise<{ runId: string; commitSha: string; checkpoint: ManagedCheckpoint }> => {
+): Promise<{ runId: string; commitSha: string; checkpoint: ZeropsRunState }> => {
 	// Manual, not webhook-driven: triggering by delivery needs an app bound to a keyed connection.
 	console.info(`Submitting immutable Notes deploy for ${fixtures.application.commitSha}`)
 	const triggered = await controlRequest('deploy', machineKey, { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: fixtures.application.commitSha })
 	const runId = idResponseSchema.parse(triggered).id
-	console.info(`Deploy ${runId} accepted; waiting for its durable build_triggered checkpoint`)
-	let observedPhase: string | undefined
+	console.info(`Deploy ${runId} accepted; waiting for its durable triggered checkpoint`)
+	let observed: string | undefined
 	const checkpoint = await poll(
-		'a durable build_triggered checkpoint',
+		'a durable triggered checkpoint',
 		async () => {
 			const checkpoint = await readRunCheckpoint(runId)
-			const phase = checkpoint?.phase ?? 'no checkpoint yet'
-			if (phase !== observedPhase) {
-				console.info(`Deploy ${runId}: ${phase}`)
-				observedPhase = phase
+			const state = checkpoint === null ? 'no checkpoint yet' : `${checkpoint.appVersionId} triggered=${String(checkpoint.triggered)}`
+			if (state !== observed) {
+				console.info(`Deploy ${runId}: ${state}`)
+				observed = state
 			}
 			const run = runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
 			if (run.status === 'failed' || run.status === 'cancelled') {
-				throw new Error(`Deploy ${runId} became ${run.status} before the hard-kill witness (${phase})`)
+				throw new Error(`Deploy ${runId} became ${run.status} before the hard-kill witness (${state})`)
 			}
 			return checkpoint
 		},
-		(value) => value?.phase === 'build_triggered',
+		(value) => value?.triggered === true,
 		{ timeoutMs: DURABLE_BUILD_WAIT_MS },
 	)
-	if (
-		checkpoint?.phase !== 'build_triggered' || checkpoint.processId === undefined
-		|| checkpoint.runId !== runId || checkpoint.sourceCommitSha !== fixtures.application.commitSha
-		|| checkpoint.descriptorSha256 !== fixtures.application.descriptorSha256
-		|| checkpoint.appId !== NOTES_APP_ID || checkpoint.environment !== NOTES_ENVIRONMENT || checkpoint.namespaceId !== 'apps-prod'
-		|| checkpoint.hostname !== NOTES_DEPLOY_SERVICE || checkpoint.setup !== NOTES_DEPLOY_SERVICE
-	) throw new Error('Submitted run source identity mismatch')
+	if (checkpoint === null || !checkpoint.triggered) throw new Error('Submitted run has no triggered checkpoint')
 	const running = runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
 	if (running.status !== 'running' || running.externalRunId !== checkpoint.appVersionId) {
 		throw new Error('Run version differs from submitted checkpoint')
 	}
-	const submitted = await emulatorSnapshot()
+	// The checkpoint records the trigger BEFORE the request, so wait for the emulator to see the build.
+	const submitted = await poll(
+		'the build process for the triggered version',
+		emulatorSnapshot,
+		(snapshot) =>
+			snapshot.processes.some(item => item.appVersionId === checkpoint.appVersionId && item.actionName === 'stack.build')
+			&& snapshot.appVersions.find(item => item.id === checkpoint.appVersionId)?.status === 'BUILDING',
+		{ timeoutMs: DURABLE_BUILD_WAIT_MS },
+	)
 	const receipt = submitted.uploadGrants.find(item => item.appVersionId === checkpoint.appVersionId)
 	const version = submitted.appVersions.find(item => item.id === checkpoint.appVersionId)
 	if (
 		receipt?.deleted !== false || receipt.receipt === undefined
-		|| version?.status !== 'BUILDING' || version.serviceStackId !== checkpoint.serviceId || version.projectId !== checkpoint.projectId
-		|| !submitted.processes.some(item =>
-			item.id === checkpoint.processId && item.appVersionId === checkpoint.appVersionId && item.actionName === 'stack.build'
-		)
+		|| version?.status !== 'BUILDING' || version.serviceStackId !== notesServiceId(submitted) || version.name !== runId
+		|| version.uploadedDescriptorSha256 !== fixtures.application.descriptorSha256 || version.buildSetup !== NOTES_DEPLOY_SERVICE
+		|| submitted.processes.filter(item => item.appVersionId === checkpoint.appVersionId && item.actionName === 'stack.build').length !== 1
 	) {
-		throw new Error('Submitted run has no completed upload or matching build process')
+		throw new Error('Submitted run has no completed upload of the resolved descriptor or matching build process')
 	}
 	console.info(`Deploy ${runId} reached the external Zerops pipeline; killing control`)
 	await compose(['kill', 'control'])
@@ -446,7 +458,7 @@ const proveRestartReconciliation = async (
 		|| snapshot.processes.filter(item => item.actionName === 'stack.build').length
 			!== submitted.processes.filter(item => item.actionName === 'stack.build').length
 		|| !isDeepStrictEqual(snapshot.uploadGrants.find(item => item.appVersionId === checkpoint.appVersionId), receipt)
-		|| snapshot.services.find(item => item.id === checkpoint.serviceId)?.activeAppVersionId !== checkpoint.appVersionId
+		|| snapshot.services.find(item => item.id === notesServiceId(snapshot))?.activeAppVersionId !== checkpoint.appVersionId
 	) {
 		throw new Error('Recovery changed the submitted version, receipt, checkpoint, or build count')
 	}
@@ -490,35 +502,43 @@ const activeOperationsConfig = async (): Promise<ActiveOperationsConfig> => {
 	return config
 }
 
+/**
+ * ADR-0044: four managed keys are sensitive service variables holding the deploy's values, and the release
+ * is a version-bound `ENV` record of the active version — never a service variable.
+ */
 const proveManagedOperationsEnvironment = async (
 	config: ActiveOperationsConfig,
 	release: string,
-	checkpoint: ManagedCheckpoint,
+	checkpoint: ZeropsRunState,
 ): Promise<void> => {
 	const snapshot = await emulatorSnapshot()
-	const services = snapshot.services.filter((service) => service.name === NOTES_DEPLOY_SERVICE)
-	if (services.length !== 1) {
-		throw new Error('Zerops emulator does not contain exactly one notes deploy service')
-	}
-	const serviceId = idResponseSchema.parse(services[0]).id
-	confirmStagedManagedBinding(checkpoint, snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId))
-	const expected = new Map<ManagedKey, string>([
+	const serviceId = notesServiceId(snapshot)
+	const records = snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId)
+	const expected = new Map<string, string>([
 		[FABRIKA_OPERATIONS_DSN, config.dsn],
 		[FABRIKA_APP_ID, NOTES_APP_ID],
 		[FABRIKA_ENVIRONMENT, NOTES_ENVIRONMENT],
 		[FABRIKA_SERVICE_KEY, DEFAULT_OPERATIONS_SERVICE_KEY],
-		[FABRIKA_RELEASE, release],
 	])
 	for (const [key, expectedValue] of expected) {
-		const binding = checkpoint.binding[key]
-		if (binding.state !== 'confirmed') throw new Error(`Managed value ${key} has no confirmed version binding`)
-		const backing = snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId && record.id === binding.backingRecordId)
-		if (
-			serviceId !== checkpoint.serviceId || backing.length !== 1 || backing[0]?.key !== binding.referenceName
-			|| backing[0]?.content !== expectedValue || backing[0]?.sensitive !== true
-		) {
-			throw new Error(`Zerops emulator managed value ${key} does not match the deploy projection`)
+		const matching = records.filter(record => record.key === key)
+		const record = matching[0]
+		if (matching.length !== 1 || record?.type !== 'USER' || record.content !== expectedValue || record.sensitive !== true) {
+			throw new Error(`Zerops emulator service variable ${key} does not match the deploy projection`)
 		}
+	}
+	const releases = records.filter(record => record.key === FABRIKA_RELEASE)
+	if (releases.length !== 1 || releases[0]?.type !== 'ENV' || releases[0]?.content !== release) {
+		throw new Error("Zerops emulator release is not the active version's descriptor value")
+	}
+	const version = snapshot.appVersions.find(item => item.id === checkpoint.appVersionId)
+	if (version?.status !== 'ACTIVE' || version.runEnvVariables?.[FABRIKA_RELEASE] !== release) {
+		throw new Error('The deployed version does not carry the release in its execution descriptor')
+	}
+	// No retired protocol record survives: every Fabrika-prefixed record is a managed key.
+	const managedKeys = new Set<string>([...expected.keys(), FABRIKA_RELEASE, FABRIKA_IAM_ISSUER])
+	if (records.some(record => record.key.startsWith('FABRIKA_') && !managedKeys.has(record.key))) {
+		throw new Error('Zerops emulator holds Fabrika records beyond the managed keys')
 	}
 }
 

@@ -123,14 +123,6 @@ export class RunRepository {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}
 
-	async getRunByExternalId(input: { appId: string; env: string; externalId: string }): Promise<RunRow | null> {
-		const result = await this.d1.prepare(`SELECT * FROM runs
-			WHERE app_id = ? AND env = ? AND external_run_id = ? LIMIT 2`)
-			.bind(input.appId, input.env, input.externalId).all<RunRow>()
-		if (result.results.length > 1) throw new Error('Provider version has ambiguous retained run state')
-		return result.results[0] ?? null
-	}
-
 	/** Persist a provider-owned operation id and optional resume state in one guarded write. */
 	async setRunExternalId(id: string, externalRunId: string, providerState?: JsonValue, guard?: RunMutationGuard): Promise<boolean> {
 		const stateAssignment = providerState === undefined ? '' : ', provider_state_json = ?'
@@ -265,13 +257,13 @@ export class RunRepository {
 		)
 	}
 
-	/** Finish a run only after cancellation has durably claimed and completed provider cleanup. */
-	async markRunCancellationFinished(id: string, guard?: RunMutationGuard): Promise<boolean> {
+	/** Finish a run only after cancellation has durably claimed and settled provider work; activation may have won first. */
+	async markRunCancellationFinished(id: string, status: 'succeeded' | 'failed', guard?: RunMutationGuard): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = 'failed', exit_code = NULL, finished_at = ?
+			`UPDATE runs SET status = ?, exit_code = NULL, finished_at = ?
 			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NOT NULL`,
-			[this.now(), id],
+			[status, this.now(), id],
 			guard,
 		)
 	}

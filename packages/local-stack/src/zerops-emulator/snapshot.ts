@@ -1,7 +1,6 @@
 import { z } from 'zod'
 import { localSourceUploadGrantSchema } from '../local-source-contract'
 import type { EmulatorSnapshot } from './model'
-import { managedRuntimeReferencesSchema } from './runtime-environment'
 
 const counter = z.number().int().min(1)
 export const roleCodeSchema = z.enum(['OWNER', 'ADMIN', 'BASIC_USER', 'READ_ONLY', 'NO_ACCESS'])
@@ -39,7 +38,7 @@ const envSchema = z.object({
 	serviceStackId: z.string(),
 	key: z.string(),
 	content: z.string(),
-	type: z.enum(['SECRET', 'USER']),
+	type: z.enum(['SECRET', 'USER', 'ENV']),
 	sensitive: z.boolean().optional(),
 })
 const versionSchema = z.object({
@@ -47,8 +46,11 @@ const versionSchema = z.object({
 	serviceStackId: z.string(),
 	projectId: z.string(),
 	status: z.enum(['UPLOADING', 'BUILDING', 'ACTIVE', 'BACKUP', 'BUILD_FAILED', 'CANCELLED']),
+	name: z.string().optional(),
 	hasHttpPorts: z.boolean().optional(),
-	managedRuntimeReferences: managedRuntimeReferencesSchema.optional(),
+	uploadedDescriptorSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+	buildSetup: z.string().optional(),
+	runEnvVariables: z.record(z.string()).optional(),
 	syntheticFailure: z.literal('LOCAL_MISSING_UPLOAD').optional(),
 	sequence: counter,
 	activateAt: z.number().finite().min(0).optional(),

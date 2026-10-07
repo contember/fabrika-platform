@@ -1,5 +1,4 @@
 import type { LocalSourceUploadGrant } from '../local-source-contract'
-import type { ManagedRuntimeReference } from './runtime-environment'
 
 export interface ProjectRecord {
 	id: string
@@ -27,7 +26,8 @@ export interface ServiceEnvRecord {
 	serviceStackId: string
 	key: string
 	content: string
-	type: 'SECRET' | 'USER'
+	/** `ENV` records come from the active version's `run.envVariables`; `/env` omits them. */
+	type: 'SECRET' | 'USER' | 'ENV'
 	sensitive?: boolean
 }
 
@@ -36,8 +36,15 @@ export interface AppVersionRecord {
 	serviceStackId: string
 	projectId: string
 	status: 'UPLOADING' | 'BUILDING' | 'ACTIVE' | 'BACKUP' | 'BUILD_FAILED' | 'CANCELLED'
+	/** The reservation's `name`; Fabrika passes the run id. */
+	name?: string
 	hasHttpPorts?: boolean
-	managedRuntimeReferences?: ManagedRuntimeReference[]
+	/** The sha256 of the root `zerops.yaml` in this version's uploaded tarball, when it was one. */
+	uploadedDescriptorSha256?: string
+	/** The `zeropsYamlSetup` its build request selected. */
+	buildSetup?: string
+	/** The selected setup's literal `run.envVariables`, applied as `ENV` records when the version activates. */
+	runEnvVariables?: Record<string, string>
 	syntheticFailure?: 'LOCAL_MISSING_UPLOAD'
 	sequence: number
 	activateAt?: number

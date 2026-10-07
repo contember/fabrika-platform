@@ -37,7 +37,6 @@ async function seedCloudflareRun(db: ControlRepositories): Promise<string> {
 function fakeRunner(options: { callerLost: boolean }): { service: CloudflareRunnerService; persisted: Map<string, RunnerStatus> } {
 	const persisted = new Map<string, RunnerStatus>()
 	const service: CloudflareRunnerService = {
-		sourceProtocol: async () => 'git-commit-v1',
 		startRun: async (job) => {
 			const status: RunnerStatus = {
 				runId: job.runId,
@@ -70,7 +69,6 @@ function cloudflareProvider(runner: CloudflareRunnerService, iamCalls: string[],
 		},
 		resolveSource: async () => ({ commitSha: COMMIT }),
 		prepareClone: async (source) => ({ repoUrl: `https://${source.repoUrl}` }),
-		assertRunnerSourceProtocol: async () => {},
 		startRun: (job) => startRunOnRunner(runner, job),
 		cancelRun: async () => {},
 		recoverRun: (runId) => recoverRunOnRunner(runner, runId, RUNNER_KEY),

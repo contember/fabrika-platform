@@ -39,7 +39,7 @@ export function runFencingContract(database: () => SqlDatabase): void {
 		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'later' }, guard)).toBe(false)
 		expect(await runs.checkpointRunProviderState(first, { phase: 'submitted' }, current)).toBe(false)
 		expect(await runs.setRunExternalId(first, 'version', { phase: 'submitted' }, current)).toBe(false)
-		expect(await runs.markRunCancellationFinished(first, current)).toBe(true)
+		expect(await runs.markRunCancellationFinished(first, 'failed', current)).toBe(true)
 	})
 
 	test('start requires a live exact owner, never creates or renews a lease, and refuses another running run after takeover', async () => {
@@ -73,8 +73,8 @@ export function runFencingContract(database: () => SqlDatabase): void {
 		expect(await runs.markRunFinished(first, 'succeeded', 0, guard)).toBe(false)
 		expect(await runs.getRun(first)).toEqual(before)
 		await runs.beginRunCancellation(first)
-		expect(await runs.markRunCancellationFinished(first, guard)).toBe(false)
-		expect(await runs.markRunCancellationFinished(first, { ...guard, holder: 'new-owner', nowMs: 200 })).toBe(true)
+		expect(await runs.markRunCancellationFinished(first, 'failed', guard)).toBe(false)
+		expect(await runs.markRunCancellationFinished(first, 'failed', { ...guard, holder: 'new-owner', nowMs: 200 })).toBe(true)
 	})
 
 	test('checkpoint CAS rejects stale snapshots and preserves external id and commit immutability', async () => {
@@ -107,18 +107,18 @@ export function runFencingContract(database: () => SqlDatabase): void {
 		await runs.markRunStarted(first, 'log', guard)
 		await runs.setRunExternalId(first, 'operation', { phase: 0 }, guard)
 		const current = { ...guard, expectedProviderStateJson: '{"phase":0}' }
-		expect(await runs.markRunCancellationFinished(first, current)).toBe(false)
+		expect(await runs.markRunCancellationFinished(first, 'failed', current)).toBe(false)
 		await runs.beginRunCancellation(first)
 		expect(await runs.setRunExternalId(first, 'operation', undefined, current)).toBe(false)
 		expect(await runs.setRunCommit(first, 'abc', current)).toBe(false)
 		expect(await runs.checkpointRunProviderState(first, { phase: 1 }, current)).toBe(false)
 		expect(await runs.markRunFinished(first, 'succeeded', 0, current)).toBe(false)
-		expect(await runs.markRunCancellationFinished(first, guard)).toBe(false)
-		expect(await runs.markRunCancellationFinished(first, { ...current, nowMs: 200 })).toBe(false)
-		expect(await runs.markRunCancellationFinished(first, current)).toBe(true)
+		expect(await runs.markRunCancellationFinished(first, 'failed', guard)).toBe(false)
+		expect(await runs.markRunCancellationFinished(first, 'failed', { ...current, nowMs: 200 })).toBe(false)
+		expect(await runs.markRunCancellationFinished(first, 'failed', current)).toBe(true)
 		expect((await runs.getRun(first))?.status).toBe('failed')
 		await runs.beginRunCancellation(second)
 		expect(await runs.markRunStarted(second, 'log', guard)).toBe(false)
-		expect(await runs.markRunCancellationFinished(second, guard)).toBe(true)
+		expect(await runs.markRunCancellationFinished(second, 'failed', guard)).toBe(true)
 	})
 }

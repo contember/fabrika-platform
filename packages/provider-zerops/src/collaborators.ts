@@ -27,8 +27,6 @@ export interface ZeropsCollaborators {
 	api: ZeropsApi
 	/** Injected by the Zerops control composition; dry runs do not require it. */
 	source?: ZeropsSourceClient
-	/** Independently bounds best-effort source cancellation without delaying Zerops cleanup. */
-	sourceCancelSleep?: Sleeper
 	reconcileSchema: SchemaReconciler
 	sleep: Sleeper
 }

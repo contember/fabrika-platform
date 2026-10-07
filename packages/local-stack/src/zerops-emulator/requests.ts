@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { type ManagedRuntimeReference, readManagedRuntimeReferences } from './runtime-environment'
 
 export const importRequestSchema = z.object({ yaml: z.string() })
 export const triggerRequestSchema = z.object({ buildFromGit: z.string() })
@@ -10,17 +9,17 @@ const descriptorSchema = z.object({
 		setup: z.string(),
 		run: z.object({
 			ports: z.array(z.object({ httpSupport: z.boolean().optional() })).optional(),
-			envVariables: z.record(z.unknown()).optional(),
+			envVariables: z.record(z.string()).optional(),
 		}).optional(),
 	})),
 })
 
-export function readDescriptorRuntime(yaml: string, setup?: string): { hasHttpPorts: boolean; managedRuntimeReferences: ManagedRuntimeReference[] } {
+export function readDescriptorRuntime(yaml: string, setup?: string): { hasHttpPorts: boolean; runEnvVariables: Record<string, string> } {
 	const descriptor = descriptorSchema.parse(Bun.YAML.parse(yaml))
 	const selected = setup === undefined ? descriptor.zerops[0] : descriptor.zerops.find((entry) => entry.setup === setup)
 	return {
 		hasHttpPorts: selected?.run?.ports?.some((port) => port.httpSupport === true) ?? false,
-		managedRuntimeReferences: readManagedRuntimeReferences(selected?.run?.envVariables),
+		runEnvVariables: selected?.run?.envVariables ?? {},
 	}
 }
 export const userDataRequestSchema = z.object({

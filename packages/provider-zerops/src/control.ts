@@ -2,13 +2,13 @@ import type {
 	ControlProvider,
 	JsonValue,
 	ProviderApp,
+	ProviderCancelOutcome,
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
 	ProviderDeployOutcome,
 	ProviderEnvelope,
 	ProviderEnvironment,
-	ProviderReconcileInput,
 	ProviderReconcileOutcome,
 	ProviderRegistration,
 	ProviderRegistrationInput,
@@ -19,27 +19,12 @@ import type {
 } from '@fabrika/provider-contract'
 import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion, type ZeropsProcess } from './api'
+import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
-import { prepareZeropsDescriptor } from './descriptor'
-import { admitManagedEnvironment, confirmCodelessManagedService, confirmStagedManagedBinding } from './managed-environment/admission'
-import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoManagedReferences } from './managed-environment/authored'
-import { cleanupManagedReservation, isAbsentManagedVersion } from './managed-environment/cleanup'
-import { prepareManagedDescriptor } from './managed-environment/descriptor'
-import {
-	type ConfirmedManagedBinding,
-	encodeManagedCheckpoint,
-	MANAGED_ENVIRONMENT_MARKER,
-	type ManagedOwner,
-	parseManagedMarker,
-	parseManagedValues,
-	verifyManagedCheckpoint,
-} from './managed-environment/protocol'
-import { createManagedMarker } from './managed-environment/staging'
+import { assertAuthoredManagedInputs, assertAuthoredManagedName, parseManagedValues } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
 	type FabrikaManifest,
-	hashFabrikaManifest,
 	manifestServiceHostnames,
 	renderFabrikaImportYaml,
 	renderFabrikaProvisioningYaml,
@@ -53,7 +38,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
-import { createZeropsDeployer } from './provider'
+import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
 import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import {
 	normalizeZeropsSourceRepository,
@@ -63,6 +48,7 @@ import {
 	type ZeropsSourceResolveResult,
 } from './source'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
+import { deleteVersion, isVersionNotFound } from './version-attempt'
 
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
 export interface ZeropsStoredTarget {
@@ -112,7 +98,6 @@ export interface ZeropsControlProviderOptions {
 	readonly source: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
-	readonly sourceCancelSleep?: Sleeper
 	readonly beforeDeploy?: ZeropsBeforeDeploy
 	readonly namespaces?: {
 		readonly clientId: string
@@ -222,18 +207,21 @@ const privateBinding = (binding: ProviderSourceBinding | undefined): ZeropsSourc
 
 const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 
-const parseRunState = async (
-	input: { providerState?: JsonValue; externalId: string; runId: string; environment: ProviderEnvironment },
-): Promise<ZeropsRunState> => {
-	const state = await verifyManagedCheckpoint(input.providerState)
-	if (
-		state.appVersionId !== input.externalId || state.runId !== input.runId || state.appId !== input.environment.appId
-		|| state.environment !== input.environment.env
-	) {
-		throw new Error('Zerops managed checkpoint has different run coordinates')
-	}
-	return state
+const checkpointSchema = z.object({ appVersionId: z.string().min(1), triggered: z.boolean() }).strict()
+
+/** The run checkpoint (ADR-0044), or null for anything else — an older shape included. */
+export const parseZeropsCheckpoint = (value: unknown): ZeropsRunState | null => {
+	const result = checkpointSchema.safeParse(value)
+	return result.success ? result.data : null
 }
+
+/** The recorded checkpoint for exactly this run's external id, or null. */
+const runCheckpoint = (input: { providerState?: JsonValue; externalId: string }): ZeropsRunState | null => {
+	const checkpoint = parseZeropsCheckpoint(input.providerState)
+	return checkpoint !== null && checkpoint.appVersionId === input.externalId ? checkpoint : null
+}
+
+const pastDeadline = (startedAtMs: number | undefined): boolean => startedAtMs !== undefined && Date.now() > startedAtMs + ZEROPS_VERSION_DEADLINE_MS
 
 /** Build the complete Zerops lifecycle bundle without importing control-plane persistence. */
 export const createZeropsControlProvider = (options: ZeropsControlProviderOptions): ControlProvider => {
@@ -247,7 +235,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			return await api.getAppVersion(input)
 		} catch (error) {
 			input.signal.throwIfAborted()
-			if (!isAbsentManagedVersion(error)) throw error
+			if (!isVersionNotFound(error)) throw error
 			return null
 		}
 	}
@@ -256,7 +244,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return {
 			api,
 			source: options.source,
-			...(options.sourceCancelSleep === undefined ? {} : { sourceCancelSleep: options.sourceCancelSleep }),
 			reconcileSchema: options.reconcileSchema ?? defaults.reconcileSchema,
 			sleep: options.sleep ?? defaultSleep,
 		}
@@ -282,68 +269,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return artifact
 	}
 
-	const ownerFor = (environment: ProviderEnvironment, artifact: FabrikaManifest, serviceId: string): ManagedOwner => {
-		const { namespace, namespaceTarget } = decodeNamespace(environment)
-		if (namespaceTarget.projectId === undefined) throw new Error('Zerops managed environment requires a project')
-		return {
-			protocol: 1,
-			appId: environment.appId,
-			environment: environment.env,
-			namespaceId: namespace.id,
-			projectId: namespaceTarget.projectId,
-			serviceId,
-			hostname: artifact.target.deployService,
-		}
-	}
-	const admit = async (
-		owner: ManagedOwner,
-		signal: AbortSignal,
-		readRetainedCheckpoint?: (id: string) => Promise<JsonValue | null>,
-	): Promise<{ markerRecordId: string; binding: ConfirmedManagedBinding }> => {
-		signal.throwIfAborted()
-		const service = await api.getService({ serviceId: owner.serviceId, signal })
-		if (service.id !== owner.serviceId || service.projectId !== owner.projectId || service.name !== owner.hostname || !service.activeAppVersionId) {
-			throw new Error('Zerops managed service has missing or different coordinates')
-		}
-		signal.throwIfAborted()
-		const records = await api.listServiceEnv({ serviceId: owner.serviceId, signal })
-		const record = records.find((entry) => entry.key === MANAGED_ENVIRONMENT_MARKER)
-		if (record === undefined) throw new Error('Zerops legacy service has no managed-environment ownership marker')
-		const marker = parseManagedMarker(record.content)
-		if (service.activeAppVersionId === marker.initialCodelessAppVersionId) {
-			return admitManagedEnvironment({ owner, records, observedActiveAppVersionId: service.activeAppVersionId, prior: { kind: 'bootstrap' } })
-		}
-		if (readRetainedCheckpoint === undefined) throw new Error('Zerops managed deployment requires exact retained checkpoint lookup')
-		signal.throwIfAborted()
-		const checkpoint = await readRetainedCheckpoint(service.activeAppVersionId)
-		signal.throwIfAborted()
-		if (checkpoint === null) throw new Error('Zerops active version has no retained owned binding')
-		return admitManagedEnvironment({ owner, records, observedActiveAppVersionId: service.activeAppVersionId, prior: { kind: 'retained', checkpoint } })
-	}
-	const originalArtifact = async (environment: ProviderEnvironment, state: ZeropsRunState): Promise<FabrikaManifest> => {
-		const artifact = artifactFor(environment)
-		const placement = resolvedEnvironment(environment, { requireReady: false })
-		if (
-			placement.target.serviceId !== state.serviceId || placement.projectId !== state.projectId || placement.namespace.id !== state.namespaceId
-			|| artifact.target.deployService !== state.hostname || artifact.target.sourceDescriptor.sha256 !== state.descriptorSha256
-			|| await hashFabrikaManifest(artifact) !== state.originalArtifactSha256
-		) throw new Error('Zerops recovery artifact identity changed')
-		await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
-		if (prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup).setup !== state.setup) {
-			throw new Error('Zerops recovery setup changed')
-		}
-		return artifact
-	}
-	const cleanup = (state: ZeropsRunState, signal: AbortSignal): Promise<boolean> =>
-		cleanupManagedReservation({
-			api,
-			source: options.source,
-			runId: state.runId,
-			appVersionId: state.appVersionId,
-			signal,
-			sleep: options.sourceCancelSleep ?? defaultSleep,
-		})
-
 	/**
 	 * A variable written through the env API resolves `${host_KEY}` at container start like `run.envVariables`
 	 * does, across services whatever `envIsolation` says — so an unchecked secret reads the proxy's key.
@@ -359,15 +284,15 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 	}
 
 	const reconcileActiveSchema = async (
-		input: ProviderReconcileInput,
-		state: ZeropsRunState,
-		artifact: FabrikaManifest,
+		input: { environment: ProviderEnvironment; returnOrigins?: readonly string[] },
 		signal: AbortSignal,
 	): Promise<void> => {
+		const artifact = artifactFor(input.environment)
 		if (artifact.app.schema === undefined || options.propustkaUrl === undefined) return
+		const placement = resolvedEnvironment(input.environment, { requireReady: false })
 		const runtimeTarget: ZeropsRuntimeTarget = {
-			projectId: state.projectId,
-			serviceId: state.serviceId,
+			projectId: placement.projectId,
+			serviceId: placement.target.serviceId,
 			accessToken: options.accessToken,
 			...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 			propustkaUrl: options.propustkaUrl,
@@ -385,36 +310,17 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		})
 	}
 
-	const reconcileTriggered = async (
-		input: ProviderReconcileInput,
-		state: ZeropsRunState,
-		signal: AbortSignal,
-	): Promise<ProviderReconcileOutcome> => {
-		signal.throwIfAborted()
-		let version: ZeropsAppVersion | null
-		try {
-			version = await getVersion({ appVersionId: state.appVersionId, signal })
-		} catch {
-			signal.throwIfAborted()
-			return { state: 'running' }
-		}
-		if (version === null) return { state: 'failed' }
-		if (version.id !== state.appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== state.serviceId)) {
+	const assertVersionCoordinates = (environment: ProviderEnvironment, appVersionId: string, version: ZeropsAppVersion): void => {
+		const serviceId = decodeEnvironment(environment).target.serviceId
+		if (version.id !== appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== serviceId)) {
 			throw new Error('Zerops app-version response has different coordinates')
 		}
-		if (version.status === ZEROPS_ACTIVE) {
-			let artifact: FabrikaManifest
-			try {
-				artifact = await originalArtifact(input.environment, state)
-			} catch {
-				signal.throwIfAborted()
-				return { state: 'failed' }
-			}
-			await reconcileActiveSchema(input, state, artifact, signal)
-			return { state: 'succeeded' }
-		}
-		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'failed' }
-		return { state: 'running' }
+	}
+
+	/** Best-effort: a refused or slow cancel-build must not decide the outcome. */
+	const cancelBuildQuietly = async (appVersionId: string, signal: AbortSignal): Promise<void> => {
+		signal.throwIfAborted()
+		await api.cancelBuild({ appVersionId, signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) }).catch(() => {})
 	}
 
 	const resolveSource = async (input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution> => {
@@ -470,12 +376,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		resolveSource,
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
-			assertAuthoredManagedInputs({
-				variableNames: Object.keys(input.vars),
-				secretNames: Object.keys(input.secrets),
-				variableValues: input.vars,
-				secretValues: input.secrets,
-			})
+			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })
 			const managedEnvironment = parseManagedValues(input.managedEnvironment)
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
@@ -503,12 +404,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					...(binding === undefined ? {} : { privateBinding: binding }),
 				}
 			}
-			let managedAdmission: ZeropsRuntimeTarget['managedAdmission']
 			if (!input.dryRun) {
-				const owner = ownerFor(input.environment, artifact, placement.target.serviceId)
-				const admitted = await admit(owner, input.signal, input.readRetainedCheckpoint)
-				managedAdmission = { owner, markerRecordId: admitted.markerRecordId }
-				input.signal.throwIfAborted()
 				await options.beforeDeploy?.({
 					appId: input.app.id,
 					env: input.environment.env,
@@ -529,13 +425,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				projectId: placement.projectId,
 				serviceId: placement.target.serviceId,
 				accessToken: options.accessToken,
-				...(managedAdmission === undefined ? {} : { managedAdmission }),
 				...(source === undefined ? {} : { source }),
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
 				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
 			}
-			const accepted: { id?: string; state?: JsonValue } = {}
 			const result = await deployRun({
 				appId: input.app.id,
 				env: input.environment.env,
@@ -547,114 +441,88 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				artifact,
 				dryRun: input.dryRun,
 				signal: input.signal,
-				events: {
-					log: input.events.log,
-					externalId: async (id, state) => {
-						await input.events.externalId(id, state)
-						accepted.id = id
-						accepted.state = state
-					},
-					checkpoint: async (state) => {
-						await input.events.checkpoint(state)
-						accepted.state = state
-					},
-				},
+				events: input.events,
 			})
 			input.signal.throwIfAborted()
-			if (result.status === 'succeeded') return { state: 'succeeded' }
-			if (accepted.id === undefined) return { state: 'failed' }
-			try {
-				const reconcile = controlProvider.reconcile
-				if (reconcile === undefined) return { state: 'running' }
-				return await reconcile({
-					runId: input.runId,
-					externalId: accepted.id,
-					environment: input.environment,
-					signal: input.signal,
-					...(accepted.state === undefined ? {} : { providerState: accepted.state }),
-					...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
-					checkpoint: input.events.checkpoint,
-				})
-			} catch {
-				input.signal.throwIfAborted()
-				return { state: 'running' }
-			}
+			return { state: result.status }
 		},
-		cancel: async (input) => {
+		cancel: async (input): Promise<ProviderCancelOutcome> => {
 			const signal = input.signal
 			signal.throwIfAborted()
-			const state = await parseRunState(input)
-			if (state.phase === 'managed_env_staging' || state.phase === 'managed_env_staged' || state.phase === 'source_uploaded') {
-				return { state: await cleanup(state, signal) ? 'settled' : 'pending' }
+			const checkpoint = runCheckpoint(input)
+			if (checkpoint === null) return { state: 'settled', outcome: 'failed' }
+			if (!checkpoint.triggered) {
+				try {
+					await deleteVersion(api, checkpoint.appVersionId, signal)
+				} catch {
+					signal.throwIfAborted()
+					return { state: 'pending' }
+				}
+				return { state: 'settled', outcome: 'failed' }
 			}
-			let version = await getVersion({ appVersionId: state.appVersionId, signal })
-			if (version === null) return { state: 'settled' }
-			if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
-			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'settled' }
-			if (version.status === undefined || version.status === 'UPLOADING') return { state: 'pending' }
-			signal.throwIfAborted()
-			await api.cancelBuild({ appVersionId: state.appVersionId, signal })
-			version = await getVersion({ appVersionId: state.appVersionId, signal })
-			if (version === null) return { state: 'settled' }
-			if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
-			return { state: version.status !== undefined && ZEROPS_TERMINAL.has(version.status) ? 'settled' : 'pending' }
+			const version = await getVersion({ appVersionId: checkpoint.appVersionId, signal })
+			if (version === null) return { state: 'settled', outcome: 'failed' }
+			assertVersionCoordinates(input.environment, checkpoint.appVersionId, version)
+			// Cancellation never implies rollback: a version that activated first makes the run a success,
+			// which finishes the same IAM touchpoint a deploy does.
+			if (version.status === ZEROPS_ACTIVE) {
+				try {
+					await reconcileActiveSchema(input, signal)
+				} catch {
+					signal.throwIfAborted()
+					return { state: 'pending' }
+				}
+				return { state: 'settled', outcome: 'succeeded' }
+			}
+			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'settled', outcome: 'failed' }
+			await cancelBuildQuietly(checkpoint.appVersionId, signal)
+			// A build request that never landed leaves the version UPLOADING for good; the deadline settles it.
+			return pastDeadline(input.startedAtMs) ? { state: 'settled', outcome: 'failed' } : { state: 'pending' }
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
 			const signal = input.signal
 			signal.throwIfAborted()
-			const state = await parseRunState(input)
-			if (state.phase === 'managed_env_staging' || state.phase === 'managed_env_staged') {
-				return { state: await cleanup(state, signal) ? 'failed' : 'running' }
+			const log = async (line: string): Promise<void> => {
+				await input.log?.(line).catch(() => {})
 			}
-			if (state.phase === 'source_uploaded') {
-				let artifact: FabrikaManifest
-				try {
-					artifact = await originalArtifact(input.environment, state)
-					signal.throwIfAborted()
-					confirmStagedManagedBinding(state, await api.listServiceEnv({ serviceId: state.serviceId, signal }))
-				} catch {
-					signal.throwIfAborted()
-					return { state: await cleanup(state, signal) ? 'failed' : 'running' }
-				}
-				const requested: ZeropsRunState = { ...state, phase: 'build_trigger_requested' }
-				try {
-					signal.throwIfAborted()
-					await input.checkpoint(encodeManagedCheckpoint(requested))
-				} catch {
-					signal.throwIfAborted()
-					return { state: 'running' }
-				}
-				let process: ZeropsProcess
-				try {
-					signal.throwIfAborted()
-					const descriptor = prepareManagedDescriptor(artifact.target.sourceDescriptor.contents, state.setup, state.binding)
-					process = await api.buildAndDeployAppVersion({
-						appVersionId: state.appVersionId,
-						zeropsYaml: descriptor.contents,
-						zeropsYamlSetup: descriptor.setup,
-						signal,
-					})
-				} catch {
-					signal.throwIfAborted()
-					return reconcileTriggered(input, requested, signal)
-				}
-				const triggered: ZeropsRunState = { ...requested, phase: 'build_triggered', processId: process.id }
+			const checkpoint = runCheckpoint(input)
+			if (checkpoint === null) {
+				await log('unrecognised checkpoint; failing without platform calls')
+				return { state: 'failed' }
+			}
+			if (!checkpoint.triggered) {
+				// A throw keeps the run running; the next maintenance pass retries the deletion.
+				await deleteVersion(api, checkpoint.appVersionId, signal)
+				await log(`deleted app-version ${checkpoint.appVersionId}; its build was never requested`)
+				return { state: 'failed' }
+			}
+			let version: ZeropsAppVersion | null
+			try {
+				version = await getVersion({ appVersionId: checkpoint.appVersionId, signal })
+			} catch {
 				signal.throwIfAborted()
-				if (process.appVersionId !== undefined && process.appVersionId !== state.appVersionId) return { state: 'running' }
-				try {
-					await input.checkpoint(encodeManagedCheckpoint(triggered))
-				} catch {
-					signal.throwIfAborted()
-					return { state: 'running' }
-				}
-				return reconcileTriggered(input, triggered, signal)
+				if (!pastDeadline(input.startedAtMs)) return { state: 'running' }
+				await cancelBuildQuietly(checkpoint.appVersionId, signal)
+				await log(`abandoned app-version ${checkpoint.appVersionId}: its status stayed unobservable past the run deadline`)
+				return { state: 'failed' }
 			}
-			return reconcileTriggered(input, state, signal)
+			if (version === null) return { state: 'failed' }
+			assertVersionCoordinates(input.environment, checkpoint.appVersionId, version)
+			if (version.status === ZEROPS_ACTIVE) {
+				await reconcileActiveSchema(input, signal)
+				return { state: 'succeeded' }
+			}
+			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'failed' }
+			if (pastDeadline(input.startedAtMs)) {
+				await cancelBuildQuietly(checkpoint.appVersionId, signal)
+				await log(`abandoned non-terminal app-version ${checkpoint.appVersionId} (${version.status ?? 'unknown'})`)
+				return { state: 'failed' }
+			}
+			return { state: 'running' }
 		},
 		secrets: {
 			put: async (input) => {
 				assertAuthoredManagedName(input.name)
-				assertNoManagedReferences(input.value)
 				assertOwnReferencesOnly(input.environment, input.name, input.value)
 				const target = decodeEnvironment(input.environment).target
 				await api.putServiceEnv({
@@ -701,9 +569,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 							throw new Error(`Zerops registration found only ${present.length} of ${observed.length} declared services`)
 						}
 						const existingDeploy = observed.find((entry) => entry.hostname === manifest.target.deployService)?.service
-						if (present.length > 0) {
-							if (existingDeploy === null || existingDeploy === undefined) throw new Error('Zerops registration has no deploy service')
-							await admit(ownerFor(input.registration.environment, manifest, existingDeploy.id), input.signal, input.readRetainedCheckpoint)
+						if (present.length > 0 && (existingDeploy === null || existingDeploy === undefined)) {
+							throw new Error('Zerops registration has no deploy service')
 						}
 						input.signal.throwIfAborted()
 						// The first import refuses name collisions atomically, including services created after the lookup.
@@ -712,40 +579,21 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 							yaml: present.length === 0 ? renderFabrikaProvisioningYaml(manifest) : renderFabrikaImportYaml(manifest),
 							signal: input.signal,
 						})
-						const finishedProcesses: ZeropsProcess[] = []
 						for (const service of imported.services) {
 							for (const process of service.processes) {
-								finishedProcesses.push(
-									await waitForProcess({
-										api,
-										processId: process.id,
-										sleep: options.sleep ?? defaultSleep,
-										signal: input.signal,
-										label: `the ${service.name} import`,
-									}),
-								)
+								await waitForProcess({
+									api,
+									processId: process.id,
+									sleep: options.sleep ?? defaultSleep,
+									signal: input.signal,
+									label: `the ${service.name} import`,
+								})
 							}
 						}
 						const reported = imported.services.find((service) => service.name === manifest.target.deployService)
 						const discovered = present.length === 0 ? reported : existingDeploy
 						if (discovered === null || discovered === undefined || discovered.id === '') {
 							throw new Error(`Zerops import did not create deploy service \`${manifest.target.deployService}\``)
-						}
-						if (present.length === 0) {
-							input.signal.throwIfAborted()
-							const service = await api.getService({ serviceId: discovered.id, signal: input.signal })
-							const owner = ownerFor(input.registration.environment, manifest, discovered.id)
-							const creation = confirmCodelessManagedService({
-								owner,
-								imported,
-								finishedProcesses,
-								service,
-								provisioningDocument: {
-									...manifest.target.importDocument,
-									services: manifest.target.importDocument.services.map((entry) => ({ ...entry, override: false, startWithoutCode: true })),
-								},
-							})
-							await createManagedMarker({ api, owner, creation, signal: input.signal, sleep: options.sleep ?? defaultSleep })
 						}
 						return normalizeRegistration({
 							app: input.registration.app,

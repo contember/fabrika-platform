@@ -5,7 +5,7 @@ import { normalizeGateRule, proxyGateRuleFieldsSchema } from '@fabrika/proxy-con
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
-import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-environment/authored'
+import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-env'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 

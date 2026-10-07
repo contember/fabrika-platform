@@ -3,9 +3,9 @@ import type { JsonValue, ProviderEnvelope } from './json'
 /** Events whose persistence and presentation belong to the control plane. */
 export interface ProviderRunEvents {
 	log(line: string): void
-	/** Atomically persist the external operation id and, when supplied, its credential-free resume state. */
+	/** Atomically persist the external operation id and, when supplied, its credential-free checkpoint. */
 	externalId(id: string, state?: JsonValue): Promise<void>
-	/** Replace the credential-free resume state while this run remains active. */
+	/** Replace the credential-free checkpoint while this run remains active. */
 	checkpoint(state: JsonValue): Promise<void>
 }
 
@@ -116,8 +116,6 @@ export interface ProviderDeployInput {
 	}
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
-	/** Read retained state for one exact external version, scoped by Control to this app/environment. */
-	readonly readRetainedCheckpoint?: (externalId: string) => Promise<JsonValue | null>
 }
 
 /** A terminal provider operation result. */
@@ -131,8 +129,8 @@ export interface ProviderTerminalOutcome {
 /** Running means external settlement is unresolved, including an ambiguous submission response. */
 export type ProviderDeployOutcome = ProviderTerminalOutcome | { readonly state: 'running' }
 
-/** Settled does not imply rollback: activation may have won before cancellation. */
-export type ProviderCancelOutcome = { readonly state: 'pending' } | { readonly state: 'settled' }
+/** Settled does not imply rollback: when activation won before cancellation, `outcome` is `succeeded`. */
+export type ProviderCancelOutcome = { readonly state: 'pending' } | { readonly state: 'settled'; readonly outcome?: 'succeeded' | 'failed' }
 
 /** Losing invocation ownership must never be interpreted as permission to cancel external work. */
 export class ProviderInvocationAbort extends Error {
@@ -147,20 +145,22 @@ export interface ProviderRunReference {
 	readonly runId: string
 	readonly externalId: string
 	readonly environment: ProviderEnvironment
-	/** Credential-free provider-owned progress needed to resume the external operation. */
+	/** Credential-free provider-owned checkpoint recorded by the run's last owner. */
 	readonly providerState?: JsonValue
+	/** When the run started (`started_at`, else `created_at`), in epoch milliseconds; bounds how long a provider polls. */
+	readonly startedAtMs?: number
 }
 
 export interface ProviderCancelInput extends ProviderRunReference {
 	readonly signal: AbortSignal
+	/** See `ProviderDeployInput.returnOrigins`; a cancel that settles an activated deploy projects the same set. */
+	readonly returnOrigins?: readonly string[]
 }
 
 export interface ProviderReconcileInput extends ProviderRunReference {
 	readonly signal: AbortSignal
-	/** See `ProviderDeployInput.returnOrigins`; a provider that finishes a resumed deploy projects the same set. */
+	/** See `ProviderDeployInput.returnOrigins`; a provider that settles a deploy here projects the same set. */
 	readonly returnOrigins?: readonly string[]
-	/** Persist a credential-free recovery checkpoint before the next irreversible provider call. */
-	checkpoint(state: JsonValue): Promise<void>
 	/** Append a line to the run's log. */
 	log?(line: string): Promise<void>
 }
@@ -241,8 +241,6 @@ export interface ProviderNamespaceMutationInput {
 
 /** One registration whose provider coordinates do not exist until namespace services are prepared. */
 export interface ProviderRegistrationPreparationInput {
-	/** Historical state is scoped to the requested registration's app/environment. */
-	readonly readRetainedCheckpoint?: (externalId: string) => Promise<JsonValue | null>
 	readonly registration: ProviderRegistration
 	readonly signal: AbortSignal
 }

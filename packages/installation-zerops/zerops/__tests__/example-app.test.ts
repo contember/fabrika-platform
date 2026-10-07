@@ -35,7 +35,6 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseZeropsDescriptor } from '../../../provider-zerops/src/descriptor'
-import { hashFabrikaManifest } from '../../../provider-zerops/src/manifest'
 import { REPO_ROOT } from '../artifacts'
 import { assertOnlyPublicService, assertZeropsHostnames } from '../invariants'
 import { validateYaml } from '../validate'
@@ -112,14 +111,7 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		listProjects: () => Promise.resolve(record('listProjects', [])),
 		findProjects: () => Promise.resolve(record('findProjects', [])),
 		listProjectServices: () => Promise.resolve(record('listProjectServices', [])),
-		listServiceEnv: () =>
-			Promise.resolve(record('listServiceEnv', [{
-				id: 'marker-1',
-				key: 'FABRIKA_MENV_PROTOCOL',
-				content: JSON.stringify({ ...MANAGED_OWNER, creationProcessId: 'creation-1', initialCodelessAppVersionId: 'bootstrap-1' }),
-				sensitive: true,
-				type: 'USER',
-			}])),
+		listServiceEnv: () => Promise.resolve(record('listServiceEnv', [])),
 		createServiceEnv: () => Promise.resolve(record('createServiceEnv', undefined)),
 		putServiceEnv: () => Promise.resolve(record('putServiceEnv', undefined)),
 		deleteServiceEnv: () => Promise.resolve(record('deleteServiceEnv', undefined)),
@@ -190,15 +182,6 @@ const TARGET: ZeropsRuntimeTarget = {
 	adminKey: 'px_admin_placeholder',
 }
 
-const MANAGED_OWNER: NonNullable<ZeropsRuntimeTarget['managedAdmission']>['owner'] = {
-	protocol: 1,
-	appId: NOTES_APP_ID,
-	environment: 'prod',
-	namespaceId: 'namespace-apps-prod',
-	projectId: TARGET.projectId,
-	serviceId: TARGET.serviceId,
-	hostname: NOTES_SERVICE,
-}
 const SOURCE_CONTENTS = readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8')
 const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(SOURCE_CONTENTS)
 const MANIFEST = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
@@ -263,7 +246,6 @@ const deployExample = (
 		deploy(
 			makeRun(recorded, {
 				...TARGET,
-				managedAdmission: { owner: MANAGED_OWNER, markerRecordId: 'marker-1' },
 				source: { runId: RUN_ID, repository: REPOSITORY, commitSha: resolved.commitSha },
 			}, overrides),
 		)
@@ -347,7 +329,15 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	test('the plan is Zerops-shaped: no build, no migrate, no sync-secrets', async () => {
 		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		expect(result.status).toBe('succeeded')
-		expect(result.steps.map((step) => step.id)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
+		expect(result.steps.map((step) => step.id)).toEqual([
+			'apply-import',
+			'write-service-env',
+			'reserve-version',
+			'upload-source',
+			'trigger-build',
+			'await-version',
+			'reconcile-schema',
+		])
 	})
 
 	test('not one collaborator call is made', async () => {
@@ -356,13 +346,17 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		expect(rec.calls).toEqual([])
 	})
 
-	test('the narrative names all four effects, in order', async () => {
+	test('the narrative names every effect, in order', async () => {
 		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		expect(result.status).toBe('succeeded')
 		const narrative = rec.logs.filter((line) => line.includes('[dry-run]')).map((line) => line.trim())
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
-			`[dry-run] would create an app version, upload the resolved repository snapshot, and trigger build+deploy for service ${TARGET.serviceId}`,
+			`[dry-run] would write service variables on ${TARGET.serviceId}: (none)`,
+			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
+			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
+			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
+			'[dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor',
 			'[dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log',
 			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}\` against https://iam.example.test`,
 		])
@@ -393,12 +387,13 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			'sourceResolve',
 			// 2. apply the import (`override: true` makes re-applying safe).
 			'importServices',
-			// 3. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
+			// 3. write the managed service variables, read once.
+			'listServiceEnv',
+			// 4. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
 			'createAppVersion',
 			'sourceUpload',
-			'listServiceEnv',
 			'buildAndDeployAppVersion',
-			// 4-N. Watch it. Build and deploy are ONE platform-side operation.
+			// 5-N. Watch it. Build and deploy are ONE platform-side operation.
 			'getLogAccess',
 			'getProcess',
 			'getAppVersion',
@@ -424,31 +419,8 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		}])
 		assertSubmittedDescriptor(rec)
 		expect(rec.externalIds).toEqual(['ver-1'])
-		const checkpoint = {
-			...MANAGED_OWNER,
-			markerRecordId: 'marker-1',
-			runId: RUN_ID,
-			appVersionId: 'ver-1',
-			originalArtifactSha256: await hashFabrikaManifest(MANIFEST),
-			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
-			setup: NOTES_SERVICE,
-			sourceCommitSha: COMMIT_SHA,
-			binding: {
-				FABRIKA_RELEASE: { state: 'absent' },
-				FABRIKA_OPERATIONS_DSN: { state: 'absent' },
-				FABRIKA_IAM_ISSUER: { state: 'absent' },
-				FABRIKA_APP_ID: { state: 'absent' },
-				FABRIKA_ENVIRONMENT: { state: 'absent' },
-				FABRIKA_SERVICE_KEY: { state: 'absent' },
-			},
-		}
-		expect(rec.externalStates).toEqual([{ ...checkpoint, phase: 'managed_env_staging' }])
-		expect(rec.checkpoints).toEqual([
-			{ ...checkpoint, phase: 'managed_env_staged' },
-			{ ...checkpoint, phase: 'source_uploaded' },
-			{ ...checkpoint, phase: 'build_trigger_requested' },
-			{ ...checkpoint, phase: 'build_triggered', processId: 'proc-1' },
-		])
+		expect(rec.externalStates).toEqual([{ appVersionId: 'ver-1', triggered: false }])
+		expect(rec.checkpoints).toEqual([{ appVersionId: 'ver-1', triggered: true }])
 	})
 
 	test('the import goes to the project the REGISTRY named, and carries the compiled document', async () => {

@@ -86,6 +86,39 @@ describe('reconcileProviderRuns', () => {
 		expect(new Set(released).size).toBe(2)
 	})
 
+	test('a cancellation the provider settles as succeeded finishes the run succeeded, with the run start and return origins handed over', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
+		await db.runs.createRun({ id: 'activated', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted('activated', 'runs/activated/logs.ndjson')
+		await db.runs.setRunExternalId('activated', 'operation', { appVersionId: 'operation', triggered: true })
+		await db.runs.beginRunCancellation('activated')
+		const started = (await db.runs.getRun('activated'))?.started_at
+		const startedAtMs: Array<number | undefined> = []
+		const returnOrigins: Array<readonly string[] | undefined> = []
+
+		expect(
+			await reconcileProviderRuns({
+				repositories: db,
+				provider: {
+					id: TEST_PROVIDER_ID,
+					normalizeRegistration: (input) => input,
+					deploy: () => Promise.resolve({ state: 'succeeded' }),
+					cancel: (input) => {
+						startedAtMs.push(input.startedAtMs)
+						returnOrigins.push(input.returnOrigins)
+						return Promise.resolve({ state: 'settled', outcome: 'succeeded' })
+					},
+				},
+				lock: makeFakeLock(db),
+			}),
+		).toMatchObject({ checked: 1, succeeded: 1, failed: 0 })
+		expect((await db.runs.getRun('activated'))?.status).toBe('succeeded')
+		expect(startedAtMs).toEqual([(started ?? 0) * 1000])
+		expect(returnOrigins).toEqual([['https://app.example.test']])
+	})
+
 	test('hands persisted provider checkpoint state to reconciliation', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
@@ -111,34 +144,6 @@ describe('reconcileProviderRuns', () => {
 			}),
 		).toMatchObject({ checked: 1, inProgress: 1 })
 		expect(states).toEqual([{ appVersionId: 'version-1', phase: 'uploaded' }])
-	})
-
-	test('persists provider reconciliation checkpoints before returning control', async () => {
-		const { db } = createHarness()
-		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
-		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('resumed', 'runs/resumed/logs.ndjson')
-		await db.runs.setRunExternalId('resumed', 'operation', { phase: 'source_uploaded' })
-
-		await reconcileProviderRuns({
-			repositories: db,
-			provider: {
-				id: TEST_PROVIDER_ID,
-				normalizeRegistration: (input) => input,
-				deploy: () => Promise.resolve({ state: 'succeeded' }),
-				reconcile: async (input) => {
-					await input.checkpoint({ phase: 'build_trigger_requested', appVersionId: input.externalId })
-					return { state: 'running' }
-				},
-			},
-			lock: makeFakeLock(db),
-		})
-
-		expect(JSON.parse((await db.runs.getRun('resumed'))?.provider_state_json ?? '')).toEqual({
-			phase: 'build_trigger_requested',
-			appVersionId: 'operation',
-		})
 	})
 
 	test('finishes terminal operations through a third provider and leaves pending work untouched', async () => {

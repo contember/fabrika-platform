@@ -14,15 +14,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
-import {
-	encodeManagedCheckpoint,
-	type ManagedCheckpoint,
-	type ManagedOwner,
-	managedReferenceNames,
-	mapManagedKeys,
-	serializeManagedMarker,
-	verifyManagedCheckpoint,
-} from '../managed-environment/protocol'
+import type { ManagedValues } from '../managed-env'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
@@ -36,16 +28,6 @@ import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
 import type { ZeropsAppConfig } from '../types'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
-
-const managedOwner: ManagedOwner = {
-	protocol: 1,
-	appId: 'notes',
-	environment: 'prod',
-	namespaceId: 'apps-prod',
-	projectId: 'project-1',
-	serviceId: 'service-1',
-	hostname: 'notes',
-}
 
 interface Recorded {
 	calls: string[]
@@ -79,20 +61,15 @@ const config: ZeropsAppConfig = {
 
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
-const checkpointFor = async (phase: ManagedCheckpoint['phase'], candidate = config, processId?: string): Promise<JsonValue> =>
-	encodeManagedCheckpoint({
-		...managedOwner,
-		runId: 'run-1',
-		appVersionId: 'version-1',
-		markerRecordId: 'marker-1',
-		originalArtifactSha256: await hashFabrikaManifest(compileFabrikaManifest(candidate, 'prod', SOURCE_DESCRIPTOR)),
-		descriptorSha256: SOURCE_DESCRIPTOR.sha256,
-		setup: 'api',
-		sourceCommitSha: COMMIT_SHA,
-		binding: mapManagedKeys(() => ({ state: 'absent' })),
-		phase,
-		...(processId === undefined ? {} : { processId }),
-	})
+const NO_MANAGED_VALUES: ManagedValues = {
+	FABRIKA_RELEASE: null,
+	FABRIKA_OPERATIONS_DSN: null,
+	FABRIKA_IAM_ISSUER: null,
+	FABRIKA_APP_ID: null,
+	FABRIKA_ENVIRONMENT: null,
+	FABRIKA_SERVICE_KEY: null,
+}
+const checkpointFor = (triggered: boolean): JsonValue => ({ appVersionId: 'version-1', triggered })
 const PROXY_SOURCE = {
 	repository: { owner: 'example', name: 'platform' },
 	commitSha: COMMIT_SHA,
@@ -149,7 +126,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	environment: environment(),
 	secrets: {},
 	vars: {},
-	managedEnvironment: mapManagedKeys(() => null),
+	managedEnvironment: NO_MANAGED_VALUES,
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -167,17 +144,8 @@ const makeApi = (
 	recorded: Recorded,
 	status: () => ZeropsAppVersionStatus | undefined = () => 'ACTIVE',
 	freshService = false,
-	owner = managedOwner,
 ): ZeropsApi => {
 	const records: ZeropsServiceEnv[] = [{ id: 'env-1', key: 'TOKEN', content: 'blurred' }]
-	if (!freshService) {
-		records.push({
-			id: 'marker-1',
-			key: 'FABRIKA_MENV_PROTOCOL',
-			content: serializeManagedMarker({ ...owner, creationProcessId: 'creation-1', initialCodelessAppVersionId: 'bootstrap-1' }),
-			sensitive: true,
-		})
-	}
 	const deleted = new Set<string>()
 	return {
 		importServices: async ({ projectId, yaml }) => {
@@ -213,6 +181,7 @@ const makeApi = (
 		},
 		deleteAppVersion: async ({ appVersionId }) => {
 			recorded.calls.push(`deleteAppVersion:${appVersionId}`)
+			if (deleted.has(appVersionId)) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
 			deleted.add(appVersionId)
 		},
 		getAppVersion: async ({ appVersionId }) => {
@@ -237,17 +206,15 @@ const makeApi = (
 		enableSubdomainAccess: async ({ serviceId }) => {
 			recorded.calls.push(`enableSubdomainAccess:${serviceId}`)
 		},
-		getService: async ({ serviceId }) => ({ id: serviceId, name: owner.hostname, projectId: owner.projectId, activeAppVersionId: 'bootstrap-1' }),
+		getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes', projectId: 'project-1', activeAppVersionId: 'bootstrap-1' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),
 		listProjects: async () => [],
 		findProjects: async () => [],
 		listProjectServices: async () => [],
 		listServiceEnv: async () => records.map((record) => ({ ...record })),
-		createServiceEnv: async ({ serviceId, key, value }) => {
-			if (records.some((record) => record.key === key)) throw new ZeropsApiError('duplicate', 400, 'userDataDuplicateKey')
-			records.push({ id: `created-${records.length}`, key, content: value, sensitive: true, type: 'USER' })
-			recorded.envWrites.push({ serviceId, key, value })
+		createServiceEnv: async () => {
+			throw new Error('the control provider writes service variables only through putServiceEnv')
 		},
 		putServiceEnv: async ({ serviceId, key, value }) => {
 			recorded.envWrites.push({ serviceId, key, value })
@@ -496,11 +463,8 @@ describe('Zerops ControlProvider registration', () => {
 		expect(recorded.imports[0]?.projectId).toBe('project-1')
 		expect(recorded.imports[0]?.yaml).toContain('startWithoutCode: true')
 		expect(recorded.imports[0]?.yaml).toContain('override: false')
-		const marker = recorded.envWrites.find((entry) => entry.key === 'FABRIKA_MENV_PROTOCOL')
-		if (marker === undefined) throw new Error('missing ownership marker')
-		expect(marker.value).toContain('bootstrap-1')
+		expect(recorded.envWrites).toEqual([])
 		expect(await control.deploy({ ...deployInput(recorded), environment: prepared.environment })).toEqual({ state: 'succeeded' })
-		expect(recorded.envWrites.filter((entry) => entry.key === 'FABRIKA_MENV_PROTOCOL')).toEqual([marker])
 	})
 
 	test('refuses an import collision after an absent lookup without retrying or adopting the raced service', async () => {
@@ -920,176 +884,16 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(input.environment.artifact.payload).toEqual(originalPayload)
 		expect(separatelyNormalizedArtifact.payload).toEqual(originalPayload)
 		expect(recorded.imports[0]?.yaml).toBe(renderFabrikaImportYaml(manifest))
-		const state = await verifyManagedCheckpoint(checkpoint)
-		expect(state.originalArtifactSha256).toBe(originalHash)
-		expect(state.descriptorSha256).toBe(SOURCE_DESCRIPTOR.sha256)
+		expect(checkpoint).toEqual({ appVersionId: 'version-1', triggered: true })
 	})
-	for (const active of ['older-version', 'all-absent-version']) {
-		test(`admits exact retained ${active} after rollback without selecting the latest run`, async () => {
-			const base = makeApi(recorded)
-			const checkpoint = await verifyManagedCheckpoint(await checkpointFor('build_triggered'))
-			const lookups: string[] = []
-			const control = createTestControlProvider({
-				accessToken: 'token',
-				api: {
-					...base,
-					getService: async (input) => ({ ...await base.getService(input), activeAppVersionId: active }),
-				},
-			})
-			expect(
-				await control.deploy({
-					...deployInput(recorded),
-					readRetainedCheckpoint: async (id) => {
-						lookups.push(id)
-						return encodeManagedCheckpoint({ ...checkpoint, appVersionId: active, runId: 'historical-run' })
-					},
-				}),
-			).toEqual({ state: 'succeeded' })
-			expect(lookups).toEqual([active])
-			expect(recorded.envWrites).toEqual([])
-		})
-	}
-
-	for (const fault of ['missing-marker', 'literal-canonical', 'missing-history', 'wrong-history']) {
-		test(`refuses ${fault} before hooks, import, reservation, or managed writes`, async () => {
-			const base = makeApi(recorded)
-			const control = createTestControlProvider({
-				accessToken: 'token',
-				api: {
-					...base,
-					getService: async (input) => ({
-						...await base.getService(input),
-						activeAppVersionId: fault.includes('history') ? 'old-version' : 'bootstrap-1',
-					}),
-					listServiceEnv: async (input) =>
-						fault === 'missing-marker'
-							? []
-							: [
-								...await base.listServiceEnv(input),
-								...(fault === 'literal-canonical' ? [{ id: 'literal', key: 'FABRIKA_RELEASE', content: 'unsafe-literal' }] : []),
-							],
-				},
-				beforeDeploy: async () => {
-					recorded.beforeDeploy.push('called')
-				},
-			})
-			await expect(
-				control.deploy({
-					...deployInput(recorded),
-					...(fault === 'wrong-history'
-						? { readRetainedCheckpoint: async () => checkpointFor('build_triggered') }
-						: {}),
-				}),
-			).rejects.toThrow()
-			expect(recorded.calls).toEqual([])
-			expect(recorded.envWrites).toEqual([])
-			expect(recorded.beforeDeploy).toEqual([])
-		})
-	}
-
-	test('observes frozen submitted coordinates after artifact drift without reconciling the replacement schema', async () => {
-		let status: ZeropsAppVersionStatus = 'BUILDING'
-		const control = createTestControlProvider({
-			accessToken: 'token',
-			propustkaUrl: 'https://iam.test',
-			api: makeApi(recorded, () => status),
-			reconcileSchema: async () => {
-				recorded.calls.push('schema')
-			},
-		})
-		if (control.reconcile === undefined) throw new Error('missing reconcile')
-		const changed = compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)
-		const input = {
-			runId: 'run-1',
-			externalId: 'version-1',
-			providerState: await checkpointFor('build_trigger_requested'),
-			signal: new AbortController().signal,
-			checkpoint: async () => {},
-			environment: environment({ artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(changed) } }),
-		}
-		expect(await control.reconcile(input)).toEqual({ state: 'running' })
-		status = 'ACTIVE'
-		expect(await control.reconcile(input)).toEqual({ state: 'failed' })
-		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
-	})
-
-	test('recovery refuses pending staging without reading any current secret catalog or submitting', async () => {
-		const checkpoint = await verifyManagedCheckpoint(await checkpointFor('managed_env_staging'))
-		const names = await managedReferenceNames(checkpoint)
-		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
-		if (control.reconcile === undefined) throw new Error('missing reconcile')
-		expect(
-			await control.reconcile({
-				runId: 'run-1',
-				externalId: 'version-1',
-				environment: environment(),
-				signal: new AbortController().signal,
-				checkpoint: async () => {
-					throw new Error('must not advance')
-				},
-				providerState: encodeManagedCheckpoint({
-					...checkpoint,
-					phase: 'managed_env_staging',
-					binding: { ...checkpoint.binding, FABRIKA_RELEASE: { state: 'pending', referenceName: names.FABRIKA_RELEASE } },
-				}),
-			}),
-		).toEqual({ state: 'failed' })
-		expect(recorded.calls).toEqual(['deleteAppVersion:version-1', 'getAppVersion:version-1'])
-		expect(recorded.envWrites).toEqual([])
-	})
-
-	for (const name of ['FABRIKA_MENV_PROTOCOL', 'FABRIKA_MENV_CUSTOM', 'FABRIKA_RELEASE']) {
+	for (const name of ['FABRIKA_RELEASE', 'FABRIKA_SERVICE_KEY']) {
 		test(`refuses reserved secret ${name} on put and delete before mutation`, async () => {
 			const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
 			if (control.secrets === undefined) throw new Error('missing secrets')
-			await expect(control.secrets.put({ environment: environment(), name, value: 'secret' })).rejects.toThrow('managed-environment')
-			await expect(control.secrets.delete({ environment: environment(), name })).rejects.toThrow('managed-environment')
+			await expect(control.secrets.put({ environment: environment(), name, value: 'secret' })).rejects.toThrow('Fabrika-managed')
+			await expect(control.secrets.delete({ environment: environment(), name })).rejects.toThrow('Fabrika-managed')
 			expect(recorded.envWrites).toEqual([])
 			expect(recorded.envDeletes).toEqual([])
-		})
-	}
-
-	for (const failure of ['upload', 'rejected-trigger', 'ambiguous-trigger']) {
-		test(`stateful cleanup settles ${failure} only when the external version is confirmed absent`, async () => {
-			let exists = true
-			let deletes = 0
-			let submissions = 0
-			const absent = () => new ZeropsApiError('version absent', 400, 'appVersionNotFound')
-			const api: ZeropsApi = {
-				...makeApi(recorded),
-				deleteAppVersion: async () => {
-					if (!exists) throw absent()
-					exists = false
-					deletes++
-				},
-				getAppVersion: async ({ appVersionId }) => {
-					if (!exists) throw absent()
-					return { id: appVersionId, status: 'UPLOADING' }
-				},
-				buildAndDeployAppVersion: async () => {
-					submissions++
-					if (failure === 'rejected-trigger') throw new ZeropsApiError('rejected', 400, 'invalidDescriptor')
-					throw new Error('lost response')
-				},
-			}
-			const source = makeSource()
-			const control = createTestControlProvider({
-				accessToken: 'token',
-				api,
-				source: {
-					...source,
-					upload: async (input) => {
-						if (failure === 'upload') throw new Error('upload failed')
-						return source.upload(input)
-					},
-				},
-				sleep: async () => {
-					if (failure !== 'upload') throw new Error('poll budget exhausted')
-				},
-			})
-			expect(await control.deploy(deployInput(recorded))).toEqual({ state: failure === 'upload' ? 'failed' : 'running' })
-			expect(deletes).toBe(failure === 'upload' ? 1 : 0)
-			expect(submissions).toBe(failure === 'upload' ? 0 : 1)
 		})
 	}
 
@@ -1112,8 +916,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 					externalId: 'version-1',
 					environment: environment(),
 					signal: new AbortController().signal,
-					providerState: await checkpointFor('build_trigger_requested'),
-					checkpoint: async () => {},
+					providerState: checkpointFor(true),
 				}),
 			).toEqual({ state: 'running' })
 		})
@@ -1136,8 +939,9 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await expect(control.deploy({ ...deployInput(recorded), signal: controller.signal })).rejects.toBe(reason)
 		expect(recorded.calls).toEqual(['importServices', 'createAppVersion:service-1'])
 		expect(sourceCalls).toEqual([])
+		expect(recorded.envWrites).toEqual([])
 	})
-	test('a cancel acknowledgement stays pending until the version itself settles, including activation winning the race', async () => {
+	test('cancelling a triggered build stays pending until the version settles, and activation winning makes it a success', async () => {
 		let status: ZeropsAppVersionStatus = 'BUILDING'
 		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded, () => status) })
 		if (control.cancel === undefined) throw new Error('missing cancellation')
@@ -1146,25 +950,110 @@ describe('Zerops ControlProvider lifecycle', () => {
 			externalId: 'version-1',
 			environment: environment(),
 			signal: new AbortController().signal,
-			providerState: await checkpointFor('build_triggered'),
+			providerState: checkpointFor(true),
+			startedAtMs: Date.now(),
 		}
 		expect(await control.cancel(input)).toEqual({ state: 'pending' })
-		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'cancelBuild:version-1', 'getAppVersion:version-1'])
+		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'cancelBuild:version-1'])
 		status = 'ACTIVE'
-		expect(await control.cancel(input)).toEqual({ state: 'settled' })
+		expect(await control.cancel(input)).toEqual({ state: 'settled', outcome: 'succeeded' })
+		status = 'CANCELLED'
+		expect(await control.cancel(input)).toEqual({ state: 'settled', outcome: 'failed' })
 		expect(recorded.calls.filter((call) => call.startsWith('cancelBuild'))).toHaveLength(1)
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
 	})
 
-	test('a failed deploy wait with durable submission intent remains unresolved while UPLOADING', async () => {
+	test('a cancel that finds the version activated reconciles the schema before settling succeeded', async () => {
+		let schemaFails = true
+		const reconciled: Array<readonly string[] | undefined> = []
 		const control = createTestControlProvider({
 			accessToken: 'token',
-			api: { ...makeApi(recorded, () => 'UPLOADING'), getProcess: async ({ processId }) => ({ id: processId, status: 'FAILED' }) },
-			sleep: async () => {},
+			propustkaUrl: 'https://iam.test',
+			api: makeApi(recorded, () => 'ACTIVE'),
+			reconcileSchema: async ({ returnOrigins }) => {
+				reconciled.push(returnOrigins)
+				if (schemaFails) throw new Error('iam unavailable')
+			},
 		})
-		expect(await control.deploy(deployInput(recorded))).toEqual({ state: 'running' })
-		expect(recorded.logs).toContain('✗ await-deploy: zerops: pipeline process process-1 is FAILED while app-version version-1 is UPLOADING')
-		expect(recorded.calls.slice(-2)).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
-		recorded.calls = []
+		if (control.cancel === undefined) throw new Error('missing cancellation')
+		const input = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			signal: new AbortController().signal,
+			providerState: checkpointFor(true),
+			returnOrigins: ['https://notes.example.test'],
+			environment: environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)),
+				},
+			}),
+		}
+		expect(await control.cancel(input)).toEqual({ state: 'pending' })
+		schemaFails = false
+		expect(await control.cancel(input)).toEqual({ state: 'settled', outcome: 'succeeded' })
+		expect(reconciled).toEqual([['https://notes.example.test'], ['https://notes.example.test']])
+		expect(recorded.calls).not.toContain('cancelBuild:version-1')
+	})
+
+	test('a cancel during deploy that lands after the triggered checkpoint still sends the build, and cancel() then stops it', async () => {
+		const controller = new AbortController()
+		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded, () => 'BUILDING'), sleep: async () => {} })
+		if (control.cancel === undefined) throw new Error('missing cancellation')
+		const input = deployInput(recorded)
+		await expect(control.deploy({
+			...input,
+			signal: controller.signal,
+			events: {
+				...input.events,
+				checkpoint: async () => {
+					controller.abort(new ProviderInvocationAbort('cancel_requested'))
+				},
+			},
+		})).rejects.toBeInstanceOf(ProviderInvocationAbort)
+		await new Promise((resolve) => setTimeout(resolve, 0))
+		expect(recorded.calls).toContain('buildAndDeployAppVersion:version-1')
+		expect(
+			await control.cancel({
+				runId: 'run-1',
+				externalId: 'version-1',
+				environment: environment(),
+				signal: new AbortController().signal,
+				providerState: checkpointFor(true),
+				startedAtMs: Date.now(),
+			}),
+		).toEqual({ state: 'pending' })
+		expect(recorded.calls.slice(-2)).toEqual(['getAppVersion:version-1', 'cancelBuild:version-1'])
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+	})
+
+	test('cancelling before the build request deletes the exact version and settles failed', async () => {
+		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
+		if (control.cancel === undefined) throw new Error('missing cancellation')
+		const input = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			signal: new AbortController().signal,
+			providerState: checkpointFor(false),
+		}
+		expect(await control.cancel(input)).toEqual({ state: 'settled', outcome: 'failed' })
+		// A version already gone counts as deleted.
+		expect(await control.cancel(input)).toEqual({ state: 'settled', outcome: 'failed' })
+		expect(recorded.calls).toEqual(['deleteAppVersion:version-1', 'deleteAppVersion:version-1'])
+	})
+
+	test('cancelling before the build request stays pending when the deletion fails', async () => {
+		const control = createTestControlProvider({
+			accessToken: 'token',
+			api: {
+				...makeApi(recorded),
+				deleteAppVersion: async () => {
+					throw new ZeropsApiError('zerops: delete app-version failed (500)', 500, '')
+				},
+			},
+		})
 		if (control.cancel === undefined) throw new Error('missing cancellation')
 		expect(
 			await control.cancel({
@@ -1172,11 +1061,34 @@ describe('Zerops ControlProvider lifecycle', () => {
 				externalId: 'version-1',
 				environment: environment(),
 				signal: new AbortController().signal,
-				providerState: await checkpointFor('build_trigger_requested'),
+				providerState: checkpointFor(false),
 			}),
 		).toEqual({ state: 'pending' })
-		expect(recorded.calls).toEqual(['getAppVersion:version-1'])
 	})
+
+	test('a failed pipeline process fails the deploy, and a cancel of a version stuck UPLOADING settles at the deadline', async () => {
+		const control = createTestControlProvider({
+			accessToken: 'token',
+			api: { ...makeApi(recorded, () => 'UPLOADING'), getProcess: async ({ processId }) => ({ id: processId, status: 'FAILED' }) },
+			sleep: async () => {},
+		})
+		expect(await control.deploy(deployInput(recorded))).toEqual({ state: 'failed' })
+		expect(recorded.logs).toContain('✗ await-version: zerops: pipeline process process-1 is FAILED while app-version version-1 is UPLOADING')
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+		recorded.calls = []
+		if (control.cancel === undefined) throw new Error('missing cancellation')
+		const reference = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			signal: new AbortController().signal,
+			providerState: checkpointFor(true),
+		}
+		expect(await control.cancel({ ...reference, startedAtMs: Date.now() })).toEqual({ state: 'pending' })
+		expect(await control.cancel({ ...reference, startedAtMs: Date.now() - 76 * 60 * 1000 })).toEqual({ state: 'settled', outcome: 'failed' })
+		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'cancelBuild:version-1', 'getAppVersion:version-1', 'cancelBuild:version-1'])
+	})
+
 	test('refuses a descriptor that drifted after registration before it resolves the source', async () => {
 		const resolutions: unknown[] = []
 		const source: ZeropsSourceClient = {
@@ -1423,93 +1335,32 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.logs.join('\n')).not.toContain('credential-must-not-leak')
 	})
 
-	test('writes managed environment only to the app service and never to YAML or logs', async () => {
+	test('writes the managed service variables to the app service and the release only into the execution descriptor', async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const release = 'fabrika/notes/prod/default/commit'
+		const builds: string[] = []
+		const base = makeApi(recorded)
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: {
+				...base,
+				buildAndDeployAppVersion: async (input) => {
+					builds.push(input.zeropsYaml)
+					return base.buildAndDeployAppVersion(input)
+				},
+			},
+		})
 		expect(
 			await control.deploy({
 				...deployInput(recorded),
-				managedEnvironment: {
-					...mapManagedKeys(() => null),
-					FABRIKA_OPERATIONS_DSN: dsn,
-					FABRIKA_RELEASE: 'fabrika/notes/prod/default/commit',
-				},
+				managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release },
 			}),
 		).toEqual({ state: 'succeeded' })
-		const names = await managedReferenceNames({ projectId: 'project-1', serviceId: 'service-1', appVersionId: 'version-1' })
-		expect(recorded.envWrites).toEqual([
-			{ serviceId: 'service-1', key: names.FABRIKA_RELEASE, value: 'fabrika/notes/prod/default/commit' },
-			{ serviceId: 'service-1', key: names.FABRIKA_OPERATIONS_DSN, value: dsn },
-		])
+		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'FABRIKA_OPERATIONS_DSN', value: dsn }])
+		expect(builds).toEqual([`zerops:\n  - setup: api\n    run:\n      envVariables:\n        FABRIKA_RELEASE: ${release}\n`])
 		expect(recorded.imports[0]?.yaml).not.toContain('FABRIKA_OPERATIONS_DSN')
 		expect(recorded.imports[0]?.yaml).not.toContain(dsn)
 		expect(recorded.logs.join('\n')).not.toContain(dsn)
-	})
-
-	test('records explicit absences without deleting the previous version backing records', async () => {
-		const dsn = 'https://operations-public-key@errors.test/1'
-		const release = 'fabrika/notes/prod/default/commit'
-		const managed = {
-			...mapManagedKeys(() => null),
-			FABRIKA_OPERATIONS_DSN: dsn,
-			FABRIKA_APP_ID: 'notes',
-			FABRIKA_ENVIRONMENT: 'prod',
-			FABRIKA_SERVICE_KEY: 'default',
-			FABRIKA_RELEASE: release,
-		}
-		const api = makeApi(recorded)
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api })
-		const input = deployInput(recorded)
-		let retained: JsonValue | undefined
-		expect(
-			await control.deploy({
-				...input,
-				managedEnvironment: managed,
-				events: {
-					...input.events,
-					checkpoint: async (value) => {
-						retained = value
-					},
-				},
-			}),
-		).toEqual({ state: 'succeeded' })
-		const prior = await verifyManagedCheckpoint(retained)
-		const canonical = Object.entries(prior.binding).flatMap(([key, entry]) =>
-			entry.state === 'confirmed' ? [{ id: `canonical-${key}`, key, content: `\${${entry.referenceName}}`, sensitive: false, type: 'USER' }] : []
-		)
-		const next = createTestControlProvider({
-			accessToken: 'zt-secret',
-			api: {
-				...api,
-				getService: async () => ({ id: 'service-1', name: 'notes', projectId: 'project-1', activeAppVersionId: 'version-1' }),
-				listServiceEnv: async (request) => [...await api.listServiceEnv(request), ...canonical],
-				createAppVersion: async () => ({ id: 'version-2', uploadUrl: 'https://upload.test/archive?signature=test' }),
-			},
-		})
-		let final: JsonValue | undefined
-		expect(
-			await next.deploy({
-				...deployInput(recorded),
-				runId: 'run-2',
-				managedEnvironment: mapManagedKeys(() => null),
-				readRetainedCheckpoint: async (id) => {
-					expect(id).toBe('version-1')
-					return retained ?? null
-				},
-				events: {
-					...input.events,
-					checkpoint: async (value) => {
-						final = value
-					},
-				},
-			}),
-		).toEqual({ state: 'succeeded' })
-
-		expect(recorded.envWrites).toHaveLength(5)
-		expect(recorded.envDeletes).toEqual([])
-		expect((await verifyManagedCheckpoint(final)).binding).toEqual(mapManagedKeys(() => ({ state: 'absent' })))
-		expect(recorded.logs.join('\n')).not.toContain(dsn)
-		expect(recorded.logs.join('\n')).not.toContain(release)
 	})
 
 	test('dry-run names managed service values without mutating Zerops or exposing values', async () => {
@@ -1526,7 +1377,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await control.deploy({
 			...deployInput(recorded),
 			dryRun: true,
-			managedEnvironment: { ...mapManagedKeys(() => null), FABRIKA_OPERATIONS_DSN: dsn },
+			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: dsn },
 		})
 		expect(recorded.envWrites).toEqual([])
 		expect(recorded.calls).toEqual([])
@@ -1548,7 +1399,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		}
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
-			api: makeApi(recorded, () => 'ACTIVE', false, { ...managedOwner, hostname: 'notesapi' }),
+			api: makeApi(recorded),
 			sleep: () => Promise.resolve(),
 		})
 		const manifest = compileFabrikaManifest(sharedConfig, 'prod', SOURCE_DESCRIPTOR)
@@ -1676,9 +1527,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 			signal: new AbortController().signal,
 			runId: 'run-1',
 			externalId: 'version-1',
-			providerState: await checkpointFor('build_triggered', { ...config, schema: SCHEMA }),
-			checkpoint: () => Promise.resolve(),
-			// A resumed deploy finishes the same IAM touchpoint, so it projects the same set.
+			providerState: checkpointFor(true),
+			// A deploy settled here finishes the same IAM touchpoint, so it projects the same set.
 			returnOrigins: ['https://notes.example.test'],
 			environment: environment({
 				artifact: {
@@ -1702,94 +1552,20 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(reconciledOrigins).toEqual([['https://notes.example.test']])
 		current = 'BUILD_FAILED'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'failed' })
-		await control.cancel(reference)
+		expect(await control.cancel(reference)).toEqual({ state: 'settled', outcome: 'failed' })
 		expect(recorded.calls).not.toContain('cancelBuild:version-1')
 		expect(recorded.calls).not.toContain('importServices')
 		expect(recorded.calls).not.toContain('triggerPipeline')
 	})
 
-	test('checkpoints recovered upload before the one build trigger and then records its process', async () => {
-		const timeline: string[] = []
-		const checkpoints: unknown[] = []
-		const api: ZeropsApi = {
-			...makeApi(recorded),
-			buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
-				timeline.push(`build:${appVersionId}`)
-				expect(zeropsYaml).toBe('zerops:\n  - setup: api\n    run:\n      envVariables: {}\n')
-				expect(zeropsYamlSetup).toBe('api')
-				return { id: 'process-1', appVersionId }
-			},
-		}
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api })
-		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
-
-		const outcome = await control.reconcile({
-			signal: new AbortController().signal,
-			runId: 'run-1',
-			externalId: 'version-1',
-			providerState: await checkpointFor('source_uploaded'),
-			environment: environment(),
-			checkpoint: (state) => {
-				checkpoints.push(state)
-				const phase = typeof state === 'object' && state !== null && !Array.isArray(state) ? state['phase'] : undefined
-				timeline.push(`checkpoint:${typeof phase === 'string' ? phase : 'invalid'}`)
-				return Promise.resolve()
-			},
-		})
-
-		expect(outcome).toEqual({ state: 'succeeded' })
-		expect(timeline).toEqual([
-			'checkpoint:build_trigger_requested',
-			'build:version-1',
-			'checkpoint:build_triggered',
-		])
-		expect(checkpoints).toEqual([
-			await checkpointFor('build_trigger_requested'),
-			await checkpointFor('build_triggered', config, 'process-1'),
-		])
-	})
-
-	test('never triggers twice from the ambiguous build-requested checkpoint', async () => {
-		const checkpoints: unknown[] = []
-		const control = createTestControlProvider({
-			accessToken: 'zt-secret',
-			api: makeApi(recorded, () => 'BUILDING'),
-			sleep: async (ms) => {
-				recorded.calls.push(`sleep:${ms}`)
-			},
-		})
-		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
-
-		expect(
-			await control.reconcile({
-				signal: new AbortController().signal,
-				runId: 'run-1',
-				externalId: 'version-1',
-				providerState: await checkpointFor('build_trigger_requested'),
-				environment: environment(),
-				checkpoint: (state) => {
-					checkpoints.push(state)
-					return Promise.resolve()
-				},
-			}),
-		).toEqual({ state: 'running' })
-		expect(checkpoints).toEqual([])
-		expect(recorded.calls).toEqual(['getAppVersion:version-1'])
-		expect(recorded.calls).not.toContain('buildAndDeployAppVersion:version-1')
-	})
-
-	test('keeps unknown and unavailable build-request observations retryable', async () => {
-		const checkpoints: unknown[] = []
+	test('keeps unknown and unavailable observations of a triggered version retryable', async () => {
 		const reference = {
 			signal: new AbortController().signal,
 			runId: 'run-1',
 			externalId: 'version-1',
-			providerState: await checkpointFor('build_trigger_requested'),
+			providerState: checkpointFor(true),
+			startedAtMs: Date.now(),
 			environment: environment(),
-			checkpoint: (state: JsonValue) => {
-				checkpoints.push(state)
-				return Promise.resolve()
-			},
 		}
 		const unknown = createTestControlProvider({
 			accessToken: 'zt-secret',
@@ -1800,8 +1576,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 		expect(await unknown.reconcile(reference)).toEqual({ state: 'running' })
 		expect(await unknown.cancel(reference)).toEqual({ state: 'pending' })
-		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
-		expect(checkpoints).toEqual([])
+		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1', 'cancelBuild:version-1'])
 
 		const unavailableApi: ZeropsApi = {
 			...makeApi(recorded),
@@ -1820,165 +1595,80 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
 	})
 
-	test('keeps an accepted build retryable when its result checkpoint fails', async () => {
-		let checkpoint = 0
+	test('recovery after a crash before the build request deletes the exact version and fails the run', async () => {
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
-
-		expect(
-			await control.reconcile({
-				signal: new AbortController().signal,
-				runId: 'run-1',
-				externalId: 'version-1',
-				providerState: await checkpointFor('source_uploaded'),
-				environment: environment(),
-				checkpoint: () => {
-					checkpoint++
-					return checkpoint === 1 ? Promise.resolve() : Promise.reject(new Error('checkpoint unavailable'))
-				},
-			}),
-		).toEqual({ state: 'running' })
-		expect(recorded.calls).toEqual(['buildAndDeployAppVersion:version-1'])
-		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
-	})
-
-	test('keeps a lost build response retryable when follow-up observation fails', async () => {
-		const api: ZeropsApi = {
-			...makeApi(recorded),
-			buildAndDeployAppVersion: async () => {
-				recorded.calls.push('buildAndDeployAppVersion:version-1')
-				throw new Error('build response lost')
-			},
-			getAppVersion: async () => {
-				recorded.calls.push('getAppVersion:unavailable')
-				throw new Error('temporary observation failure')
-			},
-		}
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api, sleep: () => Promise.resolve() })
-		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
-
-		expect(
-			await control.reconcile({
-				signal: new AbortController().signal,
-				runId: 'run-1',
-				externalId: 'version-1',
-				providerState: await checkpointFor('source_uploaded'),
-				environment: environment(),
-				checkpoint: () => Promise.resolve(),
-			}),
-		).toEqual({ state: 'running' })
-		expect(recorded.calls).toEqual(['buildAndDeployAppVersion:version-1', 'getAppVersion:unavailable'])
-		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
-	})
-
-	test('bounds failed and hanging source cancellation before every Zerops cleanup', async () => {
-		let cancellations = 0
-		const sourceSignals: AbortSignal[] = []
-		const deleteSignals: AbortSignal[] = []
-		let exists = true
-		const source: ZeropsSourceClient = {
-			...makeSource(),
-			cancel: async ({ signal }) => {
-				cancellations++
-				sourceSignals.push(signal)
-				if (cancellations % 2 === 1) throw new Error('source cancellation unavailable')
-				return new Promise<void>(() => {})
-			},
-		}
-		const api: ZeropsApi = {
-			...makeApi(recorded, () => 'UPLOADING'),
-			buildAndDeployAppVersion: async ({ appVersionId }) => {
-				recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
-				throw new ZeropsApiError('zerops: build rejected', 400, 'invalidBuild')
-			},
-			deleteAppVersion: async ({ appVersionId, signal }) => {
-				recorded.calls.push(`deleteAppVersion:${appVersionId}`)
-				deleteSignals.push(signal)
-				exists = false
-			},
-			getAppVersion: async ({ appVersionId }) => {
-				recorded.calls.push(`getAppVersion:${appVersionId}`)
-				if (!exists) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
-				return { id: appVersionId, status: 'UPLOADING' }
-			},
-		}
-		const control = createTestControlProvider({
-			accessToken: 'zt-secret',
-			api,
-			source,
-			sourceCancelSleep: () => Promise.resolve(),
-			sleep: () => Promise.resolve(),
-		})
-		if (control.reconcile === undefined || control.cancel === undefined) throw new Error('expected Zerops lifecycle capabilities')
 		const reference = {
 			signal: new AbortController().signal,
 			runId: 'run-1',
 			externalId: 'version-1',
 			environment: environment(),
-			checkpoint: () => Promise.resolve(),
+			providerState: checkpointFor(false),
 		}
-
-		expect(
-			await control.reconcile({
-				...reference,
-				providerState: await checkpointFor('managed_env_staging'),
-			}),
-		).toEqual({ state: 'failed' })
-		exists = true
-		await control.cancel({
-			signal: new AbortController().signal,
-			runId: 'run-1',
-			externalId: 'version-1',
-			environment: environment(),
-			providerState: await checkpointFor('source_uploaded'),
-		})
-		exists = true
-		expect(
-			await control.reconcile({
-				...reference,
-				providerState: await checkpointFor('build_trigger_requested'),
-			}),
-		).toEqual({ state: 'running' })
-		expect(
-			await control.reconcile({
-				...reference,
-				providerState: await checkpointFor('source_uploaded'),
-			}),
-		).toEqual({ state: 'running' })
-		expect(cancellations).toBe(2)
-		expect(sourceSignals.every((signal) => signal.aborted)).toBe(true)
-		expect(deleteSignals.every((signal) => !signal.aborted)).toBe(true)
-		expect(deleteSignals.some((signal) => sourceSignals.includes(signal))).toBe(false)
-		expect(recorded.calls).toEqual([
-			'deleteAppVersion:version-1',
-			'getAppVersion:version-1',
-			'deleteAppVersion:version-1',
-			'getAppVersion:version-1',
-			'getAppVersion:version-1',
-			'buildAndDeployAppVersion:version-1',
-			'getAppVersion:version-1',
-		])
+		expect(await control.reconcile(reference)).toEqual({ state: 'failed' })
+		// `appVersionNotFound` on the second pass counts as deleted.
+		expect(await control.reconcile(reference)).toEqual({ state: 'failed' })
+		expect(recorded.calls).toEqual(['deleteAppVersion:version-1', 'deleteAppVersion:version-1'])
 	})
 
-	test('deletes known pre-trigger crash phases but retains ambiguous submissions', async () => {
-		const sourceCalls: string[] = []
-		let deleted = false
+	test('recovery before the build request keeps the run open when the deletion fails', async () => {
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: {
 				...makeApi(recorded),
 				deleteAppVersion: async () => {
-					deleted = true
-					recorded.calls.push('deleteAppVersion:version-1')
-				},
-				getAppVersion: async ({ appVersionId }) => {
-					recorded.calls.push(`getAppVersion:${appVersionId}`)
-					if (deleted) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
-					return { id: appVersionId, status: 'UPLOADING' }
+					throw new ZeropsApiError('zerops: delete app-version failed (500)', 500, '')
 				},
 			},
-			source: makeSource(sourceCalls),
-			sleep: () => Promise.resolve(),
+		})
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+		await expect(control.reconcile({
+			signal: new AbortController().signal,
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			providerState: checkpointFor(false),
+		})).rejects.toThrow('delete app-version failed')
+	})
+
+	test('recovery after the build request polls without deleting, and abandons a version stuck past the deadline', async () => {
+		let status: ZeropsAppVersionStatus = 'UPLOADING'
+		const logs: string[] = []
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded, () => status) })
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+		const reference = {
+			signal: new AbortController().signal,
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			providerState: checkpointFor(true),
+			log: async (line: string) => {
+				logs.push(line)
+			},
+		}
+		expect(await control.reconcile({ ...reference, startedAtMs: Date.now() })).toEqual({ state: 'running' })
+		status = 'BUILDING'
+		expect(await control.reconcile({ ...reference, startedAtMs: Date.now() })).toEqual({ state: 'running' })
+		status = 'UPLOADING'
+		expect(await control.reconcile({ ...reference, startedAtMs: Date.now() - 76 * 60 * 1000 })).toEqual({ state: 'failed' })
+		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1', 'getAppVersion:version-1', 'cancelBuild:version-1'])
+		expect(logs).toEqual(['abandoned non-terminal app-version version-1 (UPLOADING)'])
+		status = 'ACTIVE'
+		expect(await control.reconcile({ ...reference, startedAtMs: Date.now() })).toEqual({ state: 'succeeded' })
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+		expect(recorded.calls).not.toContain('buildAndDeployAppVersion:version-1')
+	})
+
+	test('recovery abandons a triggered version whose status stays unobservable past the deadline', async () => {
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: {
+				...makeApi(recorded),
+				getAppVersion: async () => {
+					recorded.calls.push('getAppVersion:unavailable')
+					throw new Error('temporary observation failure')
+				},
+			},
 		})
 		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
 		const reference = {
@@ -1986,92 +1676,37 @@ describe('Zerops ControlProvider lifecycle', () => {
 			runId: 'run-1',
 			externalId: 'version-1',
 			environment: environment(),
-			checkpoint: () => Promise.resolve(),
+			providerState: checkpointFor(true),
 		}
-
-		expect(
-			await control.reconcile({
-				...reference,
-				providerState: await checkpointFor('managed_env_staging'),
-			}),
-		).toEqual({ state: 'failed' })
-		deleted = false
-		expect(
-			await control.reconcile({
-				...reference,
-				providerState: await checkpointFor('build_trigger_requested'),
-			}),
-		).toEqual({ state: 'running' })
-		const driftedArtifact = compileFabrikaManifest(config, 'prod', {
-			...SOURCE_DESCRIPTOR,
-			contents: `${SOURCE_DESCRIPTOR.contents}# changed after upload\n`,
-		})
-		expect(
-			await control.reconcile({
-				...reference,
-				providerState: await checkpointFor('source_uploaded'),
-				environment: environment({
-					artifact: {
-						provider: 'zerops',
-						version: zeropsArtifactCodec.version,
-						payload: zeropsArtifactCodec.encode(driftedArtifact),
-					},
-				}),
-			}),
-		).toEqual({ state: 'failed' })
-		expect(sourceCalls).toEqual([
-			'sourceCancel:run-1:version-1',
-			'sourceCancel:run-1:version-1',
-		])
-		expect(recorded.calls).toEqual([
-			'deleteAppVersion:version-1',
-			'getAppVersion:version-1',
-			'getAppVersion:version-1',
-			'deleteAppVersion:version-1',
-			'getAppVersion:version-1',
-		])
+		expect(await control.reconcile({ ...reference, startedAtMs: Date.now() })).toEqual({ state: 'running' })
+		expect(await control.reconcile({ ...reference, startedAtMs: Date.now() - 76 * 60 * 1000 })).toEqual({ state: 'failed' })
+		expect(recorded.calls).toEqual(['getAppVersion:unavailable', 'getAppVersion:unavailable', 'cancelBuild:version-1'])
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
 	})
 
-	test('validates durable state and uses its latest phase for cancellation', async () => {
-		const sourceCalls: string[] = []
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source: makeSource(sourceCalls) })
+	test('an unrecognised or foreign checkpoint fails or settles the run without platform calls', async () => {
+		const logs: string[] = []
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		if (control.reconcile === undefined || control.cancel === undefined) throw new Error('expected Zerops lifecycle capabilities')
 		const reference = {
 			signal: new AbortController().signal,
 			runId: 'run-1',
 			externalId: 'version-1',
 			environment: environment(),
-			checkpoint: () => Promise.resolve(),
 		}
 		const invalidStates: Array<JsonValue | undefined> = [
 			undefined,
-			{ appVersionId: 'different', phase: 'build_triggered' },
-			{ appVersionId: 'version-1', phase: 'unknown' },
-			{ appVersionId: 'version-1', phase: 'source_uploaded', uploadUrl: 'must-not-persist' },
+			{ appVersionId: 'different', triggered: true },
+			{ appVersionId: 'version-1', phase: 'source_uploaded' },
+			{ appVersionId: 'version-1', triggered: true, phase: 'source_uploaded' },
+			{ appVersionId: 'version-1', triggered: 'yes' },
 		]
 		for (const providerState of invalidStates) {
-			await expect(control.reconcile({ ...reference, providerState })).rejects.toThrow('managed-environment protocol')
+			expect(await control.reconcile({ ...reference, providerState, log: async (line) => void logs.push(line) })).toEqual({ state: 'failed' })
+			expect(await control.cancel({ ...reference, providerState })).toEqual({ state: 'settled', outcome: 'failed' })
 		}
 		expect(recorded.calls).toEqual([])
-
-		await control.cancel({
-			signal: new AbortController().signal,
-			runId: 'run-1',
-			externalId: 'version-1',
-			environment: environment(),
-			providerState: await checkpointFor('source_uploaded'),
-		})
-		await control.cancel({
-			signal: new AbortController().signal,
-			runId: 'run-1',
-			externalId: 'version-1',
-			environment: environment(),
-			providerState: await checkpointFor('build_triggered', config, 'process-1'),
-		})
-		expect(sourceCalls).toEqual([
-			'sourceCancel:run-1:version-1',
-		])
-		expect(recorded.calls).toEqual(['deleteAppVersion:version-1', 'getAppVersion:version-1', 'getAppVersion:version-1'])
+		expect(logs).toEqual(invalidStates.map(() => 'unrecognised checkpoint; failing without platform calls'))
 	})
 
 	test('writes and deletes one service-level secret and returns an opaque reference', async () => {

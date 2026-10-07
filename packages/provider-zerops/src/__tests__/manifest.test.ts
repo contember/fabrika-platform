@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { assertAuthoredManagedDocument } from '../managed-environment/authored'
-import { prepareManagedDescriptor } from '../managed-environment/descriptor'
-import { type ConfirmedManagedEntry, managedReferenceNames, mapManagedKeys } from '../managed-environment/protocol'
+import { assertAuthoredManagedDocument, overlayRelease } from '../managed-env'
 import {
 	assertFabrikaManifestCoordinates,
 	compileFabrikaManifest,
@@ -242,7 +240,7 @@ const withZeropsYaml = (manifest: FabrikaManifest, zeropsYaml: unknown): unknown
 const exampleDescriptor = async (file: string): Promise<string> =>
 	await Bun.file(new URL(`../../../../examples/zerops-app/${file}`, import.meta.url)).text()
 
-describe('managed-environment manifest boundary', () => {
+describe('managed key manifest boundary', () => {
 	test('pure authored walk accepts frozen readonly structures without changing them', () => {
 		const services = Object.freeze([
 			Object.freeze({ hostname: 'notesapi', envVariables: Object.freeze({ APP_READ: '${FABRIKA_RELEASE}' }) }),
@@ -253,14 +251,14 @@ describe('managed-environment manifest boundary', () => {
 
 	test('rejects internal and canonical managed definitions in pipeline declarations and import mappings', async () => {
 		const manifest = await compileNotes(OWN_SETUP)
-		for (const name of ['FABRIKA_MENV_PROTOCOL', 'FABRIKA_MENV_CUSTOM', 'FABRIKA_RELEASE', 'FABRIKA_OPERATIONS_DSN']) {
+		for (const name of ['FABRIKA_RELEASE', 'FABRIKA_OPERATIONS_DSN', 'FABRIKA_SERVICE_KEY']) {
 			for (const kind of ['vars', 'secrets']) {
 				expect(() =>
 					parseFabrikaManifest({
 						...manifest,
 						app: { ...manifest.app, pipeline: { ...manifest.app.pipeline, [kind]: [name] } },
 					})
-				).toThrow('managed-environment')
+				).toThrow('Fabrika-managed')
 			}
 			expect(() =>
 				parseFabrikaManifest({
@@ -272,19 +270,18 @@ describe('managed-environment manifest boundary', () => {
 						},
 					},
 				})
-			).toThrow('managed-environment')
+			).toThrow('Fabrika-managed')
 		}
-		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, { future: '${notesapi_FABRIKA_MENV_PROTOCOL}' }))).toThrow('managed-environment')
 	})
 
 	test('checks decoded descriptor policy in selected and unselected setups, including build/run mappings', async () => {
 		for (const phase of ['build', 'run']) {
-			for (const env of ['FABRIKA_RELEASE: authored', 'OTHER: "\\x24{notesapi_FABRIKA_MENV_PROTOCOL}"']) {
+			for (const env of ['FABRIKA_RELEASE: authored', 'FABRIKA_APP_ID: authored']) {
 				const descriptor = await createZeropsArtifactSourceDescriptor(
 					`zerops:\n  - setup: notesapi\n  - setup: other\n    ${phase}:\n      envVariables:\n        ${env}\n`,
 				)
 				expect(() => compileFabrikaManifest({ ...notesConfig, target: { ...notesConfig.target, zeropsSetup: 'notesapi' } }, 'prod', descriptor))
-					.toThrow('managed-environment')
+					.toThrow('Fabrika-managed')
 			}
 		}
 		const valid = await compileNotes('zerops:\n  - setup: notesapi\n    run:\n      start: echo ${FABRIKA_RELEASE}\n')
@@ -328,18 +325,45 @@ describe('managed-environment manifest boundary', () => {
 		const digest = await hashFabrikaManifest(manifest)
 		const document = interpolateManifest(manifest.target.importDocument, ['IMAGE_TAG'], { IMAGE_TAG: 'https://example.test/repo' }, ['notes'])
 		expect(document).not.toEqual(manifest.target.importDocument)
-		const names = await managedReferenceNames({ projectId: 'project', serviceId: 'service', appVersionId: 'version' })
-		const binding = mapManagedKeys((key): ConfirmedManagedEntry =>
-			key === 'FABRIKA_RELEASE'
-				? { state: 'confirmed', referenceName: names[key], backingRecordId: 'release-record' }
-				: { state: 'absent' }
-		)
-		const execution = prepareManagedDescriptor(descriptor.contents, undefined, binding)
-		expect(execution.contents).toContain(names.FABRIKA_RELEASE)
-		expect(descriptor.contents).not.toContain('FABRIKA_MENV_')
+		const execution = overlayRelease(descriptor.contents, undefined, 'fabrika/notes/prod/default/abc')
+		expect(Bun.YAML.parse(execution.contents)).toEqual({
+			zerops: [{ setup: 'notes', run: { start: 'bun app.ts', envVariables: { FABRIKA_RELEASE: 'fabrika/notes/prod/default/abc' } } }],
+		})
+		expect(descriptor.contents).not.toContain('FABRIKA_RELEASE')
 		expect(await hashFabrikaManifest(manifest)).toBe(digest)
 		await expect(verifyZeropsArtifactSourceDescriptor(manifest.target.sourceDescriptor)).resolves.toBeUndefined()
 		expect(manifest).toEqual(original)
+	})
+})
+
+describe('release overlay', () => {
+	const TWO_SETUPS =
+		'zerops:\n  - setup: api\n    run:\n      envVariables:\n        OWN: kept\n  - setup: worker\n    run:\n      start: bun worker.ts\n'
+
+	test('writes FABRIKA_RELEASE as a literal into the selected setup only', () => {
+		const execution = overlayRelease(TWO_SETUPS, 'worker', 'release-1')
+		expect(execution.setup).toBe('worker')
+		expect(Bun.YAML.parse(execution.contents)).toEqual({
+			zerops: [
+				{ setup: 'api', run: { envVariables: { OWN: 'kept' } } },
+				{ setup: 'worker', run: { start: 'bun worker.ts', envVariables: { FABRIKA_RELEASE: 'release-1' } } },
+			],
+		})
+	})
+
+	test('omits the key when the release is null', () => {
+		const execution = overlayRelease(TWO_SETUPS, 'api', null)
+		expect(execution.contents).not.toContain('FABRIKA_RELEASE')
+		expect(Bun.YAML.parse(execution.contents)).toEqual(Bun.YAML.parse(TWO_SETUPS))
+	})
+
+	test('refuses a release that Zerops would read as a reference', () => {
+		expect(() => overlayRelease(TWO_SETUPS, 'api', 'release-${api_PASSWORD}')).toThrow('must not contain `${`')
+	})
+
+	test('refuses a descriptor that authors a managed key', () => {
+		expect(() => overlayRelease('zerops:\n  - setup: api\n    run:\n      envVariables:\n        FABRIKA_RELEASE: mine\n', 'api', 'release-1'))
+			.toThrow('Fabrika-managed')
 	})
 })
 

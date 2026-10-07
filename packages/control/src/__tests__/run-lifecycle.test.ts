@@ -319,7 +319,6 @@ describe('provider-neutral run lifecycle', () => {
 				expect(sourceBinding).toEqual({ installationId: 42 })
 				return { repoUrl: source.repoUrl }
 			},
-			assertRunnerSourceProtocol: async () => {},
 			startRun: async (job) => {
 				jobs.push(job)
 				return { state: 'succeeded' }
@@ -363,9 +362,6 @@ describe('provider-neutral run lifecycle', () => {
 			prepareClone: async (source) => {
 				effects.push('clone')
 				return { repoUrl: source.repoUrl }
-			},
-			assertRunnerSourceProtocol: async () => {
-				effects.push('admission')
 			},
 			startRun: async () => {
 				effects.push('runner')

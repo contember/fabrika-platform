@@ -30,7 +30,6 @@ import {
 	type RunRow,
 } from './db'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
-import { retainedCheckpointReader } from './retained-run-checkpoints'
 import { projectedReturnOrigins } from './return-origins'
 import { type DeployLockGate, type OwnershipTiming, RunOwnership } from './run-ownership'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
@@ -334,8 +333,8 @@ export async function executeDeploy(
 	try {
 		if (run.status !== 'pending') return { runId, status: 'skipped' }
 		if (run.cancel_requested_at !== null) {
-			const settled = await settleRunCancellation(deps, owner).catch(() => false)
-			return { runId, status: settled ? 'skipped' : 'running' }
+			const settled = await settleRunCancellation(deps, owner).catch(() => null)
+			return { runId, status: settled === null ? 'running' : 'skipped' }
 		}
 		if (!(await deps.repositories.runs.markRunStarted(run.id, logsKey(run.id), owner.guard()))) {
 			owner.invalidate()
@@ -449,7 +448,6 @@ export async function executeDeploy(
 			await owner.refreshCancellation()
 			owner.work.signal.throwIfAborted()
 			const deployInput: ProviderDeployInput = {
-				readRetainedCheckpoint: retainedCheckpointReader(deps.repositories.runs, { appId: run.app_id, env: run.env }, abortController.signal),
 				runId: run.id,
 				app: registration.app,
 				environment: registration.environment,
@@ -494,8 +492,8 @@ export async function executeDeploy(
 		await owner.drain()
 		await owner.refreshCancellation()
 		if (owner.work.signal.aborted) {
-			const settled = await settleRunCancellation(deps, owner).catch(() => false)
-			return { runId, status: settled ? 'skipped' : 'running' }
+			const settled = await settleRunCancellation(deps, owner).catch(() => null)
+			return { runId, status: settled === null ? 'running' : 'skipped' }
 		}
 		if (outcome.state === 'running') return { runId, status: 'running' }
 		if (!(await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null, owner.guard()))) {
@@ -509,8 +507,8 @@ export async function executeDeploy(
 		if (owner.lost) return { runId, status: 'running' }
 		const latest = await owner.refreshCancellation()
 		if (latest?.cancel_requested_at !== null && latest?.cancel_requested_at !== undefined) {
-			const settled = await settleRunCancellation(deps, owner).catch(() => false)
-			return { runId, status: settled ? 'skipped' : 'running' }
+			const settled = await settleRunCancellation(deps, owner).catch(() => null)
+			return { runId, status: settled === null ? 'running' : 'skipped' }
 		}
 		if (owner.hasAccepted) return { runId, status: 'running' }
 		console.error(`deploy run ${run.id} failed:`, error instanceof Error ? error.message : 'unknown error')
@@ -543,35 +541,44 @@ export async function projectTerminalRun(
 	})
 }
 
-/** Cancel provider-owned work, mark the run failed, and release its deploy lock. */
+/**
+ * Cancel provider-owned work and finish the run. Resolves to the run's terminal status, or null while the
+ * provider has not settled. A run whose external work activated before the cancel took effect succeeds:
+ * cancellation never implies rollback (ADR-0044).
+ */
 export async function settleRunCancellation(
 	deps: Pick<RunDeps, 'repositories' | 'provider'>,
 	owner: RunOwnership,
-): Promise<boolean> {
+): Promise<'succeeded' | 'failed' | null> {
 	await owner.drain()
 	const cancelling = await owner.refreshCancellation()
-	if (cancelling === null || cancelling.cancel_requested_at === null || !['pending', 'running'].includes(cancelling.status)) return false
+	if (cancelling === null || cancelling.cancel_requested_at === null || !['pending', 'running'].includes(cancelling.status)) return null
+	let outcome: 'succeeded' | 'failed' = 'failed'
 	const appEnv = await deps.repositories.registry.getAppEnv(cancelling.app_id, cancelling.env)
 	if (cancelling.external_run_id !== null) {
-		if (deps.provider.cancel === undefined) return false
+		if (deps.provider.cancel === undefined) return null
 		if (appEnv === null) throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} disappeared during cancellation`)
 		if (appEnv.provider !== deps.provider.id) {
 			throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} changed owner during cancellation`)
 		}
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, cancelling.app_id)
 		owner.guard()
 		const result = await deps.provider.cancel({
 			signal: owner.ownership.signal,
 			runId: cancelling.id,
 			externalId: cancelling.external_run_id,
 			environment: await providerEnvironment(deps.repositories.registry, appEnv),
+			startedAtMs: (cancelling.started_at ?? cancelling.created_at) * 1000,
+			...(returnOrigins === undefined ? {} : { returnOrigins }),
 			...(cancelling.provider_state_json === null
 				? {}
 				: { providerState: parseProviderJson(cancelling.provider_state_json, `provider state for run ${cancelling.id}`) }),
 		})
-		if (result.state === 'pending') return false
+		if (result.state === 'pending') return null
+		outcome = result.outcome ?? 'failed'
 	}
-	await owner.mutate((guard) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, guard))
-	return true
+	await owner.mutate((guard) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, outcome, guard))
+	return outcome
 }
 
 export async function cancelDeploy(

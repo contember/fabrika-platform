@@ -123,16 +123,17 @@ export interface ZeropsRuntimeSource {
 	privateBinding?: ZeropsSourcePrivateBindingV2
 }
 
-/** Credential-free recovery state persisted beside one Zerops app-version id. */
-export type ZeropsRunState = import('./managed-environment/protocol').ManagedCheckpoint
+/** The run checkpoint (ADR-0044): the reserved version, and whether its build request may have been sent. */
+export interface ZeropsRunState {
+	appVersionId: string
+	triggered: boolean
+}
 
 /** Ephemeral runtime coordinates. This value is encoded only after credentials are composed. */
 export interface ZeropsRuntimeTarget {
 	projectId: string
 	serviceId: string
 	accessToken: string
-	/** Admission belongs to this invocation; persisted environment targets still contain only serviceId. */
-	managedAdmission?: { owner: import('./managed-environment/protocol').ManagedOwner; markerRecordId: string }
 	/** Absent only for dry runs, which perform no source or Zerops mutation. */
 	source?: ZeropsRuntimeSource
 	apiBaseUrl?: string

@@ -210,6 +210,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   Invocation ownership uses a unique holder, renewal and fenced checkpoint writes (`run-ownership.ts`).
   Preserve unresolved running rows after lease release: they exclude later deployments until recovery
   settles external work. Lease loss must never become external cancellation or terminal failure.
+  A settled cancellation finishes the run with the provider's `outcome`: when activation won first the
+  run SUCCEEDS — cancellation never implies rollback (ADR-0044). Control hands every cancel and
+  reconcile the run start (`startedAtMs`, from `started_at ?? created_at`) so a provider can bound its polling.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

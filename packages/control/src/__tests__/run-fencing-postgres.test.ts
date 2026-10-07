@@ -57,7 +57,6 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 				},
 				reconcile: async (input) => {
 					expect(input.providerState).toEqual({ phase: 2 })
-					await input.checkpoint({ phase: 3 })
 					return { state: 'succeeded' }
 				},
 			},

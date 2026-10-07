@@ -590,7 +590,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(typeof cancellation?.cancel_requested_at).toBe('number')
 		expect(cancellation?.external_run_id).toBe('operation-2')
 		expect(await db.runs.markRunFinished(cancelled.id, 'succeeded', 0)).toBe(false)
-		expect(await db.runs.markRunCancellationFinished(cancelled.id)).toBe(true)
+		expect(await db.runs.markRunCancellationFinished(cancelled.id, 'failed')).toBe(true)
 		expect((await db.runs.getRun(cancelled.id))?.status).toBe('failed')
 
 		// Candidate discovery leaves settlement to the invocation that acquires the lease.

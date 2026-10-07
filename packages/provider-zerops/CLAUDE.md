@@ -80,4 +80,15 @@ bun test
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider's `deploy` decodes the artifact ONCE and runs `createZeropsDeployer` in-process**
   on that typed value. `beforeDeploy` gets a `structuredClone`, so a hook cannot change what is imported
-  or hashed into the checkpoint.
+  or built.
+- **Only `FABRIKA_RELEASE` is bound to a version (ADR-0044).** `overlayRelease` (`src/managed-env.ts`)
+  writes it as a LITERAL into the selected setup's `run.envVariables` of the execution descriptor; it is
+  never a service variable, and `write-service-env` deletes a stray one. The other five managed keys are
+  plain service variables each deploy overwrites (null removes), all written before the build request so it
+  never meets `userDataSyncRunning`. App vars, secrets and descriptors may not author any of the six.
+- **The run checkpoint is `{ appVersionId, triggered }` and recovery never resumes (ADR-0044).** `appVersionId`
+  is recorded before the upload and `triggered` before the build request; a failed write there means no
+  build request. `triggered: false` → delete the exact version (`deleteVersion`, `src/version-attempt.ts`;
+  `appVersionNotFound` counts as deleted). `triggered: true` → settle ONLY by polling, never by deletion;
+  past run start + 75 min a non-terminal version is abandoned with a best-effort `cancelBuild`. A lost lease
+  deletes and cancels nothing. Any other checkpoint shape fails the run without a platform call.

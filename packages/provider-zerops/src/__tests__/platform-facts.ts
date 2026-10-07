@@ -276,7 +276,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		id: 'app-version-missing-id-is-400',
 		section: SECTION_USER_DATA_PROCESS,
 		request: { method: 'GET', path: '/app-version/{absentAppVersionId}' },
-		// This automated row checks status only; the deleted-reservation code witness below is manual.
+		// Status only: the absence code a client branches on is the deleted-reservation row's job.
 		expect: { status: 400 },
 		live: 'fast',
 		emulator: true,
@@ -631,6 +631,34 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulator: true,
 	},
 	{
+		// The ADR-0044 barrier: a deleted reservation is absent to a read and refuses a build.
+		id: 'deleted-reservation-reports-app-version-not-found',
+		section: 'Deleted-version upload race witness, 2026-10-03 — docs/reference/zerops-platform.md',
+		setup: [{
+			method: 'POST',
+			path: '/service-stack/{serviceId}/app-version',
+			body: { name: 'fact-deleted-reservation' },
+			capture: { deletedAppVersionId: 'id' },
+		}],
+		request: { method: 'DELETE', path: '/app-version/{deletedAppVersionId}' },
+		expect: { status: 200, bodyShape: { success: { kind: 'boolean', value: true } } },
+		then: [
+			{
+				method: 'GET',
+				path: '/app-version/{deletedAppVersionId}',
+				expect: { status: 400, bodyShape: { 'error.meta[*].code': { kind: 'equals', value: 'appVersionNotFound' } } },
+			},
+			{
+				method: 'PUT',
+				path: '/app-version/{deletedAppVersionId}/build-and-deploy',
+				body: { zeropsYaml: 'zerops:\n  - setup: api\n', zeropsYamlSetup: 'api' },
+				expect: { status: 400, bodyShape: { 'error.meta[*].code': { kind: 'equals', value: 'appVersionNotFound' } } },
+			},
+		],
+		live: 'service',
+		emulator: true,
+	},
+	{
 		id: 'subdomain-name-absent-before-any-deploy',
 		section: SECTION_CORRECTIONS,
 		// The service imported WITHOUT `startWithoutCode`, so nothing has ever deployed on it. Measured
@@ -753,6 +781,17 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double has no init or runtime environment resolution',
 	},
 	{
+		id: 'descriptor-env-literal-follows-version-activation',
+		section: 'Verified live (2026-09-23) — version-selected environment references — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/deploy', body: {} },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote:
+			'manual witness pending: a literal `run.envVariables` value (`FABRIKA_RELEASE`, ADR-0044) is expected to follow activation, rollback and cancellation as the 2026-09-23 references did; it needs two builds',
+		emulator: false,
+		emulatorNote: 'the double replaces ENV records on activation by construction, which is no evidence about the platform',
+	},
+	{
 		id: 'native-committed-archive-preserves-bytes-and-relative-symlinks',
 		section: 'Native committed-archive witness, 2026-10-02 — docs/reference/zerops-platform.md',
 		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
@@ -762,16 +801,6 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 			'manually verified native snapshot/PUT and canonical descriptor; runtime blob digest matched Git, LF and literal $Id$ survived attributes, relative symlink preserved',
 		emulator: false,
 		emulatorNote: 'the double does not unpack archives or execute uploaded source',
-	},
-	{
-		id: 'deleted-reservation-reports-app-version-not-found',
-		section: 'Deleted reservation absence witness, 2026-10-02 — docs/reference/zerops-platform.md',
-		request: { method: 'GET', path: '/app-version/{deletedAppVersionId}' },
-		expect: { status: 400 },
-		live: 'not-probed',
-		liveNote: 'manual reserve/delete witness: subsequent GET and DELETE both returned 400 with meta code appVersionNotFound',
-		emulator: false,
-		emulatorNote: 'manual absence-code witness is not covered by this fact runner',
 	},
 	{
 		id: 'fresh-import-creation-process-identifies-service',

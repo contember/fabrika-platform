@@ -42,8 +42,8 @@ import {
 	triggerRequestSchema,
 	userDataRequestSchema,
 } from './zerops-emulator/requests'
-import { activateManagedRuntimeReferences } from './zerops-emulator/runtime-environment'
-import { capabilityDigest, matchesCapability, readUploadReceipt } from './zerops-emulator/upload'
+import { activateRunEnvironment } from './zerops-emulator/runtime-environment'
+import { capabilityDigest, matchesCapability, readUploadedSource } from './zerops-emulator/upload'
 
 export interface ZeropsEmulatorOptions {
 	token: string
@@ -106,10 +106,11 @@ class ZeropsEmulator {
 		if (reservation !== null && request.method === 'POST') {
 			const serviceId = decodeURIComponent(reservation[1] ?? '')
 			if (this.service(serviceId) === undefined) return serviceStackNotFound()
-			reservationRequestSchema.parse(await parseJsonBody(request))
+			const body = reservationRequestSchema.parse(await parseJsonBody(request))
 			const service = this.service(serviceId)
 			if (service === undefined) return serviceStackNotFound()
 			const version = this.createVersion(service, 'UPLOADING', false)
+			if (body.name !== undefined) version.name = body.name
 			const capability = randomBytes(32).toString('hex')
 			this.state.uploadGrants.push({ appVersionId: version.id, capabilitySha256: capabilityDigest(capability), deleted: false })
 			await this.persist()
@@ -124,7 +125,9 @@ class ZeropsEmulator {
 			const version = this.version(appVersionId)
 			if (version === undefined) return this.versionNotFound()
 			const runtime = readDescriptorRuntime(body.zeropsYaml, body.zeropsYamlSetup)
-			version.managedRuntimeReferences = runtime.managedRuntimeReferences
+			version.runEnvVariables = runtime.runEnvVariables
+			if (body.zeropsYamlSetup === undefined) delete version.buildSetup
+			else version.buildSetup = body.zeropsYamlSetup
 			const grant = this.state.uploadGrants.find((entry) => entry.appVersionId === version.id)
 			delete version.activateAt
 			if (grant?.receipt === undefined || grant.deleted) {
@@ -375,7 +378,7 @@ class ZeropsEmulator {
 			if (this.service(serviceId) === undefined) {
 				return serviceStackNotFound()
 			}
-			const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId)
+			const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId && item.type !== 'ENV')
 			return json({ list: this.page(list, url), totalCount: list.length })
 		}
 
@@ -386,7 +389,7 @@ class ZeropsEmulator {
 			if (this.service(serviceId) === undefined) {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
 			}
-			return json({ items: this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId) })
+			return json({ items: this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId && item.type !== 'ENV') })
 		}
 
 		const serviceEnv = path.match(/^\/service-stack\/([^/]+)\/user-data$/)
@@ -430,7 +433,7 @@ class ZeropsEmulator {
 		const env = path.match(/^\/user-data\/([^/]+)$/)
 		if (env !== null) {
 			const envId = decodeURIComponent(env[1] ?? '')
-			const index = this.state.serviceEnv.findIndex((item) => item.id === envId)
+			const index = this.state.serviceEnv.findIndex((item) => item.id === envId && item.type !== 'ENV')
 			if (index < 0) {
 				return error(404, 'USER_DATA_NOT_FOUND', 'user data not found')
 			}
@@ -638,8 +641,9 @@ class ZeropsEmulator {
 		return write
 	}
 
+	/** Live names the absence in `meta` (docs/reference/zerops-platform.md, deleted-version witness). */
 	private versionNotFound(): Response {
-		return error(400, 'appVersionNotFound', 'app version not found')
+		return json({ error: { code: 'appVersionNotFound', message: 'app version not found', meta: [{ code: 'appVersionNotFound' }] } }, 400)
 	}
 
 	private createVersion(service: ServiceRecord, status: AppVersionRecord['status'], hasHttpPorts: boolean): AppVersionRecord {
@@ -672,7 +676,7 @@ class ZeropsEmulator {
 		version.status = 'ACTIVE'
 		delete version.activateAt
 		service.activeAppVersionId = version.id
-		activateManagedRuntimeReferences(this.state, service, version.managedRuntimeReferences ?? [])
+		activateRunEnvironment(this.state, service, version.runEnvVariables ?? {})
 	}
 
 	private deployCodeless(service: ServiceRecord): ProcessRecord {
@@ -709,7 +713,7 @@ class ZeropsEmulator {
 		if (this.uploading.has(grant.appVersionId)) return error(409, 'LOCAL_UPLOAD_IN_PROGRESS', 'local upload already in progress')
 		this.uploading.add(grant.appVersionId)
 		try {
-			const receipt = await readUploadReceipt(request)
+			const { receipt, descriptorSha256 } = await readUploadedSource(request)
 			if (
 				grant.receipt !== undefined
 				&& (grant.receipt.compressedBytes !== receipt.compressedBytes || grant.receipt.compressedSha256 !== receipt.compressedSha256)
@@ -718,6 +722,10 @@ class ZeropsEmulator {
 			}
 			// A deleted grant may finish transport but never regains a version or activation capability.
 			if (this.state.uploadGrants.includes(grant)) {
+				const version = this.version(grant.appVersionId)
+				if (grant.receipt === undefined && version !== undefined && descriptorSha256 !== undefined) {
+					version.uploadedDescriptorSha256 = descriptorSha256
+				}
 				grant.receipt ??= receipt
 				await this.persist()
 			}
