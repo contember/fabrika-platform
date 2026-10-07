@@ -1,5 +1,5 @@
+import { providerEnvelopeSchema } from '@fabrika/control/api/provider-envelope'
 import { z } from 'zod'
-import { providerEnvelopeSchema } from '../../control/src/api/provider-envelope'
 
 const text = z.string().min(1)
 // Unrelated list entries remain ignorable, and provider-owned payloads stay opaque.
@@ -16,7 +16,6 @@ export const environmentViewSchema = z.object({
 }).catch({})
 export const runViewSchema = z.object({ status: z.unknown(), externalRunId: z.string().optional().catch(undefined) }).catch({})
 export const completedRunSchema = z.object({ commitSha: text })
-export const deployLeaseSchema = z.object({ expiresAt: z.number().int().nonnegative().safe() }).nullable()
 export const appSourceSchema = z.object({ id: text, repoUrl: text, workerDir: z.string() })
 export const namespaceTargetViewSchema = z.object({ target: providerEnvelopeSchema })
 export const activeOperationsConfigSchema = z.object({ dsn: text, ingestProjectId: text, serviceKey: text })

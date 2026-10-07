@@ -20,6 +20,7 @@ import {
 	parseLocalSourceUploadSearch,
 } from '../../local-source-contract'
 import { createZeropsEmulator, type ZeropsEmulatorOptions } from '../../zerops-emulator'
+import { emptySnapshot, type EmulatorSnapshot } from '../../zerops-emulator/model'
 import { parseSnapshot } from '../../zerops-emulator/snapshot'
 
 const directories: string[] = []
@@ -444,4 +445,69 @@ test('codeless evidence and sensitive USER records pass real managed admission; 
 	})
 	expect((await f.api.getAppVersion({ appVersionId: reservation.id, signal: signal() })).status).toBe('BACKUP')
 	await expect(f.api.enableSubdomainAccess({ serviceId: f.serviceId, signal: signal() })).rejects.toThrow('serviceStackIsNotHttp')
+})
+
+test('a current state file with every record kind round-trips through JSON', () => {
+	const snapshot: EmulatorSnapshot = {
+		nextProject: 2,
+		nextService: 2,
+		nextEnv: 3,
+		nextVersion: 3,
+		nextProcess: 2,
+		nextIntegrationToken: 2,
+		projects: [{ id: 'p', clientId: 'c', name: 'local', status: 'ACTIVE', mode: 'LIGHT', description: 'd', tagList: ['t'] }],
+		services: [{
+			id: 's',
+			projectId: 'p',
+			name: 'api',
+			status: 'ACTIVE',
+			base: 'alpine',
+			activeAppVersionId: 'v1',
+			subdomainAccess: true,
+			autoscalingProfileId: 'a',
+		}],
+		serviceEnv: [
+			{ id: 'e1', serviceStackId: 's', key: 'SECRET_VALUE', content: 'x', type: 'SECRET' },
+			{ id: 'e2', serviceStackId: 's', key: 'USER_VALUE', content: '', type: 'USER', sensitive: false },
+		],
+		appVersions: [
+			{
+				id: 'v1',
+				serviceStackId: 's',
+				projectId: 'p',
+				status: 'ACTIVE',
+				sequence: 1,
+				hasHttpPorts: true,
+				managedRuntimeReferences: [{ key: 'FABRIKA_RELEASE', content: `\${FABRIKA_MENV_${'a'.repeat(48)}_R}` }],
+			},
+			{ id: 'v2', serviceStackId: 's', projectId: 'p', status: 'BUILDING', sequence: 2, activateAt: 0, syntheticFailure: 'LOCAL_MISSING_UPLOAD' },
+		],
+		processes: [{ id: 'process', actionName: 'stack.build', serviceStackId: 's', projectId: 'p', appVersionId: 'v2', pendingReads: 1 }],
+		integrationTokens: [{
+			id: 't',
+			clientId: 'c',
+			name: 'token',
+			created: 'then',
+			lastUpdate: 'now',
+			projects: [{ projectId: 'p' }, { projectId: 'q', roleCode: 'READ_ONLY' }],
+			roleCode: 'ADMIN',
+		}],
+		uploadGrants: [
+			{ appVersionId: 'v1', capabilitySha256: 'a'.repeat(64), deleted: false, receipt: { compressedBytes: 10, compressedSha256: 'b'.repeat(64) } },
+			{ appVersionId: 'v2', capabilitySha256: 'c'.repeat(64), deleted: true },
+		],
+	}
+	expect(parseSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot)
+})
+
+test('the state file refuses an expanded managed value and a raw upload capability', () => {
+	const version = { id: 'v', projectId: 'p', serviceStackId: 's', status: 'BUILDING', sequence: 1 }
+	const references = [{ key: 'FABRIKA_RELEASE', content: 'expanded-secret-value' }]
+	expect(() => parseSnapshot({ ...emptySnapshot(), appVersions: [{ ...version, managedRuntimeReferences: references }] })).toThrow(
+		/^invalid Zerops emulator state at appVersions\.0\.managedRuntimeReferences\.0\.content: .*; run `bun run local:reset`$/,
+	)
+	const grant = { appVersionId: 'v', capabilitySha256: 'a'.repeat(64), deleted: false, capability: 'secret' }
+	expect(() => parseSnapshot({ ...emptySnapshot(), uploadGrants: [grant] })).toThrow(
+		/^invalid Zerops emulator state at uploadGrants\.0: .*; run `bun run local:reset`$/,
+	)
 })

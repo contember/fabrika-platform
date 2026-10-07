@@ -24,6 +24,7 @@ import {
 	parseManagedBinding,
 	parseManagedCheckpoint,
 	parseManagedMarker,
+	parseManagedOwner,
 	parseManagedValues,
 	serializeManagedMarker,
 	serializeManagedOwner,
@@ -206,6 +207,22 @@ describe('managed-environment protocol', () => {
 				expect(String(error)).toContain('invalid managed-environment')
 			}
 		}
+	})
+
+	test('owner serialization keeps the canonical field order', () => {
+		expect(serializeManagedOwner(owner)).toBe(
+			'{"protocol":1,"appId":"demo","environment":"test","namespaceId":"namespace","projectId":"project","serviceId":"service","hostname":"demoapi"}',
+		)
+	})
+
+	test('a prototyped record, a hidden property or a symbol key is refused', () => {
+		for (
+			const value of [
+				Object.create(owner),
+				Object.defineProperty({ ...owner }, 'hidden', { value: 'secret' }),
+				{ ...owner, [Symbol('hidden')]: 'secret' },
+			]
+		) expect(() => parseManagedOwner(value)).toThrow('invalid managed-environment protocol data')
 	})
 
 	test('marker requires both immutable bootstrap coordinates and rejects a mutable version pointer', () => {

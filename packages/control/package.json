@@ -18,6 +18,36 @@
 			"bun": "./fabrika.schema.ts",
 			"types": "./fabrika.schema.ts",
 			"default": "./fabrika.schema.ts"
+		},
+		"./api/provider-envelope": {
+			"bun": "./src/api/provider-envelope.ts",
+			"types": "./src/api/provider-envelope.ts",
+			"default": "./src/api/provider-envelope.ts"
+		},
+		"./github-connection-store": {
+			"bun": "./src/github-connection-store.ts",
+			"types": "./src/github-connection-store.ts",
+			"default": "./src/github-connection-store.ts"
+		},
+		"./iam-admin": {
+			"bun": "./src/iam-admin.ts",
+			"types": "./src/iam-admin.ts",
+			"default": "./src/iam-admin.ts"
+		},
+		"./repo-source": {
+			"bun": "./src/repo-source.ts",
+			"types": "./src/repo-source.ts",
+			"default": "./src/repo-source.ts"
+		},
+		"./run-ownership": {
+			"bun": "./src/run-ownership.ts",
+			"types": "./src/run-ownership.ts",
+			"default": "./src/run-ownership.ts"
+		},
+		"./vault": {
+			"bun": "./src/vault.ts",
+			"types": "./src/vault.ts",
+			"default": "./src/vault.ts"
 		}
 	},
 	"scripts": {

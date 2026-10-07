@@ -12,6 +12,7 @@ import type {
 } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
+import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository, uuidv7 } from '../db'
@@ -970,7 +971,7 @@ describe('provider-neutral run lifecycle', () => {
 		expect(logged.join('\n')).not.toContain('must-not-reach-provider')
 	})
 
-	// ── ADR-0021 return origins (backlog 51) ────────────────────────────────────
+	// ── ADR-0022 return origins (backlog 51) ────────────────────────────────────
 	//
 	// The registration is a fact the CONTROL PLANE knows, so this is the layer that decides it: what
 	// reaches the provider here is what the deploy step hands to IAM's registry. All three acceptance
@@ -1250,5 +1251,16 @@ describe('parseProviderEnvelope', () => {
 		})
 		expect(() => parseProviderEnvelope('{"provider":"third","version":1}', 'target')).toThrow('provider envelope')
 		expect(() => parseProviderEnvelope('{', 'target')).toThrow('valid JSON')
+	})
+
+	test('a persisted version 0 envelope is still read, while the API refuses one and an empty provider', () => {
+		expect(parseProviderEnvelope('{"provider":"test","version":0,"payload":null,"extra":true}', 'target')).toEqual({
+			provider: 'test',
+			version: 0,
+			payload: null,
+		})
+		expect(() => parseProviderEnvelope('{"provider":"","version":1,"payload":null}', 'target')).toThrow('target is not a provider envelope')
+		expect(readProviderEnvelope({ provider: 'test', version: 0, payload: null })).toBeNull()
+		expect(readProviderEnvelope({ provider: 'test', version: 1 })).toBeNull()
 	})
 })

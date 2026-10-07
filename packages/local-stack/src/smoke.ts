@@ -1,3 +1,5 @@
+import { normalizeRepoUrl } from '@fabrika/control/repo-source'
+import { DEPLOY_LEASE_TTL_MS } from '@fabrika/control/run-ownership'
 import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
 import {
 	DEFAULT_OPERATIONS_SERVICE_KEY,
@@ -20,8 +22,6 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { normalizeRepoUrl } from '../../control/src/repo-source'
-import { DEPLOY_LEASE_TTL_MS } from '../../control/src/run-ownership'
 import { confirmStagedManagedBinding } from '../../provider-zerops/src/managed-environment/admission'
 import { type ManagedCheckpoint, type ManagedKey, verifyManagedCheckpoint } from '../../provider-zerops/src/managed-environment/protocol'
 import {
@@ -39,7 +39,6 @@ import {
 	appSourceSchema,
 	completedRunSchema,
 	createdNoteSchema,
-	deployLeaseSchema,
 	environmentViewSchema,
 	errorResponseSchema,
 	iamSchemaResponseSchema,
@@ -69,6 +68,8 @@ const NOTES_SOURCE_CONNECTION = LOCAL_SOURCE_CONNECTIONS[0]
 if (NOTES_SOURCE_CONNECTION === undefined) throw new Error('the local source connection fixture is empty')
 const EXTERNAL_ACTIVATION_WAIT_MS = 11_000
 const POLL_INTERVAL_MS = 200
+// Production runs the cron every 5 min; the smoke compresses that so the lease expiry dominates the wait.
+const MAINTENANCE_CRON_INTERVAL_MS = 10_000
 const POLL_TIMEOUT_MS = 30_000
 // Six sequential user-data syncs follow proxy synchronization and import; build submission can retry sync conflicts.
 export const DURABLE_BUILD_WAIT_MS = 120_000
@@ -336,41 +337,6 @@ const readRunCheckpoint = async (runId: string): Promise<ManagedCheckpoint | nul
 	return output === '' ? null : verifyManagedCheckpoint(parseJson(output, 'provider checkpoint'))
 }
 
-export const waitForDeployLeaseExpiry = async (
-	read: () => Promise<{ expiresAt: number } | null>,
-	timing: { now: () => number; sleep: (ms: number) => Promise<unknown> } = { now: Date.now, sleep: Bun.sleep },
-): Promise<void> => {
-	const deadline = timing.now() + DEPLOY_LEASE_TTL_MS + 60_000
-	let announced = false
-	for (;;) {
-		const lease = await read()
-		const now = timing.now()
-		if (lease === null || lease.expiresAt <= now) return
-		if (now >= deadline) throw new Error('Timed out waiting for the killed Control invocation’s deploy lease to expire naturally')
-		if (!announced) {
-			console.info(
-				`Waiting for persisted deploy lease expiry at ${new Date(lease.expiresAt).toISOString()} (timeout in ${
-					Math.ceil((deadline - now) / 60_000)
-				} minutes; no lease mutation)`,
-			)
-			announced = true
-		}
-		await timing.sleep(Math.min(30_000, lease.expiresAt - now + 1000, deadline - now))
-	}
-}
-
-const readNotesDeployLease = async () =>
-	deployLeaseSchema.parse(parseJson(
-		(await postgresOutput(
-			'control',
-			`SELECT COALESCE(
-		(SELECT json_build_object('expiresAt', expires_at) FROM deploy_locks WHERE lock_key = '${NOTES_APP_ID}:${NOTES_ENVIRONMENT}'),
-		'null'::json
-	)`,
-		)).trim(),
-		'Control deploy lease query',
-	))
-
 const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceManifest): Promise<void> => {
 	const view = namespaceTargetViewSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: 'apps-prod' }))
 	if (view.target.provider !== 'zerops' || view.target.version !== zeropsNamespaceTargetCodec.version) {
@@ -456,13 +422,17 @@ const proveRestartReconciliation = async (
 	}
 	console.info(`Deploy ${runId} reached the external Zerops pipeline; killing control`)
 	await compose(['kill', 'control'])
-	await waitForDeployLeaseExpiry(readNotesDeployLease)
 	await Bun.sleep(EXTERNAL_ACTIVATION_WAIT_MS)
 	await compose(['up', '--detach', '--wait', 'control'])
+	// Startup reconcile cannot take the killed holder's lease; production recovers through the maintenance cron once it expires.
 	await poll(
-		'startup reconciliation',
-		async () => runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId })),
+		'maintenance-cron reconciliation after the killed deploy lease expires',
+		async () => {
+			await compose(['exec', '-T', 'control', 'bun', 'packages/control/src/node/cron.ts'], true, false)
+			return runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
+		},
 		(value) => value.status === 'succeeded',
+		{ timeoutMs: DEPLOY_LEASE_TTL_MS + 60_000, sleep: () => Bun.sleep(MAINTENANCE_CRON_INTERVAL_MS) },
 	)
 	const completed = await controlRequest('runs.get', machineKey, { runId })
 	const commitSha = completedRunSchema.parse(completed).commitSha

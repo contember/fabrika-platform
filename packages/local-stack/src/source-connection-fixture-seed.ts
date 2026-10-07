@@ -1,3 +1,6 @@
+import { githubWebhookSecretLabel } from '@fabrika/control/github-connection-store'
+import { Vault } from '@fabrika/control/vault'
+import { PostgresDatabase } from '@fabrika/platform-node'
 import {
 	decodeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundleV2,
@@ -6,9 +9,6 @@ import {
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { githubWebhookSecretLabel } from '../../control/src/github-connection-store'
-import { Vault } from '../../control/src/vault'
-import { PostgresDatabase } from '../../platform-node/src/sql-postgres'
 import { LOCAL_SOURCE_CONNECTIONS, type LocalSourceConnectionFixture } from './source-connection-fixture'
 
 const SOURCE_ENV = resolve(import.meta.dir, '..', '.state', 'source.env')

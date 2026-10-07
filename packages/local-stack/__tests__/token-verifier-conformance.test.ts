@@ -17,11 +17,11 @@
  * because `jose` resolves from that package, not from this one.
  */
 
+import { TokenVerifier as AuthTokenVerifier } from '@fabrika/auth'
+import { TokenVerifier as ProxyTokenVerifier } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
 import { IamRpcStub } from '../../auth/src/__tests__/stub'
-import { TokenVerifier as AuthTokenVerifier } from '../../auth/src/verify'
 import { APP, foreignPrivateKey, ISSUER, PUBLIC_JWKS, ROTATED_JWKS, rotatedPrivateKey, signToken } from '../../proxy-core/src/__tests__/helpers'
-import { TokenVerifier as ProxyTokenVerifier } from '../../proxy-core/src/verifier'
 
 /** The three states, flattened to one word so two different result types compare directly. */
 type Verdict = 'valid' | 'invalid' | 'unavailable'

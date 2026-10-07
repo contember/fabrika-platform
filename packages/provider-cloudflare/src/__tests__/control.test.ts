@@ -565,6 +565,10 @@ describe('Cloudflare control provider', () => {
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: 'https://api.example.com' })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [42] })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [''] })).toBe(false)
+		for (const ref of ['main', COMMIT_SHA.toUpperCase(), `${COMMIT_SHA}\n`, COMMIT_SHA.slice(1)]) {
+			expect(isCloudflareRunnerJob({ ...valid, ref })).toBe(false)
+		}
+		expect(isCloudflareRunnerJob({ ...valid, ref: 'main', dryRun: true })).toBe(true)
 	})
 
 	test('rejects job values that would become an option, a path or a foreign host in the container', () => {

@@ -406,6 +406,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		})
 		expect(() => decodeControlJobMessage({ kind: 'sweep' })).toThrow('unknown kind')
 		expect(() => decodeControlJobMessage({ kind: 'namespace', mutation: 'provision' })).toThrow('no namespaceId')
+		expect(() => decodeControlJobMessage({ kind: 'namespace', namespaceId: '', mutation: 'reconcile' })).toThrow('no namespaceId')
 		expect(() => decodeControlJobMessage({ kind: 'namespace', namespaceId: 'apps-prod' })).toThrow('no mutation')
 		expect(() => decodeControlJobMessage({ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'delete' })).toThrow('no mutation')
 

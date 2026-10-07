@@ -400,6 +400,14 @@ describe('Zerops source v2 resolve and upload wire contracts', () => {
 		) expect(() => decodeZeropsSourceResolveRequestV2(value)).toThrow()
 	})
 
+	test('the private installation id is a positive safe integer', () => {
+		for (const installationId of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN, '42']) {
+			expect(() => decodeZeropsSourceResolveRequestV2({ ...resolve, privateBinding: { ...privateBinding, installationId } })).toThrow()
+		}
+		const largest = { ...privateBinding, installationId: Number.MAX_SAFE_INTEGER }
+		expect(decodeZeropsSourceResolveRequestV2({ ...resolve, privateBinding: largest }).privateBinding).toEqual(largest)
+	})
+
 	test('rejects partial, malformed, flattened, or extended upload coordinates', () => {
 		for (
 			const value of [
@@ -650,7 +658,7 @@ describe('webhook configure URL grammar', () => {
 	test('refuses anything else, the unscoped Cloudflare route included', () => {
 		for (
 			const url of [
-				// Only a Cloudflare composition answers here, and it never reaches this wire (ADR-0039).
+				// Only a Cloudflare composition answers here, and it never reaches this wire (ADR-0029).
 				'https://control.example.test/webhooks/github',
 				'http://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
 				'https://control.example.test/webhooks/github/one/two',
@@ -663,5 +671,179 @@ describe('webhook configure URL grammar', () => {
 				'https://control.example.test:8443/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
 			]
 		) expect(() => response(url)).toThrow()
+	})
+})
+
+describe('Zerops source wire rules', () => {
+	const connectionId = 'connection:0198'
+	const management: { protocolVersion: 1; connectionId: string; credentialSha256: string } = {
+		protocolVersion: 1,
+		connectionId,
+		credentialSha256: descriptorSha,
+	}
+	const canonicalBundle =
+		'{"version":2,"connectionId":"connection:0198","githubAppId":"123","privateKeyPem":"-----BEGIN PRIVATE KEY-----\\nMAMCAQE=\\n-----END PRIVATE KEY-----\\n"}'
+	const githubApp = {
+		id: 123,
+		slug: 'example-app',
+		htmlUrl: 'https://github.com/apps/example-app',
+		public: false,
+		owner: { login: 'Example', type: 'Organization' },
+		permissions: { contents: 'read' },
+		events: ['push'],
+	}
+	const active = { protocolVersion: 2, connectionId, credentialVersion: 2, credentialSha256: descriptorSha, githubApp }
+
+	test('the credential digest is SHA-256 over the exact canonical bytes', async () => {
+		expect(await sha256ZeropsSourceCredentialBundleV2(canonicalBundle)).toBe('5827d847d15d7bdc34ba4719f00605a2c6f4c1965e5812939a2c46523afa706a')
+	})
+
+	test('a credential bundle with changed bytes is refused even when its JSON meaning is unchanged', () => {
+		for (
+			const value of [
+				` ${canonicalBundle}`,
+				`${canonicalBundle}\n`,
+				canonicalBundle.replace('"version":2', '"version":2,"version":2'),
+				canonicalBundle.replace('connection:0198', 'connection\\u003a0198'),
+			]
+		) expect(() => decodeZeropsSourceCredentialBundleV2(value)).toThrow('canonical JSON')
+	})
+
+	test('a malformed PEM is refused, not repaired', () => {
+		for (
+			const value of [
+				privateKeyPem.replaceAll('\n', '\r\n'),
+				privateKeyPem.replace('END PRIVATE KEY', 'END RSA PRIVATE KEY'),
+				privateKeyPem.replace('MAMCAQE=', 'AAAA'),
+				privateKeyPem.replace('MAMCAQE=', 'MAM=\nCAQE='),
+				privateKeyPem.replace('MAMCAQE=', 'MAMCAQE=\n'),
+				'not a key',
+			]
+		) expect(() => buildZeropsSourceCredentialBundleV2({ connectionId, githubAppId: '123', privateKeyPem: value })).toThrow()
+	})
+
+	test('the GitHub App identity, permissions and events stay closed', () => {
+		for (
+			const override of [
+				{ owner: { login: 'Example', type: 'User' } },
+				{ owner: { ...githubApp.owner, id: 1 } },
+				{ permissions: { contents: 'write' } },
+				{ permissions: { contents: 'read', metadata: 'read' } },
+				{ events: [] },
+				{ events: ['push', 'push'] },
+				{ htmlUrl: 'https://github.com/apps/another-app' },
+				{ htmlUrl: 'https://user:secret@github.com/apps/example-app' },
+				{ htmlUrl: 'https://github.com/apps/example-app?secret=token' },
+			]
+		) expect(() => decodeZeropsSourceCredentialActivateResponseV2({ ...active, githubApp: { ...githubApp, ...override } })).toThrow()
+	})
+
+	test('only an organization scope is lowercased; a repository owner must already be lowercase', () => {
+		expect(decodeZeropsSourceInstallationsVerifyRequest({ ...management, scope: { kind: 'organization', organization: 'ExAmPlE' } })).toEqual({
+			...management,
+			scope: { kind: 'organization', organization: 'example' },
+		})
+		expect(() => decodeZeropsSourceResolveRequest({ ...resolveRequestFor('repo'), repository: { owner: 'Contember', name: 'repo' } })).toThrow()
+	})
+
+	test('a repository scope holds 1 to 100 entries', () => {
+		const repositories = Array.from({ length: 100 }, (_, index) => ({ owner: 'example', name: `repo-${index}` }))
+		expect(decodeZeropsSourceInstallationsVerifyRequest({ ...management, scope: { kind: 'repositories', repositories } }).scope).toEqual({
+			kind: 'repositories',
+			repositories,
+		})
+		for (const entries of [[], [...repositories, repository]]) {
+			expect(() => decodeZeropsSourceInstallationsVerifyRequest({ ...management, scope: { kind: 'repositories', repositories: entries } })).toThrow()
+		}
+	})
+
+	test('status variants refuse each other’s fields and an unsupported credential version', () => {
+		expect(() => decodeZeropsSourceCredentialStatusResponseV2({ ...active, state: 'anonymous' })).toThrow('unknown field')
+		expect(() => decodeZeropsSourceCredentialStatusResponseV2({ protocolVersion: 2, connectionId, state: 'active' })).toThrow()
+		expect(() => decodeZeropsSourceCredentialStatusResponseV2({ ...active, state: 'active', credentialVersion: 1 })).toThrow()
+	})
+
+	const secret = 'ghs_never_echo_this_value'
+	const expectRedacted = (operation: () => unknown): unknown => {
+		let caught: unknown
+		try {
+			operation()
+		} catch (error) {
+			caught = error
+		}
+		expect(caught).toBeInstanceOf(Error)
+		expect(caught instanceof Error ? caught.message : '').not.toContain(secret)
+		expect(String(caught)).not.toContain(secret)
+		expect(JSON.stringify(caught)).not.toContain(secret)
+		return caught
+	}
+
+	const resolveV1 = { protocolVersion: 1, runId: 'run-1', repository, requestedRef: 'release/next', descriptorSha256: descriptorSha }
+	const uploadV1 = {
+		protocolVersion: 1,
+		runId: 'run-1',
+		appVersionId: 'version-1',
+		repository,
+		commitSha: sha40,
+		uploadUrl: 'https://storage.example.test/upload?signature=secret',
+		descriptor: { path: 'zerops.yaml', sha256: descriptorSha },
+	}
+	const resolveResponse = { protocolVersion: 1, runId: 'run-1', commitSha: sha40, descriptorSha256: descriptorSha }
+	const uploadResponse = { ...resolveResponse, appVersionId: 'version-1' }
+	const cancel = { protocolVersion: 1, runId: 'run-1', appVersionId: 'version-1' }
+	const webhookUrl = 'https://control.example.test/webhooks/github/connection:0198'
+	const decoders: { name: string; decode: (value: unknown) => unknown; wire: Record<string, unknown> }[] = [
+		{ name: 'resolve v1', decode: decodeZeropsSourceResolveRequest, wire: resolveV1 },
+		{ name: 'resolve v2', decode: decodeZeropsSourceResolveRequestV2, wire: { ...resolveV1, protocolVersion: 2 } },
+		{ name: 'resolve response v1', decode: decodeZeropsSourceResolveResponse, wire: resolveResponse },
+		{ name: 'resolve response v2', decode: decodeZeropsSourceResolveResponseV2, wire: { ...resolveResponse, protocolVersion: 2 } },
+		{ name: 'upload v1', decode: decodeZeropsSourceUploadRequest, wire: uploadV1 },
+		{ name: 'upload v2', decode: decodeZeropsSourceUploadRequestV2, wire: { ...uploadV1, protocolVersion: 2 } },
+		{ name: 'upload response v1', decode: decodeZeropsSourceUploadResponse, wire: uploadResponse },
+		{ name: 'upload response v2', decode: decodeZeropsSourceUploadResponseV2, wire: { ...uploadResponse, protocolVersion: 2 } },
+		{ name: 'cancel', decode: decodeZeropsSourceCancelRequest, wire: cancel },
+		{ name: 'cancel response', decode: decodeZeropsSourceCancelResponse, wire: cancel },
+		{
+			name: 'activation',
+			decode: decodeZeropsSourceCredentialActivateRequestV2,
+			wire: { protocolVersion: 2, connectionId, credentialBundle: canonicalBundle, credentialSha256: descriptorSha },
+		},
+		{ name: 'activation response', decode: decodeZeropsSourceCredentialActivateResponseV2, wire: active },
+		{ name: 'status', decode: decodeZeropsSourceCredentialStatusRequestV2, wire: { protocolVersion: 2, connectionId } },
+		{ name: 'anonymous status', decode: decodeZeropsSourceCredentialStatusResponseV2, wire: { protocolVersion: 2, connectionId, state: 'anonymous' } },
+		{ name: 'active status', decode: decodeZeropsSourceCredentialStatusResponseV2, wire: { ...active, state: 'active' } },
+		{ name: 'webhook', decode: decodeZeropsSourceWebhookConfigureRequest, wire: { ...management, url: webhookUrl, secret: 'webhook-secret' } },
+		{
+			name: 'webhook response',
+			decode: decodeZeropsSourceWebhookConfigureResponse,
+			wire: { ...management, webhook: { url: webhookUrl, contentType: 'json', insecureSsl: '0' } },
+		},
+		{
+			name: 'organization verification',
+			decode: decodeZeropsSourceInstallationsVerifyRequest,
+			wire: { ...management, scope: { kind: 'organization', organization: 'example' } },
+		},
+		{
+			name: 'installed installation',
+			decode: decodeZeropsSourceInstallationsVerifyResponse,
+			wire: { ...management, installation: { status: 'installed', installationId: 1, accountLogin: 'Example', repositorySelection: 'all' } },
+		},
+	]
+
+	test.each(decoders)('$name accepts its wire shape and never echoes an unknown key or value', ({ decode, wire }) => {
+		expect(decode(wire)).toEqual(wire)
+		expect(String(expectRedacted(() => decode({ ...wire, [secret]: secret })))).toContain('unknown field')
+	})
+
+	test('discriminators, enum values and nested unknown keys stay out of the error', () => {
+		for (
+			const operation of [
+				() => decodeZeropsSourceErrorEnvelope({ error: { code: secret, stage: secret, retryable: true } }),
+				() => decodeZeropsSourceCredentialStatusResponseV2({ protocolVersion: 2, connectionId, state: secret }),
+				() =>
+					decodeZeropsSourceCredentialActivateResponseV2({ ...active, githubApp: { ...githubApp, permissions: { contents: 'read', [secret]: true } } }),
+				() => decodeZeropsSourceCredentialBundleV2(canonicalBundle.replace('"version":2', `"version":"${secret}"`)),
+			]
+		) expectRedacted(operation)
 	})
 })

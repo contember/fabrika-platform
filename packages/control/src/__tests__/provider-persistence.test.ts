@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { parseProviderJson, serializeProviderJson } from '../db/runs'
 import { createHarness, queryRows } from './helpers/harness'
 
 const targetJson = JSON.stringify({ provider: 'harbor', version: 2, payload: { region: 'eu-west' } })
@@ -456,5 +457,16 @@ describe('generic provider persistence', () => {
 		})
 		sqlite.close()
 		expect(() => migrate('different-project')).toThrow()
+	})
+})
+
+describe('provider checkpoint JSON', () => {
+	test('keeps keys, order and shared references byte-exact and refuses non-finite numbers', () => {
+		const raw = '{"z":1,"__proto__":{"kept":true},"a":[null,false,"x"]}'
+		expect(serializeProviderJson(parseProviderJson(raw, 'checkpoint'))).toBe(raw)
+		const shared = { value: 1 }
+		expect(serializeProviderJson({ first: shared, second: shared })).toBe('{"first":{"value":1},"second":{"value":1}}')
+		expect(() => parseProviderJson('1e400', 'checkpoint')).toThrow('checkpoint is not a JSON value')
+		expect(() => serializeProviderJson({ value: Number.NaN })).toThrow('provider checkpoint is not a JSON value')
 	})
 })

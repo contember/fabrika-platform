@@ -315,6 +315,19 @@ describe('local Zerops emulator', () => {
 		const response = await handler(new Request('http://zerops.local/api/rest/public/__local/state'))
 		expect(response.status).toBe(401)
 	})
+
+	test('checks the bearer and the resource before parsing the body, and keeps the error envelope', async () => {
+		const handler = await createZeropsEmulator({ token })
+		const send = (path: string, body: string, bearer = token) =>
+			handler(new Request(`http://zerops.local/api/rest/public${path}`, { method: 'POST', headers: { authorization: `Bearer ${bearer}` }, body }))
+		const denied = await send('/client/c/project/import', '{', 'wrong')
+		expect(denied.status).toBe(401)
+		expect(await denied.json()).toEqual({ error: { code: 'UNAUTHORIZED', message: 'invalid bearer token' } })
+		expect((await send('/project/missing/service-stack/import', '{')).status).toBe(404)
+		const malformed = await send('/client/c/project/import', '{')
+		expect(malformed.status).toBe(400)
+		expect(await malformed.json()).toEqual({ error: { code: 'BAD_REQUEST', message: 'request body must be JSON' } })
+	})
 })
 
 /**

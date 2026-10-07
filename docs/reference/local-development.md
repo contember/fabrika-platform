@@ -31,8 +31,8 @@ machine API key described below.
 2. registers the notes app from its compiled Zerops manifest;
 3. triggers a deploy and waits for an external app-version id;
 4. hard-kills control while the emulated pipeline is `BUILDING`;
-5. starts control after the pipeline becomes `ACTIVE` and verifies startup
-   reconciliation plus terminal release projection;
+5. starts control after the pipeline becomes `ACTIVE`, runs the maintenance cron until the dead
+   holder's deploy lease expires, and verifies that it settles the run plus terminal release projection;
 6. verifies the explicit notes `publicOrigin`, stable managed ingest
    configuration, and deploy-scoped release values on the app service;
 7. checks the reconciled IAM schema, public and authenticated proxy routes, and
