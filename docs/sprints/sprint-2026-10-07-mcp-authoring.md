@@ -12,8 +12,8 @@ stage and production deployment on Zerops, not component test counts.
 ## Refs re-verified at HEAD (2026-10-07)
 
 - ✔ A manual run accepts an explicit ref and an optional pinned commit — `packages/control/src/db/runs.ts:106`.
-- ✔ Zerops deploy honours a pinned commit through Source resolve — `packages/control/src/run-lifecycle.ts:390`.
-- ✔ Source authenticates Control with one RPC key and holds the GitHub App credentials — `packages/source-zerops/src/service.ts:120`.
+- ✔ Zerops deploy honours a pinned commit through the in-process source resolve — `packages/control/src/run-lifecycle.ts`.
+- ✔ Control holds each GitHub connection's App key in its vault (ADR-0029) — `packages/control/src/github/connections/credentials.ts`.
 - ✔ The proxy reads the console gates from `CONTROL_PROXY_GATES` — `packages/control/fabrika.gates.ts`.
 - ⚠ `main` has no OAuth server, no resource-token profile and no repository write client; all three are ported.
 
@@ -77,14 +77,14 @@ open PR. The MCP SDK (`@modelcontextprotocol/server`) is an approved new depende
   a commit creates exactly one new commit on the working branch; PR creation is idempotent per request key.
 - **Touch points.** `packages/github-app/src/`.
 
-### WU2 — Source workspace operations (M)
+### WU2 — Workspace operations through the connection's GitHub App (M)
 
-- **Verify first.** The GitHub App needs `contents: write` and `pull_requests: write`; confirm how the
-  connection capability (`builder-write`) is stored on `main`.
-- **Scope.** Port `SourceGitWorkspaces` and its private HTTP route and client. Source keeps the
-  GitHub credentials; Control sends only the operation.
-- **Acceptance.** Source tests with a mocked GitHub transport; Control never receives a GitHub token.
-- **Touch points.** `packages/source-zerops/src/workspace-*.ts`, `service.ts`.
+- **Verify first.** The GitHub App needs `contents: write` and `pull_requests: write`.
+- **Scope.** Execute workspace operations in Control through the binding's own GitHub App, the key read
+  from the vault per operation. (Planned in the Zerops Source service; `main` folded Source into Control.)
+- **Acceptance.** Tests with a fake App client: the bound connection's key opens the repository, a
+  foreign owner is refused before any client exists, GitHub refusals are classified without their text.
+- **Touch points.** `packages/control/src/github/workspace.ts`.
 
 ### WU3 — Control workspaces and stage deploy (M)
 
@@ -149,3 +149,23 @@ open PR. The MCP SDK (`@modelcontextprotocol/server`) is an approved new depende
 | 6    | WU7           | last                   |
 
 ## Run log
+
+- 2026-10-07 — All work units landed, each after an independent review and its fix round: contracts,
+  GitHub client, Source workspace route, proxy/SDK, IAM OAuth, Control MCP + one authoring env per
+  app, installation/local stack, in-process witness, builder fixture. Full `bun run test`: 4,512 + 323 + 180 pass, 0 fail (293 skipped: suites needing Postgres/S3 env). WU6 (template) needed no new code: `examples/zerops-app` is already the
+  ordinary Bun/Postgres app.
+- Review-driven changes beyond the plan: IAM's native verifier refuses resource tokens;
+  `get_deployment` is owner-scoped; `deploy_stage` always deploys the live head; all of `.github/`
+  is protected; one authoring environment per app; platform hosts are lowercased.
+- Known limits: an issued access token stays valid ≤ 300 s after revocation; a concurrent reset of a
+  workspace branch to an ancestor can still be fast-forwarded (REST has no compare-and-swap); two
+  concurrent `authoring: true` puts on different envs can race; existing sidecars need a hand edit to
+  pass `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`; the App identity DTOs still state `contents: read`.
+- Open acceptance (needs an operator): a real Claude/ChatGPT connector against a real installation,
+  a real GitHub App with write permissions, and a real Zerops stage build of a workspace commit.
+  The in-process witness does not run Caddy, a Zerops build, GitHub or a real client.
+- 2026-10-08 — Rebased onto the second simplification pass. Source is gone from `main`, so the Source
+  workspace route and its wire protocol were dropped; Control runs workspace operations itself
+  (`src/github/workspace.ts`) and repository paths are checked at the MCP boundary (`isRepositoryPath`).
+  The proxy OAuth contract moved into `@fabrika/proxy-core/manifest`, the installation into
+  `provider-zerops/src/installation`, and the migrations follow the squashed baselines (`0002_*`).
