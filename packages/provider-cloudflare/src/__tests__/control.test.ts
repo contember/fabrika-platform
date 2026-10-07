@@ -1,3 +1,4 @@
+import { ReconcileSchemaError } from '@fabrika/auth'
 import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
@@ -11,6 +12,7 @@ import {
 	createCloudflareControlProvider,
 	isCloudflareRunnerJob,
 } from '..'
+import type { CloudflareRunRecovery } from '../control'
 
 const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelope['payload'] }, value: T): ProviderEnvelope => ({
 	provider: 'cloudflare',
@@ -296,7 +298,7 @@ describe('Cloudflare control provider', () => {
 	})
 
 	test('startup errors remain ambiguous until the runner recovery gate fences late starts', async () => {
-		let state: 'running' | 'failed' = 'running'
+		let recovery: CloudflareRunRecovery = { state: 'running' }
 		let unavailable = true
 		const provider = createCloudflareControlProvider({
 			accountId: 'account',
@@ -310,7 +312,7 @@ describe('Cloudflare control provider', () => {
 			cancelRun: async () => {},
 			recoverRun: async () => {
 				if (unavailable) throw new Error('recovery RPC unavailable')
-				return state
+				return recovery
 			},
 		})
 		await expect(provider.deploy(deployInput())).rejects.toThrow('startup RPC unavailable')
@@ -325,8 +327,8 @@ describe('Cloudflare control provider', () => {
 		await expect(provider.reconcile(input)).rejects.toThrow('recovery RPC unavailable')
 		unavailable = false
 		expect(await provider.reconcile(input)).toEqual({ state: 'running' })
-		state = 'failed'
-		expect(await provider.reconcile(input)).toEqual({ state: 'failed' })
+		recovery = { state: 'failed', exitCode: 1 }
+		expect(await provider.reconcile(input)).toEqual({ state: 'failed', exitCode: 1 })
 	})
 	for (const kind of ['cancel_requested', 'lease_lost']) {
 		test(`${kind} interrupts an outstanding runner RPC without conflating lease loss with cancellation`, async () => {
@@ -747,6 +749,128 @@ describe('Cloudflare control provider', () => {
 		expect(await provider.deploy({ ...deployInput(), dryRun: false })).toMatchObject({ state: 'succeeded' })
 
 		expect(calls).toEqual([])
+	})
+
+	const recoveringProvider = (
+		recovery: CloudflareRunRecovery,
+		calls: Array<{ app: string; returnOrigins?: readonly string[] }>,
+		iamFailure?: Error,
+	) =>
+		createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			propustkaUrl: 'https://iam.example.com',
+			propustkaProvisioningKey: 'px_admin',
+			reconcileSchema: async (input) => {
+				calls.push({ app: input.app, ...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }) })
+				if (iamFailure !== undefined) throw iamFailure
+			},
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => {
+				throw new Error('a reconcile must not start a run')
+			},
+			cancelRun: async () => {},
+			recoverRun: async () => recovery,
+		})
+
+	const reconcileInput = (returnOrigins?: readonly string[], logs: string[] = []) => ({
+		runId: RUN_ID,
+		externalId: RUN_ID,
+		environment: deployInput().environment,
+		signal: new AbortController().signal,
+		checkpoint: async () => {},
+		log: async (line: string) => {
+			logs.push(line)
+		},
+		...(returnOrigins === undefined ? {} : { returnOrigins }),
+	})
+
+	test('a reconcile applies the persisted outcome IAM reconcile once, with return origins, before reporting it terminal', async () => {
+		const calls: Array<{ app: string; returnOrigins?: readonly string[] }> = []
+		const provider = recoveringProvider({
+			state: 'succeeded',
+			exitCode: 0,
+			iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[{"action":"notes.read"}],"roles":{}}' },
+		}, calls)
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+
+		expect(await provider.reconcile(reconcileInput(['https://api.example.com']))).toEqual({ state: 'succeeded', exitCode: 0 })
+		expect(calls).toEqual([{ app: 'api', returnOrigins: ['https://api.example.com'] }])
+	})
+
+	test('a reconcile of a run still in flight applies nothing', async () => {
+		const calls: Array<{ app: string }> = []
+		const provider = recoveringProvider({ state: 'running' }, calls)
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+
+		expect(await provider.reconcile(reconcileInput())).toEqual({ state: 'running' })
+		expect(calls).toEqual([])
+	})
+
+	test('a reconcile whose reported schema is invalid fails the run without touching IAM, and says why in the run log', async () => {
+		const calls: Array<{ app: string }> = []
+		const logs: string[] = []
+		const provider = recoveringProvider({
+			state: 'succeeded',
+			exitCode: 0,
+			artifactState: 'complete',
+			iamReconcile: { app: 'vozka', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' },
+		}, calls)
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+
+		expect(await provider.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'failed', artifactState: 'complete' })
+		expect(calls).toEqual([])
+		expect(logs).toEqual(['reconcile-schema failed: reported an authz schema for app "vozka", expected "api"'])
+	})
+
+	test('an unavailable IAM keeps the run in flight for the next reconcile, and logs the reason', async () => {
+		const calls: Array<{ app: string }> = []
+		const logs: string[] = []
+		const provider = recoveringProvider(
+			{ state: 'succeeded', exitCode: 0, iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' } },
+			calls,
+			new Error('PUT /admin/apps/api/schema failed (503): unavailable'),
+		)
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+
+		expect(await provider.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'running' })
+		expect(calls).toEqual([{ app: 'api' }])
+		expect(logs).toEqual(['reconcile-schema failed: PUT /admin/apps/api/schema failed (503): unavailable'])
+	})
+
+	test('an IAM refusal (4xx) fails the run instead of retrying it forever', async () => {
+		const calls: Array<{ app: string }> = []
+		const logs: string[] = []
+		const provider = recoveringProvider(
+			{ state: 'succeeded', exitCode: 0, iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' } },
+			calls,
+			new ReconcileSchemaError('PUT /admin/apps/api/schema failed (401): unauthorized', 401),
+		)
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+
+		expect(await provider.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'failed' })
+		expect(logs).toEqual(['reconcile-schema failed: PUT /admin/apps/api/schema failed (401): unauthorized'])
+	})
+
+	test('a dry status is projected dry with its artifact state, and an IAM report on it is refused', async () => {
+		const calls: Array<{ app: string }> = []
+		const dry = recoveringProvider({ state: 'succeeded', exitCode: 0, artifactState: 'not_applicable', dryRun: true }, calls)
+		if (dry.reconcile === undefined) throw new Error('missing recovery')
+		expect(await dry.reconcile(reconcileInput())).toEqual({ state: 'succeeded', exitCode: 0, artifactState: 'not_applicable', dryRun: true })
+
+		const logs: string[] = []
+		const reporting = recoveringProvider({
+			state: 'succeeded',
+			exitCode: 0,
+			dryRun: true,
+			iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' },
+		}, calls)
+		if (reporting.reconcile === undefined) throw new Error('missing recovery')
+		expect(await reporting.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'failed', dryRun: true })
+		expect(calls).toEqual([])
+		expect(logs).toEqual(['reconcile-schema refused: a dry run reported an authz schema'])
 	})
 
 	test('carries the control plane return origins to the runner', async () => {

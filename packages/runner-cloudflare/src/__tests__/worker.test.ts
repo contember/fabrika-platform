@@ -1,6 +1,5 @@
-import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { Database, type SQLQueryBindings } from 'bun:sqlite'
+import type { RunnerStatus } from '@fabrika/runner-contract'
 import { describe, expect, mock, spyOn, test } from 'bun:test'
 import { logsKey, statusKey } from '../relay'
 import type { Env } from '../worker-env'
@@ -8,7 +7,7 @@ import type { Env } from '../worker-env'
 // The RPC boundary itself: `startRun` / `cancelRun` must refuse a caller that does not present
 // `FABRIKA_RUNNER_KEY` BEFORE any side effect, because a Cloudflare service binding is not a
 // capability — any Worker on the account can bind `<env>-vozka-runner`. The fakes below make every
-// side effect (addressing the container DO, preparing a D1 statement) record itself and then throw,
+// side effect (addressing the container DO, touching R2) record itself and then throw,
 // so "refused first" is proved by an EMPTY record, not by the absence of an assertion.
 
 // `VozkaRunner` extends `WorkerEntrypoint`, and `RunnerContainer` extends `@cloudflare/containers`'
@@ -75,31 +74,6 @@ function runnerNamespace(touched: string[]): Env['RUNNER'] {
 	}
 }
 
-function database(touched: string[]): Env['DB'] {
-	return {
-		prepare(query: string): never {
-			touched.push(`prepare:${query}`)
-			throw new Error('unexpected D1 access')
-		},
-		batch(): never {
-			touched.push('batch')
-			throw new Error('unexpected D1 access')
-		},
-		exec(): never {
-			touched.push('exec')
-			throw new Error('unexpected D1 access')
-		},
-		withSession(): never {
-			touched.push('withSession')
-			throw new Error('unexpected D1 access')
-		},
-		dump(): never {
-			touched.push('dump')
-			throw new Error('unexpected D1 access')
-		},
-	}
-}
-
 function bucket(touched: string[]): Env['RUN_LOGS'] {
 	const record = (label: string) => (): never => {
 		touched.push(`r2:${label}`)
@@ -126,7 +100,6 @@ function harness(runnerKey?: string): Harness {
 	const env: Env = {
 		RUNNER: runnerNamespace(touched),
 		RUN_LOGS: bucket(touched),
-		DB: database(touched),
 		ENVIRONMENT: 'stage',
 		...(runnerKey === undefined ? {} : { FABRIKA_RUNNER_KEY: runnerKey }),
 	}
@@ -144,7 +117,7 @@ describe('VozkaRunner.startRun', () => {
 		expect(touched).toEqual([])
 	})
 
-	test('an unconfigured runner key denies every job, before the container or D1', async () => {
+	test('an unconfigured runner key denies every job, before the container or R2', async () => {
 		const { worker, touched } = harness()
 		await expect(worker.startRun(job)).rejects.toThrow('FABRIKA_RUNNER_KEY is not configured')
 		expect(touched).toEqual([])
@@ -186,7 +159,7 @@ describe('VozkaRunner.startRun', () => {
 })
 
 describe('VozkaRunner.sourceProtocol', () => {
-	test('capability admission authenticates without container, database or storage effects', async () => {
+	test('capability admission authenticates without container or storage effects', async () => {
 		const unconfigured = harness()
 		await expect(unconfigured.worker.sourceProtocol(RUNNER_KEY)).rejects.toThrow('FABRIKA_RUNNER_KEY is not configured')
 		expect(unconfigured.touched).toEqual([])
@@ -198,39 +171,19 @@ describe('VozkaRunner.sourceProtocol', () => {
 	})
 })
 
-function relayHarness(health: unknown, postError?: Error, failedWrites: readonly string[] = []) {
-	const sqlite = new Database(':memory:')
-	sqlite.exec('CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT, exit_code INTEGER, finished_at INTEGER, cancel_requested_at INTEGER)')
-	sqlite.run('INSERT INTO runs (id, status) VALUES (?, ?)', [RUN_ID, 'running'])
-	const statement = (sql: string, values: SQLQueryBindings[]): SqlStatement => ({
-		bind: (...input) =>
-			statement(
-				sql,
-				input.map((value) => {
-					if (value === null || typeof value === 'string' || typeof value === 'number') return value
-					throw new Error('unsupported SQL binding')
-				}),
-			),
-		run: async () => ({ meta: { changes: sqlite.query(sql).run(...values).changes } }),
-		first: () => {
-			throw new Error('unexpected first')
-		},
-		all: () => {
-			throw new Error('unexpected all')
-		},
-	})
-	const db: SqlDatabase = {
-		prepare: (sql) => statement(sql, []),
-		batch: () => {
-			throw new Error('unexpected batch')
-		},
-	}
+function relayHarness(
+	health: unknown,
+	options: { postError?: Error; failedWrites?: readonly string[]; recovery?: RunnerStatus | null; persisted?: RunnerStatus } = {},
+) {
+	const failedWrites = options.failedWrites ?? []
 	const objects = new Map<string, string>()
+	if (options.persisted !== undefined) objects.set(statusKey(RUN_ID), JSON.stringify(options.persisted))
 	const writeAttempts: string[] = []
 	const paths: string[] = []
 	const container = {
-		startDeploy: async (runId: string) => {
+		startDeploy: async (runId: string, dryRun: boolean) => {
 			expect(runId).toBe(RUN_ID)
+			expect(dryRun).toBe(false)
 		},
 		deployFetch: async (input: string, init?: RequestInit) => {
 			const path = new URL(input).pathname
@@ -240,14 +193,22 @@ function relayHarness(health: unknown, postError?: Error, failedWrites: readonly
 				expect(init).toEqual({ redirect: 'manual' })
 				return new Response(JSON.stringify(health))
 			}
-			if (path === '/run' && postError !== undefined) throw postError
+			if (path === '/run' && options.postError !== undefined) throw options.postError
 			throw new Error('unexpected container request')
 		},
 		heartbeat: async () => {},
+		recoverDeploy: async (runId: string) => {
+			paths.push(`recover:${runId}`)
+			if (options.recovery === undefined) throw new Error('unexpected recovery')
+			return options.recovery
+		},
 	}
 	const env = {
-		DB: db,
 		RUN_LOGS: {
+			get: async (key: string) => {
+				const value = objects.get(key)
+				return value === undefined ? null : { text: async () => value }
+			},
 			put: async (key: string, value: string) => {
 				writeAttempts.push(key)
 				if (failedWrites.includes(key)) throw new Error('R2 error contains private-storage-token')
@@ -259,69 +220,60 @@ function relayHarness(health: unknown, postError?: Error, failedWrites: readonly
 	}
 	const worker: unknown = Reflect.construct(VozkaRunner, [{ waitUntil: () => {} }, env])
 	if (!(worker instanceof VozkaRunner)) throw new Error('failed to construct Worker')
-	return { worker, sqlite, paths, objects, writeAttempts }
+	return { worker, paths, objects, writeAttempts }
 }
 
 describe('VozkaRunner image admission settlement', () => {
 	for (const failedWrites of [[logsKey(RUN_ID)], [statusKey(RUN_ID)], [logsKey(RUN_ID), statusKey(RUN_ID)]]) {
-		test(`known pre-POST refusal reaches the terminal DB co-write despite R2 failure: ${failedWrites.join(', ')}`, async () => {
-			const { worker, sqlite, paths, writeAttempts } = relayHarness({ status: 'ok', port: 8080 }, undefined, failedWrites)
+		test(`known pre-POST refusal still returns the failed status despite R2 failure: ${failedWrites.join(', ')}`, async () => {
+			const { worker, paths, writeAttempts } = relayHarness({ status: 'ok', port: 8080 }, { failedWrites })
 			const diagnostic = spyOn(console, 'error').mockImplementation(() => {})
 			try {
 				const result = await worker.startRun(job)
 				expect(result.status.state).toBe('failed')
 				expect(paths).toEqual(['/health'])
 				expect(writeAttempts).toEqual([logsKey(RUN_ID), statusKey(RUN_ID)])
-				const row = sqlite.query<{ status: string; finished_at: number | null }, []>('SELECT status, finished_at FROM runs').get()
-				expect(row?.status).toBe('failed')
-				expect(typeof row?.finished_at).toBe('number')
 				expect(diagnostic.mock.calls).toHaveLength(failedWrites.length)
 				expect(JSON.stringify(result) + JSON.stringify(diagnostic.mock.calls)).not.toContain('private-storage-token')
 			} finally {
 				diagnostic.mockRestore()
-				sqlite.close()
 			}
 		})
 	}
 
-	test('an old image produces zero job POSTs and immediately co-writes failed terminal database status', async () => {
-		const { worker, sqlite, paths, objects } = relayHarness({ status: 'ok', port: 8080 })
-		try {
-			const result = await worker.startRun(job)
-			expect(result.status.state).toBe('failed')
-			expect(paths).toEqual(['/health'])
-			expect(objects.get(logsKey(RUN_ID))).toContain('source protocol is unavailable or not supported')
-			expect(objects.get(statusKey(RUN_ID))).toBe(JSON.stringify(result.status))
-			const row = sqlite.query<{ status: string; finished_at: number | null }, []>('SELECT status, finished_at FROM runs').get()
-			expect(row?.status).toBe('failed')
-			expect(typeof row?.finished_at).toBe('number')
-		} finally {
-			sqlite.close()
-		}
+	test('an old image produces zero job POSTs and persists the failed status that recovery reads back', async () => {
+		const { worker, paths, objects } = relayHarness({ status: 'ok', port: 8080 })
+		const result = await worker.startRun(job)
+		expect(result.status.state).toBe('failed')
+		expect(paths).toEqual(['/health'])
+		expect(objects.get(logsKey(RUN_ID))).toContain('source protocol is unavailable or not supported')
+		expect(objects.get(statusKey(RUN_ID))).toBe(JSON.stringify(result.status))
+		expect(await worker.recoverRun(RUN_ID, RUNNER_KEY)).toEqual(result.status)
+		expect(paths).toEqual(['/health'])
 	})
 
-	test('ambiguous post-POST errors still throw and leave the accepted run available for recovery', async () => {
+	test('ambiguous post-POST errors still throw and leave the accepted run in flight for recovery', async () => {
 		const error = new Error('POST response lost')
-		const { worker, sqlite, paths, objects } = relayHarness({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }, error)
-		try {
-			await expect(worker.startRun(job)).rejects.toBe(error)
-			expect(paths).toEqual(['/health', '/run'])
-			expect(objects.size).toBe(0)
-			expect(sqlite.query<{ status: string }, []>('SELECT status FROM runs').get()?.status).toBe('running')
-		} finally {
-			sqlite.close()
-		}
+		const { worker, paths, objects } = relayHarness({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }, {
+			postError: error,
+			recovery: null,
+		})
+		await expect(worker.startRun(job)).rejects.toBe(error)
+		expect(paths).toEqual(['/health', '/run'])
+		expect(objects.size).toBe(0)
+		expect(await worker.recoverRun(RUN_ID, RUNNER_KEY)).toBeNull()
+		expect(paths).toEqual(['/health', '/run', `recover:${RUN_ID}`])
 	})
 })
 
 describe('VozkaRunner.cancelRun', () => {
-	test('an unconfigured runner key denies the cancel, before the container or D1', async () => {
+	test('an unconfigured runner key denies the cancel, before the container or R2', async () => {
 		const { worker, touched } = harness()
 		await expect(worker.cancelRun(RUN_ID, RUNNER_KEY)).rejects.toThrow('FABRIKA_RUNNER_KEY is not configured')
 		expect(touched).toEqual([])
 	})
 
-	test("a wrong key cannot destroy another run's container or fail its row", async () => {
+	test("a wrong key cannot destroy another run's container", async () => {
 		const { worker, touched } = harness(RUNNER_KEY)
 		await expect(worker.cancelRun(RUN_ID, 'guess')).rejects.toThrow('runner: unauthorized')
 		expect(touched).toEqual([])
@@ -341,12 +293,33 @@ describe('VozkaRunner.cancelRun', () => {
 })
 
 describe('VozkaRunner.recoverRun', () => {
-	test('recovery authenticates and validates coordinates before reading or fencing the container', async () => {
+	test('recovery authenticates and validates coordinates before reading storage or fencing the container', async () => {
 		const { worker, touched } = harness(RUNNER_KEY)
 		await expect(worker.recoverRun(RUN_ID, 'guess')).rejects.toThrow('runner: unauthorized')
 		await expect(worker.recoverRun('../../etc', RUNNER_KEY)).rejects.toThrow('runner: invalid run id')
 		expect(touched).toEqual([])
-		await expect(worker.recoverRun(RUN_ID, RUNNER_KEY)).rejects.toThrow(REACHED_CONTAINER)
-		expect(touched).toEqual([`idFromName:${RUN_ID}`])
+		await expect(worker.recoverRun(RUN_ID, RUNNER_KEY)).rejects.toThrow('unexpected R2 access')
+		expect(touched).toEqual(['r2:get'])
+	})
+
+	test('a persisted terminal status is returned with its IAM reconcile, without touching the container', async () => {
+		const persisted: RunnerStatus = {
+			runId: RUN_ID,
+			state: 'succeeded',
+			exitCode: 0,
+			iamReconcile: { app: 'api', schemaJson: '{"actions":[]}' },
+			startedAt: 1,
+			finishedAt: 9,
+		}
+		const { worker, paths } = relayHarness({}, { persisted })
+		expect(await worker.recoverRun(RUN_ID, RUNNER_KEY)).toEqual(persisted)
+		expect(paths).toEqual([])
+	})
+
+	test("with no persisted status the run's Durable Object settles it", async () => {
+		const settled: RunnerStatus = { runId: RUN_ID, state: 'failed', error: 'runner never dispatched the run', startedAt: 1, finishedAt: 1 }
+		const { worker, paths } = relayHarness({}, { recovery: settled })
+		expect(await worker.recoverRun(RUN_ID, RUNNER_KEY)).toEqual(settled)
+		expect(paths).toEqual([`recover:${RUN_ID}`])
 	})
 })

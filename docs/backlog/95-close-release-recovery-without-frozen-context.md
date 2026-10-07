@@ -16,7 +16,7 @@ The release parser also requires `uploadCredential.expiresAt > observedAt`. A te
 ## Approach / acceptance
 
 1. Decide who persists release intent and when, before provider effects. Define behavior when that persistence fails.
-2. Decide where exact artifact evidence becomes durable and how both the runner co-write and Control's post-runner correction use it.
+2. Decide where exact artifact evidence becomes durable and how Control's settlement of the runner outcome uses it.
 3. Decide whether an expired upload verifier may accompany a later terminal observation, independently of accepting artifact uploads. Preserve authority and historical identity; record any protocol change in an ADR.
 4. Implement only after those decisions are approved. Keep provider-neutral ownership, dual-runtime SQL transaction fencing and migration identity.
 5. Witness missing-start-context recovery, dry runs, exact artifact results, late completion past expiry, process interruption, and fast-runner/post-runner correction on SQLite and real PostgreSQL. Repeated replay must create no additional semantic revision.
@@ -26,6 +26,6 @@ The release parser also requires `uploadCredential.expiresAt > observedAt`. A te
 - `packages/control/src/run-lifecycle.ts`, `operations-releases.ts`, and `db/operations-releases.ts`
 - Control's run persistence and both migration bundles if approved decisions require new records
 - `packages/operations-contract/src/releases.ts` and Operations release/artifact handling
-- Runner outcome and terminal co-write boundaries
+- Runner outcome persistence and Control's settlement
 
 Origin: [platform simplification sprint](../archive/sprint-2026-10-04-platform-simplification.md).

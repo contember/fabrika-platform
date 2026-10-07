@@ -22,7 +22,6 @@
 		"@cloudflare/containers": "^0.0.30",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",
-		"@fabrika/platform": "workspace:*",
 		"@fabrika/runner-contract": "workspace:*"
 	},
 	"devDependencies": {

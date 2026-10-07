@@ -179,25 +179,25 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   admin surface per deploy; do not add a second lifecycle for this.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
-- **`markRunFailedAfterRunner` is the ONE succeeded→failed correction, and only the Cloudflare runner's
-  fast path earns it.** vozka-runner writes the terminal status from inside `startRun`, before the RPC
-  returns, so provider work that happens AFTER it — today the IAM schema reconcile — meets a row
-  `markRunFinished` will not move, and the run read green with one failed line in its log. When
-  `markRunFinished` returns false and the outcome is `failed`, `executeDeploy` applies the correction and
-  projects `failed`; a `succeeded` outcome over a terminal row stays `skipped`, because that is ordinary
-  redelivery and a second projection would double-count the release. It keeps the runner's `finished_at`
-  (that is when the work stopped) and refuses a cancelled run. Do not widen it into a general re-open.
+- **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
+  both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
+  restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the
+  status vozka-runner persisted in R2 (`recoverRun`, parsed in `platform-cf.ts`). Either way the provider
+  applies the outcome's IAM schema reconcile BEFORE Control marks the run terminal, so a terminal row is
+  never re-opened. An invalid report fails the run; on the reconcile path an IAM failure keeps it
+  `running` for the next cron, with the reason appended to the run log (`runLogs`). IAM replaces the
+  app's whole vocabulary, so a re-application after a lost lease is harmless. A redelivery or a second
+  reconcile finds the row terminal and applies nothing. A dry status is projected dry and applies nothing.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
-  `@fabrika/provider-cloudflare`; `@fabrika/runner-contract` contains only transport types and endpoint
-  constants, `@fabrika/runner-container` owns the Bun process and image, and
+  `@fabrika/provider-cloudflare`; `@fabrika/runner-contract` contains only transport schemas, types and
+  endpoint constants, `@fabrika/runner-container` owns the Bun process and image, and
   `@fabrika/runner-cloudflare` owns the executor Worker.
   The control plane has NO `Container` binding. The split exists because a deploy's final
   step runs `wrangler deploy` INSIDE the container, and when the target is fabrika that resets fabrika's DOs —
   so a container hosted in fabrika would reset ITSELF mid-deploy. Hosting it in vozka-runner means a fabrika
   deploy never touches it. As a consequence fabrika has no `Container` → no docker → it's deployable THROUGH
-  the runner. vozka-runner ALSO writes the terminal run status→D1 (`@fabrika/runner-cloudflare`'s `finishRun`), a
-  belt-and-suspenders co-write with `markRunFinished` made safe by the `WHERE status IN ('pending','running')`
-  guard — whichever survives the deploy records the run. vozka-runner is deployed out-of-band (its own bootstrap).
+  the runner. vozka-runner writes only R2 (logs and the terminal `status.json`), never the database.
+  vozka-runner is deployed out-of-band (its own bootstrap).
 - **Per-app-env deploy lock** (`@fabrika/platform`'s `SqlDeployLocks`, wired in `src/services.ts`; one
   `deploy_locks` ROW per `<app>:<env>`, NOT a DO — the implementation needs nothing but the `SqlDatabase`
   port, so it is portable and lives with the ports, not in this Worker):

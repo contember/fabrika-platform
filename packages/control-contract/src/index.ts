@@ -1,4 +1,5 @@
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
+import { z } from 'zod'
 
 export * from './builder-bootstrap.js'
 export * from './builder-connections.js'
@@ -132,12 +133,14 @@ export interface StartGitHubSourceConnectionResponse {
 	readonly continuePath: string
 }
 
-/** One redacted line of deploy output exposed by the control API. */
-export interface RunLogLine {
-	readonly ts: number
-	readonly stream: 'stdout' | 'stderr' | 'meta'
-	readonly text: string
-}
+/** One redacted line of deploy output: the runner's NDJSON log line and the control API's view of it. */
+export const runLogLineSchema = z.object({
+	ts: z.number().finite(),
+	stream: z.enum(['stdout', 'stderr', 'meta']),
+	text: z.string(),
+})
+
+export type RunLogLine = z.infer<typeof runLogLineSchema>
 
 /** Backward-compatible short name for browser consumers. */
 export type LogLine = RunLogLine

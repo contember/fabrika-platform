@@ -23,6 +23,7 @@ async function main(): Promise<void> {
 				reconcileProviderRuns({
 					repositories: repositories(runtime.env),
 					provider: runtime.provider,
+					runLogs: runtime.env.RUN_LOGS,
 					lock: deployLock(runtime.env),
 					operations: operationsReleaseDeps(runtime.env),
 				}),

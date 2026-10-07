@@ -1,5 +1,6 @@
+import { runLogLineSchema } from '@fabrika/control-contract'
 import { CLOUDFLARE_SOURCE_PROTOCOL } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_PORT } from '@fabrika/runner-contract'
+import { RUNNER_PORT, type RunnerStatus, runnerStatusSchema } from '@fabrika/runner-contract'
 import { z } from 'zod'
 
 export const runnerHealthSchema = z.object({
@@ -7,19 +8,6 @@ export const runnerHealthSchema = z.object({
 	port: z.literal(RUNNER_PORT),
 	sourceProtocol: z.literal(CLOUDFLARE_SOURCE_PROTOCOL),
 })
-
-export const runnerStatusSchema = z.object({
-	runId: z.string(),
-	state: z.enum(['pending', 'cloning', 'installing', 'deploying', 'succeeded', 'failed']),
-	exitCode: z.number().finite().optional(),
-	error: z.string().optional(),
-	artifactState: z.enum(['complete', 'incomplete', 'not_applicable']).optional(),
-	iamReconcile: z.object({ app: z.string(), schemaJson: z.string() }).passthrough().optional(),
-	startedAt: z.number().finite(),
-	finishedAt: z.number().finite().optional(),
-}).passthrough()
-
-export const runLogLineSchema = z.object({ ts: z.number().finite(), stream: z.enum(['stdout', 'stderr', 'meta']), text: z.string() }).passthrough()
 
 export const backstopPayloadSchema = z.object({ runId: z.string(), deadline: z.number().finite() })
 
@@ -35,4 +23,10 @@ export const parseRunLogLine = (raw: string) => {
 		if (parsed.success) return parsed.data
 	} catch {}
 	throw new Error('runner returned malformed log line')
+}
+
+/** Mark a status dry from the runner's own record of the job; whatever the container claimed is dropped. */
+export const stampDryRun = (status: RunnerStatus, dryRun: boolean): RunnerStatus => {
+	const { dryRun: _reported, ...rest } = status
+	return dryRun ? { ...rest, dryRun: true } : rest
 }

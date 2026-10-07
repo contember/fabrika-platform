@@ -1,7 +1,7 @@
 # @fabrika/runner-cloudflare
 
-The Cloudflare Worker that starts one deploy container per run, relays logs and status to R2, and
-records terminal outcomes in the control-plane database.
+The Cloudflare Worker that starts one deploy container per run and relays its logs and terminal status
+to R2. The control plane reads that status back and records the outcome in its own database.
 
 It is deployed out of band because deploying the control plane must not reset its active deploy
 container. The plain-Bun container image lives in `@fabrika/runner-container`. Each account's

@@ -2,14 +2,12 @@ import type { RunLogLine, RunnerStatus } from '@fabrika/runner-contract'
 import { expect, test } from 'bun:test'
 import { backstopPayloadSchema, parseRunLogLine, parseRunnerStatus } from '../protocol'
 
-test('status and NDJSON retain extensions and IAM report bytes', () => {
-	const report = { app: 'app', schemaJson: ' { "scopes": [] } ', extension: 1 }
-	const status = { runId: 'run', state: 'succeeded', startedAt: 1, iamReconcile: report, extension: { future: true } } satisfies RunnerStatus & {
-		extension: { future: boolean }
-	}
-	expect(parseRunnerStatus(status, 'run')).toEqual(status)
-	const line = { ts: 1, stream: 'stdout', text: 'output', extension: true } satisfies RunLogLine & { extension: boolean }
-	expect(parseRunLogLine(JSON.stringify(line))).toEqual(line)
+test('status and NDJSON keep IAM report bytes and strip undeclared fields', () => {
+	const report = { app: 'app', schemaJson: ' { "scopes": [] } ' }
+	const status = { runId: 'run', state: 'succeeded', startedAt: 1, iamReconcile: report } satisfies RunnerStatus
+	expect(parseRunnerStatus({ ...status, iamReconcile: { ...report, extension: 1 }, extension: { future: true } }, 'run')).toEqual(status)
+	const line = { ts: 1, stream: 'stdout', text: 'output' } satisfies RunLogLine
+	expect(parseRunLogLine(JSON.stringify({ ...line, extension: true }))).toEqual(line)
 })
 
 test('status rejects malformed nested reports and explicit null optional fields', () => {

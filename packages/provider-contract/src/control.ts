@@ -150,12 +150,18 @@ export interface ProviderReconcileInput extends ProviderRunReference {
 	readonly returnOrigins?: readonly string[]
 	/** Persist a credential-free recovery checkpoint before the next irreversible provider call. */
 	checkpoint(state: JsonValue): Promise<void>
+	/** Append a line to the run's log. */
+	log?(line: string): Promise<void>
 }
 
 /** The latest state reported while reconciling a platform-owned run. */
 export interface ProviderReconcileOutcome {
 	readonly state: 'running' | 'succeeded' | 'failed'
 	readonly exitCode?: number
+	/** See `ProviderTerminalOutcome.artifactState`. */
+	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
+	/** The settled run was a preview: core projects it as a dry run. */
+	readonly dryRun?: boolean
 }
 
 /** Write one secret value to provider-managed storage. */

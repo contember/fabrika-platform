@@ -1,7 +1,15 @@
 import type { AuthContext } from '@fabrika/auth'
-import type { CursorList, RunDto, RunListInput, RunLogLine, RunLogResponse, RunTailResponse, TriggerDeployRequest } from '@fabrika/control-contract'
+import {
+	type CursorList,
+	type RunDto,
+	type RunListInput,
+	type RunLogLine,
+	runLogLineSchema,
+	type RunLogResponse,
+	type RunTailResponse,
+	type TriggerDeployRequest,
+} from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
-import { z } from 'zod'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
@@ -146,12 +154,6 @@ function parseNdjsonLogs(text: string): RunLogLine[] {
 	}
 	return out
 }
-
-const runLogLineSchema = z.object({
-	ts: z.number(),
-	stream: z.enum(['stdout', 'stderr', 'meta']),
-	text: z.string(),
-})
 
 /**
  * Manual deploy trigger (the "Deploy" button / `triggerDeploy` RPC): resolve the app + env, create a

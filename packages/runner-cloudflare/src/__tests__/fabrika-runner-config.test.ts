@@ -1,11 +1,11 @@
-import { Container, D1Database, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
+import { Container, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import config, { buildRunnerWorker } from '../../fabrika-runner.config'
 
 // vozka-runner's own deploy surface uses the Cloudflare provider authoring API.
 // These tests prove: defineApp accepts it, the resource graph materializes the executor's binding set
-// (the RunnerContainer DO + the SHARED, adopted-by-name R2/D1), and it is INFRA — no Access, no schema,
-// no runtime secrets. The shared D1 must NOT declare a migrations dir (the control plane owns the schema).
+// (the RunnerContainer DO + the SHARED, adopted-by-name R2), and it is INFRA — no Access, no schema,
+// no runtime secrets. It binds no database: the control plane is the only writer of its own.
 
 /** Resolve a Worker binding by name (oblaka exposes the materialized graph on `worker.options`). */
 function binding(worker: Worker, name: string): unknown {
@@ -20,26 +20,20 @@ describe('defineApp(vozka-runner config)', () => {
 		expect(worker.options.main).toBe('./src/worker.ts')
 	})
 
-	test('binds the RunnerContainer DO + the shared (adopted) R2 + D1', () => {
+	test('binds the RunnerContainer DO + the shared (adopted) R2, and no database', () => {
 		const worker = buildRunnerWorker({ env: 'stage' })
 		const container = binding(worker, 'RUNNER')
 		expect(container).toBeInstanceOf(Container)
 		if (!(container instanceof Container)) throw new Error('RUNNER must be a Container')
 		expect(container.options.className).toBe('RunnerContainer')
 		expect(binding(worker, 'RUN_LOGS')).toBeInstanceOf(R2Bucket)
-		expect(binding(worker, 'DB')).toBeInstanceOf(D1Database)
+		expect(Object.keys(worker.options.bindings ?? {}).sort()).toEqual(['RUNNER', 'RUN_LOGS'])
 	})
 
-	test('the shared resources keep the control plane names (so oblaka ADOPTS them, not create new)', () => {
-		const worker = buildRunnerWorker({ env: 'stage' })
-		const logs = binding(worker, 'RUN_LOGS')
-		const db = binding(worker, 'DB')
+	test('the shared bucket keeps the control plane name (so oblaka ADOPTS it, not create new)', () => {
+		const logs = binding(buildRunnerWorker({ env: 'stage' }), 'RUN_LOGS')
 		if (!(logs instanceof R2Bucket)) throw new Error('RUN_LOGS must be an R2Bucket')
-		if (!(db instanceof D1Database)) throw new Error('DB must be a D1Database')
 		expect(logs.options.name).toBe('vozka-run-logs')
-		expect(db.options.name).toBe('vozka')
-		// The control plane owns the shared schema and its migrations.
-		expect(db.options.migrationsDir).toBeUndefined()
 	})
 
 	test.each(['local', 'stage', 'prod'])('%s builds the account-owned image from this checkout', (env) => {

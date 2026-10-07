@@ -8,7 +8,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
-import type { RelayResult } from '@fabrika/runner-cloudflare'
+import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, jest, spyOn, test } from 'bun:test'
 import {
 	assertRunnerSourceProtocol,
@@ -17,6 +17,7 @@ import {
 	cloudflareIamControlOptions,
 	type CloudflareRunnerService,
 	controlEnv,
+	recoverRunOnRunner,
 	startRunOnRunner,
 	type WorkerBindings,
 } from '../platform-cf'
@@ -168,7 +169,7 @@ interface RunnerCall {
 	readonly runnerKey: string | undefined
 }
 
-function fakeRunner(calls: RunnerCall[], result: RelayResult): CloudflareRunnerService {
+function fakeRunner(calls: RunnerCall[], result: RelayResult, persisted: RunnerStatus | null = null): CloudflareRunnerService {
 	return {
 		sourceProtocol: async () => CLOUDFLARE_SOURCE_PROTOCOL,
 		startRun: async (job) => {
@@ -177,11 +178,10 @@ function fakeRunner(calls: RunnerCall[], result: RelayResult): CloudflareRunnerS
 		},
 		cancelRun: async (runId, runnerKey) => {
 			calls.push({ method: 'cancelRun', runId, runnerKey })
-			return true
 		},
 		recoverRun: async (runId, runnerKey) => {
 			calls.push({ method: 'recoverRun', runId, runnerKey })
-			return 'running'
+			return persisted
 		},
 	}
 }
@@ -467,5 +467,61 @@ describe('the Cloudflare runner port', () => {
 		await expect(cancelRunOnRunner(runner, 'run-1', undefined)).rejects.toThrow('FABRIKA_RUNNER_KEY')
 		await expect(cancelRunOnRunner(runner, 'run-1', '')).rejects.toThrow('FABRIKA_RUNNER_KEY')
 		expect(calls).toEqual([])
+	})
+
+	test('recovery reads the persisted terminal status as the outcome, IAM reconcile included', async () => {
+		const calls: RunnerCall[] = []
+		const persisted: RunnerStatus = {
+			runId: 'run-1',
+			state: 'succeeded',
+			exitCode: 0,
+			iamReconcile: { app: 'api', schemaJson: '{"actions":[]}' },
+			startedAt: 1,
+			finishedAt: 9,
+		}
+		const runner = fakeRunner(calls, { lineCount: 0, status: persisted }, persisted)
+
+		expect(await recoverRunOnRunner(runner, 'run-1', 'test-runner-key')).toEqual({
+			state: 'succeeded',
+			exitCode: 0,
+			iamReconcile: { app: 'api', schemaJson: '{"actions":[]}' },
+		})
+		expect(calls).toEqual([{ method: 'recoverRun', runId: 'run-1', runnerKey: 'test-runner-key' }])
+	})
+
+	test('runner results are parsed at the boundary: an old or malformed answer throws rather than failing the run', async () => {
+		const wire = <T>(json: string): T => {
+			const box: { v: T } = JSON.parse(`{"v":${json}}`)
+			return box.v
+		}
+		const runner = (recovered: RunnerStatus | null, started: RelayResult): CloudflareRunnerService => ({
+			sourceProtocol: async () => CLOUDFLARE_SOURCE_PROTOCOL,
+			startRun: async () => started,
+			cancelRun: async () => {},
+			recoverRun: async () => recovered,
+		})
+		const terminal: RelayResult = { lineCount: 0, status: { runId: 'run-1', state: 'succeeded', startedAt: 1 } }
+
+		await expect(recoverRunOnRunner(runner(wire('"running"'), terminal), 'run-1', 'test-runner-key')).rejects.toThrow('malformed recovery status')
+		await expect(recoverRunOnRunner(runner(wire('{"runId":"run-1","state":"done","startedAt":1}'), terminal), 'run-1', 'test-runner-key')).rejects
+			.toThrow('malformed recovery status')
+		expect(await recoverRunOnRunner(runner({ runId: 'run-1', state: 'deploying', startedAt: 1 }, terminal), 'run-1', 'test-runner-key')).toEqual({
+			state: 'running',
+		})
+		expect(await recoverRunOnRunner(runner({ runId: 'run-1', state: 'failed', dryRun: true, startedAt: 1 }, terminal), 'run-1', 'test-runner-key'))
+			.toEqual({ state: 'failed', dryRun: true })
+
+		await expect(startRunOnRunner(runner(null, wire('{"status":"succeeded"}')), job())).rejects.toThrow('malformed run result')
+		await expect(startRunOnRunner(runner(null, { lineCount: 0, status: { runId: 'run-1', state: 'deploying', startedAt: 1 } }), job())).rejects
+			.toThrow('non-terminal run result')
+	})
+
+	test('recovery reports a run with no persisted status as still running, and needs the key', async () => {
+		const calls: RunnerCall[] = []
+		const runner = fakeRunner(calls, { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } })
+
+		await expect(recoverRunOnRunner(runner, 'run-1', undefined)).rejects.toThrow('FABRIKA_RUNNER_KEY')
+		expect(await recoverRunOnRunner(runner, 'run-1', 'test-runner-key')).toEqual({ state: 'running' })
+		expect(calls).toEqual([{ method: 'recoverRun', runId: 'run-1', runnerKey: 'test-runner-key' }])
 	})
 })

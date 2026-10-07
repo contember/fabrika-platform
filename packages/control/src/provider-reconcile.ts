@@ -1,3 +1,6 @@
+import type { RunLogLine } from '@fabrika/control-contract'
+import type { BlobStore } from '@fabrika/platform'
+import type { ProviderReconcileOutcome } from '@fabrika/provider-contract'
 import { parseProviderJson } from './db'
 import { projectedReturnOrigins } from './return-origins'
 import { projectTerminalRun, providerEnvironment, type RunDeps, settleRunCancellation } from './run-lifecycle'
@@ -13,14 +16,30 @@ export interface ProviderReconcileSummary {
 
 export type ProviderReconcileDeps = Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'operations' | 'ownershipTiming'> & {
 	projectTerminal?: typeof projectTerminalRun
+	/** The run-log store a provider's reconcile appends to; absent, its lines go to the console only. */
+	runLogs?: Pick<BlobStore, 'get' | 'put'>
 }
 
-async function project(deps: ProviderReconcileDeps, runId: string, state: 'failed' | 'succeeded'): Promise<void> {
+async function project(
+	deps: ProviderReconcileDeps,
+	runId: string,
+	state: 'failed' | 'succeeded',
+	outcome: Pick<ProviderReconcileOutcome, 'artifactState' | 'dryRun'> = {},
+): Promise<void> {
 	try {
-		await (deps.projectTerminal ?? projectTerminalRun)(deps, runId, false, state)
+		await (deps.projectTerminal ?? projectTerminalRun)(deps, runId, outcome.dryRun === true, state, outcome.artifactState)
 	} catch {
 		console.error(`provider reconcile terminal projection failed for run ${runId}`)
 	}
+}
+
+/** Append one meta line to a run's log, keeping what the provider's executor already wrote there. */
+async function appendRunLog(logs: Pick<BlobStore, 'get' | 'put'>, key: string, text: string): Promise<void> {
+	const existing = await logs.get(key)
+	const before = existing === null ? '' : await existing.text()
+	const line: RunLogLine = { ts: Date.now(), stream: 'meta', text }
+	const separator = before === '' || before.endsWith('\n') ? '' : '\n'
+	await logs.put(key, `${before}${separator}${JSON.stringify(line)}\n`)
 }
 
 export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promise<ProviderReconcileSummary> {
@@ -73,6 +92,11 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 				...(run.provider_state_json === null ? {} : { providerState: parseProviderJson(run.provider_state_json, 'provider state') }),
 				...(returnOrigins === undefined ? {} : { returnOrigins }),
 				checkpoint: (state) => owner.mutate((guard) => deps.repositories.runs.checkpointRunProviderState(run.id, state, guard), state),
+				log: async (line) => {
+					console.info(`deploy run ${run.id}: ${line}`)
+					if (deps.runLogs === undefined || run.log_key === null) return
+					await appendRunLog(deps.runLogs, run.log_key, line).catch(() => console.error(`deploy run ${run.id}: failed to persist log output`))
+				},
 			})
 			await owner.drain()
 			await owner.refreshCancellation()
@@ -88,7 +112,7 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 			const state = outcome.state
 			await owner.mutate((guard) => deps.repositories.runs.markRunFinished(run.id, state, outcome.exitCode ?? null, guard))
 			summary[state]++
-			await project(deps, run.id, state)
+			await project(deps, run.id, state, outcome)
 		} catch {
 			console.error(`provider reconcile failed for run ${candidate.id}`)
 			if (!owner.lost && owner.work.signal.aborted && owner.row.cancel_requested_at === null) {

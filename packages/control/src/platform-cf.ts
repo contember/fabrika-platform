@@ -15,10 +15,12 @@ import {
 	CLOUDFLARE_SOURCE_PROTOCOL,
 	type CloudflareRunnerJob,
 	type CloudflareRunOutcome,
+	type CloudflareRunRecovery,
 	createCloudflareControlProvider,
 } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider, ProviderSource, ProviderSourceBinding } from '@fabrika/provider-contract'
-import type { RelayResult, VozkaRunner } from '@fabrika/runner-cloudflare'
+import { type RelayResult, type RunnerStatus, runnerStatusSchema, type VozkaRunner } from '@fabrika/runner-cloudflare'
+import { z } from 'zod'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
 import { controlPublicOrigin } from './iam'
@@ -36,7 +38,7 @@ export interface WorkerBindings
 	DB: D1Database
 	/** Control-plane SPA static assets. */
 	ASSETS: Fetcher
-	/** R2 bucket run logs + terminal status are written into (by vozka-runner), keyed by run id. */
+	/** R2 bucket vozka-runner writes run logs + terminal status into, keyed by run id. */
 	RUN_LOGS: R2Bucket
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<ControlJobMessage>
@@ -133,7 +135,7 @@ export interface CloudflareRunnerService {
 	sourceProtocol(runnerKey: string): Promise<typeof CLOUDFLARE_SOURCE_PROTOCOL>
 	startRun(job: CloudflareRunnerJob): Promise<RelayResult>
 	cancelRun(runId: string, runnerKey: string): Promise<unknown>
-	recoverRun(runId: string, runnerKey: string): Promise<'running' | 'failed'>
+	recoverRun(runId: string, runnerKey: string): Promise<RunnerStatus | null>
 }
 
 const runner = (bindings: WorkerBindings): CloudflareRunnerService => {
@@ -191,19 +193,42 @@ export const assertRunnerSourceProtocol = async (
 	}
 }
 
+// The runner is a separately deployed Worker: parse what its RPC returns rather than trust the type.
+const relayResultSchema = z.object({ status: runnerStatusSchema })
+const recoveredStatusSchema = runnerStatusSchema.nullable()
+
 /** The executor's IAM reconcile rides back on the outcome: the container compiles the schema, the control plane applies it. */
+const runOutcome = (status: RunnerStatus): CloudflareRunRecovery => {
+	if (status.state !== 'succeeded' && status.state !== 'failed') return { state: 'running' }
+	return {
+		state: status.state,
+		...(status.exitCode === undefined ? {} : { exitCode: status.exitCode }),
+		...(status.artifactState === undefined ? {} : { artifactState: status.artifactState }),
+		...(status.iamReconcile === undefined ? {} : { iamReconcile: status.iamReconcile }),
+		...(status.dryRun === true ? { dryRun: true } : {}),
+	}
+}
+
 export const startRunOnRunner = async (
 	svc: CloudflareRunnerService,
 	job: CloudflareRunnerJob,
 ): Promise<CloudflareRunOutcome> => {
-	const result = await svc.startRun(job)
-	const state = result.status.state === 'succeeded' ? 'succeeded' : 'failed'
-	return {
-		state,
-		...(result.status.exitCode === undefined ? {} : { exitCode: result.status.exitCode }),
-		...(result.status.artifactState === undefined ? {} : { artifactState: result.status.artifactState }),
-		...(result.status.iamReconcile === undefined ? {} : { iamReconcile: result.status.iamReconcile }),
-	}
+	const parsed = relayResultSchema.safeParse(await svc.startRun(job))
+	if (!parsed.success) throw new Error('Cloudflare runner returned a malformed run result')
+	const outcome = runOutcome(parsed.data.status)
+	if (outcome.state === 'running') throw new Error('Cloudflare runner returned a non-terminal run result')
+	return outcome
+}
+
+/** After a control-plane restart the runner's persisted status is the run's outcome; null means still in flight. */
+export const recoverRunOnRunner = async (
+	svc: CloudflareRunnerService,
+	runId: string,
+	runnerKey: string | undefined,
+): Promise<CloudflareRunRecovery> => {
+	const parsed = recoveredStatusSchema.safeParse(await svc.recoverRun(runId, required(runnerKey, 'FABRIKA_RUNNER_KEY')))
+	if (!parsed.success) throw new Error('Cloudflare runner returned a malformed recovery status')
+	return parsed.data === null ? { state: 'running' } : runOutcome(parsed.data)
 }
 
 /** A cancel destroys a container and fails a run, so it presents the same key a job carries — and refuses without one. */
@@ -240,9 +265,6 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 			return startRunOnRunner(runner(bindings), job)
 		},
 		cancelRun: (runId) => cancelRunOnRunner(runner(bindings), runId, env.FABRIKA_RUNNER_KEY),
-		recoverRun: (runId) => {
-			const svc = runner(bindings)
-			return svc.recoverRun(runId, required(env.FABRIKA_RUNNER_KEY, 'FABRIKA_RUNNER_KEY'))
-		},
+		recoverRun: (runId) => recoverRunOnRunner(runner(bindings), runId, env.FABRIKA_RUNNER_KEY),
 	})
 }

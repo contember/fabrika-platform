@@ -99,6 +99,11 @@ for (const backend of ['sqlite', 'postgres']) {
 		let requests: OperationsReleaseReconcileRequestV1[]
 		let transportAvailable: boolean
 
+		/** The row turns authoritative `failed` after the projection recorded `succeeded`. */
+		const failSucceededRun = async (runId: string): Promise<void> => {
+			await database.prepare(`UPDATE runs SET status = 'failed', exit_code = NULL WHERE id = ? AND status = 'succeeded'`).bind(runId).run()
+		}
+
 		beforeEach(async () => {
 			if (backend === 'postgres') {
 				const fixture = await createPostgres('terminal_release')
@@ -230,7 +235,7 @@ for (const backend of ['sqlite', 'postgres']) {
 					const page = await super.listTerminalPage(...args)
 					if (!changed && page.some((row) => row.run_id === 'snapshot-change')) {
 						changed = true
-						await repositories.runs.markRunFailedAfterRunner('snapshot-change')
+						await failSucceededRun('snapshot-change')
 					}
 					return page
 				}
@@ -349,7 +354,7 @@ for (const backend of ['sqlite', 'postgres']) {
 			}
 			await seed('corrected', payload, true)
 			await repositories.runs.markRunFinished('corrected', 'succeeded', 0)
-			await repositories.runs.markRunFailedAfterRunner('corrected')
+			await failSucceededRun('corrected')
 			await repositories.registry.upsertAppEnv(
 				providerEnvironment('notes', 'prod', { domain: 'changed.example', publicOrigin: 'https://changed.example' }),
 			)

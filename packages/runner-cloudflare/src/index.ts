@@ -1,4 +1,4 @@
-export { finishRun } from './finish-run'
+export { type RunnerStatus, runnerStatusSchema } from '@fabrika/runner-contract'
 export { logsKey, relayRun, statusKey } from './relay'
 export type { ContainerLike, R2Like, RelayOptions, RelayResult } from './relay'
 

@@ -254,9 +254,6 @@ export class RunRepository {
 	/**
 	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code.
 	 * Returns true iff the row transitioned (it was still `running`/`pending`).
-	 *
-	 * The statement + bind order are DUPLICATED verbatim by `@fabrika/runner-cloudflare`'s `finishRun`, whose
-	 * co-write the `WHERE status IN ('pending','running')` guard makes idempotent. Change both together.
 	 */
 	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, guard?: RunMutationGuard): Promise<boolean> {
 		return this.mutateRun(
@@ -264,20 +261,6 @@ export class RunRepository {
 			`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
 			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`,
 			[status, exitCode, this.now(), id],
-			guard,
-		)
-	}
-
-	/**
-	 * The runner's `finishRun` records `succeeded` inside `startRun`, before control applies the IAM reconcile; this
-	 * is the one succeeded→failed correction that a later failure needs. Keeps `finished_at`, refuses a cancelled run.
-	 */
-	async markRunFailedAfterRunner(id: string, guard?: RunMutationGuard): Promise<boolean> {
-		return this.mutateRun(
-			id,
-			`UPDATE runs SET status = 'failed', exit_code = NULL
-			WHERE id = ? AND status = 'succeeded' AND cancel_requested_at IS NULL`,
-			[id],
 			guard,
 		)
 	}

@@ -575,16 +575,13 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'building', attempt: 1 })).toBe(true)
 		expect(JSON.parse((await db.runs.getRun(first.id))?.provider_state_json ?? '')).toEqual({ phase: 'building', attempt: 1 })
 
-		// The terminal write is guarded too — it is co-written by vozka-runner's `finishRun`.
+		// The terminal write is guarded too: a terminal row never moves again.
 		expect(await db.runs.markRunFinished(first.id, 'succeeded', 0)).toBe(true)
 		expect(await db.runs.markRunFinished(first.id, 'failed', 1)).toBe(false)
 		const done = await db.runs.getRun(first.id)
 		expect(done?.status).toBe('succeeded')
 		expect(done?.exit_code).toBe(0)
 		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'late' })).toBe(false)
-		expect(await db.runs.markRunFailedAfterRunner(first.id)).toBe(true)
-		expect((await db.runs.getRun(first.id))?.status).toBe('failed')
-		expect(await db.runs.markRunFailedAfterRunner(first.id)).toBe(false)
 
 		const cancelled = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
 		await db.runs.markRunStarted(cancelled.id, `runs/${cancelled.id}/logs.ndjson`)
@@ -595,7 +592,6 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.runs.markRunFinished(cancelled.id, 'succeeded', 0)).toBe(false)
 		expect(await db.runs.markRunCancellationFinished(cancelled.id)).toBe(true)
 		expect((await db.runs.getRun(cancelled.id))?.status).toBe('failed')
-		expect(await db.runs.markRunFailedAfterRunner(cancelled.id)).toBe(false)
 
 		// Candidate discovery leaves settlement to the invocation that acquires the lease.
 		expect(await db.runs.listStaleRuns(3600)).toHaveLength(0)

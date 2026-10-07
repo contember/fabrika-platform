@@ -467,6 +467,17 @@ describe('relayRun', () => {
 		expect(JSON.parse(bucket.objects.get(statusKey('run-relay-1')) ?? '{}').state).toBe('failed')
 	})
 
+	test('the persisted status is dry exactly when the job is, whatever the container claims', async () => {
+		const dry = new FakeR2()
+		const dryResult = await relayRun(makeContainer(terminalStatus, sampleLines, { count: 0 }), dry, { ...job, dryRun: true }, { flushIntervalMs: 0 })
+		expect(dryResult.status).toEqual({ ...terminalStatus, dryRun: true })
+		expect(JSON.parse(dry.objects.get(statusKey('run-relay-1')) ?? '{}')).toEqual({ ...terminalStatus, dryRun: true })
+
+		const live = new FakeR2()
+		const claimedDry = makeContainer({ ...terminalStatus, dryRun: true }, sampleLines, { count: 0 })
+		expect((await relayRun(claimedDry, live, job, { flushIntervalMs: 0 })).status).toEqual(terminalStatus)
+	})
+
 	test('throws when the container rejects /run', async () => {
 		const bucket = new FakeR2()
 		const inner = makeContainer(terminalStatus, [], { count: 0 })

@@ -762,6 +762,7 @@ describe('executor outcome file', () => {
 		workspace: string,
 		write: (path: string) => Promise<void>,
 		deployExitCode = 0,
+		dryRun = false,
 	): Promise<{ status: Awaited<ReturnType<Runner['run']>>; outcomePath: string | undefined }> => {
 		let outcomePath: string | undefined
 		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
@@ -774,7 +775,7 @@ describe('executor outcome file', () => {
 			}
 			return { exitCode: deployExitCode }
 		}
-		const status = await new Runner(baseJob(), { spawn, workspace }).run()
+		const status = await new Runner(baseJob(dryRun ? { dryRun: true } : {}), { spawn, workspace }).run()
 		return { status, outcomePath }
 	}
 
@@ -795,6 +796,17 @@ describe('executor outcome file', () => {
 			expect(status.state).toBe('succeeded')
 			expect(status.iamReconcile).toEqual(reconcile)
 			expect(outcomePath).toBe(join(workspace, 'run-1.outcome.json'))
+			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
+		})
+	})
+
+	test('a dry run reports no reconcile even when the checkout wrote an outcome file', async () => {
+		await withWorkspace(async (workspace) => {
+			const reconcile = { app: 'shop', schemaJson: '{"roles":[]}' }
+			const { status } = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify({ iamReconcile: reconcile })), 0, true)
+			expect(status.state).toBe('succeeded')
+			expect(status.dryRun).toBe(true)
+			expect(status.iamReconcile).toBeUndefined()
 			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
 		})
 	})

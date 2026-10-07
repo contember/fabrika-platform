@@ -562,7 +562,6 @@
       "dependencies": {
         "@cloudflare/containers": "^0.0.30",
         "@fabrika/control-contract": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/runner-contract": "workspace:*",
         "zod": "^3.25.76",
@@ -593,6 +592,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/control-contract": "workspace:*",
+        "zod": "^3.25.76",
       },
       "devDependencies": {
         "@types/bun": "latest",

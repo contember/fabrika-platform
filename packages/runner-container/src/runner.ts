@@ -390,6 +390,7 @@ export class Runner {
 			...(this.error !== undefined ? { error: this.error } : {}),
 			...(this.artifactState === undefined ? {} : { artifactState: this.artifactState }),
 			...(this.iamReconcile === undefined ? {} : { iamReconcile: this.iamReconcile }),
+			...(this.job.dryRun === true ? { dryRun: true } : {}),
 			startedAt: this.startedAt,
 			...(this.finishedAt !== undefined ? { finishedAt: this.finishedAt } : {}),
 		}
@@ -581,7 +582,8 @@ export class Runner {
 			deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })
 			this.emit('meta', `fabrika-cloudflare-executor deploy exited with code ${deploy.exitCode}`)
 			try {
-				if (deploy.exitCode === 0) outcome = await this.readOutcomeFile()
+				// A dry run reports nothing to apply; Control may read this status back without knowing it was dry.
+				if (deploy.exitCode === 0 && this.job.dryRun !== true) outcome = await this.readOutcomeFile()
 			} catch (err) {
 				const message = outcomeFailure(err)
 				this.finish('failed', { exitCode: deploy.exitCode, error: message })

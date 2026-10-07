@@ -49,12 +49,5 @@
 			"binding": "RUN_LOGS",
 			"bucket_name": "vozka-run-logs"
 		}
-	],
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "vozka",
-			"database_id": "vozka"
-		}
 	]
 }

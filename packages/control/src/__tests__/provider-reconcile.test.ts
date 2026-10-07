@@ -315,6 +315,54 @@ describe('reconcileProviderRuns', () => {
 		expect(projected).toEqual([['https://app.example.test', 'https://stage.app.example.test']])
 	})
 
+	test("projects the provider's artifact state and dry flag, and appends its log lines after the executor's", async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.runs.createRun({ id: 'previewed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted('previewed', 'runs/previewed/logs.ndjson')
+		await db.runs.setRunExternalId('previewed', 'operation')
+
+		const executorLine = JSON.stringify({ ts: 1, stream: 'stdout', text: 'executor output' })
+		const objects = new Map([['runs/previewed/logs.ndjson', executorLine]])
+		const projections: unknown[] = []
+		expect(
+			await reconcileProviderRuns({
+				repositories: db,
+				provider: {
+					id: TEST_PROVIDER_ID,
+					normalizeRegistration: (input) => input,
+					deploy: () => Promise.resolve({ state: 'succeeded' }),
+					reconcile: async (input) => {
+						await input.log?.('settled by reconcile')
+						return { state: 'succeeded', artifactState: 'not_applicable', dryRun: true }
+					},
+				},
+				lock: makeFakeLock(db),
+				projectTerminal: async (_deps, runId, dryRun, outcome, artifactState) => {
+					projections.push({ runId, dryRun, outcome, artifactState })
+				},
+				runLogs: {
+					get: async (key) => {
+						const value = objects.get(key)
+						return value === undefined ? null : { body: new Blob([value]).stream(), text: async () => value }
+					},
+					put: async (key, value) => {
+						if (typeof value !== 'string') throw new Error('test log store accepts strings only')
+						objects.set(key, value)
+					},
+				},
+			}),
+		).toMatchObject({ checked: 1, succeeded: 1 })
+
+		expect(projections).toEqual([{ runId: 'previewed', dryRun: true, outcome: 'succeeded', artifactState: 'not_applicable' }])
+		const lines = (objects.get('runs/previewed/logs.ndjson') ?? '').trim().split('\n').map((line) => JSON.parse(line))
+		expect(lines).toEqual([
+			{ ts: 1, stream: 'stdout', text: 'executor output' },
+			expect.objectContaining({ stream: 'meta', text: 'settled by reconcile' }),
+		])
+	})
+
 	test('keeps provider-owned runs in progress when reconciliation is not a provider capability', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })

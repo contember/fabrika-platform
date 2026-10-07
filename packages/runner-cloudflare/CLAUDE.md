@@ -1,7 +1,7 @@
 # @fabrika/runner-cloudflare
 
-The Cloudflare deploy executor Worker. It owns the per-run `RunnerContainer` Durable Object, relays
-container logs and status to R2, and writes terminal run status to the control-plane database. It has
+The Cloudflare deploy executor Worker. It owns the per-run `RunnerContainer` Durable Object and relays
+container logs and the terminal status to R2, where Control reads them back. It has
 no public route and is called through a service binding — but a binding is not a capability, so it
 also holds ONE credential, `FABRIKA_RUNNER_KEY`, and verifies it on every RPC.
 
@@ -30,11 +30,19 @@ bun run bootstrap
   closes the service-binding half of A6-4, not that one; do not read the invariant above as "A6-4 closed".
 - The Worker publishes no hostname of its own: `routes: []`, `workers_dev: false`, `preview_urls: false`.
 - Never log credentials or secret values.
-- Keep the guarded `finishRun` update identical to the control plane's terminal-status write.
+- **The Worker never writes Control's database.** Control is the only writer of a run's row (ADR-0044).
+  The durable outcome is `runs/<id>/status.json` in R2, carrying the IAM reconcile the executor compiled:
+  the relay writes it, the `RunnerContainer` backstop writes it when a Control self-deploy aborted the
+  relay, and `recoverRun` reads it back. Without one, `recoverRun` has the run's DO settle it itself
+  (`recoverDispatched`): fence a never-dispatched job, persist a terminal container status, or persist
+  failed past the deadline counted from the stored dispatch time — so recovery never depends on the
+  backstop, whose thrown callbacks `@cloudflare/containers` drops (`backstopTick` reschedules instead).
+  A malformed `status.json` reads as failed. The dry-run flag on a persisted status comes from the job
+  (relay) or DO storage, never from the container.
 - The Worker must stay separate from the control plane so self-deploys cannot reset active runs.
 - Each account deployment builds the container from its pinned fabrika checkout. Never restore a
   repository-wide registry tag or an upstream image publisher.
 - Keep a 20-minute active rollout grace so runner replacement does not interrupt normal deploys.
-- `RUN_LOGS` and `DB` adopt the control plane's existing R2 and D1 resources.
+- `RUN_LOGS` adopts the control plane's existing R2 bucket. The Worker binds no database.
 - `src/index.ts` exports the `VozkaRunner` class as a type only.
 - Deploy this Worker out of band. It cannot safely deploy itself through itself.

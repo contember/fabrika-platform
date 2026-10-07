@@ -9,18 +9,23 @@
 
 import { Container } from '@cloudflare/containers'
 import { RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
-import { backstopDecision, finishRun, isRunFinished } from './finish-run'
+import { z } from 'zod'
 import { backstopPayloadSchema, parseRunLogLine, parseRunnerStatus } from './protocol'
-import { logsKey, statusKey } from './relay'
+import { logsKey } from './relay'
 import { RunContainerGate } from './run-container-gate'
+import {
+	BACKSTOP_FIRST_DELAY_S,
+	BACKSTOP_POLL_S,
+	backstopTick,
+	recoverDispatched,
+	RUN_DEADLINE_MS,
+	type RunSettlementPorts,
+	settleRun,
+} from './run-outcome'
 import type { Env } from './worker-env'
 
-/** First backstop check, ~after a short deploy would normally finish (the relay handles the fast path). */
-const BACKSTOP_FIRST_DELAY_S = 90
-/** Re-poll interval while a run is still in flight. */
-const BACKSTOP_POLL_S = 45
-/** Give up after this long (the container is hard-killed ~15 min in) and record the run failed. */
-const BACKSTOP_MAX_MS = 18 * 60 * 1000
+const DISPATCHED_AT = 'dispatchedAt'
+const DRY_RUN = 'dryRun'
 
 export class RunnerContainer extends Container<Env> {
 	private readonly runGate = new RunContainerGate({
@@ -28,8 +33,9 @@ export class RunnerContainer extends Container<Env> {
 		write: () => this.ctx.storage.put('runCancelled', true),
 	})
 
-	async startDeploy(runId: string): Promise<void> {
+	async startDeploy(runId: string, dryRun: boolean): Promise<void> {
 		await this.runGate.run(async () => {
+			await this.ctx.storage.put(DRY_RUN, dryRun)
 			await this.startAndWaitForPorts()
 			await this.armBackstop(runId)
 		})
@@ -37,16 +43,48 @@ export class RunnerContainer extends Container<Env> {
 
 	deployFetch(input: string, init?: RequestInit): Promise<Response> {
 		return this.runGate.run(async () => {
-			if (new URL(input).pathname === RUNNER_RUN_PATH) await this.ctx.storage.put('runDispatched', true)
+			if (new URL(input).pathname === RUNNER_RUN_PATH) await this.ctx.storage.put(DISPATCHED_AT, Date.now())
 			return this.containerFetch(input, init)
 		})
 	}
 
-	recoverDeploy(): Promise<'running' | 'failed'> {
-		return this.runGate.recover(
-			async () => (await this.ctx.storage.get<boolean>('runDispatched')) === true,
-			() => this.destroy(),
-		)
+	/** The run's terminal status once known (persisting it if needed), or null while it is in flight. */
+	async recoverDeploy(runId: string): Promise<RunnerStatus | null> {
+		const gate = await this.runGate.recover(async () => (await this.dispatchedAt()) !== null, () => this.destroy())
+		return recoverDispatched(await this.settlementPorts(runId), gate === 'running' ? await this.dispatchedAt() : null)
+	}
+
+	private async dispatchedAt(): Promise<number | null> {
+		const parsed = z.number().finite().safeParse(await this.ctx.storage.get(DISPATCHED_AT))
+		return parsed.success ? parsed.data : null
+	}
+
+	private async settlementPorts(runId: string): Promise<RunSettlementPorts> {
+		return {
+			runId,
+			dryRun: z.boolean().safeParse(await this.ctx.storage.get(DRY_RUN)).data === true,
+			bucket: this.env.RUN_LOGS,
+			now: () => Date.now(),
+			containerStatus: async () => {
+				try {
+					const res = await this.deployFetch(`http://container${RUNNER_STATUS_PATH}`)
+					return parseRunnerStatus(await res.json(), runId)
+				} catch {
+					return null
+				}
+			},
+			// Never log the error object (it may hold a token).
+			flushLogs: async () => {
+				try {
+					const logs = await this.deployFetch(`http://container${RUNNER_LOGS_PATH}`)
+					const text = await logs.text()
+					const lines = text.split('\n').filter((l) => l.length > 0).map((line) => JSON.stringify(parseRunLogLine(line)))
+					if (lines.length > 0) await this.env.RUN_LOGS.put(logsKey(runId), lines.join('\n'))
+				} catch (err) {
+					console.error('runner: final log flush failed', err instanceof Error ? err.message : 'unknown error')
+				}
+			},
+		}
 	}
 
 	cancelDeploy(): Promise<void> {
@@ -59,7 +97,7 @@ export class RunnerContainer extends Container<Env> {
 	// and a quiet `bun install` produces no traffic. A long inactivity window keeps the instance
 	// from being reaped; the relay additionally calls `heartbeat()` to renew the timer (see below).
 	// CF still SIGTERMs on a rollout and hard-kills ~15 min later — runs are expected to finish well
-	// inside that, and the control plane records terminal status from R2 regardless.
+	// inside that, and the backstop persists a terminal status to R2 regardless.
 	override sleepAfter = '20m'
 
 	override onStart(): void {
@@ -83,58 +121,28 @@ export class RunnerContainer extends Container<Env> {
 	}
 
 	/**
-	 * Arm the run-completion BACKSTOP. The relay (logs → R2, terminal status → D1) runs INSIDE the
+	 * Arm the run-completion BACKSTOP. The relay (logs + terminal status → R2) runs INSIDE the
 	 * `RUNNER_SVC.startRun` RPC from the control plane; when a deploy redeploys fabrika ITSELF, fabrika's
-	 * reset aborts that RPC and kills the relay before it records the outcome — yet this container (a DO
+	 * reset aborts that RPC and kills the relay before it persists the outcome — yet this container (a DO
 	 * in the SEPARATE vozka-runner worker) survives and the deploy completes. The backstop polls the
-	 * container from the DO's own caller-independent context and writes the terminal status if the relay
-	 * couldn't. Scheduled via the Container's own `schedule()` (NOT a raw `alarm()` override — the base
-	 * class owns the alarm). The write is idempotent (guarded UPDATE), so the relay's fast-path wins when
-	 * it survives and the backstop is a cheap no-op.
+	 * container from the DO's own caller-independent context and persists the terminal status the control
+	 * plane's reconcile reads back. Scheduled via the Container's own `schedule()` (NOT a raw `alarm()`
+	 * override — the base class owns the alarm).
 	 */
 	async armBackstop(runId: string): Promise<void> {
-		await this.schedule(BACKSTOP_FIRST_DELAY_S, 'backstopCheck', { runId, deadline: Date.now() + BACKSTOP_MAX_MS })
+		await this.schedule(BACKSTOP_FIRST_DELAY_S, 'backstopCheck', { runId, deadline: Date.now() + RUN_DEADLINE_MS })
 	}
 
-	/** Scheduled backstop tick — records the run's terminal status if the relay didn't. Re-schedules itself while in flight. */
+	/** Scheduled backstop tick — persists the run's terminal status if the relay didn't. Re-schedules itself until settled. */
 	async backstopCheck(payload: { runId: string; deadline: number }): Promise<void> {
 		const parsed = backstopPayloadSchema.safeParse(payload)
 		if (!parsed.success) throw new Error('runner: invalid backstop payload')
 		const { runId, deadline } = parsed.data
-		const expired = Date.now() > deadline
-
-		// Read the container's status; null = unreachable (it may have been hard-killed).
-		let status: RunnerStatus | null = null
-		try {
-			const res = await this.deployFetch(`http://container${RUNNER_STATUS_PATH}`)
-			status = parseRunnerStatus(await res.json(), runId)
-		} catch {
-			status = null
-		}
-
-		const action = backstopDecision({ alreadyFinished: await isRunFinished(this.env.DB, runId), status, expired })
-		if (action.kind === 'noop') {
-			return
-		}
-		if (action.kind === 'reschedule') {
-			await this.schedule(BACKSTOP_POLL_S, 'backstopCheck', { runId, deadline })
-			return
-		}
-		// kind === 'finish': flush whatever the container still holds (best-effort — the relay was cut
-		// off mid-stream), then record the terminal status. Never log the error object (it may hold a token).
-		if (status !== null) {
-			try {
-				const logs = await this.deployFetch(`http://container${RUNNER_LOGS_PATH}`)
-				const text = await logs.text()
-				const lines = text.split('\n').filter((l) => l.length > 0).map((line) => JSON.stringify(parseRunLogLine(line)))
-				if (lines.length > 0) {
-					await this.env.RUN_LOGS.put(logsKey(runId), lines.join('\n'))
-				}
-				await this.env.RUN_LOGS.put(statusKey(runId), JSON.stringify(status))
-			} catch (err) {
-				console.error('backstop: final log flush failed', err instanceof Error ? err.message : 'unknown error')
-			}
-		}
-		await finishRun(this.env.DB, runId, action.state, action.exitCode)
+		await backstopTick(
+			async () => settleRun(await this.settlementPorts(runId), deadline),
+			async () => {
+				await this.schedule(BACKSTOP_POLL_S, 'backstopCheck', { runId, deadline })
+			},
+		)
 	}
 }

@@ -1,3 +1,4 @@
+import { ReconcileSchemaError } from '@fabrika/auth'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -15,7 +16,7 @@ import type {
 } from '@fabrika/provider-contract'
 import { decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
-import type { RunnerIamReconcile } from '@fabrika/runner-contract'
+import { type RunnerIamReconcile, runnerIamReconcileSchema } from '@fabrika/runner-contract'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
@@ -140,8 +141,8 @@ export const cloudflareRunnerJobSchema = z.object({
 		serviceKey: z.string().min(1),
 		release: z.string().min(1),
 		runId: z.string().min(1),
-	}).passthrough().optional(),
-}).passthrough().refine((job) => job.dryRun === true || isCanonicalCommit(job.ref))
+	}).optional(),
+}).refine((job) => job.dryRun === true || isCanonicalCommit(job.ref))
 
 export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => cloudflareRunnerJobSchema.safeParse(value).success
 
@@ -150,7 +151,10 @@ export interface CloudflareCloneSource {
 }
 
 /** A run's terminal outcome plus the IAM reconcile the executor compiled, if the plan reached that step. */
-export type CloudflareRunOutcome = ProviderTerminalOutcome & { readonly iamReconcile?: RunnerIamReconcile }
+export type CloudflareRunOutcome = ProviderTerminalOutcome & { readonly iamReconcile?: RunnerIamReconcile; readonly dryRun?: boolean }
+
+/** What the runner reports for a run after a control-plane restart: its persisted outcome, or still in flight. */
+export type CloudflareRunRecovery = CloudflareRunOutcome | { readonly state: 'running' }
 
 export interface CloudflareControlOptions {
 	readonly accountId: string
@@ -165,7 +169,7 @@ export interface CloudflareControlOptions {
 	assertRunnerSourceProtocol(signal: AbortSignal): Promise<void>
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
-	recoverRun?(runId: string): Promise<'running' | 'failed'>
+	recoverRun?(runId: string): Promise<CloudflareRunRecovery>
 }
 
 const encodeEnvelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
@@ -250,7 +254,16 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 
 /** A megabyte of vocabulary is already absurd; beyond it the control plane refuses to parse at all. */
 const MAX_SCHEMA_JSON_CHARS = 1024 * 1024
-const iamReconcileSchema = z.object({ app: z.string(), schemaJson: z.string() })
+
+/** The app a terminal outcome belongs to, and where IAM may hand it a session. */
+interface IamReconcileTarget {
+	readonly appId: string
+	readonly returnOrigins?: readonly string[]
+	readonly signal: AbortSignal
+}
+
+/** The executor's report itself is unusable; retrying cannot make it valid. */
+class InvalidIamReport extends Error {}
 
 /**
  * Apply the schema the executor compiled, with the control plane's own IAM key. The control port may
@@ -258,42 +271,80 @@ const iamReconcileSchema = z.object({ app: z.string(), schemaJson: z.string() })
  */
 const applyIamReconcile = async (
 	options: CloudflareControlOptions,
-	input: ProviderDeployInput,
+	target: IamReconcileTarget,
 	report: RunnerIamReconcile,
 ): Promise<void> => {
-	const parsedReport = iamReconcileSchema.safeParse(report)
+	const parsedReport = runnerIamReconcileSchema.safeParse(report)
 	if (!parsedReport.success) {
-		throw new Error('reported an authz schema whose app id or body is not a string')
+		throw new InvalidIamReport('reported an authz schema whose app id or body is not a string')
 	}
 	const reconcile = parsedReport.data
-	if (reconcile.app !== input.app.id) {
-		throw new Error(`reported an authz schema for app "${reconcile.app}", expected "${input.app.id}"`)
+	if (reconcile.app !== target.appId) {
+		throw new InvalidIamReport(`reported an authz schema for app "${reconcile.app}", expected "${target.appId}"`)
 	}
 	if (reconcile.schemaJson.length > MAX_SCHEMA_JSON_CHARS) {
-		throw new Error(`reported an authz schema of ${reconcile.schemaJson.length} characters, over the ${MAX_SCHEMA_JSON_CHARS} limit`)
+		throw new InvalidIamReport(`reported an authz schema of ${reconcile.schemaJson.length} characters, over the ${MAX_SCHEMA_JSON_CHARS} limit`)
 	}
 	let parsed: unknown
 	try {
 		parsed = JSON.parse(reconcile.schemaJson)
 	} catch {
-		throw new Error('reported an authz schema that is not valid JSON')
+		throw new InvalidIamReport('reported an authz schema that is not valid JSON')
 	}
 	const schema = parseAppSchema(parsed)
 	if (!schema.ok) {
-		throw new Error(`reported a malformed authz schema: ${schema.message}`)
+		throw new InvalidIamReport(`reported a malformed authz schema: ${schema.message}`)
 	}
 	if (options.propustkaUrl === undefined) return
 	// Return origins ride this call because `apps.setReturnOrigins` 404s for an app IAM has never heard
 	// of, and the schema reconcile is what registers it. Separate call, same moment.
-	const returnOrigins = input.returnOrigins !== undefined && input.returnOrigins.length > 0 ? input.returnOrigins : undefined
+	const returnOrigins = target.returnOrigins !== undefined && target.returnOrigins.length > 0 ? target.returnOrigins : undefined
 	await (options.reconcileSchema ?? defaultReconcileSchema)({
 		url: options.propustkaUrl,
-		app: input.app.id,
+		app: target.appId,
 		schema: schema.schema,
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(options.propustkaProvisioningKey === undefined ? {} : { adminKey: options.propustkaProvisioningKey }),
-		signal: input.signal,
+		signal: target.signal,
 	})
+}
+
+/**
+ * Settle a terminal outcome: apply its IAM reconcile, if any, before Control marks the run terminal. Both
+ * the awaited deploy and a post-restart reconcile come through here under Control's lease. IAM replaces
+ * the app's whole vocabulary, so applying the same schema again after a lost lease is harmless.
+ * `retryUnavailableIam` keeps the run in flight when IAM was unreachable or answered 5xx/408/429, so the
+ * next reconcile retries; an invalid report or any other IAM refusal fails the run.
+ */
+const settleOutcome = async (
+	options: CloudflareControlOptions,
+	target: IamReconcileTarget,
+	outcome: CloudflareRunOutcome,
+	log: (line: string) => Promise<void>,
+	retryUnavailableIam: boolean,
+): Promise<ProviderTerminalOutcome | { readonly state: 'running' }> => {
+	const failed: ProviderTerminalOutcome = { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
+	const reconcile = outcome.iamReconcile
+	if (reconcile === undefined) return outcome
+	if (outcome.dryRun === true) {
+		await log('reconcile-schema refused: a dry run reported an authz schema')
+		return failed
+	}
+	try {
+		await applyIamReconcile(options, target, reconcile)
+	} catch (error) {
+		target.signal.throwIfAborted()
+		await log(`reconcile-schema failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+		if (retryUnavailableIam && isTransientIamFailure(error)) return { state: 'running' }
+		return failed
+	}
+	return outcome
+}
+
+const isTransientIamFailure = (error: unknown): boolean => {
+	if (error instanceof InvalidIamReport) return false
+	if (!(error instanceof ReconcileSchemaError)) return true
+	return error.status >= 500 || error.status === 408 || error.status === 429
 }
 
 /** Build the Cloudflare control capability over its runner and source-resolution ports. */
@@ -330,23 +381,34 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			input.signal.removeEventListener('abort', abort)
 		}
 		input.signal.throwIfAborted()
-		const reconcile = outcome.iamReconcile
-		if (reconcile === undefined || input.dryRun) return outcome
-		try {
-			await applyIamReconcile(options, input, reconcile)
-		} catch (error) {
-			input.signal.throwIfAborted()
-			input.events.log(`reconcile-schema failed: ${error instanceof Error ? error.message : 'unknown error'}`)
-			return { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
-		}
-		return outcome
+		if (input.dryRun) return outcome
+		const target = { appId: input.app.id, signal: input.signal, ...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }) }
+		const log = async (line: string): Promise<void> => input.events.log(line)
+		return settleOutcome(options, target, outcome, log, false)
 	},
 	reconcile: async (input) => {
 		input.signal.throwIfAborted()
-		if (options.recoverRun === undefined) return { state: 'running' }
-		const state = await options.recoverRun(input.runId)
-		input.signal.throwIfAborted()
-		return { state }
+		const recoverRun = options.recoverRun
+		if (recoverRun === undefined) return { state: 'running' }
+		const recovery = await awaitWithSignal(input.signal, () => recoverRun(input.runId))
+		if (recovery.state === 'running') return { state: 'running' }
+		const target = {
+			appId: input.environment.appId,
+			signal: input.signal,
+			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+		}
+		const log = async (line: string): Promise<void> => {
+			if (input.log === undefined) console.error(`run ${input.runId}: ${line}`)
+			else await input.log(line)
+		}
+		const outcome = await settleOutcome(options, target, recovery, log, true)
+		if (outcome.state === 'running') return outcome
+		return {
+			state: outcome.state,
+			...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
+			...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }),
+			...(recovery.dryRun === true ? { dryRun: true } : {}),
+		}
 	},
 	cancel: async (input) => {
 		input.signal.throwIfAborted()

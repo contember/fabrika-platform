@@ -170,7 +170,7 @@ that same commit. Missing or mismatched objects fail without a branch fallback.
 and `/runner` entrypoint. Control checks `sourceProtocol(runnerKey)` on the
 detached Worker. The Worker checks the image's `/health` capability before
 POSTing `/run`. A known pre-POST image refusal produces a persisted failed
-outcome and the existing terminal database co-write. Errors after submission
+outcome in R2 that Control applies. Errors after submission
 retain recovery semantics because work may already have started.
 
 Dry mutable-ref previews retain branch/tag cloning and release-unavailable

@@ -8,14 +8,13 @@
 // (scripts/bootstrap-runner.ts) — it can't deploy itself through itself (same self-reset), and it only
 // changes when the relay / container / runner image changes.
 //
-// SHARED RESOURCES: RUN_LOGS (R2) + DB (D1) are the SAME bucket + database the control plane owns. oblaka
-// ADOPTS an existing resource by its remote name (`<env>-<name>`), so declaring the same names here binds
-// fabrika's existing resources rather than creating new ones. fabrika owns the schema + migrations; this
-// worker only WRITES (run logs/status → R2, the runs row's terminal status → D1) — hence NO migrationsDir.
+// SHARED RESOURCE: RUN_LOGS (R2) is the SAME bucket the control plane owns. oblaka ADOPTS an existing
+// resource by its remote name (`<env>-<name>`), so declaring the same name here binds fabrika's existing
+// bucket rather than creating a new one. This worker writes run logs/status → R2 only and has no database.
 //
 // Local dev still uses oblaka directly via the `oblaka.ts` shim, which calls `buildRunnerWorker` below.
 
-import { Container, D1Database, defineApp, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import { Container, defineApp, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 /** Container instance type per stage — dev locally, larger off-local; any other env → basic. */
 const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
@@ -72,9 +71,6 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 			}),
 			// Run logs + terminal status, keyed by run id — the control plane's bucket, ADOPTED by name.
 			RUN_LOGS: new R2Bucket({ name: 'vozka-run-logs' }),
-			// Registry + run history — the control plane's D1, ADOPTED by name. NO migrationsDir: fabrika owns
-			// the schema + migrations; vozka-runner only writes the runs row's terminal status.
-			DB: new D1Database({ name: 'vozka', locationHint: 'weur' }),
 		},
 	})
 }

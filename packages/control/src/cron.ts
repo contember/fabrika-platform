@@ -49,9 +49,9 @@ export interface MaintenanceOptions {
  * trigger alongside the webhook — then reap orphaned runs.
  *
  * A poll-created run is serialized by the same per-app-env deploy lock as any other run (the consumer
- * takes it). The sweep is the backstop-TO-the-backstop: vozka-runner's per-run DO already records a
- * terminal status within ~18 min even when the relay is aborted, so this only catches runs the DO never
- * fired for at all (e.g. vozka-runner itself was down). Logs counts only — never a feed URL or a secret.
+ * takes it). The provider reconcile settles a run whose provider accepted it — on Cloudflare from the
+ * status vozka-runner persists within ~18 min even when the relay is aborted. The sweep only fails runs
+ * no provider ever accepted. Logs counts only — never a feed URL or a secret.
  */
 export async function runMaintenance(env: Env, options: MaintenanceOptions = {}): Promise<MaintenanceSummary> {
 	const persistence = repositories(env)

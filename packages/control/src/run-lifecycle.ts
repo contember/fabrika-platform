@@ -515,7 +515,8 @@ export async function executeDeploy(
 		}
 		if (outcome.state === 'running') return { runId, status: 'running' }
 		if (!(await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null, owner.guard()))) {
-			return await recordFailureOverRunnerSuccess(deps, run.id, message.dryRun === true, outcome.state, owner)
+			owner.invalidate()
+			return { runId: run.id, status: 'skipped' }
 		}
 		await projectTerminalRun(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
 		return { runId: run.id, status: outcome.state }
@@ -533,33 +534,11 @@ export async function executeDeploy(
 			await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
 			return { runId: run.id, status: 'failed' }
 		}
-		return await recordFailureOverRunnerSuccess(deps, run.id, message.dryRun === true, 'failed', owner)
+		owner.invalidate()
+		return { runId: run.id, status: 'skipped' }
 	} finally {
 		await owner.close()
 	}
-}
-
-/**
- * The Cloudflare runner writes the run's terminal status from inside `startRun`, so a failure the control
- * plane only learns about AFTER that — today the IAM schema reconcile — finds the row already `succeeded`
- * and `markRunFinished` refusing it. Without this the run reads green with one failed line in its log.
- *
- * A `succeeded` outcome over an already-terminal row stays `skipped`: it is the ordinary redelivery, and
- * projecting it again would double-count the release.
- */
-async function recordFailureOverRunnerSuccess(
-	deps: RunDeps,
-	runId: string,
-	dryRun: boolean,
-	outcome: 'succeeded' | 'failed',
-	owner: RunOwnership,
-): Promise<{ runId: string; status: 'failed' | 'skipped' }> {
-	if (outcome !== 'failed' || !(await deps.repositories.runs.markRunFailedAfterRunner(runId, owner.guard()))) {
-		owner.invalidate()
-		return { runId, status: 'skipped' }
-	}
-	await projectTerminalRun(deps, runId, dryRun, 'failed')
-	return { runId, status: 'failed' }
 }
 
 export async function projectTerminalRun(

@@ -9,7 +9,7 @@ import type { RunLogLine } from '@fabrika/control-contract'
 import { type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
 import { z } from 'zod'
-import { parseRunLogLine, parseRunnerStatus, runnerHealthSchema } from './protocol'
+import { parseRunLogLine, parseRunnerStatus, runnerHealthSchema, stampDryRun } from './protocol'
 
 /** The slice of a Cloudflare R2 bucket the relay needs. Real `R2Bucket` satisfies this. */
 export interface R2Like {
@@ -147,7 +147,7 @@ export const relayRun = async (
 		await assertImageSourceProtocol(container, healthTimeoutMs)
 	} catch {
 		const finishedAt = now()
-		const status: RunnerStatus = { runId: job.runId, state: 'failed', error: SOURCE_PROTOCOL_FAILURE, startedAt, finishedAt }
+		const status = stampDryRun({ runId: job.runId, state: 'failed', error: SOURCE_PROTOCOL_FAILURE, startedAt, finishedAt }, job.dryRun === true)
 		const line: RunLogLine = { ts: finishedAt, stream: 'meta', text: SOURCE_PROTOCOL_FAILURE }
 		for (
 			const diagnostic of [
@@ -239,7 +239,7 @@ export const relayRun = async (
 		const response = await container.containerFetch(`http://container${RUNNER_STATUS_PATH}`)
 		const parsed = parseRunnerStatus(await response.json().catch(() => undefined), job.runId)
 		if (parsed.state === 'succeeded' || parsed.state === 'failed') {
-			status = parsed
+			status = stampDryRun(parsed, job.dryRun === true)
 			break
 		}
 		await new Promise((resolve) => setTimeout(resolve, statusPollMs))

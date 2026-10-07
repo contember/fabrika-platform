@@ -66,6 +66,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 				reconcileProviderRuns({
 					repositories: env.REPOSITORIES,
 					provider: cloudflareControlProvider(this.env, env),
+					runLogs: env.RUN_LOGS,
 					lock: deployLock(env),
 					operations: operationsReleaseDeps(env),
 				}),

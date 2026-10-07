@@ -180,7 +180,6 @@ for (const failure of ['false', 'error', 'hanging']) {
 		expect(await db.runs.checkpointRunProviderState(row.id, { phase: 3 }, guard)).toBe(false)
 		expect(await db.runs.markRunFinished(row.id, 'failed', 1, guard)).toBe(false)
 		await replacement.mutate((current) => db.runs.markRunFinished(row.id, 'succeeded', 0, current))
-		expect(await db.runs.markRunFailedAfterRunner(row.id, guard)).toBe(false)
 		await owner.close()
 		lateRenewal.resolve(true)
 		expect(await lock.acquire('app:prod', 'intruder')).toBe(false)
