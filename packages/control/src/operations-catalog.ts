@@ -8,14 +8,13 @@ import {
 } from '@fabrika/operations-contract/catalog'
 import { buildOperationsDsn } from '@fabrika/operations-contract/ingest'
 import type { DeployLocks, HttpService } from '@fabrika/platform'
+import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import type { OperationsCatalogRepository, OperationsCatalogSyncState } from './db'
+import { acquireLease, CATALOG_LEASE_KEY, type Lease } from './lease'
 import { canonicalPublicOrigin, PublicOriginValidationError } from './public-origin'
-import { uuidv7 } from './uuid'
 
 const CATALOG_ENDPOINT = 'https://operations.internal/private/catalog/reconcile'
-const CATALOG_LOCK_KEY = 'operations-catalog-projection'
-const CATALOG_LOCK_TTL_MS = 5 * 60 * 1000
 const CATALOG_REQUEST_TIMEOUT_MS = 15_000
 const MIN_SYNC_KEY_LENGTH = 32
 const MAX_COALESCED_PASSES = 20
@@ -88,27 +87,28 @@ async function runCatalogSync(
 		return summary
 	} catch (cause) {
 		const message = cause instanceof CatalogSyncError ? cause.message : 'operations catalog sync failed'
-		await recordCatalogFailure(deps.catalog, message)
+		// A lost lease is not a catalog failure: the next holder or the maintenance replay delivers the revision.
+		if (!(cause instanceof ProviderInvocationAbort)) await recordCatalogFailure(deps.catalog, message)
 		// Only a CatalogSyncError carries a reason worth printing; the fallback just repeats the outcome.
 		logCatalogSync('failed', requestedRevision, cause instanceof CatalogSyncError ? cause.message : undefined)
 		return { outcome: 'failed', revision: requestedRevision }
 	}
 }
 
-/** One guarded flush. `null` means another holder owns the lease and is delivering the same desired revision. */
+/** One leased flush. `null` means another holder owns the lease and is delivering the same desired revision. */
 async function flushUnderLock(
 	deps: OperationsCatalogSyncDeps,
 	service: HttpService,
 	syncKey: string,
 	operationsOrigin: string,
 ): Promise<OperationsCatalogSyncSummary | null> {
-	const holder = uuidv7()
-	if (!(await deps.locks.acquire(CATALOG_LOCK_KEY, holder, CATALOG_LOCK_TTL_MS))) return null
+	const lease = await acquireLease(deps.locks, CATALOG_LEASE_KEY)
+	if (lease === null) return null
 	try {
-		return await flushCatalog(deps.catalog, service, syncKey, operationsOrigin)
+		return await flushCatalog(deps.catalog, lease, service, syncKey, operationsOrigin)
 	} finally {
 		try {
-			await deps.locks.release(CATALOG_LOCK_KEY, holder)
+			await lease.release()
 		} catch {
 			console.warn('operations catalog lock release failed')
 		}
@@ -135,8 +135,10 @@ function logCatalogSync(outcome: OperationsCatalogSyncOutcome, revision: number 
 	console.info(`operations catalog sync: ${outcome}${at}`)
 }
 
+// Catalog writes are revision-monotonic, not fenced: the lease only keeps two holders from sending at once.
 async function flushCatalog(
 	catalog: OperationsCatalogRepository,
+	lease: Lease,
 	service: HttpService,
 	syncKey: string,
 	operationsOrigin: string,
@@ -158,13 +160,15 @@ async function flushCatalog(
 			snapshotHash,
 			sources,
 		}
+		lease.assertHeld()
 		await catalog.markAttempt(snapshot.revision, snapshotHash)
-		const response = await sendCatalog(service, syncKey, request)
+		const response = await sendCatalog(service, syncKey, request, lease.signal)
 		lastRevision = response.revision
 		if (response.outcome === 'stale') {
 			if (response.revision <= snapshot.revision) {
 				throw new CatalogSyncError('operations catalog returned an invalid stale revision')
 			}
+			lease.assertHeld()
 			await catalog.advancePast(response.revision)
 			lastOutcome = 'coalesced'
 			continue
@@ -188,6 +192,7 @@ async function flushCatalog(
 				dsn: buildOperationsDsn(operationsOrigin, source.ingestCredential.publicKey, item.ingestProjectId),
 			}
 		})
+		lease.assertHeld()
 		await catalog.markApplied(snapshot.revision, snapshotHash, configs)
 		lastOutcome = response.outcome
 	}
@@ -234,6 +239,7 @@ async function sendCatalog(
 	service: HttpService,
 	syncKey: string,
 	payload: OperationsCatalogReconcileRequestV2,
+	signal: AbortSignal,
 ): Promise<OperationsCatalogReconcileResponseV2> {
 	let response: Response
 	try {
@@ -245,10 +251,11 @@ async function sendCatalog(
 					'content-type': 'application/json',
 				},
 				body: JSON.stringify(payload),
-				signal: AbortSignal.timeout(CATALOG_REQUEST_TIMEOUT_MS),
+				signal: AbortSignal.any([signal, AbortSignal.timeout(CATALOG_REQUEST_TIMEOUT_MS)]),
 			}),
 		)
 	} catch {
+		signal.throwIfAborted()
 		throw new CatalogSyncError('operations catalog request failed')
 	}
 	if (!response.ok) {

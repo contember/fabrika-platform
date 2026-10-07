@@ -1,44 +1,25 @@
 ---
 id: 84
-title: A catalog projection can wait out a lease left behind by a dead flush holder
+title: Catalog projection windows that remain after the shared lease
 blocked-by: []
 ---
 
-# 84 — A catalog projection can wait out a lease left behind by a dead flush holder
+# 84 — Catalog projection windows that remain after the shared lease
 
 **Summary.** The silence around this is closed (sprint "a bring-up without surprises", WU2): every
-catalog sync now logs its outcome and revision, most changes that coalesce against the flush holder's
-own release are now delivered by that holder rather than by the maintenance replay, and a deploy
-that finds no active ingest configuration writes one run-log line naming the catalog state it saw.
-What remains is the one window the reproduction could not close: a projection lease left behind by a
-container that died mid-flush refuses every change AND every maintenance replay until it expires.
-Effort S.
+catalog sync logs its outcome and revision, most changes that coalesce against the flush holder's own
+release are delivered by that holder, and a deploy that finds no active ingest configuration writes one
+run-log line naming the catalog state it saw. A lease left behind by a dead flush holder now blocks for
+at most one lease TTL (90 s): the sync holds the shared lease primitive of ADR-0044, and the
+reproduction in `packages/control/src/__tests__/operations-catalog-window.test.ts` ("a lock left behind
+by a dead holder drops every change until one lease TTL") witnesses it. What remains are the smaller
+findings of the same reproduction, none changed yet. Effort S.
 
 ## Problem
 
-`runCatalogSync` takes a `deploy_locks` lease with a five-minute TTL. A holder that dies never
-releases it, so for up to five minutes every registry change returns `coalesced` and every scheduled
-replay returns `coalesced` too — the replay is refused by the same lease it is meant to repair. The
-first replay after expiry is up to one cron period later, so an application registered inside that
-window can wait about ten minutes for the ingest configuration its first deploy reads. Reproduced in
-`packages/control/src/__tests__/operations-catalog-window.test.ts` ("a lock left behind by a dead
-holder drops every change until the lease expires").
-
-**Seen live (2026-08-21, the test installation).** Three minutes after `platform upgrade` replaced
-the control container, a registration's own sync logged `operations catalog sync: coalesced revision
-10`; a deploy 80 ms later wrote `operations ingest not injected: app has no active ingest config
-(catalog revision 10 pending)` and the application, which requires the DSN at boot, failed. A deploy
-seven minutes later carried all four Operations keys — the replay after the lease expired had
-delivered revision 10. A roll is therefore the common trigger: the container that dies mid-flush is
-the one the roll replaces. The cheapest close is a holder that releases its lease on `SIGTERM`, or a
-lease that the replacing container may take over; measure which one the platform's stop sequence
-allows (it sends the stop and waits, `docs/reference/zerops-platform.md`).
-
-Three smaller findings from the same reproduction, none changed yet:
-
 - The handoff passes narrow the coalescing window rather than close it: after the last pass there is
   no final `getState`, so a change that lands in that pass's own release window still waits for the
-  maintenance replay, on the cadence above.
+  maintenance replay.
 - The deploy's run-log line lives on `runs/<id>/logs.ndjson`, which a relay-backed provider re-flushes
   in full from its own buffer (`packages/runner-cloudflare/src/relay.ts`). Control writes the line
   before the provider starts, so it can never truncate a relay log — but on those providers the line
@@ -49,16 +30,12 @@ Three smaller findings from the same reproduction, none changed yet:
   response is skipped with no error and no log line.
 - A reconcile accepted by Operations whose local `markApplied` never runs (the process ends between
   the response and the write) leaves Operations listing a source that control has no active
-  configuration for. Nothing can log this — the next successful sync repairs it, on the cadence above.
+  configuration for. Nothing can log this — the next successful sync repairs it.
 
 ## Approach / acceptance
 
-1. Decide how a projection lease should self-heal faster than its TTL: a shorter lease with a
-   heartbeat, a lease the maintenance replay may break when it is older than one cron period, or
-   accepting the window now that both ends of it are visible in the logs.
-2. Whatever is chosen, the maintenance replay must not be refused by a lease no process holds.
-3. Witness: extend the reproduction above — the replay after a dead holder delivers the pending
-   revision without waiting out the full TTL.
+1. Decide per finding whether to close it or accept it now that both ends are visible in the logs.
+2. A closed finding gets a witness in the reproduction above.
 
 ## Touch points
 
@@ -66,4 +43,5 @@ Three smaller findings from the same reproduction, none changed yet:
 `packages/control/src/__tests__/operations-catalog-window.test.ts`.
 
 <!-- Origin: cheap-rebuild sprint WU8 run log, 2026-08-21; rewritten by WU2 of the
-     bring-up-without-surprises sprint after the reproduction. -->
+     bring-up-without-surprises sprint after the reproduction; trimmed when ADR-0044's lease
+     replaced the five-minute catalog lock. -->

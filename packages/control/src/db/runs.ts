@@ -1,17 +1,11 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
+import type { LeaseFence } from '../lease'
 import { firstRow } from './returning'
 
 export type RunTrigger = 'webhook' | 'manual' | 'poll'
 
 export type RunStatus = 'pending' | 'running' | 'succeeded' | 'failed'
-
-/** Acquire the lease first with a unique invocation holder; sample nowMs anew for each mutation. */
-export interface RunMutationGuard {
-	readonly holder: string
-	readonly nowMs: number
-	readonly expectedProviderStateJson: string | null
-}
 
 export interface RunRow {
 	id: string
@@ -81,23 +75,17 @@ export const serializeProviderJson = (value: JsonValue): string => {
 export class RunRepository {
 	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
-	private async mutateRun(id: string, sql: string, values: (string | number | null)[], guard?: RunMutationGuard): Promise<boolean> {
-		if (guard === undefined) {
-			const result = await this.d1.prepare(sql).bind(...values).run()
-			return result.meta.changes > 0
-		}
-		const checkpointPredicate = guard.expectedProviderStateJson === null ? 'provider_state_json IS NULL' : 'provider_state_json = ?'
-		const checkpointValues = guard.expectedProviderStateJson === null ? [] : [guard.expectedProviderStateJson]
+	/** Every lifecycle write is holder-fenced on the run's `<app>:<env>` lease. */
+	private async mutateRun(id: string, sql: string, values: (string | number | null)[], fence: LeaseFence): Promise<boolean> {
 		// The lease row must stay locked through the mutation: an EXISTS alone races takeover on Postgres.
 		const results = await this.d1.batch<{ id: string }>([
 			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
 				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
-					AND holder = ? AND expires_at > ?`).bind(id, guard.holder, guard.nowMs),
+					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
 			this.d1.prepare(`${sql}
-				AND ${checkpointPredicate}
 				AND EXISTS (SELECT 1 FROM deploy_locks
 					WHERE lock_key = runs.app_id || ':' || runs.env AND holder = ? AND expires_at > ?)
-				RETURNING id`).bind(...values, ...checkpointValues, guard.holder, guard.nowMs),
+				RETURNING id`).bind(...values, fence.holder, fence.nowMs),
 		])
 		return (results[1]?.results.length ?? 0) > 0
 	}
@@ -123,26 +111,12 @@ export class RunRepository {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}
 
-	/** Persist a provider-owned operation id and optional resume state in one guarded write. */
-	async setRunExternalId(id: string, externalRunId: string, providerState?: JsonValue, guard?: RunMutationGuard): Promise<boolean> {
-		const stateAssignment = providerState === undefined ? '' : ', provider_state_json = ?'
-		const stateValues = providerState === undefined ? [] : [serializeProviderJson(providerState)]
-		return this.mutateRun(
-			id,
-			`UPDATE runs SET external_run_id = ?${stateAssignment}
-			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
-				AND (external_run_id IS NULL OR external_run_id = ?)`,
-			[externalRunId, ...stateValues, id, externalRunId],
-			guard,
-		)
-	}
-
 	/** Reservation evidence survives a cancellation request so the current owner can settle cleanup. */
 	async recordInitialRunExternalId(
 		id: string,
 		externalRunId: string,
 		providerState: JsonValue | undefined,
-		guard: RunMutationGuard,
+		fence: LeaseFence,
 	): Promise<boolean> {
 		const stateAssignment = providerState === undefined ? '' : ', provider_state_json = ?'
 		const stateValues = providerState === undefined ? [] : [serializeProviderJson(providerState)]
@@ -151,18 +125,18 @@ export class RunRepository {
 			`UPDATE runs SET external_run_id = ?${stateAssignment}
 			WHERE id = ? AND status = 'running' AND external_run_id IS NULL`,
 			[externalRunId, ...stateValues, id],
-			guard,
+			fence,
 		)
 	}
 
 	/** Replace provider resume state only while the run remains active. */
-	async checkpointRunProviderState(id: string, providerState: JsonValue, guard?: RunMutationGuard): Promise<boolean> {
+	async checkpointRunProviderState(id: string, providerState: JsonValue, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET provider_state_json = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL AND external_run_id IS NOT NULL`,
 			[serializeProviderJson(providerState), id],
-			guard,
+			fence,
 		)
 	}
 
@@ -210,32 +184,35 @@ export class RunRepository {
 	 * status so a redelivered queue message can't re-start a run already past pending. Returns true
 	 * iff the row transitioned.
 	 */
-	async markRunStarted(id: string, logKey: string, guard?: RunMutationGuard): Promise<boolean> {
-		const runningPredicate = guard === undefined ? '' : `AND NOT EXISTS (SELECT 1 FROM runs active
-			WHERE active.app_id = runs.app_id AND active.env = runs.env AND active.status = 'running' AND active.id <> runs.id)`
+	async markRunStarted(id: string, logKey: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = 'running', started_at = ?, log_key = ?
-			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL ${runningPredicate}`,
+			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL
+				AND NOT EXISTS (SELECT 1 FROM runs active
+					WHERE active.app_id = runs.app_id AND active.env = runs.env AND active.status = 'running' AND active.id <> runs.id)`,
 			[this.now(), logKey, id],
-			guard,
+			fence,
 		)
 	}
 
 	/** Record one resolved commit while the active run still accepts provider lifecycle writes. */
-	async setRunCommit(id: string, commitSha: string, guard?: RunMutationGuard): Promise<boolean> {
+	async setRunCommit(id: string, commitSha: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET commit_sha = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
 				AND (commit_sha IS NULL OR LOWER(commit_sha) = ?)`,
 			[commitSha, id, commitSha],
-			guard,
+			fence,
 		)
 	}
 
-	/** Atomically claim cancellation and return the latest active run snapshot. */
-	async beginRunCancellation(id: string): Promise<RunRow | null> {
+	/**
+	 * Record a cancellation REQUEST and return the latest active run snapshot. The one unfenced run update:
+	 * it changes no lifecycle state, and the lease holder reads it at its next step boundary.
+	 */
+	async requestRunCancellation(id: string): Promise<RunRow | null> {
 		return this.d1
 			.prepare(`UPDATE runs SET cancel_requested_at = COALESCE(cancel_requested_at, ?)
 				WHERE id = ? AND status IN ('pending','running') RETURNING *`)
@@ -247,24 +224,24 @@ export class RunRepository {
 	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code.
 	 * Returns true iff the row transitioned (it was still `running`/`pending`).
 	 */
-	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, guard?: RunMutationGuard): Promise<boolean> {
+	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
 			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`,
 			[status, exitCode, this.now(), id],
-			guard,
+			fence,
 		)
 	}
 
 	/** Finish a run only after cancellation has durably claimed and settled provider work; activation may have won first. */
-	async markRunCancellationFinished(id: string, status: 'succeeded' | 'failed', guard?: RunMutationGuard): Promise<boolean> {
+	async markRunCancellationFinished(id: string, status: 'succeeded' | 'failed', fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = ?, exit_code = NULL, finished_at = ?
 			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NOT NULL`,
 			[status, this.now(), id],
-			guard,
+			fence,
 		)
 	}
 

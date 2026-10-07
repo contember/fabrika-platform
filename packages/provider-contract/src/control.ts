@@ -7,6 +7,11 @@ export interface ProviderRunEvents {
 	externalId(id: string, state?: JsonValue): Promise<void>
 	/** Replace the credential-free checkpoint while this run remains active. */
 	checkpoint(state: JsonValue): Promise<void>
+	/**
+	 * A step boundary: Control checks its lease and reads the run's cancellation request. Rejects with a
+	 * `ProviderInvocationAbort` after aborting the run's signal. A long step calls it at its own boundaries.
+	 */
+	boundary(): Promise<void>
 }
 
 /** Complete platform-owned runtime state. A null value removes the key from persistent targets. */
@@ -139,6 +144,21 @@ export class ProviderInvocationAbort extends Error {
 		this.name = 'ProviderInvocationAbort'
 	}
 }
+
+/** Resolve after `ms`, or reject with the signal's reason once it aborts. */
+export const abortableWait = (ms: number, signal: AbortSignal): Promise<void> =>
+	new Promise((resolve, reject) => {
+		signal.throwIfAborted()
+		const abort = (): void => {
+			clearTimeout(timer)
+			reject(signal.reason)
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', abort)
+			resolve()
+		}, ms)
+		signal.addEventListener('abort', abort, { once: true })
+	})
 
 /** A platform-owned run that can be cancelled or reconciled. */
 export interface ProviderRunReference {

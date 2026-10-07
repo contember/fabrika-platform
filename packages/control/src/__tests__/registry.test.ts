@@ -19,6 +19,7 @@ import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
+import { fixtureRuns, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
 // Registry + onboarding row creation, and run-history reads, driven through the RPC
@@ -51,7 +52,7 @@ function makeDeps(
 		repoSource: opts.repoSource ?? new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
 		provider: opts.provider ?? fakeProvider,
 		// Stand in for the runner: mark the run failed (the real seam destroys the container + frees the lock).
-		cancelRun: (run) => db.runs.markRunFinished(run.id, 'failed', null).then(() => {}),
+		cancelRun: (run) => fixtureRuns(db.runs, makeFakeLock(db)).finish(run.id, 'failed').then(() => {}),
 		...(opts.catalogChanged === undefined ? {} : { catalogChanged: opts.catalogChanged }),
 	}
 	return { deps, queue, logStore, sqlite }
@@ -692,7 +693,7 @@ describe('run history API', () => {
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
 		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
-		await deps.repositories.runs.markRunStarted(runId, logsKey(runId))
+		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).start(runId, logsKey(runId))
 		// Stage two log lines in the fake R2 under the run's log key.
 		logStore.set(
 			logsKey(runId),
@@ -724,7 +725,7 @@ describe('run history API', () => {
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
 		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
-		await deps.repositories.runs.markRunStarted(runId, logsKey(runId))
+		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).start(runId, logsKey(runId))
 
 		const cancelled = await rpcResult(rpcRequest('runs.cancel', { runId }), deps)
 		expect(cancelled.status).toBe(200)

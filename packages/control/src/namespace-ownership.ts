@@ -1,26 +1,19 @@
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import type { DeployLocks } from '@fabrika/platform'
+import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { ControlRegistryRepository, DeploymentNamespaceRow, DeploymentNamespaceState } from './db'
-import { DEPLOY_LEASE_TTL_MS, type DeployLockGate, type OwnershipTiming } from './run-ownership'
+import { LEASE_TTL_MS } from './lease'
 import { uuidv7 } from './uuid'
+
+export interface OwnershipTiming {
+	now(): number
+	wait(ms: number, signal: AbortSignal): Promise<void>
+	ttlMs: number
+	pollMs: number
+}
 
 export const namespaceLockKey = (namespaceId: string): string => `namespace:${namespaceId}`
 
-const wait = (ms: number, signal: AbortSignal): Promise<void> =>
-	new Promise((resolve, reject) => {
-		signal.throwIfAborted()
-		const abort = (): void => {
-			clearTimeout(timer)
-			reject(signal.reason)
-		}
-		const timer = setTimeout(() => {
-			signal.removeEventListener('abort', abort)
-			resolve()
-		}, ms)
-		signal.addEventListener('abort', abort, { once: true })
-	})
-
-// The shorter request lease bounds the local deadline; the namespace-job lease is longer.
-const defaultTiming: OwnershipTiming = { now: Date.now, wait, ttlMs: DEPLOY_LEASE_TTL_MS, pollMs: 1000 }
+const defaultTiming: OwnershipTiming = { now: Date.now, wait: abortableWait, ttlMs: LEASE_TTL_MS, pollMs: 1000 }
 export type NamespaceOwnershipRepository = Pick<ControlRegistryRepository, 'getDeploymentNamespace' | 'checkpointDeploymentNamespace'>
 
 export class NamespaceOwnership {
@@ -34,7 +27,7 @@ export class NamespaceOwnership {
 	private constructor(
 		row: DeploymentNamespaceRow,
 		private readonly registry: NamespaceOwnershipRepository,
-		private readonly lock: DeployLockGate,
+		private readonly lock: DeployLocks,
 		private readonly holder: string,
 		private readonly timing: OwnershipTiming,
 		acquiredAt: number,
@@ -46,13 +39,13 @@ export class NamespaceOwnership {
 
 	static async acquire(
 		registry: NamespaceOwnershipRepository,
-		lock: DeployLockGate,
+		lock: DeployLocks,
 		namespaceId: string,
 		timing = defaultTiming,
 	): Promise<NamespaceOwnership | null> {
 		const holder = uuidv7()
 		const acquiredAt = timing.now()
-		if (!(await lock.acquire(namespaceLockKey(namespaceId), holder))) return null
+		if (!(await lock.acquire(namespaceLockKey(namespaceId), holder, timing.ttlMs))) return null
 		try {
 			const row = await registry.getDeploymentNamespace(namespaceId)
 			if (row === null) throw new Error(`deployment namespace ${namespaceId} not found`)
@@ -89,7 +82,7 @@ export class NamespaceOwnership {
 				let renewed: boolean
 				try {
 					renewed = await Promise.race([
-						this.lock.renew(namespaceLockKey(this.current.id), this.holder),
+						this.lock.renew(namespaceLockKey(this.current.id), this.holder, this.timing.ttlMs),
 						this.timing.wait(Math.max(0, this.deadline - started), AbortSignal.any([this.stop.signal, timeout.signal])).then(() => false),
 					])
 				} finally {

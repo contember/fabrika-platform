@@ -14,7 +14,7 @@ import type {
 	ProviderTerminalOutcome,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
-import { decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { abortableWait, decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
 import { type RunnerIamReconcile, runnerIamReconcileSchema } from '@fabrika/runner-contract'
 import { z } from 'zod'
@@ -165,7 +165,25 @@ export interface CloudflareControlOptions {
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
 	recoverRun?(runId: string): Promise<CloudflareRunRecovery>
+	/** Overridable for tests; the wait between two reads of Control's step boundary. */
+	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>
 }
+
+const BOUNDARY_INTERVAL_MS = 10_000
+
+/** Read Control's step boundary while the runner works; a rejection that matters aborts the run signal. */
+const readBoundaries = async (events: ProviderDeployInput['events'], sleep: CloudflareControlOptions['sleep'], stop: AbortSignal): Promise<void> => {
+	try {
+		for (;;) {
+			await (sleep ?? abortableWait)(BOUNDARY_INTERVAL_MS, stop)
+			await events.boundary().catch(() => {})
+		}
+	} catch {
+		// `stop` aborted: the runner answered.
+	}
+}
+
+const isLeaseLoss = (reason: unknown): boolean => reason instanceof ProviderInvocationAbort && reason.kind === 'lease_lost'
 
 const encodeEnvelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
 	provider: 'cloudflare',
@@ -360,11 +378,15 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 		const abort = (): void => {
 			const reason: unknown = input.signal.reason
 			if (reason instanceof ProviderInvocationAbort && reason.kind === 'cancel_requested') {
-				void options.cancelRun(input.runId).catch(() => {})
+				// A boundary that finds the lease lost forbids the cancel (ADR-0044).
+				void input.events.boundary().catch((error: unknown) => error).then((crossed) => isLeaseLoss(crossed) ? undefined : options.cancelRun(input.runId))
+					.catch(() => {})
 			}
 			interrupted.reject(reason)
 		}
 		input.signal.addEventListener('abort', abort, { once: true })
+		const stopBoundaries = new AbortController()
+		const boundaries = readBoundaries(input.events, options.sleep, stopBoundaries.signal)
 		let outcome: CloudflareRunOutcome
 		try {
 			outcome = await Promise.race([options.startRun(job), interrupted.promise])
@@ -373,6 +395,8 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			throw error
 		} finally {
 			input.signal.removeEventListener('abort', abort)
+			stopBoundaries.abort()
+			await boundaries
 		}
 		input.signal.throwIfAborted()
 		if (input.dryRun) return outcome

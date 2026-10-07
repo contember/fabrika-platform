@@ -1,6 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { firstRow } from './returning'
-import type { RunMutationGuard, RunRow } from './runs'
+import type { RunRow } from './runs'
 
 export interface OperationsReleaseSyncRow {
 	run_id: string
@@ -68,11 +68,11 @@ export class OperationsReleaseRepository {
 			WHERE s.run_id = ? AND r.status IN ('succeeded', 'failed')`).bind(runId).first<TerminalOperationsReleaseRow>()
 	}
 
-	async repairTerminal(
-		expected: TerminalOperationsReleaseRow,
-		payloadJson: string | null,
-		guard: RunMutationGuard,
-	): Promise<boolean> {
+	/**
+	 * Replace a terminal run's stale release payload, or record why it cannot be repaired. Unfenced: the
+	 * revision predicate makes overlapping replays idempotent, and the run is already terminal.
+	 */
+	async repairTerminal(expected: TerminalOperationsReleaseRow, payloadJson: string | null): Promise<boolean> {
 		const assignment = payloadJson === null
 			? 'last_error = ?'
 			: 'payload_json = ?, desired_revision = desired_revision + 1, last_error = NULL'
@@ -80,33 +80,21 @@ export class OperationsReleaseRepository {
 		const externalValues = expected.external_run_id === null ? [] : [expected.external_run_id]
 		const finishedPredicate = expected.finished_at === null ? 'r.finished_at IS NULL' : 'r.finished_at = ?'
 		const finishedValues = expected.finished_at === null ? [] : [expected.finished_at]
-		// Hold the lease row through the CAS; an EXISTS alone does not fence Postgres takeover.
-		const results = await this.db.batch<{ run_id: string }>([
-			this.db.prepare(`UPDATE deploy_locks SET holder = holder
-				WHERE lock_key = ? AND holder = ? AND expires_at > ?`)
-				.bind(`${expected.app_id}:${expected.env}`, guard.holder, guard.nowMs),
-			this.db.prepare(`UPDATE operations_release_sync SET ${assignment}
-				WHERE run_id = ? AND desired_revision = ? AND payload_json = ?
-					AND EXISTS (SELECT 1 FROM runs r WHERE r.id = operations_release_sync.run_id
-						AND r.app_id = ? AND r.env = ? AND r.status = ? AND r.status IN ('succeeded', 'failed')
-						AND ${finishedPredicate} AND ${externalPredicate})
-					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
-				RETURNING run_id`).bind(
-				payloadJson ?? TERMINAL_RELEASE_REPAIR_DIAGNOSTIC,
-				expected.run_id,
-				expected.desired_revision,
-				expected.payload_json,
-				expected.app_id,
-				expected.env,
-				expected.status,
-				...finishedValues,
-				...externalValues,
-				`${expected.app_id}:${expected.env}`,
-				guard.holder,
-				guard.nowMs,
-			),
-		])
-		return (results[1]?.results.length ?? 0) > 0
+		const result = await this.db.prepare(`UPDATE operations_release_sync SET ${assignment}
+			WHERE run_id = ? AND desired_revision = ?
+				AND EXISTS (SELECT 1 FROM runs r WHERE r.id = operations_release_sync.run_id
+					AND r.app_id = ? AND r.env = ? AND r.status = ? AND r.status IN ('succeeded', 'failed')
+					AND ${finishedPredicate} AND ${externalPredicate})`).bind(
+			payloadJson ?? TERMINAL_RELEASE_REPAIR_DIAGNOSTIC,
+			expected.run_id,
+			expected.desired_revision,
+			expected.app_id,
+			expected.env,
+			expected.status,
+			...finishedValues,
+			...externalValues,
+		).run()
+		return (result.meta.changes ?? 0) > 0
 	}
 
 	async markAttempt(runId: string, revision: number): Promise<void> {

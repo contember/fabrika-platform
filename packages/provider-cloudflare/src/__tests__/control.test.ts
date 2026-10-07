@@ -6,7 +6,7 @@ import type {
 	ProviderRegistration,
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -75,6 +75,7 @@ const deployInput = (): ProviderDeployInput => ({
 		log: () => {},
 		externalId: async () => {},
 		checkpoint: async () => {},
+		boundary: async () => {},
 	},
 })
 
@@ -287,6 +288,101 @@ describe('Cloudflare control provider', () => {
 			expect(cancels).toBe(kind === 'lease_lost' ? 0 : 1)
 		})
 	}
+
+	test('reads the step boundary while the runner works, and a cancellation found there cancels the runner', async () => {
+		const controller = new AbortController()
+		const reason = new ProviderInvocationAbort('cancel_requested')
+		let boundaries = 0
+		let cancels = 0
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			...sourceOptions,
+			sleep: (_ms, signal) => abortableWait(1, signal),
+			prepareClone: async (source) => source,
+			startRun: () => new Promise(() => {}),
+			cancelRun: async () => {
+				cancels++
+			},
+		})
+		const input = deployInput()
+		const deploying = provider.deploy({
+			...input,
+			signal: controller.signal,
+			events: {
+				...input.events,
+				boundary: async () => {
+					boundaries++
+					if (boundaries < 3) return
+					controller.abort(reason)
+					throw reason
+				},
+			},
+		})
+		await expect(deploying).rejects.toBe(reason)
+		await Bun.sleep(0)
+		// The fourth read is the abort listener confirming the lease before it cancels the runner.
+		expect(boundaries).toBe(4)
+		expect(cancels).toBe(1)
+	})
+
+	test('a cancellation whose lease is lost before the runner cancel leaves the runner alone', async () => {
+		const entered = Promise.withResolvers<void>()
+		const controller = new AbortController()
+		let cancels = 0
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			...sourceOptions,
+			prepareClone: async (source) => source,
+			startRun: async () => {
+				entered.resolve()
+				return new Promise(() => {})
+			},
+			cancelRun: async () => {
+				cancels++
+			},
+		})
+		const input = deployInput()
+		const deploying = provider.deploy({
+			...input,
+			signal: controller.signal,
+			events: { ...input.events, boundary: () => Promise.reject(new ProviderInvocationAbort('lease_lost')) },
+		})
+		await entered.promise
+		const reason = new ProviderInvocationAbort('cancel_requested')
+		controller.abort(reason)
+		await expect(deploying).rejects.toBe(reason)
+		await Bun.sleep(0)
+		expect(cancels).toBe(0)
+	})
+
+	test('a runner that answers before the first boundary reads none', async () => {
+		let boundaries = 0
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			...sourceOptions,
+			prepareClone: async (source) => source,
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		await provider.deploy({
+			...input,
+			dryRun: true,
+			events: {
+				...input.events,
+				boundary: async () => {
+					boundaries++
+				},
+			},
+		})
+		expect(boundaries).toBe(0)
+	})
 
 	test('cancellation arriving during async source preparation cannot start the runner', async () => {
 		const sourceReady = Promise.withResolvers<void>()

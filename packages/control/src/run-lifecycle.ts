@@ -6,17 +6,19 @@ import {
 	operationsManagedEnvironmentCollisions,
 } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
-import type { BlobStore } from '@fabrika/platform'
-import type {
-	ControlProvider,
-	ProviderApp,
-	ProviderDeployInput,
-	ProviderDeploymentNamespace,
-	ProviderDeployOutcome,
-	ProviderEnvelope,
-	ProviderEnvironment,
-	ProviderSourceBinding,
-	ProviderTerminalOutcome,
+import type { BlobStore, DeployLocks } from '@fabrika/platform'
+import {
+	type ControlProvider,
+	type ProviderApp,
+	type ProviderDeployInput,
+	type ProviderDeploymentNamespace,
+	type ProviderDeployOutcome,
+	type ProviderEnvelope,
+	type ProviderEnvironment,
+	ProviderInvocationAbort,
+	type ProviderReconcileOutcome,
+	type ProviderSourceBinding,
+	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import {
@@ -27,14 +29,15 @@ import {
 	type DeploymentNamespaceRow,
 	type OperationsCatalogRepository,
 	parseProviderJson,
+	type RunRepository,
 	type RunRow,
+	serializeProviderJson,
 } from './db'
+import { acquireLease, type Lease, type LeaseClock, type LeaseFence, runLeaseKey } from './lease'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
-import { type DeployLockGate, type OwnershipTiming, RunOwnership } from './run-ownership'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
 
-export type { DeployLockGate } from './run-ownership'
 export type RunOutcome = ProviderTerminalOutcome
 
 /** Everything the provider-neutral lifecycle needs. */
@@ -42,8 +45,8 @@ export interface RunDeps {
 	repositories: ControlRepositories
 	secrets: SecretResolver
 	provider: ControlProvider
-	lock: DeployLockGate
-	ownershipTiming?: OwnershipTiming
+	lock: DeployLocks
+	leaseClock?: LeaseClock
 	logs: Pick<BlobStore, 'put'>
 	operations?: OperationsReleaseProjectionDeps
 	/**
@@ -305,54 +308,124 @@ const assertUnmanagedNames = (kind: 'variable' | 'secret', names: readonly strin
 	}
 }
 
+/** The row reached a terminal state before this invocation's write: nothing is left for it to do. */
+class RunSettled extends Error {}
+
+/**
+ * One invocation's hold on a run: its `<app>:<env>` lease and the signal its work runs under. `work`
+ * aborts with `cancel_requested` when a step boundary reads the request (never a poll, ADR-0044), and
+ * with `lease_lost` when the lease goes.
+ */
+export class RunInvocation {
+	readonly work = new AbortController()
+
+	private constructor(readonly lease: Lease, private readonly runs: RunRepository, readonly runId: string) {
+		const follow = (): void => this.work.abort(lease.signal.reason)
+		if (lease.signal.aborted) follow()
+		else lease.signal.addEventListener('abort', follow, { once: true })
+	}
+
+	static async acquire(deps: Pick<RunDeps, 'repositories' | 'lock' | 'leaseClock'>, candidate: RunRow): Promise<RunInvocation | null> {
+		const lease = await acquireLease(deps.lock, runLeaseKey(candidate.app_id, candidate.env), deps.leaseClock)
+		return lease === null ? null : new RunInvocation(lease, deps.repositories.runs, candidate.id)
+	}
+
+	/** Another run of the same environment, under the same lease. */
+	forRun(runId: string): RunInvocation {
+		return new RunInvocation(this.lease, this.runs, runId)
+	}
+
+	get lost(): boolean {
+		return this.lease.signal.aborted
+	}
+
+	get cancelled(): boolean {
+		const reason: unknown = this.work.signal.reason
+		return reason instanceof ProviderInvocationAbort && reason.kind === 'cancel_requested'
+	}
+
+	/** Read the row under the lease; a recorded cancellation request aborts `work`. */
+	async read(): Promise<RunRow | null> {
+		const row = await this.runs.getRun(this.runId)
+		this.lease.assertHeld()
+		if (row !== null && row.cancel_requested_at !== null && !this.work.signal.aborted) {
+			this.work.abort(new ProviderInvocationAbort('cancel_requested'))
+		}
+		return row
+	}
+
+	/** A step boundary: rejects with `lease_lost`, `cancel_requested` or `RunSettled`, else answers the active row. */
+	async boundary(): Promise<RunRow> {
+		const row = await this.read()
+		if (row === null || (row.status !== 'pending' && row.status !== 'running')) throw new RunSettled(`run ${this.runId} is settled`)
+		if (this.cancelled) throw new ProviderInvocationAbort('cancel_requested')
+		return row
+	}
+
+	/** One fenced write. A refused one is explained by the row; a throwing one leaves the outcome unknown. */
+	async write(mutation: (fence: LeaseFence) => Promise<boolean>): Promise<void> {
+		const fence = this.lease.fence()
+		let changed: boolean
+		try {
+			changed = await mutation(fence)
+		} catch (error) {
+			// The row may or may not have changed, so this invocation must not write again.
+			this.lease.abandon()
+			throw error
+		}
+		if (changed) return
+		await this.boundary()
+		throw new Error(`run ${this.runId} refused a lifecycle write`)
+	}
+
+	release(): Promise<void> {
+		return this.lease.release()
+	}
+}
+
+type DeployStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'deferred'
+
 /**
  * Execute one queued deploy through the statically selected provider.
  *
  * Core owns locking and terminal database transitions. The provider owns source delivery, deploy
  * mechanics, external operation ids, reconciliation, and provider-managed secret semantics.
  */
-export async function executeDeploy(
-	deps: RunDeps,
-	message: DeployJobMessage,
-): Promise<{ runId: string; status: 'running' | 'succeeded' | 'failed' | 'skipped' | 'deferred' }> {
-	let run = await deps.repositories.runs.getRun(message.runId)
-	if (run === null) {
+export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): Promise<{ runId: string; status: DeployStatus }> {
+	const candidate = await deps.repositories.runs.getRun(message.runId)
+	if (candidate === null) {
 		return { runId: message.runId, status: 'skipped' }
 	}
-	if (run.status !== 'pending') {
-		return { runId: run.id, status: 'skipped' }
+	if (candidate.status !== 'pending') {
+		return { runId: candidate.id, status: 'skipped' }
 	}
 
-	const owner = await RunOwnership.acquire(deps.repositories.runs, deps.lock, run, deps.ownershipTiming)
-	if (owner === null) {
-		return { runId: run.id, status: 'deferred' }
+	const invocation = await RunInvocation.acquire(deps, candidate)
+	if (invocation === null) {
+		return { runId: candidate.id, status: 'deferred' }
 	}
-	run = owner.row
-	const runId = run.id
+	const runId = candidate.id
+	const dryRun = message.dryRun === true
+	const runs = deps.repositories.runs
+	let accepted = false
 
 	try {
-		if (run.status !== 'pending') return { runId, status: 'skipped' }
-		if (run.cancel_requested_at !== null) {
-			const settled = await settleRunCancellation(deps, owner).catch(() => null)
-			return { runId, status: settled === null ? 'running' : 'skipped' }
-		}
-		if (!(await deps.repositories.runs.markRunStarted(run.id, logsKey(run.id), owner.guard()))) {
-			owner.invalidate()
-			const latest = await deps.repositories.runs.getRun(runId)
+		const run = await invocation.read()
+		if (run === null || run.status !== 'pending') return { runId, status: 'skipped' }
+		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
+		if (!(await startRun(deps, invocation, run))) {
+			const latest = await runs.getRun(runId)
 			return { runId, status: latest?.status === 'pending' ? 'deferred' : 'skipped' }
 		}
-		let startedRun = await deps.repositories.runs.getRun(run.id)
-		if (startedRun === null) return { runId: run.id, status: 'skipped' }
+		let startedRun = await invocation.boundary()
 		if (startedRun.log_key === null) throw new Error('started run has no log key')
 		const startedLogKey = startedRun.log_key
 		const app = await deps.repositories.registry.getApp(run.app_id)
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (app === null || appEnv === null) {
-			if (await deps.repositories.runs.markRunFinished(run.id, 'failed', null, owner.guard())) {
-				await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
-				return { runId: run.id, status: 'failed' }
-			}
-			return { runId: run.id, status: 'skipped' }
+			await invocation.write((fence) => runs.markRunFinished(runId, 'failed', null, fence))
+			await projectTerminalRun(deps, runId, dryRun, 'failed')
+			return { runId, status: 'failed' }
 		}
 		if (appEnv.provider !== deps.provider.id) {
 			throw new Error(
@@ -365,38 +438,33 @@ export async function executeDeploy(
 		let registration = deps.provider.normalizeRegistration?.({ app: appInput, environment: environmentInput })
 			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
-		const abortController = owner.work
 		const resolveSource = deps.provider.resolveSource
-		if (message.dryRun !== true && resolveSource !== undefined) {
-			await owner.refreshCancellation()
-			owner.work.signal.throwIfAborted()
+		if (!dryRun && resolveSource !== undefined) {
+			await invocation.boundary()
 			const expectedCommitSha = startedRun.commit_sha === null
 				? undefined
 				: immutableGitObjectId(startedRun.commit_sha, 'recorded commit')
 			const resolution = await resolveSource({
-				runId: run.id,
+				runId,
 				app: registration.app,
 				environment: registration.environment,
 				...(expectedCommitSha === undefined ? {} : { expectedCommitSha }),
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
-				signal: abortController.signal,
+				signal: invocation.work.signal,
 			})
 			const commitSha = immutableGitObjectId(resolution.commitSha, 'resolved commit')
-			await owner.refreshCancellation()
-			owner.work.signal.throwIfAborted()
+			await invocation.boundary()
 			if (expectedCommitSha !== undefined && commitSha !== expectedCommitSha) {
 				throw new Error('resolved commit does not match the recorded commit')
 			}
-			await owner.mutate((guard) => deps.repositories.runs.setRunCommit(runId, commitSha, guard))
-			const resolvedRun = await deps.repositories.runs.getRun(run.id)
-			if (resolvedRun === null) throw new Error('resolved run disappeared')
-			startedRun = resolvedRun
+			await invocation.write((fence) => runs.setRunCommit(runId, commitSha, fence))
+			startedRun = await invocation.boundary()
 			registration = { ...registration, app: providerAppAtCommit(registration.app, commitSha) }
 		}
 		const releaseContext = deps.operations === undefined
 			? null
 			: await projectOperationsRun(deps.operations, startedRun, {
-				dryRun: message.dryRun === true,
+				dryRun,
 				phase: 'started',
 				artifactState: 'pending',
 			})
@@ -436,7 +504,7 @@ export async function executeDeploy(
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id)
-		const runLogs = new RunLogWriter(deps.logs, startedLogKey, run.id)
+		const runLogs = new RunLogWriter(deps.logs, startedLogKey, runId)
 		let outcome: ProviderDeployOutcome
 		try {
 			if (ingestGap !== null) {
@@ -445,43 +513,37 @@ export async function executeDeploy(
 				// only in the control log there — flush first so ours can never land after a relay flush.
 				await runLogs.flush()
 			}
-			await owner.refreshCancellation()
-			owner.work.signal.throwIfAborted()
+			await invocation.boundary()
 			const deployInput: ProviderDeployInput = {
-				runId: run.id,
+				runId,
 				app: registration.app,
 				environment: registration.environment,
 				secrets,
 				vars,
 				managedEnvironment,
 				...(returnOrigins === undefined ? {} : { returnOrigins }),
-				dryRun: message.dryRun === true,
+				dryRun,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
-				signal: abortController.signal,
+				signal: invocation.work.signal,
 				events: {
 					log: (line) => runLogs.log(line),
 					externalId: async (externalId, providerState) => {
-						await owner.mutate(
-							(guard) => deps.repositories.runs.recordInitialRunExternalId(runId, externalId, providerState, guard),
-							providerState,
-							true,
-							async () => {
-								const acceptedRun = await deps.repositories.runs.getRun(runId)
-								owner.guard()
-								if (deps.operations !== undefined && acceptedRun !== null && acceptedRun.cancel_requested_at === null) {
-									await projectOperationsRun(deps.operations, acceptedRun, {
-										dryRun: message.dryRun === true,
-										phase: 'provider_accepted',
-										artifactState: 'pending',
-									})
-								}
-							},
-						)
-						await owner.refreshCancellation()
+						if (providerState !== undefined) serializeProviderJson(providerState)
+						await invocation.write((fence) => runs.recordInitialRunExternalId(runId, externalId, providerState, fence))
+						accepted = true
+						const acceptedRun = await invocation.boundary()
+						if (deps.operations !== undefined) {
+							await projectOperationsRun(deps.operations, acceptedRun, { dryRun, phase: 'provider_accepted', artifactState: 'pending' })
+						}
 					},
 					checkpoint: async (providerState) => {
-						await owner.mutate((guard) => deps.repositories.runs.checkpointRunProviderState(runId, providerState, guard), providerState)
+						serializeProviderJson(providerState)
+						await invocation.write((fence) => runs.checkpointRunProviderState(runId, providerState, fence))
+						await invocation.boundary()
+					},
+					boundary: async () => {
+						await invocation.boundary()
 					},
 				},
 			}
@@ -489,37 +551,142 @@ export async function executeDeploy(
 		} finally {
 			await runLogs.flush()
 		}
-		await owner.drain()
-		await owner.refreshCancellation()
-		if (owner.work.signal.aborted) {
-			const settled = await settleRunCancellation(deps, owner).catch(() => null)
-			return { runId, status: settled === null ? 'running' : 'skipped' }
-		}
+		await invocation.boundary()
 		if (outcome.state === 'running') return { runId, status: 'running' }
-		if (!(await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null, owner.guard()))) {
-			owner.invalidate()
-			return { runId: run.id, status: 'skipped' }
-		}
-		await projectTerminalRun(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
-		return { runId: run.id, status: outcome.state }
+		const state = outcome.state
+		await invocation.write((fence) => runs.markRunFinished(runId, state, outcome.exitCode ?? null, fence))
+		await projectTerminalRun(deps, runId, dryRun, state, outcome.artifactState)
+		return { runId, status: state }
 	} catch (error) {
-		await owner.drain().catch(() => {})
-		if (owner.lost) return { runId, status: 'running' }
-		const latest = await owner.refreshCancellation()
-		if (latest?.cancel_requested_at !== null && latest?.cancel_requested_at !== undefined) {
-			const settled = await settleRunCancellation(deps, owner).catch(() => null)
-			return { runId, status: settled === null ? 'running' : 'skipped' }
+		if (error instanceof RunSettled) return { runId, status: 'skipped' }
+		if (!invocation.lost && !invocation.cancelled) await invocation.boundary().catch(() => {})
+		// Lease loss stops this invocation's effects; the next holder settles what it recorded (ADR-0044).
+		if (invocation.lost) return { runId, status: 'running' }
+		if (invocation.cancelled) return await settleCancelledInvocation(deps, invocation)
+		if (accepted) return { runId, status: 'running' }
+		console.error(`deploy run ${runId} failed:`, error instanceof Error ? error.message : 'unknown error')
+		try {
+			await invocation.write((fence) => runs.markRunFinished(runId, 'failed', null, fence))
+		} catch (refused) {
+			return { runId, status: refused instanceof RunSettled ? 'skipped' : 'running' }
 		}
-		if (owner.hasAccepted) return { runId, status: 'running' }
-		console.error(`deploy run ${run.id} failed:`, error instanceof Error ? error.message : 'unknown error')
-		if (await deps.repositories.runs.markRunFinished(run.id, 'failed', null, owner.guard())) {
-			await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
-			return { runId: run.id, status: 'failed' }
-		}
-		owner.invalidate()
-		return { runId: run.id, status: 'skipped' }
+		await projectTerminalRun(deps, runId, dryRun, 'failed')
+		return { runId, status: 'failed' }
 	} finally {
-		await owner.close()
+		await invocation.release()
+	}
+}
+
+async function settleCancelledInvocation(
+	deps: Pick<RunDeps, 'repositories' | 'provider'>,
+	invocation: RunInvocation,
+): Promise<{ runId: string; status: DeployStatus }> {
+	const settled = await settleRunCancellation(deps, invocation).catch(() => null)
+	return { runId: invocation.runId, status: settled === null ? 'running' : 'skipped' }
+}
+
+/**
+ * Move the run to `running`. A run of the same environment left `running` by a dead holder is settled
+ * first under this same lease, so the next deploy does not wait for the cron (ADR-0044).
+ */
+async function startRun(deps: RunDeps, invocation: RunInvocation, run: RunRow): Promise<boolean> {
+	const runs = deps.repositories.runs
+	if (await runs.markRunStarted(run.id, logsKey(run.id), invocation.lease.fence())) return true
+	const blocking = (await runs.listInFlightRuns(deps.provider.id)).find((other) =>
+		other.app_id === run.app_id && other.env === run.env && other.status === 'running' && other.id !== run.id
+	)
+	if (blocking === undefined) return false
+	const settled = await settleUnfinishedRun(deps, invocation.forRun(blocking.id)).catch(() => null)
+	if (settled !== 'succeeded' && settled !== 'failed') return false
+	return runs.markRunStarted(run.id, logsKey(run.id), invocation.lease.fence())
+}
+
+export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operations'> & {
+	projectTerminal?: typeof projectTerminalRun
+	/** The run-log store a provider's reconcile appends to; absent, its lines go to the console only. */
+	runLogs?: Pick<BlobStore, 'get' | 'put'>
+}
+
+/** `untracked`: the provider cannot observe accepted work, so only a cancellation can settle it. */
+export type RunSettlement = 'succeeded' | 'failed' | 'running' | 'waiting' | 'untracked'
+
+async function projectSettled(
+	deps: RunSettleDeps,
+	runId: string,
+	state: 'failed' | 'succeeded',
+	outcome: Pick<ProviderReconcileOutcome, 'artifactState' | 'dryRun'> = {},
+): Promise<void> {
+	try {
+		await (deps.projectTerminal ?? projectTerminalRun)(deps, runId, outcome.dryRun === true, state, outcome.artifactState)
+	} catch {
+		console.error(`provider reconcile terminal projection failed for run ${runId}`)
+	}
+}
+
+/** Append one meta line to a run's log, keeping what the provider's executor already wrote there. */
+async function appendRunLog(logs: Pick<BlobStore, 'get' | 'put'>, key: string, text: string): Promise<void> {
+	const existing = await logs.get(key)
+	const before = existing === null ? '' : await existing.text()
+	const line: RunLogLine = { ts: Date.now(), stream: 'meta', text }
+	const separator = before === '' || before.endsWith('\n') ? '' : '\n'
+	await logs.put(key, `${before}${separator}${JSON.stringify(line)}\n`)
+}
+
+/**
+ * Settle one unfinished run under its environment's lease without replaying any step: settle its
+ * cancellation, fail it when no provider accepted it, or reconcile the accepted work. `null` when the
+ * run is no longer active.
+ */
+export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunInvocation): Promise<RunSettlement | null> {
+	let cancelling = false
+	const settleCancellation = async (): Promise<RunSettlement> => {
+		cancelling = true
+		const settled = await settleRunCancellation(deps, invocation)
+		if (settled === null) return 'running'
+		await projectSettled(deps, invocation.runId, settled)
+		return settled
+	}
+	try {
+		const run = await invocation.read()
+		if (run === null || (run.status !== 'pending' && run.status !== 'running')) return null
+		if (invocation.cancelled) return await settleCancellation()
+		if (run.external_run_id === null) {
+			if (run.status === 'pending') return 'waiting'
+			await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, 'failed', null, fence))
+			await projectSettled(deps, run.id, 'failed')
+			return 'failed'
+		}
+		const reconcile = deps.provider.reconcile
+		if (reconcile === undefined) return 'untracked'
+		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
+		if (appEnv === null || appEnv.provider !== deps.provider.id) throw new Error('provider environment disappeared or changed owner')
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, run.app_id)
+		const environment = await providerEnvironment(deps.repositories.registry, appEnv)
+		await invocation.boundary()
+		const outcome = await reconcile({
+			runId: run.id,
+			externalId: run.external_run_id,
+			environment,
+			signal: invocation.work.signal,
+			...(run.provider_state_json === null ? {} : { providerState: parseProviderJson(run.provider_state_json, 'provider state') }),
+			startedAtMs: (run.started_at ?? run.created_at) * 1000,
+			...(returnOrigins === undefined ? {} : { returnOrigins }),
+			log: async (line) => {
+				console.info(`deploy run ${run.id}: ${line}`)
+				if (deps.runLogs === undefined || run.log_key === null) return
+				await appendRunLog(deps.runLogs, run.log_key, line).catch(() => console.error(`deploy run ${run.id}: failed to persist log output`))
+			},
+		})
+		await invocation.boundary()
+		if (outcome.state === 'running') return 'running'
+		const state = outcome.state
+		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, state, outcome.exitCode ?? null, fence))
+		await projectSettled(deps, run.id, state, outcome)
+		return state
+	} catch (error) {
+		// A cancellation read at a boundary is settled now; a settlement that itself failed waits for the next pass.
+		if (!invocation.lost && invocation.cancelled && !cancelling) return await settleCancellation()
+		throw error
 	}
 }
 
@@ -548,26 +715,27 @@ export async function projectTerminalRun(
  */
 export async function settleRunCancellation(
 	deps: Pick<RunDeps, 'repositories' | 'provider'>,
-	owner: RunOwnership,
+	invocation: RunInvocation,
 ): Promise<'succeeded' | 'failed' | null> {
-	await owner.drain()
-	const cancelling = await owner.refreshCancellation()
+	const cancelling = await invocation.read()
 	if (cancelling === null || cancelling.cancel_requested_at === null || !['pending', 'running'].includes(cancelling.status)) return null
 	let outcome: 'succeeded' | 'failed' = 'failed'
-	const appEnv = await deps.repositories.registry.getAppEnv(cancelling.app_id, cancelling.env)
 	if (cancelling.external_run_id !== null) {
 		if (deps.provider.cancel === undefined) return null
+		const appEnv = await deps.repositories.registry.getAppEnv(cancelling.app_id, cancelling.env)
 		if (appEnv === null) throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} disappeared during cancellation`)
 		if (appEnv.provider !== deps.provider.id) {
 			throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} changed owner during cancellation`)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, cancelling.app_id)
-		owner.guard()
+		const environment = await providerEnvironment(deps.repositories.registry, appEnv)
+		// Only the lease holder may cancel external work, and only while it still holds the lease.
+		invocation.lease.assertHeld()
 		const result = await deps.provider.cancel({
-			signal: owner.ownership.signal,
+			signal: invocation.lease.signal,
 			runId: cancelling.id,
 			externalId: cancelling.external_run_id,
-			environment: await providerEnvironment(deps.repositories.registry, appEnv),
+			environment,
 			startedAtMs: (cancelling.started_at ?? cancelling.created_at) * 1000,
 			...(returnOrigins === undefined ? {} : { returnOrigins }),
 			...(cancelling.provider_state_json === null
@@ -577,21 +745,19 @@ export async function settleRunCancellation(
 		if (result.state === 'pending') return null
 		outcome = result.outcome ?? 'failed'
 	}
-	await owner.mutate((guard) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, outcome, guard))
+	await invocation.write((fence) => deps.repositories.runs.markRunCancellationFinished(cancelling.id, outcome, fence))
 	return outcome
 }
 
-export async function cancelDeploy(
-	deps: Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'ownershipTiming'>,
-	run: RunRow,
-): Promise<void> {
-	const cancelling = await deps.repositories.runs.beginRunCancellation(run.id)
+export async function cancelDeploy(deps: Pick<RunDeps, 'repositories' | 'provider' | 'lock' | 'leaseClock'>, run: RunRow): Promise<void> {
+	const cancelling = await deps.repositories.runs.requestRunCancellation(run.id)
 	if (cancelling === null) return
-	const owner = await RunOwnership.acquire(deps.repositories.runs, deps.lock, cancelling, deps.ownershipTiming)
-	if (owner === null) return
+	// A live holder settles the request at its next step boundary.
+	const invocation = await RunInvocation.acquire(deps, cancelling)
+	if (invocation === null) return
 	try {
-		await settleRunCancellation(deps, owner)
+		await settleRunCancellation(deps, invocation)
 	} finally {
-		await owner.close()
+		await invocation.release()
 	}
 }

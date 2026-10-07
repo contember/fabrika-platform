@@ -20,7 +20,7 @@ import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelo
 import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 
 const envelope = (provider: string, payload: string): ProviderEnvelope => ({
 	provider,
@@ -95,8 +95,9 @@ async function seedRun(
 		trigger: 'manual',
 	})
 	if (options.externalId !== undefined) {
-		await db.runs.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
-		await db.runs.setRunExternalId(runId, options.externalId)
+		const owned = fixtureRuns(db.runs, makeFakeLock(db))
+		await owned.start(runId, `runs/${runId}/logs.ndjson`)
+		await owned.externalId(runId, options.externalId)
 	}
 	return runId
 }
@@ -472,21 +473,22 @@ describe('provider-neutral run lifecycle', () => {
 	test('guards provider acceptance identity, checkpoint order, size, and cancellation freeze', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
-		await db.runs.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
+		const owned = fixtureRuns(db.runs, makeFakeLock(db))
+		await owned.start(runId, `runs/${runId}/logs.ndjson`)
 
-		expect(await db.runs.checkpointRunProviderState(runId, { phase: 'too-early' })).toBe(false)
-		expect(await db.runs.setRunExternalId(runId, 'operation-1', { phase: 'accepted' })).toBe(true)
-		expect(await db.runs.setRunExternalId(runId, 'operation-1', { phase: 'replayed' })).toBe(true)
-		expect(await db.runs.setRunExternalId(runId, 'operation-2', { phase: 'wrong-owner' })).toBe(false)
-		expect(JSON.parse((await requireRun(db, runId)).provider_state_json ?? '')).toEqual({ phase: 'replayed' })
-		await expect(db.runs.checkpointRunProviderState(runId, { payload: 'x'.repeat(17 * 1024) })).rejects.toThrow('16 KiB')
+		expect(await owned.checkpoint(runId, { phase: 'too-early' })).toBe(false)
+		expect(await owned.externalId(runId, 'operation-1', { phase: 'accepted' })).toBe(true)
+		expect(await owned.externalId(runId, 'operation-1', { phase: 'replayed' })).toBe(false)
+		expect(await owned.externalId(runId, 'operation-2', { phase: 'wrong-owner' })).toBe(false)
+		expect(JSON.parse((await requireRun(db, runId)).provider_state_json ?? '')).toEqual({ phase: 'accepted' })
+		await expect(owned.checkpoint(runId, { payload: 'x'.repeat(17 * 1024) })).rejects.toThrow('16 KiB')
 
-		const cancelling = await db.runs.beginRunCancellation(runId)
+		const cancelling = await db.runs.requestRunCancellation(runId)
 		expect(cancelling?.external_run_id).toBe('operation-1')
-		expect(await db.runs.setRunCommit(runId, 'a'.repeat(40))).toBe(false)
-		expect(await db.runs.setRunExternalId(runId, 'operation-1')).toBe(false)
-		expect(await db.runs.checkpointRunProviderState(runId, { phase: 'late' })).toBe(false)
-		expect(await db.runs.markRunFinished(runId, 'succeeded', 0)).toBe(false)
+		expect(await owned.commit(runId, 'a'.repeat(40))).toBe(false)
+		expect(await owned.externalId(runId, 'operation-1')).toBe(false)
+		expect(await owned.checkpoint(runId, { phase: 'late' })).toBe(false)
+		expect(await owned.finish(runId, 'succeeded', 0)).toBe(false)
 	})
 
 	test('a cancellation during source resolution prevents provider deploy and Operations projection', async () => {
@@ -610,7 +612,7 @@ describe('provider-neutral run lifecycle', () => {
 		expect(run.exit_code).toBe(0)
 		expect(run.external_run_id).toBe('memory-run-1')
 		expect(run.log_key).toBe(`runs/${runId}/logs.ndjson`)
-		expect(lock.held.size).toBe(0)
+		expect(await heldLeases(db)).toEqual([])
 	})
 
 	test('deploys the stored registration unchanged when the provider does not normalize registrations', async () => {
@@ -1075,7 +1077,7 @@ describe('provider-neutral run lifecycle', () => {
 	test('skips redelivery and defers while another run owns the lock', async () => {
 		const { db } = createHarness()
 		const runningId = await seedRun(db)
-		await db.runs.markRunStarted(runningId, `runs/${runningId}/logs.ndjson`)
+		await fixtureRuns(db.runs, makeFakeLock(db)).start(runningId, `runs/${runningId}/logs.ndjson`)
 		const inputs: ProviderDeployInput[] = []
 		expect(
 			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId: runningId })).status,
@@ -1084,7 +1086,7 @@ describe('provider-neutral run lifecycle', () => {
 		const pendingId = uuidv7()
 		await db.runs.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		const lock = makeFakeLock(db)
-		await lock.acquire('app:prod', 'other-run')
+		await lock.acquire('app:prod', 'other-run', 60_000)
 		expect(
 			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' }), new EnvSecretResolver({}), lock), {
 				runId: pendingId,
@@ -1135,7 +1137,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerArtifactJson: appEnv.provider_artifact_json,
 		})
 		const lock = makeFakeLock(db)
-		await lock.acquire('app:prod', runId)
+		await lock.acquire('app:prod', runId, 60_000)
 		const deps = makeDeps(
 			db,
 			makeProvider([], { state: 'failed' }, { cancelled, cancelledNamespaces }),
@@ -1147,14 +1149,14 @@ describe('provider-neutral run lifecycle', () => {
 
 		expect(cancelled).toEqual([])
 		expect((await requireRun(db, runId)).status).toBe('running')
-		expect(lock.held.get('app:prod')).toBe(runId)
+		expect(await heldLeases(db)).toEqual([{ lock_key: 'app:prod', holder: runId }])
 		await lock.release('app:prod', runId)
 		await cancelDeploy(deps, await requireRun(db, runId))
 
 		expect(cancelled).toEqual(['provider-operation-1'])
 		expect(cancelledNamespaces).toEqual(['apps-prod'])
 		expect((await requireRun(db, runId)).status).toBe('failed')
-		expect(lock.held.size).toBe(0)
+		expect(await heldLeases(db)).toEqual([])
 	})
 })
 

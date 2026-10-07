@@ -137,6 +137,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 			recorded.externalIds.push(id)
 		},
 		checkpoint: async () => {},
+		boundary: async () => {},
 	},
 })
 
@@ -940,6 +941,81 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual(['importServices', 'createAppVersion:service-1'])
 		expect(sourceCalls).toEqual([])
 		expect(recorded.envWrites).toEqual([])
+	})
+	test('a lease lost at an await-version boundary neither cancels the build nor deletes the version', async () => {
+		const controller = new AbortController()
+		const reason = new ProviderInvocationAbort('lease_lost')
+		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded, () => 'BUILDING'), sleep: async () => {} })
+		const input = deployInput(recorded)
+		await expect(control.deploy({
+			...input,
+			signal: controller.signal,
+			events: {
+				...input.events,
+				boundary: async () => {
+					if (!recorded.calls.some((call) => call.startsWith('getAppVersion'))) return
+					controller.abort(reason)
+					throw reason
+				},
+			},
+		})).rejects.toBe(reason)
+		expect(recorded.calls.filter((call) => call.startsWith('getAppVersion'))).toHaveLength(1)
+		expect(recorded.calls.filter((call) => call.startsWith('cancelBuild') || call.startsWith('deleteAppVersion'))).toEqual([])
+	})
+	test('a cancellation whose lease is lost before the next poll never cancels the build', async () => {
+		const controller = new AbortController()
+		const lost = new ProviderInvocationAbort('lease_lost')
+		const api = makeApi(recorded, () => 'BUILDING')
+		const control = createTestControlProvider({
+			accessToken: 'token',
+			sleep: async () => {},
+			api: {
+				...api,
+				getAppVersion: async (input) => {
+					const version = await api.getAppVersion(input)
+					// A cancellation lands while a poll is out; the lease is gone by the next poll's boundary.
+					controller.abort(new ProviderInvocationAbort('cancel_requested'))
+					return version
+				},
+			},
+		})
+		const input = deployInput(recorded)
+		await expect(control.deploy({
+			...input,
+			signal: controller.signal,
+			events: {
+				...input.events,
+				boundary: async () => {
+					if (controller.signal.aborted) throw lost
+				},
+			},
+		})).rejects.toBeInstanceOf(ProviderInvocationAbort)
+		expect(recorded.calls.filter((call) => call.startsWith('getAppVersion'))).toHaveLength(1)
+		expect(recorded.calls.filter((call) => call.startsWith('cancelBuild') || call.startsWith('deleteAppVersion'))).toEqual([])
+	})
+	test('a cancellation read at a step boundary stops the deploy before the next step', async () => {
+		const controller = new AbortController()
+		const reason = new ProviderInvocationAbort('cancel_requested')
+		const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
+		const input = deployInput(recorded)
+		let boundaries = 0
+		expect(
+			await control.deploy({
+				...input,
+				signal: controller.signal,
+				events: {
+					...input.events,
+					boundary: async () => {
+						boundaries++
+						if (recorded.calls.at(-1) !== 'importServices') return
+						controller.abort(reason)
+						throw reason
+					},
+				},
+			}).catch((error: unknown) => error),
+		).toBe(reason)
+		expect(boundaries).toBe(2)
+		expect(recorded.calls).toEqual(['importServices'])
 	})
 	test('cancelling a triggered build stays pending until the version settles, and activation winning makes it a success', async () => {
 		let status: ZeropsAppVersionStatus = 'BUILDING'

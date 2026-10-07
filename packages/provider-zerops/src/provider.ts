@@ -379,6 +379,9 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 	}
 
 	for (;;) {
+		// Only a boundary that still holds the lease may cancel the build; a lost lease rejects it as lease_lost.
+		const crossed: unknown = await env.run.events.boundary().then(() => null, (error: unknown) => error)
+		if (isLeaseLoss(crossed)) throw crossed
 		if (signal.aborted) {
 			if (isLeaseLoss(signal.reason)) throw signal.reason
 			await cancelBuildQuietly(env, appVersionId)
@@ -465,6 +468,7 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 	const { run, zerops, compiled, log, signal, dryRun, attempt } = env
 	const { target, artifact } = run
+	await run.events.boundary()
 
 	switch (spec.kind) {
 		case 'apply-import': {

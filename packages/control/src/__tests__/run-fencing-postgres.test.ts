@@ -21,7 +21,7 @@ afterAll(async () => {
 describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 	runFencingContract(() => fixture.db)
 
-	test('runtime deploy and recovery share SQL ownership and retain exclusion across unresolved invocations', async () => {
+	test('runtime deploy settles an unresolved run of its environment inline, and recovery shares the same SQL ownership', async () => {
 		const repositories = createControlRepositories(fixture.db)
 		const locks = new SqlDeployLocks(fixture.db)
 		const appId = 'runtime-ownership'
@@ -40,61 +40,28 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 		}
 		const deps: RunDeps = {
 			repositories,
-			lock: {
-				acquire: (key, holder) => locks.acquire(key, holder, 1800000),
-				renew: (key, holder) => locks.renew(key, holder, 1800000),
-				release: (key, holder) => locks.release(key, holder),
-			},
+			lock: locks,
 			secrets: new EnvSecretResolver({}),
 			logs: { put: async () => {} },
 			provider: {
 				id: 'runtime-test',
 				normalizeRegistration: (input) => input,
 				deploy: async (input) => {
-					await input.events.externalId('external', { phase: 1 })
-					await input.events.checkpoint({ phase: 2 })
+					await input.events.externalId('external', { appVersionId: 'external', triggered: false })
+					await input.events.checkpoint({ appVersionId: 'external', triggered: true })
 					return { state: 'running' }
 				},
 				reconcile: async (input) => {
-					expect(input.providerState).toEqual({ phase: 2 })
+					expect(input.providerState).toEqual({ appVersionId: 'external', triggered: true })
 					return { state: 'succeeded' }
 				},
 			},
 		}
 		expect(await executeDeploy(deps, { runId: 'runtime-first' })).toEqual({ runId: 'runtime-first', status: 'running' })
-		expect(await executeDeploy(deps, { runId: 'runtime-next' })).toEqual({ runId: 'runtime-next', status: 'deferred' })
-		expect(await reconcileProviderRuns(deps)).toMatchObject({ succeeded: 1, waiting: 1 })
 		expect(await executeDeploy(deps, { runId: 'runtime-next' })).toEqual({ runId: 'runtime-next', status: 'running' })
-	})
-
-	test('concurrent checkpoint CAS attempts have exactly one winner', async () => {
-		if (postgresUrl === null) throw new Error('Postgres not configured')
-		const pool = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 2 })
-		try {
-			const { registry, runs } = createControlRepositories(pool)
-			await registry.createApp({ id: 'concurrent-cas', repoUrl: 'github.com/acme/app' })
-			await registry.upsertAppEnv({
-				appId: 'concurrent-cas',
-				env: 'prod',
-				namespaceId: null,
-				provider: 'test',
-				providerTargetJson: '{}',
-				providerArtifactJson: '{}',
-			})
-			await runs.createRun({ id: 'concurrent-cas', appId: 'concurrent-cas', env: 'prod', ref: 'main', trigger: 'manual' })
-			await new SqlDeployLocks(pool, { now: () => 100 }).acquire('concurrent-cas:prod', 'owner', 100)
-			const guard = { holder: 'owner', nowMs: 100, expectedProviderStateJson: null }
-			await runs.markRunStarted('concurrent-cas', 'log', guard)
-			await runs.setRunExternalId('concurrent-cas', 'operation', undefined, guard)
-			const results = await Promise.all([
-				runs.checkpointRunProviderState('concurrent-cas', { phase: 1 }, guard),
-				runs.checkpointRunProviderState('concurrent-cas', { phase: 2 }, guard),
-			])
-			expect(results.filter(Boolean)).toHaveLength(1)
-			expect((await runs.getRun('concurrent-cas'))?.provider_state_json).toBe(results[0] ? '{"phase":1}' : '{"phase":2}')
-		} finally {
-			await pool.close()
-		}
+		expect((await repositories.runs.getRun('runtime-first'))?.status).toBe('succeeded')
+		expect(await reconcileProviderRuns(deps)).toMatchObject({ succeeded: 1, waiting: 0 })
+		expect((await repositories.runs.getRun('runtime-next'))?.status).toBe('succeeded')
 	})
 
 	test('lease takeover waits behind the real mutation batch until its run write commits', async () => {
@@ -142,7 +109,7 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 				await release.promise
 			})
 			await Promise.race([locked.promise, holding])
-			mutation = runs.markRunStarted('takeover-race', 'log', { holder: 'owner', nowMs: 100, expectedProviderStateJson: null })
+			mutation = runs.markRunStarted('takeover-race', 'log', { holder: 'owner', nowMs: 100 })
 			await waitForLock(mutationName)
 			takeover = new SqlDeployLocks(takeoverPool, { now: () => 200 }).acquire('takeover-race:prod', 'next-owner', 100)
 			await waitForLock(takeoverName)
@@ -152,10 +119,10 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 			release.resolve()
 			expect(await mutation).toBe(true)
 			expect(await takeover).toBe(true)
-			expect(await runs.markRunStarted('takeover-next', 'log', { holder: 'next-owner', nowMs: 200, expectedProviderStateJson: null })).toBe(false)
+			expect(await runs.markRunStarted('takeover-next', 'log', { holder: 'next-owner', nowMs: 200 })).toBe(false)
 			expect((await runs.getRun('takeover-race'))?.status).toBe('running')
 			expect((await runs.getRun('takeover-next'))?.status).toBe('pending')
-			expect(await runs.markRunFinished('takeover-race', 'succeeded', 0, { holder: 'owner', nowMs: 100, expectedProviderStateJson: null })).toBe(false)
+			expect(await runs.markRunFinished('takeover-race', 'succeeded', 0, { holder: 'owner', nowMs: 100 })).toBe(false)
 		} finally {
 			release.resolve()
 			await Promise.allSettled([holding, mutation, takeover])

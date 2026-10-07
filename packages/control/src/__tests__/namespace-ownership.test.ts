@@ -1,8 +1,7 @@
 import { SqlDeployLocks } from '@fabrika/platform'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { expect, test } from 'bun:test'
-import { NamespaceOwnership } from '../namespace-ownership'
-import type { OwnershipTiming } from '../run-ownership'
+import { NamespaceOwnership, type OwnershipTiming } from '../namespace-ownership'
 import { createHarness } from './helpers/harness'
 
 class Clock implements OwnershipTiming {

@@ -24,5 +24,5 @@ export {
 	type NamespaceResourceClaimOwner,
 	type NamespaceResourceClaimRow,
 } from './db/registry-types'
-export { parseProviderJson, type RunMutationGuard, RunRepository, type RunRow, type RunStatus, type RunTrigger } from './db/runs'
+export { parseProviderJson, RunRepository, type RunRow, type RunStatus, type RunTrigger, serializeProviderJson } from './db/runs'
 export { uuidv7 } from './uuid'

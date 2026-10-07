@@ -39,10 +39,10 @@
 			"types": "./src/repo-source.ts",
 			"default": "./src/repo-source.ts"
 		},
-		"./run-ownership": {
-			"bun": "./src/run-ownership.ts",
-			"types": "./src/run-ownership.ts",
-			"default": "./src/run-ownership.ts"
+		"./lease": {
+			"bun": "./src/lease.ts",
+			"types": "./src/lease.ts",
+			"default": "./src/lease.ts"
 		},
 		"./vault": {
 			"bun": "./src/vault.ts",

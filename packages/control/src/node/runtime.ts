@@ -25,7 +25,7 @@ import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { LocalGitHubRepoEvents } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { deployLock, type NamespaceProxyEnv } from '../services'
+import { locks, type NamespaceProxyEnv } from '../services'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
@@ -139,7 +139,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	}
-	env.NAMESPACE_PROXY = zeropsNamespaceProxySync(source, controlRepositories.registry, deployLock(env), queue, sourceClient)
+	env.NAMESPACE_PROXY = zeropsNamespaceProxySync(source, controlRepositories.registry, locks(env), queue, sourceClient)
 
 	return {
 		env,

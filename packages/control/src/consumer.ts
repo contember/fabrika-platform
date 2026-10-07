@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { type NamespaceJobDeps, type NamespaceJobResult, runNamespaceJob } from './api/namespaces'
 import type { Env } from './env'
 import { type ControlJobMessage, type DeployJobMessage, executeDeploy, type NamespaceJobMessage } from './run-lifecycle'
-import { buildRunDeps, DEPLOY_LOCK_REQUEUE_DELAY_S, DEPLOY_LOCK_TTL_MS, locks, repositories } from './services'
+import { buildRunDeps, DEPLOY_LOCK_REQUEUE_DELAY_S, locks, repositories } from './services'
 
 /** The lifecycle's terminal answer for one message — what the caller logs, and nothing it must act on. */
 export type DeployJobResult = Awaited<ReturnType<typeof executeDeploy>>
@@ -35,24 +35,9 @@ export type ControlJobResult =
 	| ({ kind: 'deploy' } & DeployJobResult)
 	| ({ kind: 'namespace' } & NamespaceJobResult)
 
-/**
- * A redelivered deploy message is refused by `markRunStarted`'s status guard, but a namespace left
- * `provisioning` is deliberately RESUMABLE — so the renewed lease is the only thing standing between a
- * redelivery and two workers mutating one namespace at once.
- */
-export const NAMESPACE_LOCK_TTL_MS = 2 * DEPLOY_LOCK_TTL_MS
-
 /** Namespace jobs take the same generic lease deploys do, keyed by namespace instead of by app-env. */
 export function namespaceJobDeps(env: Env, provider: ControlProvider): NamespaceJobDeps {
-	return {
-		repositories: repositories(env),
-		provider,
-		lock: {
-			acquire: (key, holder) => locks(env).acquire(key, holder, NAMESPACE_LOCK_TTL_MS),
-			renew: (key, holder) => locks(env).renew(key, holder, NAMESPACE_LOCK_TTL_MS),
-			release: (key, holder) => locks(env).release(key, holder),
-		},
-	}
+	return { repositories: repositories(env), provider, lock: locks(env) }
 }
 
 /**

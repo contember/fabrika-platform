@@ -5,6 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseProviderJson, serializeProviderJson } from '../db/runs'
 import { createHarness, queryRows } from './helpers/harness'
+import { fixtureRuns, makeFakeLock } from './helpers/lock'
 
 const targetJson = JSON.stringify({ provider: 'harbor', version: 2, payload: { region: 'eu-west' } })
 const artifactJson = JSON.stringify({ provider: 'harbor', version: 4, payload: { image: 'registry.example/app:v4' } })
@@ -108,9 +109,10 @@ describe('generic provider persistence', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(appEnvironment('app', 'prod'))
 		const run = await db.runs.createRun({ id: 'run-1', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted(run.id, 'runs/run-1/logs.ndjson')
+		const owned = fixtureRuns(db.runs, makeFakeLock(db))
+		await owned.start(run.id, 'runs/run-1/logs.ndjson')
 
-		expect(await db.runs.setRunExternalId(run.id, 'harbor-operation-7')).toBe(true)
+		expect(await owned.externalId(run.id, 'harbor-operation-7')).toBe(true)
 		expect((await db.runs.getRun(run.id))?.external_run_id).toBe('harbor-operation-7')
 		expect((await db.runs.listInFlightRuns('harbor')).map((row) => row.id)).toEqual(['run-1'])
 		expect(await db.runs.listInFlightRuns('other')).toHaveLength(0)

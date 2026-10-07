@@ -16,7 +16,6 @@ import {
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
 import type { OperationsReleaseRepository, OperationsReleaseSyncRow, RunRepository, RunRow, TerminalOperationsReleaseRow } from './db'
-import { type DeployLockGate, type OwnershipTiming, RunOwnership } from './run-ownership'
 
 const REQUEST_TIMEOUT_MS = 15_000
 const MIN_SYNC_KEY_LENGTH = 32
@@ -29,7 +28,7 @@ export interface OperationsReleaseProjectionDeps {
 	syncKey?: string
 	artifactOrigin?: string
 	now?: () => number
-	terminalRepair?: { runs: RunRepository; lock: DeployLockGate; timing?: OwnershipTiming }
+	terminalRepair?: { runs: RunRepository }
 }
 
 export interface OperationsReleaseContext {
@@ -138,8 +137,7 @@ export async function replayOperationsReleases(
 }
 
 async function repairTerminalReleases(deps: OperationsReleaseProjectionDeps): Promise<void> {
-	const repair = deps.terminalRepair
-	if (repair === undefined) return
+	if (deps.terminalRepair === undefined) return
 	const boundary = await deps.repository.terminalScanBoundary()
 	if (boundary === null) return
 	let after = ''
@@ -149,26 +147,20 @@ async function repairTerminalReleases(deps: OperationsReleaseProjectionDeps): Pr
 		for (const candidate of page) {
 			after = candidate.run_id
 			if (validatedTerminalSnapshotAgrees(candidate)) continue
-			const owner = await RunOwnership.acquire(repair.runs, repair.lock, candidate, repair.timing)
-			if (owner === null) continue
 			try {
 				const current = await deps.repository.getTerminal(candidate.run_id)
-				if (current === null || current.app_id !== owner.row.app_id || current.env !== owner.row.env) continue
+				if (current === null || current.app_id !== candidate.app_id || current.env !== candidate.env) continue
 				let payload: OperationsReleaseProjectionPayloadV1 | null
 				try {
 					integer(current.desired_revision)
 					payload = terminalPayload(current)
 				} catch {
-					await owner.mutate((guard) => deps.repository.repairTerminal(current, null, guard))
+					await deps.repository.repairTerminal(current, null)
 					continue
 				}
-				if (payload !== null) {
-					await owner.mutate((guard) => deps.repository.repairTerminal(current, JSON.stringify(payload), guard))
-				}
+				if (payload !== null) await deps.repository.repairTerminal(current, JSON.stringify(payload))
 			} catch {
 				console.warn(`operations terminal release repair failed for run ${candidate.run_id}`)
-			} finally {
-				await owner.close()
 			}
 		}
 	}

@@ -1,6 +1,6 @@
 import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { LEASE_TTL_MS } from '@fabrika/control/lease'
 import { normalizeRepoUrl } from '@fabrika/control/repo-source'
-import { DEPLOY_LEASE_TTL_MS } from '@fabrika/control/run-ownership'
 import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
 import {
 	DEFAULT_OPERATIONS_SERVICE_KEY,
@@ -444,7 +444,7 @@ const proveRestartReconciliation = async (
 			return runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
 		},
 		(value) => value.status === 'succeeded',
-		{ timeoutMs: DEPLOY_LEASE_TTL_MS + 60_000, sleep: () => Bun.sleep(MAINTENANCE_CRON_INTERVAL_MS) },
+		{ timeoutMs: LEASE_TTL_MS + 60_000, sleep: () => Bun.sleep(MAINTENANCE_CRON_INTERVAL_MS) },
 	)
 	const completed = await controlRequest('runs.get', machineKey, { runId })
 	const commitSha = completedRunSchema.parse(completed).commitSha

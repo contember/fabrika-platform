@@ -7,14 +7,13 @@ import { OPERATIONS_CATALOG_PROTOCOL_VERSION, type OperationsCatalogReconcileOut
 import { type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { type AppliedOperationsIngestConfig, OperationsCatalogRepository, type OperationsCatalogSyncState } from '../db'
+import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
 import { projectOperationsCatalogChange, replayOperationsCatalog } from '../operations-catalog'
 import { createHarness, type Harness } from './helpers/harness'
 import { providerEnvironment } from './helpers/provider'
 
 const SYNC_KEY = 'catalog-sync-key-with-at-least-32-characters'
 const ORIGIN = 'https://errors.example.test'
-const LOCK_KEY = 'operations-catalog-projection'
-const LOCK_TTL_MS = 5 * 60 * 1000
 
 /** A fake Operations that answers a full, correct reconcile — and can be paused mid-request. */
 class CatalogService {
@@ -162,22 +161,23 @@ async function activeDsn(harness: Harness, appId: string): Promise<string | null
 }
 
 describe('Operations catalog projection window (backlog 84)', () => {
-	test('candidate 1: a lock left behind by a dead holder drops every change until the lease expires', async () => {
+	test('candidate 1: a lock left behind by a dead holder drops every change until one lease TTL', async () => {
 		const { harness, deps, locks, advance } = fixture()
 		await register(harness, 'app-a')
 		expect((await projectOperationsCatalogChange(deps)).outcome).toBe('applied')
 
 		// A container that died mid-flush leaves the row behind; nothing releases it.
-		expect(await locks.acquire(LOCK_KEY, 'dead-holder', LOCK_TTL_MS)).toBe(true)
+		expect(await locks.acquire(CATALOG_LEASE_KEY, 'dead-holder', LEASE_TTL_MS)).toBe(true)
 
 		await register(harness, 'app-b')
 		expect(await projectOperationsCatalogChange(deps)).toEqual({ outcome: 'coalesced', revision: 2 })
 		expect(await activeDsn(harness, 'app-b')).toBeNull()
-		// The maintenance replay is refused by the same lease, so the gap outlives the 5-minute cron.
+		// The maintenance replay is refused by the same lease until it expires.
+		advance(LEASE_TTL_MS - 1)
 		expect((await replayOperationsCatalog(deps)).outcome).toBe('coalesced')
 		expect(await activeDsn(harness, 'app-b')).toBeNull()
 
-		advance(LOCK_TTL_MS + 1)
+		advance(2)
 		expect((await replayOperationsCatalog(deps)).outcome).toBe('applied')
 		expect(await activeDsn(harness, 'app-b')).not.toBeNull()
 	})

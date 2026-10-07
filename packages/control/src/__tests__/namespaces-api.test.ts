@@ -7,7 +7,7 @@ import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureRuns, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const target = (phase: string): ProviderEnvelope => ({
@@ -501,12 +501,12 @@ describe('app environment namespace assignment', () => {
 		await deps.repositories.runs.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
 			.toBe(409)
-		await deps.repositories.runs.markRunFinished('pending-run', 'failed', null)
+		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).finish('pending-run', 'failed')
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
 			.toBe(200)
 
 		await deps.repositories.runs.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await deps.repositories.runs.markRunFinished('successful-run', 'succeeded', 0)
+		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).finish('successful-run', 'succeeded', 0)
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('second') }), deps)).status)
 			.toBe(409)
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)

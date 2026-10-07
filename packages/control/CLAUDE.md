@@ -207,17 +207,25 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   preserved). The lease is non-reentrant + TTL-bounded (self-heals if a consumer dies) + holder-checked on
   release; `acquire` is ONE conditional upsert (`meta.changes` is the answer) so there is no read-then-write
   race, which is why it works identically on SQLite and Postgres. Never split it into a read + a write.
-  Invocation ownership uses a unique holder, renewal and fenced checkpoint writes (`run-ownership.ts`).
+  Invocation ownership is ONE lease primitive (`src/lease.ts`, ADR-0044): a unique holder, a 90 s TTL
+  renewed every 30 s, and every run write holder-fenced (`LeaseFence`; the lease row stays locked in the
+  same batch, because an `EXISTS` alone races takeover on Postgres). `requestRunCancellation` is the ONE
+  unfenced run update — it records a request, and the holder reads it at step boundaries
+  (`RunInvocation.boundary()`, and providers through `events.boundary()`), never by polling the row. The
+  Operations catalog sync holds the same lease (`CATALOG_LEASE_KEY`); terminal release repair holds none,
+  because its revision predicate already makes an overlapping replay a no-op.
   Preserve unresolved running rows after lease release: they exclude later deployments until recovery
-  settles external work. Lease loss must never become external cancellation or terminal failure.
+  settles external work — the next deploy of the environment settles one inline under its own lease
+  (`settleUnfinishedRun`, the same body as the cron's reconcile) and defers only while it stays unsettled.
+  Lease loss must never become external cancellation or terminal failure.
   A settled cancellation finishes the run with the provider's `outcome`: when activation won first the
   run SUCCEEDS — cancellation never implies rollback (ADR-0044). Control hands every cancel and
   reconcile the run start (`startedAtMs`, from `started_at ?? created_at`) so a provider can bound its polling.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.
-  The job holds a `namespace:<id>` lease in the same `deploy_locks` table, on `NAMESPACE_LOCK_TTL_MS`
-  (double the deploy TTL) — a namespace left `provisioning` is deliberately RESUMABLE, so unlike a run
+  The job holds a `namespace:<id>` lease in the same `deploy_locks` table, on the same TTL — a namespace
+  left `provisioning` is deliberately RESUMABLE, so unlike a run
   nothing else refuses a redelivery and the renewed lease is the only guard against one.
   `reconcile` on a namespace that is still settling ONLY enqueues: it must never rewrite
   `provider_target_json`, or a checkpoint the running job just wrote is rolled back under it.

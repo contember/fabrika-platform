@@ -295,6 +295,7 @@ const deployRun = (
 			recorded.checkpoints.push(state)
 			recorded.timeline.push(`checkpoint:${checkpointLabel(state)}`)
 		},
+		boundary: async () => {},
 	},
 	target: targetValue,
 	artifact: compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR),

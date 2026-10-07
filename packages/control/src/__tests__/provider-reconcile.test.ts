@@ -1,20 +1,33 @@
-import type { ControlProvider, ProviderReconcileOutcome } from '@fabrika/provider-contract'
+import type { DeployLocks } from '@fabrika/platform'
+import type { ControlProvider, JsonValue, ProviderReconcileOutcome } from '@fabrika/provider-contract'
+import type { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import type { ControlRepositories } from '../db'
 import { type ProviderReconcileSummary, reconcileProviderRuns } from '../provider-reconcile'
 import { createHarness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureRuns, makeFakeLock } from './helpers/lock'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
 
-function trackedLock(db: ControlRepositories, release: (key: string, holder: string) => Promise<void>) {
+function trackedLock(db: ControlRepositories, release: (key: string, holder: string) => Promise<void>): DeployLocks {
 	const lock = makeFakeLock(db)
 	return {
-		...lock,
-		release: async (key: string, holder: string) => {
+		acquire: (key, holder, ttlMs) => lock.acquire(key, holder, ttlMs),
+		renew: (key, holder, ttlMs) => lock.renew(key, holder, ttlMs),
+		release: async (key, holder) => {
 			await lock.release(key, holder)
 			await release(key, holder)
 		},
 	}
+}
+
+const owned = (db: ControlRepositories) => fixtureRuns(db.runs, makeFakeLock(db))
+
+/** The fenced start refuses a second running run per environment, so several are seeded as raw rows. */
+function seedRunning(sqlite: Database, id: string, externalId: string, state?: JsonValue): void {
+	sqlite.run(
+		`UPDATE runs SET status = 'running', started_at = created_at, log_key = ?, external_run_id = ?, provider_state_json = ? WHERE id = ?`,
+		[`runs/${id}/logs.ndjson`, externalId, state === undefined ? null : JSON.stringify(state), id],
+	)
 }
 
 function provider(outcomes: Readonly<Record<string, ProviderReconcileOutcome>>, environments: string[]): ControlProvider {
@@ -41,9 +54,9 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		await db.runs.createRun({ id: 'cancelling', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('cancelling', 'runs/cancelling/logs.ndjson')
-		await db.runs.setRunExternalId('cancelling', 'operation', { phase: 'uploaded' })
-		await db.runs.beginRunCancellation('cancelling')
+		await owned(db).start('cancelling', 'runs/cancelling/logs.ndjson')
+		await owned(db).externalId('cancelling', 'operation', { phase: 'uploaded' })
+		await db.runs.requestRunCancellation('cancelling')
 
 		let cancellationAttempts = 0
 		let reconcileAttempts = 0
@@ -91,9 +104,9 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
 		await db.runs.createRun({ id: 'activated', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('activated', 'runs/activated/logs.ndjson')
-		await db.runs.setRunExternalId('activated', 'operation', { appVersionId: 'operation', triggered: true })
-		await db.runs.beginRunCancellation('activated')
+		await owned(db).start('activated', 'runs/activated/logs.ndjson')
+		await owned(db).externalId('activated', 'operation', { appVersionId: 'operation', triggered: true })
+		await db.runs.requestRunCancellation('activated')
 		const started = (await db.runs.getRun('activated'))?.started_at
 		const startedAtMs: Array<number | undefined> = []
 		const returnOrigins: Array<readonly string[] | undefined> = []
@@ -124,8 +137,8 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('resumed', 'runs/resumed/logs.ndjson')
-		await db.runs.setRunExternalId('resumed', 'operation', { appVersionId: 'version-1', phase: 'uploaded' })
+		await owned(db).start('resumed', 'runs/resumed/logs.ndjson')
+		await owned(db).externalId('resumed', 'operation', { appVersionId: 'version-1', phase: 'uploaded' })
 
 		const states: unknown[] = []
 		expect(
@@ -147,7 +160,7 @@ describe('reconcileProviderRuns', () => {
 	})
 
 	test('finishes terminal operations through a third provider and leaves pending work untouched', async () => {
-		const { db } = createHarness()
+		const { db, sqlite } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
@@ -176,10 +189,7 @@ describe('reconcileProviderRuns', () => {
 				trigger: 'manual',
 			})
 		}
-		for (const id of ['active', 'failed', 'building', 'foreign']) {
-			await db.runs.markRunStarted(id, `runs/${id}/logs.ndjson`)
-			await db.runs.setRunExternalId(id, id)
-		}
+		for (const id of ['active', 'failed', 'building', 'foreign']) seedRunning(sqlite, id, id)
 
 		const released: string[] = []
 		const environments: string[] = []
@@ -233,8 +243,8 @@ describe('reconcileProviderRuns', () => {
 			trigger: 'manual',
 			commitSha: '0123456789abcdef0123456789abcdef01234567',
 		})
-		await db.runs.markRunStarted('recovering', 'runs/recovering/logs.ndjson')
-		await db.runs.setRunExternalId('recovering', 'version-1')
+		await owned(db).start('recovering', 'runs/recovering/logs.ndjson')
+		await owned(db).externalId('recovering', 'version-1')
 
 		let postWorkAttempts = 0
 		let deploys = 0
@@ -299,8 +309,8 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'stage', { publicOrigin: 'https://stage.app.example.test' }))
 		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('resumed', 'runs/resumed/logs.ndjson')
-		await db.runs.setRunExternalId('resumed', 'operation')
+		await owned(db).start('resumed', 'runs/resumed/logs.ndjson')
+		await owned(db).externalId('resumed', 'operation')
 
 		const projected: Array<readonly string[] | undefined> = []
 		await reconcileProviderRuns({
@@ -325,8 +335,8 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		await db.runs.createRun({ id: 'previewed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('previewed', 'runs/previewed/logs.ndjson')
-		await db.runs.setRunExternalId('previewed', 'operation')
+		await owned(db).start('previewed', 'runs/previewed/logs.ndjson')
+		await owned(db).externalId('previewed', 'operation')
 
 		const executorLine = JSON.stringify({ ts: 1, stream: 'stdout', text: 'executor output' })
 		const objects = new Map([['runs/previewed/logs.ndjson', executorLine]])
@@ -373,8 +383,8 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		await db.runs.createRun({ id: 'owned', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted('owned', 'runs/owned/logs.ndjson')
-		await db.runs.setRunExternalId('owned', 'operation')
+		await owned(db).start('owned', 'runs/owned/logs.ndjson')
+		await owned(db).externalId('owned', 'operation')
 		await db.runs.createRun({ id: 'waiting', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 
 		const summary = await reconcileProviderRuns({
@@ -399,13 +409,12 @@ describe('reconcileProviderRuns', () => {
 	})
 
 	test('isolates a malformed provider row, redacts its failure, and reconciles later rows', async () => {
-		const { db } = createHarness()
+		const { db, sqlite } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		for (const id of ['broken', 'healthy']) {
 			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-			await db.runs.markRunStarted(id, `runs/${id}/logs.ndjson`)
-			await db.runs.setRunExternalId(id, `${id}-operation`)
+			seedRunning(sqlite, id, `${id}-operation`)
 		}
 
 		const secret = 'private-provider-response'
@@ -440,15 +449,14 @@ describe('reconcileProviderRuns', () => {
 	})
 
 	test('keeps terminal counters truthful when lock release fails and continues after cancellation', async () => {
-		const { db } = createHarness()
+		const { db, sqlite } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		for (const id of ['cancelling', 'failed', 'succeeded']) {
 			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-			await db.runs.markRunStarted(id, `runs/${id}/logs.ndjson`)
-			await db.runs.setRunExternalId(id, `${id}-operation`, { phase: 'accepted' })
+			seedRunning(sqlite, id, `${id}-operation`, { phase: 'accepted' })
 		}
-		await db.runs.beginRunCancellation('cancelling')
+		await db.runs.requestRunCancellation('cancelling')
 
 		const projectionSecret = 'private-projection-error'
 		const releaseSecret = 'private-lock-driver-error'

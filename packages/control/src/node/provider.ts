@@ -14,7 +14,7 @@
 // the local stack read the same code and are not subject to the platform's reservation, so one name
 // works everywhere.
 
-import type { JobQueue } from '@fabrika/platform'
+import type { DeployLocks, JobQueue } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
@@ -33,8 +33,7 @@ import { encodeProxyManifestJson } from '@fabrika/proxy-contract'
 import type { NamespaceProxyChanged } from '../api/namespaces'
 import type { Env } from '../env'
 import type { ControlJobMessage } from '../run-lifecycle'
-import type { DeployLockGate } from '../run-ownership'
-import { deployLock, repositories } from '../services'
+import { locks, repositories } from '../services'
 import { HttpZeropsSourceClient } from './source-client'
 import { compileNamespaceProxyManifest, type NamespaceProxyRegistry, syncNamespaceProxy, syncZeropsProxy } from './zerops-proxy'
 
@@ -130,7 +129,7 @@ const zeropsApi = (source: Record<string, string | undefined>) =>
 export function zeropsNamespaceProxySync(
 	source: Record<string, string | undefined>,
 	db: NamespaceProxyRegistry,
-	lock: DeployLockGate,
+	lock: DeployLocks,
 	queue: JobQueue<ControlJobMessage>,
 	sourceClient: ZeropsSourceClient = zeropsSourceClient(source),
 ): NamespaceProxyChanged {
@@ -174,7 +173,7 @@ export function zeropsControlProvider(
 		beforeDeploy: async (input) => {
 			await syncZeropsProxy({
 				db: repositories(env).registry,
-				lock: deployLock(env),
+				lock: locks(env),
 				source: sourceClient,
 				api: input.api,
 				namespaceId: input.namespaceId,

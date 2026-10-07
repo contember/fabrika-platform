@@ -8,7 +8,7 @@ import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { EnvSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureRuns, makeFakeLock } from './helpers/lock'
 
 // Control is the only writer of a Cloudflare run's row (ADR-0044). The runner persists its terminal
 // status — with the IAM reconcile the executor compiled — and Control applies that reconcile once,
@@ -125,8 +125,9 @@ describe('Cloudflare run outcome through Control', () => {
 	test('a reconcile of a run still in flight leaves it running and applies nothing', async () => {
 		const { db } = createHarness()
 		const runId = await seedCloudflareRun(db)
-		await db.runs.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
-		await db.runs.setRunExternalId(runId, runId, null)
+		const owned = fixtureRuns(db.runs, makeFakeLock(db))
+		await owned.start(runId, `runs/${runId}/logs.ndjson`)
+		await owned.externalId(runId, runId, null)
 		const iamCalls: string[] = []
 		const { service } = fakeRunner({ callerLost: false })
 

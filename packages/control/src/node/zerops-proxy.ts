@@ -1,4 +1,4 @@
-import type { JobQueue } from '@fabrika/platform'
+import type { DeployLocks, JobQueue } from '@fabrika/platform'
 import type { ProviderCodec, ProviderEnvelope } from '@fabrika/provider-contract'
 import {
 	assertFabrikaManifestCoordinates,
@@ -14,7 +14,6 @@ import { encodeProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-cont
 import type { ControlRegistryRepository } from '../db'
 import { NamespaceOwnership } from '../namespace-ownership'
 import { type ControlJobMessage, parseProviderEnvelope } from '../run-lifecycle'
-import type { DeployLockGate } from '../run-ownership'
 
 const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
 	if (envelope.provider !== 'zerops' || envelope.version !== codec.version) {
@@ -67,7 +66,7 @@ export async function compileNamespaceProxyManifest(
 
 export interface SyncZeropsProxyInput {
 	db: NamespaceProxyRegistry
-	lock: DeployLockGate
+	lock: DeployLocks
 	queue?: JobQueue<ControlJobMessage>
 	source: ZeropsSourceClient
 	api: ZeropsProxyAttemptApi

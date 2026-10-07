@@ -13,7 +13,7 @@ import type {
 	PlanDeploymentNamespaceResponse,
 	RemoveDeploymentNamespaceResponse,
 } from '@fabrika/control-contract'
-import type { JobQueue } from '@fabrika/platform'
+import type { DeployLocks, JobQueue } from '@fabrika/platform'
 import {
 	type ControlProvider,
 	type ProviderDeploymentNamespace,
@@ -25,7 +25,7 @@ import {
 } from '@fabrika/provider-contract'
 import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
 import { NamespaceOwnership } from '../namespace-ownership'
-import type { ControlJobMessage, DeployLockGate, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
+import type { ControlJobMessage, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
 import { uuidv7 } from '../uuid'
 import { fail } from './domain'
 import { parseStoredEnvelope } from './provider-envelope'
@@ -325,7 +325,7 @@ export interface NamespaceJobResult {
 export interface NamespaceJobDeps {
 	readonly repositories: ControlRepositories
 	readonly provider: ControlProvider
-	readonly lock: DeployLockGate
+	readonly lock: DeployLocks
 }
 
 /**

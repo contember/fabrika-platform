@@ -223,6 +223,7 @@ const makeRun = (
 			recorded.checkpoints.push(state)
 			return Promise.resolve()
 		},
+		boundary: () => Promise.resolve(),
 	},
 	...overrides,
 })

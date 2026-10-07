@@ -6,7 +6,7 @@ import type { Env } from './env'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
 import type { ControlJobMessage } from './run-lifecycle'
-import { deployLock, operationsReleaseDeps } from './services'
+import { locks, operationsReleaseDeps } from './services'
 import { unavailableSourceConnection } from './source-connection-port'
 
 /**
@@ -67,7 +67,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 					repositories: env.REPOSITORIES,
 					provider: cloudflareControlProvider(this.env, env),
 					runLogs: env.RUN_LOGS,
-					lock: deployLock(env),
+					lock: locks(env),
 					operations: operationsReleaseDeps(env),
 				}),
 		})

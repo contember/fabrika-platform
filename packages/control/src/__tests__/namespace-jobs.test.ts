@@ -17,7 +17,7 @@ import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage, NamespaceJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness, type Harness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { heldLeases, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const target = (phase: string): ProviderEnvelope => ({ provider: 'harbor', version: 1, payload: { phase } })
@@ -351,12 +351,12 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 			repositories: harness.repositories,
 			provider,
 			lock: {
-				renew: lock.renew,
-				async acquire(key, holder) {
+				renew: (key, holder, ttlMs) => lock.renew(key, holder, ttlMs),
+				async acquire(key, holder, ttlMs) {
 					// Another worker finished this namespace while we were waiting for the lease.
 					expect(await runNamespaceJob(jobDeps(harness, namespacedProvider(recording())), provisionJob('apps-prod')))
 						.toEqual({ namespaceId: 'apps-prod', status: 'ready' })
-					return lock.acquire(key, holder)
+					return lock.acquire(key, holder, ttlMs)
 				},
 				release: (key, holder) => lock.release(key, holder),
 			},
@@ -366,7 +366,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 
 		expect(record.provisions).toEqual([])
 		// The lease is still released, so the namespace is not wedged for the next job.
-		expect(lock.held.size).toBe(0)
+		expect(await heldLeases(harness.repositories)).toEqual([])
 	})
 
 	test('a contended namespace defers and comes back as a fresh message', async () => {

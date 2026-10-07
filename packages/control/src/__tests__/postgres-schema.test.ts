@@ -34,6 +34,7 @@ import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { unavailableSourceConnection } from '../source-connection-port'
 import { Vault } from '../vault'
+import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
 import { adminToken, testIamEnv } from './helpers/tokens'
@@ -558,39 +559,40 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.runs.listRuns({ limit: 10, before: second.id })).map((r) => r.id)).toEqual([first.id])
 		expect(await db.runs.listRuns({ limit: 1 })).toHaveLength(1)
 
+		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
 		// pending → running only once: a redelivered queue message must be a no-op.
-		expect(await db.runs.markRunStarted(first.id, `runs/${first.id}/logs.ndjson`)).toBe(true)
-		expect(await db.runs.markRunStarted(first.id, `runs/${first.id}/logs.ndjson`)).toBe(false)
+		expect(await owned.start(first.id, `runs/${first.id}/logs.ndjson`)).toBe(true)
+		expect(await owned.start(first.id, `runs/${first.id}/logs.ndjson`)).toBe(false)
 		const running = await db.runs.getRun(first.id)
 		expect(running?.status).toBe('running')
 		expect(typeof running?.started_at).toBe('number')
 
-		expect(await db.runs.setRunCommit(first.id, 'deadbeef')).toBe(true)
+		expect(await owned.commit(first.id, 'deadbeef')).toBe(true)
 		expect((await db.runs.getRun(first.id))?.commit_sha).toBe('deadbeef')
-		expect(await db.runs.setRunExternalId(first.id, 'harbor-operation-1', { phase: 'accepted', attempt: 1 })).toBe(true)
+		expect(await owned.externalId(first.id, 'harbor-operation-1', { phase: 'accepted', attempt: 1 })).toBe(true)
 		expect((await db.runs.listInFlightRuns('harbor')).map((run) => run.id)).toEqual([first.id])
 		const accepted = await db.runs.getRun(first.id)
 		expect(accepted?.external_run_id).toBe('harbor-operation-1')
 		expect(JSON.parse(accepted?.provider_state_json ?? '')).toEqual({ phase: 'accepted', attempt: 1 })
-		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'building', attempt: 1 })).toBe(true)
+		expect(await owned.checkpoint(first.id, { phase: 'building', attempt: 1 })).toBe(true)
 		expect(JSON.parse((await db.runs.getRun(first.id))?.provider_state_json ?? '')).toEqual({ phase: 'building', attempt: 1 })
 
 		// The terminal write is guarded too: a terminal row never moves again.
-		expect(await db.runs.markRunFinished(first.id, 'succeeded', 0)).toBe(true)
-		expect(await db.runs.markRunFinished(first.id, 'failed', 1)).toBe(false)
+		expect(await owned.finish(first.id, 'succeeded', 0)).toBe(true)
+		expect(await owned.finish(first.id, 'failed', 1)).toBe(false)
 		const done = await db.runs.getRun(first.id)
 		expect(done?.status).toBe('succeeded')
 		expect(done?.exit_code).toBe(0)
-		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'late' })).toBe(false)
+		expect(await owned.checkpoint(first.id, { phase: 'late' })).toBe(false)
 
 		const cancelled = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunStarted(cancelled.id, `runs/${cancelled.id}/logs.ndjson`)
-		await db.runs.setRunExternalId(cancelled.id, 'operation-2', { phase: 'uploaded' })
-		const cancellation = await db.runs.beginRunCancellation(cancelled.id)
+		await owned.start(cancelled.id, `runs/${cancelled.id}/logs.ndjson`)
+		await owned.externalId(cancelled.id, 'operation-2', { phase: 'uploaded' })
+		const cancellation = await db.runs.requestRunCancellation(cancelled.id)
 		expect(typeof cancellation?.cancel_requested_at).toBe('number')
 		expect(cancellation?.external_run_id).toBe('operation-2')
-		expect(await db.runs.markRunFinished(cancelled.id, 'succeeded', 0)).toBe(false)
-		expect(await db.runs.markRunCancellationFinished(cancelled.id, 'failed')).toBe(true)
+		expect(await owned.finish(cancelled.id, 'succeeded', 0)).toBe(false)
+		expect(await owned.finishCancellation(cancelled.id, 'failed')).toBe(true)
 		expect((await db.runs.getRun(cancelled.id))?.status).toBe('failed')
 
 		// Candidate discovery leaves settlement to the invocation that acquires the lease.
@@ -1120,7 +1122,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		)
 		await db.operationsReleases.markApplied(stale.id, 1)
 		const absent = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.runs.markRunFinished(absent.id, 'succeeded', 0)
+		await fixtureRuns(db.runs, new SqlDeployLocks(raw)).finish(absent.id, 'succeeded', 0)
 		const requests: OperationsReleaseReconcileRequestV1[] = []
 		const summary = await runMaintenance({
 			...env(),

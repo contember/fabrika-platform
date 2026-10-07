@@ -14,7 +14,7 @@ import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
 import { type ProviderReconcileSummary, sweepStaleRuns } from './provider-reconcile'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
-import { deployLock, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
+import { locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -74,7 +74,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `in-progress=${reconcile.inProgress} waiting=${reconcile.waiting}`,
 		)
 	}
-	const swept = await sweepStaleRuns({ repositories: persistence, lock: deployLock(env) }, STALE_RUN_MAX_AGE_S, options.now)
+	const swept = await sweepStaleRuns({ repositories: persistence, lock: locks(env) }, STALE_RUN_MAX_AGE_S, options.now)
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}
