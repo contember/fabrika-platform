@@ -1,6 +1,7 @@
 import type { ProviderCodec } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { parseManagedOwner } from './managed-environment/protocol'
+import { privateBindingV2Schema } from './source/validation'
 import type { ZeropsRuntimeTarget } from './types'
 
 const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
@@ -8,9 +9,9 @@ const runtimeSourceSchema = z.object({
 	runId: z.string().min(1),
 	repository: z.object({ owner: z.string().min(1), name: z.string().min(1) }).strict(),
 	commitSha: z.string().regex(IMMUTABLE_GIT_OBJECT),
-	githubInstallationId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+	privateBinding: privateBindingV2Schema.optional(),
 }).strict().transform((source) => {
-	if (source.githubInstallationId === undefined) delete source.githubInstallationId
+	if (source.privateBinding === undefined) delete source.privateBinding
 	return source
 })
 const runtimeTargetSchema = z.object({
@@ -54,7 +55,14 @@ export const zeropsTargetCodec: ProviderCodec<ZeropsRuntimeTarget> = {
 					runId: target.source.runId,
 					repository: { owner: target.source.repository.owner, name: target.source.repository.name },
 					commitSha: target.source.commitSha,
-					...(target.source.githubInstallationId === undefined ? {} : { githubInstallationId: target.source.githubInstallationId }),
+					...(target.source.privateBinding === undefined
+						? {}
+						: {
+							privateBinding: {
+								connectionId: target.source.privateBinding.connectionId,
+								installationId: target.source.privateBinding.installationId,
+							},
+						}),
 				},
 			}),
 		...(target.apiBaseUrl !== undefined ? { apiBaseUrl: target.apiBaseUrl } : {}),

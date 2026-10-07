@@ -1,5 +1,3 @@
-import { type GitHubSourceTransportKind } from '../github-connection-store'
-
 // ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
 
 export interface AppRow {
@@ -75,12 +73,6 @@ export interface AppInput {
 	configPath?: string | null
 	githubConnectionId?: string | null
 	githubInstallationId?: number | null
-}
-
-export interface ZeropsSourceBinding {
-	readonly connectionId: string
-	readonly installationId: number
-	readonly transportKind: GitHubSourceTransportKind
 }
 
 export interface NamespaceResourceClaimOwner {

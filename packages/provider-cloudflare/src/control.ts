@@ -7,6 +7,7 @@ import type {
 	ProviderRegistration,
 	ProviderRegistrationInput,
 	ProviderSource,
+	ProviderSourceBinding,
 	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
 	ProviderTerminalOutcome,
@@ -160,7 +161,7 @@ export interface CloudflareControlOptions {
 	/** Overridable for tests; production reconciles over HTTPS with the control plane's own admin key. */
 	readonly reconcileSchema?: SchemaReconciler
 	resolveSource(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
-	prepareClone(source: ProviderSource, signal: AbortSignal): Promise<CloudflareCloneSource>
+	prepareClone(source: ProviderSource, signal: AbortSignal, sourceBinding?: ProviderSourceBinding): Promise<CloudflareCloneSource>
 	assertRunnerSourceProtocol(signal: AbortSignal): Promise<void>
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
@@ -219,7 +220,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	if (!input.dryRun && !isCanonicalCommit(ref)) {
 		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
 	}
-	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal))
+	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const managedEnvironment: Record<string, string> = {}
 	for (const [name, value] of Object.entries(input.managedEnvironment)) {
 		if (value !== null) managedEnvironment[name] = value
@@ -299,6 +300,7 @@ const applyIamReconcile = async (
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
 	normalizeRegistration,
+	source: { binding: 'installation' },
 	resolveSource: async (input) => {
 		input.signal.throwIfAborted()
 		const registration = normalizeRegistration(input)

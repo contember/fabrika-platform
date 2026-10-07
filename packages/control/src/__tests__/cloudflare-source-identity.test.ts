@@ -174,11 +174,11 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 				source.resolveCommit(
 					input.app.source.repoUrl,
 					input.expectedCommitSha ?? input.app.source.ref,
-					input.app.source.githubInstallationId,
+					input.sourceBinding?.installationId,
 					input.signal,
 				),
-			prepareClone: async (selected, signal) => {
-				const clone = await source.clone(selected.repoUrl, selected.ref, selected.githubInstallationId, signal)
+			prepareClone: async (selected, signal, sourceBinding) => {
+				const clone = await source.clone(selected.repoUrl, selected.ref, sourceBinding?.installationId, signal)
 				return { repoUrl: clone.cloneUrl }
 			},
 			assertRunnerSourceProtocol: async (signal) => {

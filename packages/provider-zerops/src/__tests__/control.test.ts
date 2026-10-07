@@ -7,6 +7,7 @@ import type {
 	ProviderEnvironment,
 	ProviderReconcileOutcome,
 	ProviderRegistrationInput,
+	ProviderSourceBinding,
 	RuntimeProviderRun,
 } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
@@ -32,7 +33,6 @@ import {
 	zeropsArtifactCodec,
 } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
-import type { ZeropsSourceTransportBinding } from '../provider'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget } from '../types'
@@ -1256,19 +1256,19 @@ describe('Zerops ControlProvider lifecycle', () => {
 			},
 		}
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
-		const binding1: ZeropsSourceTransportBinding = { connectionId: 'connection-1', installationId: 41, transportKind: 'keyed-v2' }
-		const binding2: ZeropsSourceTransportBinding = { connectionId: 'connection-2', installationId: 42, transportKind: 'keyed-v2' }
-		const app1 = { ...app, source: { ...app.source, githubConnectionId: binding1.connectionId, githubInstallationId: binding1.installationId } }
-		const app2 = { ...app, source: { ...app.source, githubConnectionId: binding2.connectionId, githubInstallationId: binding2.installationId } }
+		const binding1: ProviderSourceBinding = { connectionId: 'connection-1', installationId: 41 }
+		const binding2: ProviderSourceBinding = { connectionId: 'connection-2', installationId: 42 }
 		const signal = new AbortController().signal
+		const resolveSource = control.resolveSource
+		if (resolveSource === undefined) throw new Error('expected source resolution')
 
 		await Promise.all([
-			control.resolveSourceWithBinding({ runId: 'run-1', app: app1, environment: environment(), signal, sourceBinding: binding1 }),
-			control.resolveSourceWithBinding({ runId: 'run-2', app: app2, environment: environment(), signal, sourceBinding: binding2 }),
+			resolveSource({ runId: 'run-1', app, environment: environment(), signal, sourceBinding: binding1 }),
+			resolveSource({ runId: 'run-2', app, environment: environment(), signal, sourceBinding: binding2 }),
 		])
 		await Promise.all([
-			control.deployWithBinding({ ...deployInput(recorded), runId: 'run-1', app: app1, sourceBinding: binding1 }),
-			control.deployWithBinding({ ...deployInput(recorded), runId: 'run-2', app: app2, sourceBinding: binding2 }),
+			control.deploy({ ...deployInput(recorded), runId: 'run-1', sourceBinding: binding1 }),
+			control.deploy({ ...deployInput(recorded), runId: 'run-2', sourceBinding: binding2 }),
 		])
 
 		expect(calls).toContain('resolve-v2:run-1:connection-1:41')
@@ -1278,25 +1278,19 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(calls.some((call) => call.startsWith('resolve:') || call.startsWith('upload:'))).toBe(false)
 	})
 
-	test('rejects partial, unbound, and swapped private source coordinates before source calls', async () => {
+	test('rejects an installation-only binding before source calls', async () => {
 		const calls: string[] = []
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source: makeSource(calls) })
 		const signal = new AbortController().signal
-		const partial = { ...app, source: { ...app.source, githubInstallationId: 42 } }
-		expect(() => control.normalizeRegistration({ app: partial, environment: environment() })).toThrow('both connection and installation')
-		const privateApp = { ...app, source: { ...app.source, githubConnectionId: 'connection-1', githubInstallationId: 42 } }
+		const sourceBinding: ProviderSourceBinding = { installationId: 42 }
+		expect(control.source).toEqual({ binding: 'connection' })
 		if (control.resolveSource === undefined) throw new Error('expected source resolution')
-		await expect(control.resolveSource({ runId: 'run-1', app: privateApp, environment: environment(), signal })).rejects.toThrow(
-			'explicit transport binding',
+		await expect(control.resolveSource({ runId: 'run-1', app, environment: environment(), signal, sourceBinding })).rejects.toThrow(
+			'requires a connection binding',
 		)
-		await expect(control.resolveSourceWithBinding({
-			runId: 'run-1',
-			app: privateApp,
-			environment: environment(),
-			signal,
-			sourceBinding: { connectionId: 'connection-2', installationId: 42, transportKind: 'keyed-v2' },
-		})).rejects.toThrow('different application coordinates')
+		await expect(control.deploy({ ...deployInput(recorded), sourceBinding })).rejects.toThrow('requires a connection binding')
 		expect(calls).toEqual([])
+		expect(recorded.calls).toEqual([])
 	})
 
 	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
@@ -1393,24 +1387,20 @@ describe('Zerops ControlProvider lifecycle', () => {
 			...deployInput(recorded),
 			app: { ...app, source: { ...app.source, repoUrl: 'github.com/acme/notes', ref: COMMIT_SHA } },
 		})
-		await control.deployWithBinding({
+		await control.deploy({
 			...deployInput(recorded),
-			app: {
-				...app,
-				source: {
-					...app.source,
-					repoUrl: 'https://github.com/acme/notes',
-					ref: COMMIT_SHA,
-					githubConnectionId: 'connection-1',
-					githubInstallationId: 42,
-				},
-			},
-			sourceBinding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+			app: { ...app, source: { ...app.source, repoUrl: 'https://github.com/acme/notes', ref: COMMIT_SHA } },
+			sourceBinding: { connectionId: 'connection-1', installationId: 42 },
 		})
 
 		expect(observed).toEqual([
 			{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA },
-			{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA, githubInstallationId: 42 },
+			{
+				runId: 'run-1',
+				repository: { owner: 'acme', name: 'notes' },
+				commitSha: COMMIT_SHA,
+				privateBinding: { connectionId: 'connection-1', installationId: 42 },
+			},
 		])
 		expect(environment().target.payload).toEqual({ serviceId: 'service-1' })
 	})

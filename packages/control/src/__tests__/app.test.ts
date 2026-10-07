@@ -1,5 +1,6 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE, type GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
@@ -10,10 +11,13 @@ import { FakeRepoSource } from '../repo-source'
 import { unavailableSourceConnection } from '../source-connection-port'
 import { Vault } from '../vault'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
-import { fakeControlProvider } from './helpers/provider'
+import { fakeControlProvider, TEST_PROVIDER_ID } from './helpers/provider'
 import { adminToken, operatorToken, testIamEnv, testToken, viewerToken } from './helpers/tokens'
 
-function application(overrides: Partial<Env> = {}, harness: Harness = createHarness()) {
+/** The routing choice comes from the declared source mode, not from the provider id. */
+const connectionProvider: ControlProvider = { ...fakeControlProvider, source: { binding: 'connection' } }
+
+function application(overrides: Partial<Env> = {}, harness: Harness = createHarness(), provider: ControlProvider = fakeControlProvider) {
 	const { REPO_EVENTS = new FakeRepoSource(), ...rest } = overrides
 	const env: Env = {
 		DB: harness.d1,
@@ -33,7 +37,7 @@ function application(overrides: Partial<Env> = {}, harness: Harness = createHarn
 		...rest,
 	}
 	return (request: Request) =>
-		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unavailableSourceConnection('harbor') }, {
+		controlApp.fetch(request, { env, provider, sourceConnection: unavailableSourceConnection('harbor') }, {
 			waitUntil() {},
 		})
 }
@@ -56,6 +60,23 @@ describe('controlApp', () => {
 
 		expect(viewer.status).toBe(403)
 		expect(admin.status).toBe(200)
+		expect(anonymous.status).toBe(401)
+	})
+
+	test('reports the installation provider to any authenticated caller', async () => {
+		const fetch = application()
+		const viewer = await fetch(rpcRequest('installation', null, viewerToken))
+		expect(viewer.status).toBe(200)
+		const viewerBody: unknown = await viewer.json()
+		expect(viewerBody).toEqual({ result: { provider: TEST_PROVIDER_ID } })
+
+		const anonymous = await fetch(
+			new Request('https://control.test/api/rpc', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', origin: 'https://control.test' },
+				body: JSON.stringify({ method: 'installation', input: null }),
+			}),
+		)
 		expect(anonymous.status).toBe(401)
 	})
 
@@ -260,7 +281,7 @@ describe('controlApp', () => {
 		expect(projectSingletonSourceConnectionPage(connected, { cursor: 'later-page' })).toEqual({ items: [], nextCursor: null, workflow: null })
 	})
 
-	test('mounts scoped Zerops webhooks with their exact vault secret and no static fallback', async () => {
+	test('mounts scoped webhooks in the connection source mode with their exact vault secret and no static fallback', async () => {
 		const harness = createHarness()
 		const vaultKey = testVaultKey()
 		const vault = await Vault.create(harness.d1, vaultKey)
@@ -294,7 +315,7 @@ describe('controlApp', () => {
 			})
 			await seedZeropsTrigger(harness, app.id)
 		}
-		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey, GITHUB_CONNECTION_WEBHOOKS: true }, harness)
+		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey }, harness, connectionProvider)
 		const exactA = await webhookRequest('/webhooks/github/connection-a', 'secret-a', 'github.com/acme/app', 42)
 		const exactB = await webhookRequest('/webhooks/github/connection-b', 'secret-b', 'github.com/beta/app', 43)
 		const crossConnection = await webhookRequest('/webhooks/github/connection-b', 'secret-a', 'github.com/acme/app', 42)
@@ -312,7 +333,7 @@ describe('controlApp', () => {
 		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(2)
 	})
 
-	test('refuses the unscoped route in a Zerops composition, which has no connection to resolve', async () => {
+	test('refuses the unscoped route in the connection source mode, which has no connection to resolve', async () => {
 		const harness = createHarness()
 		const vaultKey = testVaultKey()
 		const vault = await Vault.create(harness.d1, vaultKey)
@@ -331,7 +352,7 @@ describe('controlApp', () => {
 			githubInstallationId: 43,
 		})
 		await seedZeropsTrigger(harness, 'keyed-app')
-		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey, GITHUB_CONNECTION_WEBHOOKS: true }, harness)
+		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey }, harness, connectionProvider)
 
 		// Since ADR-0029 nothing keyed can be selected without a connection id, so the unscoped path is
 		// refused rather than trying a stored secret — even the one that would verify on its own route.

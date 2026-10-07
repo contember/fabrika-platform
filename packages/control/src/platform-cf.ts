@@ -17,7 +17,7 @@ import {
 	type CloudflareRunOutcome,
 	createCloudflareControlProvider,
 } from '@fabrika/provider-cloudflare/runner'
-import type { ControlProvider, ProviderSource } from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderSource, ProviderSourceBinding } from '@fabrika/provider-contract'
 import type { RelayResult, VozkaRunner } from '@fabrika/runner-cloudflare'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
@@ -150,11 +150,16 @@ const required = (value: string | undefined, name: string): string => {
 	return value
 }
 
-const prepareClone = async (bindings: WorkerBindings, source: ProviderSource, signal: AbortSignal) => {
+const prepareClone = async (
+	bindings: WorkerBindings,
+	source: ProviderSource,
+	signal: AbortSignal,
+	sourceBinding: ProviderSourceBinding | undefined,
+) => {
 	const target = await cloudflareRepoSource(bindings).clone(
 		source.repoUrl,
 		source.ref,
-		source.githubInstallationId,
+		sourceBinding?.installationId,
 		signal,
 	)
 	return { repoUrl: target.cloneUrl }
@@ -222,11 +227,11 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 			return cloudflareRepoSource(bindings).resolveCommit(
 				source.repoUrl,
 				input.expectedCommitSha ?? source.ref,
-				source.githubInstallationId,
+				input.sourceBinding?.installationId,
 				input.signal,
 			)
 		},
-		prepareClone: (source, signal) => prepareClone(bindings, source, signal),
+		prepareClone: (source, signal, sourceBinding) => prepareClone(bindings, source, signal, sourceBinding),
 		assertRunnerSourceProtocol: (signal) => assertRunnerSourceProtocol(runner(bindings), env.FABRIKA_RUNNER_KEY, signal),
 		startRun: (job) => {
 			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')

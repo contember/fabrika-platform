@@ -25,12 +25,6 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 			...(input.workerDir === undefined || input.workerDir === null ? {} : { workerDir: input.workerDir }),
 			...(input.buildCmd === undefined || input.buildCmd === null ? {} : { buildCommand: input.buildCmd }),
 			...(input.configPath === undefined || input.configPath === null ? {} : { configPath: input.configPath }),
-			...(sourceBinding.githubConnectionId === undefined || sourceBinding.githubConnectionId === null
-				? {}
-				: { githubConnectionId: sourceBinding.githubConnectionId }),
-			...(sourceBinding.githubInstallationId === undefined || sourceBinding.githubInstallationId === null
-				? {}
-				: { githubInstallationId: sourceBinding.githubInstallationId }),
 		},
 	}
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, id, env, null)
@@ -57,8 +51,8 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 		workerDir: source.workerDir ?? null,
 		buildCmd: source.buildCommand ?? null,
 		configPath: source.configPath ?? null,
-		githubConnectionId: source.githubConnectionId ?? null,
-		githubInstallationId: source.githubInstallationId ?? null,
+		githubConnectionId: sourceBinding.githubConnectionId ?? null,
+		githubInstallationId: sourceBinding.githubInstallationId ?? null,
 	}
 	const environmentInput = {
 		appId: registration.app.id,
@@ -137,7 +131,6 @@ export async function prepareRegistration(
 	})
 	if (
 		prepared.app.id !== requested.app.id
-		|| !sameGitHubSourceBinding(prepared.app, requested.app)
 		|| prepared.environment.appId !== requested.app.id
 		|| prepared.environment.env !== requested.environment.env
 		|| prepared.environment.publicOrigin !== requested.environment.publicOrigin
@@ -151,7 +144,6 @@ export function normalizeRegistration(provider: ControlProvider, app: ProviderAp
 		const registration = provider.normalizeRegistration({ app, environment })
 		if (
 			registration.app.id !== app.id
-			|| !sameGitHubSourceBinding(registration.app, app)
 			|| registration.environment.appId !== app.id
 			|| registration.environment.env !== environment.env
 			|| registration.environment.publicOrigin !== environment.publicOrigin
@@ -164,11 +156,6 @@ export function normalizeRegistration(provider: ControlProvider, app: ProviderAp
 		if (isStructuralError(cause)) throw cause
 		fail(400, cause instanceof Error ? cause.message : 'invalid provider registration')
 	}
-}
-
-function sameGitHubSourceBinding(actual: ProviderApp, expected: ProviderApp): boolean {
-	return actual.source.githubConnectionId === expected.source.githubConnectionId
-		&& actual.source.githubInstallationId === expected.source.githubInstallationId
 }
 
 function sameNamespaceCoordinates(

@@ -8,8 +8,6 @@ export interface ProviderSource {
 	readonly workerDir?: string
 	readonly buildCommand?: string
 	readonly configPath?: string
-	readonly githubConnectionId?: string
-	readonly githubInstallationId?: number
 }
 
 /** App data needed by a control provider. */
@@ -54,6 +52,7 @@ export interface ProviderSourceResolutionInput {
 	readonly environment: ProviderEnvironment
 	/** An immutable commit already recorded by the trigger, which resolution must verify exactly. */
 	readonly expectedCommitSha?: string
+	readonly sourceBinding?: ProviderSourceBinding
 	readonly signal: AbortSignal
 }
 
@@ -62,15 +61,19 @@ export interface ProviderSourceResolution {
 	readonly commitSha: string
 }
 
-/** Credential-free coordinates loaded from the persisted private-source connection. */
+/**
+ * Credential-free selector of the GitHub App installation that reads a private source (ADR-0029).
+ * Absent means a public source. `connectionId` is present exactly in the `connection` source mode.
+ */
 export interface ProviderSourceBinding {
-	readonly connectionId: string
 	readonly installationId: number
-	readonly transportKind: 'keyed-v2'
+	readonly connectionId?: string
 }
 
-export interface ProviderBoundSourceResolutionInput extends ProviderSourceResolutionInput {
-	readonly sourceBinding: ProviderSourceBinding
+/** How private GitHub sources reach a provider (ADR-0029). */
+export interface ProviderSourceCapabilities {
+	/** `connection`: one keyed connection's App and installation. `installation`: the installation's single App. */
+	readonly binding: 'connection' | 'installation'
 }
 
 /** One control-plane deploy invocation. */
@@ -89,6 +92,7 @@ export interface ProviderDeployInput {
 	 */
 	readonly returnOrigins?: readonly string[]
 	readonly dryRun: boolean
+	readonly sourceBinding?: ProviderSourceBinding
 	/** Optional short-lived, run-scoped Operations artifact destination. */
 	readonly artifactUpload?: {
 		readonly url: string
@@ -103,10 +107,6 @@ export interface ProviderDeployInput {
 	readonly events: ProviderRunEvents
 	/** Read retained state for one exact external version, scoped by Control to this app/environment. */
 	readonly readRetainedCheckpoint?: (externalId: string) => Promise<JsonValue | null>
-}
-
-export interface ProviderBoundDeployInput extends ProviderDeployInput {
-	readonly sourceBinding: ProviderSourceBinding
 }
 
 /** A terminal provider operation result. */
@@ -322,13 +322,13 @@ export interface ControlProvider {
 	readonly id: string
 	normalizeRegistration(input: ProviderRegistrationInput): ProviderRegistration
 	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
-	resolveSourceWithBinding?(input: ProviderBoundSourceResolutionInput): Promise<ProviderSourceResolution>
 	deploy(input: ProviderDeployInput): Promise<ProviderDeployOutcome>
-	deployWithBinding?(input: ProviderBoundDeployInput): Promise<ProviderDeployOutcome>
 	cancel?(input: ProviderCancelInput): Promise<ProviderCancelOutcome>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
 	readonly namespaces?: ProviderNamespaceCapabilities
+	/** Absent means the provider deploys public sources only. */
+	readonly source?: ProviderSourceCapabilities
 	/**
 	 * The variable names this artifact declares, so core can refuse one it would silently ignore
 	 * ([ADR-0035](../../../docs/decisions/0035-the-platform-owns-the-application-iam-issuer.md)).

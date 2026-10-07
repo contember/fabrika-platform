@@ -127,8 +127,8 @@ describe('the Cloudflare source composition', () => {
 		try {
 			const provider = cloudflareControlProvider(bindings, controlEnv(bindings, () => {}))
 			if (provider.resolveSource === undefined) throw new Error('missing resolver')
-			const source = { ...input.app.source, ref: 'refs/heads/main', githubInstallationId: 99 }
-			const selection = { ...input, app: { ...input.app, source }, expectedCommitSha: input.app.source.ref }
+			const source = { ...input.app.source, ref: 'refs/heads/main' }
+			const selection = { ...input, app: { ...input.app, source }, sourceBinding: { installationId: 99 }, expectedCommitSha: input.app.source.ref }
 			expect(await provider.resolveSource(selection)).toEqual({ commitSha: input.app.source.ref })
 			expect(resolution.mock.calls[0]).toEqual([source.repoUrl, input.app.source.ref, 99, input.signal])
 			const { expectedCommitSha: _recorded, ...unrecorded } = selection
@@ -139,6 +139,7 @@ describe('the Cloudflare source composition', () => {
 			await expect(provider.deploy({
 				...input,
 				app: { ...input.app, source: { ...source, ref: input.app.source.ref } },
+				sourceBinding: { installationId: 99 },
 				events: {
 					...input.events,
 					externalId: async () => {

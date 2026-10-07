@@ -62,7 +62,6 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 		// concrete pushed ref, never the pattern.
 		const envs = await deps.repositories.registry.listTriggerEnvs(app.id)
 		for (const appEnv of envs) {
-			if (deps.binding.kind === 'connection' && appEnv.provider !== 'zerops') continue
 			if (appEnv.trigger_ref === null || !refMatches(appEnv.trigger_ref, push.ref)) {
 				continue
 			}
@@ -95,5 +94,5 @@ async function getConnectionApps(
 	if (connection === null || connection.installationId !== installationId) return []
 	const repository = parseGitHubRepo(repoUrl)
 	if (repository === null || repository.owner.toLowerCase() !== connection.appOwner.toLowerCase()) return []
-	return repositories.registry.getZeropsAppsByRepoUrlAndSourceBinding(repoUrl, connectionId, installationId)
+	return repositories.registry.getAppsByRepoUrlAndSourceConnection(repoUrl, connectionId, installationId)
 }

@@ -120,7 +120,5 @@ const toProviderApp = (row: AppRow): ProviderApp => ({
 		...(row.worker_dir === null ? {} : { workerDir: row.worker_dir }),
 		...(row.build_cmd === null ? {} : { buildCommand: row.build_cmd }),
 		...(row.config_path === null ? {} : { configPath: row.config_path }),
-		...(row.github_connection_id === null ? {} : { githubConnectionId: row.github_connection_id }),
-		...(row.github_installation_id === null ? {} : { githubInstallationId: row.github_installation_id }),
 	},
 })

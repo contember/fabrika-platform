@@ -97,6 +97,7 @@ const fakeProvider: ControlProvider = {
 		}
 	},
 	deploy: () => Promise.resolve({ state: 'succeeded' }),
+	source: { binding: 'installation' },
 }
 
 /** A provider that CAN read its own artifact's declarations — the shape `declaredVariables` exists for. */
@@ -112,6 +113,7 @@ const declaringProvider: ControlProvider = {
 
 const zeropsProvider: ControlProvider = {
 	id: 'zerops',
+	source: { binding: 'connection' },
 	normalizeRegistration: (input) => {
 		if (input.environment.target.provider !== 'zerops' || input.environment.artifact.provider !== 'zerops') {
 			throw new Error('fake Zerops provider rejects foreign envelopes')
@@ -414,6 +416,27 @@ describe('onboarding + registry CRUD', () => {
 		const patched = await rpcResult(rpcRequest('apps.update', { appId: 'existing', app: { resolveInstallationId: true } }), deps)
 		expect(patched.status).toBe(200)
 		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(555)
+	})
+
+	test('registration picks the private-source binding from the declared source mode, not the provider id', async () => {
+		const register = async (provider: ControlProvider, id: string) => {
+			const { deps, sqlite } = makeDeps({ provider, installationId: 777 })
+			insertSourceConnection(sqlite, 'connection-acme', 'Acme', 101)
+			const response = await rpcResult(
+				rpcRequest('register', { ...registrationEnvelopes(), id, repoUrl: 'https://github.com/acme/private', env: 'prod', resolveInstallationId: true }),
+				deps,
+			)
+			return { status: response.status, app: await deps.repositories.registry.getApp(id) }
+		}
+
+		const connection = await register({ ...fakeProvider, source: { binding: 'connection' } }, 'connection-app')
+		expect(connection.app).toMatchObject({ github_connection_id: 'connection-acme', github_installation_id: 101 })
+		const installation = await register({ ...fakeProvider, source: { binding: 'installation' } }, 'installation-app')
+		expect(installation.app).toMatchObject({ github_connection_id: null, github_installation_id: 777 })
+		const { source: _source, ...publicOnly } = fakeProvider
+		const refused = await register(publicOnly, 'public-only-app')
+		expect(refused.status).toBe(409)
+		expect(refused.app).toBeNull()
 	})
 
 	test('Zerops onboarding persists the repository owner pair and rejects direct or two-step reassignment', async () => {

@@ -53,7 +53,8 @@ The control plane receives one `ControlProvider`. Every provider implements:
 A provider may also implement:
 
 - `resolveSource` to resolve a requested source revision before deployment;
-- `resolveSourceWithBinding` and `deployWithBinding` for a persisted private-source binding;
+- `source: { binding: 'connection' | 'installation' }` to accept a private-source binding, which
+  Control then passes as `sourceBinding` to `resolveSource` and `deploy`;
 - `cancel` for platform-owned work;
 - `reconcile` for unfinished external operations;
 - `secrets` for immediate writes to provider-managed secret storage.

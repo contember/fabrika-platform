@@ -23,7 +23,6 @@ export {
 	NamespaceResourceClaimConflictError,
 	type NamespaceResourceClaimOwner,
 	type NamespaceResourceClaimRow,
-	type ZeropsSourceBinding,
 } from './db/registry-types'
 export { parseProviderJson, type RunMutationGuard, RunRepository, type RunRow, type RunStatus, type RunTrigger } from './db/runs'
 export { uuidv7 } from './uuid'

@@ -85,14 +85,14 @@ export interface WebhookRoute {
 }
 
 /**
- * Resolve one webhook route before its request body is read.
+ * Resolve one webhook route before its request body is read, by the provider's source mode (ADR-0029).
  *
- * A Cloudflare composition has no connection rows, so it keeps its static secret on the unscoped path
- * (ADR-0029). A Zerops composition selects one exact connection's vault secret and, since ADR-0029,
- * has nothing the unscoped path could resolve — it refuses rather than trying any stored secret.
+ * Without keyed connections the installation's single App keeps its static secret on the unscoped path.
+ * In the `connection` mode each route selects one exact connection's vault secret, and the unscoped
+ * path refuses rather than trying any stored secret.
  */
-export function webhookRoute(env: Env, connectionId?: string): WebhookRoute | null {
-	if (env.GITHUB_CONNECTION_WEBHOOKS === undefined) {
+export function webhookRoute(env: Env, provider: ControlProvider, connectionId?: string): WebhookRoute | null {
+	if (provider.source?.binding !== 'connection') {
 		return connectionId === undefined ? { repoSource: env.REPO_EVENTS, binding: { kind: 'installation-only' } } : null
 	}
 	if (connectionId === undefined) return null

@@ -120,7 +120,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
 		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], sourceClient),
-		GITHUB_CONNECTION_WEBHOOKS: true,
 		IAM: iamRpc(source),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,

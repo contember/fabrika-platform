@@ -75,7 +75,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 async function webhook(ctx: ControlAppContext, connectionId?: string): Promise<Response> {
 	let target: WebhookRoute | null
 	try {
-		target = await webhookRoute(ctx.env, connectionId)
+		target = await webhookRoute(ctx.env, ctx.provider, connectionId)
 	} catch {
 		return error(401, 'invalid webhook signature')
 	}

@@ -17,7 +17,7 @@ import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { type ManagedOwner, mapManagedKeys, serializeManagedMarker, verifyManagedCheckpoint } from '../managed-environment/protocol'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, hashFabrikaManifest, zeropsArtifactCodec } from '../manifest'
-import { CANCELLED, createZeropsProvider, type ZeropsSourceTransportBinding, type ZeropsSourceTransportRouting } from '../provider'
+import { CANCELLED, createZeropsProvider, type ZeropsSourceTransportRouting } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
@@ -431,10 +431,8 @@ describe('Zerops provider', () => {
 			expect(recorded.calls).toEqual([])
 		})
 	}
-	test('routes an upload through v2 only when a keyed binding names the connection', async () => {
-		let binding: ZeropsSourceTransportBinding | undefined
+	test('routes an upload through v2 only when the runtime source carries a keyed binding', async () => {
 		const routing: ZeropsSourceTransportRouting = {
-			bindingForRun: () => binding,
 			uploadV2: async (input) => {
 				const privateBinding = input.privateBinding
 				if (privateBinding === undefined) throw new Error('missing private binding')
@@ -460,7 +458,7 @@ describe('Zerops provider', () => {
 				runId: 'run-1',
 				repository: { owner: 'acme', name: 'demo' },
 				commitSha: '0123456789abcdef0123456789abcdef01234567',
-				githubInstallationId: 42,
+				privateBinding: { connectionId: 'keyed-connection', installationId: 42 },
 			},
 		})
 
@@ -469,29 +467,9 @@ describe('Zerops provider', () => {
 		expect(recorded.uploads).toHaveLength(1)
 		expect(recorded.v2Uploads).toHaveLength(0)
 
-		binding = { connectionId: 'keyed-connection', installationId: 42, transportKind: 'keyed-v2' }
 		await execute(runtimeRun(recorded, provider, privateTarget), provider)
 		expect(recorded.uploads).toHaveLength(1)
 		expect(recorded.v2Uploads).toEqual([{ connectionId: 'keyed-connection', installationId: 42 }])
-	})
-
-	test('rejects a routed binding whose installation differs from the runtime source', async () => {
-		const provider = createZeropsProvider(() => makeCollaborators(recorded), {
-			bindingForRun: () => ({ connectionId: 'keyed-connection', installationId: 84, transportKind: 'keyed-v2' }),
-			uploadV2: () => Promise.reject(new Error('must not upload')),
-		})
-		const privateTarget = target({
-			source: {
-				runId: 'run-1',
-				repository: { owner: 'acme', name: 'demo' },
-				commitSha: '0123456789abcdef0123456789abcdef01234567',
-				githubInstallationId: 42,
-			},
-		})
-		const session = await provider.runtime.open(runtimeRun(recorded, provider, privateTarget))
-		await session.execute('apply-import')
-		await expect(session.execute('trigger-deploy')).rejects.toThrow('different installation coordinates')
-		expect(recorded.v2Uploads).toHaveLength(0)
 	})
 
 	test('waits for the import processes before triggering, because an import answers before its services exist', async () => {

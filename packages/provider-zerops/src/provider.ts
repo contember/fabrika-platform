@@ -15,7 +15,6 @@ import {
 	type ProviderDeploySession,
 	ProviderInvocationAbort,
 	type ProviderModule,
-	type ProviderSourceBinding,
 	type TypedProviderRun,
 } from '@fabrika/provider-contract'
 import {
@@ -62,10 +61,8 @@ export const CANCELLED = 'deploy cancelled'
 
 type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifest>
 
-export type ZeropsSourceTransportBinding = ProviderSourceBinding
-
+/** The keyed upload a private source takes; the binding itself rides on the run's runtime source. */
 export interface ZeropsSourceTransportRouting {
-	bindingForRun(runId: string): ZeropsSourceTransportBinding | undefined
 	uploadV2(input: ZeropsSourceUploadInputV2): Promise<ZeropsSourceUploadResult>
 }
 
@@ -496,9 +493,6 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 					appVersionId: version.id,
 					repository: source.runtime.repository,
 					commitSha: source.runtime.commitSha,
-					...(source.runtime.githubInstallationId === undefined
-						? {}
-						: { githubInstallationId: source.runtime.githubInstallationId }),
 					uploadUrl: version.uploadUrl,
 					descriptor: {
 						path: artifact.target.sourceDescriptor.path,
@@ -506,15 +500,12 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 					},
 					signal,
 				}
-				const sourceTransport = env.sourceTransport
-				const binding = sourceTransport?.bindingForRun(source.runtime.runId)
-				if (binding !== undefined && source.runtime.githubInstallationId !== binding.installationId) {
-					throw new Error('zerops: source transport binding has different installation coordinates')
-				}
+				const binding = source.runtime.privateBinding
 				let uploaded: ZeropsSourceUploadResult
 				if (binding === undefined) {
 					uploaded = await source.client.upload(uploadInput)
 				} else {
+					const sourceTransport = env.sourceTransport
 					if (sourceTransport === undefined) throw new Error('zerops: keyed source transport is unavailable')
 					uploaded = await sourceTransport.uploadV2({
 						...uploadInput,

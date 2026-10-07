@@ -46,8 +46,6 @@ export interface Env {
 	WAIT_UNTIL: WaitUntil
 	/** Verified GitHub push events and installation lookup, composed per provider/runtime. */
 	REPO_EVENTS: RepoEvents
-	/** Set when this composition owns keyed GitHub source connections, so every webhook must name one (ADR-0029). */
-	GITHUB_CONNECTION_WEBHOOKS?: true
 	/**
 	 * IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
 	 * (`@fabrika/auth`) over the project's private network in a process. Required in practice —

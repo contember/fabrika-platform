@@ -103,7 +103,7 @@ async function seedRun(
 
 function insertSourceConnection(
 	sqlite: ReturnType<typeof createHarness>['sqlite'],
-	input: { connectionId: string; installationId: number; transportKind: 'keyed-v2' },
+	input: { connectionId: string; installationId: number },
 ): void {
 	sqlite.query(`INSERT INTO github_source_connections_keyed (
 		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
@@ -113,7 +113,7 @@ function insertSourceConnection(
 	) VALUES (?, ?, 'github-app', 'github-app', 'https://github.com/apps/github-app', 'acme', 'github-app', 0,
 		?, 'https://control.example.test/webhooks/github', 'vault:webhook', ?,
 		'acme', 'all', '[]', '[]', 'operator', 1, 1, 1)`)
-		.run(input.connectionId, input.transportKind, 'c'.repeat(64), input.installationId)
+		.run(input.connectionId, 'keyed-v2', 'c'.repeat(64), input.installationId)
 }
 
 async function activateOperationsIngest(db: ControlRepositories): Promise<string> {
@@ -136,12 +136,19 @@ async function activateOperationsIngest(db: ControlRepositories): Promise<string
 function makeProvider(
 	inputs: ProviderDeployInput[],
 	outcome: RunOutcome,
-	options: { id?: string; managedSecrets?: boolean; cancelled?: string[]; cancelledNamespaces?: string[] } = {},
+	options: {
+		id?: string
+		sourceBinding?: 'connection' | 'installation'
+		managedSecrets?: boolean
+		cancelled?: string[]
+		cancelledNamespaces?: string[]
+	} = {},
 ): ControlProvider {
 	const id = options.id ?? 'memory'
 	return {
 		id,
 		normalizeRegistration: (input) => normalize(id, input),
+		source: { binding: options.sourceBinding ?? 'installation' },
 		deploy: async (input) => {
 			inputs.push(input)
 			await input.events.externalId(`${id}-run-1`)
@@ -208,33 +215,22 @@ const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> 
 describe('provider-neutral run lifecycle', () => {
 	test('loads and carries the exact keyed source binding through resolve and deploy', async () => {
 		const { db, sqlite } = createHarness()
-		insertSourceConnection(sqlite, { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' })
+		insertSourceConnection(sqlite, { connectionId: 'connection-1', installationId: 42 })
 		const runId = await seedRun(db, {
 			provider: 'zerops',
 			sourceBinding: { connectionId: 'connection-1', installationId: 42 },
 		})
-		const seen: Array<{ phase: string; binding: ProviderSourceBinding; connectionId?: string; installationId?: number }> = []
+		const seen: Array<{ phase: string; binding: ProviderSourceBinding | undefined }> = []
 		const provider: ControlProvider = {
 			id: 'zerops',
 			normalizeRegistration: (input) => normalize('zerops', input),
-			resolveSource: () => Promise.reject(new Error('unbound resolution must not run')),
-			resolveSourceWithBinding: (input) => {
-				seen.push({
-					phase: 'resolve',
-					binding: input.sourceBinding,
-					...(input.app.source.githubConnectionId === undefined ? {} : { connectionId: input.app.source.githubConnectionId }),
-					...(input.app.source.githubInstallationId === undefined ? {} : { installationId: input.app.source.githubInstallationId }),
-				})
+			source: { binding: 'connection' },
+			resolveSource: (input) => {
+				seen.push({ phase: 'resolve', binding: input.sourceBinding })
 				return Promise.resolve({ commitSha: 'a'.repeat(40) })
 			},
-			deploy: () => Promise.reject(new Error('unbound deploy must not run')),
-			deployWithBinding: async (input) => {
-				seen.push({
-					phase: 'deploy',
-					binding: input.sourceBinding,
-					...(input.app.source.githubConnectionId === undefined ? {} : { connectionId: input.app.source.githubConnectionId }),
-					...(input.app.source.githubInstallationId === undefined ? {} : { installationId: input.app.source.githubInstallationId }),
-				})
+			deploy: async (input) => {
+				seen.push({ phase: 'deploy', binding: input.sourceBinding })
 				await input.events.externalId('version-1')
 				return { state: 'succeeded' }
 			},
@@ -242,26 +238,16 @@ describe('provider-neutral run lifecycle', () => {
 
 		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
 		expect(seen).toEqual([
-			{
-				phase: 'resolve',
-				binding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
-				connectionId: 'connection-1',
-				installationId: 42,
-			},
-			{
-				phase: 'deploy',
-				binding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
-				connectionId: 'connection-1',
-				installationId: 42,
-			},
+			{ phase: 'resolve', binding: { connectionId: 'connection-1', installationId: 42 } },
+			{ phase: 'deploy', binding: { connectionId: 'connection-1', installationId: 42 } },
 		])
 	})
 
-	test('fails before provider source effects on partial, missing, stale, or swapped Zerops bindings', async () => {
+	test('fails before provider source effects on partial, missing, stale, or swapped connection bindings', async () => {
 		const cases: Array<{
 			kind: string
 			appBinding?: { connectionId: string; installationId: number }
-			storedBinding?: { connectionId: string; installationId: number; transportKind: 'keyed-v2' }
+			storedBinding?: { connectionId: string; installationId: number }
 		}> = [
 			{ kind: 'partial', appBinding: undefined, storedBinding: undefined },
 			{
@@ -272,24 +258,26 @@ describe('provider-neutral run lifecycle', () => {
 			{
 				kind: 'stale-installation',
 				appBinding: { connectionId: 'connection-1', installationId: 84 },
-				storedBinding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+				storedBinding: { connectionId: 'connection-1', installationId: 42 },
 			},
 			{
 				kind: 'swapped-connection',
 				appBinding: { connectionId: 'connection-2', installationId: 42 },
-				storedBinding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+				storedBinding: { connectionId: 'connection-1', installationId: 42 },
 			},
 		]
 		for (const current of cases) {
 			const { db, sqlite } = createHarness()
 			if (current.storedBinding !== undefined) insertSourceConnection(sqlite, current.storedBinding)
-			const runId = await seedRun(db, {
-				provider: 'memory',
-				...(current.appBinding === undefined ? {} : { sourceBinding: current.appBinding }),
-			})
+			const runId = await seedRun(db, { provider: 'memory' })
 			sqlite.query(`UPDATE app_envs SET provider = 'zerops' WHERE app_id = 'app' AND env = 'prod'`).run()
+			// Written past the registry, which refuses an invalid binding at environment upsert.
+			if (current.appBinding !== undefined) {
+				sqlite.query(`UPDATE apps SET repo_url = 'github.com/acme/app', github_connection_id = ?, github_installation_id = ? WHERE id = 'app'`)
+					.run(current.appBinding.connectionId, current.appBinding.installationId)
+			}
 			let calls = 0
-			const provider = makeProvider([], { state: 'succeeded' }, { id: 'zerops' })
+			const provider = makeProvider([], { state: 'succeeded' }, { id: 'zerops', sourceBinding: 'connection' })
 			provider.resolveSource = () => {
 				calls++
 				return Promise.resolve({ commitSha: 'a'.repeat(40) })
@@ -322,13 +310,13 @@ describe('provider-neutral run lifecycle', () => {
 			runnerKey: 'test-runner-key',
 			resolveSource: async (input) => {
 				expect(input.expectedCommitSha).toBeUndefined()
-				expect(input.app.source).toMatchObject({ ref: 'refs/heads/deploy/prod', githubInstallationId: 42 })
-				expect(input.app.source.githubConnectionId).toBeUndefined()
+				expect(input.app.source).toMatchObject({ ref: 'refs/heads/deploy/prod' })
+				expect(input.sourceBinding).toEqual({ installationId: 42 })
 				return { commitSha }
 			},
-			prepareClone: async (source) => {
+			prepareClone: async (source, _signal, sourceBinding) => {
 				expect(source.ref).toBe(commitSha)
-				expect(source.githubInstallationId).toBe(42)
+				expect(sourceBinding).toEqual({ installationId: 42 })
 				return { repoUrl: source.repoUrl }
 			},
 			assertRunnerSourceProtocol: async () => {},
@@ -604,9 +592,9 @@ describe('provider-neutral run lifecycle', () => {
 				ref: 'refs/heads/deploy/prod',
 				workerDir: 'worker',
 				configPath: 'fabrika.config.ts',
-				githubInstallationId: 42,
 			},
 		})
+		expect(input.sourceBinding).toEqual({ installationId: 42 })
 		expect(input.environment.domain).toBe('app.example.com')
 		expect(input.environment.publicOrigin).toBe('https://public.example.com')
 		expect(input.secrets).toEqual({ API_KEY: 'prod' })
@@ -876,6 +864,7 @@ describe('provider-neutral run lifecycle', () => {
 	): ControlProvider => ({
 		id: 'memory',
 		normalizeRegistration: (input) => normalize('memory', input),
+		source: { binding: 'installation' },
 		deploy: async () => {
 			expect(await db.runs.markRunFinished(runId, 'succeeded', 0)).toBe(true)
 			return answer()

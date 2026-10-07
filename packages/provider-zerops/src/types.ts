@@ -9,7 +9,7 @@ import type {
 	ZeropsYamlRun,
 	ZeropsYamlSetup,
 } from './schema.generated'
-import type { ZeropsSourceRepository } from './source'
+import type { ZeropsSourcePrivateBindingV2, ZeropsSourceRepository } from './source'
 
 export interface ZeropsResourceContext {
 	env: string
@@ -119,7 +119,8 @@ export interface ZeropsRuntimeSource {
 	runId: string
 	repository: ZeropsSourceRepository
 	commitSha: string
-	githubInstallationId?: number
+	/** Absent for a public repository. */
+	privateBinding?: ZeropsSourcePrivateBindingV2
 }
 
 /** Credential-free recovery state persisted beside one Zerops app-version id. */

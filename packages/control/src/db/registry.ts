@@ -1,5 +1,5 @@
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
-import { type GitHubSourceTransportKind } from '../github-connection-store'
+import type { ProviderSourceBinding, ProviderSourceCapabilities } from '@fabrika/provider-contract'
 import {
 	type AppEnvInput,
 	type AppEnvRow,
@@ -13,7 +13,6 @@ import {
 	NamespaceResourceClaimConflictError,
 	type NamespaceResourceClaimOwner,
 	type NamespaceResourceClaimRow,
-	type ZeropsSourceBinding,
 } from './registry-types'
 import { firstRow } from './returning'
 
@@ -47,15 +46,14 @@ export class ControlRegistryRepository {
 		return results
 	}
 
-	/** Exact repository, connection and installation lookup for a scoped Zerops webhook. */
-	async getZeropsAppsByRepoUrlAndSourceBinding(
+	/** Exact repository, connection and installation lookup for a connection-scoped webhook. */
+	async getAppsByRepoUrlAndSourceConnection(
 		repoUrl: string,
 		connectionId: string,
 		installationId: number,
 	): Promise<AppRow[]> {
-		await this.validateZeropsSourceBinding(repoUrl, connectionId, installationId)
-		const { results } = await this.d1.prepare(`SELECT DISTINCT a.* FROM apps a
-			INNER JOIN app_envs e ON e.app_id = a.id AND e.provider = 'zerops'
+		await this.validateConnectionSourceBinding(repoUrl, connectionId, installationId)
+		const { results } = await this.d1.prepare(`SELECT a.* FROM apps a
 			INNER JOIN github_source_connections_keyed c
 				ON c.connection_id = a.github_connection_id
 				AND c.installation_id = a.github_installation_id
@@ -67,65 +65,56 @@ export class ControlRegistryRepository {
 	}
 
 	/**
-	 * Resolve the credential selector for one Zerops app environment. Public source is represented by
-	 * neither coordinate. Partial, stale, cross-owner and cross-installation bindings fail closed.
+	 * The credential selector a deploy of this app hands its provider; null for a public source. In the
+	 * `connection` mode partial, stale and cross-owner bindings fail closed (ADR-0029).
 	 */
-	async getZeropsSourceBinding(appId: string, env: string): Promise<ZeropsSourceBinding | null> {
-		const row = await this.d1.prepare(`SELECT
-				a.repo_url, a.github_connection_id, a.github_installation_id,
-				e.provider, c.transport_kind, c.app_owner
+	async getSourceBinding(appId: string, mode: ProviderSourceCapabilities['binding']): Promise<ProviderSourceBinding | null> {
+		const row = await this.d1.prepare(`SELECT a.repo_url, a.github_connection_id, a.github_installation_id, c.app_owner
 			FROM apps a
-			INNER JOIN app_envs e ON e.app_id = a.id AND e.env = ?
 			LEFT JOIN github_source_connections_keyed c
 				ON c.connection_id = a.github_connection_id
 				AND c.installation_id = a.github_installation_id
-			WHERE a.id = ?`).bind(env, appId).first<ZeropsSourceBindingRow>()
-		if (row === null || row.provider !== 'zerops') return null
+			WHERE a.id = ?`).bind(appId).first<SourceBindingRow>()
+		if (row === null) return null
 		const connectionId = row.github_connection_id
 		const installationId = row.github_installation_id
+		if (mode === 'installation') return installationId === null ? null : { installationId }
 		if (connectionId === null && installationId === null) return null
-		if (connectionId === null || installationId === null || row.transport_kind === null || row.app_owner === null) {
-			throw new Error('incomplete Zerops GitHub source binding')
+		if (connectionId === null || installationId === null || row.app_owner === null) {
+			throw new Error('incomplete GitHub source binding')
 		}
 		const repositoryOwner = githubRepositoryOwner(row.repo_url)
 		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
-			throw new Error('Zerops GitHub source binding does not own the repository')
+			throw new Error('GitHub source binding does not own the repository')
 		}
-		return {
-			connectionId,
-			installationId,
-			transportKind: parseGitHubSourceTransportKind(row.transport_kind),
-		}
+		return { connectionId, installationId }
 	}
 
-	/** Validate a proposed Zerops registration before the app row exists. */
-	async validateZeropsSourceBinding(
+	/** Validate a proposed connection binding before the app row exists. */
+	async validateConnectionSourceBinding(
 		repoUrl: string,
 		githubConnectionId: string | null,
 		githubInstallationId: number | null,
-	): Promise<ZeropsSourceBinding | null> {
+	): Promise<ProviderSourceBinding | null> {
 		if (githubConnectionId === null && githubInstallationId === null) return null
-		if (githubConnectionId === null || githubInstallationId === null) throw new Error('incomplete Zerops GitHub source binding')
-		const row = await this.d1.prepare(`SELECT transport_kind, app_owner
+		if (githubConnectionId === null || githubInstallationId === null) throw new Error('incomplete GitHub source binding')
+		const row = await this.d1.prepare(`SELECT app_owner
 			FROM github_source_connections_keyed WHERE connection_id = ? AND installation_id = ?`)
 			.bind(githubConnectionId, githubInstallationId)
-			.first<ZeropsConnectionBindingRow>()
-		if (row === null) throw new Error('unknown Zerops GitHub source binding')
+			.first<{ app_owner: string }>()
+		if (row === null) throw new Error('unknown GitHub source binding')
 		const repositoryOwner = githubRepositoryOwner(repoUrl)
 		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
-			throw new Error('Zerops GitHub source binding does not own the repository')
+			throw new Error('GitHub source binding does not own the repository')
 		}
-		return {
-			connectionId: githubConnectionId,
-			installationId: githubInstallationId,
-			transportKind: parseGitHubSourceTransportKind(row.transport_kind),
-		}
+		return { connectionId: githubConnectionId, installationId: githubInstallationId }
 	}
 
-	async validateStoredZeropsSourceBinding(appId: string): Promise<ZeropsSourceBinding | null> {
+	/** A stored connection binding must still name a connection that owns the repository. */
+	private async assertStoredSourceConnection(appId: string): Promise<void> {
 		const app = await this.getApp(appId)
-		if (app === null) return null
-		return this.validateZeropsSourceBinding(app.repo_url, app.github_connection_id, app.github_installation_id)
+		if (app === null || app.github_connection_id === null) return
+		await this.validateConnectionSourceBinding(app.repo_url, app.github_connection_id, app.github_installation_id)
 	}
 
 	async createApp(input: AppInput): Promise<AppRow> {
@@ -479,7 +468,7 @@ export class ControlRegistryRepository {
 
 	/** Upsert an (app, env) target. ON CONFLICT (app_id, env) overwrites the mutable columns. */
 	async upsertAppEnv(input: AppEnvInput): Promise<AppEnvRow> {
-		if (input.provider === 'zerops') await this.validateStoredZeropsSourceBinding(input.appId)
+		await this.assertStoredSourceConnection(input.appId)
 		return firstRow<AppEnvRow>(this.appEnvUpsertStatement(input))
 	}
 
@@ -494,7 +483,7 @@ export class ControlRegistryRepository {
 		if (input.namespaceId === null) {
 			throw new Error('namespace resource claims require an environment namespace')
 		}
-		if (input.provider === 'zerops') await this.validateStoredZeropsSourceBinding(input.appId)
+		await this.assertStoredSourceConnection(input.appId)
 		const owner: NamespaceResourceClaimOwner = {
 			namespaceId: input.namespaceId,
 			ownerAppId: input.appId,
@@ -534,8 +523,8 @@ export class ControlRegistryRepository {
 		if (appInput.id !== environmentInput.appId) {
 			throw new Error('app and environment coordinates do not match')
 		}
-		if (environmentInput.provider === 'zerops') {
-			await this.validateZeropsSourceBinding(
+		if ((appInput.githubConnectionId ?? null) !== null) {
+			await this.validateConnectionSourceBinding(
 				appInput.repoUrl,
 				appInput.githubConnectionId ?? null,
 				appInput.githubInstallationId ?? null,
@@ -783,23 +772,11 @@ export class ControlRegistryRepository {
 	}
 }
 
-interface ZeropsSourceBindingRow {
+interface SourceBindingRow {
 	repo_url: string
 	github_connection_id: string | null
 	github_installation_id: number | null
-	provider: string
-	transport_kind: string | null
 	app_owner: string | null
-}
-
-interface ZeropsConnectionBindingRow {
-	transport_kind: string
-	app_owner: string
-}
-
-function parseGitHubSourceTransportKind(value: string): GitHubSourceTransportKind {
-	if (value === 'keyed-v2') return value
-	throw new Error('invalid GitHub source transport kind')
 }
 
 function githubRepositoryOwner(repoUrl: string): string | null {

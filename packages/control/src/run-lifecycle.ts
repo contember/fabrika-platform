@@ -15,7 +15,7 @@ import type {
 	ProviderDeployOutcome,
 	ProviderEnvelope,
 	ProviderEnvironment,
-	ProviderSourceResolutionInput,
+	ProviderSourceBinding,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
@@ -136,10 +136,20 @@ const providerApp = (app: AppRow, run: RunRow): ProviderApp => ({
 		...(app.worker_dir === null ? {} : { workerDir: app.worker_dir }),
 		...(app.build_cmd === null ? {} : { buildCommand: app.build_cmd }),
 		...(app.config_path === null ? {} : { configPath: app.config_path }),
-		...(app.github_connection_id === null ? {} : { githubConnectionId: app.github_connection_id }),
-		...(app.github_installation_id === null ? {} : { githubInstallationId: app.github_installation_id }),
 	},
 })
+
+/** The app's private-source selector in the provider's declared source mode (ADR-0029); undefined for a public source. */
+const loadSourceBinding = async (deps: Pick<RunDeps, 'repositories' | 'provider'>, app: AppRow): Promise<ProviderSourceBinding | undefined> => {
+	const mode = deps.provider.source?.binding
+	if (mode === undefined) {
+		if (app.github_connection_id !== null || app.github_installation_id !== null) {
+			throw new Error(`provider "${deps.provider.id}" cannot deploy a private source`)
+		}
+		return undefined
+	}
+	return (await deps.repositories.registry.getSourceBinding(app.id, mode)) ?? undefined
+}
 
 /** Convert one validated namespace row into the provider contract. */
 const providerNamespace = (row: DeploymentNamespaceRow): ProviderDeploymentNamespace => ({
@@ -350,7 +360,7 @@ export async function executeDeploy(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
 		}
-		const sourceBinding = await deps.repositories.registry.getZeropsSourceBinding(app.id, appEnv.env)
+		const sourceBinding = await loadSourceBinding(deps, app)
 		const appInput = providerApp(app, run)
 		const environmentInput = await providerEnvironment(deps.repositories.registry, appEnv, { requireReadyNamespace: true })
 		let registration = deps.provider.normalizeRegistration({
@@ -368,22 +378,12 @@ export async function executeDeploy(
 			|| registration.environment.namespace?.env !== environmentInput.namespace?.env
 			|| registration.environment.namespace?.exclusiveAppId !== environmentInput.namespace?.exclusiveAppId
 			|| registration.environment.namespace?.target.provider !== environmentInput.namespace?.target.provider
-			|| registration.app.source.githubConnectionId !== appInput.source.githubConnectionId
-			|| registration.app.source.githubInstallationId !== appInput.source.githubInstallationId
 		) {
 			throw new Error('provider returned a deploy registration for different coordinates')
 		}
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
 		const abortController = owner.work
-		const resolveSourceWithBinding = deps.provider.resolveSourceWithBinding
-		const resolveSource = sourceBinding === null
-			? deps.provider.resolveSource
-			: resolveSourceWithBinding === undefined
-			? undefined
-			: (input: ProviderSourceResolutionInput) => resolveSourceWithBinding({ ...input, sourceBinding })
-		if (sourceBinding !== null && resolveSource === undefined) {
-			throw new Error(`provider "${deps.provider.id}" cannot resolve a bound private source`)
-		}
+		const resolveSource = deps.provider.resolveSource
 		if (message.dryRun !== true && resolveSource !== undefined) {
 			await owner.refreshCancellation()
 			owner.work.signal.throwIfAborted()
@@ -395,6 +395,7 @@ export async function executeDeploy(
 				app: registration.app,
 				environment: registration.environment,
 				...(expectedCommitSha === undefined ? {} : { expectedCommitSha }),
+				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				signal: abortController.signal,
 			})
 			const commitSha = immutableGitObjectId(resolution.commitSha, 'resolved commit')
@@ -473,6 +474,7 @@ export async function executeDeploy(
 				managedEnvironment,
 				...(returnOrigins === undefined ? {} : { returnOrigins }),
 				dryRun: message.dryRun === true,
+				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
 				signal: abortController.signal,
 				events: {
@@ -501,15 +503,7 @@ export async function executeDeploy(
 					},
 				},
 			}
-			if (sourceBinding === null) {
-				outcome = await deps.provider.deploy(deployInput)
-			} else {
-				const deployWithBinding = deps.provider.deployWithBinding
-				if (deployWithBinding === undefined) {
-					throw new Error(`provider "${deps.provider.id}" cannot deploy a bound private source`)
-				}
-				outcome = await deployWithBinding({ ...deployInput, sourceBinding })
-			}
+			outcome = await deps.provider.deploy(deployInput)
 		} finally {
 			await runLogs.flush()
 		}

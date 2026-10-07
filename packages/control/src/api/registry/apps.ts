@@ -100,10 +100,13 @@ export async function sourceBindingFields(
 	repoUrl: string,
 	existing?: AppRow,
 ): Promise<{ githubConnectionId?: string | null; githubInstallationId?: number | null }> {
-	if (c.provider.id !== 'zerops') {
+	const mode = c.provider.source?.binding
+	if (mode !== 'connection') {
+		if (input.githubInstallationId === null) return { githubInstallationId: null }
+		if (input.githubInstallationId === undefined && input.resolveInstallationId !== true) return {}
+		if (mode === undefined) fail(409, `provider ${c.provider.id} deploys public sources only`)
 		if (input.githubInstallationId !== undefined) return { githubInstallationId: input.githubInstallationId }
-		if (input.resolveInstallationId === true) return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
-		return {}
+		return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
 	}
 	if (existing?.github_connection_id !== null && existing?.github_connection_id !== undefined) {
 		if (repoOwnerChanged(existing.repo_url, repoUrl) || input.githubInstallationId === null) {
@@ -113,7 +116,7 @@ export async function sourceBindingFields(
 	if (input.githubInstallationId === null) return { githubConnectionId: null, githubInstallationId: null }
 	if (input.githubInstallationId !== undefined || input.resolveInstallationId === true) {
 		const repository = parseGitHubRepo(repoUrl)
-		if (repository === null) fail(400, 'a private Zerops source must be a GitHub repository')
+		if (repository === null) fail(400, 'a private source must be a GitHub repository')
 		const connection = await c.repositories.githubConnections.getConnectionByOwner(repository.owner)
 		if (connection === null) fail(409, 'the repository organization has no GitHub source connection')
 		if (

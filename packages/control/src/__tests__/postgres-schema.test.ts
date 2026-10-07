@@ -748,8 +748,8 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				{ id: 'cloudflare-only', github_connection_id: null },
 				{ id: 'zerops-match', github_connection_id: 'legacy-connection' },
 			])
-			await expect(upgraded.registry.getZeropsSourceBinding('zerops-match', 'prod')).rejects.toThrow('incomplete')
-			expect(await upgraded.registry.getZeropsSourceBinding('cloudflare-only', 'prod')).toBeNull()
+			await expect(upgraded.registry.getSourceBinding('zerops-match', 'connection')).rejects.toThrow('incomplete')
+			expect(await upgraded.registry.getSourceBinding('cloudflare-only', 'installation')).toEqual({ installationId: 45 })
 			// 0018 removes only adoption attempts; repair evidence survives and still blocks a new setup.
 			const vault = await Vault.create(upgrade, kek())
 			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('blocked-by-repair'), 'opaque-state')

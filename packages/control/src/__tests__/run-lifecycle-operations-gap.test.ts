@@ -64,6 +64,7 @@ function deps(db: ControlRepositories, logs: BlobStore, inputs: ProviderDeployIn
 	const provider: ControlProvider = {
 		id: PROVIDER_ID,
 		normalizeRegistration: (input) => input,
+		source: { binding: 'installation' },
 		deploy: (input) => {
 			inputs.push(input)
 			return Promise.resolve({ state: 'succeeded' })
@@ -148,6 +149,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 		const provider: ControlProvider = {
 			id: PROVIDER_ID,
 			normalizeRegistration: (input) => input,
+			source: { binding: 'installation' },
 			deploy: () => {
 				writes.push('deploy')
 				return Promise.resolve({ state: 'succeeded' })
