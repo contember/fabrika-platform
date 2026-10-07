@@ -72,7 +72,7 @@ export function scheduleNamespacePoll(
 /** Placements that can own this exact app environment without changing provider coordinates. */
 export function compatibleNamespaces(
 	appId: string,
-	environment: AppEnvDto,
+	environment: Pick<AppEnvDto, 'env' | 'provider'>,
 	namespaces: readonly DeploymentNamespaceDto[],
 ): DeploymentNamespaceDto[] {
 	return namespaces.filter((namespace) =>

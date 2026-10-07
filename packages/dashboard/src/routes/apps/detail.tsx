@@ -17,19 +17,28 @@ import { fmtDate } from '../../lib/format'
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
-		const [app, envs, secrets, vars, runs, namespaces] = await Promise.all([
+		const [app, envs, secrets, vars, runs, namespaces, installation] = await Promise.all([
 			api.apps.get({ appId: params.id }),
 			api.apps.environments.list({ appId: params.id }),
 			api.apps.secrets.list({ appId: params.id }),
 			api.apps.variables.list({ appId: params.id }),
 			api.runs.list({ appId: params.id, limit: 10 }),
 			api.namespaces.list(),
+			api.installation(),
 		])
-		return { app, envs: envs.items, secrets: secrets.items, vars: vars.items, runs: runs.items, namespaces: namespaces.items }
+		return {
+			app,
+			envs: envs.items,
+			secrets: secrets.items,
+			vars: vars.items,
+			runs: runs.items,
+			namespaces: namespaces.items,
+			providerId: installation.provider,
+		}
 	})
 	.route('/apps/:id')
 	.render(({ data, invalidate }) => {
-		const { app, envs, secrets, vars, runs, namespaces } = data
+		const { app, envs, secrets, vars, runs, namespaces, providerId } = data
 		const [confirming, setConfirming] = useState(false)
 		const navigate = useNavigate()
 
@@ -66,7 +75,7 @@ export default createPage()
 					<Link to="builder/authorize">Connection instructions and your issued builder keys</Link>
 				</section>
 				<BuildConfigSection app={app} onDone={invalidate} />
-				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} onDone={invalidate} />
+				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
 				<SecretsSection appId={app.id} secrets={secrets} envs={envs} onDone={invalidate} />
 				<VariablesSection appId={app.id} vars={vars} envs={envs} onDone={invalidate} />
 				<RecentRunsSection runs={runs} />

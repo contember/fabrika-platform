@@ -23,6 +23,7 @@ import type {
 	GitHubSourceConnectionListInput,
 	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionStatusDto,
+	InstallationDto,
 	ListResponse,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
@@ -126,6 +127,7 @@ export interface GitHubSourceConnectionRpcContract {
 
 /** Portable Delivery control API shared by browser and machine callers. */
 export interface ControlRpcContract {
+	installation: RpcProcedure<void, InstallationDto>
 	builderPairing: {
 		inspect: RpcProcedure<BuilderPairingProofRequest, InspectDeviceAuthorizationResult>
 		approve: RpcProcedure<BuilderPairingProofRequest, ApproveDeviceAuthorizationResult>

@@ -190,6 +190,7 @@ export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
 export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
 	return rpc.router({
+		installation: rpc.procedure.query(({ ctx }) => ({ provider: ctx.provider.id })),
 		builderPairing: rpc.router({
 			inspect: rpc.procedure.input(pairingProof).query(({ ctx, input }) => controlCall(() => inspectBuilderPairing(pairingContext(ctx), input))),
 			approve: rpc.procedure.input(pairingProof).mutation(({ ctx, input }) => controlCall(() => approveBuilderPairing(pairingContext(ctx), input))),

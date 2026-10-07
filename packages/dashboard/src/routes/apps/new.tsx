@@ -2,17 +2,20 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { api, ApiError, type RegisterAppRequest } from '../../lib/api'
-import { parseManifestEditor } from '../../lib/manifest-editor'
+import { formProvider, type ProviderRegistrationPayload, providerRegistrationPayload } from '../../lib/provider-registration'
 
 // Onboarding. "Paste a GitHub repo URL + domain, pick an env" creates the app and its first env in one
-// `register-app` call. The built manifest is provider-owned input; control reserves its service names,
-// provisions them codeless, and persists the discovered target id.
+// `register-app` call. The provider input follows the installation: Cloudflare takes the app's config
+// path; Zerops takes a built manifest, whose service names control reserves in a ready namespace.
 //
 // This used to be the console's landing page. It is a form, not a report — the overview earns that slot
 // now, and this is the step you take from it.
 
 export default createPage()
-	.loader(async () => ({ namespaces: await api.namespaces.list() }))
+	.loader(async () => {
+		const [installation, namespaces] = await Promise.all([api.installation(), api.namespaces.list()])
+		return { installation, namespaces }
+	})
 	.route('/apps/new')
 	.render(({ data }) => {
 		const navigate = useNavigate()
@@ -25,18 +28,21 @@ export default createPage()
 		const [triggerRef, setTriggerRef] = useState('')
 		const [namespaceId, setNamespaceId] = useState('')
 		const [manifest, setManifest] = useState('')
+		const [configPath, setConfigPath] = useState('fabrika.config.ts')
 		const [installationId, setInstallationId] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
 
+		const provider = formProvider(data.installation.provider)
 		const ready = data.namespaces.items.filter((namespace) => namespace.state === 'ready' && namespace.env === env)
 
 		async function submit(e: React.FormEvent) {
 			e.preventDefault()
 			setError(null)
-			let parsedManifest: ReturnType<typeof parseManifestEditor>
+			if (provider === null) return
+			let registration: ProviderRegistrationPayload
 			try {
-				parsedManifest = parseManifestEditor(manifest)
+				registration = providerRegistrationPayload(provider, { configPath, manifest, namespaceId })
 			} catch (cause) {
 				setError(cause instanceof Error ? cause.message : 'Paste a valid fabrika.manifest.json.')
 				return
@@ -53,11 +59,7 @@ export default createPage()
 				...(domain.trim() === '' ? {} : { domain: domain.trim() }),
 				...(publicOrigin.trim() === '' ? {} : { publicOrigin: publicOrigin.trim() }),
 				...(triggerRef.trim() === '' ? {} : { triggerRef: triggerRef.trim() }),
-				namespaceId,
-				// The pasted manifest declares the version its provider's codec accepts. A literal here goes
-				// stale the moment that codec moves, and registration then refuses every artifact.
-				target: { provider: 'zerops', version: parsedManifest.version, payload: {} },
-				artifact: { provider: 'zerops', version: parsedManifest.version, payload: parsedManifest.payload },
+				...registration,
 				...installField,
 			}
 			setBusy(true)
@@ -80,10 +82,17 @@ export default createPage()
 					</Link>
 					<h1>Onboard an app</h1>
 					<p className="hint">
-						Register a built manifest into a ready deployment namespace. fabrika reserves the service names before it creates any provider resource.
+						{provider === 'cloudflare'
+							? 'Register an app by the path of its fabrika config module in the repository.'
+							: 'Register a built manifest into a ready deployment namespace. fabrika reserves the service names before it creates any provider resource.'}
 					</p>
 				</div>
 
+				{provider === null && (
+					<p className="error-text" role="alert">
+						This console has no onboarding form for provider <code>{data.installation.provider}</code>.
+					</p>
+				)}
 				<form className="panel form" onSubmit={submit}>
 					<label>
 						App id
@@ -149,37 +158,54 @@ export default createPage()
 						/>
 						<span className="hint">Push to this git ref auto-deploys this env. Leave empty for manual-only (Deploy button).</span>
 					</label>
-					<label>
-						Deployment namespace
-						<select
-							required
-							value={namespaceId}
-							onChange={(e) => setNamespaceId(e.target.value)}
-						>
-							<option value="">Select a ready namespace</option>
-							{ready.map((namespace) => <option key={namespace.id} value={namespace.id}>{namespace.id}</option>)}
-						</select>
-						{ready.length === 0 && (
-							<span className="hint">
-								No ready namespace for <code>{env || 'this env'}</code> yet — <Link to="namespaces/create">provision one</Link> first.
-							</span>
-						)}
-					</label>
-					<label>
-						Built fabrika manifest
-						<textarea
-							required
-							rows={10}
-							value={manifest}
-							onChange={(e) => setManifest(e.target.value)}
-							placeholder='{ "manifestVersion": 2, "app": { … }, "target": { … } }'
-							autoComplete="off"
-							spellCheck={false}
-						/>
-						<span className="hint">
-							Generate it in the app repository with <code>fabrika app build --env={env || 'prod'}</code>.
-						</span>
-					</label>
+					{provider === 'cloudflare' && (
+						<label>
+							Config path
+							<input
+								required
+								value={configPath}
+								onChange={(e) => setConfigPath(e.target.value)}
+								placeholder="fabrika.config.ts"
+								autoComplete="off"
+							/>
+							<span className="hint">Path of the app's fabrika config module in the repository.</span>
+						</label>
+					)}
+					{provider === 'zerops' && (
+						<>
+							<label>
+								Deployment namespace
+								<select
+									required
+									value={namespaceId}
+									onChange={(e) => setNamespaceId(e.target.value)}
+								>
+									<option value="">Select a ready namespace</option>
+									{ready.map((namespace) => <option key={namespace.id} value={namespace.id}>{namespace.id}</option>)}
+								</select>
+								{ready.length === 0 && (
+									<span className="hint">
+										No ready namespace for <code>{env || 'this env'}</code> yet — <Link to="namespaces/create">provision one</Link> first.
+									</span>
+								)}
+							</label>
+							<label>
+								Built fabrika manifest
+								<textarea
+									required
+									rows={10}
+									value={manifest}
+									onChange={(e) => setManifest(e.target.value)}
+									placeholder='{ "manifestVersion": 3, "app": { … }, "target": { … } }'
+									autoComplete="off"
+									spellCheck={false}
+								/>
+								<span className="hint">
+									Generate it in the app repository with <code>fabrika app build --env={env || 'prod'}</code>.
+								</span>
+							</label>
+						</>
+					)}
 					<label>
 						GitHub installation id (optional)
 						<input
@@ -196,7 +222,7 @@ export default createPage()
 					</label>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
-						<button type="submit" className="primary" disabled={busy}>
+						<button type="submit" className="primary" disabled={busy || provider === null || (provider === 'cloudflare' && configPath.trim() === '')}>
 							{busy ? 'Onboarding…' : 'Register app'}
 						</button>
 						<Link to="apps" className="btn">Cancel</Link>

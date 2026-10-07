@@ -19,6 +19,12 @@ export interface CursorList<T> {
 
 export type ProviderEnvelopeDto = ProviderEnvelope
 
+/** What the console needs to know about the installation it runs in. */
+export interface InstallationDto {
+	/** The id of the one provider bundle this installation composes (ADR-0011). */
+	readonly provider: string
+}
+
 export interface GitHubSourceRepositoryDto {
 	readonly owner: string
 	readonly name: string

@@ -4,18 +4,22 @@ import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type PutApp
 import { shortRef } from '../../lib/format'
 import { cloudflareArtifactWithConfigPath, cloudflareConfigPath } from '../../lib/manifest-editor'
 import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
+import { type FormProvider, formProvider, type ProviderRegistrationPayload, providerRegistrationPayload } from '../../lib/provider-registration'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Icon } from '../Icon'
 import { EmptyState, Table } from '../Table'
 
 export function EnvironmentsSection(
-	{ appId, envs, namespaces, onDone }: {
+	{ appId, envs, namespaces, providerId, onDone }: {
 		appId: string
 		envs: AppEnvDto[]
 		namespaces: DeploymentNamespaceDto[]
+		/** The installation's provider; it decides what a new environment's form collects. */
+		providerId: string
 		onDone: () => void
 	},
 ) {
+	const provider = formProvider(providerId)
 	return (
 		<section>
 			<div className="section-head">
@@ -46,7 +50,13 @@ export function EnvironmentsSection(
 			>
 				{envs.map((env) => <EnvRow key={env.env} appId={appId} env={env} namespaces={namespaces} onDone={onDone} />)}
 			</Table>
-			<AddEnvForm appId={appId} existing={envs} onDone={onDone} />
+			{provider === null
+				? (
+					<p className="hint">
+						This console has no environment form for provider <code>{providerId}</code>.
+					</p>
+				)
+				: <AddEnvForm appId={appId} existing={envs} namespaces={namespaces} provider={provider} onDone={onDone} />}
 		</section>
 	)
 }
@@ -102,6 +112,8 @@ function EnvRow(
 				appId={appId}
 				env={env.env}
 				initial={env}
+				provider={null}
+				namespaces={namespaces}
 				onDone={() => {
 					setEditing(false)
 					onDone()
@@ -219,10 +231,13 @@ function NamespaceAssignment(
 
 /** Shared env editor — an inline table row form for both edit and add. */
 function EnvForm(
-	{ appId, env, initial, onDone, onCancel, lockEnv = true }: {
+	{ appId, env, initial, provider, namespaces, onDone, onCancel, lockEnv = true }: {
 		appId: string
 		env: string
 		initial: AppEnvDto | null
+		/** Decides a NEW environment's fields and envelopes; an edit keeps the stored envelopes. */
+		provider: FormProvider | null
+		namespaces: DeploymentNamespaceDto[]
 		onDone: () => void
 		onCancel: () => void
 		lockEnv?: boolean
@@ -234,24 +249,44 @@ function EnvForm(
 	const [triggerRef, setTriggerRef] = useState(initial?.triggerRef ?? '')
 	const initialConfigPath = initial === null ? 'fabrika.config.ts' : cloudflareConfigPath(initial.artifact)
 	const [configPath, setConfigPath] = useState(initialConfigPath ?? '')
+	const [manifest, setManifest] = useState('')
+	const [namespaceId, setNamespaceId] = useState('')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	const addingZerops = initial === null && provider === 'zerops'
+	const ready = provider === null ? [] : compatibleNamespaces(appId, { env: envName.trim(), provider }, namespaces)
+	const providerFieldsMissing = addingZerops
+		? manifest.trim() === '' || namespaceId === ''
+		: initialConfigPath !== null && configPath.trim() === ''
+
+	function placement(): ProviderRegistrationPayload | null {
+		if (initial !== null) {
+			return {
+				namespaceId: initial.namespaceId,
+				target: initial.target,
+				artifact: initialConfigPath === null ? initial.artifact : cloudflareArtifactWithConfigPath(initial.artifact, configPath.trim()),
+			}
+		}
+		return provider === null ? null : providerRegistrationPayload(provider, { configPath, manifest, namespaceId })
+	}
 
 	async function save() {
-		setBusy(true)
 		setError(null)
+		let resolved: ProviderRegistrationPayload | null
+		try {
+			resolved = placement()
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : 'Paste a valid fabrika.manifest.json.')
+			return
+		}
+		if (resolved === null) return
+		setBusy(true)
 		try {
 			const body: PutAppEnvRequest = {
 				domain: domain.trim() === '' ? null : domain.trim(),
 				publicOrigin: publicOrigin.trim() === '' ? null : publicOrigin.trim(),
 				triggerRef: triggerRef.trim() === '' ? null : triggerRef.trim(),
-				namespaceId: initial?.namespaceId ?? null,
-				target: initial?.target ?? { provider: 'cloudflare', version: 1, payload: {} },
-				artifact: initial === null
-					? { provider: 'cloudflare', version: 1, payload: { configPath: configPath.trim() } }
-					: initialConfigPath === null
-					? initial.artifact
-					: cloudflareArtifactWithConfigPath(initial.artifact, configPath.trim()),
+				...resolved,
 			}
 			await api.apps.environments.put({ appId, env: envName.trim(), environment: body })
 			onDone()
@@ -285,10 +320,31 @@ function EnvForm(
 				{error && <div className="error-text small">{error}</div>}
 			</td>
 			<td>
-				{initial?.namespaceId === null || initial === null ? <span className="muted">unassigned</span> : <code>{initial.namespaceId}</code>}
+				{addingZerops
+					? (
+						<select aria-label="Placement" required value={namespaceId} onChange={(e) => setNamespaceId(e.target.value)}>
+							<option value="">Select a ready namespace</option>
+							{ready.map((namespace) => <option key={namespace.id} value={namespace.id}>{namespace.id}</option>)}
+						</select>
+					)
+					: initial?.namespaceId === null || initial === null
+					? <span className="muted">unassigned</span>
+					: <code>{initial.namespaceId}</code>}
 			</td>
 			<td>
-				{initial !== null && initialConfigPath === null
+				{addingZerops
+					? (
+						<textarea
+							required
+							rows={4}
+							aria-label="Built fabrika manifest"
+							value={manifest}
+							onChange={(e) => setManifest(e.target.value)}
+							placeholder='{ "manifestVersion": 3, … }'
+							spellCheck={false}
+						/>
+					)
+					: initial !== null && initialConfigPath === null
 					? <code>{initial.provider}@{initial.artifact.version}</code>
 					: (
 						<input
@@ -305,7 +361,7 @@ function EnvForm(
 					type="button"
 					className="primary small"
 					onClick={save}
-					disabled={busy || envName.trim() === '' || (initialConfigPath !== null && configPath.trim() === '')}
+					disabled={busy || envName.trim() === '' || providerFieldsMissing}
 				>
 					{busy ? 'Saving…' : 'Save'}
 				</button>
@@ -315,7 +371,15 @@ function EnvForm(
 	)
 }
 
-function AddEnvForm({ appId, existing, onDone }: { appId: string; existing: AppEnvDto[]; onDone: () => void }) {
+function AddEnvForm(
+	{ appId, existing, namespaces, provider, onDone }: {
+		appId: string
+		existing: AppEnvDto[]
+		namespaces: DeploymentNamespaceDto[]
+		provider: FormProvider
+		onDone: () => void
+	},
+) {
 	const [open, setOpen] = useState(false)
 
 	if (!open) {
@@ -337,6 +401,8 @@ function AddEnvForm({ appId, existing, onDone }: { appId: string; existing: AppE
 						appId={appId}
 						env={existing.length === 0 ? 'prod' : ''}
 						initial={null}
+						provider={provider}
+						namespaces={namespaces}
 						lockEnv={false}
 						onDone={() => {
 							setOpen(false)
