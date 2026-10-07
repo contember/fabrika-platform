@@ -97,4 +97,24 @@ describe('Sentry-compatible ingest kernel', () => {
 		expect(event?.exception).toEqual({ type: 'Message', value: 'worker stopped', frames: [] })
 		expect(event?.eventId).toMatch(/^[0-9a-f]{32}$/)
 	})
+
+	test('reads tags as a record or as key/value pairs', () => {
+		const fromRecord = buildParsedEvent('worker', { message: 'm', tags: { region: 'eu', build: 17, empty: null } }, 100)
+		expect(fromRecord?.tags).toEqual({ region: 'eu', build: '17' })
+		const fromPairs = buildParsedEvent('worker', { message: 'm', tags: [['region', 'eu'], ['build', 17], ['broken'], [null, 'x']] }, 100)
+		expect(fromPairs?.tags).toEqual({ region: 'eu', build: '17' })
+		expect(buildParsedEvent('worker', { message: 'm', tags: 'not tags' }, 100)?.tags).toEqual({})
+	})
+
+	test('ingests a bare exception whose type key holds a non-string', () => {
+		for (const type of [null, 42]) {
+			expect(buildParsedEvent('worker', { exception: { type } }, 100)?.exception).toEqual({ type: 'Error', value: '', frames: [] })
+		}
+	})
+
+	test('ignores a __proto__ tag key', () => {
+		const event = buildParsedEvent('worker', { message: 'm', tags: Object.fromEntries([['__proto__', 'x'], ['region', 'eu']]) }, 100)
+		expect(event?.tags).toEqual({ region: 'eu' })
+		expect(Object.keys(event?.tags ?? {})).toEqual(['region'])
+	})
 })

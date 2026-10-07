@@ -1,7 +1,6 @@
-import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
+import { LOCAL_ENVIRONMENT, parseJsonStringArray, readEnvironmentName } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
 import { ResendEmailSender } from '@fabrika/email/resend'
-import { z } from 'zod'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
@@ -57,18 +56,6 @@ export interface Config {
 	readonly issuer: string
 }
 
-/** Parse a JSON array of strings (the central human-domain/email lists); [] on anything malformed. */
-const stringArraySchema = z.array(z.unknown()).transform((values) => values.filter((value): value is string => typeof value === 'string'))
-
-function parseStringArray(raw: string): string[] {
-	try {
-		const parsed = stringArraySchema.safeParse(JSON.parse(raw))
-		return parsed.success ? parsed.data : []
-	} catch {
-		return []
-	}
-}
-
 /**
  * Parse `ADMIN_ORIGINS` into canonical origins. A malformed entry is REFUSED rather than skipped:
  * this list is the only thing standing between the console and a hostile page, and an operator who
@@ -76,7 +63,7 @@ function parseStringArray(raw: string): string[] {
  */
 function parseAdminOrigins(raw: string): string[] {
 	const origins: string[] = []
-	for (const value of parseStringArray(raw)) {
+	for (const value of parseJsonStringArray(raw)) {
 		const normalized = normalizeOrigin(value)
 		if (normalized === null) {
 			throw new Error(`ADMIN_ORIGINS holds a value that is not an absolute http(s) origin: ${value}`)
@@ -122,7 +109,7 @@ function parseAdminAudiences(raw: string | undefined): ReadonlySet<string> {
 }
 
 function parseBootstrapAdmins(raw: string): Set<string> {
-	return new Set(parseStringArray(raw).map(normalizeEmailIdentity).filter((value) => value !== ''))
+	return new Set(parseJsonStringArray(raw).map(normalizeEmailIdentity).filter((value) => value !== ''))
 }
 
 export function buildServices(env: Env): Services {
@@ -143,8 +130,8 @@ export function buildServices(env: Env): Services {
 		email: buildEmailSender(env),
 		config: {
 			human: {
-				emailDomains: parseStringArray(env.HUMAN_EMAIL_DOMAINS),
-				emails: parseStringArray(env.HUMAN_EMAILS),
+				emailDomains: parseJsonStringArray(env.HUMAN_EMAIL_DOMAINS),
+				emails: parseJsonStringArray(env.HUMAN_EMAILS),
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
 			adminOrigins: parseAdminOrigins(env.ADMIN_ORIGINS),

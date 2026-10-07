@@ -1,3 +1,4 @@
+import { ConflictError } from '@fabrika/app'
 import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
@@ -11,6 +12,7 @@ import {
 	type RegistryUseCaseContext,
 	updateAppUseCase,
 } from '../api/registry'
+import { normalizeRegistration } from '../api/registry/registration'
 import { uuidv7 } from '../db'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
@@ -1053,5 +1055,30 @@ describe('the namespace proxy follows the registry', () => {
 			triggerRef: 'refs/tags/v*',
 		})
 		expect(recording.synced).toEqual([])
+	})
+})
+
+describe('provider registration normalization errors', () => {
+	const envelope: ProviderEnvelope = { provider: 'harbor', version: 1, payload: {} }
+	const app = { id: 'app', source: { repoUrl: 'github.com/acme/app', ref: 'main' } }
+	const environment = { appId: 'app', env: 'prod', target: envelope, artifact: envelope }
+	const throwing = (cause: unknown): ControlProvider => ({
+		id: 'harbor',
+		normalizeRegistration: () => {
+			throw cause
+		},
+		deploy: () => Promise.resolve({ state: 'succeeded' }),
+	})
+
+	test('a structural provider error keeps its own status', () => {
+		expect(() => normalizeRegistration(throwing(new ConflictError('already claimed')), app, environment)).toThrow(
+			expect.objectContaining({ httpStatus: 409, type: 'conflict', message: 'already claimed' }),
+		)
+	})
+
+	test('any other provider error becomes a 400 with its message', () => {
+		expect(() => normalizeRegistration(throwing(new Error('bad target')), app, environment)).toThrow(
+			expect.objectContaining({ httpStatus: 400, type: 'bad_request', message: 'bad target' }),
+		)
 	})
 })

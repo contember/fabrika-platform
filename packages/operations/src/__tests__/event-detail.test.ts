@@ -102,6 +102,20 @@ describe('event detail and source context', () => {
 		expect(detail.traceId).toBe('trace-1')
 	})
 
+	test('reads tags as a record or as key/value pairs, and tolerates malformed fields', async () => {
+		const fromRecord = await parseEventDetail(JSON.stringify({ tags: { region: 'eu', build: 17, empty: null } }), 'source-a', reader({}))
+		expect(fromRecord.tags).toEqual([{ key: 'build', value: '17' }, { key: 'region', value: 'eu' }])
+		const fromPairs = await parseEventDetail(
+			JSON.stringify({ tags: [['region', 'eu'], ['build', 17], ['broken'], 'loose', [null, 'x']], user: 'nobody', breadcrumbs: 3, contexts: [] }),
+			'source-a',
+			reader({}),
+		)
+		expect(fromPairs.tags).toEqual([{ key: 'build', value: '17' }, { key: 'region', value: 'eu' }])
+		expect(fromPairs.user).toBeNull()
+		expect(fromPairs.breadcrumbs).toEqual([])
+		expect(fromPairs.runtime).toBeNull()
+	})
+
 	test('retains malformed event bytes for forensics', async () => {
 		const detail = await parseEventDetail('{broken', 'source-a', reader({}))
 		expect(detail.rawEvent).toBe('{broken')

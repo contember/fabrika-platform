@@ -1,3 +1,4 @@
+import { isStructuralError } from '@fabrika/app'
 import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
@@ -160,7 +161,7 @@ export function normalizeRegistration(provider: ControlProvider, app: ProviderAp
 		) fail(400, 'provider returned a registration for different coordinates')
 		return registration
 	} catch (cause) {
-		if (isDomainError(cause)) throw cause
+		if (isStructuralError(cause)) throw cause
 		fail(400, cause instanceof Error ? cause.message : 'invalid provider registration')
 	}
 }
@@ -226,13 +227,6 @@ export function preparationFailure(cause: unknown): string {
 	const reason = cause instanceof Error && cause.message !== '' ? cause.message.slice(0, 300) : 'unknown error'
 	console.error(`provider registration preparation failed: ${reason}`)
 	return 'provider registration preparation failed'
-}
-
-function isDomainError(cause: unknown): cause is { httpStatus: number; type: string } {
-	return typeof cause === 'object'
-		&& cause !== null
-		&& typeof Reflect.get(cause, 'httpStatus') === 'number'
-		&& typeof Reflect.get(cause, 'type') === 'string'
 }
 
 export function toAppEnvDto(row: AppEnvRow): AppEnvDto {

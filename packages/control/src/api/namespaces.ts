@@ -1,3 +1,4 @@
+import { isStructuralError } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
 import { API_KEY_PREFIX } from '@fabrika/auth-core'
 import type {
@@ -284,7 +285,7 @@ function normalizeNamespace(
 		if (!sameCoordinates(normalized, namespace, providerId)) fail(400, 'provider returned a namespace for different coordinates')
 		return normalized
 	} catch (cause) {
-		if (isDomainError(cause)) throw cause
+		if (isStructuralError(cause)) throw cause
 		fail(400, cause instanceof Error ? cause.message : 'invalid deployment namespace')
 	}
 }
@@ -469,7 +470,7 @@ export async function planNamespaceUseCase(
 		const normalized = normalizeNamespace(capabilities, c.provider.id, planned.namespace)
 		return { namespace: normalized, presentation: operator.present(normalized) }
 	} catch (cause) {
-		if (isDomainError(cause)) throw cause
+		if (isStructuralError(cause)) throw cause
 		fail(400, cause instanceof Error ? cause.message : 'invalid namespace plan')
 	}
 }
@@ -607,8 +608,4 @@ function toRemovedDetail(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow
 	} catch {
 		return { ...toNamespaceDto(row), presentation: null }
 	}
-}
-
-function isDomainError(cause: unknown): boolean {
-	return typeof cause === 'object' && cause !== null && typeof Reflect.get(cause, 'httpStatus') === 'number'
 }

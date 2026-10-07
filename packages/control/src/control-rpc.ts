@@ -1,4 +1,4 @@
-import { initRpc, type RpcRouterFor } from '@fabrika/app'
+import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
 import {
 	BUILDER_APPROVAL_VERIFIER,
@@ -108,7 +108,6 @@ const createReceiptInput = pairingProof.extend({
 })
 const nonEmpty = z.string().min(1)
 const nullableString = z.string().nullable().optional()
-const providerEnvelope = providerEnvelopeSchema.passthrough()
 const jsonValue = jsonValueSchema
 const appOptionalFields = {
 	defaultBranch: z.string().optional(),
@@ -128,8 +127,8 @@ const appEnvironmentBody = z.object({
 	publicOrigin: nullableString,
 	triggerRef: nullableString,
 	namespaceId: nullableString,
-	target: providerEnvelope,
-	artifact: providerEnvelope,
+	target: providerEnvelopeSchema,
+	artifact: providerEnvelopeSchema,
 })
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
 const secretBody = z.object({
@@ -146,7 +145,7 @@ const variableBody = z.object({
 const putVariableInput = z.object({ appId: nonEmpty, variable: variableBody })
 const secretValueInput = z.object({ appId: nonEmpty, name: nonEmpty, env: nullableString, value: z.string() })
 const namespaceId = z.object({ namespaceId: nonEmpty })
-const namespaceBody = z.object({ id: nonEmpty, env: nonEmpty, exclusiveAppId: nullableString, target: providerEnvelope })
+const namespaceBody = z.object({ id: nonEmpty, env: nonEmpty, exclusiveAppId: nullableString, target: providerEnvelopeSchema })
 const adoptNamespaceInput = z.object({ namespaceId: nonEmpty, namespace: namespaceBody.omit({ id: true }) })
 const planNamespaceInput = z.object({
 	id: nonEmpty,
@@ -172,8 +171,8 @@ const registerInput = z.object({
 	publicOrigin: nullableString,
 	triggerRef: nullableString,
 	namespaceId: nullableString,
-	target: providerEnvelope,
-	artifact: providerEnvelope,
+	target: providerEnvelopeSchema,
+	artifact: providerEnvelopeSchema,
 	...appOptionalFields,
 })
 const githubOwner = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
@@ -402,13 +401,6 @@ async function controlCall<T>(run: () => Promise<T>): Promise<T> {
 	} catch (cause) {
 		if (isStructuralError(cause)) throw cause
 		console.error('control RPC request failed')
-		throw Object.assign(new Error('internal error'), { httpStatus: 500, type: 'internal' })
+		throw new HttpError(500, 'internal', 'internal error')
 	}
-}
-
-function isStructuralError(cause: unknown): boolean {
-	return typeof cause === 'object'
-		&& cause !== null
-		&& typeof Reflect.get(cause, 'httpStatus') === 'number'
-		&& typeof Reflect.get(cause, 'type') === 'string'
 }

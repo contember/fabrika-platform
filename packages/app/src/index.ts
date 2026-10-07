@@ -24,7 +24,9 @@ export {
 	defaultOnError,
 	ForbiddenError,
 	HttpError,
+	isStructuralError,
 	NotFoundError,
+	type StructuralError,
 	toErrorResponse,
 	UnauthorizedError,
 } from './errors.js'

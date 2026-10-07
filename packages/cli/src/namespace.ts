@@ -146,6 +146,7 @@ const controlClient = (
 		},
 	})
 
+// Passthrough on purpose: the operator sees the whole namespace detail, this only checks it is one.
 const namespaceResponseSchema = z.object({ id: z.string(), state: z.enum(['pending', 'provisioning', 'ready', 'failed']) }).passthrough()
 const writeNamespace = (deps: ZeropsNamespaceCommandDependencies, result: unknown): void => {
 	const parsed = namespaceResponseSchema.safeParse(result)

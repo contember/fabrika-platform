@@ -2,7 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { defineApp } from '../app.js'
-import { NotFoundError } from '../errors.js'
+import { isStructuralError, NotFoundError } from '../errors.js'
 import type { Middleware } from '../middleware.js'
 import { route } from '../router.js'
 import type { Route } from '../router.js'
@@ -242,6 +242,14 @@ describe('defineApp — error mapping', () => {
 		const error = record(record(await res.json())['error'])
 		expect(error['type']).toBe('teapot')
 		expect(error['message']).toBe('short and stout')
+	})
+
+	test('isStructuralError accepts any value carrying its own status and type', () => {
+		expect(isStructuralError(new NotFoundError('gone'))).toBe(true)
+		expect(isStructuralError({ httpStatus: 418, type: 'teapot', message: 'short and stout' })).toBe(true)
+		expect(isStructuralError(new Error('kaboom'))).toBe(false)
+		expect(isStructuralError(Object.assign(new Error('no type'), { httpStatus: 502 }))).toBe(false)
+		expect(isStructuralError(null)).toBe(false)
 	})
 
 	test('a custom onError is used when provided', async () => {

@@ -1,3 +1,4 @@
+import { ConflictError } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
@@ -804,5 +805,48 @@ describe('reconcile is the operator’s repair verb for a stale proxy manifest',
 		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
 		expect(harness.audits.map((audit) => audit.action)).toContain('namespace.reconcile')
 		expect((await harness.deps.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('pending')
+	})
+})
+
+describe('provider namespace errors', () => {
+	function failingOperator(cause: unknown): ControlProvider {
+		const provider = namespacedProvider(providerRecording())
+		const namespaces = provider.namespaces
+		const operator = namespaces?.operator
+		if (namespaces === undefined || operator === undefined) throw new Error('test provider must support namespace planning')
+		return {
+			...provider,
+			namespaces: {
+				...namespaces,
+				normalize: () => {
+					throw cause
+				},
+				operator: {
+					...operator,
+					plan: () => {
+						throw cause
+					},
+				},
+			},
+		}
+	}
+
+	async function errorOf(response: Response): Promise<{ status: number; error: unknown }> {
+		const body: { error: unknown } = await response.json()
+		return { status: response.status, error: body.error }
+	}
+
+	test('a structural provider error keeps its own status on plan and create', async () => {
+		const { deps } = makeDeps(failingOperator(new ConflictError('preset retired')))
+		const expected = { status: 409, error: 'preset retired' }
+		expect(await errorOf(await rpcResult(rpcRequest('namespaces.plan', { id: 'apps-prod', env: 'prod', preset: 'shared' }), deps))).toEqual(expected)
+		expect(await errorOf(await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), deps))).toEqual(expected)
+	})
+
+	test('any other provider error becomes a 400 with its message on plan and create', async () => {
+		const { deps } = makeDeps(failingOperator(new Error('unknown preset')))
+		const expected = { status: 400, error: 'unknown preset' }
+		expect(await errorOf(await rpcResult(rpcRequest('namespaces.plan', { id: 'apps-prod', env: 'prod', preset: 'shared' }), deps))).toEqual(expected)
+		expect(await errorOf(await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), deps))).toEqual(expected)
 	})
 })

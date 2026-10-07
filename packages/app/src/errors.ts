@@ -71,6 +71,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === 'object'
 }
 
+/** True when a thrown value carries its own HTTP status and type, i.e. it is meant to reach the caller as-is. */
+export function isStructuralError(err: unknown): err is StructuralError {
+	return isRecord(err)
+		&& typeof err['httpStatus'] === 'number'
+		&& typeof err['type'] === 'string'
+		&& typeof err['message'] === 'string'
+}
+
 /**
  * Read the structural HTTP-error fields off ANY thrown value. Defaults:
  * `httpStatus → 500`, `type → 'internal'`, `message → the Error message or 'Internal error'`.

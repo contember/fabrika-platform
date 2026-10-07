@@ -1,5 +1,5 @@
 import type { ParsedEvent, ParsedException, StackFrame } from '@fabrika/operations-contract/ingest'
-import { envelopeItemSchema, sentryExceptionSchema } from './event-schemas.js'
+import { envelopeItemSchema, type SentryEvent, sentryEventSchema, type SentryException } from './event-schemas.js'
 
 export interface ParsedEnvelope {
 	eventPayload: Record<string, unknown> | null
@@ -23,66 +23,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function readString(record: Record<string, unknown>, key: string): string | undefined {
-	const value = record[key]
-	return typeof value === 'string' ? value : undefined
-}
-
-function parseExceptionValue(value: unknown): ParsedException | null {
-	const parsed = sentryExceptionSchema.safeParse(value)
-	if (!parsed.success) return null
+function toParsedException(exception: SentryException): ParsedException {
 	return {
-		type: parsed.data.type ?? 'Error',
-		value: parsed.data.value ?? '',
-		frames: parsed.data.stacktrace?.frames ?? [],
+		type: exception.type ?? 'Error',
+		value: exception.value ?? '',
+		frames: exception.stacktrace?.frames ?? [],
 	}
 }
 
-function parseExceptionFromEvent(event: Record<string, unknown>): ParsedException | null {
-	const exception = event['exception']
-	if (isRecord(exception)) {
-		const values = exception['values']
-		if (Array.isArray(values) && values.length > 0) {
-			const parsed = parseExceptionValue(values[values.length - 1])
-			if (parsed) return parsed
-		}
-		const singular = parseExceptionValue(exception)
-		if (singular && (singular.value.length > 0 || singular.frames.length > 0 || exception['type'] !== undefined)) return singular
+function exceptionOf(event: SentryEvent): ParsedException | null {
+	const exception = event.exception
+	if (exception !== undefined) {
+		const latest = exception.values?.at(-1)
+		if (latest) return toParsedException(latest)
+		const singular = toParsedException(exception)
+		if (singular.value.length > 0 || singular.frames.length > 0 || exception.hasTypeKey) return singular
 	}
-
-	const message = event['message']
-	if (typeof message === 'string' && message.length > 0) {
-		return { type: 'Message', value: message, frames: [] }
-	}
-	if (isRecord(message)) {
-		const formatted = readString(message, 'formatted') ?? readString(message, 'message')
-		if (formatted) return { type: 'Message', value: formatted, frames: [] }
-	}
-	return null
-}
-
-function parseTags(event: Record<string, unknown>): Record<string, string> {
-	const result: Record<string, string> = {}
-	const tags = event['tags']
-	if (isRecord(tags)) {
-		for (const [key, value] of Object.entries(tags)) {
-			if (value !== null && value !== undefined) result[key] = String(value)
-		}
-		return result
-	}
-	if (!Array.isArray(tags)) return result
-	for (const pair of tags) {
-		if (!Array.isArray(pair) || pair.length !== 2 || pair[0] === null || pair[0] === undefined) continue
-		result[String(pair[0])] = String(pair[1])
-	}
-	return result
-}
-
-function parseSdkFingerprint(event: Record<string, unknown>): string[] | null {
-	const fingerprint = event['fingerprint']
-	if (!Array.isArray(fingerprint)) return null
-	const parts = fingerprint.filter((part): part is string => typeof part === 'string')
-	return parts.length > 0 ? parts : null
+	return event.message === undefined ? null : { type: 'Message', value: event.message, frames: [] }
 }
 
 export type IngestAuthResult =
@@ -197,28 +154,26 @@ export function buildParsedEvent(
 	eventPayload: Record<string, unknown>,
 	receivedAt: number = Date.now(),
 ): ParsedEvent | null {
-	const exception = parseExceptionFromEvent(eventPayload)
+	const event = sentryEventSchema.parse(eventPayload)
+	const exception = exceptionOf(event)
 	if (!exception) return null
-	const rawEventId = eventPayload['event_id']
-	const eventId = typeof rawEventId === 'string' && /^[0-9a-f]{32}$/i.test(rawEventId)
-		? rawEventId.toLowerCase()
+	const eventId = event.event_id !== undefined && /^[0-9a-f]{32}$/i.test(event.event_id)
+		? event.event_id.toLowerCase()
 		: crypto.randomUUID().replaceAll('-', '')
+	const fingerprint = event.fingerprint ?? []
 	const parsed: ParsedEvent = {
 		eventId,
 		projectId,
 		exception,
-		level: readString(eventPayload, 'level') ?? 'error',
-		tags: parseTags(eventPayload),
-		sdkFingerprint: parseSdkFingerprint(eventPayload),
+		level: event.level ?? 'error',
+		tags: Object.fromEntries(event.tags.map((tag) => [tag.key, tag.value])),
+		sdkFingerprint: fingerprint.length > 0 ? fingerprint : null,
 		receivedAt,
 		raw: eventPayload,
 	}
-	const release = readString(eventPayload, 'release')
-	const environment = readString(eventPayload, 'environment')
-	const platform = readString(eventPayload, 'platform')
-	if (release !== undefined) parsed.release = release
-	if (environment !== undefined) parsed.environment = environment
-	if (platform !== undefined) parsed.platform = platform
+	if (event.release !== undefined) parsed.release = event.release
+	if (event.environment !== undefined) parsed.environment = event.environment
+	if (event.platform !== undefined) parsed.platform = event.platform
 	return parsed
 }
 

@@ -151,7 +151,7 @@ const runLogLineSchema = z.object({
 	ts: z.number(),
 	stream: z.enum(['stdout', 'stderr', 'meta']),
 	text: z.string(),
-}).passthrough()
+})
 
 /**
  * Manual deploy trigger (the "Deploy" button / `triggerDeploy` RPC): resolve the app + env, create a

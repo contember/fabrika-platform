@@ -23,3 +23,14 @@ export function numberField(value: unknown, key: string): number | undefined {
 	const v = prop(value, key)
 	return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
+
+/** The string entries of a JSON array; non-string entries are dropped, and malformed or non-array text yields []. */
+export function parseJsonStringArray(text: string): string[] {
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(text)
+	} catch {
+		return []
+	}
+	return Array.isArray(parsed) ? parsed.filter((value) => typeof value === 'string') : []
+}

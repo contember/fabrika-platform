@@ -21,7 +21,7 @@ import {
 	type PrincipalIdentity,
 	type Scope,
 } from '@fabrika/auth'
-import { z } from 'zod'
+import { parseJsonStringArray } from '@fabrika/auth-core'
 import { SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
 
@@ -68,19 +68,11 @@ export function controlPublicOrigin(env: Pick<IamEnv, 'FABRIKA_CONTROL_DOMAIN'>)
  * `parseBootstrapAdmins` semantics: a malformed / non-array value fails CLOSED (empty set), so a bad
  * env var grants nobody admin. An empty / unset value (the steady state) yields an empty set.
  */
-const bootstrapAdminList = z.array(z.unknown()).transform(values => values.filter((value): value is string => typeof value === 'string'))
-
 export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<string> {
 	if (raw === undefined || raw.trim() === '') {
 		return new Set()
 	}
-	try {
-		const parsed: unknown = JSON.parse(raw)
-		const result = bootstrapAdminList.safeParse(parsed)
-		return new Set(result.success ? result.data : [])
-	} catch {
-		return new Set()
-	}
+	return new Set(parseJsonStringArray(raw))
 }
 
 /**

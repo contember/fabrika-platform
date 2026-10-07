@@ -1,4 +1,4 @@
-import { initRpc, type RpcRouterFor } from '@fabrika/app'
+import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
 import type { OperationsRpcContract } from '@fabrika/operations-contract/rpc'
 import type { OperationsAppEnv } from './app.js'
@@ -99,19 +99,16 @@ async function operatorCall<T>(ctx: OperationsRpcContext, run: (operations: Oper
 	try {
 		return await run(operatorUseCases(ctx))
 	} catch (error) {
-		if (
-			error !== null && typeof error === 'object' && !Array.isArray(error) && 'httpStatus' in error && typeof error.httpStatus === 'number'
-			&& 'type' in error && typeof error.type === 'string'
-		) throw error
-		if (error instanceof RangeError) throw requestError(400, 'bad_request', error.message)
+		if (isStructuralError(error)) throw error
+		if (error instanceof RangeError) throw new HttpError(400, 'bad_request', error.message)
 		console.error('operations operator RPC failed')
-		throw requestError(500, 'internal', 'internal error')
+		throw new HttpError(500, 'internal', 'internal error')
 	}
 }
 
 function operatorUseCases(ctx: OperationsRpcContext): OperationsOperatorUseCases {
 	const auth = ctx.auth
-	if (auth === undefined || auth === null) throw requestError(401, 'auth', 'authentication required')
+	if (auth === undefined || auth === null) throw new HttpError(401, 'auth', 'authentication required')
 	return new OperationsOperatorUseCases(ctx.request, {
 		repositories: ctx.env.repositories,
 		health: ctx.env.health,
@@ -119,8 +116,4 @@ function operatorUseCases(ctx: OperationsRpcContext): OperationsOperatorUseCases
 		auth,
 		principals: ctx.env.iam,
 	})
-}
-
-function requestError(httpStatus: number, type: string, message: string): Error & { readonly httpStatus: number; readonly type: string } {
-	return Object.assign(new Error(message), { httpStatus, type })
 }

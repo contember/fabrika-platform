@@ -61,3 +61,58 @@ export const sentryUserSchema = z.object({
 export const sentryRuntimeSchema = z.object({ name: optionalText, version: optionalText })
 
 export const envelopeItemSchema = z.object({ type: z.string().min(1), length: z.number().int().safe().nonnegative().optional() })
+
+// Ingest accepts a bare exception whose `type` key is present with any value, so the key's presence is kept.
+const sentryEventExceptionSchema = sentryExceptionSchema.extend({
+	type: z.unknown(),
+	values: z.array(sentryExceptionSchema.nullable().catch(null)).optional().catch(undefined),
+}).transform(({ type, ...exception }) => ({
+	...exception,
+	type: typeof type === 'string' ? type : undefined,
+	hasTypeKey: type !== undefined,
+}))
+
+const sentryMessageSchema = z.union([
+	z.string(),
+	z.object({ formatted: optionalText, message: optionalText }).transform((message) => message.formatted ?? message.message),
+]).transform((text) => text === undefined || text === '' ? undefined : text)
+
+const sentryTagsSchema = z.union([
+	z.array(z.tuple([z.unknown(), z.unknown()]).nullable().catch(null)).transform((pairs) =>
+		pairs.flatMap((pair) => pair === null || pair[0] === null || pair[0] === undefined ? [] : [{ key: String(pair[0]), value: String(pair[1]) }])
+	),
+	z.record(z.unknown()).transform((tags) =>
+		Object.entries(tags).flatMap(([key, value]) => value === null || value === undefined ? [] : [{ key, value: String(value) }])
+	),
+]).catch([]).transform((tags) => tags.filter((tag) => tag.key !== '__proto__'))
+
+const sentryBreadcrumbListSchema = z.array(sentryBreadcrumbSchema.nullable().catch(null))
+	.transform((breadcrumbs) => breadcrumbs.filter((breadcrumb) => breadcrumb !== null))
+
+/** One Sentry event as both ingest and event detail read it; every field is optional and a malformed one reads as absent. */
+export const sentryEventSchema = z.object({
+	event_id: optionalText,
+	level: optionalText,
+	release: optionalText,
+	environment: optionalText,
+	platform: optionalText,
+	server_name: optionalText,
+	exception: sentryEventExceptionSchema.optional().catch(undefined),
+	message: sentryMessageSchema.optional().catch(undefined),
+	tags: sentryTagsSchema,
+	fingerprint: z.array(z.unknown()).transform((parts) => parts.filter((part) => typeof part === 'string')).optional().catch(undefined),
+	request: sentryRequestSchema.optional().catch(undefined),
+	user: sentryUserSchema.optional().catch(undefined),
+	context: z.object({ url: optionalText, user: sentryUserSchema.optional().catch(undefined) }).optional().catch(undefined),
+	breadcrumbs: z.union([sentryBreadcrumbListSchema, z.object({ values: sentryBreadcrumbListSchema }).transform((value) => value.values)]).catch([]),
+	contexts: z.object({
+		runtime: sentryRuntimeSchema.optional().catch(undefined),
+		os: sentryRuntimeSchema.optional().catch(undefined),
+		browser: sentryRuntimeSchema.optional().catch(undefined),
+		trace: z.object({ trace_id: optionalText }).optional().catch(undefined),
+	}).optional().catch(undefined),
+})
+
+export type SentryEvent = z.infer<typeof sentryEventSchema>
+export type SentryException = z.infer<typeof sentryExceptionSchema>
+export type SentryRuntime = z.infer<typeof sentryRuntimeSchema>
