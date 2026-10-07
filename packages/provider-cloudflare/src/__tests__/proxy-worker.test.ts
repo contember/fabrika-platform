@@ -1,5 +1,6 @@
 import type { AppGates } from '@fabrika/auth'
-import { encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { buildResourceAccessClaims, type Jwks, RESOURCE_ACCESS_TOKEN_TYP } from '@fabrika/auth-core'
+import { encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
 import { APP, FakeIam, HOST, ISSUER, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
@@ -230,3 +231,120 @@ describe('Cloudflare proxy Worker', () => {
 		expect((await canonical(new Request(`https://${HOST}/anything`))).status).toBe(200)
 	})
 })
+
+const RESOURCE = `https://${HOST}/mcp`
+const RESOURCE_METADATA = `https://${HOST}/.well-known/oauth-protected-resource/mcp`
+const OAUTH_RESOURCE: OAuthProtectedResource = {
+	resource: RESOURCE,
+	resourceMetadata: RESOURCE_METADATA,
+	authorizationServers: [ISSUER],
+	scopesSupported: ['authoring'],
+}
+const resourceKey = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+const resourceJwk = await crypto.subtle.exportKey('jwk', resourceKey.publicKey)
+const RESOURCE_JWKS: Jwks = { keys: [{ kty: 'EC', crv: 'P-256', x: resourceJwk.x, y: resourceJwk.y, kid: 'oauth', alg: 'ES256', use: 'sig' }] }
+
+function base64url(bytes: Uint8Array): string {
+	return Buffer.from(bytes).toString('base64url')
+}
+
+/** A compact ES256 JWS over Web Crypto, whose P1363 signature encoding is what JWS expects. */
+async function signResourceToken(): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const claims = buildResourceAccessClaims({
+		iss: ISSUER,
+		app: APP,
+		resource: RESOURCE,
+		subject: 'user-1',
+		label: 'a@b.cz',
+		permissions: [],
+		issuedAt: now,
+		expiresAt: now + 300,
+		clientId: 'https://client.example.com/metadata.json',
+		scopes: ['authoring'],
+		grantId: 'grant-1',
+		tokenId: 'token-1',
+	})
+	const encoder = new TextEncoder()
+	const header = base64url(encoder.encode(JSON.stringify({ alg: 'ES256', kid: 'oauth', typ: RESOURCE_ACCESS_TOKEN_TYP })))
+	const input = `${header}.${base64url(encoder.encode(JSON.stringify(claims)))}`
+	const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, resourceKey.privateKey, encoder.encode(input))
+	return `${input}.${base64url(new Uint8Array(signature))}`
+}
+
+describe('Cloudflare proxy Worker — OAuth resources', () => {
+	function oauthEnvironment(upstream: { fetch: (request: Request) => Promise<Response> }): CloudflareProxyEnv {
+		return {
+			IAM: new FakeIam({ jwks: RESOURCE_JWKS }),
+			FABRIKA_IAM_ISSUER: ISSUER,
+			FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
+				apps: [{
+					id: APP,
+					hosts: [HOST],
+					upstream: 'APP',
+					scheme: 'https',
+					gates: { rules: [{ path: '/mcp', kind: 'oauth', resource: RESOURCE, scopes: ['authoring'] }, { path: '/*', kind: 'public' }] },
+					oauthResources: [OAUTH_RESOURCE],
+				}],
+			}),
+			APP: upstream,
+		}
+	}
+
+	test('serves the protected resource metadata itself, without calling the application', async () => {
+		const upstream = new RecordingUpstream()
+		const response = await createCloudflareProxyHandler(oauthEnvironment(upstream))(new Request(RESOURCE_METADATA))
+		expect(response.status).toBe(200)
+		expect(await response.text()).toBe(JSON.stringify({
+			resource: RESOURCE,
+			authorization_servers: [ISSUER],
+			scopes_supported: ['authoring'],
+			bearer_methods_supported: ['header'],
+		}))
+		expect(upstream.calls).toBe(0)
+	})
+
+	test('a case variant of the metadata path ends at the metadata endpoint with 404, like the Caddy route', async () => {
+		const upstream = new RecordingUpstream()
+		const handler = createCloudflareProxyHandler(oauthEnvironment(upstream))
+		const variant = RESOURCE_METADATA.replace('/mcp', '/MCP')
+		const response = await handler(new Request(variant))
+		expect(response.status).toBe(404)
+		expect(upstream.calls).toBe(0)
+		// The same request off the metadata path reaches the public catch-all, proving the 404 is not the gate's.
+		expect((await handler(new Request(`https://${HOST}/.well-known/other`))).status).toBe(200)
+		expect(upstream.calls).toBe(1)
+	})
+
+	test('answers a missing bearer with the shared 401 challenge, never a login bounce', async () => {
+		const upstream = new RecordingUpstream()
+		const response = await createCloudflareProxyHandler(oauthEnvironment(upstream))(
+			new Request(RESOURCE, { method: 'POST', headers: { Cookie: '__Host-px_session=session' } }),
+		)
+		expect(response.status).toBe(401)
+		expect(response.headers.get('WWW-Authenticate')).toBe(`Bearer resource_metadata="${RESOURCE_METADATA}"`)
+		expect(response.headers.get('location')).toBeNull()
+		expect(upstream.calls).toBe(0)
+	})
+
+	test('injects a verified resource token and strips a forged one', async () => {
+		const token = await signResourceToken()
+		const upstream = new RecordingUpstream()
+		const response = await createCloudflareProxyHandler(oauthEnvironment(upstream))(
+			new Request(RESOURCE, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-Fabrika-Token': 'forged' } }),
+		)
+		expect(response.status).toBe(200)
+		expect(upstream.seen?.headers.get('X-Fabrika-Token')).toBe(token)
+	})
+})
+
+class RecordingUpstream {
+	calls = 0
+	seen: Request | undefined
+
+	fetch = (request: Request): Promise<Response> => {
+		this.calls++
+		this.seen = request
+		return Promise.resolve(new Response('ok'))
+	}
+}

@@ -41,6 +41,7 @@ import {
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_URI_HEADER,
 	LOGIN_REDIRECT_PARAM,
+	OAUTH_METADATA_VERIFY_PATH,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
@@ -316,7 +317,10 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      keys a per-client abuse limit on. It is written unconditionally, so a caller's value is
  *      replaced whether or not it was deleted, and it is never read back from the auth response: it
  *      describes the request as the EDGE saw it, and no inner hop gets a vote.
- *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion.
+ *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion. Before it, one terminal route
+ *      per `oauthResources` entry sends its RFC 9728 metadata path to the auth service's metadata
+ *      endpoint and returns that answer as-is, so the app never sees it. Caddy's `path` matcher is
+ *      case-insensitive; the auth service compares host and raw path exactly and 404s anything else.
  *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; it strips every
  *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route.
  */
@@ -341,6 +345,11 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 						},
 					}],
 				},
+				...(app.oauthResources ?? []).map((resource): CaddyRoute => ({
+					match: [{ path: [new URL(resource.resourceMetadata).pathname] }],
+					handle: [authRequest(app, authUpstream, OAUTH_METADATA_VERIFY_PATH)],
+					terminal: true,
+				})),
 				{ handle: [forwardAuth(app, authUpstream)] },
 				{
 					handle: [{
@@ -377,19 +386,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
  */
 function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHandler {
 	return {
-		handler: 'reverse_proxy',
-		upstreams: [{ dial: authUpstream }],
-		// The route already knows which app it fronts — pin it rather than have the auth service
-		// re-derive it from a header the client can influence.
-		rewrite: { method: 'GET', uri: `${DEFAULT_VERIFY_PATH}?${APP_QUERY_PARAM}=${encodeURIComponent(app.id)}` },
-		headers: {
-			request: {
-				set: {
-					[FORWARDED_METHOD_HEADER]: ['{http.request.method}'],
-					[FORWARDED_URI_HEADER]: ['{http.request.uri}'],
-				},
-			},
-		},
+		...authRequest(app, authUpstream, DEFAULT_VERIFY_PATH),
 		handle_response: [{
 			match: { status_code: [2] },
 			routes: [
@@ -398,6 +395,25 @@ function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHand
 				copyResponseHeader(REQUEST_ID_HEADER),
 			],
 		}],
+	}
+}
+
+/** A subrequest to the auth service describing the original request; without `handle_response` its answer is the response. */
+function authRequest(app: ProxyApp, authUpstream: string, path: string): CaddyReverseProxyHandler {
+	return {
+		handler: 'reverse_proxy',
+		upstreams: [{ dial: authUpstream }],
+		// The route already knows which app it fronts — pin it rather than have the auth service
+		// re-derive it from a header the client can influence.
+		rewrite: { method: 'GET', uri: `${path}?${APP_QUERY_PARAM}=${encodeURIComponent(app.id)}` },
+		headers: {
+			request: {
+				set: {
+					[FORWARDED_METHOD_HEADER]: ['{http.request.method}'],
+					[FORWARDED_URI_HEADER]: ['{http.request.uri}'],
+				},
+			},
+		},
 	}
 }
 

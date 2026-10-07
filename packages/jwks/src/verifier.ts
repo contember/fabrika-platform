@@ -7,7 +7,14 @@
  * Collapsing them would let a JWKS outage read as a forged token.
  */
 
-import { type AccessTokenClaims, type Jwks, parseAccessClaims } from '@fabrika/auth-core'
+import {
+	type AccessTokenClaims,
+	type Jwks,
+	matchesTokenAudience,
+	parseAccessClaims,
+	RESOURCE_ACCESS_TOKEN_TYP,
+	type TokenAudienceProfile,
+} from '@fabrika/auth-core'
 import { createLocalJWKSet, errors as joseErrors, jwtVerify } from 'jose'
 
 export type VerifyResult =
@@ -84,16 +91,18 @@ export class TokenVerifier {
 	}
 
 	/**
-	 * Verify `token` for `audience` and narrow it to access claims. An unknown `kid` forces one JWKS
-	 * refetch (a key rotated in), then a retry — but at most once per cooldown, because otherwise any
-	 * caller can turn every request into an IAM round trip just by inventing a `kid`.
+	 * Verify `token` for `audience` and narrow it to access claims. A bare string is an app id
+	 * (`{ kind: 'app', app }`). An unknown `kid` forces one JWKS refetch (a key rotated in), then a
+	 * retry — but at most once per cooldown, because otherwise any caller can turn every request into
+	 * an IAM round trip just by inventing a `kid`.
 	 */
-	async verify(token: string, audience: string): Promise<VerifyResult> {
+	async verify(token: string, audience: string | TokenAudienceProfile): Promise<VerifyResult> {
+		const profile: TokenAudienceProfile = typeof audience === 'string' ? { kind: 'app', app: audience } : audience
 		let payload: unknown
 		try {
-			payload = await this.verifyWith(token, audience, false)
+			payload = await this.verifyWith(token, profile, false)
 			if (payload === NO_KEY && this.mayForceRefetch()) {
-				payload = await this.verifyWith(token, audience, true)
+				payload = await this.verifyWith(token, profile, true)
 			}
 		} catch (err) {
 			if (err instanceof JwksUnavailableError) {
@@ -105,7 +114,7 @@ export class TokenVerifier {
 			return { ok: false, reason: 'invalid' }
 		}
 		const claims = parseAccessClaims(payload)
-		return claims === null ? { ok: false, reason: 'invalid' } : { ok: true, claims }
+		return claims === null || !matchesTokenAudience(claims, profile) ? { ok: false, reason: 'invalid' } : { ok: true, claims }
 	}
 
 	/**
@@ -123,10 +132,12 @@ export class TokenVerifier {
 	}
 
 	/** Returns the payload, `null` on a genuine verification failure, or `NO_KEY` on a kid miss. */
-	private async verifyWith(token: string, audience: string, force: boolean): Promise<unknown> {
+	private async verifyWith(token: string, profile: TokenAudienceProfile, force: boolean): Promise<unknown> {
 		const keys = await this.keySet(force)
+		const audience = profile.kind === 'app' ? profile.app : profile.resource
 		try {
-			const { payload } = await jwtVerify(token, keys, { issuer: this.issuer, audience })
+			const { payload, protectedHeader } = await jwtVerify(token, keys, { issuer: this.issuer, audience })
+			if (profile.kind === 'resource' && protectedHeader.typ !== RESOURCE_ACCESS_TOKEN_TYP) return null
 			return payload
 		} catch (err) {
 			return err instanceof joseErrors.JWKSNoMatchingKey ? NO_KEY : null

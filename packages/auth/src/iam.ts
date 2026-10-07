@@ -16,7 +16,7 @@
  * service that owns identity.
  */
 
-import { type IamRpc, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { type IamRpc, isOAuthResourceUri, PROXY_TOKEN_HEADER, type TokenAudienceProfile } from '@fabrika/auth-core'
 import { buildAuthContext, IamClient } from './client'
 import { readRequestId } from './request'
 import type { AuthContext, ListPrincipalsFailure, PrincipalList } from './types'
@@ -38,6 +38,11 @@ export interface IamEnv {
 export interface CreateIamOptions {
 	/** The IAM app id (baked in so it can never be mistyped). Falls back to `env.FABRIKA_APP_ID`. */
 	appId?: string
+	/**
+	 * Which tokens `authenticate` accepts. Defaults to the app's native tokens; a resource server
+	 * passes `{ kind: 'resource', app, resource }` to accept OAuth tokens minted for that resource.
+	 */
+	tokenAudience?: TokenAudienceProfile
 }
 
 // ── Authentication result ────────────────────────────────────────────────────────
@@ -91,6 +96,7 @@ interface IamConfig {
 	binding: IamRpc
 	verifier: TokenVerifier
 	appId: string
+	tokenAudience: TokenAudienceProfile
 }
 
 /**
@@ -103,6 +109,7 @@ export class Iam {
 	private readonly binding: IamRpc
 	private readonly verifier: TokenVerifier
 	private readonly appId: string
+	private readonly tokenAudience: TokenAudienceProfile
 
 	/** @internal — use `createIam`. */
 	constructor(config: IamConfig) {
@@ -110,6 +117,7 @@ export class Iam {
 		this.binding = config.binding
 		this.verifier = config.verifier
 		this.appId = config.appId
+		this.tokenAudience = config.tokenAudience
 	}
 
 	// ── Management surface (delegated to the real client) ─────────────────────────
@@ -137,7 +145,7 @@ export class Iam {
 
 	/** Verify one token and wrap its claims in the `permits`-backed `AuthContext`. */
 	private async contextFor(token: string, requestId: string): Promise<AuthResult> {
-		const verified = await this.verifier.verify(token)
+		const verified = await this.verifier.verify(token, this.tokenAudience)
 		if (!verified.ok) {
 			return verified.reason === 'unavailable'
 				? { ok: false, reason: 'unavailable', status: 503 }
@@ -165,11 +173,16 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 		throw new Error('createIam: the IAM service binding is missing (env.IAM) — check the IAM ServiceReference.')
 	}
 	const issuer = canonicalIssuer(env.FABRIKA_IAM_ISSUER)
+	const tokenAudience = opts.tokenAudience ?? { kind: 'app', app: appId }
+	if (tokenAudience.app !== appId || (tokenAudience.kind === 'resource' && !isOAuthResourceUri(tokenAudience.resource))) {
+		throw new Error('createIam: tokenAudience must name this app and, for a resource, a valid OAuth resource URI.')
+	}
 	return new Iam({
 		management: new IamClient(binding, appId),
 		binding,
 		verifier: new TokenVerifier(binding, issuer, appId),
 		appId,
+		tokenAudience,
 	})
 }
 

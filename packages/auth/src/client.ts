@@ -1,4 +1,4 @@
-import type { AccessTokenClaims, DomainEvent, IamRpc, PermissionEntry, Scope } from '@fabrika/auth-core'
+import type { AccessTokenClaims, DomainEvent, IamRpc, OAuthTokenClaims, PermissionEntry, Scope } from '@fabrika/auth-core'
 import { permits, scopedValues } from '@fabrika/auth-core'
 import { readCredentials } from './request'
 import type { AuthContext, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
@@ -24,6 +24,7 @@ class RealAuthContext implements AuthContext {
 		private readonly auditLabel: string,
 		/** The credential id, for the audit linkage of an anonymous caller (null when bound). */
 		private readonly anonymousTokenId: string | null,
+		readonly oauth: OAuthTokenClaims | undefined,
 	) {}
 
 	can(action: string, scope?: Scope): boolean {
@@ -66,7 +67,7 @@ export function buildAuthContext(binding: IamRpc, appId: string, claims: AccessT
 		? null
 		: { id: claims.sub, type: claims.ptype, label: claims.label ?? claims.sub }
 	const auditLabel = claims.label ?? (principal === null ? `credential:${claims.sub}` : claims.sub)
-	return new RealAuthContext(binding, appId, claims.perms, requestId, principal, auditLabel, principal === null ? claims.sub : null)
+	return new RealAuthContext(binding, appId, claims.perms, requestId, principal, auditLabel, principal === null ? claims.sub : null, claims.oauth)
 }
 
 // ── IamClient ──────────────────────────────────────────────────────────────────

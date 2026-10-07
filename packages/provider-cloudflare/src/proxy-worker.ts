@@ -9,6 +9,7 @@ import {
 	FORWARDED_PROTO_HEADER,
 	FORWARDED_URI_HEADER,
 	MemoryTokenCache,
+	OAUTH_METADATA_VERIFY_PATH,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	stripFabrikaCookies,
@@ -101,6 +102,8 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: VerifyService): ProxyFetch {
 	return async (request) => {
 		const url = new URL(request.url)
+		const app = findApp(manifest, url)
+		const isMetadata = app !== null && isOAuthMetadataPath(app, url)
 		const clientAddress = request.headers.get(CLOUDFLARE_CLIENT_ADDRESS_HEADER)
 		const headers = new Headers(request.headers)
 		// The same strips the generated Caddy route does: a client may assert neither the injected token,
@@ -114,14 +117,13 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		if (clientAddress !== null && clientAddress !== '') headers.set(CLIENT_ADDRESS_HEADER, clientAddress)
 
 		const verification = await verify(
-			new Request(`https://fabrika-proxy.internal${DEFAULT_VERIFY_PATH}`, {
+			new Request(`https://fabrika-proxy.internal${isMetadata ? OAUTH_METADATA_VERIFY_PATH : DEFAULT_VERIFY_PATH}`, {
 				method: 'GET',
 				headers,
 			}),
 		)
-		if (!verification.ok) return verification
+		if (!verification.ok || isMetadata) return verification
 
-		const app = findApp(manifest, url)
 		if (app === null) return new Response('not found', { status: 404 })
 		const upstream = env[app.upstream]
 		if (!isWorkerService(upstream)) return UNAVAILABLE.clone()
@@ -153,6 +155,15 @@ function findApp(manifest: ProxyManifest, url: URL): ProxyApp | null {
 	const host = url.host.toLowerCase()
 	const hostname = url.hostname.toLowerCase()
 	return manifest.apps.find((app) => app.hosts.includes(host) || app.hosts.includes(hostname)) ?? null
+}
+
+/**
+ * Mirrors the generated Caddy metadata route, whose `path` matcher ignores case: such a request is
+ * answered by the metadata endpoint, which compares exactly and 404s a mismatch, and never reaches the gates.
+ */
+function isOAuthMetadataPath(app: ProxyApp, url: URL): boolean {
+	const path = url.pathname.toLowerCase()
+	return app.oauthResources?.some((resource) => new URL(resource.resourceMetadata).pathname.toLowerCase() === path) ?? false
 }
 
 function validManifest(manifest: ProxyManifest): boolean {

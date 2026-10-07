@@ -1,7 +1,14 @@
-import { buildAccessClaims, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import {
+	buildAccessClaims,
+	buildResourceAccessClaims,
+	type Jwks,
+	type PermissionEntry,
+	PROXY_TOKEN_HEADER,
+	RESOURCE_ACCESS_TOKEN_TYP,
+} from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
-import { anonymousContext, createIam, type IamEnv } from '../iam'
+import { anonymousContext, type AuthResult, createIam, type IamEnv } from '../iam'
 import { IamRpcStub } from './stub'
 
 const ISSUER = 'https://propustka.test'
@@ -107,6 +114,76 @@ describe('createIam — the issuer is canonicalized once', () => {
 	test('an unparseable or non-http(s) issuer throws at construction', () => {
 		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_IAM_ISSUER: 'not a url', FABRIKA_APP_ID: APP })).toThrow(/not an absolute URL/)
 		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_IAM_ISSUER: 'ftp://iam.test', FABRIKA_APP_ID: APP })).toThrow(/http\(s\) origin/)
+	})
+})
+
+// ── authenticate — an OAuth resource server ──────────────────────────────────────
+
+const RESOURCE = 'https://app.test/mcp'
+
+async function signResource(opts: { app?: string; resource?: string } = {}): Promise<string> {
+	const claims = buildResourceAccessClaims({
+		iss: ISSUER,
+		app: opts.app ?? APP,
+		resource: opts.resource ?? RESOURCE,
+		subject: 'user-1',
+		label: 'a@b.cz',
+		permissions: PERMS,
+		issuedAt: now() - 60,
+		expiresAt: now() + 300,
+		clientId: 'https://client.test/metadata.json',
+		scopes: ['authoring'],
+		grantId: 'grant-1',
+		tokenId: 'token-1',
+	})
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1', typ: RESOURCE_ACCESS_TOKEN_TYP }).sign(privateKey)
+}
+
+describe('authenticate — a resource token audience', () => {
+	const resourceIam = () => createIam(iamEnv(new IamRpcStub({ jwks: JWKS })), { tokenAudience: { kind: 'resource', app: APP, resource: RESOURCE } })
+
+	test('a resource token resolves the principal, its OAuth claims and its permissions', async () => {
+		const result = await resourceIam().authenticate(proxied(await signResource()))
+		if (!result.ok) throw new Error('expected ok')
+		expect(result.context.principal?.id).toBe('user-1')
+		expect(result.context.oauth).toEqual({
+			app: APP,
+			clientId: 'https://client.test/metadata.json',
+			scopes: ['authoring'],
+			grantId: 'grant-1',
+			tokenId: 'token-1',
+		})
+		expect(result.context.can('demo.read')).toBe(true)
+		expect(result.context.can('demo.write')).toBe(false)
+	})
+
+	test('a native app token, or a resource token for another resource or app, is refused', async () => {
+		const iam = resourceIam()
+		const invalid: AuthResult = { ok: false, reason: 'invalid_token', status: 401 }
+		expect(await iam.authenticate(proxied(await sign()))).toEqual(invalid)
+		expect(await iam.authenticate(proxied(await signResource({ resource: 'https://app.test/other' })))).toEqual(invalid)
+		expect(await iam.authenticate(proxied(await signResource({ app: 'other-app' })))).toEqual(invalid)
+	})
+
+	test('only the proxy-injected header is read, never the client bearer', async () => {
+		const token = await signResource()
+		expect(await resourceIam().authenticate(new Request(RESOURCE, { headers: { Authorization: `Bearer ${token}` } })))
+			.toEqual({ ok: false, reason: 'no_token', status: 401 })
+	})
+
+	test('the default app audience refuses a resource token and exposes no OAuth claims', async () => {
+		const iam = createIam(iamEnv(new IamRpcStub({ jwks: JWKS })))
+		expect(await iam.authenticate(proxied(await signResource()))).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
+		const result = await iam.authenticate(proxied(await sign()))
+		if (!result.ok) throw new Error('expected ok')
+		expect(result.context.oauth).toBeUndefined()
+	})
+
+	test('a token audience for another app or an invalid resource is refused at construction', () => {
+		const env = iamEnv(new IamRpcStub())
+		expect(() => createIam(env, { tokenAudience: { kind: 'resource', app: 'other-app', resource: RESOURCE } })).toThrow(/tokenAudience/)
+		expect(() => createIam(env, { tokenAudience: { kind: 'resource', app: APP, resource: 'http://app.test/mcp' } })).toThrow(/tokenAudience/)
+		expect(() => createIam(env, { tokenAudience: { kind: 'app', app: 'other-app' } })).toThrow(/tokenAudience/)
 	})
 })
 

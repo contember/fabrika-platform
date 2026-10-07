@@ -40,7 +40,8 @@ import { compileGates } from './gates'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
 import type { IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
-import type { ProxyManifest } from './manifest'
+import { formatOAuthBearerChallenge, type ProxyManifest } from './manifest'
+import { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
 
 export interface VerifyServiceConfig {
 	manifest: ProxyManifest
@@ -99,7 +100,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			if (url.pathname === healthPath) {
 				return new Response('ok', { status: 200, headers: { 'cache-control': 'no-store' } })
 			}
-			if (url.pathname !== DEFAULT_VERIFY_PATH) {
+			if (url.pathname !== DEFAULT_VERIFY_PATH && url.pathname !== OAUTH_METADATA_VERIFY_PATH) {
 				return textResponse(404, 'not found')
 			}
 			if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -119,6 +120,11 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 					status: 403,
 					reason: 'no_app',
 				})
+			}
+
+			if (url.pathname === OAUTH_METADATA_VERIFY_PATH) {
+				const metadata = findOAuthMetadata(resolved.app, forwarded.url)
+				return metadata === null ? textResponse(404, 'not found') : oauthMetadataResponse(metadata, forwarded.method)
 			}
 
 			// The handoff callback is checked BEFORE the gates: it is how a browser becomes able to
@@ -203,6 +209,9 @@ function denied(
 		: textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
 	if (decision.clearHandoffState !== undefined) {
 		response.headers.append('set-cookie', clearHandoffCookie(decision.clearHandoffState))
+	}
+	if (decision.challenge !== undefined) {
+		response.headers.set('WWW-Authenticate', formatOAuthBearerChallenge(decision.challenge))
 	}
 	return response
 }

@@ -16,13 +16,20 @@
  * NOTHING here returns an allow on an unexpected condition. Every `catch` maps to a deny.
  */
 
-import { API_KEY_PREFIX, AUTH_CODE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
+import {
+	API_KEY_PREFIX,
+	AUTH_CODE_PARAM,
+	AUTH_HANDOFF_STATE_PARAM,
+	type GateRule,
+	SESSION_COOKIE,
+	TOKEN_REFRESH_SKEW_SECONDS,
+} from '@fabrika/auth-core'
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
-import { applicableGates, type CompiledGate, readCookie, readServiceCredential } from './gates'
+import { applicableGates, type CompiledGate, readBearer, readCookie, readServiceCredential } from './gates'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type IamGateway, IamUnavailableError } from './iam'
-import type { ProxyApp } from './manifest'
+import type { OAuthBearerChallenge, ProxyApp } from './manifest'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
@@ -33,6 +40,10 @@ export type DenyReason =
 	| 'no_credential'
 	/** A service credential was presented and is not a valid `px_` key. */
 	| 'invalid_key'
+	/** An `oauth` rule's bearer is malformed, unverifiable, or minted for another resource or app. */
+	| 'invalid_token'
+	/** An `oauth` rule's bearer verified but lacks a required scope. */
+	| 'insufficient_scope'
 	| 'no_session'
 	| 'invalid_session'
 	| 'unknown_principal'
@@ -49,13 +60,20 @@ export type DenyReason =
 export type Decision =
 	| {
 		outcome: 'allow'
-		gate: 'public' | 'service' | 'human'
+		gate: 'public' | 'service' | 'human' | 'oauth'
 		/** The verified token to inject upstream. `null` on a `public` gate — no credential, no token. */
 		token: string | null
 		/** Principal id (or credential id) for the log line. Never a secret. */
 		subject: string | null
 	}
-	| { outcome: 'deny'; status: 401 | 403 | 503; reason: DenyReason; clearHandoffState?: string }
+	| {
+		outcome: 'deny'
+		status: 401 | 403 | 503
+		reason: DenyReason
+		clearHandoffState?: string
+		/** Set on an `oauth` rule's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */
+		challenge?: OAuthBearerChallenge
+	}
 	/**
 	 * A human hit a `human` gate without a usable session. `location` is where they must go to sign
 	 * in; `status` is only how they are TOLD — 302 for a document navigation, 401 for anything else,
@@ -158,6 +176,9 @@ export class Authorizer {
 		let session: SessionAttempt | null = null
 
 		for (const { rule } of matching) {
+			if (rule.kind === 'oauth') {
+				return await this.authorizeOAuth(resolved.app, rule, request) // terminal, with or without a token
+			}
 			if (rule.kind === 'public') {
 				return { outcome: 'allow', gate: 'public', token: null, subject: null }
 			}
@@ -186,6 +207,40 @@ export class Authorizer {
 		}
 		// Every matching rule was a `service` rule with no credential present.
 		return { outcome: 'deny', status: 401, reason: 'no_credential' }
+	}
+
+	/**
+	 * An `oauth`-rule bearer: an RFC 9068 access token minted by IAM for this rule's resource of this
+	 * app, carrying every scope the rule names. Verified locally — no IAM call, no cache. A refusal is a
+	 * bearer challenge pointing at the resource metadata, never a login bounce.
+	 */
+	private async authorizeOAuth(app: ProxyApp, rule: Extract<GateRule, { kind: 'oauth' }>, request: ForwardedRequest): Promise<Decision> {
+		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
+		if (resource === undefined) {
+			// The manifest parser refuses an unregistered oauth rule; reaching this is a composition bug.
+			return { outcome: 'deny', status: 403, reason: 'internal_error' }
+		}
+		const challenge: OAuthBearerChallenge = { resource_metadata: resource.resourceMetadata }
+		// RFC 6750 §3.1: a request without a bearer (none, or another scheme) gets a challenge with no error code.
+		const bearer = readBearer(request.headers.get('Authorization'))
+		if (bearer === null) {
+			return { outcome: 'deny', status: 401, reason: 'no_credential', challenge }
+		}
+		const invalid: Decision = { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } }
+		const verified = await this.verifier.verify(bearer, { kind: 'resource', app: app.id, resource: resource.resource })
+		if (!verified.ok) {
+			return verified.reason === 'unavailable' ? { outcome: 'deny', status: 503, reason: 'iam_unavailable' } : invalid
+		}
+		const granted = verified.claims.oauth?.scopes ?? []
+		if (!rule.scopes.every((scope) => granted.includes(scope))) {
+			return {
+				outcome: 'deny',
+				status: 403,
+				reason: 'insufficient_scope',
+				challenge: { ...challenge, error: 'insufficient_scope', scope: rule.scopes.join(' ') },
+			}
+		}
+		return { outcome: 'allow', gate: 'oauth', token: bearer, subject: verified.claims.sub }
 	}
 
 	/**

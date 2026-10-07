@@ -9,11 +9,13 @@
 import {
 	type AppGates,
 	buildAccessClaims,
+	buildResourceAccessClaims,
 	type ExchangeAuthCodeResult,
 	type Jwks,
 	type MintFromKeyResult,
 	type MintTokenResult,
 	type PermissionEntry,
+	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import {
@@ -26,13 +28,23 @@ import {
 } from '../constants'
 import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
-import type { ProxyApp, ProxyManifest } from '../manifest'
+import type { OAuthProtectedResource, ProxyApp, ProxyManifest } from '../manifest'
 
 export const ISSUER = 'https://iam.test'
 export const APP = 'example-app'
 export const HOST = 'app.example.com'
 
 export const PERMS: PermissionEntry[] = [{ action: 'demo.read', scope: null, source: 'grant' }]
+
+export const RESOURCE = `https://${HOST}/mcp`
+export const RESOURCE_METADATA = `https://${HOST}/.well-known/oauth-protected-resource/mcp`
+export const OAUTH_RESOURCE: OAuthProtectedResource = {
+	resource: RESOURCE,
+	resourceMetadata: RESOURCE_METADATA,
+	authorizationServers: [ISSUER],
+	scopesSupported: ['mcp:read', 'mcp:write'],
+}
+export const OAUTH_GATES: AppGates = { rules: [{ kind: 'oauth', path: '/mcp', resource: RESOURCE, scopes: ['mcp:read'] }] }
 
 // One ES256 key pair for the suite; `publicJwks` is what a healthy IAM serves.
 const primary = await generateKeyPair('ES256')
@@ -80,6 +92,38 @@ export async function signToken(options: SignOptions = {}): Promise<string> {
 	return new SignJWT({ ...claims })
 		.setProtectedHeader({ alg: 'ES256', kid: options.kid ?? 'k1' })
 		.sign(options.key ?? primary.privateKey)
+}
+
+export interface ResourceSignOptions {
+	app?: string
+	resource?: string
+	scopes?: string[]
+	/** `null` signs without a `typ` header. */
+	typ?: string | null
+	ttlSeconds?: number
+	key?: KeyLike
+}
+
+/** An OAuth resource access token, as IAM's token endpoint mints it for an MCP client. */
+export async function signResourceToken(options: ResourceSignOptions = {}): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const claims = buildResourceAccessClaims({
+		iss: ISSUER,
+		app: options.app ?? APP,
+		resource: options.resource ?? RESOURCE,
+		subject: 'user-1',
+		label: 'a@b.cz',
+		permissions: PERMS,
+		issuedAt: now,
+		expiresAt: now + (options.ttlSeconds ?? 300),
+		clientId: 'https://client.example.com/metadata.json',
+		scopes: options.scopes ?? ['mcp:read'],
+		grantId: 'grant-1',
+		tokenId: 'token-1',
+	})
+	const typ = options.typ === undefined ? RESOURCE_ACCESS_TOKEN_TYP : options.typ
+	const header = typ === null ? { alg: 'ES256', kid: 'k1' } : { alg: 'ES256', kid: 'k1', typ }
+	return new SignJWT(claims).setProtectedHeader(header).sign(options.key ?? primary.privateKey)
 }
 
 /** A principal-bound token, i.e. what `mintToken` / `mintFromKey` return for a real caller. */
@@ -165,6 +209,8 @@ export function manifestWith(gates: AppGates, overrides: Partial<ProxyApp> = {})
 }
 
 export interface VerifyRequestOptions {
+	/** The auth service endpoint the subrequest targets. Default `/verify`. */
+	endpoint?: string
 	path?: string
 	method?: string
 	host?: string
@@ -200,7 +246,7 @@ export function verifyRequest(options: VerifyRequestOptions = {}): Request {
 	}
 	const app = options.app === undefined ? APP : options.app
 	const query = app === null ? '' : `?${APP_QUERY_PARAM}=${encodeURIComponent(app)}`
-	return new Request(`http://127.0.0.1:9000${DEFAULT_VERIFY_PATH}${query}`, { method: 'GET', headers })
+	return new Request(`http://127.0.0.1:9000${options.endpoint ?? DEFAULT_VERIFY_PATH}${query}`, { method: 'GET', headers })
 }
 
 // ── A logger that records everything, so tests can prove what was NOT written ──

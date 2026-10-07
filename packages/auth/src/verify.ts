@@ -14,7 +14,7 @@
  * built there is per-request while the binding lives for the isolate/process.
  */
 
-import type { IamRpc } from '@fabrika/auth-core'
+import type { IamRpc, TokenAudienceProfile } from '@fabrika/auth-core'
 import { createJwksCache, type JwksCache, TokenVerifier as JwksVerifier, type VerifyResult } from '@fabrika/jwks'
 
 export type { VerifyResult }
@@ -31,20 +31,23 @@ function cacheFor(binding: IamRpc): JwksCache {
 	return cache
 }
 
-/** Verifies tokens for ONE (binding, issuer, audience) triple. Cheap to construct; the cache is shared. */
+/**
+ * Verifies tokens for ONE (binding, issuer, audience) triple. A bare string audience is an app id. Cheap to
+ * construct; the cache is shared.
+ */
 export class TokenVerifier {
 	private readonly inner: JwksVerifier
 
 	constructor(
 		binding: IamRpc,
 		issuer: string,
-		private readonly audience: string,
+		private readonly audience: string | TokenAudienceProfile,
 		now: () => number = () => Math.floor(Date.now() / 1000),
 	) {
 		this.inner = new JwksVerifier({ getJwks: () => binding.getJwks(), issuer, now, cache: cacheFor(binding) })
 	}
 
-	verify(token: string): Promise<VerifyResult> {
-		return this.inner.verify(token, this.audience)
+	verify(token: string, audience: string | TokenAudienceProfile = this.audience): Promise<VerifyResult> {
+		return this.inner.verify(token, audience)
 	}
 }

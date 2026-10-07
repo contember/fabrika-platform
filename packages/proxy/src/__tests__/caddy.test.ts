@@ -399,3 +399,51 @@ describe('access-log redaction', () => {
 		expect(buildCaddyConfig(MANIFEST, OPTIONS).apps.http.servers['proxy']?.logs?.should_log_credentials).toBe(false)
 	})
 })
+
+describe('OAuth protected resource metadata', () => {
+	const resource = {
+		resource: 'https://mcp.example.com/mcp',
+		resourceMetadata: 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp',
+		authorizationServers: ['https://iam.example.com'],
+		scopesSupported: ['authoring'],
+	}
+	function appSteps(proxyApp: ProxyApp): CaddyRoute[] {
+		const route = buildCaddyConfig({ apps: [proxyApp] }, OPTIONS).apps.http.servers['proxy']?.routes[0]
+		if (route === undefined) throw new Error('expected an app route')
+		return subrouteOf(route).routes
+	}
+	const app: ProxyApp = {
+		id: 'mcp-app',
+		hosts: ['mcp.example.com'],
+		upstream: 'mcp:3000',
+		scheme: 'https',
+		gates: { rules: [{ path: '/mcp', kind: 'oauth', resource: resource.resource, scopes: ['authoring'] }, { path: '/*', kind: 'human' }] },
+		oauthResources: [resource],
+	}
+	const steps = appSteps(app)
+
+	test('the metadata path is answered by the auth service, after the strip and before forward_auth', () => {
+		expect(steps).toHaveLength(4)
+		expect(steps[0]?.handle[0]?.handler).toBe('headers')
+		const metadata = steps[1]
+		expect(metadata?.match).toEqual([{ path: ['/.well-known/oauth-protected-resource/mcp'] }])
+		expect(metadata?.terminal).toBe(true)
+		const handler = proxyHandler(metadata)
+		expect(handler.upstreams).toEqual([{ dial: '127.0.0.1:9000' }])
+		expect(handler.rewrite).toEqual({ method: 'GET', uri: '/oauth-metadata?app=mcp-app' })
+		expect(handler.headers?.request?.set).toEqual({
+			'X-Forwarded-Method': ['{http.request.method}'],
+			'X-Forwarded-Uri': ['{http.request.uri}'],
+		})
+	})
+
+	test('the metadata answer is returned as-is and never continues to the app', () => {
+		expect(proxyHandler(steps[1]).handle_response).toBeUndefined()
+		expect(proxyHandler(steps[2]).rewrite?.uri).toBe('/verify?app=mcp-app')
+		expect(proxyHandler(steps[3]).upstreams).toEqual([{ dial: 'mcp:3000' }])
+	})
+
+	test('an app without OAuth resources gets no metadata route', () => {
+		expect(appSteps({ ...app, oauthResources: undefined, gates: GATES })).toHaveLength(3)
+	})
+})

@@ -53,7 +53,9 @@ export type {
 	GateKind,
 	GateRule,
 	IamRpc,
+	OAuthTokenClaims,
 	PrincipalListItem,
 	RoleDef,
 	Scope,
+	TokenAudienceProfile,
 } from '@fabrika/auth-core'

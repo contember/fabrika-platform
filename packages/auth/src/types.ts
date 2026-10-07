@@ -1,4 +1,4 @@
-import type { DomainEvent, PrincipalListItem, PrincipalType, Scope } from '@fabrika/auth-core'
+import type { DomainEvent, OAuthTokenClaims, PrincipalListItem, PrincipalType, Scope } from '@fabrika/auth-core'
 
 /**
  * The resolved caller's identity — who Access says you are, as the IAM Worker recorded
@@ -40,6 +40,11 @@ export interface AuthContext {
 	 * either way). Stamp `created_by` with `principal?.id ?? null`.
 	 */
 	readonly principal: PrincipalIdentity | null
+	/**
+	 * The OAuth client, consented scopes and grant behind an OAuth resource token; absent for every
+	 * native credential. `perms` are already narrowed by the scopes, so `can()` stays the authority.
+	 */
+	readonly oauth?: OAuthTokenClaims
 	/**
 	 * Point check: may this principal do `action` (optionally within `scope`, an opaque
 	 * `{ type, value }` coordinate)? Scope-less → satisfied by GLOBAL permissions only; a

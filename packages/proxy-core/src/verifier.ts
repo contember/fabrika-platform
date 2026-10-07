@@ -8,7 +8,7 @@
  * not per verifier.
  */
 
-import type { Jwks } from '@fabrika/auth-core'
+import type { Jwks, TokenAudienceProfile } from '@fabrika/auth-core'
 import { TokenVerifier as JwksVerifier, type VerifyResult } from '@fabrika/jwks'
 import { JWKS_REFETCH_COOLDOWN_SECONDS, JWKS_TTL_SECONDS } from './constants'
 
@@ -28,11 +28,11 @@ export class TokenVerifier {
 	}
 
 	/**
-	 * Verify `token` for `audience`. An unknown `kid` forces one JWKS refetch (a key rotated in), then a
+	 * Verify `token` for `audience` (a bare string is an app id). An unknown `kid` forces one JWKS refetch (a key rotated in), then a
 	 * retry — but at most once per cooldown, because otherwise any caller can turn every request into an
 	 * IAM round trip just by inventing a `kid`.
 	 */
-	verify(token: string, audience: string): Promise<VerifyResult> {
+	verify(token: string, audience: string | TokenAudienceProfile): Promise<VerifyResult> {
 		return this.inner.verify(token, audience)
 	}
 }
