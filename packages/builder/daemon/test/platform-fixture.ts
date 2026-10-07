@@ -142,7 +142,14 @@ export function fixture() {
 						return Response.json({ result: { items: environments } })
 					case 'apps.environments.put': {
 						if (refusePut) return Response.json({ error: { message: TOKEN } }, { status: 500 })
-						const environment = { ...record(input['environment']), appId: input['appId'], env: input['env'], provider: 'zerops', createdAt: now }
+						const environment = {
+							authoring: false,
+							...record(input['environment']),
+							appId: input['appId'],
+							env: input['env'],
+							provider: 'zerops',
+							createdAt: now,
+						}
 						environments = [environment]
 						return Response.json({ result: environment })
 					}

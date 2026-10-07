@@ -277,6 +277,7 @@ describe('exact-source deployment', () => {
 				publicOrigin: 'https://changed.example.test',
 				triggerRef: 'release',
 				namespaceId: 'new-ns',
+				authoring: false,
 			}]
 			await until(() => {
 				try {
