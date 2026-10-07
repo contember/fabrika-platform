@@ -22,7 +22,7 @@ Two project-specific notes:
   writes an app secret to project-level env on Zerops_
   ([ADR-0004](decisions/0004-secrets-live-in-the-platform.md)). Those lines are
   binding, at the same level as a root-`CLAUDE.md` hard rule. Don't relax one
-  without a superseding ADR.
+  without rewriting the ADR that holds it.
 - **Code wins over docs about what the system does today; ADRs win over code about
   what it should do.** Most of `decisions/` is decided-but-not-yet-built (see
   [`backlog/`](backlog/README.md) for the phase ladder), so a mismatch between an
@@ -35,7 +35,7 @@ Two project-specific notes:
 | --------------------- | ----------------------------------------------------------------------- | ----------------------------------------------- |
 | `reference/`          | living knowledge: architecture, conventions, runbooks — "how it IS now" | edit in place when behaviour changes            |
 | `ideas/`              | research, proposals, half-formed thoughts — **no commitment**           | graduate → `backlog/`/sprint, or delete         |
-| `decisions/`          | ADR — one significant decision each, the _why_                          | **immutable**; supersede, never rewrite         |
+| `decisions/`          | ADR — one significant decision each, the _why_                          | rewrite in place until 1.0; delete when retired |
 | `backlog/`            | decided work items ("issues") not yet scheduled                         | delete on ship (or archive if reference-worthy) |
 | `sprints/`            | active thematic work-plans being executed now                           | archive (with OUTCOME) on ship                  |
 | `archive/`            | shipped sprints + reference-worthy shipped items                        | append-only graveyard-lite                      |
@@ -103,10 +103,17 @@ doesn't duplicate the durable doc.
 ## Decisions (ADR)
 
 One file per significant decision: `decisions/NNNN-<slug>.md` (copy
-`decisions/_template.md`). Sections: Status · Context · Decision · Consequences ·
-(Alternatives). **Immutable**: once Accepted, never rewrite — to change a decision,
-write a _new_ ADR and set the old one's status to `Superseded by NNNN`. Numbers
-are monotonic and never reused.
+`decisions/_template.md`). Sections: Context · Decision · Consequences ·
+(Alternatives).
+
+**Living until 1.0.** fabrika-platform is pre-release, so an ADR states the decision
+as it stands now. When a decision changes, rewrite its ADR in place — Context,
+Decision, Consequences and the rejected options in Alternatives — instead of adding
+a new ADR that supersedes it. When two ADRs decide one question, merge them into
+the lower-numbered survivor and delete the other. Never leave a `superseded` ADR
+behind; git holds the history. Numbers are monotonic and never reused or
+renumbered; gaps are fine. After deleting an ADR, repoint every reference to it
+(see Conventions).
 
 **When to write one:** the choice (a) constrains future work, (b) rejected a real
 alternative, or (c) someone will later ask "why did we do it this way?". Otherwise
@@ -163,6 +170,8 @@ path (`git mv`); they are not edited afterward.
 - Don't add top-level meta files (`STATUS.md`, `PROGRESS.md`) — the structure
   encodes status. (One living `STATUS.md` _inside_ a long-running subsystem folder
   is the only exception.)
-- Don't rewrite a decided ADR — supersede it.
+- Don't add an ADR that only supersedes another — rewrite the existing one.
+- Don't put evidence ledgers, witness tables or territory maps in docs. Reasoning
+  belongs in commit and PR bodies; a sprint carries its plan and a short run log.
 - Don't let the archive become a dump — delete by default.
 - Don't duplicate content across folders — link to the one canonical copy.

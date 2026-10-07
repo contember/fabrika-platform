@@ -1,7 +1,7 @@
 ---
 id: NNNN
 title: <short imperative title>
-status: proposed # proposed | accepted | deprecated | superseded by NNNN
+status: proposed # proposed | accepted
 date: YYYY-MM-DD
 ---
 

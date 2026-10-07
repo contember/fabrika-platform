@@ -17,8 +17,9 @@
 One file per significant architectural/product decision: `NNNN-<slug>.md`
 (monotonic, never reused). Copy [`_template.md`](_template.md).
 
-**Immutable.** Once a decision is Accepted, don't rewrite it — to change course,
-write a _new_ ADR and set the old one's status to `Superseded by NNNN`.
+**Living until 1.0.** Each ADR states its decision as it stands now. To change
+course, rewrite the ADR in place; merge two ADRs that decide one question and delete
+the absorbed one. There are no superseded ADRs — git holds the history.
 
 Write one when the choice (a) constrains future work, (b) rejected a real
 alternative, or (c) someone will later ask "why did we do it this way?". Otherwise
