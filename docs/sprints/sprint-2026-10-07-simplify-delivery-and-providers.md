@@ -234,3 +234,8 @@ All others are kept and only have their cross-references fixed.
 <!-- Append as you work. -->
 
 - 2026-10-07 — Orchestration gate approved: phases 0–6, Claude reviewers, single tree, one commit per unit. WU1.1 and WU1.2 run as one unit (shared Control files). WU1.4 dropped: patch lost. Backlog 37 consumed by D3; 88 folded into WU2.4; 84 folded into WU3.3; 81 stays separate.
+- Phase 0 → `39f8212` (living-ADR rules), `4536a7e` (31 ADRs remain; 17 absorbed or deleted), `c65939e` (code references repointed; migration files untouched).
+- Phase 1 → `c68a2bb` (builder/canvas compat for unreleased formats), `92d8346` (lease 90 s, provider leaks, `fabrika namespace` in cli), `07a336f` (emulator strict state, smoke uses the maintenance cron after lease expiry, zod-only suites dropped with behaviour cases moved). Gates: typecheck, `bun run test` 4268 pass / 0 fail, `local:smoke` exit 0.
+- Deviation: the `control/src/node/` → `zerops/` rename moved to WU5.1 (it changes generated `zerops.yaml` paths and the local compose file).
+- Deferred: `fabrika namespace` (cli) overlaps `fabrika control namespaces`; only `adopt` is unique. Removing it is a feature change — owner decision.
+- ADR review finding: D6 said "as on Cloudflare", but Cloudflare holds its single App key as Worker secrets, not in the vault. ADR-0029 now states the Zerops composition uses the vault and Cloudflare keeps Worker secrets.
