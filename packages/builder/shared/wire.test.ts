@@ -58,13 +58,17 @@ test('deployment requires explicit nulls and preserves run identity', () => {
 })
 
 test('health consumers retain distinct sessions and malformed-field tolerance', () => {
-	const health = { ok: true, version: false, pid: 1.5, sessions: 3, sessionsDir: false, extra: true }
-	expect(healthInfoSchema.parse(health)).toEqual({ ok: true, pid: 1.5, sessions: 3 })
+	const sessionsDir = '/data/sessions'
+	const health = { ok: true, version: false, pid: 1.5, sessions: 3, sessionsDir, extra: true }
+	expect(healthInfoSchema.parse(health)).toEqual({ ok: true, pid: 1.5, sessions: 3, sessionsDir })
 	expect(uiHealthSchema.parse(health)).toEqual({ ok: true })
-	expect(activeDaemonSchema.safeParse(health).success).toBe(false)
-	expect(activeDaemonSchema.parse({ ok: true })).toEqual({ ok: true })
-	expect(healthInfoSchema.safeParse({ ok: false }).success).toBe(false)
-	expect(healthInfoSchema.parse({ ok: true, sessions: ['one', 2] })).toEqual({ ok: true })
+	expect(activeDaemonSchema.parse(health)).toEqual({ ok: true, sessionsDir })
+	for (const value of [{ ok: true }, { ok: true, sessionsDir: false }]) {
+		expect(activeDaemonSchema.safeParse(value).success).toBe(false)
+		expect(healthInfoSchema.safeParse(value).success).toBe(false)
+	}
+	expect(healthInfoSchema.safeParse({ ok: false, sessionsDir }).success).toBe(false)
+	expect(healthInfoSchema.parse({ ok: true, sessions: ['one', 2], sessionsDir })).toEqual({ ok: true, sessionsDir })
 })
 
 test('CLI phase projection drops gateName while UI retains explicit null and omits malformed fields', () => {

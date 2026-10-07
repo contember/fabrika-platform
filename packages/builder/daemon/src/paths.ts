@@ -1,16 +1,12 @@
 import { createCanvasPaths } from '@fabrika/canvas-kernel/server'
-import { existsSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join, resolve } from 'path'
 
 export const NEUTRAL_DATA_DIR = join(homedir(), '.fabrika')
-export const LEGACY_DATA_DIR = join(homedir(), '.claude', 'fabrika')
 
 export function resolveDataDir(): string {
 	const explicit = process.env['FABRIKA_DATA_DIR']
 	if (explicit) return resolve(explicit)
-	if (existsSync(NEUTRAL_DATA_DIR)) return NEUTRAL_DATA_DIR
-	if (existsSync(LEGACY_DATA_DIR)) return LEGACY_DATA_DIR
 	return NEUTRAL_DATA_DIR
 }
 

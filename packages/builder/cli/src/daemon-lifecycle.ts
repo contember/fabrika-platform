@@ -96,8 +96,7 @@ export async function ensureDaemon(opts: { quiet?: boolean } = {}): Promise<bool
 }
 
 async function stopMismatchedManagedDaemon(info: HealthInfo, quiet: boolean): Promise<boolean> {
-	const actual = info.sessionsDir ?? '<not reported by legacy daemon>'
-	const mismatch = `daemon data-root mismatch: active ${actual}, requested ${SESSIONS_DIR}`
+	const mismatch = `daemon data-root mismatch: active ${info.sessionsDir}, requested ${SESSIONS_DIR}`
 	if (!existsSync(PID_FILE)) {
 		if (!quiet) console.error(`[fabrika] ${mismatch}; no managed PID file, refusing to stop it.`)
 		return false

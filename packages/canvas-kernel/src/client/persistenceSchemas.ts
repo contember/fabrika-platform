@@ -20,13 +20,11 @@ export const feedbackEntrySchema = z.object({
 
 export const persistedStateSchema = annotationStateSchema.extend({
 	responses: z.array(
-		z.tuple([z.string(), planResponseSchema]).rest(z.unknown())
-			.transform(([key, response]): [string, z.output<typeof planResponseSchema>] => [key, response]).optional().catch(undefined),
+		z.tuple([z.string(), planResponseSchema]).optional().catch(undefined),
 	)
 		.transform(entries => entries.filter(entry => entry !== undefined)).catch([]),
 	feedbackEntries: z.array(
-		z.tuple([z.string(), feedbackEntrySchema]).rest(z.unknown())
-			.transform(([key, entry]): [string, z.output<typeof feedbackEntrySchema>] => [key, entry]).optional().catch(undefined),
+		z.tuple([z.string(), feedbackEntrySchema]).optional().catch(undefined),
 	)
 		.transform(entries => entries.filter(entry => entry !== undefined)).optional().catch([]),
 })

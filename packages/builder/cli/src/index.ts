@@ -6,7 +6,6 @@ export {
 	FABRIKA_DIRNAME,
 	getSessionId,
 	hashRepoPath,
-	LEGACY_DATA_DIR,
 	NEUTRAL_DATA_DIR,
 	resolveDataDir,
 	TEMP_DIR,

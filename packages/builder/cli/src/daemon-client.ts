@@ -18,7 +18,7 @@ export interface HealthInfo {
 	version?: string
 	pid?: number
 	dataDir?: string
-	sessionsDir?: string
+	sessionsDir: string
 	sessions?: number | string[]
 }
 
@@ -38,7 +38,6 @@ export async function isDaemonRunning(): Promise<boolean> {
 }
 
 export function healthMatchesDataRoot(info: HealthInfo, expectedSessionsDir: string = SESSIONS_DIR): boolean {
-	if (!info.sessionsDir) return false
 	return comparablePath(info.sessionsDir) === comparablePath(expectedSessionsDir)
 }
 

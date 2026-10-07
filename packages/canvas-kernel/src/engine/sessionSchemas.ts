@@ -39,12 +39,6 @@ const metadataFields = {
 	createdAt: z.string(),
 	updatedAt: z.string(),
 }
-export const legacyFlatMetadataSchema = z.object({
-	...metadataFields,
-	version: z.number().int(),
-	currentRevision: z.never().optional(),
-}).passthrough()
-
 export const savedSessionMetadataSchema = z.object({
 	...metadataFields,
 	currentRevision: z.number().int(),

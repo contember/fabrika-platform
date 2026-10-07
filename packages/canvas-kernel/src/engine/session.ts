@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { legacyFlatMetadataSchema, remoteFeedbackSchema, savedSessionMetadataSchema } from './sessionSchemas'
+import { remoteFeedbackSchema, savedSessionMetadataSchema } from './sessionSchemas'
 
 export interface DiffStats {
 	added: number
@@ -116,14 +116,6 @@ interface SessionMeta {
 	shares?: ShareEntry[]
 }
 
-// Legacy format (flat files, pre-revision)
-interface LegacyMeta {
-	projectRoot: string
-	createdAt: string
-	updatedAt: string
-	version: number
-}
-
 function computeLineDiffStats(oldText: string, newText: string): DiffStats {
 	const oldLines = oldText.split('\n')
 	const newLines = newText.split('\n')
@@ -206,27 +198,6 @@ export class SessionManager {
 
 			try {
 				const raw: unknown = JSON.parse(readFileSync(metaPath, 'utf-8'))
-
-				// Detect and migrate legacy flat-file format
-				const legacy = legacyFlatMetadataSchema.safeParse(raw)
-				if (legacy.success) {
-					this.migrateLegacy(name.name, legacy.data)
-					const { meta: migrated } = savedSessionMetadataSchema.parse(JSON.parse(readFileSync(metaPath, 'utf-8')))
-					const canvasFiles = this.getRevisionCanvasFiles(name.name, migrated.currentRevision)
-					if (canvasFiles.length === 0) continue
-					this.sessions.set(name.name, {
-						...migrated,
-						id: name.name,
-						projectRoot: migrated.projectRoot,
-						canvasFiles,
-						currentRevision: migrated.currentRevision,
-						revisions: migrated.revisions,
-						createdAt: migrated.createdAt,
-						updatedAt: migrated.updatedAt,
-					})
-					continue
-				}
-
 				const { meta, migrated } = savedSessionMetadataSchema.parse(raw)
 				if (migrated) {
 					writeFileSync(metaPath, JSON.stringify(meta, null, 2))
@@ -249,78 +220,12 @@ export class SessionManager {
 					...(meta.shares ? { shares: meta.shares } : {}),
 				})
 			} catch (cause) {
-				// A session that fails here vanishes from the list, and migration moves
-				// the user's files before it can fail — so staying silent loses work
-				// without saying so. Other sessions still load.
+				// A session that fails here vanishes from the list, so staying silent
+				// loses work without saying so. Other sessions still load.
 				const reason = cause instanceof Error ? cause.message : String(cause)
 				console.warn(`[sessions] ${name.name}: could not be loaded (${reason})`)
 			}
 		}
-	}
-
-	private migrateLegacy(id: string, legacy: LegacyMeta) {
-		const dir = this.sessionDir(id)
-		const flatJsx = join(dir, 'plan.jsx')
-		const flatCompiled = join(dir, 'plan.compiled.js')
-		const historyDir = join(dir, 'history')
-
-		const revisions: RevisionInfo[] = []
-
-		// Migrate history files
-		if (existsSync(historyDir)) {
-			// By revision number, not by name — sorting as text puts 10 before 2, and
-			// the order of this array is the revision order everything else reads.
-			const files = readdirSync(historyDir)
-				.filter((f) => f.endsWith('.jsx'))
-				.map((file) => ({ file, num: parseInt(file.replace('.jsx', ''), 10) }))
-				.filter(({ num }) => !Number.isNaN(num))
-				.sort((a, b) => a.num - b.num)
-			for (const { file, num } of files) {
-				const revDir = this.revisionDir(id, num)
-				mkdirSync(revDir, { recursive: true })
-				renameSync(join(historyDir, file), join(revDir, 'plan.jsx'))
-				revisions.push({
-					revision: num,
-					canvasFiles: [{ filename: 'plan.jsx' }],
-					createdAt: legacy.createdAt,
-					hasFeedback: false,
-					feedbackConsumed: false,
-				})
-			}
-		}
-
-		// Migrate current version
-		const currentRev = legacy.version
-		const revDir = this.revisionDir(id, currentRev)
-		mkdirSync(revDir, { recursive: true })
-		if (existsSync(flatJsx)) {
-			renameSync(flatJsx, join(revDir, 'plan.jsx'))
-		}
-		if (existsSync(flatCompiled)) {
-			renameSync(flatCompiled, join(revDir, 'plan.compiled.js'))
-		}
-		revisions.push({
-			revision: currentRev,
-			canvasFiles: [{ filename: 'plan.jsx' }],
-			createdAt: legacy.updatedAt,
-			hasFeedback: false,
-			feedbackConsumed: false,
-		})
-
-		const { version: _version, ...legacyFields } = legacy
-		const meta: SessionMeta = {
-			...legacyFields,
-			projectRoot: legacy.projectRoot,
-			createdAt: legacy.createdAt,
-			updatedAt: legacy.updatedAt,
-			currentRevision: currentRev,
-			revisions,
-		}
-		writeFileSync(join(dir, 'meta.json'), JSON.stringify(meta, null, 2))
-
-		// Only once the new layout is on disk. Anything that fails above leaves the
-		// old directory in place rather than half-migrated and unrecorded.
-		rmSync(historyDir, { recursive: true, force: true })
 	}
 
 	readRevisionJsx(id: string, rev: number, filename: string): string | null {

@@ -38,7 +38,7 @@ Usage:
 Environment:
   FABRIKA_PORT         Daemon port (default 19410)
   FABRIKA_SESSION_ID   Session id (fallback: stable hash of repo abs path)
-  FABRIKA_DATA_DIR     Persistent daemon/session data (default ~/.fabrika; legacy auto-detected)
+  FABRIKA_DATA_DIR     Persistent daemon/session data (default ~/.fabrika)
   FABRIKA_TIMEOUT      gate wait timeout in ms (default 3600000)`
 
 export async function runBuilderCli(argv: readonly string[]): Promise<number> {

@@ -49,21 +49,6 @@ interface AgentSource {
 	raw: string
 }
 
-const LEGACY_MANAGED_HASHES: Record<string, Set<string>> = {
-	[join('.claude', 'skills', 'fabrika', 'SKILL.md')]: new Set([
-		'd06c8508d47ab36222bcb33b964fd928e3fbcff383db8c257ef68dfd956dd428',
-	]),
-	[join('.claude', 'agents', 'build-orchestrator.md')]: new Set([
-		'31c436e08ffac217d32c71ec56d1612f565b0b2828df9c067ff1e812768339f1',
-	]),
-	[join('.claude', 'agents', 'flows-author.md')]: new Set([
-		'1e55cce06f0210b65ce6ec2d9cd1d4bb5e0e8bcff11e06eb4f2ee405914dd322',
-	]),
-	[join('.claude', 'agents', 'opice-skeleton-author.md')]: new Set([
-		'8644461c1acdc236a886b648ae97984cbd54bc0d59872f7b310ce2b5783e4378',
-	]),
-}
-
 export function resolveSkillSource(): string | null {
 	const candidates = [resolve(HERE, '../../skill')]
 	for (const candidate of candidates) {
@@ -256,10 +241,7 @@ function installManagedFile(
 		result.written.push(destination)
 	} else if (existingHash === desiredHash) {
 		result.skipped.push(destination)
-	} else if (
-		existingHash === recorded?.installedHash
-		|| LEGACY_MANAGED_HASHES[desired.relativePath]?.has(existingHash ?? '')
-	) {
+	} else if (existingHash === recorded?.installedHash) {
 		writeAtomic(destination, desired.content)
 		result.updated.push(destination)
 	} else {

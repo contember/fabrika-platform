@@ -83,14 +83,14 @@ export const healthInfoSchema = z.object({
 	version: optionalTextSchema,
 	pid: wireNumberSchema.optional().catch(undefined),
 	dataDir: optionalTextSchema,
-	sessionsDir: optionalTextSchema,
+	sessionsDir: z.string(),
 	sessions: z.union([wireNumberSchema, z.array(z.string())]).optional().catch(undefined),
 }).transform(({ ok, version, pid, dataDir, sessionsDir, sessions }) => ({
 	ok,
 	...(version === undefined ? {} : { version }),
 	...(pid === undefined ? {} : { pid }),
 	...(dataDir === undefined ? {} : { dataDir }),
-	...(sessionsDir === undefined ? {} : { sessionsDir }),
+	sessionsDir,
 	...(sessions === undefined ? {} : { sessions }),
 }))
 export const uiHealthSchema = z.object({
@@ -99,8 +99,7 @@ export const uiHealthSchema = z.object({
 	sessions: z.array(z.string()).optional().catch(undefined),
 })
 	.transform(({ ok, version, sessions }) => ({ ok, ...(version === undefined ? {} : { version }), ...(sessions === undefined ? {} : { sessions }) }))
-export const activeDaemonSchema = z.object({ ok: z.literal(true), sessionsDir: z.string().optional() })
-	.transform(({ ok, sessionsDir }) => ({ ok, ...(sessionsDir === undefined ? {} : { sessionsDir }) }))
+export const activeDaemonSchema = z.object({ ok: z.literal(true), sessionsDir: z.string() })
 export const builderPlatformErrorSchema = z.object({ error: z.object({ code: z.literal('builder_platform'), message: z.string().max(1000) }) })
 export const planResultSchema = z.object({
 	ok: z.boolean(),

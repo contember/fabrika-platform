@@ -9,8 +9,8 @@ import { PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
 const port = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
 
 interface ActiveDaemon {
-	ok?: boolean
-	sessionsDir?: string
+	ok: boolean
+	sessionsDir: string
 }
 
 function parseActiveDaemon(value: unknown): ActiveDaemon | null {
@@ -32,12 +32,12 @@ async function activeDaemon(): Promise<ActiveDaemon | null> {
 
 const active = await activeDaemon()
 if (active) {
-	if (active.sessionsDir && resolve(active.sessionsDir) === resolve(SESSIONS_DIR)) {
+	if (resolve(active.sessionsDir) === resolve(SESSIONS_DIR)) {
 		console.log(`fabrika daemon already running on http://localhost:${port} — not starting a second.`)
 		process.exit(0)
 	}
 	console.error(
-		`fabrika daemon on :${port} uses ${active.sessionsDir ?? 'an unknown legacy data root'}; `
+		`fabrika daemon on :${port} uses ${active.sessionsDir}; `
 			+ `requested ${SESSIONS_DIR}. Stop it before starting this daemon.`,
 	)
 	process.exit(1)

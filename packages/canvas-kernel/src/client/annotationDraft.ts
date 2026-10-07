@@ -10,7 +10,7 @@ const draftContentSchema = z.object({
 const responseContentSchema = z.tuple([
 	z.unknown(),
 	z.object({ note: z.unknown(), value: z.unknown() }),
-]).rest(z.unknown())
+])
 
 interface RevisionState {
 	revision: number
