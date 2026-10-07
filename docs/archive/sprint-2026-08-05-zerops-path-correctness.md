@@ -303,7 +303,7 @@ generated host answered `200 "wu3 ok\n"`. Facts + commands → `docs/reference/z
 
 The `installation-zerops` artifacts have no live driver, so the honest fix there is the header: a
 generated document that declares a public subdomain now states that applying it publishes nothing and
-names the call that does. The declaration itself stays — it is what ADR-0007's `assertOnlyPublicService`
+names the call that does. The declaration itself stays — it is what ADR-0022's `assertOnlyPublicService`
 reads.
 
 Also corrected: the local Zerops emulator honoured `enableSubdomainAccess` from an import, so a broken

@@ -16,7 +16,7 @@ version-bound managed env, a source-protocol handshake) and ~17k lines of tests 
 provider-neutral core still branches on `'zerops'` and every cloud is spread over 4–5 packages. Success:
 fewer hops per deploy, no provider names in shared control code, one public package per cloud plus its
 private deployables, and an ADR set with no superseded entries. Feature set is unchanged — including
-**multiple private GitHub source connections** (ADR-0032 stays in substance).
+**multiple private GitHub source connections** (ADR-0029 stays in substance).
 
 ## Refs re-verified at HEAD (2026-10-07, `6090968`)
 
@@ -51,7 +51,7 @@ private deployables, and an ADR set with no superseded entries. Feature set is u
   holder; no checkpoint compare-and-swap, no per-run DB poll loop. Runs and namespace-proxy attempts use it.
 - **D6 — `source` merges into Control.** GitHub App credentials of every connection live in Control's vault,
   as on Cloudflare. The `source` service, its RPC key, the V2 wire protocol and env-slot activation go away.
-  Keyed multi-connection semantics (ADR-0032) are kept.
+  Keyed multi-connection semantics (ADR-0029) are kept.
 - **D7 — Keep the separate Cloudflare runner Worker.** It stays a deployable; only its contract and its
   direct D1 write go.
 - **D8 — Package target.** Per cloud: one public `provider-<cloud>` with subpaths
@@ -119,9 +119,9 @@ All others are kept and only have their cross-references fixed.
 - **Scope.** Remove emulator snapshot back-compat (`legacy-emulator.json`, legacy branches in `zerops-emulator/snapshot.ts`); replace relative imports into other packages' `src/` with package exports; delete tests that only exercise zod (`static-validation.test.ts`, `wire-contracts.test.ts`); review the other "legacy" branches (builder/canvas draft recovery) and delete those with no installed data behind them.
 - **Acceptance.** `bun run test` green; `grep -rn "\.\./\.\./[a-z-]*/src" packages/local-stack` empty.
 
-#### WU1.4 — Unresolved webhook egress draft (S)
+#### WU1.4 — Unresolved webhook egress draft (dropped)
 
-- **Scope.** Recover the draft referenced by the readiness sprint from outside the repo into a branch, or drop it and say so in that sprint.
+- The draft at `/tmp/opencode/fabrika-wu4-paused.patch` no longer exists; the readiness sprint records the loss. Its WU4 stays a release blocker there.
 
 ### Phase 2 — Boundaries and types
 
@@ -143,8 +143,8 @@ All others are kept and only have their cross-references fixed.
 
 #### WU2.4 — Runner outcome through Control (M)
 
-- **Scope.** Runner Worker stops writing `runs` (`runner-cloudflare/src/finish-run.ts`); Control applies the outcome from the runner's `status.json` in its reconcile/poll path under the lease guard. Delete `recordFailureOverRunnerSuccess`.
-- **Acceptance.** Test: runner finishes while Control is unavailable; next reconcile settles the run once.
+- **Scope.** Runner Worker stops writing `runs` (`runner-cloudflare/src/finish-run.ts`); Control applies the outcome from the runner's `status.json` in its reconcile/poll path under the lease guard. Delete `recordFailureOverRunnerSuccess`. The same path applies the outcome's IAM reconcile, so a Control self-deploy no longer loses it (consumes backlog 88).
+- **Acceptance.** Test: runner finishes while Control is unavailable; next reconcile settles the run once and applies its IAM reconcile once.
 
 #### WU2.5 — Console knows the provider (M)
 
@@ -165,8 +165,8 @@ All others are kept and only have their cross-references fixed.
 
 #### WU3.3 — One lease primitive per D5 (M–L)
 
-- **Scope.** Collapse `RunOwnership`, `NamespaceOwnership`, `proxy-attempt.ts` and terminal-release-repair CAS onto acquire/renew/holder-checked write; read cancellation at step boundaries; make the unguarded `mutateRun` path impossible; move `control/src/zerops/zerops-proxy.ts` behind a `namespaces.republish` capability in `provider-zerops`.
-- **Acceptance.** Concurrency tests: two holders, one wins; cancel during a step stops at the next boundary; namespace republish and app deploy serialize.
+- **Scope.** Collapse `RunOwnership`, `NamespaceOwnership`, `proxy-attempt.ts` and terminal-release-repair CAS onto acquire/renew/holder-checked write; read cancellation at step boundaries; make the unguarded `mutateRun` path impossible; move `control/src/zerops/zerops-proxy.ts` behind a `namespaces.republish` capability in `provider-zerops`. The Operations catalog sync lease uses the same TTL and renewal (consumes backlog 84).
+- **Acceptance.** Concurrency tests: two holders, one wins; cancel during a step stops at the next boundary; namespace republish and app deploy serialize; a dead catalog-sync holder blocks for at most one TTL.
 
 #### WU3.4 — Cloudflare commit binding without handshake (M)
 
@@ -182,7 +182,7 @@ All others are kept and only have their cross-references fixed.
 #### WU4.1 — Merge `source-zerops` into Control (L)
 
 - **Scope.** Move tarball streaming, metadata and keyed connections into `control/src/source/`; credentials in the vault (D6); delete `source-client.ts`, `source-connection.ts` env-slot activation, `FABRIKA_SOURCE_RPC_KEY`, the `source` service from `installation-zerops/zerops/topology.ts`, and the `source-zerops` package; regenerate `zerops.yaml` and import YAMLs; local stack drops the `source` container.
-- **Acceptance.** Local stack: private keyed deploy from two connections (closes backlog 81); upload streams without buffering (existing tar tests moved); `local:smoke` green.
+- **Acceptance.** Local stack: private keyed deploy from two connections (backlog 81 — a GitHub double for keyed deploys — stays separate); upload streams without buffering (existing tar tests moved); `local:smoke` green.
 
 ### Phase 5 — Packages
 
@@ -215,14 +215,14 @@ All others are kept and only have their cross-references fixed.
 - Folding the Cloudflare runner Worker into Control (D7).
 - Moving composition roots out of `@fabrika/control`; renaming packages to `@fabrika/<cloud>`.
 - Typing `canvas-kernel/src/engine/compiler.ts`; broad branded ids beyond the Zerops boundary.
-- The readiness sprint's HA topology, source-map and webhook work, apart from WU1.4.
+- The readiness sprint's HA topology, source-map and webhook work, (the webhook egress draft is lost; see the readiness sprint).
 
 ## Sequencing
 
 | Order | Units                                            | Parallel?                                                      |
 | ----- | ------------------------------------------------ | -------------------------------------------------------------- |
 | 1     | Phase 0 (WU0.1 → WU0.2 → WU0.3)                  | serial, one author                                             |
-| 2     | WU1.1–1.4                                        | parallel                                                       |
+| 2     | WU1.1–1.3                                        | parallel                                                       |
 | 3     | WU2.1, WU2.2, WU2.4, WU2.5                       | parallel; WU2.3 after WU2.1 (same Zerops files)                |
 | 4     | WU3.1 → WU3.2 → WU3.3; WU3.4 and WU3.5 alongside | serial core                                                    |
 | 5     | WU4.1                                            | after Phase 3 (shares Zerops deploy code)                      |
@@ -232,3 +232,5 @@ All others are kept and only have their cross-references fixed.
 ## Run log
 
 <!-- Append as you work. -->
+
+- 2026-10-07 — Orchestration gate approved: phases 0–6, Claude reviewers, single tree, one commit per unit. WU1.1 and WU1.2 run as one unit (shared Control files). WU1.4 dropped: patch lost. Backlog 37 consumed by D3; 88 folded into WU2.4; 84 folded into WU3.3; 81 stays separate.

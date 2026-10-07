@@ -73,7 +73,7 @@
 > [the later adoption proof](sprint-2026-07-31-operations-adoption-proof.md) and
 > [36](../backlog/36-complete-zerops-release-artifact-correlation.md); remaining
 > activation and egress hardening is tracked in
-> [37](../backlog/37-activate-zerops-managed-environment-transactionally.md) and
+> [37](../decisions/0044-zerops-delivery-ownership-and-recovery.md) and
 > [38](../backlog/38-add-dns-safe-operations-egress.md). A real
 > Zerops account remains [05](../backlog/05-bring-up-on-a-real-zerops-account.md);
 > live state adoption and standalone Poplach retirement remain
@@ -624,7 +624,7 @@ Do not start the credentialed cutover in backlog 34 from this sprint.
 - Zerops does not yet publish source maps from its platform-owned build
   filesystem → [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
 - Zerops service variables are written before an asynchronous app version is
-  known to be active → [backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md).
+  known to be active → [backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md).
 - Syntax validation alone cannot stop DNS rebinding or private-address egress
   from webhooks and active health checks →
   [backlog 38](../backlog/38-add-dns-safe-operations-egress.md).

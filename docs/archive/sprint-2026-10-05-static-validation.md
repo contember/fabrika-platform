@@ -79,7 +79,7 @@ Before dispatch, the leader uses the question tool to confirm dependency changes
 
 ## Ownership and dispatch
 
-The pinned [execution territory ledger](static-validation-territories.md) defines baseline allowlists and their exclusions.
+The pinned execution territory ledger (deleted 2026-10-07; see git history) defined baseline allowlists and their exclusions.
 
 Paths below are relative to the repository root. Package territories include tests, except explicit exclusions. The leader expands them into exact file allowlists and checks pairwise intersections before dispatch.
 
@@ -237,7 +237,7 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 - Approved browser follow-up shipped as `5caa7cf` (trusted IAM cookie owner and explicit platform/namespace build wiring), `197db1f` (native anonymous HTTP assertion transport), and `c3462cd` (owner invariant). All ten extended browser walkthroughs pass; focused auth delta review found no issue. Integrated tests after that change: 5,054 pass, 39 unchanged skips, zero failures. Full typecheck/lint and release validation pass. Docker source-recovery smoke remains the final unfinished witness; follow-up detail lives in the local-integration log.
 
-- Local integration extension approved: see [the frozen seam and implementation units](static-validation-local-integration.md). Genuine synthetic Git fixtures, local-only injected upload transport and minimal emulator evidence are approved; production policies remain unchanged.
+- Local integration extension approved: see the frozen seam and implementation units (deleted 2026-10-07; see git history). Genuine synthetic Git fixtures, local-only injected upload transport and minimal emulator evidence are approved; production policies remain unchanged.
 - Original builder stack restored: all 14 services running, all 12 configured health checks healthy. The user approved missing default binding and OAuth resource metadata repair, including its generator. Other 11 container identities/start times and all volumes preserved. Generator-only patch remains uncommitted in the separate, already-dirty worktree; isolated patch at `/tmp/opencode/fabrika-restoration-generator.patch`.
 
 - All selected schema units implemented; WU17 `5b694a7` and WU19 own-key fix `097feab` integrated. R3 closed with both regression fixes verified. Final inventory: 205 paths, 123 changed/deleted and 82 intentional retained boundaries; 114 Zod importers across 29 owning manifests, all dependencies correctly declared.
@@ -258,7 +258,7 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 - R1 completed with no unresolved findings across WU01–WU04/WU06, including independent frozen-snapshot tests and differential probes. R2 WU07/WU08 slice found no issue; further R2 units pending.
 - WU11 `0bdeb39`: leader reran 251 GitHub/source tests; static response projections preserve permissions, association, metadata tolerance and secret-safe errors. WU12 `cad9752`: leader reran 94 installation tests; resumed credentials and CF/protection projections migrated, unused narrowing module removed. Scalar config/domain checks retained in both.
 
-Retained boundary dispositions are recorded in the [exception ledger](static-validation-exceptions.md); remaining units add their dispositions when integrated.
+Retained boundary dispositions are recorded in the exception ledger (deleted 2026-10-07; see git history); remaining units add their dispositions when integrated.
 
 - WU02 committed `32b7c2c`; leader reran 167 Operations tests with Postgres/S3, no skips. WU04 committed `a22dc0c`; leader reran 439 auth/JWKS/proxy tests, no skips; unused proxy Zod dependency removed. Both retain domain/security/scalar checks; R1 final slices pending.
 - WU07 committed `342d6b6`; leader reran provider tests (745 pass, 37 live skips), typecheck; removed obsolete source structural helpers after namespace migration. Runtime alias-preserving refinements, YAML AST/source checks and canonical/hash/domain checks remain. R2 first slice includes WU07/WU08.

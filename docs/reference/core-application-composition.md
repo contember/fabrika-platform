@@ -215,7 +215,7 @@ Cloudflare composition.
 ## Environment boundaries
 
 Configuration uses component-owned names from
-[ADR-0018](../decisions/0018-canonical-fabrika-environment-names.md):
+[ADR-0024](../decisions/0024-canonical-environment-names.md):
 
 - applications use `FABRIKA_APP_ID` and `FABRIKA_IAM_ISSUER`;
 - IAM service configuration uses `FABRIKA_IAM_*`;
@@ -226,7 +226,7 @@ Configuration uses component-owned names from
 
 These are the only names anything reads. Every composition root reads its own
 canonical name off its own source, and there is no shared compatibility reader
-— [ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md)
+— [ADR-0024](../decisions/0024-canonical-environment-names.md)
 retired the predecessor names and the fallback machinery together.
 
 The retirement covered configuration names only. Deployed resource names, stored

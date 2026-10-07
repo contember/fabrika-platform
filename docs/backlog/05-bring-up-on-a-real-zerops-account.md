@@ -10,7 +10,7 @@ blocked-by: []
 [`zerops-live-bringup`](../archive/sprint-2026-08-03-zerops-live-bringup.md) brought
 the platform up on `prg1` in project `fabrika-test` on 2026-08-03: IAM, Operations,
 control and the proxy all build, boot and serve; the proxy enforcement boundary
-behaves exactly as ADR-0007 and ADR-0010 describe; and an example app runs behind it
+behaves exactly as ADR-0022 and ADR-0022 describe; and an example app runs behind it
 with its gates enforced. Six defects that only a live account could surface were found
 and five fixed.
 
@@ -32,7 +32,7 @@ them.
    Browser SSO no longer waits on this. It used to: the session cookie was shared
    across hosts through a parent-domain `Domain` attribute, and `*.zerops.app` is on
    the Public Suffix List, so a browser refuses a cookie scoped to `prg1.zerops.app`
-   outright. [ADR-0021](../decisions/0021-exchange-token-session-handoff.md) replaced
+   outright. [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) replaced
    that with a one-time code redeemed by the proxy, verified live across two
    `.zerops.app` hostnames on 2026-08-04, and
    [ADR-0023](../decisions/0023-one-session-per-host.md) has since deleted the shared
@@ -47,7 +47,7 @@ them.
 4. **Human authentication is done on this tier.** Password enrollment, sign-in,
    throttling, admin disable and the audit trail were exercised live on 2026-08-04,
    and so was cross-host browser SSO between two `.zerops.app` hostnames
-   ([ADR-0021](../decisions/0021-exchange-token-session-handoff.md)). Nothing
+   ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Nothing
    authentication-shaped is left for this list.
 
 ## Still-open semantics

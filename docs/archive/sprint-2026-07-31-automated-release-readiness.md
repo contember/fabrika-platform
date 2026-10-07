@@ -100,7 +100,7 @@ Hosted GitHub Actions and live npm verification are deliberately deferred to [ba
 ## Out of scope (explicit)
 
 - Credentialed Zerops bring-up and live semantics remain `../backlog/05-bring-up-on-a-real-zerops-account.md` plus questions 06 and 09.
-- Zerops source-map publication and managed-environment activation remain `../backlog/36-complete-zerops-release-artifact-correlation.md` and `../backlog/37-activate-zerops-managed-environment-transactionally.md`; the latter cannot close without a real-account witness.
+- Zerops source-map publication and managed-environment activation remain `../backlog/36-complete-zerops-release-artifact-correlation.md` and `../decisions/0044-zerops-delivery-ownership-and-recovery.md`; the latter cannot close without a real-account witness.
 - DNS-safe Operations egress remains `../backlog/38-add-dns-safe-operations-egress.md`; it needs its own cross-runtime security design.
 - Existing Poplach state adoption, Trasa deprecation, and downstream SDK migration remain separate external work.
 - This repository does not deploy `main` or tags into customer accounts.

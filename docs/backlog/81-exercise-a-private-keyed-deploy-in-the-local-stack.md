@@ -33,7 +33,7 @@ Two consequences are visible in `packages/local-stack/src/smoke.ts` today:
 
 So the keyed private path — credential selection by connection, token minting, private tarball
 resolve, and a delivery that reaches a bound application — has no deterministic witness. Only a live
-installation exercises it, which is exactly the gap ADR-0039 leaned on when it retired the v1 path.
+installation exercises it, which is exactly the gap the retirement of the v1 path leaned on.
 
 ## Approach / acceptance
 

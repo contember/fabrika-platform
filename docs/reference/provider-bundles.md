@@ -75,7 +75,7 @@ writes them as service-level variables before triggering the platform build.
 `null` removes a previously managed value. The remaining question of making
 those Zerops writes activation-consistent with an asynchronously successful app
 version is tracked in
-[backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md).
+[backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md).
 
 An optional `artifactUpload` contains the bounded, release-scoped Operations
 source-map endpoint and bearer. The Cloudflare runner consumes it where the build

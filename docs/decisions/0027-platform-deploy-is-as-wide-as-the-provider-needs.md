@@ -59,8 +59,7 @@ rather than forcing them to match.
 - **On Cloudflare, `fabrika platform deploy` stays narrow** and the scaffolded workflow keeps the
   order, as it ships today.
 - `@fabrika/installation-contract` keeps owning **the command surface** — which commands a provider
-  offers and how they are invoked — and does **not** own the deploy order. Backlog 61's "the contract
-  owning the order" is superseded by this ADR.
+  offers and how they are invoked — and does **not** own the deploy order.
 
 **Invariant: whatever owns the order must apply the proxy manifest in the same run as the code it
 describes, and must fail closed — a deploy that cannot apply the manifest must not leave the previous

@@ -39,7 +39,7 @@
 **Theme.** A comprehensive review of `iam` / `proxy` / `auth` / `auth-core` produced 63 findings. The
 single decision that shapes the rest is **backlog 18** (shipped and deleted by WU-A; its text is at
 `52c916c^`): the app SDK still carries a complete second enforcement path, and 15 findings live in
-code that is supposed to be deleted. So the sprint's goal is the one ADR-0007 stated and never finished — **the proxy is
+code that is supposed to be deleted. So the sprint's goal is the one ADR-0022 stated and never finished — **the proxy is
 the only thing that enforces, and every installation is secure by default** — plus the security and
 correctness debt the review surfaced along the way.
 
@@ -81,9 +81,9 @@ Three things fail that test today, and this sprint removes them:
 | 5  | ✔ `redeemKey` must survive                                   | backlog 18: share links are redeemed OFF the gate path; it is reached through `capabilityMiddleware` today (`auth/src/iam.ts:465`)                                                                                                                        |
 | 6  | ✔ The proxy never checks `ptype`                             | `proxy/src/authorize.ts:211` accepts any token whose signature, `iss`, `aud` and `exp` hold; `auth-core/src/types.ts:101` defines a `human` gate as "a resolved user principal exists"                                                                    |
 | 7  | ✔ Anonymous `px_` credentials carry no app                   | `credentials` has no `app` column in either migration set; `tokens.ts:142` ignores its `app` argument on that branch                                                                                                                                      |
-| 8  | ✔ The handoff code is logged verbatim                        | `proxy/src/caddy.ts:283` redacts only `px_…` and declared query credentials; the ADR-0021 code is a bare `randomToken(32)` on `?code=`                                                                                                                    |
+| 8  | ✔ The handoff code is logged verbatim                        | `proxy/src/caddy.ts:283` redacts only `px_…` and declared query credentials; the ADR-0022 code is a bare `randomToken(32)` on `?code=`                                                                                                                    |
 | 9  | ✔ Email identity forks                                       | `normalizeEmailIdentity` governs the password path; `db.ts:239` `getUserByEmail` is `WHERE email = ?` and `idx_principals_uq_email` is case-sensitive in both engines                                                                                     |
-| 10 | ✔ ADR-0021's persistence never runs on Postgres              | `postgres-schema.test.ts` calls no `HandoffRepository` method; `consumeCode`'s at-most-once guarantee rests on `changes === 0`, which on Postgres comes from string-matching a command tag                                                                |
+| 10 | ✔ ADR-0022's persistence never runs on Postgres              | `postgres-schema.test.ts` calls no `HandoffRepository` method; `consumeCode`'s at-most-once guarantee rests on `changes === 0`, which on Postgres comes from string-matching a command tag                                                                |
 
 ## Work units
 
@@ -151,7 +151,7 @@ _Folds in:_ what remains of SEC-4 after WU-A.
 ### Wave 3
 
 **WU-E — `__Host-` cookie prefix** · medium · coordinated across auth-core, proxy, iam (SEC-20)
-**WU-F — Cover the ADR-0021 path** · medium · TEST-1, TEST-2, TEST-3
+**WU-F — Cover the ADR-0022 path** · medium · TEST-1, TEST-2, TEST-3
 **WU-G — Project return origins from the control plane** · medium · closes **backlog 51** (shipped and
 deleted in `9d7396d`; its text is at `9d7396d^`)
 
@@ -190,7 +190,7 @@ _Touch points:_ `packages/iam/src/admin/**`, `packages/iam-contract/src/index.ts
 the work; its text is at `9d7396d^`)
 
 **WU-J — Consolidate the enforcement ADRs** · medium
-Where enforcement lives has been decided four times: ADR-0007 moved it to a proxy and retired an
+Where enforcement lives has been decided four times: ADR-0022 moved it to a proxy and retired an
 invariant inside itself; 0008 chose Caddy; 0010 amends 0008 after implementation disproved its
 central assumption; 0021 replaces the shared-cookie handoff 0007/0008 silently assumed. backlog 18
 finishes the job by deleting the SDK's copy. A reader today has to replay four documents plus a
@@ -236,7 +236,7 @@ rule — it adds one and re-statuses four; it does not edit their bodies.
 | ARCH-2 Cloudflare split       | Write an amending ADR admitting it is a typing convention there; do not split the entrypoint |
 | CORR-10 cross-app grants      | Validate against the UNION of every registered app's catalog; fix the seed                   |
 | OIDC boot asymmetry           | Unify on fatal — refusing to boot beats booting misconfigured                                |
-| Custom domain (Zerops)        | Stay on `.zerops.app`; ADR-0021 removed SSO's dependency on a shared cookie                  |
+| Custom domain (Zerops)        | Stay on `.zerops.app`; ADR-0022 removed SSO's dependency on a shared cookie                  |
 
 ### ARCH-2 — the reasoning, so it is not re-derived
 
@@ -337,7 +337,7 @@ miniature: proxy matches a `human` gate → 302 to IAM → `LOCAL_DEV_LOGIN` →
 URL. `DEV` is `""` for control and operations in both compose files, so no synthetic persona
 exists anywhere — which is the precondition WU-K needed.
 
-Sign-in locally uses the **shared cookie**, not the ADR-0021 handoff, and the reason is worth
+Sign-in locally uses the **shared cookie**, not the ADR-0022 handoff, and the reason is worth
 keeping: `apps.setReturnOrigins` 404s for an unknown app and `vozka` is not registered in IAM,
 because only a deploy reconciles fabrika's own schema. Forcing the handoff locally would have
 meant inventing a local-only app registration — adding a local-only mechanism in order to remove
@@ -414,7 +414,7 @@ decided ("prefix only") cannot be applied to `px_session` in any installation th
 path — including the local stack, which WU-D deliberately put on it.
 
 That surfaces a question this sprint's own goal implies. There are **two session-delivery mechanisms**:
-the ADR-0021 handoff, and the shared cookie ADR-0021 kept as an optimisation ("it costs nothing, keeps
+the ADR-0022 handoff, and the shared cookie ADR-0022 kept as an optimisation ("it costs nothing, keeps
 the local stack working unchanged"). "Costs nothing" is no longer quite true — it costs the `__Host-`
 prefix, it is a second path through `readHandoff`, and it is why SEC-6 needed a narrowed opt-out at all.
 

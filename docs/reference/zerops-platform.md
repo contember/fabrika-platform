@@ -468,7 +468,7 @@ Two consequences the client shape depends on:
   sound decision procedure is: read `subdomainAccess`, act only if it is `false`, then read it back until
   it is `true` — which is what `ensureSubdomainAccess` in `@fabrika/provider-zerops` does.
 - **A declaration that cannot be delivered must say so.** fabrika still writes `enableSubdomainAccess` in
-  its import documents, because it is what ADR-0007's `assertOnlyPublicService` reads to prove no service
+  its import documents, because it is what ADR-0022's `assertOnlyPublicService` reads to prove no service
   other than the proxy is claimed public — but the generated artifacts' header now states that applying
   the file publishes nothing, and names the call that does.
 
@@ -637,7 +637,7 @@ App gets a v2 canonical bundle in its own create-only environment slot derived f
 The slot name and bundle both bind that id; source validates the binding at startup and keeps immutable
 credential snapshots keyed by connection id. It activates a new SHA-256-bound bundle without restarting
 and routes v2 resolve and upload calls by the exact connection and installation pair. `keyed-v2` is the
-only transport (ADR-0039); there is no fallback and no credential search. A leftover unkeyed
+only transport (ADR-0029); there is no fallback and no credential search. A leftover unkeyed
 `GITHUB_APP_CREDENTIALS` bundle or split `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` pair is ignored
 entirely, and a request that names no connection resolves no credential at all. Fabrika sets no total
 connection limit. Request bodies, repository lists, environment responses and Control pages remain
@@ -647,7 +647,7 @@ Each connection has an independent webhook secret encrypted in Control's platfor
 App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and secret before
 reading and authenticating the bounded body, then requires the payload installation, repository and
 registered application pair to match it. A Zerops composition REFUSES the generic `/webhooks/github`
-route with 401 — since ADR-0039 it has nothing there to resolve, and it never falls back to a keyed
+route with 401 — since ADR-0029 it has nothing there to resolve, and it never falls back to a keyed
 connection. Cloudflare keeps that generic route, on its static secret and installation-id path, because
 it has no source connection row at all.
 
@@ -669,7 +669,7 @@ the pax global header's `comment`, strips the single archive prefix, keeps regul
 rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed mtime. The tarball's own
 directory entries are dropped; instead each parent directory is written once, outermost first, before
 the first file beneath it, because the platform's unpacker creates no directory it was not told about
-(measured 2026-08-21, below; ADR-0037's "drops directory entries" describes the first cut, which failed
+(measured 2026-08-21, below; ADR-0029's "drops directory entries" describes the first cut, which failed
 that build). It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
 root `.gitmodules`, paths outside the prefix or containing `.`/`..`, duplicate paths, a pax `linkpath`
 record, a pax record over 64 KiB, and a truncated stream. It admits at most 50,000 files and 512 MiB of
@@ -805,7 +805,7 @@ decision has to read the error code. The local emulator answers the same 400 sin
 
 ### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — the unpacker needs directory entries
 
-The first deploy through the streamed tarball path (ADR-0037) reached `BUILDING` and failed 45 s later
+The first deploy through the streamed tarball path (ADR-0029) reached `BUILDING` and failed 45 s later
 with no line after "DOWNLOADING APPLICATION SOURCE CODE … unpacking it on the container"; the
 app-version and its process carried no reason. The same tree pushed with the CLI built and deployed.
 Three hand uploads of the same 21 files through `POST /service-stack/{id}/app-version` → `PUT
@@ -940,7 +940,7 @@ Linux TCP acknowledgement counters increased by 65,624 bytes before deletion. Af
 the client sent the remaining bytes and received HTTP 200. This proves remote TCP acknowledgement of
 transmitted encrypted body bytes, not application-handler or backing-store consumption before deletion.
 
-The observations support exact-version deletion as a pre-trigger activation barrier (ADR-0047).
+The observations support exact-version deletion as a pre-trigger activation barrier (ADR-0044).
 They do not prove physical blob cleanup, upload-URL revocation, transport termination, indefinite
 non-resurrection or safe deletion after ambiguous build submission. The probe used the existing
 operator credential, not a separately tested project-scoped integration credential.
@@ -1020,7 +1020,7 @@ the current suite does not observe a real application's process environment over
 **Service-API variables are mutable service state, not an atomic release binding.** A failed or
 cancelled build leaves the values in place; a later restart exposes them to the old code. A successful
 deploy or archived-version deploy also boots with the current values. This is the live witness for
-[backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md), not a proof of a
+[backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md), not a proof of a
 replacement activation protocol or Control crash recovery.
 
 ### Verified live (2026-09-23, account `prg1`) — version-selected environment references
@@ -1234,7 +1234,7 @@ looks like — and the two passes as a whole.
 ### GitHub source connection in Control and CLI repair
 
 Normal GitHub App setup runs in the authenticated Control console at **Settings → Source**
-([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md)). Fresh Zerops installations
+([ADR-0029](../decisions/0029-github-app-sources.md)). Fresh Zerops installations
 boot with anonymous source access. The page lists stable connections in bounded pages and presents the
 one global setup or repair workflow separately. A human principal holding `source.connection.manage`
 can add another private organization-owned App while stable rows remain. Only one nonterminal workflow
@@ -1277,7 +1277,7 @@ purpose-bound webhook secret from the Control vault and reapplies its exact stor
 content type, TLS setting and secret through the credential-bound source client. If the durable source
 slot contains another active private key for the same exact GitHub App, reconciliation first proves the
 App identity and webhook configuration, then compare-and-set rebinds Control to the source-reported
-digest ([ADR-0036](../decisions/0036-recover-a-source-credential-binding.md)). It never reads or replaces
+digest ([ADR-0029](../decisions/0029-github-app-sources.md)). It never reads or replaces
 the private key, changes the App, webhook secret, connection id or application binding, or adopts a
 credential from another App. This is the repair path for credential-binding and remote webhook drift
 after a completed setup; the generic webhook route is reserved for Cloudflare and refused here.
@@ -1300,11 +1300,11 @@ reached that connection's scoped webhook route, passed HMAC verification and cre
 the nonsecret Control project binding. Equal valid RPC keys are reused; one valid side repairs an
 absent side; both absent generate one; invalid or mismatched values are refused. Normal init neither
 creates nor receives GitHub App credentials and never opens an XDG recovery file. It reports whether
-the remote source already holds a keyed credential and, since ADR-0039, ignores a leftover unkeyed or
+the remote source already holds a keyed credential and, since ADR-0029, ignores a leftover unkeyed or
 split value rather than offering to adopt it: a private source is connected only through Control's
 **Settings → Source**.
 
-Older ADR-0030 CLI recovery files are compatibility evidence only. This release does not discover,
+Older ADR-0029 CLI recovery files are compatibility evidence only. This release does not discover,
 open or delete them. There is nothing left to adopt them into, so an operator holding one connects a
 new source in Control and deletes the file afterwards. Source credentials never enter the sidecar
 checkout, repository or GitHub Environment.
@@ -1401,7 +1401,7 @@ record IDs, never values or upload URLs. Interrupted recovery uses that frozen b
 today's secret catalog. Original descriptor bytes and digest remain unchanged by the execution overlay.
 Backing records remain available for rollback; no garbage collection is performed.
 
-Pre-trigger cleanup requires exact-version deletion and verified absence (ADR-0047). Source abort is
+Pre-trigger cleanup requires exact-version deletion and verified absence (ADR-0044). Source abort is
 best effort, not proof of transport termination. Potentially submitted builds remain unresolved until
 external settlement; lease loss does not authorize deletion or cancellation. Dry runs validate the
 complete six-key representation but require neither live admission nor provider calls.
@@ -1423,5 +1423,5 @@ first-class deployment target**.
 `startWithoutCode` runtime service; select an `alpine@3.x` type instead of setting it).
 
 This is what makes the Caddy proxy deployable —
-[ADR-0008](../decisions/0008-caddy-forward-auth-proxy.md). Since the project L7
+[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md). Since the project L7
 balancer terminates TLS, Caddy needs neither ACME nor certificate persistence.

@@ -33,9 +33,9 @@ Backlog 17 and 19 are complete and removed. WU2 and WU3 remain in backlog 18, wh
 ### WU1 — Establish one gate and token wire contract (effort M)
 
 - **Problem.** Gate matching and credential parsing are duplicated between `@fabrika/auth` and `@fabrika/proxy`, while the proxy token header is duplicated between the proxy and apps.
-- **Verify first.** Pin the current divergence matrix from ADR-0010 in `@fabrika/auth-core` tests: anchored and case-sensitive globs, `*` crossing `/`, repeated slash preservation, ordered rules, absent-credential fall-through, empty values as absent, and present-invalid credentials as terminal.
+- **Verify first.** Pin the current divergence matrix from ADR-0022 in `@fabrika/auth-core` tests: anchored and case-sensitive globs, `*` crossing `/`, repeated slash preservation, ordered rules, absent-credential fall-through, empty values as absent, and present-invalid credentials as terminal.
 - **Scope.** Move the stable injected-header name and the canonical path matcher into `@fabrika/auth-core`; make the proxy consume them; keep credential extraction in the proxy once the SDK copy disappears. Remove the cross-package equality test and duplication warnings that no longer describe the final state. Refresh gate comments that still name in-process SDK enforcement.
-- **Acceptance / witness.** Exactly one production matcher and one token-header constant remain. Proxy authorization tests and the ADR-0010 divergence matrix pass without mirrored helper implementations.
+- **Acceptance / witness.** Exactly one production matcher and one token-header constant remain. Proxy authorization tests and the ADR-0022 divergence matrix pass without mirrored helper implementations.
 - **Touch points.** `packages/auth-core/`, `packages/proxy/`, `packages/installation-zerops/zerops/__tests__/example-app.test.ts`, and gate-related reference comments.
 
 ### WU2 — Reduce the app SDK to post-proxy identity and object authorization (effort XL)
@@ -77,7 +77,7 @@ Backlog 17 and 19 are complete and removed. WU2 and WU3 remain in backlog 18, wh
 - Unix timestamp storage remains [backlog 22](../backlog/22-unix-second-columns-overflow-in-2038.md). It requires a separate cross-schema data-model decision and is not urgent.
 - npm bootstrap and predecessor package/repository retirement remain [backlog 25](../backlog/25-bootstrap-npm-trusted-publishing.md) and [backlog 26](../backlog/26-retire-trasa-release-surface.md).
 - No edits, releases, or deployments in the standalone Poplach, Revizor, or Opice repositories. This sprint produces their migration contract only.
-- No change to proxy topology, gate precedence, token claims, IAM admission policy, or ADR-0007/0010 boundaries.
+- No change to proxy topology, gate precedence, token claims, IAM admission policy, or ADR-0022/0010 boundaries.
 
 ## Decisions
 
@@ -101,7 +101,7 @@ Backlog 17 and 19 are complete and removed. WU2 and WU3 remain in backlog 18, wh
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+     trim to a one-line pointer ("→ ADR-0022"). -->
 
 - 2026-07-31 — WU4 shipped as `695d47b`: both providers now cancel in-flight IAM schema reconciliation with the deploy signal.
 - 2026-07-31 — WU1 shipped as `a82567a`: auth-core now owns the sole gate matcher and injected-token header contract.

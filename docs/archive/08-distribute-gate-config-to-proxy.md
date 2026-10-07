@@ -7,12 +7,12 @@ blocked-by: []
 # 08 — Decide how gate config reaches the running auth service
 
 **Summary.** Gates become a reconciled, IAM-stored artifact
-([ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md)). Open: how they get
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Open: how they get
 from there into a running proxy deployment.
 
 ## Problem
 
-Note the correction in [ADR-0010](../decisions/0010-gate-evaluation-stays-in-the-auth-service.md):
+Note the correction in [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md):
 gates are **not** Caddy configuration and never reach Caddy at all. Caddy's routes
 are a fixed three-step chain per app. Gates are read by the **TypeScript auth
 service**, from its manifest. So this item is about getting a manifest to that

@@ -80,8 +80,8 @@ pipeline, which is the `triggerPipeline` branch that takes no `buildFromGit`.
 
 **Invariant: fabrika never deploys its own installation, and no credential for an installation's
 account lives in this repository.** A change that adds a deploy job to `.github/workflows/`, or that
-gives the control plane a path to redeploy the services it is running in, needs a superseding
-decision.
+gives the control plane a path to redeploy the services it is running in, needs this ADR
+rewritten first.
 
 ## Consequences
 

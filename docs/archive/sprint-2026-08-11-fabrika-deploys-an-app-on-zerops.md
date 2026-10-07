@@ -82,7 +82,7 @@ written, unit-tested against fakes, and `trigger-deploy` has never built anythin
 
 The control plane already holds the repository and the GitHub App installation id. What changed during
 the run is the transport: Zerops' user-scoped OAuth integration cannot be configured by the installation
-token. [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) therefore
+token. [ADR-0029](../decisions/0029-github-app-sources.md) therefore
 adds a per-installation `source` service that fetches an exact commit and uploads its archive into the
 Zerops build pipeline.
 
@@ -162,7 +162,7 @@ Zerops build pipeline.
   persists nothing — prefer that over widening `ZeropsStoredTarget`, which would need a version 3 and a
   backfill for no gain.
 - **Scope guard.** A **public** URL carries no credential. A credentialed clone URL stays refused by
-  [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) — the platform
+  [ADR-0029](../decisions/0029-github-app-sources.md) — the platform
   records what it is given. WU3 replaces this checkpoint with the one transport used by public and
   private application repositories.
 - **Acceptance / witness.** A deploy triggered from the console against the **public** example
@@ -213,9 +213,9 @@ Zerops build pipeline.
   `627c5d9` implements the shared manifest flow, `419dffb` adopts it on Cloudflare without the
   `onCreated` durability hook, and `0592334` adds the optional awaited bounded hook. Commits `3e4c2b6`,
   `1e6f4b1` and `6a36a2d` implement App-JWT verification and create-only service variables; `e74bd1c`
-  is the historical seamless CLI implementation described by ADR-0030. Commits `a64278f`, `d6dd195`,
+  is the historical seamless CLI implementation described by ADR-0029. Commits `a64278f`, `d6dd195`,
   `459bc64` and `ecd49b9` add legacy credential adoption, narrow init to anonymous bootstrap/repair,
-  implement the authenticated Control workflow from ADR-0031 and expose it in the dashboard. The
+  implement the authenticated Control workflow from ADR-0029 and expose it in the dashboard. The
   source service, provider lifecycle, control delegation, installation topology and supported upgrade
   flow are locally verified. The complete live browser setup and both live deploys remain open.
 - **Security gates.** Project-network reachability is not authorization. Tests must prove an unsigned
@@ -317,7 +317,7 @@ Zerops build pipeline.
    observation from it means what it says.
 6. **The GitHub machine identity is operator-owned.** Each installation uses an organization-owned
    GitHub App installed on selected repositories. Fabrika does not operate a central App or hold a
-   credential shared across operators. → [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md).
+   credential shared across operators. → [ADR-0029](../decisions/0029-github-app-sources.md).
 
 ## Decision — registration keeps manifest compilation local
 
@@ -462,7 +462,7 @@ the private half of the gate impossible.
 ### WU3 architecture checkpoint (2026-08-11)
 
 The native repository-integration plan is retired by the authorization-boundary probe above. The
-replacement is [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md):
+replacement is [ADR-0029](../decisions/0029-github-app-sources.md):
 an operator-owned GitHub App supplies machine identity, and a non-public per-installation `source`
 service transports an exact repository snapshot through Zerops' app-version upload pipeline. Zerops
 still executes the application build and deploy.
@@ -570,7 +570,7 @@ environment and correlated exception ingest also remain live-only gates. The spr
 ### WU3 Control-managed source checkpoint (2026-08-14)
 
 The normal setup authority has moved from laptop-side init into authenticated Control, as accepted by
-[ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md):
+[ADR-0029](../decisions/0029-github-app-sources.md):
 
 - commit `a64278f` added deterministic adoption of a complete legacy or canonical source credential
   set. It creates the atomic bundle only when needed, activates the exact digest and returns no
@@ -816,8 +816,8 @@ URL.
 
 That successful deploy proved the App key worked, not that it was byte-identical to the deleted setup
 credential. The later stable `Reconcile` call answered `502 credential_conflict`: the restored bundle's
-digest differed from Control's final row, and ADR-0031 had already deleted the original recovery copy.
-ADR-0036 closes that recovery gap. A same-origin human reconciliation now verifies the active durable
+digest differed from Control's final row, and ADR-0029 had already deleted the original recovery copy.
+ADR-0029 closes that recovery gap. A same-origin human reconciliation now verifies the active durable
 credential belongs to the exact stored GitHub App, reconfigures the exact webhook with Control's
 existing vault secret, and only then compare-and-set rebinds the row to the source-reported digest. It
 returns a specific `409` for identity conflicts and `503` for dependency failures instead of collapsing

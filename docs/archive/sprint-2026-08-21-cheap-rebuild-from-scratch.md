@@ -4,8 +4,8 @@
 > namespace. The rebuild found and fixed two platform facts the fake APIs had hidden (a missing
 > service is a `400`, the unpacker needs directory entries) and shipped them as `v0.0.24` and
 > `v0.0.25`. The two projects cost $8.70 and $3.98 per 30 days. Commit map: WU1a → `40fa310`
-> (ADR-0037); WU0 → `30251be` (ADR-0038); WU2 → `da77242`; WU4 → `6fb69c5`; WU1 → `b1c0849`
-> (ADR-0039); WU3 → `ee3ec4d`; WU5+6 → `e1976e5`; WU7 → `513aeae` (decided, not built); WU8 fixes →
+> (ADR-0029); WU0 → `30251be` (ADR-0038); WU2 → `da77242`; WU4 → `6fb69c5`; WU1 → `b1c0849`
+> (ADR-0029); WU3 → `ee3ec4d`; WU5+6 → `e1976e5`; WU7 → `513aeae` (decided, not built); WU8 fixes →
 > `c8e4d5d`, `9441c3d`; run log → `410cac3`, `a6169af`. Verification: after WU5+6 `bun run typecheck`
 > 35/35, `bun test` 2 782 pass / 9 skip / 0 fail with PostgreSQL, lint and format clean,
 > `release:validate` exit 0; CI and Release green on `v0.0.23`–`v0.0.25`; WU8 witnesses (1)–(8) in
@@ -160,7 +160,7 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
   only, reject symlinks / hard links / `.gitmodules` / traversal / duplicates, 50 000 entries and
   512 MiB enforced in the stream, descriptor digest checked in the stream) → gzip → PUT. No git, no
   temp disk, memory bounded to one header plus one pax record. The RPC contract with control, the
-  upload-URL validation, the failure codes and the deadlines stay. ADR-0037 amends ADR-0029's
+  upload-URL validation, the failure codes and the deadlines stay. ADR-0029 amends ADR-0029's
   packaging invariant; `docs/reference/zerops-platform.md` describes the new path.
 - **Acceptance / witness.** Unit: `git archive`-generated fixtures round-trip through the rewrite and
   the captured PUT body unpacks to the expected paths, modes and content; symlink, `.gitmodules`, long
@@ -175,7 +175,7 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
 
 ### WU1 — Remove the legacy v1 source credential path (effort L)
 
-- **Problem.** [ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)
+- **Problem.** [ADR-0029](../decisions/0029-github-app-sources.md)
   kept the live v1 credential and the generic webhook as a marker-selected compatibility path, and the
   active [multi-connection sprint](sprint-2026-08-14-multiple-private-github-source-connections.md)
   still owes a live witness for it. That witness required the one v1 credential in existence —
@@ -398,7 +398,7 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
   solve it here.
 - **Merging the four Bun services.** Raised and rejected on 2026-08-21: four runtimes floor at four
   shared cores and 0.5 GB together, so merging would save about three shared cores and cost the
-  credential-custody boundary ([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)),
+  credential-custody boundary ([ADR-0029](../decisions/0029-github-app-sources.md)),
   the telemetry availability boundary ([ADR-0016](../decisions/0016-independent-operations-plane.md))
   and the identity boundary. The cost was never the service count.
 
@@ -408,7 +408,7 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
    alternative — keep the compatibility code and close the multi-connection sprint with its live gate
    unmet — leaves code nobody can exercise and a sprint that cannot honestly be archived. Requires a
    superseding ADR for
-   [ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)'s compatibility
+   [ADR-0029](../decisions/0029-github-app-sources.md)'s compatibility
    clause; 0032 is immutable and is not edited.
 2. **Fix before rebuild, not after.** Every WU2–WU7 defect is on the bring-up path, and WU8 is their
    only honest acceptance. Rebuilding first would mean either living with them again or tearing down
@@ -439,7 +439,7 @@ everything except WU6, which follows it.
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+     trim to a one-line pointer ("→ ADR-0022"). -->
 
 - 2026-08-21 — Plan written. `3ecf86d` already landed the cheap defaults; WU0 owes its ADR. Live state
   at planning time: `fabrika-notes-prod` at about $78/30d (an HA PostgreSQL at `oltp-production`, six
@@ -448,7 +448,7 @@ everything except WU6, which follows it.
   confirmed by key name only, no value read — which is the evidence WU1 acts on. `fabrika-test` was
   already gone from the account before this sprint began.
 - 2026-08-21 — WU1a added: the `source` tarball rewrite was decided and started the same day this plan
-  was written (ADR-0037). WU0's ADR moves to 0038 and WU1's to 0039. WU4 moved up to stage 2 and WU5
+  was written (ADR-0029). WU0's ADR moves to 0038 and WU1's to 0039. WU4 moved up to stage 2 and WU5
   down to stage 3 so the two long poles start together. WU6 now decides the provider-project question
   (it does not delete one). Decision 4 got a date.
 - 2026-08-21 — WU1a landed locally in `40fa310`: `source-zerops` 127 pass / 0 fail, full typecheck,

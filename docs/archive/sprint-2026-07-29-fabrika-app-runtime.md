@@ -39,7 +39,7 @@ without mixing request-time code with provider configuration.
 - ✔ `@fabrika/auth` already owns the canonical `AuthContext`, `Scope`, and
   `Middleware` contracts — `packages/auth/src/index.ts`.
 - ✔ Proxy gates and application object checks are separate responsibilities —
-  `docs/decisions/0007-proxy-based-auth-enforcement.md`.
+  `docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md`.
 
 ## Work units
 

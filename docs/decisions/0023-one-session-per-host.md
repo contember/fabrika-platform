@@ -1,163 +1,125 @@
 ---
 id: 0023
-title: One session per host — retire the shared session cookie
+title: One session per host, bound to the browser that started the login
 status: accepted
-date: 2026-08-05
-amends: 0022
+date: 2026-10-07
 ---
 
-# 0023 — One session per host
+# 0023 — One session per host, bound to the browser that started the login
 
 ## Context
 
-[ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) states the enforcement model end to end
-and leaves exactly one question open, in the section _"There are two session-delivery mechanisms, and
-whether to keep both is open"_. This ADR answers it. 0022's body is unedited; it anticipated this
-decision and named its consequences.
+[ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) delivers an application session through a
+one-time code that the proxy redeems on the app's own host. A second mechanism could also deliver one:
+IAM sets its session cookie with `Domain=<parent>` and every app under that parent reads it. That
+shared cookie saves one redirect when an app shares a domain with IAM, and costs more than that:
 
-There were two ways a browser could come to hold a session for an application:
+- **It blocks the `__Host-` prefix.** `__Host-` forbids `Domain`, so the session cookie cannot carry
+  it. Without the prefix a sibling subdomain can set `Domain=<parent>` and plant a second session
+  cookie that the real host then sends alongside its own.
+- **It is a second path through `/auth/login`.** Choosing between the two paths needs a rule for "can a
+  cookie reach that host", which no registry answers.
+- **It is a second redirect authority.** The cookie domain becomes a wildcard allowlist beside the
+  per-app return-origin registry.
 
-1. **The one-time code** ([ADR-0021](0021-exchange-token-session-handoff.md)). IAM issues a single-use
-   code bound to `(session, app, return URL)`, redirects to the app's own host at
-   `/__fabrika/auth/callback`, and the proxy there redeems it and sets a **host-only** cookie. Works
-   everywhere, including across registrable domains and on `*.zerops.app`, which is on the Public
-   Suffix List.
-2. **The shared cookie.** IAM sets `px_session` with `Domain=<parent>`, configured by
-   `SESSION_COOKIE_DOMAIN`, and every app under that parent reads the same cookie. ADR-0021 kept it as
-   an optimisation: _"it costs nothing, keeps the local stack working unchanged, and remains the right
-   path when the app genuinely does share a domain with IAM"_.
+The control plane registers an app's return origins on every deploy, so the handoff works anywhere a
+deploy happens. `__Host-` requires `Secure`, and Chromium accepts a `Secure` cookie over plain HTTP on
+`*.localhost`, so the local stack can use the prefix without TLS.
 
-"Costs nothing" stopped being true, and the auth-hardening sprint found the bill in three places:
-
-- **It blocked the `__Host-` cookie prefix** (SEC-20). `__Host-` forbids `Domain`; `SESSION_COOKIE_DOMAIN`
-  exists to set one. The prefix could not be applied to the session cookie in any installation on the
-  shared-cookie path — including the local stack, which was deliberately on it.
-- **It was a second path through `/auth/login`.** `readHandoff` had four outcomes rather than two, and
-  the difference between two of them was whether a fallback the operator never asked for could reach the
-  destination. SEC-6 is the finding that the fallback strands a browser in an undiagnosable login loop
-  whenever it cannot; the fix was a narrowed opt-out, i.e. a special case inside a special case.
-- **It made `safeRedirect` a second authority on where a browser may be sent.** Its allowlist was the
-  cookie domain, so IAM had two different answers to "may I send this browser to that host?" — the
-  return-origin registry, and a wildcard over a parent domain that no one registered anything with.
-
-The reason to keep it also weakened. WU-G made registering an app's return origins one ordinary call on
-every deploy (`reconcileSchema` with `returnOrigins`, projected by the control plane from
-`app_envs.public_origin`), so the argument "the handoff needs registration and only a deploy can do
-that" no longer holds anywhere a deploy happens — and where none does, the local stack, the same call is
-available.
-
-**One measurement was load-bearing and is recorded here so nobody re-derives it.** `__Host-` requires
-`Secure`, and the local stack serves plain HTTP on `http://*.fabrika.localhost:18080`. Verified in
-Chromium 151.0.7922.34 (the build Playwright 1.62.1 installs, i.e. the one the browser suite runs):
-a `__Host-`-prefixed `Secure` cookie set over plain HTTP on `http://control.fabrika.localhost` is
-**accepted** and returned on the next request, because `*.localhost` is a potentially-trustworthy
-origin. The same probe confirmed the prefix's rules are enforced — a `__Host-` cookie carrying `Domain`
-and one without `Secure` were both dropped — and that the prefix buys something host-only alone does
-not: a sibling host setting `Domain=fabrika.localhost` planted a **second** `px_session` that the real
-host then sent alongside its own, while `__Host-px_session` could not be shadowed at all.
+The code alone does not bind the callback to the browser that started the login. An attacker can log
+in as themselves, copy the callback URL and make a victim's browser visit it. The victim's proxy would
+redeem a valid code and replace the victim's app session with a child of the attacker's session. This
+is login CSRF (session swapping).
 
 ## Decision
 
-**We will deliver every application session as a one-time code redeemed by the proxy on the
-application's own host, and delete the shared session cookie.** Four parts.
+**We will deliver every application session as a one-time code redeemed on the app's own host, bound
+to the browser that started the login, and have no shared session cookie.**
 
 ### 1. There is one session-delivery mechanism
 
-`SESSION_COOKIE_DOMAIN` is deleted, from `Env`, from `Config`, from both installation templates and
-from the local composition. No configuration widens a session cookie to a parent domain, and no code
-path reads one. An app that shares a domain with IAM takes the same route as an app that does not.
+No configuration widens a session cookie to a parent domain, and no code path reads one. An app that
+shares a domain with IAM takes the same route as one that does not.
 
-**Invariant: a session cookie is host-only, always.** IAM's is written on IAM's host by
-`/auth/login`; an app's is written on the app's host by its proxy, on the one path that redeems a code.
-The two are different `sessions` rows with the same cookie NAME, and neither is ever readable from the
-other's host.
+**Invariant: a session cookie is host-only, always.** IAM writes its session on IAM's host at
+`/auth/login`. A proxy writes an app session on the app's host, on the one path that redeems a code.
+They are different `sessions` rows with the same cookie name.
 
-### 2. Both session cookies and the per-app token carry the `__Host-` prefix
+### 2. Every fabrika cookie carries the `__Host-` prefix and `Secure`
 
-`SESSION_COOKIE` is `__Host-px_session` and `TOKEN_COOKIE` is `__Host-px_token`. The prefix is a
-browser-enforced restatement of the invariant above: a cookie with that name is refused unless it has
-`Secure`, has `Path=/`, and names no `Domain`. What it adds beyond host-only is the shadowing case
-measured above — a sibling subdomain cannot plant a duplicate the real host would then send. That is
-why SEC-20's decision ("prefix only; duplicate-aware cookie reading not needed") is coherent: with the
-prefix there is no duplicate to read.
+The session cookie is `__Host-px_session`; handoff cookies are `__Host-px_handoff_<state>`. The browser
+refuses a cookie with that prefix unless it has `Secure`, `Path=/` and no `Domain`, so a sibling host
+cannot shadow it. `Secure` is unconditional. The socket behind a TLS-terminating balancer is plain HTTP,
+so a derived `Secure` was the wrong signal, and without `Secure` the browser stores nothing anyway.
 
-**`Secure` is now unconditional** on every cookie IAM and the proxy write. It used to be derived — from
-the configured issuer's scheme in IAM, from the manifest's scheme in the proxy — because the socket is
-plain HTTP behind a TLS-terminating balancer and was the wrong signal. The prefix removes the decision
-entirely: without `Secure` the browser stores nothing, so a conditional could only ever produce a cookie
-that does not exist. It remains correct behind a balancer and on `localhost`.
+The browser holds no access-token cookie. The proxy mints or reuses a short-lived per-app JWT
+server-side and injects it as `X-Fabrika-Token`.
 
-### 3. `readHandoff` has two outcomes for a named app, and the registry is the only authority
+### 3. The return-origin registry is the only redirect authority
 
-Given `?app=`, either the return address is in that app's registry and the browser gets a code, or it is
-not and the answer is a **400 naming the address**. An empty registry is not an opt-out; it is an app
-that cannot log anyone in, reported as such. SEC-6's narrowed opt-out is gone with the branch it was
-narrowing.
-
-`safeRedirect` accepts only IAM's own origin and falls back to the issuer for everything else — no
-cookie domain, and no `*.localhost` special case either, because a cross-host destination is the
-registry's business and `readHandoff` has already consulted it.
+Given `?app=`, IAM issues a code only when the return address is in that app's registry, the request
+carries a valid handoff state and challenge, and the human is authenticated. Otherwise it answers
+**400 and names the refused address**. An empty registry is an app that cannot log anyone in.
+`safeRedirect` accepts only IAM's own origin and falls back to the issuer.
 
 **Invariant: the return-origin registry is the only thing that may send a browser to another host.**
 
-### 4. Local development runs the handoff, like everything else
+### 4. The handoff is bound to the browser with a PKCE-style verifier
 
-`@fabrika/local-stack` registers the console (`vozka`) and the notes example with IAM after the
-composition is healthy, with the same `reconcileSchema` call, the same endpoints and the same admin
-credential a deploy uses. It stands in for the deploy that is absent locally, exactly as it already does
-for the machine key — it is not a local-only mechanism, and there is no local-only branch in IAM or the
-proxy to support it. The browser suite signs in the same way: the seeded IAM login is planted on IAM's
-host and one `/auth/login?app=…&redirect=…` per application host turns it into that host's own session.
+1. When the proxy starts a login it generates a random public `state` and a random secret `verifier`.
+2. It stores the verifier in a ten-minute `__Host-px_handoff_<state>` cookie (`HttpOnly`,
+   `SameSite=Lax`). The state-specific name keeps concurrent tabs independent.
+3. It sends `state` and `code_challenge = SHA-256(verifier)` through IAM's password, OIDC and
+   existing-session login paths. The verifier never appears in a URL.
+4. IAM integrity-binds the challenge into the plaintext code and stores the hash of the complete code.
+5. IAM returns the state with the code. The proxy requires the matching verifier cookie and redeems
+   `(app, code, verifier)` over its private IAM surface.
+6. IAM consumes the code atomically, then checks the verifier. Success creates the child app session.
+   Every terminal callback clears the handoff cookie.
+
+**Invariant: a callback URL alone never establishes a session.** Redemption needs the verifier that
+only the initiating browser holds.
+
+### 5. Local development runs the handoff
+
+`@fabrika/local-stack` registers its apps' return origins with the same `reconcileSchema` call and the
+same admin credential a deploy uses. IAM and the proxy have no local-only branch. The browser suite
+plants an IAM login on IAM's host and runs one `/auth/login?app=…&redirect=…` per app host.
 
 ## Consequences
 
-- **One extra redirect on first sign-in for an app that shares a domain with IAM.** This is the whole
-  price. The shared cookie let such an app skip the code round trip; now it takes it. It is one 302 per
-  app per login — not per request, not per token expiry — and the proxy re-mints access tokens
-  server-side from the app's own session thereafter.
-- **`__Host-` on the session cookie, which was unreachable before.** A sibling subdomain can no longer
-  shadow a session cookie, and the browser enforces host-only rather than the server merely intending it.
-- **Every installation exercises the same code path.** The handoff was the path a Zerops installation
-  took and the local stack did not, so its coverage was production-only; it is now on every `local:up`
-  and every browser run. Two configurations became one.
-- **An app whose return origins are not registered cannot log anyone in, and says so.** This is
-  fail-closed and it is new operational surface — 0022 already recorded it for apps that had opted in;
-  it now applies to all of them. The 400 names the address, which is the one thing an operator can act
-  on. The control plane registers these on every deploy from `app_envs.public_origin`, so the failure
-  mode is "the origin was never configured", not "somebody forgot a step".
-- **An installation served over cleartext HTTP on a public hostname can hold no session.** `Secure` is
-  unconditional and the browser will not store the cookie. That is the correct outcome for a 30-day
-  credential; it is stated here because it is a behaviour change for anyone who was relying on an
-  `http://` issuer outside `localhost`.
-- **`readHandoff`, `safeRedirect` and the cookie builder each got smaller.** The cookie helper has no
-  `domain` option at all, so the shape that would break the prefix is not expressible.
-- **What did NOT change: the proxy's tiers.** `authorize.ts` still reads a session cookie on the app
-  host and mints from it. Only the cookie's provenance narrowed — from "possibly IAM's own shared
-  cookie" to "always a child session this proxy itself set".
-- **A parent (`app IS NULL`) session still mints for any app if presented on an app's host.** Nothing
-  puts it there any more — the cookie is host-only on IAM's host — but `mintToken` does not refuse it,
-  and the local fixture seeders rely on that. Tightening it would buy nothing: whoever holds an IAM
-  login can obtain a code for any registered app anyway.
+- **One extra redirect on first sign-in for an app that shares a domain with IAM**, once per app per
+  login. Access tokens are re-minted server-side from the app session afterwards.
+- **Every installation, including `local:up` and the browser suite, exercises the same path.**
+- **An app whose return origins are not registered cannot log anyone in, and the 400 says which
+  address.** The control plane registers origins on every deploy from the app environment's public
+  origin, so the failure means the origin was never configured.
+- **An installation served over cleartext HTTP on a public hostname holds no session.** Correct for a
+  30-day credential.
+- **A copied callback URL cannot create or replace another browser's session.** A thief of a live code
+  can still consume it and make that login fail; the code was already a short-lived bearer credential.
+- **Login start writes a transient cookie.** Abandoned attempts expire after ten minutes.
+- **The code format carries the challenge, but storage is still one hash.** No schema change.
+- **A parent IAM session still mints for any app if presented on an app host.** Nothing puts it there,
+  and the local fixture seeders rely on it. Refusing it buys nothing: an IAM login can obtain a code for
+  any registered app.
+- **First-party gateways that call IAM forward the proxy's JWT as a bearer**, not a cookie. IAM verifies
+  issuer and audience and resolves the principal's IAM permissions itself.
 
 ## Alternatives considered
 
-**Keep the shared cookie and apply `__Host-` only to `px_token`.** The other half of the question 0022
-left open. `px_token` is already host-only, so the prefix there is nearly free — and nearly pointless:
-the credential worth protecting is the 30-day session, not the five-minute access token, and the session
-would have kept the shadowing weakness the measurement above demonstrates. It would also have preserved
-the second `readHandoff` path, the second redirect authority, and a mechanism whose only remaining
-advantage is one redirect on one class of installation. This sprint's standard is "where two mechanisms
-do one job, delete one"; this is that case.
-
-**Keep the shared cookie for co-located hosts and use the handoff elsewhere, selected automatically.**
-That is what the code did, and SEC-6 is the report of it failing: the selection was "does this app have
-a registry", which does not answer "can a cookie reach that host", so a third rule had to be bolted on
-to tell the two apart. Any automatic selection has this shape.
-
-**Serve TLS in the local stack so `__Host-` is unambiguous.** Considered before the measurement, and
-unnecessary after it: Chromium accepts the prefix over plain HTTP on `*.localhost`. It would have added
-certificate generation and trust-store handling to `local:up` for no behavioural gain.
-
-**Apply `__Host-` outside `local` only.** Rejected on the sprint's own terms: a mechanism that exists
-only locally is precisely what this work has been deleting, and it would mean the cookie the suite tests
-is not the cookie production sets.
+- **Keep the shared cookie and prefix only the access token.** Protects the five-minute credential and
+  leaves the 30-day session shadowable, with the second login path and second redirect authority intact.
+- **Choose shared cookie or handoff automatically per app.** "Does this app have a registry" does not
+  answer "can a cookie reach that host", so a third rule must be bolted on. Any automatic choice has
+  this shape.
+- **Serve TLS in the local stack.** Unnecessary: Chromium accepts `__Host-` over HTTP on `*.localhost`.
+- **Apply `__Host-` outside `local` only.** The suite would test a cookie production does not set.
+- **A state cookie with no verifier.** Stops a copied URL in the common case, but the check stays
+  proxy-local; a verifier makes IAM enforce the browser proof and keeps the secret out of every URL.
+- **Store the challenge in a new column.** Binding it into the hashed code gives the same authenticated
+  input without a migration or a second lookup key.
+- **Keep a browser JWT cookie as a fallback.** Another ambient credential and another gate branch; the
+  app session and the proxy's token cache already cover renewal and the fast path.
+- **Forward fabrika cookies to the app and trust it not to read them.** Leaves a bearer credential in a
+  less trusted process; stripping at the proxy is smaller and testable.

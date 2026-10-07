@@ -56,4 +56,4 @@ real alternative, also write a ../decisions/ ADR and link it here.>
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+     trim to a one-line pointer ("→ ADR-0022"). -->

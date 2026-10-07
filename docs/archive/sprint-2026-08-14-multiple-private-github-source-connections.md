@@ -1,9 +1,9 @@
 > **OUTCOME — closed 2026-08-21.** One Zerops installation connects and deploys private repositories
 > from several GitHub organizations through keyed v2 credentials and connection-scoped webhooks
-> (ADR-0032); `keyed-v2` scoped delivery, exact-commit private deploys, restart reconstruction and
-> keyed-slot recovery (ADR-0036) were all witnessed live between 2026-08-14 and 2026-08-20. The legacy
+> (ADR-0029); `keyed-v2` scoped delivery, exact-commit private deploys, restart reconstruction and
+> keyed-slot recovery (ADR-0029) were all witnessed live between 2026-08-14 and 2026-08-20. The legacy
 > `legacy-v1` compatibility path this sprint preserved was retired with the account that held its only
-> credential (ADR-0039, `b1c0849`), which voids the legacy generic-delivery gate rather than meeting it.
+> credential (ADR-0029, `b1c0849`), which voids the legacy generic-delivery gate rather than meeting it.
 > Commit map (selected): v1/v2 rebinding `2cf6681`, `f668ff5`; scoped webhook URL `225e47b`; source
 > failure reasons `407ff66`; browser manifest handoff `7fe3bec`; webhook reconciliation `b7bc771`;
 > durable binding recovery `87aa2ed`; retirement `b1c0849`. Verification: the 2026-08-17 run-log gates
@@ -19,7 +19,7 @@ GitHub organizations without making any GitHub App public.
 **Theme.** Replace the single-connection assumption with an explicit connection-and-installation
 binding across credential custody, source RPC, Control persistence, webhooks, registry and dashboard,
 while preserving the already-live v1 connection as a compatibility path. The governing decision is
-[ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md).
+[ADR-0029](../decisions/0029-github-app-sources.md).
 
 ## Refs re-verified at HEAD (2026-08-14)
 
@@ -195,7 +195,7 @@ while preserving the already-live v1 connection as a compatibility path. The gov
   Create only private Apps in the new multi-connection action. Generate v2 credential bundles and
   scoped webhook URLs. Select the connected organization by canonical repository owner during
   onboarding and persist the exact connection/installation pair. Keep legacy adoption narrow and
-  preserve all redaction and authorization checks from ADR-0031.
+  preserve all redaction and authorization checks from ADR-0029.
 - **Acceptance / witness.** Workflow tests start and complete a second organization beside the migrated
   connection, reject a same-owner connection, recover an interrupted second setup without disturbing
   the first, and bind new Zerops private apps to the expected pair. No browser/API response or log
@@ -347,7 +347,7 @@ while preserving the already-live v1 connection as a compatibility path. The gov
 
 ## Decisions
 
-- [ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md) owns the
+- [ADR-0029](../decisions/0029-github-app-sources.md) owns the
   organization-private model, create-only keyed credentials, additive compatibility, exact webhook and
   registry binding, no explicit count cap and rollout order.
 - The existing singleton table and base v1 credential remain compatibility evidence. Its copied keyed

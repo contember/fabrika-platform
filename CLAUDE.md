@@ -5,10 +5,8 @@ An application platform with three planes: **Delivery** (declare/provision/deplo
 health). It targets a small fleet of apps on more than one cloud — Cloudflare and Zerops today.
 
 Read `docs/decisions/` before changing anything structural: much of what looks odd here is odd on
-purpose, and some invariants have already been retired by a later ADR (ADR-0022 supersedes ADR-0007,
-ADR-0008, ADR-0010 and ADR-0021; ADR-0009 extends ADR-0002). **For anything touching authentication
-or authorization, ADR-0022 is the one to read** — the four it supersedes are kept for their
-reasoning, not as a description of current behaviour. Before touching the Zerops path read
+purpose. ADRs are living until 1.0 — each states its decision as it stands now (`docs/CLAUDE.md`).
+**For anything touching authentication or authorization, ADR-0022 is the one to read.** Before touching the Zerops path read
 [`docs/reference/zerops-platform.md`](./docs/reference/zerops-platform.md) — it records platform
 facts settled against a real account, several of which contradict Zerops' published documentation.
 
@@ -163,7 +161,7 @@ Project docs live in [`docs/`](./docs/) and follow a fixed structure — start a
 [`docs/INDEX.md`](./docs/INDEX.md) (the map). In short:
 
 - `docs/reference/` — how the system works now.
-- `docs/decisions/` — ADRs (the _why_), immutable.
+- `docs/decisions/` — ADRs (the _why_), rewritten in place until 1.0.
 - `docs/backlog/` — decided work not yet scheduled · `docs/sprints/` — active
   work-plans · `docs/archive/` — shipped.
 - `docs/ideas/` — proposals, no commitment.

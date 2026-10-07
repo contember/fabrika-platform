@@ -9,7 +9,7 @@ planes for applications that run entirely on **one** cloud platform:
   supports triage, and monitors active health.
 
 Delivery and Access came from two previously separate, Cloudflare-only projects
-([ADR-0001](../decisions/0001-merge-propustka-and-vozka.md)); Operations absorbed
+([ADR-0011](../decisions/0011-static-provider-bundles.md)); Operations absorbed
 the first useful Poplach slice under
 [ADR-0016](../decisions/0016-independent-operations-plane.md):
 
@@ -67,13 +67,13 @@ Worker.
 `source` exists because Zerops builds from an archive it is handed, and its
 native GitHub integration cannot be driven by an installation's project-scoped
 token
-([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).
+([ADR-0029](../decisions/0029-github-app-sources.md)).
 It is a transporter, not an execution environment. It resolves the requested ref
 to an exact commit and to the SHA-256 of the repository-root `zerops.yaml`, then
 streams GitHub's `git archive` tarball to the presigned Zerops upload URL that
 control obtained — `gunzip → tar rewrite → gzip → PUT`, with no repository byte
 staged on disk
-([ADR-0037](../decisions/0037-stream-github-tarballs-for-zerops-sources.md)). The
+([ADR-0029](../decisions/0029-github-app-sources.md)). The
 rewrite keeps regular files only and refuses symlinks, `.gitmodules`, and trees
 above 50,000 entries or 512 MiB. Public platform uploads explicitly enable validated relative symlinks
 and check Git tree metadata to reject submodules even without their marker. `source` never executes repository code and
@@ -83,8 +83,8 @@ authorization.
 
 Private repositories are read through operator-owned GitHub Apps — one App per
 GitHub organization, created and verified from the authenticated console
-([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md),
-[ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)).
+([ADR-0029](../decisions/0029-github-app-sources.md),
+[ADR-0029](../decisions/0029-github-app-sources.md)).
 The App id and private key live only on `source`, one canonical bundle per
 connection in its own environment slot; control holds the identifiers that select
 it. `@fabrika/github-app` is the shared client both sides use: the least-authority
@@ -134,7 +134,7 @@ App at all.
 
 `@fabrika/auth` is the published application-facing IAM SDK; the rename from the
 predecessor packages was a deliberate, one-time break — see
-[ADR-0001](../decisions/0001-merge-propustka-and-vozka.md).
+[ADR-0011](../decisions/0011-static-provider-bundles.md).
 
 The narrow contract packages keep wire types away from runtime entrypoints:
 
@@ -302,7 +302,7 @@ version's presigned upload URL to stream the archive to, and calls
 token, and control's Zerops token never leaves control. Each step commits a
 credential-free checkpoint before the next irreversible call, so a crashed run is
 reconciled from the recorded phase rather than guessed at
-([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).
+([ADR-0029](../decisions/0029-github-app-sources.md)).
 
 The Zerops control provider requires its composition root to inject
 `@fabrika/engine`; it has no fallback executor. It stores
@@ -318,7 +318,7 @@ failure from an older attempt cannot replace a newer successful retry.
 The Zerops provider currently writes managed environment values before it
 triggers the asynchronous app pipeline. Activation consistency when that
 pipeline fails still requires
-[backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md).
+[backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md).
 
 Secret edits follow the same registered service address but are not a deploy step.
 The control plane writes or deletes them immediately through the service-env API
@@ -368,7 +368,7 @@ verifier binds that callback to the app host that started login. No cookie is ev
 between two hosts, each host's session cookie carries the `__Host-` prefix, and the proxy
 removes every Fabrika cookie before the application while preserving app-owned cookies
 ([ADR-0023](../decisions/0023-one-session-per-host.md),
-[ADR-0026](../decisions/0026-bind-session-handoffs-to-the-browser.md)). See
+[ADR-0023](../decisions/0023-one-session-per-host.md)). See
 [`cross-host-sso.md`](cross-host-sso.md).
 
 The IAM service stays **global** — one identity database, one audit log, one admin

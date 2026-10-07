@@ -97,7 +97,7 @@ Each entry **graduates** out of the scratch log:
 - It was a transient hiccup with no future value → leave it in the log; it dies
   with the sprint when the sprint is archived (git holds the record).
 
-After graduating an entry, trim it to a one-line pointer ("→ ADR-0007") so the log
+After graduating an entry, trim it to a one-line pointer ("→ ADR-0022") so the log
 doesn't duplicate the durable doc.
 
 ## Decisions (ADR)

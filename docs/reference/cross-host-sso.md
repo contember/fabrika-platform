@@ -8,9 +8,9 @@ hosts. See
 [ADR-0023](../decisions/0023-one-session-per-host.md) for why there is only one
 mechanism, [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)
 for the enforcement model around it,
-[ADR-0026](../decisions/0026-bind-session-handoffs-to-the-browser.md) for the
+[ADR-0023](../decisions/0023-one-session-per-host.md) for the
 browser-bound proof, and
-[ADR-0021](../decisions/0021-exchange-token-session-handoff.md) for the code's
+[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) for the code's
 design.
 
 ## The round trip

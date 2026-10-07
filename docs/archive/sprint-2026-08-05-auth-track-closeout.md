@@ -66,7 +66,7 @@ Re-read in the actual code before planning on them. `✔` = confirmed live · `�
   `packages/iam/src`. Green field, and nothing to un-trust.
 - ✔ IAM's existing buckets are per-account + deployment-wide, in
   `password_login_throttles` (`packages/iam/src/password-db.ts:279-353`). WU-C keeps them.
-- ✔ 198 `VOZKA_*` / `PROPUSTKA_*` occurrences remain under `packages/` — the ADR-0018 fallback,
+- ✔ 198 `VOZKA_*` / `PROPUSTKA_*` occurrences remain under `packages/` — the ADR-0024 fallback,
   still carried.
 
 ## Work units
@@ -142,9 +142,9 @@ Re-read in the actual code before planning on them. `✔` = confirmed live · `�
   step asserts the same intent it did before.
 - **Touch points.** `tests/browser/operations-{error-discovery,bulk-status-and-merge,event-release-correlation}.test.ts`.
 
-### WU-E — retire the ADR-0018 legacy env fallback (effort M) · beyond the filed items
+### WU-E — retire the ADR-0024 legacy env fallback (effort M) · beyond the filed items
 
-- **Problem.** 198 `VOZKA_*` / `PROPUSTKA_*` occurrences remain, kept alive by ADR-0018's
+- **Problem.** 198 `VOZKA_*` / `PROPUSTKA_*` occurrences remain, kept alive by ADR-0024's
   "legacy fallback" for installations that no longer need protecting. The standing direction for
   this repo is that no backward compatibility is owed and that superseded decisions should not
   linger as if live.
@@ -152,11 +152,11 @@ Re-read in the actual code before planning on them. `✔` = confirmed live · `�
   `environmentAliases.read`, `readResumeEnvironmentAlias`) — the sweep is only safe if the list is
   complete, so find the sites rather than trusting this list.
 - **Scope.** Drop the fallback readers and the legacy names, canonical names only. Supersede
-  ADR-0018 with an ADR recording that the fallback is retired and why it was safe to retire.
+  ADR-0024 with an ADR recording that the fallback is retired and why it was safe to retire.
 - **Acceptance / witness.** No `VOZKA_`/`PROPUSTKA_` env name remains under `packages/`, `scripts/`,
   `.github/`; `typecheck`, `lint`, full `bun test`, and `local:up` all pass. Durable identifiers
   with `vozka`/`propustka` in their **values** (resource names, database ids) are NOT touched —
-  ADR-0018 already separates those, and they address deployed things.
+  ADR-0024 already separates those, and they address deployed things.
 - **Touch points.** `packages/iam/src/node/runtime.ts`, `packages/auth/src/iam.ts`,
   `packages/installation-cloudflare/src/init.ts`, `packages/runner-cloudflare/scripts/`,
   `packages/local-stack/src/smoke.ts`, `docs/decisions/`.
@@ -343,10 +343,10 @@ sprint).
   stack down. WU-C's proxy/IAM edits were in the tree throughout this run; the suite was green with
   them, which is evidence but not a guarantee for whatever they land.
 
-### WU-E — retire the ADR-0018 legacy env fallback (2026-08-05)
+### WU-E — retire the ADR-0024 legacy env fallback (2026-08-05)
 
-- **→ [ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md).** Canonical
-  `FABRIKA_*` names only; ADR-0018 is `superseded by 0024` (status line only, body untouched). Its
+- **→ [ADR-0024](../decisions/0024-canonical-environment-names.md).** Canonical
+  `FABRIKA_*` names only; ADR-0024 is `superseded by 0024` (status line only, body untouched). Its
   naming rules and its durable-identifier exclusion both survive there.
 - **The plan's three named readers were not the list.** `sharedSecret`, `environmentAliases.read`
   and `readResumeEnvironmentAlias` were three of TEN alias helpers over one shared reader:

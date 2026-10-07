@@ -6,7 +6,7 @@ blocked-by: []
 
 # 09 — Confirm Zerops allows multiple custom domains on one service
 
-**Summary.** Near-settled in ADR-0007's favour. Upstream's custom-domain procedure
+**Summary.** Near-settled in ADR-0022's favour. Upstream's custom-domain procedure
 takes **more than one domain per service**, so the one-proxy-fronts-many-apps
 topology holds. What remains is confirming it on an account and writing it down.
 
@@ -27,12 +27,12 @@ Two operational facts that come with it, and that the bring-up will need:
   before the certificate can issue. Wildcards need DNS-01
   (`CNAME _acme-challenge.<domain>` → `<domain>.zerops.zone`).
 
-Not yet observed on a live account, so the ADR-0007 topology is well-supported rather
+Not yet observed on a live account, so the ADR-0022 topology is well-supported rather
 than proven.
 
 ## Problem
 
-[ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md) makes the proxy the
+[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) makes the proxy the
 only publicly routed service in an environment project, fronting every app in it.
 That requires **many custom domains pointing at one service**.
 

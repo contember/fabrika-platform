@@ -34,7 +34,7 @@ The counter-argument for a single project is that separating environments pushes
 app→IAM traffic over the public internet. That argument is weak here: the IAM
 service must be publicly exposed **anyway** for the browser OIDC flow, and the
 app→IAM RPC path is cold-path only — the warm path verifies tokens locally
-([ADR-0007](0007-proxy-based-auth-enforcement.md)).
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 
 ## Decision
 

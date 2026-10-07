@@ -35,7 +35,7 @@ RPC, authorization, persistence, protocol, and environment boundaries.
 `@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
 origin from `FABRIKA_IAM_ISSUER`, straight off the `Env` it is handed. Those are the
 only names it accepts; the predecessor names were retired by
-[ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md), and
+[ADR-0024](../decisions/0024-canonical-environment-names.md), and
 there is no compatibility reader left to consult.
 
 ## Authorization boundary

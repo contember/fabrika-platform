@@ -42,7 +42,7 @@ the current internal API or storage format.
 - ✔ Persistence fixes the provider set in a CHECK and adds Zerops-specific target
   columns — `packages/control/migrations/0007_zerops_targets.sql:2`.
 - ✔ One-platform-per-installation is already a product constraint —
-  `docs/decisions/0001-merge-propustka-and-vozka.md:34`.
+  `docs/decisions/0011-static-provider-bundles.md:34`.
 
 ## Work units
 

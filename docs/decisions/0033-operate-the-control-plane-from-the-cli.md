@@ -36,7 +36,7 @@ symptom, that the four RPC calls which admit the first administrator live in a t
 The control gates admit this client today and always did: `/api/*` carries both a `service` and a
 `human` rule (`packages/control/fabrika.gates.ts`). Only the source-connection routes are human-only,
 and they stay that way — App creation is a browser flow with a GitHub redirect in the middle, and
-`requireHuman` enforcing `principal.type === 'user'` is the correct reading of ADR-0031.
+`requireHuman` enforcing `principal.type === 'user'` is the correct reading of ADR-0029.
 
 ## Decision
 

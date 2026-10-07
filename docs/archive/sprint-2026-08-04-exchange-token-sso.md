@@ -31,11 +31,11 @@
 cookie domain with it — proven live on `.zerops.app` subdomains, with no custom
 domain.
 
-**Theme.** [ADR-0021](../decisions/0021-exchange-token-session-handoff.md) replaces
+**Theme.** [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) replaces
 the shared-cookie handoff with a one-time code redeemed by the proxy. Two already
 decided fixes ride along because they are in the same code and the same request
 path: backlog **50** (console writes 403 behind a terminating balancer) and backlog
-**48** (the proxy's public scheme), which ADR-0021 settles as a manifest field. Both
+**48** (the proxy's public scheme), which ADR-0022 settles as a manifest field. Both
 files are deleted by this sprint.
 
 ## Refs re-verified at HEAD (2026-08-04)
@@ -63,7 +63,7 @@ files are deleted by this sprint.
 
 - **Scope.** `ExchangeAuthCodeInput` / `ExchangeAuthCodeResult` in `@fabrika/auth-core`,
   next to the mint types. The reserved callback path and code TTL as named constants.
-  `IamRpc` is NOT extended (ADR-0021).
+  `IamRpc` is NOT extended (ADR-0022).
 - **Acceptance.** `bun run typecheck` clean; no SDK implementor changes.
 
 ### WU2 — IAM persistence (M)
@@ -72,7 +72,7 @@ files are deleted by this sprint.
   `migrations-postgres/`, plus their repositories in `src/db.ts`. Single-use is
   enforced by the same partial-unique pattern the password action tokens use.
   `sessions` gains `app` and `parent_session_id` for the child sessions redemption
-  creates (ADR-0021); revoking a parent must revoke its children.
+  creates (ADR-0022); revoking a parent must revoke its children.
 - **Acceptance.** `postgres-schema.test.ts` passes against a real Postgres; a code
   redeemed twice fails the second time; revoking a parent kills its children.
 
@@ -125,7 +125,7 @@ files are deleted by this sprint.
 ## Out of scope
 
 - Back-channel logout / immediate revocation across apps. The TTL bound is unchanged
-  by this sprint and is recorded in ADR-0021's consequences.
+  by this sprint and is recorded in ADR-0022's consequences.
 - Retiring the in-process SDK path ([`18`](../backlog/18-shrink-the-app-sdk.md)).
 - Custom domains, the production two-project topology, the git-sourced deploy —
   [`05`](../backlog/05-bring-up-on-a-real-zerops-account.md) keeps them.
@@ -135,7 +135,7 @@ files are deleted by this sprint.
 - **The redemption had to yield a session, not an access token.** Caught while
   writing WU4, before any code: a per-app token lives 300s, so a browser holding only
   one would be redirected on every expiry — and a redirect turns an in-flight `POST`
-  into a bodyless `GET`. ADR-0021 was revised before implementation; what lands on the
+  into a bodyless `GET`. ADR-0022 was revised before implementation; what lands on the
   app's host is a credential the proxy can re-mint from.
 - **`redeem` bypassed `callIam`.** Its own try/catch made an unreachable IAM a 403
   instead of a 503 whenever the injected gateway threw anything but
@@ -155,5 +155,5 @@ files are deleted by this sprint.
   answered 200, because the proxy caches a minted token for its 300s TTL. Asking IAM
   directly with the child session returned `invalid_session` immediately; polling the
   app then flipped it to a 302 inside the next window. Instant at IAM, bounded by one
-  token lifetime at the edge — exactly what ADR-0021 records, and worth measuring
+  token lifetime at the edge — exactly what ADR-0022 records, and worth measuring
   rather than assuming, because the first look said "broken".

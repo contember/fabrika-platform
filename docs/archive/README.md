@@ -28,8 +28,8 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   — shared REST/RPC payload rules and bound-source provider capabilities, plus sixteen source-file decompositions; independent reviews and integrated checks passed.
 
 - [A cheap installation, rebuilt from scratch (2026-08-21)](sprint-2026-08-21-cheap-rebuild-from-scratch.md)
-  — emptied the account, retired the legacy v1 source path (ADR-0039), streamed GitHub tarballs in
-  `source` (ADR-0037), sized namespaces cheaply (ADR-0038), fixed the bring-up defects, and stood one
+  — emptied the account, retired the legacy v1 source path (ADR-0029), streamed GitHub tarballs in
+  `source` (ADR-0029), sized namespaces cheaply (ADR-0038), fixed the bring-up defects, and stood one
   installation back up unattended with two private apps from two organizations; the live run found
   two platform facts the emulator had hidden and left backlog 83–84.
 - [A bring-up without surprises (2026-08-21)](sprint-2026-08-21-bring-up-without-surprises.md)
@@ -39,8 +39,8 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   platform-fact table asserted of the emulator and the account, and the `source` memory reading.
 - [Multiple private GitHub source connections (2026-08-14)](sprint-2026-08-14-multiple-private-github-source-connections.md)
   — one installation, one private GitHub App per organization, keyed v2 credentials and
-  connection-scoped webhooks (ADR-0032), witnessed live through a keyed-v2 private deploy and a
-  keyed-slot recovery. Its legacy-v1 compatibility gate was retired by ADR-0039 instead of met; the
+  connection-scoped webhooks (ADR-0029), witnessed live through a keyed-v2 private deploy and a
+  keyed-slot recovery. Its legacy-v1 compatibility gate was retired by ADR-0029 instead of met; the
   second-organization deploy moved to the cheap-rebuild sprint.
 - [A public and private GitHub application deployed on Zerops (2026-08-11)](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
   — one exact application commit deployed first from a public repository and then from the same
@@ -109,7 +109,7 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   emptied the Access-plane backlog: a session is refused once its method is
   disabled, Operations' public host declares only the routes it serves, an abuse
   limit is keyed on a coordinate the caller cannot set, the drifted Operations
-  browser scenarios are re-authored, and ADR-0018's legacy environment-name
+  browser scenarios are re-authored, and ADR-0024's legacy environment-name
   fallback is retired. Records why item 54's other half is a console architecture
   change rather than a rename.
 - [Zerops path correctness (2026-08-05)](sprint-2026-08-05-zerops-path-correctness.md)
@@ -118,8 +118,8 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   loud, and brought the live installation to HEAD — which is where a browser found
   two sign-in defects no test could reach. Its fifth unit was overtaken by ADR-0025.
 - [Proxy gate-config delivery](08-distribute-gate-config-to-proxy.md) — the
-  shipped redeploy decision retained as context for ADR-0007, ADR-0008, and
-  ADR-0010.
+  shipped redeploy decision retained as context for ADR-0022, ADR-0022, and
+  ADR-0022.
 - [Canonical Fabrika environment names](07-rename-env-var-prefixes.md) — the
-  shipped ADR-0018 compatibility sweep retained as the inventory of renamed
+  shipped ADR-0024 compatibility sweep retained as the inventory of renamed
   configuration boundaries and exclusions.

@@ -52,25 +52,11 @@ Use the existing supported topology where possible; do not introduce a new insta
 
 ### WU1 — Durable managed-environment activation (L; backlog 37)
 
-- **Problem.** Failed candidate variables can reach old code on restart; sequential writes can leave a partial set.
-- **Verify first.** WU0's live primitive and migration/absence behavior; control lease/reconciliation races.
-- **Scope.** Bind all platform-managed deployment keys to a specific version; preserve ordinary application-secret semantics. Recover the same binding after interrupted staging, lost responses, cancellation and Control restart. Prevent older/concurrent work from corrupting a newer binding.
-- **Approved boundary.** Use immutable version-scoped service values and descriptor references for new applications. Refuse automatic conversion of legacy canonical configuration before mutation; legacy migration is a separate, explicitly designed operation. The user approved this boundary after comparing native pipeline configuration with version-scoped references.
-- **Decision.** [ADR-0044](../decisions/0044-bind-zerops-managed-configuration-to-application-versions.md) records the binding and recovery contract, including collision-safe first provisioning approved by the user.
-- **Acceptance / witness.** Fault-injection tests at each durable boundary, duplicate delivery and concurrent reconciliation, a run longer than the current lease, and live failed-build/restart/rollback pairing. No secret values in durable provider envelopes or logs.
-- **Touch points.** Provider deploy/control/checkpoints/API and their tests; Control lifecycle/reconciliation and any approved lock changes. This is one combined territory, not separate agents editing either side of the same protocol.
-
-Implementation contract to freeze before delegating:
-
-- Establish a create-only protocol/ownership marker only during fresh provisioning. An existing unmarked service is not automatically adopted, even when its canonical variables appear absent.
-- Creation must be positively attributable to the provisioning operation; a pre-import absence check alone is not evidence because `override` can adopt a concurrently created service. Wait for import processes before any marker write.
-- A subsequent deploy admits the previous coherent version binding, including explicit absences. Canonical records may be returned as `USER` even when they contain descriptor references; classify by the exact owned binding, not the record type alone. Do not treat markers as protection against privileged platform edits.
-- Reserve the internal secret-key prefix against application writes. Stage values with create-only writes and exact in-memory read-back; checkpoints contain only coordinates, original artifact/descriptor digests, setup, reference names and confirmed record IDs.
-- Recovery never regenerates values from the current catalog. An incomplete unconfirmed staging set fails safely before submission. Once submission may have happened, observe the frozen external version rather than retrying submission or declaring terminal failure from a local timeout.
-- Use a renewable invocation lease with unique attempt holders, durable exclusion of newer runs while external work remains unresolved, and fenced compare-and-swap checkpoint/terminal writes. Deploy, reconciliation and cancellation share this discipline. The existing 30-minute TTL alone cannot cover a 70-minute build.
-- Repository mutations must serialize on the common lease row while checking ownership, sibling runs and prior checkpoint. A standalone PostgreSQL `NOT EXISTS` or lease `EXISTS` predicate is insufficient. Losing an invocation lease stops effects; it is not a request to cancel the external build.
-- Cancellation request acceptance is not external settlement. Retain staged secrets for rollback; do not claim a cancelled run restored old code if activation already won.
-- Shared seams include lock renewal, guarded run-repository mutations, unresolved provider outcomes and reconcile/cancel signals. Land and review those together before provider implementation; preserve Cloudflare behavior in mechanical contract updates.
+**Moved.** The [simplification sprint](sprint-2026-10-07-simplify-delivery-and-providers.md)
+replaces this unit's version-bound protocol with its decisions D3–D5: only the release identity is
+bound to an application version, recovery polls or deletes the recorded version, and one renewed
+holder-checked lease covers runs and namespace-proxy attempts. That sprint's WU3.2 and WU3.3 deliver
+it and rewrite ADR-0044; backlog 37 is consumed. This unit closes when they ship.
 
 ### WU2 — Immutable installation and namespace-proxy revision (M; backlog 65)
 
@@ -94,7 +80,7 @@ ADR-0043 and the platform reference retain the contract and live evidence.
 
 ### WU4 — Safe Operations egress (M; backlog 38)
 
-**Paused by user.** Native Bun 1.3.14 transports did not enforce the response-header bound. The user declined the proposed temporary npm Undici compatibility spike for now. The incomplete adapter was removed from the working tree; its eight-file draft is retained at `/tmp/opencode/fabrika-wu4-paused.patch`. This is an unresolved release blocker for the required webhook notifications and active checks.
+**Paused by user.** Native Bun 1.3.14 transports did not enforce the response-header bound. The user declined the proposed temporary npm Undici compatibility spike for now. The incomplete adapter was removed from the working tree; its eight-file draft was kept only at `/tmp/opencode/fabrika-wu4-paused.patch` and is lost (checked 2026-10-07); the work restarts from the problem statement. This is an unresolved release blocker for the required webhook notifications and active checks.
 
 - **Problem.** Syntax validation does not keep webhook/health traffic outside private networks after DNS resolution.
 - **Verify first.** Inspect existing runtime transports and caller requirements. Prove the selected Bun transport can pin validated addresses while retaining hostname/TLS verification.
@@ -163,7 +149,7 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 
 - 2026-10-03: WU1 implementation review found no defects (216 reviewer-run tests). Leader ran all eight focused suites: 335 passes, 1,804 assertions; Control integration added 74 passes. Full repository typecheck passed. The full test command with real PostgreSQL and dedicated temporary S3 reached 3,705 passes, 37 opt-in skips and 16 failures across example-app execution and CLI installation/namespace tests; subsequent isolated suites did not run because the first command failed. Read-only root-cause triage precedes fixes. The S3 fixture was removed; the integration remains uncommitted.
 
-- 2026-10-03: Both late/in-flight upload-after-deletion probes passed: upload HTTP 200 did not restore the deleted version; exact GET and build requests returned `400 appVersionNotFound`, with no new process or active-version change. Disposable services were deleted. → platform reference and ADR-0047. WU1 and proxy cleanup now adopt confirmed exact-version deletion for pre-trigger settlement; ambiguous build submissions retain the existing unresolved-state rule.
+- 2026-10-03: Both late/in-flight upload-after-deletion probes passed: upload HTTP 200 did not restore the deleted version; exact GET and build requests returned `400 appVersionNotFound`, with no new process or active-version change. Disposable services were deleted. → platform reference and ADR-0044. WU1 and proxy cleanup now adopt confirmed exact-version deletion for pre-trigger settlement; ambiguous build submissions retain the existing unresolved-state rule.
 
 - 2026-10-03: User selected the simplest working completion path after independent review distinguished activation safety from transport termination. Run disposable late/in-flight upload-after-deletion witnesses before adopting pre-trigger settlement through fenced build exclusion and verified version absence. No durable source coordinator is authorized. Potentially submitted builds still require external settlement; source termination is not inferred from an abort acknowledgement. In parallel, classify and fix the remaining WU1 integration failures independently of the cancellation gate.
 
@@ -187,7 +173,7 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 
 - 2026-10-02: Leader reran the platform-source protocol/metadata/archive/service suites: 265 passes, 756 assertions, no failures; both independent reviews accepted the slice. Latest package typecheck reported only two namespace `Sleeper` typing errors outside source-service changes, assigned to the namespace integration owner. User authorized direct affected-package typechecks and focused verification suites while the CPU lease queue is blocked, excluding builds and benchmarks.
 
-- 2026-10-02: User approved exact-version, app/environment-scoped lookup of retained run checkpoints for managed-binding admission after rollback. User also approved shared durable namespace proxy attempts and renewable ownership across every rebuild path; → ADR-0046. Both integration seams remain under implementation.
+- 2026-10-02: User approved exact-version, app/environment-scoped lookup of retained run checkpoints for managed-binding admission after rollback. User also approved shared durable namespace proxy attempts and renewable ownership across every rebuild path; → ADR-0044. Both integration seams remain under implementation.
 
 - 2026-10-02: Namespace provider review accepted the recovery fixes after the real API client preserved only verified `400 appVersionNotFound` during deletion. Leader ran 127 API/namespace tests (547 assertions), no failures. Installation default serialization now escapes `$` as JSON `\u0024`; independent re-review accepted exact descriptor/digest round-tripping. Remaining typechecks and source suites were resubmitted after the server restart.
 

@@ -260,7 +260,7 @@ Re-read the load-bearing facts in the actual code before planning on them.
 
 ### WU8 — Read the `source` service's memory during a real upload (effort S)
 
-- **Problem.** The streamed tarball path (ADR-0037) was built to stop `source` from needing RAM in
+- **Problem.** The streamed tarball path (ADR-0029) was built to stop `source` from needing RAM in
   proportion to the repository, and the rebuild proved it deploys at a 0.125 GB floor — but nobody
   read its memory while it worked. The claim that motivated the rewrite is still an inference.
 - **Verify first.** What the account exposes: a metrics endpoint on the public API, the console's
@@ -269,7 +269,7 @@ Re-read the load-bearing facts in the actual code before planning on them.
 - **Scope.** Deploy a repository of a few hundred megabytes (a throwaway with generated files) through
   the test installation and record `source`'s peak memory and container count during the upload, and
   the same for a small repository. Write both into `docs/reference/zerops-platform.md` beside the
-  ADR-0037 description. No code unless the reading contradicts the design — then a backlog item.
+  ADR-0029 description. No code unless the reading contradicts the design — then a backlog item.
 - **Acceptance / witness.** Two numbers in the reference doc with the date, the repository sizes and
   how they were read; `source` did not scale past its floor for either.
 - **Touch points.** `docs/reference/zerops-platform.md`; the throwaway repository lives outside this
@@ -323,7 +323,7 @@ identifiers redacted where they are credentials.
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+     trim to a one-line pointer ("→ ADR-0022"). -->
 
 - 2026-08-21 — Wave 0 (read-only). WU3: no ordering reason exists among `iam`, `operations`, `source` —
   none reads a sibling at boot (`iam` holds no sibling origin; `operations` constructs `HttpIamRpc`
@@ -381,7 +381,7 @@ identifiers redacted where they are credentials.
   repository (25 × 10 MB random files, plus the 62 MB app): deploy succeeded in 3 min 22 s, the
   tarball stream took ~17 s (version reserved 18:29:31Z, build-and-deploy 18:29:48Z), `source`
   stayed at **1 container × 128 MB** for the whole run. The small branch alone: 3 min 08 s, the
-  same 1 × 128 MB. The floor held for both; written into the reference doc beside ADR-0037.
+  same 1 × 128 MB. The floor held for both; written into the reference doc beside ADR-0029.
 - 2026-08-21 — Release `v0.0.26` (run 32514719921): verify → publish → `registry-smoke` passed 23
   packages with no manual re-run, 4 min 04 s end to end (WU7 witness).
 - 2026-08-21 — WU3 witness. `fabrika platform upgrade --provider=zerops --to=v0.0.26 --sidecar=<checkout>`:

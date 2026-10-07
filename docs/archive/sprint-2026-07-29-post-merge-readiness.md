@@ -303,7 +303,7 @@ closure record includes commit and verification witnesses.
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+     trim to a one-line pointer ("→ ADR-0022"). -->
 
 - 2026-07-29 — WU1: the standalone Oblaka entry now delegates to the shared IAM
   resource builder. Local and remote graph-equality, validation, secret-boundary,

@@ -87,7 +87,7 @@
 ### WU6 — Decision, reference, and release evidence (effort M)
 
 - **Problem.** The auth and outbound-delivery boundaries constrain future providers and stored identity state.
-- **Verify first.** Re-read ADR-0007, ADR-0015, ADR-0017, and backlog 46 against the final implementation.
+- **Verify first.** Re-read ADR-0022, ADR-0015, ADR-0017, and backlog 46 against the final implementation.
 - **Scope.** Record the portable email and composable authentication decisions, update current references/package maps, rescope Operations email backlog honestly, and close this sprint with exact evidence.
 - **Acceptance / witness.** Formatting, lint, full typecheck, full tests, real Postgres password suite, and Cloudflare/Zerops generation checks pass; any unavailable credentialed witness is reported rather than inferred.
 - **Touch points.** `docs/decisions`, `docs/reference`, `docs/backlog`, docs indices, sprint archive.

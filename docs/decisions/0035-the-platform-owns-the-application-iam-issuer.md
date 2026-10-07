@@ -58,7 +58,7 @@ We will treat the application's IAM issuer as platform-owned configuration, unde
 1. **`FABRIKA_IAM_ISSUER` is the canonical name**, from the platform's own configuration through to the
    application. `FABRIKA_IAM_URL` is renamed everywhere it appears — `@fabrika/auth`, both proxies,
    both installations, the runner job contract, the authoring configs and the examples. This is a
-   flag-day rename with no transitional reader, as [ADR-0024](0024-retire-the-legacy-environment-name-fallback.md)
+   flag-day rename with no transitional reader, as [ADR-0024](0024-canonical-environment-names.md)
    requires: a fallback is "the kind of utility a future rename adopts instead of doing the rename".
    The name says what the value IS — the `iss` of a token — rather than where it happens to be fetched
    from.

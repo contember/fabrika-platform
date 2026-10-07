@@ -232,7 +232,7 @@ consumes backlog 35 without expanding the Operations feature set.
 - Zerops source-map publication and Delivery-to-Operations release links remain
   [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
 - Transactional Zerops managed-environment activation remains
-  [backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md).
+  [backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md).
 - DNS-pinned production egress for webhooks and health checks remains
   [backlog 38](../backlog/38-add-dns-safe-operations-egress.md).
 - A credentialed Zerops deployment remains
@@ -281,7 +281,7 @@ grouped issue through the managed configuration path.
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+     trim to a one-line pointer ("→ ADR-0022"). -->
 
 - The original WU2 draft asked for an application-environment intersection.
   Operations access intentionally treats app and environment grants as

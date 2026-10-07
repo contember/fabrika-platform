@@ -2,7 +2,7 @@
 id: 0045
 title: Upload immutable installation and namespace proxy sources
 status: accepted
-date: 2026-10-02
+date: 2026-10-07
 ---
 
 # 0045 — Upload immutable installation and namespace proxy sources
@@ -34,7 +34,7 @@ their source. Git export attributes must not invalidate source/descriptor identi
 
 **Invariant:** every installation service build uses that one snapshot and an explicitly reserved
 application-version ID: reserve, upload, build the reserved version, then observe that version.
-Both first-install passes share the snapshot. Preserve concurrent IAM/Operations/source builds,
+Both first-install passes share the snapshot. Preserve concurrent IAM/Operations builds,
 followed by proxy and then Control. A failed source preparation cannot fall back to a Git pipeline.
 An ambiguous build response cannot justify deleting the version or submitting another build.
 
@@ -43,19 +43,16 @@ commit SHA, and the descriptor identity needed to verify and submit the build. N
 copies the installation owner's selected default. Every subsequent proxy rebuild uses the persisted
 identity, not a new default from an upgraded Control process.
 
-The existing source service transports the exact public commit to the reserved proxy version. Its
-platform-archive path supports validated safe relative symlinks; this does not silently relax the
-application-archive contract. Provisioning checkpoints represent upload and submission ambiguity.
-Registry-triggered rebuild requests may wait for a bounded archive upload before reporting that the
-build started.
+Control streams the exact public commit to the reserved proxy version through the same in-process
+tarball path as application sources ([ADR-0029](0029-github-app-sources.md)). Its platform-archive
+mode supports validated safe relative symlinks; this does not relax the application-archive
+contract. Recovery and ownership of a proxy rebuild follow
+[ADR-0044](0044-zerops-delivery-ownership-and-recovery.md). Registry-triggered rebuild requests may
+wait for a bounded archive upload before reporting that the build started. Ordinary reconciliation
+never backfills current HEAD or replaces a stored namespace pin.
 
-Legacy unpinned namespace records remain inspectable. An operator must select an explicit pin before
-conversion; neither a bare URL nor the disproven suffix establishes a historical commit. Do not
-backfill current HEAD or replace a stored namespace pin during ordinary reconciliation.
-
-This amends ADR-0025's source-selection mechanism and ADR-0029's remaining allowance for mutable
-platform/proxy Git builds. The operator-owned installation repository and source-service boundary
-remain in place.
+This refines ADR-0025's source-selection mechanism. The operator-owned installation repository
+remains in place.
 
 ## Consequences
 
@@ -64,7 +61,3 @@ remain in place.
 - Installation commands need a full checkout and fail before writes when it cannot be verified.
 - A namespace can deliberately retain an older proxy revision through a Control upgrade.
 - Proxy upload adds bounded work to registry-triggered rebuild requests.
-- Existing unpinned namespaces need an explicit migration decision; no automatic historical identity
-  is fabricated.
-- Implementation acceptance requires live upload/build byte witnesses. Schema validation and a
-  successful archive unit test do not establish Zerops extraction behavior.
