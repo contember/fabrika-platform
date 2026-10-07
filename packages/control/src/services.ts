@@ -88,7 +88,7 @@ export interface WebhookRoute {
  * Resolve one webhook route before its request body is read.
  *
  * A Cloudflare composition has no connection rows, so it keeps its static secret on the unscoped path
- * (ADR-0032). A Zerops composition selects one exact connection's vault secret and, since ADR-0039,
+ * (ADR-0029). A Zerops composition selects one exact connection's vault secret and, since ADR-0029,
  * has nothing the unscoped path could resolve — it refuses rather than trying any stored secret.
  */
 export function webhookRoute(env: Env, connectionId?: string): WebhookRoute | null {

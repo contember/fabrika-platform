@@ -5,7 +5,7 @@
 // (`./collaborators.ts`). It never spawns a process and has no `runCommand` to be handed.
 //
 // The interesting step is `await-deploy`: fabrika does not RUN the build, it WATCHES one the platform
-// runs. That is the case the run's `AbortSignal` was added for (ADR-0009), and it is honoured three ways —
+// runs. That is the case the run's `AbortSignal` was added for (ADR-0011), and it is honoured three ways —
 // the poll loop rechecks it, the sleep between polls is interruptible, and a cancelled run asks Zerops to
 // cancel the build it started rather than leaving it running.
 

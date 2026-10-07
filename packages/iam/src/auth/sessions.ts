@@ -46,7 +46,7 @@ export async function issueSession(
 		redirect: string
 		reason: string
 		clearOidc?: boolean
-		/** When set, land on the app's callback with a code instead of on `redirect` (ADR-0021). */
+		/** When set, land on the app's callback with a code instead of on `redirect` (ADR-0022). */
 		handoff?: Handoff | null
 	},
 ): Promise<Response> {

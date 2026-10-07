@@ -93,7 +93,7 @@ export interface SessionDto {
 	principalId: string
 	/** How the human proved who they were; `local_dev` is IAM's `LOCAL_DEV_LOGIN` bypass. */
 	authenticationMethod: 'oidc' | 'password' | 'local_dev'
-	/** The app this session is bound to (an ADR-0021 child); null = the IAM session itself. */
+	/** The app this session is bound to (an ADR-0022 child); null = the IAM session itself. */
 	app: string | null
 	/** The IAM session this was derived from; null on an IAM session. Revoking that one revokes this. */
 	parentSessionId: string | null
@@ -369,7 +369,7 @@ export interface AppInput {
 }
 
 /**
- * The public origins IAM will hand this app a session at (ADR-0021). Declarative: the whole set is
+ * The public origins IAM will hand this app a session at (ADR-0022). Declarative: the whole set is
  * stated, so removing one is the same call as adding one and a stale entry cannot survive a deploy.
  */
 export interface SetReturnOriginsRequest {

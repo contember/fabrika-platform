@@ -220,7 +220,7 @@ describe('Delivery RPC client', () => {
 			const redirected = new URL(await browser.assigned)
 
 			expect(redirected.origin + redirected.pathname).toBe('https://iam.fabrika.localhost/auth/login')
-			// ADR-0021 needs `app=`; the client only rewrites `redirect=`, to the page the operator is on
+			// ADR-0022 needs `app=`; the client only rewrites `redirect=`, to the page the operator is on
 			// rather than the RPC endpoint the miss happened at.
 			expect(redirected.searchParams.get('app')).toBe('vozka')
 			expect(redirected.searchParams.get('redirect')).toBe('https://console.fabrika.localhost/apps/billing')

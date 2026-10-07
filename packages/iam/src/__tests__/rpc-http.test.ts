@@ -410,7 +410,7 @@ describe('the proxy mint surface', () => {
 	})
 
 	test('/auth/mint/exchange forwards {app, code, verifier, requestId} to exchangeAuthCode', async () => {
-		// ADR-0021's third endpoint. It was added to `isMintPath` and to the dispatch without ever being
+		// ADR-0022's third endpoint. It was added to `isMintPath` and to the dispatch without ever being
 		// named here, so a drift in either half would have shown up only as a 503 on the Zerops path.
 		const { rpc, response } = mint(MINT_EXCHANGE_PATH, {
 			app: 'opice',

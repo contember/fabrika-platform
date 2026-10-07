@@ -1,6 +1,6 @@
 /**
  * Credential extraction for the gate evaluator relocated out of the app's process
- * ([ADR-0007](../../../docs/decisions/0007-proxy-based-auth-enforcement.md)).
+ * ([ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
  *
  * The semantics are `AppGates`', verbatim (see `@fabrika/auth-core`'s `types.ts`):
  *   - array order IS the precedence;

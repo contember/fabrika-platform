@@ -5,7 +5,7 @@
  * answer an operator had to "that session should not exist" was to disable the whole principal —
  * which also locks the person out. These tests pin the three things that makes true: an operator can
  * SEE a principal's sessions, END one, and end ALL of them; and revoking the IAM parent ends every
- * app session derived from it WITHOUT a sweep, because the lookup joins to the parent (ADR-0021).
+ * app session derived from it WITHOUT a sweep, because the lookup joins to the parent (ADR-0022).
  */
 
 import type { SessionDto } from '@fabrika/iam-contract'

@@ -17,7 +17,7 @@ interface Flight {
 	state: string
 	verifier: string
 	redirect: string
-	/** The handoff app, when this SSO detour started from one (ADR-0021). */
+	/** The handoff app, when this SSO detour started from one (ADR-0022). */
 	app?: string
 	handoffState?: string
 	handoffChallenge?: string

@@ -1,5 +1,5 @@
 /**
- * Cross-host session handoff ([ADR-0021](../../../docs/decisions/0021-exchange-token-session-handoff.md)).
+ * Cross-host session handoff ([ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
  *
  * IAM authenticates on ITS host and the app lives on another, where no cookie of IAM's can be read.
  * So IAM issues a single-use code bound to `(session, app, return URL)`, the browser carries it to

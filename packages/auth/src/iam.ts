@@ -1,7 +1,7 @@
 /**
  * `createIam` — the single request-time entry point apps use instead of hand-rolling auth.
  *
- * Since [ADR-0007](../../../docs/decisions/0007-proxy-based-auth-enforcement.md) the PROXY is the only
+ * Since [ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md) the PROXY is the only
  * thing that enforces: it matches the app's gates, resolves the credential, and injects a verified
  * access token as `PROXY_TOKEN_HEADER`. What is left for an app is small and fixed:
  *   - `authenticate(request)` — read that header and verify it LOCALLY against IAM's published JWKS

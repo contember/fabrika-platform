@@ -1,6 +1,6 @@
 // The ZEROPS driver's collaborator: a thin, typed client over the Zerops REST API. This is the whole
 // side-effect surface of a Zerops deploy — ADR-0003 says a deploy there is HTTP calls and nothing else, so
-// substituting this ONE interface is what makes the driver testable and dry-run-able (ADR-0009).
+// substituting this ONE interface is what makes the driver testable and dry-run-able (ADR-0011).
 //
 // PROVENANCE. Every request/response shape below was read off Zerops' own OpenAPI document, served at
 // `https://api.app-prg1.zerops.io/api/rest/public/swagger/openapi.yml` (linked from the REST API
@@ -273,7 +273,7 @@ export interface ZeropsLogLine {
 }
 
 /**
- * The Zerops REST surface fabrika depends on, as ONE injectable interface (ADR-0009's collaborator
+ * The Zerops REST surface fabrika depends on, as ONE injectable interface (ADR-0011's collaborator
  * bundle). Every method takes the run's `AbortSignal`: a driver that polls `/app-version` is precisely the
  * case cancellation was added for, and an abandoned run must not keep an HTTP request alive.
  *

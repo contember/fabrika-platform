@@ -54,7 +54,7 @@ export interface CloudflareRunnerJob {
 	readonly configPath?: string
 	readonly stateNamespace?: string
 	readonly domain?: string
-	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0021). */
+	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0022). */
 	readonly returnOrigins?: readonly string[]
 	readonly dryRun?: boolean
 	/**

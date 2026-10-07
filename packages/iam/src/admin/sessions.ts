@@ -68,7 +68,7 @@ export async function listSessionsUseCase(c: AdminContext, input: ListSessionsIn
  * Revoke ONE session.
  *
  * Revoking an IAM session ends every app session derived from it in the same write: a child is valid
- * only while its parent is, and the lookup joins to the parent on every use (ADR-0021). So there is
+ * only while its parent is, and the lookup joins to the parent on every use (ADR-0022). So there is
  * no sweep to run and no window in which a child outlives its parent.
  */
 export async function revokeSessionUseCase(c: AdminContext, input: SessionIdInput): Promise<RevokedSessionsResponse> {

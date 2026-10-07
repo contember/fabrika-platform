@@ -1,4 +1,4 @@
-// The proxy half of the session handoff (ADR-0021, ADR-0023).
+// The proxy half of the session handoff (ADR-0022, ADR-0023).
 //
 // This is the ONLY path on which the proxy sets a cookie, so the tests are as much about what it
 // does NOT do — set one on a failed redemption, trust the request for the destination, reach the

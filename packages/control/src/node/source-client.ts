@@ -144,7 +144,7 @@ export class HttpZeropsSourceClient
 	}
 
 	/**
-	 * Zerops selects a source credential by connection, not by installation id (ADR-0039), so `source`
+	 * Zerops selects a source credential by connection, not by installation id (ADR-0029), so `source`
 	 * has nothing to look up. Registration resolves the pair from the connected organization instead.
 	 */
 	resolveInstallationId(): Promise<number | null> {

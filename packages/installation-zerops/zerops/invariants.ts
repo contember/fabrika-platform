@@ -5,7 +5,7 @@
 // These three are here rather than in `@fabrika/provider-zerops` because each needs a fact the compiler does not
 // have:
 //
-//   • WHICH service is allowed to be public is a property of the topology (ADR-0007 says "the proxy"),
+//   • WHICH service is allowed to be public is a property of the topology (ADR-0022 says "the proxy"),
 //     not of any single document. The compiler cannot know the proxy's hostname.
 //   • The hostname RULE is in the schema's prose (`description`), not in its `pattern` — there is no
 //     `pattern` keyword anywhere in the published document, so schema validation cannot catch it.
@@ -37,7 +37,7 @@ export const assertZeropsHostnames = (document: ZeropsImportDocument): void => {
 }
 
 /**
- * ADR-0007: **only the proxy is publicly routed.** App services, the IAM service, the control plane and
+ * ADR-0022: **only the proxy is publicly routed.** App services, the IAM service, the control plane and
  * the databases stay internal and are reached over the project's private network.
  *
  * Zerops makes this the default — a service is not publicly accessible until you opt in — so the failure
@@ -54,7 +54,7 @@ export const assertOnlyPublicService = (document: ZeropsImportDocument, publicSe
 			throw new Error(
 				`zerops: service \`${service.hostname}\` enables public subdomain access; only \`${
 					publicService ?? '(none)'
-				}\` may be publicly routed (ADR-0007)`,
+				}\` may be publicly routed (ADR-0022)`,
 			)
 		}
 	}

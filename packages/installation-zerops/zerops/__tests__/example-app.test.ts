@@ -519,7 +519,7 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		// The fall-through pair: a machine credential is tried first, a human second.
 		expect(kinds('/api/notes')).toEqual(['service /api/*', 'human /api/*', 'human /*'])
 		expect(kinds('/settings')).toEqual(['human /*'])
-		// Case-sensitive, unlike a Caddy path matcher — which is one of ADR-0010's three reasons gates
+		// Case-sensitive, unlike a Caddy path matcher — which is one of ADR-0022's three reasons gates
 		// are never compiled into Caddy routes.
 		expect(kinds('/Public/info')).toEqual(['human /*'])
 	})
@@ -528,7 +528,7 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		const config = buildCaddyConfig(manifest, { authUpstream: '127.0.0.1:9000' })
 		const serialized = JSON.stringify(config)
 		expect(serialized).toContain(`"dial":"${NOTES_UPSTREAM}"`)
-		// ADR-0010: the delete is load-bearing — `copy_headers` cannot delete, so without it a
+		// ADR-0022: the delete is load-bearing — `copy_headers` cannot delete, so without it a
 		// client-supplied token would survive to the app on any `public` path. The request id rides
 		// along for the same reason: it is written to IAM's audit trail, so only the proxy mints one.
 		// The client address and its aliases join them so an upstream's abuse limit keys on what this

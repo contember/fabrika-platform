@@ -52,7 +52,7 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts �
   compiles `*` to `.*` — it crosses `/` — matches case-sensitively, and matches the raw pathname
   with no normalization. Those are exactly the three properties Caddy's path matcher does not share,
   which is why gate rules are never compiled into routes
-  ([ADR-0010](../../docs/decisions/0010-gate-evaluation-stays-in-the-auth-service.md)). A second
+  ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)). A second
   evaluator anywhere gates a slightly different set of requests than the app declared, silently, in
   the permissive direction.
 - **`applicableGates` returns every match in declaration order; it does not decide.** Precedence,

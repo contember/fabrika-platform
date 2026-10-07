@@ -24,7 +24,7 @@
  * Any of these mismatches turns a route split into a silent widening or narrowing of an authorization
  * rule — the failure mode with the worst blast radius available here. So the mapping is deliberately
  * trivial: **every request goes to `/verify`**, and gate evaluation happens once, in TypeScript,
- * exactly as ADR-0008 divides the work (Caddy owns HTTP correctness, the auth service owns auth).
+ * exactly as ADR-0022 divides the work (Caddy owns HTTP correctness, the auth service owns auth).
  * Gate ORDER is preserved verbatim in the manifest the auth service reads.
  *
  * Gates still shape the generated config in one place: the access-log redaction pattern extends its
@@ -413,7 +413,7 @@ function copyResponseHeader(header: string): CaddyRoute {
  * Access-log redaction. `should_log_credentials: false` already keeps `Cookie` / `Set-Cookie` /
  * `Authorization` out, but the injected token header is not in Caddy's credentials list, and the
  * request URI and the response `Location` are both logged verbatim — and either can carry a
- * credential: a share-link `px_` token in the path, a declared `query` credential, or the ADR-0021
+ * credential: a share-link `px_` token in the path, a declared `query` credential, or the ADR-0022
  * handoff code. The URI and `Location` share one pattern, because a credential is the same string
  * wherever it appears.
  *
@@ -443,7 +443,7 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
  * An RE2 alternation covering every way a credential can appear in a URI or a `Location`:
  *
  *   - an opaque `px_` token anywhere — share links ride in the path;
- *   - the ADR-0021 handoff `?code=…`. UNCONDITIONAL: the reserved callback exists on every app host,
+ *   - the ADR-0022 handoff `?code=…`. UNCONDITIONAL: the reserved callback exists on every app host,
  *     the code is a bare `randomToken(32)` with no `px_` prefix, and it is not a declared credential,
  *     so nothing else in this file would ever contribute it;
  *   - `?state=…`, an OAuth capability that must never reach request or redirect logs;

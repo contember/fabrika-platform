@@ -266,7 +266,7 @@ export class TarballRepositorySource implements RepositorySource {
 		}
 		const installationId = input.privateBinding?.installationId ?? input.githubInstallationId
 		if (installationId === undefined) return {}
-		// A v1 request names no connection, so since ADR-0039 it has no credential to select at all.
+		// A v1 request names no connection, so since ADR-0029 it has no credential to select at all.
 		const github: SourceGitHubClient | undefined = input.privateBinding === undefined
 			? undefined
 			: this.options.github?.snapshotV2(input.privateBinding.connectionId)?.client

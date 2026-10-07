@@ -7,7 +7,7 @@
  * classes — so these shapes and the framework reader are the single contract. They live in
  * `@fabrika/auth` because `requirePermission` consumes an `AuthContext` (a client type).
  *
- * There is deliberately no login-bounce error here: since ADR-0007 the proxy 302s an unauthenticated
+ * There is deliberately no login-bounce error here: since ADR-0022 the proxy 302s an unauthenticated
  * browser, so an app never has to produce a login URL of its own.
  */
 

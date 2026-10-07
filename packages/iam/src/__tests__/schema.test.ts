@@ -51,7 +51,7 @@ test('creates every table the worker reads/writes (and retires projects)', () =>
 			'password_credentials',
 			'password_action_tokens',
 			'password_login_throttles',
-			// ADR-0021's cross-host handoff (0004): the return-origin registry and the single-use codes.
+			// ADR-0022's cross-host handoff (0004): the return-origin registry and the single-use codes.
 			'app_return_origins',
 			'auth_codes',
 		]

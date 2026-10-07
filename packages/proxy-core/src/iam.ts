@@ -3,7 +3,7 @@
  *
  * `IamGateway` is a STRUCTURAL SUBSET of `IamRpc`, so on Cloudflare the thin Worker passes its
  * `env.IAM` service binding straight in with no adapter. On Zerops there is no binding, so
- * `HttpIamGateway` speaks HTTP to the global IAM service — the public hop ADR-0007 calls cold-path
+ * `HttpIamGateway` speaks HTTP to the global IAM service — the public hop ADR-0022 calls cold-path
  * only: everything after the first exchange is a local JWKS verification against the cached token.
  *
  * FAIL-CLOSED CONTRACT: an unreachable, slow or incoherent IAM raises `IamUnavailableError`. A
@@ -37,7 +37,7 @@ const exchangeResultSchema = z.discriminatedUnion('ok', [
 /**
  * What the proxy needs of IAM. IAM's entrypoints satisfy it structurally — the CF binding drops
  * straight in with no adapter. Three of the four calls are `IamRpc`; `exchangeAuthCode` is
- * deliberately NOT (`IamHandoffRpc`, ADR-0021), because only the proxy may turn a handoff code into
+ * deliberately NOT (`IamHandoffRpc`, ADR-0022), because only the proxy may turn a handoff code into
  * a session and `IamRpc` is held by every SDK consumer.
  */
 export interface IamGateway {
@@ -88,11 +88,11 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  *
  *   POST {origin}/auth/mint/session   {app, session, requestId} -> MintTokenResult
  *   POST {origin}/auth/mint/key       {app, key, requestId}     -> MintFromKeyResult
- *   POST {origin}/auth/mint/exchange  {app, code, requestId}    -> ExchangeAuthCodeResult   (ADR-0021)
+ *   POST {origin}/auth/mint/exchange  {app, code, requestId}    -> ExchangeAuthCodeResult   (ADR-0022)
  *   GET  {origin}/.well-known/jwks.json                         -> Jwks                     (public)
  *
  * The three POST endpoints are the `/auth/mint/*` PROXY surface, gated by IAM's `proxyKey` — the
- * least-privilege split ADR-0007 requires, kept apart from the management `/rpc/*` surface. They
+ * least-privilege split ADR-0022 requires, kept apart from the management `/rpc/*` surface. They
  * answer **200 on any decided outcome, including a denial**: `{ ok: false, reason }` is "IAM answered:
  * no", a non-200 is "IAM could not be consulted". Both deny; only the second is an incident.
  *

@@ -210,13 +210,13 @@ describe('ADR-0004 — isolation and the absence of secrets, on the FINISHED doc
 	})
 })
 
-describe('ADR-0007 — the proxy is the only publicly routed service', () => {
+describe('ADR-0022 — the proxy is the only publicly routed service', () => {
 	for (const { label, document, publicService } of documents()) {
 		test(`${label}: only the declared public service may be routed, and every runtime service states its answer`, () => {
 			// The generalization the light tier forces: `platform` and `apps-prod` publish through a custom
 			// domain and so route NOTHING from the import, while `platform-light` is a single-project
 			// installation with no second project to put a domain in front of and takes the subdomain. The
-			// invariant was never "nothing is public" — it is ADR-0007's "only the proxy", which is what
+			// invariant was never "nothing is public" — it is ADR-0022's "only the proxy", which is what
 			// `publicService` names and what `assertOnlyPublicService` enforces.
 			const routed = document.services.filter((service) => service.enableSubdomainAccess === true).map((service) => service.hostname)
 			expect(routed.every((hostname) => hostname === publicService)).toBe(true)

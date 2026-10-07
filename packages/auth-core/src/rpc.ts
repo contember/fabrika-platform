@@ -52,7 +52,7 @@ export type MintFromKeyResult =
 	| { ok: true; token: string; expiresAt: number }
 	| { ok: false; reason: 'invalid_key' | 'unknown_principal' | 'disabled' }
 
-// ── Session handoff (ADR-0021, ADR-0023) ──────────────────────────────────────
+// ── Session handoff (ADR-0022, ADR-0023) ──────────────────────────────────────
 //
 // The ONE way a browser that authenticated at IAM ends up authenticated at an app, whether or not the
 // two share a domain: no cookie of IAM's is ever readable from an app's host. IAM issues a single-use
@@ -66,7 +66,7 @@ export type MintFromKeyResult =
 // app's own session, server-side.
 //
 // This lives on the PROXY surface (`/auth/mint/*`, gated by its own key), not on `IamRpc`. That is
-// ADR-0007's least-privilege split: the proxy is the only publicly-routed component and holds a key
+// ADR-0022's least-privilege split: the proxy is the only publicly-routed component and holds a key
 // scoped to the handful of calls it needs.
 
 export interface ExchangeAuthCodeInput {

@@ -15,7 +15,7 @@
 //
 // It also means the apps-project proxy reaches the IAM service over a PUBLIC endpoint. That is fine and
 // was priced in: the warm path verifies tokens locally against a cached JWKS, so the cross-project hop
-// is cold-path only (ADR-0007).
+// is cold-path only (ADR-0022).
 //
 // ── What these documents are, and what they are not ───────────────────────────────────────────────
 //
@@ -72,7 +72,7 @@ import { assertTopologyInvariants } from './invariants'
  * `PUT /service-stack/{id}/enable-subdomain-access` on a service that already publishes an HTTP port —
  * which the namespace lifecycle does for itself (`ensureSubdomainAccess` in `@fabrika/provider-zerops`)
  * and which an operator applying the generated platform artifacts must do by hand; the artifact's header
- * names the call. So `true` here records the INTENT and feeds ADR-0007's `assertOnlyPublicService`; it
+ * names the call. So `true` here records the INTENT and feeds ADR-0022's `assertOnlyPublicService`; it
  * does not turn anything on.
  */
 export type PublicAccess = 'custom-domain' | 'zerops-subdomain'
@@ -127,7 +127,7 @@ export interface ProjectTopology {
 	 * imports into an existing project.
 	 */
 	servicesTarget?: ZeropsSourceTarget
-	/** The one service allowed to be publicly routed (ADR-0007). Always the proxy. */
+	/** The one service allowed to be publicly routed (ADR-0022). Always the proxy. */
 	publicService: string
 	/** Present on app namespaces so fixtures can prove the selected isolation tier. */
 	namespacePreset?: 'cheap' | 'mid' | 'full'
@@ -289,7 +289,7 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 				runtime({
 					hostname: PROXY_HOSTNAME,
 					// Alpine custom runtime: a Caddy binary plus a compiled Bun auth service, no interpreter
-					// (ADR-0008). `run.os` is deprecated — the OS is the service type.
+					// (ADR-0022). `run.os` is deprecated — the OS is the service type.
 					type: 'alpine@3.21',
 					priority: 30,
 					// THE ONLY PUBLICLY ROUTED SERVICE. Everything above is reachable only over the project's
@@ -297,7 +297,7 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					// login and the control-plane dashboard.
 					public: publicAccess === 'zerops-subdomain',
 					// It is on every request to every service in this project, and it is stateless by
-					// construction (ADR-0008 insists on that precisely so this line is allowed to exist).
+					// construction (ADR-0022 insists on that precisely so this line is allowed to exist).
 					minContainers: 2,
 					maxContainers: 6,
 				}),
@@ -361,7 +361,7 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 			type: 'alpine@3.21',
 			priority: 30,
 			public: publicAccess === 'zerops-subdomain',
-			// Still the only publicly routed service (ADR-0007). One container is a real availability
+			// Still the only publicly routed service (ADR-0022). One container is a real availability
 			// trade and the reason this tier is not for production; it is not a relaxation of the rule
 			// about WHICH service faces the internet.
 			minContainers: 1,

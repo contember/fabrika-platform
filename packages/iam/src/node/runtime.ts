@@ -28,7 +28,7 @@ export interface ProcessConfig {
 	 * Shared secret gating the PROXY mint surface (`/auth/mint/*`), which the auth proxy calls on the
 	 * cold path. Separate from `rpcKey` by least privilege — the proxy is the only publicly-routed
 	 * component and needs only three IAM calls: `mintToken`, `mintFromKey`, and `exchangeAuthCode`
-	 * (ADR-0021), which redeems a live handoff code for an app-bound session. That third one is a real
+	 * (ADR-0022), which redeems a live handoff code for an app-bound session. That third one is a real
 	 * capability rather than a read, and the split is still worth it: the code is single-use,
 	 * hash-only, bound to `(session, app, return URL)` and dead in two minutes, whereas the management
 	 * key would additionally let a compromised edge forge audit rows for any app. EMPTY DISABLES IT.

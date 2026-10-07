@@ -30,7 +30,7 @@ export const DEFAULT_HEALTH_PATH = '/healthz'
 export const APP_QUERY_PARAM = 'app'
 
 /**
- * Query parameter IAM's `/auth/login` takes the return URL in (ADR-0021). The proxy writes it on the
+ * Query parameter IAM's `/auth/login` takes the return URL in (ADR-0022). The proxy writes it on the
  * login bounce and redacts it out of the access log, where it would re-emit — percent-encoded — a
  * credential that was just stripped from the logged URI.
  */

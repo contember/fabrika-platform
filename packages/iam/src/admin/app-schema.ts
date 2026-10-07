@@ -185,7 +185,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 }
 
 /**
- * Replace an app's registered return origins (ADR-0021). Every value is canonicalized before it is
+ * Replace an app's registered return origins (ADR-0022). Every value is canonicalized before it is
  * stored, so the comparison at issue time is against one spelling and an operator cannot register
  * `https://App.Example.com/` and then wonder why `https://app.example.com` is refused.
  *

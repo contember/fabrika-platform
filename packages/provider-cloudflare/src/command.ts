@@ -36,7 +36,7 @@ const requiredValues = (names: readonly string[] | undefined): Record<string, st
 
 /**
  * Decode `FABRIKA_IAM_RETURN_ORIGINS`, the comma-separated set the control plane projects into the
- * deploy environment (ADR-0021). Undefined for an absent or empty value, so a deploy with nothing to
+ * deploy environment (ADR-0022). Undefined for an absent or empty value, so a deploy with nothing to
  * project leaves IAM's registry alone rather than clearing it. Part of the executor's environment
  * contract, exported for the test that pins it; not part of the package's public surface.
  */

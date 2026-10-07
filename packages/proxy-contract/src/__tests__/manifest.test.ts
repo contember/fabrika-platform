@@ -65,7 +65,7 @@ describe('scheme — the scheme the BROWSER speaks, which no header can supply',
 	})
 
 	test('an unrecognised scheme is rejected rather than coerced', () => {
-		// Load-bearing for ADR-0021: this scheme builds the login bounce and the handoff callback.
+		// Load-bearing for ADR-0022: this scheme builds the login bounce and the handoff callback.
 		expect(parseProxyManifest(withScheme('ftp'))).toBeNull()
 		expect(parseProxyManifest(withScheme('HTTPS'))).toBeNull()
 	})

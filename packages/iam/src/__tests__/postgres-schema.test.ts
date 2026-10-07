@@ -607,7 +607,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 	})
 })
 
-describe.skipIf(!hasPostgres)('HandoffRepository on Postgres — the ADR-0021 persistence layer', () => {
+describe.skipIf(!hasPostgres)('HandoffRepository on Postgres — the ADR-0022 persistence layer', () => {
 	// The half of `handoff.test.ts` that had never run on anything but SQLite. `consumeCode` is the
 	// reason this block exists: its at-most-once guarantee is `changes === 0` on a guarded UPDATE, and
 	// on Postgres that number comes from string-matching a command tag in `sql-postgres.ts`. Wrong in
@@ -1015,7 +1015,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 	})
 
 	test('POST /auth/mint/exchange redeems a handoff code for an app-bound session, once', async () => {
-		// ADR-0021's cold path on the engine it exists FOR: the shared cookie is what a Cloudflare
+		// ADR-0022's cold path on the engine it exists FOR: the shared cookie is what a Cloudflare
 		// installation falls back on, so on Zerops this is the only way a browser ever gets a session.
 		await reset()
 		const principal = await db.principals.createUser('sub-exchange', 'exchange@x.cz')
@@ -1027,7 +1027,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 			expiresAt: now() + 3600,
 		})
 		// The code carries its own S256 challenge as a suffix, so redemption needs the browser's verifier
-		// (ADR-0026). `issueAuthCode` builds this shape; here the row is written directly.
+		// (ADR-0023). `issueAuthCode` builds this shape; here the row is written directly.
 		const verifier = randomToken(32)
 		const code = `handoff-code-plaintext.${await pkceChallenge(verifier)}`
 		await db.handoff.issueCode({

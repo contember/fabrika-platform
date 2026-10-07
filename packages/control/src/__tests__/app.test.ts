@@ -333,7 +333,7 @@ describe('controlApp', () => {
 		await seedZeropsTrigger(harness, 'keyed-app')
 		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey, GITHUB_CONNECTION_WEBHOOKS: true }, harness)
 
-		// Since ADR-0039 nothing keyed can be selected without a connection id, so the unscoped path is
+		// Since ADR-0029 nothing keyed can be selected without a connection id, so the unscoped path is
 		// refused rather than trying a stored secret — even the one that would verify on its own route.
 		expect((await fetch(await webhookRequest('/webhooks/github', 'keyed-secret', 'github.com/beta/app', 43))).status).toBe(401)
 		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(0)

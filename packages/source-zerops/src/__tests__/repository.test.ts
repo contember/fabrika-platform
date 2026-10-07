@@ -94,7 +94,7 @@ describe('Zerops source resolve', () => {
 	})
 
 	test('refuses an unkeyed request that names an installation, because it names no credential', async () => {
-		// Since ADR-0039 only a keyed private binding selects a credential; a bare installation id
+		// Since ADR-0029 only a keyed private binding selects a credential; a bare installation id
 		// cannot, so the request fails closed instead of falling through to an anonymous fetch.
 		const fixture = await gitFixture()
 		const github: SourceGitHubConnection = {

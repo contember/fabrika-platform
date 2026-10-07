@@ -107,13 +107,13 @@ existing key is reused; a mismatch is refused. It also repairs the nonsecret pro
 Control. Normal init leaves source in anonymous public-repository mode. GitHub App creation, activation,
 webhook configuration, and installation verification belong to the authenticated Control UI at
 \`Settings → Source\`. A leftover unkeyed or split GitHub App value is ignored, never adopted: since
-ADR-0039 the only credential source can use is a keyed one, so connect a new source in Control.
+ADR-0029 the only credential source can use is a keyed one, so connect a new source in Control.
 Init never prompts for,
 writes, recovers, or prints GitHub App credentials, and no source credential reaches the sidecar or
 GitHub Environment.
 
 If an older init left an owner-only local recovery file, this release does not open or delete it. Since
-ADR-0039 there is nothing left to adopt it into: connect a new source in Control and delete the old
+ADR-0029 there is nothing left to adopt it into: connect a new source in Control and delete the old
 file afterwards.
 
   <installation>                    names this installation: the GitHub Environment, the default

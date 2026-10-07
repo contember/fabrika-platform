@@ -36,7 +36,7 @@
 //
 // `/rpc/*`        — the MANAGEMENT surface (all eight methods), gated by `rpcKey`.
 // `/auth/mint/*`  — the PROXY surface, gated by `proxyKey`: `mintToken`, `mintFromKey`, and — since
-//                   ADR-0021 — `exchangeAuthCode`, which redeems a cross-host handoff code for an
+//                   ADR-0022 — `exchangeAuthCode`, which redeems a cross-host handoff code for an
 //                   app-bound session. Paths and wire shapes are fixed by `packages/proxy/src/iam.ts`
 //                   (`HttpIamGateway`); that file is the contract.
 //
@@ -157,7 +157,7 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: strin
 //
 // Three endpoints, fixed by `packages/proxy/src/iam.ts`: `mintToken`, `mintFromKey` and
 // `exchangeAuthCode`. They are the COLD PATH of every request the proxy handles — the first exchange
-// of a browser session, a `px_` key, or an ADR-0021 handoff code for a short-lived signed token — and
+// of a browser session, a `px_` key, or an ADR-0022 handoff code for a short-lived signed token — and
 // everything after that is a local JWKS verification inside the project. Do not change a
 // path or a body shape here without changing `HttpIamGateway` in the same commit: a mismatch fails
 // closed at runtime (the gateway maps any non-200 to `IamUnavailableError` → a 503 deny), which is
@@ -172,7 +172,7 @@ const MINT_PREFIX = '/auth/mint/'
 export const MINT_SESSION_PATH = `${MINT_PREFIX}session`
 /** Mint from an opaque `px_` credential (API key / share link). Body: `MintFromKeyInput`. */
 export const MINT_KEY_PATH = `${MINT_PREFIX}key`
-/** Redeem a cross-host handoff code for an app session (ADR-0021). Body: `ExchangeAuthCodeInput`. */
+/** Redeem a cross-host handoff code for an app session (ADR-0022). Body: `ExchangeAuthCodeInput`. */
 export const MINT_EXCHANGE_PATH = `${MINT_PREFIX}exchange`
 
 /** True when `pathname` addresses the proxy mint surface. Checked BEFORE the public `/auth/*` routes. */

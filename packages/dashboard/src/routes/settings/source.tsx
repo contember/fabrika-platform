@@ -317,7 +317,7 @@ function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 			const started = await api.sourceConnection.start(privateSourceConnectionRequest(organization, appName, parsedRepositories))
 			const continuePath = sourceStartContinuePath(started)
 			if (continuePath === null) throw new Error('invalid source connection handoff')
-			// Control serves this path, not the console (ADR-0031). `location.assign` would raise a
+			// Control serves this path, not the console (ADR-0029). `location.assign` would raise a
 			// navigate event the router's catch-all 404 matches, and it would render "Not found"
 			// without a request ever leaving the browser.
 			router.leaveApp(continuePath)

@@ -20,7 +20,7 @@ export interface SessionRow {
 	created_at: number
 	expires_at: number
 	revoked_at: number | null
-	/** NULL = an IAM session. Non-NULL = an app-bound child session (ADR-0021) that mints only for it. */
+	/** NULL = an IAM session. Non-NULL = an app-bound child session (ADR-0022) that mints only for it. */
 	app: string | null
 	/** The IAM session this was derived from; revoking that one revokes this. NULL on an IAM session. */
 	parent_session_id: string | null
@@ -37,7 +37,7 @@ export class SessionRepository {
 		email?: string | null
 		authenticationMethod?: AuthenticationMethod
 		expiresAt: number
-		/** Bind this session to ONE app (ADR-0021). Omitted = an IAM session, usable for any app. */
+		/** Bind this session to ONE app (ADR-0022). Omitted = an IAM session, usable for any app. */
 		app?: string | null
 		/** The IAM session this is derived from. Revoking that one revokes this. */
 		parentSessionId?: string | null
@@ -141,7 +141,7 @@ export class SessionRepository {
 	 *
 	 * **Revoking an IAM session revokes every app session derived from it**, with no sweep: a child
 	 * carries `parent_session_id`, and `getActiveSessionByHash`/`ById` join to the parent on every
-	 * lookup, so the child stops resolving the moment the parent's `revoked_at` is set (ADR-0021).
+	 * lookup, so the child stops resolving the moment the parent's `revoked_at` is set (ADR-0022).
 	 */
 	async revokeSessionById(id: string): Promise<boolean> {
 		const result = await this.db

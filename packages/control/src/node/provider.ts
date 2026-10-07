@@ -10,7 +10,7 @@
 // the env API rejects the write, and there is no other channel for a per-installation secret (ADR-0004
 // forbids project-level env, and a committed `zerops.yaml` must not carry values). Verified live.
 //
-// `FABRIKA_ZEROPS_*` is the only name these carry (ADR-0018, ADR-0024). The Cloudflare composition and
+// `FABRIKA_ZEROPS_*` is the only name these carry (ADR-0024, ADR-0024). The Cloudflare composition and
 // the local stack read the same code and are not subject to the platform's reservation, so one name
 // works everywhere.
 

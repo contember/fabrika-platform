@@ -1,5 +1,5 @@
 /**
- * The proxy authorization core ([ADR-0007](../../../docs/decisions/0007-proxy-based-auth-enforcement.md)).
+ * The proxy authorization core ([ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
  *
  * Same four steps, same order, same fail-closed posture:
  *   1. match the request path against the app's ordered gate rules;
@@ -63,7 +63,7 @@ export type Decision =
 	 */
 	| { outcome: 'login'; status: 302 | 401; location: string; reason: DenyReason; handoff: HandoffAttempt }
 	/**
-	 * A handoff code was redeemed (ADR-0021). The only outcome that writes the long-lived app
+	 * A handoff code was redeemed (ADR-0022). The only outcome that writes the long-lived app
 	 * session: `session` is host-only on this app's host, and `location` is where IAM said the browser
 	 * was going — read from the code server-side, never from the request.
 	 */
@@ -305,7 +305,7 @@ export class Authorizer {
 	}
 
 	/**
-	 * Redeem a handoff code (ADR-0021). Called for the reserved callback path only, BEFORE gate
+	 * Redeem a handoff code (ADR-0022). Called for the reserved callback path only, BEFORE gate
 	 * matching — the callback is how a browser becomes able to satisfy a gate, so it cannot be behind
 	 * one.
 	 *
@@ -387,7 +387,7 @@ export class Authorizer {
  * A redirect is not a neutral way to say "sign in". A cross-origin bounce to IAM is something a
  * page's `fetch` cannot follow, so the console sees an opaque network failure instead of a sign-in;
  * and a 302 destroys the request it answers, turning an in-flight POST into a bodyless GET — the same
- * argument ADR-0021 makes for handing over a session rather than a bare token.
+ * argument ADR-0022 makes for handing over a session rather than a bare token.
  *
  * **`Sec-Fetch-Mode` is the signal, not `Accept`.** It is written by the browser and not by the page:
  * `Sec-` is a forbidden header PREFIX, so `fetch`/XHR cannot set it, and only a document or frame

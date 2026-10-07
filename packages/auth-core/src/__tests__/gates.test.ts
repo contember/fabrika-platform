@@ -4,7 +4,7 @@ import type { AppGates } from '../types'
 
 const matchingPaths = (gates: AppGates, pathname: string): string[] => applicableGates(compileGates(gates), pathname).map(({ rule }) => rule.path)
 
-describe('gate path contract from ADR-0010', () => {
+describe('gate path contract from ADR-0022', () => {
 	test('globs are anchored and case-sensitive', () => {
 		const gates: AppGates = { rules: [{ path: '/Admin/*', kind: 'public' }] }
 		expect(matchingPaths(gates, '/Admin/users')).toEqual(['/Admin/*'])

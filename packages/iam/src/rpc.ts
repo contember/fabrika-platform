@@ -63,7 +63,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		denyDeviceAuthorization: (input) => denyDeviceAuthorization(services, env, input),
 		listOwnDeviceAuthorizations: (input) => listOwnDeviceAuthorizations(services, env, input),
 		/**
-		 * Redeem a cross-host handoff code for an app-bound session (ADR-0021). Reached only over the
+		 * Redeem a cross-host handoff code for an app-bound session (ADR-0022). Reached only over the
 		 * proxy's own surface — see `IamHandoffRpc` for why it is not part of `IamRpc`. Fails closed
 		 * like every mint front: an unusable code is a decided `{ ok: false }`, never a throw.
 		 */

@@ -395,7 +395,7 @@ describe('deny — "we could not check" is 503 on the human path, never a login 
 
 describe('deny — the forwarded host must belong to the pinned app', () => {
 	test('a pinned app claiming another host is refused, and no URL is built from that host', async () => {
-		// ADR-0010 pins `?app=` because `X-Forwarded-Host` is client-controllable; the same header then
+		// ADR-0022 pins `?app=` because `X-Forwarded-Host` is client-controllable; the same header then
 		// builds the login bounce, so it must also be checked against the app's declared hosts.
 		const iam = iamWith({})
 		const response = await service(HUMAN, iam)(verifyRequest({ host: 'evil.example.com' }))

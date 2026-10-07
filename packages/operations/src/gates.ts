@@ -1,5 +1,5 @@
 // The per-path gates the Operations service's PUBLIC hostname is fronted by — the proxy manifest,
-// verbatim. Not enforced here and not enforced by the application: since ADR-0007 the proxy is the
+// verbatim. Not enforced here and not enforced by the application: since ADR-0022 the proxy is the
 // only enforcement point, and it reads this list from its manifest in declaration order.
 //
 // **This module must stay free of `@fabrika/provider-cloudflare` AND of the rest of this package.**

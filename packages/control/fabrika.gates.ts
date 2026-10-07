@@ -1,6 +1,6 @@
 // The per-path gates the control plane's PUBLIC surface is fronted by — the proxy manifest, verbatim.
 //
-// They are not enforced here and not enforced by the application either: since ADR-0007 the proxy is
+// They are not enforced here and not enforced by the application either: since ADR-0022 the proxy is
 // the only enforcement point, and it reads this list from its manifest in declaration order. See
 // `examples/zerops-app/fabrika.gates.ts` for the semantics (order is precedence, an absent credential
 // falls through, a present one is terminal, no match denies).

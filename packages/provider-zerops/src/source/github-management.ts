@@ -21,7 +21,7 @@ import { identifierSchema, installationIdSchema, parseSourceWire, repositorySche
 
 const WEBHOOK_PATH = '/webhooks/github'
 
-/** The bare path belongs to Cloudflare; Zerops requires one connection id (ADR-0039). */
+/** The bare path belongs to Cloudflare; Zerops requires one connection id (ADR-0029). */
 const isWebhookPath = (pathname: string): boolean => {
 	if (!pathname.startsWith(`${WEBHOOK_PATH}/`)) return false
 	const connectionId = pathname.slice(WEBHOOK_PATH.length + 1)

@@ -1,7 +1,7 @@
 /**
  * Local access-token verification — the only thing this SDK still does with a credential.
  *
- * Since [ADR-0007](../../../docs/decisions/0007-proxy-based-auth-enforcement.md) the PROXY is the only
+ * Since [ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md) the PROXY is the only
  * enforcement point: it matches the app's gates, resolves the credential, and injects the verified
  * token as `PROXY_TOKEN_HEADER`. The app must NOT trust that header blindly, so every token is
  * re-verified here against IAM's published JWKS — signature, `iss`, `aud`, `exp` — before it can

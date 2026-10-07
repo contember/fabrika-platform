@@ -191,7 +191,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		}
 		// Retired by migrations/0003 — this set never creates it in the first place.
 		expect(names).not.toContain('accounts')
-		// Retired by migrations-postgres/0018 (ADR-0039): the singleton was v1 compatibility evidence.
+		// Retired by migrations-postgres/0018 (ADR-0029): the singleton was v1 compatibility evidence.
 		expect(names).not.toContain('github_source_connections')
 	})
 })

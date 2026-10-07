@@ -6,7 +6,7 @@
  * context. The API router only performs action and scope checks against that context. The GitHub
  * webhook remains outside this guard and is HMAC-gated instead.
  *
- * Nothing here evaluates a gate: since ADR-0007 the proxy is the only enforcement point, and it has
+ * Nothing here evaluates a gate: since ADR-0022 the proxy is the only enforcement point, and it has
  * already refused (or bounced to login) anything that does not satisfy `CONTROL_PROXY_GATES`
  * (`fabrika.gates.ts`).
  */

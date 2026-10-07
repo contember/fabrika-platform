@@ -108,7 +108,7 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 	}
 
 	/**
-	 * Cross-host handoff redemption (ADR-0021). Present on the binding, absent from `IamRpc`: the
+	 * Cross-host handoff redemption (ADR-0022). Present on the binding, absent from `IamRpc`: the
 	 * proxy Worker narrows this entrypoint structurally, so it reaches this method while an SDK
 	 * consumer typed against `IamRpc` never sees it.
 	 */

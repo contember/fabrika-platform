@@ -123,7 +123,7 @@ control service. It is NOT the private hostname the services use between themsel
 resolves inside the provider's project and nowhere else, so from here it only ever fails to connect.
 
 Connecting a GitHub source is NOT here and will not be: App creation is a browser flow whose
-authorization requires a human principal (ADR-0031). Use Settings → Source in the console.
+authorization requires a human principal (ADR-0029). Use Settings → Source in the console.
 `
 
 const DEFAULT_CONTROL_APP_ID = 'vozka'

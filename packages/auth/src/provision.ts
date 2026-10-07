@@ -6,7 +6,7 @@
 // IAM Worker's DB always mirrors what the app actually checks at runtime. An app's FIRST schema
 // reconcile is also how it REGISTERS itself in IAM's app registry.
 //
-// The same deploy step optionally projects the app's RETURN ORIGINS (ADR-0021) — see
+// The same deploy step optionally projects the app's RETURN ORIGINS (ADR-0022) — see
 // `returnOrigins` below. That is a SECOND call to a different endpoint, deliberately: the schema is
 // vocabulary the application declares, a return origin is a fact the control plane knows, and the
 // two must never travel in one body.
@@ -35,7 +35,7 @@ export interface ReconcileSchemaOptions {
 	/** The app's declared vocabulary. */
 	schema: AppSchema
 	/**
-	 * Every origin IAM may hand this app a session at (ADR-0021), as known by the CONTROL PLANE.
+	 * Every origin IAM may hand this app a session at (ADR-0022), as known by the CONTROL PLANE.
 	 *
 	 * Omit to leave the registry alone; a supplied set REPLACES it, so it must be the complete set for
 	 * the app and not just the environment being deployed. It is NEVER read off the `AppSchema`: an app

@@ -347,7 +347,7 @@ const operations: ZeropsYamlSetupSpec = {
 
 /**
  * The auth enforcement proxy — Caddy for HTTP correctness, a compiled Bun auth service for every
- * authorization decision (ADR-0008, as amended by ADR-0010: gates are NEVER compiled into Caddy routes).
+ * authorization decision (ADR-0022, as amended by ADR-0022: gates are NEVER compiled into Caddy routes).
  *
  * This is the only setup deployed into BOTH projects, and the only publicly routed service in either.
  *

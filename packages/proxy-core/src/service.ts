@@ -347,7 +347,7 @@ function readForwardedRequest(request: Request, requestId: string): ForwardedReq
  * "default app".
  *
  * A PINNED app is still cross-checked against the forwarded host. `X-Forwarded-Host` is
- * client-controllable once `trusted_proxies` is set (ADR-0010), and the pin is what stops it choosing
+ * client-controllable once `trusted_proxies` is set (ADR-0022), and the pin is what stops it choosing
  * the app — but the same header then builds the login bounce and the handoff callback, so a request
  * pinned to app A claiming app B's host would send the browser somewhere the manifest never declared.
  * The authoritative host list is right here; use it.

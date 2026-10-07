@@ -1,4 +1,4 @@
-// The session handoff (ADR-0021, ADR-0023) — the only way a session reaches an app's host.
+// The session handoff (ADR-0022, ADR-0023) — the only way a session reaches an app's host.
 //
 // The property under test throughout is that a code buys exactly ONE app session, for ONE app, for
 // as long as the login behind it lives — and nothing else. Every failure mode below is a way that

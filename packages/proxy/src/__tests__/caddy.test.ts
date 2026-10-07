@@ -364,7 +364,7 @@ describe('access-log redaction', () => {
 		expect('/api/v1/items?page=2'.replace(pattern, 'REDACTED')).toBe('/api/v1/items?page=2')
 	})
 
-	test('the ADR-0021 handoff code is redacted on every app, declared or not', () => {
+	test('the ADR-0022 handoff code is redacted on every app, declared or not', () => {
 		// The code is a bare random token on a reserved path — no `px_` prefix, no gate rule to declare
 		// it — so it is only ever caught by an unconditional alternative.
 		const pattern = new RegExp(uriRedactionPattern(MANIFEST), 'g')

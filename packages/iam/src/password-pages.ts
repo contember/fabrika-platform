@@ -4,7 +4,7 @@ export function loginPage(input: {
 	readonly redirect: string
 	readonly oidcEnabled: boolean
 	readonly forgotEnabled: boolean
-	/** The app this login is a handoff for (ADR-0021); absent for a plain IAM login. */
+	/** The app this login is a handoff for (ADR-0022); absent for a plain IAM login. */
 	readonly app?: string
 	readonly handoffState?: string
 	readonly handoffChallenge?: string

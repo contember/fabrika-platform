@@ -652,7 +652,7 @@ export const deployPreparedPlatform = async (
 		log.info(`would reconcile \`${consoleApp.id}\` and register its return origin ${consoleOrigin}`)
 	} else {
 		// The schema PUT is what REGISTERS the app, and `apps.setReturnOrigins` 404s for an app IAM has
-		// never heard of — so both travel in this one call, in that order (ADR-0021/ADR-0023).
+		// never heard of — so both travel in this one call, in that order (ADR-0022/ADR-0023).
 		await collaborators.reconcileSchema({
 			url: platformOrigin(placement.scheme, placement.hosts.iam),
 			app: consoleApp.id,

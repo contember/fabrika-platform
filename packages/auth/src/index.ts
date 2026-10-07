@@ -3,7 +3,7 @@
 // Depends ONLY on @fabrika/auth-core: the binding is typed as the `IamRpc` contract (so the SDK
 // never imports the IAM service), and `can()`/`scopedTo()` reuse core's `permits`/`matchAction`.
 //
-// Enforcement lives in @fabrika/proxy (ADR-0007). Nothing exported here can evaluate a gate.
+// Enforcement lives in @fabrika/proxy (ADR-0022). Nothing exported here can evaluate a gate.
 
 export { IamClient } from './client'
 export { applyScope } from './scope'

@@ -2,7 +2,7 @@
  * The shared middleware contract consumed by `@fabrika/app`. The auth package owns the shape so an
  * app's own auth middleware — the one that calls `iam.authenticate(request)` and stores the resolved
  * context — drops into the request pipeline without a duplicate compatibility interface. The SDK
- * itself ships no middleware: enforcement is the proxy's job (ADR-0007).
+ * itself ships no middleware: enforcement is the proxy's job (ADR-0022).
  *
  * A middleware runs in order; it may:
  *   - mutate `ctx` (e.g. set `ctx.auth`),

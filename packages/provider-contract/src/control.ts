@@ -83,7 +83,7 @@ export interface ProviderDeployInput {
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
 	/**
-	 * Every origin IAM may hand this app a session at (ADR-0021). App-wide, not per-environment:
+	 * Every origin IAM may hand this app a session at (ADR-0022). App-wide, not per-environment:
 	 * IAM's registry is keyed by app id, so the set is assembled from every environment of the app.
 	 * Absent when the app has no public origin at all, which leaves IAM's registry untouched.
 	 */
