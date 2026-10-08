@@ -141,8 +141,9 @@ the provider's own version and recorded in the run log. Not built yet:
 
 - the generated isolation tests (A11); the build runs the application's own tests;
 - `fabrika job run`, which the generated crontab calls (A15);
-- the checker version in the run's snapshot (B6), and the contract read from the commit (B6): until
-  then the config decides whether an application is a contract application.
+- nothing of the snapshot (B6 built it): the run's snapshot records the checker version, and the contract
+  Control approved at the commit decides the lock-down, so a config that drops `target.contract` cannot
+  drop it (`lockedExecutionFor`).
 
 ## Consequences
 

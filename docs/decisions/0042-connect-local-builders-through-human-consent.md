@@ -33,7 +33,10 @@ We will keep the builder and coding agent local. The installed console will auth
 10. **Uploads carry no gates and no IAM schema.** The builder's manifest describes resources only. Control reads the access surface from the deployed commit ([ADR-0005](0005-compile-app-config-to-static-manifest.md)).
 11. **The builder key cannot approve.** It is a service principal, and only a human user principal with `access.approve` approves an access change (ADR-0050). Consent never delegates `access.approve`.
 
-The code does not do items 10 and 11 yet (part B, work unit B6).
+Item 11 is built: `approvals.complete` refuses every service principal, key and OAuth token (work unit B6).
+Item 10 holds in effect, not yet in form: a contract application's upload may still carry its endpoint
+table and IAM schema, but no provider publishes them; the access comes from the snapshot of the commit.
+Dropping them from the upload is left to the build (A17).
 
 **Invariant: browser consent never yields a human session, human access token, or platform administration secret to the local builder.** Only the daemon redeems its proof for the app-scoped machine key.
 

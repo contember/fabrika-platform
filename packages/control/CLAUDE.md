@@ -322,11 +322,27 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   App with its key read from the vault per operation. A workspace is the branch `fabrika/<id>` owned by one
   principal; every use case re-checks `app_envs.authoring`, the action at the coordinates and ownership, and
   answers 404 otherwise. Paths are repository-relative (`isRepositoryPath`, at the MCP boundary), and
-  protected paths (`zerops.y[a]ml`, `fabrika.*`, everything under `.github/`) are refused before GitHub is
-  called. `get_deployment` reaches only runs of the caller's own workspace branches. `get_app_rules`
+  protected paths (`zerops.y[a]ml`, every `fabrika.*` but the exact `fabrika.contract.ts`, everything under
+  `.github/`) are refused before GitHub is called. `get_deployment` reaches only runs of the caller's own
+  workspace branches, and reports a parked run with its approval link. `get_app_rules`
   answers the body of `@fabrika/app`'s `skill/SKILL.md`; the server `instructions` stay under 2,000
   characters (some clients cut them at 2 KB) and point to it. Never restate the rules beyond those three lines.
   One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
+- **Published access comes ONLY from `approvedSnapshot(app, env)` (ADR-0050, `src/approval/`).** Right after the
+  commit is pinned, `executeDeploy` reads the run's snapshot (`readAccessSnapshot` over `env.COMMITS`, the
+  commit's tree and files through the GitHub metadata client; `contractReaderInputs` names the files), stores it
+  on the run, classifies it against the active snapshot (`classifyAccess`, pure, conservative) and either parks
+  the run in `awaiting_approval` (a widening on a `protected` environment without a matching approval) or
+  publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` fenced on the run lease and
+  taken under the namespace lease; a lost swap classifies again. `providerEnvironment` and `namespaceMembers`
+  attach `approvedProviderAccess`, so every deploy, cancel, reconcile, registry hook and namespace job hands the
+  provider the approved access and nothing else. A new write path must take it the same way; reading access
+  from the provider artifact is a bug. An approval names both digests and holds only for them.
+- **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
+  `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
+  principal with no OAuth claims, no link claims and no `Authorization` header, on a request that passes
+  `sameOrigin` against `controlPublicOrigin`. The decision is written under the run lease (a busy environment
+  answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

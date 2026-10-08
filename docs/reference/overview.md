@@ -250,6 +250,18 @@ provider's `deploy()` runs its own ordered steps through the shared `runSteps`
 helper in `@fabrika/provider-contract`; control never sees provider target data,
 artifact data, or step kinds.
 
+Right after the provider pins the run's commit, Control reads the run's **access snapshot** at that commit
+([ADR-0050](../decisions/0050-approved-access.md), `packages/control/src/approval/`): the contract graph and
+`src/db/tables.ts` through the static reader of `@fabrika/check/contract`, which executes nothing, and every
+`db/migrations/` file with its SHA-256. It classifies the snapshot against the environment's active snapshot
+(that of `app_envs.published_run_id`). A widening on an environment with `protected` set (`prod` by
+default) parks the run in `awaiting_approval`; it publishes nothing until a person approves it in the
+console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation`, under
+the namespace lease. Every provider environment and namespace member then carries `approvedSnapshot`'s
+access, and the providers publish a contract application's endpoint table and reconcile its IAM schema from
+it, never from the artifact. Approving needs `access.approve` (authorization) from a human user principal on a
+console request from Control's own origin (admission).
+
 For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete
 ref, then persists the selected commit before freezing its release context.
 `@fabrika/runner-cloudflare` starts a Cloudflare Container and POSTs the job. The

@@ -60,8 +60,9 @@ contract and classify what it changed instead.
    scope (ADR-0050). Every run records its actor, including runs created through MCP.
 9. **Zerops only** for this version.
 
-Today the code still protects every `fabrika.*` file, and nothing waits for approval (part B, work
-unit B6).
+Built (work unit B6): a workspace may edit `fabrika.contract.ts`, and every other `fabrika.*` file stays
+protected; a widening it brings to a protected environment parks the run, and `get_deployment` reports it
+with the approval link.
 
 ## Consequences
 

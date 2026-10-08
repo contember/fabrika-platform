@@ -37,7 +37,7 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `read_files`          | File contents at the workspace head.                           |
 | `apply_changes`       | Commit file writes and deletions against an expected head.     |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env. |
-| `get_deployment`      | The state of that run.                                         |
+| `get_deployment`      | The state of that run; a parked run with its approval link.    |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.  |
 | `get_app_rules`       | The application rules, read-only.                              |
 
@@ -98,8 +98,14 @@ IAM still fetches each client's CIMD document over HTTPS, and a hosted client ca
 
 ## Protected paths
 
-`apply_changes` refuses `zerops.yaml` and `zerops.yml` at any depth, any `fabrika.*` file, and
-everything under `.github/`. The operator changes them through normal review.
+`apply_changes` refuses `zerops.yaml` and `zerops.yml` at any depth, every `fabrika.*` file except
+`fabrika.contract.ts`, and everything under `.github/`. The operator changes them through normal review.
+
+The contract, its schema modules, `src/db/tables.ts` and `db/migrations/` are editable: Control classifies
+their change at deploy time ([ADR-0050](../decisions/0050-approved-access.md)). The authoring target is
+unprotected by default, so a change applies there at once. When a widening reaches a protected
+environment, `get_deployment` reports the run as `awaiting_approval` with the console's approval link and the
+change in plain language. No OAuth or MCP token can approve it.
 
 ## Limits
 

@@ -32,7 +32,17 @@ self-report of the build the agent controls.
 **We will publish an application's access only from an approved snapshot, and we will make every
 widening on a protected environment wait for a human.**
 
-The code does none of this yet (part B, work unit B6).
+Built in work unit B6 (`packages/control/src/approval/`). Details the sections below leave open:
+
+- The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
+  every file under `db/migrations/` is listed.
+- The snapshot digest covers the canonical contract and the migration list, not the checker version.
+- A commit without `fabrika.contract.ts` has a snapshot without a contract; such an application keeps the
+  gates and IAM schema of its artifact until B10. Dropping the contract from a commit is a widening.
+- A run records its actor as `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`.
+- `approvals.complete` approves or refuses; a refused run fails. The protected flag changes through
+  `apps.environments.protect`. A parked run can be cancelled.
+- A provider that pins no commit (`resolveSource` absent) reads no snapshot and publishes nothing new.
 
 ### 1. A deploy run holds the snapshot
 

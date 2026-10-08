@@ -67,7 +67,8 @@ compares its own contract digest with `FABRIKA_CONTRACT_DIGEST` and refuses to s
 on a mismatch ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 
 `readContractSource` in `@fabrika/check/contract` is the reader, and the application checker runs it in the
-build. Control does not call it yet (part B, work unit B6).
+build. Control runs it on the files of each deploy run's pinned commit, which `contractReaderInputs` names
+(work unit B6, [ADR-0050](0050-approved-access.md)).
 
 ## Consequences
 

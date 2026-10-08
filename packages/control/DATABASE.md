@@ -45,6 +45,10 @@ lifecycle stay in `CLAUDE.md`.
 - **Before 1.0 the history may be squashed** into one initial file per dialect when installations are
   reinstalled (ADR-0017). A squash must reproduce the schema and seed rows exactly: dump both dialects
   before and after and diff them. Otherwise an applied file is immutable and a change is a new file.
+- **SQLite cannot change a CHECK**, so `0005_approved_access.sql` rebuilds `runs` for the `awaiting_approval`
+  status. `operations_release_sync` references `runs` with `ON DELETE CASCADE`: its rows are copied aside and
+  restored around the rebuild, because dropping the parent would cascade into them. Rebuild a referenced table
+  the same way.
 - **The Bun migration wrapper owns `control_schema_migrations`, bundle `control`, and advisory lock
   `4471902583`.** Bundle and filename form the migration identity; see ADR-0017.
 
