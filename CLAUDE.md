@@ -118,8 +118,8 @@ needed only when there is no app config. Platform commands load the provider's
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned
   ledger** (ADR-0017). IAM, control, and Operations keep separate ledger tables
-  and stable advisory locks. Do not rename a bundle or migration file; the old
-  `schema_migrations` table is read-only legacy evidence.
+  and stable advisory locks. Do not rename a bundle or migration file. Before 1.0 a bundle's
+  history may be squashed when installations are reinstalled; there is no legacy-ledger adoption.
 - **The deploy EXECUTOR is a separate worker** reached via a service binding, because a deploy's final
   step runs `wrangler deploy` inside a container — a container hosted in the control plane would reset
   itself mid-deploy. It is deployed out-of-band.

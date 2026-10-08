@@ -13,7 +13,7 @@ export interface CredentialRow {
 	 * The app this credential may mint for. NULL = cross-app, which is legal ONLY for a
 	 * principal-bound credential (its permissions are still resolved per app through `grants`) and is
 	 * REFUSED for an anonymous one, whose frozen grants were delegation-checked against exactly one
-	 * app at issue time. See `resolveCredential` and migration `0012`/`0006`.
+	 * app at issue time. See `resolveCredential`.
 	 */
 	app: string | null
 	issued_by: string | null

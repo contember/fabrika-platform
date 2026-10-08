@@ -18,7 +18,7 @@ export const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
  * installation that moved to password-only kept honouring every OIDC login for a month — and, for the
  * bypass, every one of those is a global admin.
  *
- * The bypass carries `local_dev` as its own method (migration `0013`/`0007`) rather than an exemption
+ * The bypass carries `local_dev` as its own method rather than an exemption
  * here, so this stays a total function over the enum: a method added later has to answer the question.
  */
 export function sessionUsable(
@@ -37,7 +37,7 @@ export function sessionUsable(
 
 /**
  * Fixed identity for the SEEDED PROVISIONING KEY below. A stable `service` principal with this id is
- * seeded into `principals` (migration `0008_provisioning_principal.sql`) so the audit the provisioning
+ * seeded into `principals` (migration `0001_init.sql`) so the audit the provisioning
  * key drives (e.g. `iam.app.schema.reconcile`) resolves its `principal_id` FK — the prod-applied analog
  * of the dev admin's `seed.dev.sql` row.
  */
@@ -79,7 +79,7 @@ export async function resolveCaller(
 		// the machine analog of the `IAM_BOOTSTRAP_ADMINS` email bootstrap. Checked BEFORE the DB lookup so
 		// a fresh control plane can reconcile/issue before any DB-backed admin credential exists. Empty env
 		// (the default) disables it. Compared by hash in constant time; resolves the seeded `provisioning-admin`
-		// principal (migration 0008) so its audit FK holds.
+		// principal (`0001_init.sql`) so its audit FK holds.
 		const provisioningKey = (env.FABRIKA_IAM_PROVISIONING_KEY ?? '').trim()
 		if (provisioningKey !== '' && timingSafeEqualHex(presentedHash, await hashToken(provisioningKey))) {
 			return {

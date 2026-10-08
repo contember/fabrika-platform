@@ -14,16 +14,6 @@ const serviceMigrations = definePostgresServiceMigrations({
 	directory: MIGRATIONS_DIR,
 	ledgerTable: 'iam_schema_migrations',
 	lockKey: MIGRATION_LOCK_KEY,
-	legacy: {
-		table: 'schema_migrations',
-		sentinelTables: ['principals', 'auth_log'],
-		effects: [{
-			migration: '0002_provisioning_principal.sql',
-			probeSql: `SELECT EXISTS (
-				SELECT 1 FROM principals WHERE id = 'provisioning-admin'
-			) AS proven`,
-		}],
-	},
 })
 
 export function postgresMigrations(dir: string = MIGRATIONS_DIR): PostgresMigration[] {

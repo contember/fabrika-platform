@@ -128,7 +128,7 @@ describe('Db.listPrincipals — ordering', () => {
 
 		const seeded = new Set([first, second, third])
 		const expected = [first, second, third].sort((a, b) => (a < b ? 1 : -1))
-		// Filtered because migration 0008 seeds `provisioning-admin`, which is older than these.
+		// Filtered because the init migration seeds `provisioning-admin`, which is older than these.
 		expect((await h.repositories.principals.listPrincipals({ limit: 50 })).map((r) => r.id).filter((id) => seeded.has(id))).toEqual(expected)
 	})
 })

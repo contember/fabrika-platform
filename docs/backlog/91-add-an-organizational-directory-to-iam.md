@@ -12,7 +12,7 @@ blocked-by: []
 
 IAM currently models only `user` and `service` principals. A user has one email and one unqualified OIDC `external_id`, and authorization resolves from grants attached directly to that principal plus the bootstrap role (`packages/iam/src/db.ts`, `packages/iam/src/resolve.ts`). The app-owned scope model is deliberately flat and opaque; an `organization` or `team` scope value is not an IAM-owned directory object and has no hierarchy (`packages/auth-core/src/types.ts`).
 
-The initial schema contained login-time IdP group-to-role mappings, but migration `packages/iam/migrations/0007_drop_group_access.sql` removed them when native IAM sessions stopped carrying IdP groups. Some `group:${string}` permission-source and IAM UI wording remains, but there is no durable group, membership, lifecycle, provenance, or organizational model behind it.
+The initial schema contained login-time IdP group-to-role mappings, but a later migration removed them when native IAM sessions stopped carrying IdP groups. Some `group:${string}` permission-source and IAM UI wording remains, but there is no durable group, membership, lifecycle, provenance, or organizational model behind it.
 
 This prevents IAM from representing joiner/mover/leaver state, departments and teams, reusable access groups, or externally synchronized directory data. Reintroducing transient IdP group claims directly into permission resolution would recreate the removed model without solving those lifecycle and provenance gaps.
 

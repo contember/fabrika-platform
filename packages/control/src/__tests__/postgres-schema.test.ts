@@ -135,29 +135,10 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			.all<{ bundle: string; name: string }>()
 		expect(results).toEqual([
 			{ bundle: 'control', name: '0001_init.sql' },
-			{ bundle: 'control', name: '0002_jobs.sql' },
-			{ bundle: 'control', name: '0003_zerops_targets.sql' },
-			{ bundle: 'control', name: '0004_provider_envelopes.sql' },
-			{ bundle: 'control', name: '0005_deployment_namespaces.sql' },
-			{ bundle: 'control', name: '0006_immutable_namespace_resource_claim_owners.sql' },
-			{ bundle: 'control', name: '0007_namespace_resource_claim_owner_coordinates.sql' },
-			{ bundle: 'control', name: '0008_zerops_namespace_app_targets.sql' },
-			{ bundle: 'control', name: '0009_operations_catalog_sync.sql' },
-			{ bundle: 'control', name: '0010_operations_release_sync.sql' },
-			{ bundle: 'control', name: '0011_operations_ingest_configs.sql' },
-			{ bundle: 'control', name: '0012_app_env_public_origin.sql' },
-			{ bundle: 'control', name: '0013_provider_run_state.sql' },
-			{ bundle: 'control', name: '0014_zerops_legacy_run_state.sql' },
-			{ bundle: 'control', name: '0015_github_source_connections.sql' },
-			{ bundle: 'control', name: '0016_github_manifest_state.sql' },
-			{ bundle: 'control', name: '0017_keyed_github_source_connections.sql' },
-			{ bundle: 'control', name: '0018_retire_legacy_github_source.sql' },
-			{ bundle: 'control', name: '0019_builder_connection_receipts.sql' },
-			{ bundle: 'control', name: '0020_github_app_credentials_in_vault.sql' },
 		])
 	})
 
-	test('creates exactly the tables the service reads/writes, and none of the retired ones', async () => {
+	test('creates the tables the service reads/writes', async () => {
 		const { results } = await raw
 			.prepare(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ?`)
 			.bind(fixture?.schema ?? '')
@@ -186,10 +167,6 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		) {
 			expect(names).toContain(table)
 		}
-		// Retired by migrations/0003 — this set never creates it in the first place.
-		expect(names).not.toContain('accounts')
-		// Retired by migrations-postgres/0018 (ADR-0029): the singleton was v1 compatibility evidence.
-		expect(names).not.toContain('github_source_connections')
 	})
 })
 

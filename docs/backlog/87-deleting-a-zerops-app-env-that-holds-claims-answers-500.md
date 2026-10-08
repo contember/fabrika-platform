@@ -14,8 +14,8 @@ and stays in the registry. Needs a decision, not just a fix. Effort M.
 
 ## Problem
 
-- `packages/control/migrations/0011_namespace_resource_claim_owner_coordinates.sql:13` and
-  `migrations-postgres/0007_namespace_resource_claim_owner_coordinates.sql:25` make the claim rows
+- The `namespace_resource_claims` foreign keys in `packages/control/migrations/0001_init.sql` and
+  `migrations-postgres/0001_init.sql` make the claim rows
   restrict the env delete; `app_envs.app_id` cascades from `apps`, so an app delete hits the same wall.
 - `deleteAppEnv` / `deleteApp` (`packages/control/src/db.ts`) delete only the env or app row;
   `deleteNamespaceResourceClaimsForOwner` exists but is called only from the registration rollback.

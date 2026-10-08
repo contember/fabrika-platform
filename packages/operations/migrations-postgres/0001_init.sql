@@ -1,14 +1,36 @@
+-- Operations schema — POSTGRES dialect. `../migrations/0001_init.sql` states the same schema for
+-- SQLite/D1; add every later change to both sets. Millisecond timestamps are BIGINT here and
+-- INTEGER there. Two deliberate differences: `releases.release_name` and `releases.updated_at` are
+-- NOT NULL here, so `idx_releases_source_name` needs no partial predicate.
+
 CREATE TABLE sources (
-	id            TEXT PRIMARY KEY,
-	app_id        TEXT NOT NULL,
-	environment   TEXT NOT NULL,
-	service_key   TEXT NOT NULL,
-	display_name  TEXT NOT NULL,
-	enabled       INTEGER NOT NULL,
-	created_at    BIGINT NOT NULL,
-	updated_at    BIGINT NOT NULL,
+	id                TEXT PRIMARY KEY,
+	app_id            TEXT NOT NULL,
+	environment       TEXT NOT NULL,
+	service_key       TEXT NOT NULL,
+	display_name      TEXT NOT NULL,
+	enabled           INTEGER NOT NULL,
+	created_at        BIGINT NOT NULL,
+	updated_at        BIGINT NOT NULL,
+	disabled_at       BIGINT,
+	origin            TEXT NOT NULL DEFAULT 'control',
+	public_origin     TEXT,
+	ingest_project_id TEXT,
 	UNIQUE (app_id, environment, service_key)
 );
+CREATE UNIQUE INDEX idx_sources_ingest_project_id
+	ON sources(ingest_project_id)
+	WHERE ingest_project_id IS NOT NULL;
+
+CREATE TABLE operations_catalog_cursor (
+	singleton      INTEGER PRIMARY KEY CHECK (singleton = 1),
+	revision       INTEGER NOT NULL,
+	snapshot_hash  TEXT NOT NULL,
+	applied_at     BIGINT NOT NULL
+);
+
+INSERT INTO operations_catalog_cursor (singleton, revision, snapshot_hash, applied_at)
+VALUES (1, 0, '', 0);
 
 CREATE TABLE ingest_credentials (
 	id          TEXT PRIMARY KEY,
@@ -19,6 +41,17 @@ CREATE TABLE ingest_credentials (
 	revoked_at  BIGINT
 );
 CREATE INDEX idx_ingest_credentials_source ON ingest_credentials(source_id, created_at);
+CREATE INDEX idx_ingest_credentials_source_validity
+	ON ingest_credentials(source_id, revoked_at, expires_at);
+
+CREATE TABLE ingest_rate_limits (
+	source_id      TEXT NOT NULL REFERENCES sources(id),
+	window_start   BIGINT NOT NULL,
+	consumed_count INTEGER NOT NULL,
+	updated_at     BIGINT NOT NULL,
+	PRIMARY KEY (source_id, window_start)
+);
+CREATE INDEX idx_ingest_rate_limits_expiry ON ingest_rate_limits(window_start);
 
 CREATE TABLE issues (
 	source_id             TEXT NOT NULL REFERENCES sources(id),
@@ -38,9 +71,13 @@ CREATE TABLE issues (
 	merged_into           TEXT,
 	revision              INTEGER NOT NULL DEFAULT 0,
 	last_mutation_id      TEXT,
+	id                    TEXT,
 	PRIMARY KEY (source_id, fingerprint)
 );
 CREATE INDEX idx_issues_source_status_seen ON issues(source_id, status, last_seen);
+CREATE UNIQUE INDEX idx_issues_id
+	ON issues(id)
+	WHERE id IS NOT NULL;
 
 CREATE TABLE occurrences (
 	id            TEXT PRIMARY KEY,
@@ -144,37 +181,127 @@ CREATE TABLE releases (
 	state           TEXT NOT NULL,
 	created_at      BIGINT NOT NULL,
 	finished_at     BIGINT,
+	release_name    TEXT NOT NULL,
+	artifact_state  TEXT NOT NULL DEFAULT 'pending',
+	updated_at      BIGINT NOT NULL,
 	UNIQUE (source_id, run_id)
 );
+CREATE UNIQUE INDEX idx_releases_source_name ON releases(source_id, release_name);
+CREATE UNIQUE INDEX idx_releases_source_commit ON releases(source_id, commit_sha);
+
 CREATE TABLE source_maps (
 	release_id    TEXT NOT NULL REFERENCES releases(id),
 	file_name     TEXT NOT NULL,
 	blob_key      TEXT NOT NULL,
 	uploaded_at   BIGINT NOT NULL,
+	digest        TEXT,
+	byte_length   BIGINT,
 	PRIMARY KEY (release_id, file_name)
 );
+CREATE INDEX idx_source_maps_digest
+	ON source_maps(release_id, digest)
+	WHERE digest IS NOT NULL;
+
+CREATE TABLE deploy_run_links (
+	run_id              TEXT PRIMARY KEY,
+	source_id           TEXT NOT NULL REFERENCES sources(id),
+	release_id          TEXT REFERENCES releases(id),
+	availability        TEXT NOT NULL,
+	unavailable_reason  TEXT,
+	phase               TEXT NOT NULL,
+	provider_run_id     TEXT,
+	outcome             TEXT,
+	artifact_state      TEXT NOT NULL,
+	projection_revision INTEGER NOT NULL,
+	projection_hash     TEXT NOT NULL,
+	observed_at         BIGINT NOT NULL,
+	updated_at          BIGINT NOT NULL
+);
+CREATE INDEX idx_deploy_run_links_release ON deploy_run_links(release_id, observed_at);
+
+CREATE TABLE artifact_upload_credentials (
+	id               TEXT PRIMARY KEY,
+	run_id           TEXT NOT NULL UNIQUE REFERENCES deploy_run_links(run_id),
+	release_id       TEXT NOT NULL REFERENCES releases(id),
+	verifier         TEXT NOT NULL UNIQUE,
+	expires_at       BIGINT NOT NULL,
+	revoked_at       BIGINT,
+	uploaded_bytes   BIGINT NOT NULL DEFAULT 0,
+	artifact_count   INTEGER NOT NULL DEFAULT 0,
+	last_upload_id   TEXT
+);
+CREATE INDEX idx_artifact_upload_credentials_validity
+	ON artifact_upload_credentials(verifier, expires_at, revoked_at);
 
 CREATE TABLE health_checks (
-	id            TEXT PRIMARY KEY,
-	source_id     TEXT NOT NULL REFERENCES sources(id),
-	url           TEXT NOT NULL,
-	enabled       INTEGER NOT NULL,
-	created_at    BIGINT NOT NULL,
-	updated_at    BIGINT NOT NULL
+	id                 TEXT PRIMARY KEY,
+	source_id          TEXT NOT NULL REFERENCES sources(id),
+	url                TEXT NOT NULL,
+	enabled            INTEGER NOT NULL,
+	created_at         BIGINT NOT NULL,
+	updated_at         BIGINT NOT NULL,
+	path               TEXT NOT NULL DEFAULT '/health',
+	interval_ms        BIGINT NOT NULL DEFAULT 60000,
+	timeout_ms         BIGINT NOT NULL DEFAULT 5000,
+	expected_status    INTEGER NOT NULL DEFAULT 200,
+	failure_threshold  INTEGER NOT NULL DEFAULT 3,
+	recovery_threshold INTEGER NOT NULL DEFAULT 2,
+	stale_after_ms     BIGINT NOT NULL DEFAULT 180000,
+	due_at             BIGINT NOT NULL DEFAULT 0,
+	claimed_until      BIGINT,
+	claim_token        TEXT
 );
+CREATE INDEX idx_health_checks_due ON health_checks(enabled, due_at, claimed_until);
+
 CREATE TABLE health_observations (
 	id            TEXT PRIMARY KEY,
 	check_id      TEXT NOT NULL REFERENCES health_checks(id),
 	state         TEXT NOT NULL,
 	observed_at   BIGINT NOT NULL,
 	latency_ms    INTEGER,
-	detail_code   TEXT
+	detail_code   TEXT,
+	successful    INTEGER NOT NULL DEFAULT 0,
+	status_code   INTEGER,
+	transition_id TEXT
 );
 CREATE INDEX idx_health_observations_check_time ON health_observations(check_id, observed_at);
+
 CREATE TABLE current_health (
-	check_id      TEXT PRIMARY KEY REFERENCES health_checks(id),
-	state         TEXT NOT NULL,
-	observed_at   BIGINT NOT NULL,
-	latency_ms    INTEGER,
-	detail_code   TEXT
+	check_id              TEXT PRIMARY KEY REFERENCES health_checks(id),
+	state                 TEXT NOT NULL,
+	observed_at           BIGINT NOT NULL,
+	latency_ms            INTEGER,
+	detail_code           TEXT,
+	consecutive_failures  INTEGER NOT NULL DEFAULT 0,
+	consecutive_successes INTEGER NOT NULL DEFAULT 0,
+	transition_id         TEXT
+);
+
+CREATE TABLE health_transitions (
+	id          TEXT PRIMARY KEY,
+	source_id   TEXT NOT NULL REFERENCES sources(id),
+	check_id    TEXT REFERENCES health_checks(id),
+	kind        TEXT NOT NULL,
+	from_state  TEXT,
+	to_state    TEXT NOT NULL,
+	occurred_at BIGINT NOT NULL
+);
+CREATE INDEX idx_health_transitions_source_time ON health_transitions(source_id, occurred_at, id);
+
+CREATE TABLE telemetry_health_observations (
+	id          TEXT PRIMARY KEY,
+	source_id   TEXT NOT NULL REFERENCES sources(id),
+	state       TEXT NOT NULL,
+	observed_at BIGINT NOT NULL,
+	payload     TEXT NOT NULL,
+	transition_id TEXT
+);
+CREATE INDEX idx_telemetry_health_history ON telemetry_health_observations(source_id, observed_at, id);
+
+CREATE TABLE current_telemetry_health (
+	source_id   TEXT PRIMARY KEY REFERENCES sources(id),
+	state       TEXT NOT NULL,
+	observed_at BIGINT NOT NULL,
+	payload     TEXT NOT NULL,
+	transition_id TEXT
 );

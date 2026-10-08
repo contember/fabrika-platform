@@ -16,10 +16,6 @@ const serviceMigrations = definePostgresServiceMigrations({
 	ledgerTable: 'operations_schema_migrations',
 	lockKey: MIGRATION_LOCK_KEY,
 	dependencies: [platformNodePostgresMigrationBundle(['0001_jobs.sql'])],
-	legacy: {
-		table: 'schema_migrations',
-		sentinelTables: ['sources', 'issues'],
-	},
 })
 
 export type Migration = PostgresMigration

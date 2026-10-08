@@ -10,22 +10,17 @@
 // The Postgres half skips (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — helpers/postgres.ts.
 
 import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
-import { PostgresDatabase } from '@fabrika/platform-node'
-import { Database } from 'bun:sqlite'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { LOCAL_DEV_ADMIN_ID, sessionUsable } from '../auth'
 import { handleAuth } from '../auth/routes'
 import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../db'
 import type { RequestContext } from '../env'
-import { applyMigrations, postgresMigrations } from '../node/migrate'
 import { pkceChallenge } from '../oidc'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
 import { createHarness, makeServicesFor, seedUser } from './helpers/harness'
-import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
+import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
@@ -185,80 +180,5 @@ describe.skipIf(!hasPostgres)('a session whose method the installation has since
 			ok: false,
 			reason: 'invalid_session',
 		})
-	})
-})
-
-// ── The upgrade path ──────────────────────────────────────────────────────────
-//
-// A bypass session issued BEFORE the method existed is stored as `oidc` with the fixed subject. Left
-// alone it would read as an OIDC session in an installation that runs OIDC off, so the migration
-// renames exactly those rows — which is also why a local stack stays signed in across the upgrade.
-
-const SQLITE_DIR = join(import.meta.dir, '..', '..', 'migrations')
-const SQLITE_MIGRATION = '0013_session_method_local_dev.sql'
-const POSTGRES_MIGRATION = '0007_session_method_local_dev.sql'
-const T = 1_782_896_400
-
-/** Apply one file the way `wrangler d1 migrations apply` does — statement by statement. */
-function applySqlite(db: Database, sql: string): void {
-	for (const statement of sql.split(/;\s*\n/).map((s) => s.trim())) {
-		if (statement === '' || statement.split('\n').every((line) => line.trim().startsWith('--'))) continue
-		db.query(statement).run()
-	}
-}
-
-describe('the migration renames the sessions the bypass already minted', () => {
-	test('SQLite', () => {
-		const db = new Database(':memory:')
-		db.exec('PRAGMA foreign_keys = ON')
-		for (const name of readdirSync(SQLITE_DIR).filter((f) => f.endsWith('.sql') && f < SQLITE_MIGRATION).sort()) {
-			db.exec(readFileSync(join(SQLITE_DIR, name), 'utf8'))
-		}
-		db.run(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
-			VALUES ('p1', 'user', 'local-dev-admin', 'admin@local.test', 'admin@local.test', ${T}, ${T})`)
-		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, created_at, expires_at)
-			VALUES ('s-bypass', 'h-bypass', 'p1', 'local-dev-admin', 'admin@local.test', 'oidc', ${T}, ${T + 100})`)
-		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, created_at, expires_at)
-			VALUES ('s-oidc', 'h-oidc', 'p1', 'google-sub', 'human@x.cz', 'oidc', ${T}, ${T + 100})`)
-
-		applySqlite(db, readFileSync(join(SQLITE_DIR, SQLITE_MIGRATION), 'utf8'))
-
-		expect(db.query<{ id: string; authentication_method: string }, []>('SELECT id, authentication_method FROM sessions ORDER BY id').all())
-			.toEqual([
-				{ id: 's-bypass', authentication_method: 'local_dev' },
-				{ id: 's-oidc', authentication_method: 'oidc' },
-			])
-	})
-
-	test.skipIf(!hasPostgres)('Postgres', async () => {
-		const url = postgresUrl ?? ''
-		const schema = `session_method_upgrade_${Math.random().toString(36).slice(2, 10)}`
-		const admin = PostgresDatabase.connect(url)
-		await admin.prepare(`CREATE SCHEMA ${schema}`).run()
-		await admin.close()
-		const db = PostgresDatabase.connect(url, { connection: { search_path: schema }, max: 1 })
-		try {
-			await applyMigrations(db, postgresMigrations().filter((m) => m.name < POSTGRES_MIGRATION))
-			await db.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`).bind('p1', 'user', 'local-dev-admin', 'admin@local.test', 'admin@local.test', T, T).run()
-			for (const [id, hash, sub] of [['s-bypass', 'h-bypass', 'local-dev-admin'], ['s-oidc', 'h-oidc', 'google-sub']]) {
-				await db.prepare(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(id ?? '', hash ?? '', 'p1', sub ?? '', 'oidc', T, T + 100).run()
-			}
-
-			expect(await applyMigrations(db)).toEqual([POSTGRES_MIGRATION, '0008_device_authorizations.sql'])
-
-			const { results } = await db.prepare('SELECT id, authentication_method FROM sessions ORDER BY id')
-				.all<{ id: string; authentication_method: string }>()
-			expect(results).toEqual([
-				{ id: 's-bypass', authentication_method: 'local_dev' },
-				{ id: 's-oidc', authentication_method: 'oidc' },
-			])
-		} finally {
-			await db.close()
-			const cleanup = PostgresDatabase.connect(url)
-			await cleanup.prepare(`DROP SCHEMA ${schema} CASCADE`).run()
-			await cleanup.close()
-		}
 	})
 })

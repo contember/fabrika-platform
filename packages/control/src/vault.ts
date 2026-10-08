@@ -42,7 +42,7 @@ const IV_BYTES = 12
 /** AES-256: a 32-byte key (master KEK and per-value DEK alike). */
 const KEY_BYTES = 32
 
-/** A vault row as stored in D1 (snake_case, matching migrations/0002_vault.sql). */
+/** A vault row as stored in D1 (snake_case, matching migrations/0001_init.sql). */
 export interface VaultRow {
 	id: string
 	scope: SecretScope

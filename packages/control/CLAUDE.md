@@ -79,8 +79,7 @@ whole deploy in process. Core owns registry/run writes, locking, secret resoluti
 Runtime surface: `src/env.ts` (ports + vars) · `src/platform-cf.ts` (the raw CF bindings + their
 adapters) · `src/services.ts` (how every dependency bag is built). Persistence capabilities live in
 `src/db.ts`; the runtime composition root assembles them over D1 or Postgres. Schema:
-`migrations/*.sql` (SQLite/D1) and `migrations-postgres/*.sql` (the same FINAL schema, expressed once,
-for Postgres).
+`migrations/*.sql` (SQLite/D1) and `migrations-postgres/*.sql` (the same schema for Postgres).
 
 Three deploy TRIGGERS, all converging on the same `createRun` + enqueue: (1) the GitHub-App push
 webhook (`src/github/triggers/webhook.ts`, private repos, scoped to one connection); (2) the manual Deploy button (`triggerDeploy`); (3) the cron

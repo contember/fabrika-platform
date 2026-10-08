@@ -14,29 +14,6 @@ const serviceMigrations = definePostgresServiceMigrations({
 	directory: MIGRATIONS_DIR,
 	ledgerTable: 'control_schema_migrations',
 	lockKey: MIGRATION_LOCK_KEY,
-	legacy: {
-		table: 'schema_migrations',
-		sentinelTables: ['apps', 'runs'],
-		effects: [{
-			migration: '0002_jobs.sql',
-			probeSql: `SELECT
-				EXISTS (
-					SELECT 1
-					FROM pg_catalog.pg_class AS relation
-					INNER JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-					WHERE namespace.nspname = current_schema()
-						AND relation.relname = 'jobs'
-						AND relation.relkind IN ('r', 'p')
-				)
-				AND (
-					SELECT COUNT(*) = 7
-					FROM information_schema.columns
-					WHERE table_schema = current_schema()
-						AND table_name = 'jobs'
-						AND column_name IN ('id', 'queue', 'payload', 'visible_at', 'attempts', 'max_attempts', 'created_at')
-				) AS proven`,
-		}],
-	},
 })
 
 export function postgresMigrations(dir: string = MIGRATIONS_DIR): PostgresMigration[] {

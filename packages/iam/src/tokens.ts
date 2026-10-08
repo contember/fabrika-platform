@@ -158,7 +158,7 @@ export type ResolvedCredential =
  * an app-scoped admin of the least important app could issue `{ action: '*' }` and present the key to
  * every other app behind the proxy (SEC-2). A `NULL` app on an anonymous credential is therefore
  * refused rather than treated as cross-app — a credential issued before the binding existed must be
- * reissued, which is the hard cutover migration `0012`/`0006` announces.
+ * reissued, a hard cutover.
  *
  * A principal-bound credential may be cross-app (`NULL`) because it carries no frozen authority: its
  * permissions are resolved per app from `grants`, which are themselves app-filtered. When it names an

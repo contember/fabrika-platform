@@ -3,7 +3,7 @@ import { type AppEnvRow, type AppRow } from './registry-types'
 import { firstRow } from './returning'
 
 /**
- * Per-(app, env) public-repo poll bookkeeping (migrations/0004_repo_poll.sql). One row per pollable
+ * Per-(app, env) public-repo poll bookkeeping (migrations/0001_init.sql). One row per pollable
  * (app, env): the feed's last ETag (for the conditional GET), the head sha the poller last enqueued
  * for, the last poll time, and a short last-error string. Only public apps (no GitHub App install)
  * with a `trigger_ref` are polled — see `getPollEligibleEnvs`.

@@ -38,13 +38,15 @@ lifecycle stay in `CLAUDE.md`.
 
 ## Migrations
 
-- **`migrations/` is IMMUTABLE history; `migrations-postgres/` expresses the FINAL schema.** The
-  SQLite set carries create-copy-drop-rename rebuilds it needed because SQLite cannot ALTER a
-  constraint; the Postgres set never reproduces them — it states the outcome once. What must match is
-  the OUTCOME: `src/db.ts` runs against both unmodified. Add a change to BOTH sets, knowingly.
+- **`migrations/` (SQLite/D1) and `migrations-postgres/` state the same schema.** What must match is the OUTCOME: `src/db.ts` runs against both unmodified. Add a change to
+  BOTH sets, knowingly. Only `jobs` is Postgres-only — the Cloudflare queue has no schema — and it stays
+  `CREATE TABLE IF NOT EXISTS`, column for column with `@fabrika/platform-node`'s `0001_jobs.sql`,
+  because Control and Operations create it in one shared schema on the light Zerops tier.
+- **Before 1.0 the history may be squashed** into one initial file per dialect when installations are
+  reinstalled (ADR-0017). A squash must reproduce the schema and seed rows exactly: dump both dialects
+  before and after and diff them. Otherwise an applied file is immutable and a change is a new file.
 - **The Bun migration wrapper owns `control_schema_migrations`, bundle `control`, and advisory lock
-  `4471902583`.** Bundle and filename form durable identity. Legacy `schema_migrations` rows may be
-  adopted only when the control sentinels and migration effects prove ownership; see ADR-0017.
+  `4471902583`.** Bundle and filename form the migration identity; see ADR-0017.
 
 ```bash
 bunx wrangler d1 migrations apply DB --local      # SQLite/D1

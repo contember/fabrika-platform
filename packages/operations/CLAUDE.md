@@ -77,6 +77,7 @@ and artifact state as one tuple, and delayed older projections cannot roll it
 back.
 
 The Bun migration wrapper uses `definePostgresServiceMigrations` and composes the
-`platform-node` job-queue bundle before the Operations service bundle. Bundle names and filenames are durable migration
-identity under ADR-0017; do not rename them. Real Postgres and S3 tests require
+`platform-node` job-queue bundle before the Operations service bundle. Bundle names and filenames are
+migration identity under ADR-0017; do not rename them. Before 1.0 the history may be squashed when
+installations are reinstalled. Real Postgres and S3 tests require
 `FABRIKA_TEST_POSTGRES_URL` and `FABRIKA_TEST_S3_*` and otherwise skip.

@@ -173,8 +173,7 @@ inputs explicit and service-owned:
 - stable bundle name;
 - stable ledger table;
 - stable advisory lock;
-- migration directory and dependency order;
-- legacy-ledger sentinel and effect evidence.
+- migration directory and dependency order.
 
 IAM, Control, and Operations use `iam_schema_migrations`,
 `control_schema_migrations`, and `operations_schema_migrations`, respectively.

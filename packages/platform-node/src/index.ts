@@ -33,8 +33,6 @@ export {
 	applyPostgresMigrations,
 	definePostgresMigrationPlan,
 	platformNodePostgresMigrationBundle,
-	type PostgresLegacyMigrationEffect,
-	type PostgresLegacyMigrationLedger,
 	type PostgresMigration,
 	type PostgresMigrationBundle,
 	postgresMigrationFilenames,

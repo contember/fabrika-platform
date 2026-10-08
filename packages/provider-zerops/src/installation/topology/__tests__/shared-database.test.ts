@@ -74,7 +74,7 @@ describe('the light tier shares one database, so the three schemas must interlea
 			return body.split('\n').map((line) => line.trim()).filter((line) => line !== '').join(' ')
 		}
 		const reference = columns('packages/platform-node/migrations/0001_jobs.sql')
-		expect(columns('packages/control/migrations-postgres/0002_jobs.sql')).toBe(reference)
+		expect(columns('packages/control/migrations-postgres/0001_init.sql')).toBe(reference)
 		// Guard the guard: if the extraction ever silently returns a fragment, these two make it fail
 		// rather than compare two equal fragments.
 		expect(reference).toContain('queue')
@@ -82,7 +82,7 @@ describe('the light tier shares one database, so the three schemas must interlea
 	})
 
 	test('both `jobs` creators are idempotent — the second service must not fail on an existing table', () => {
-		for (const path of ['packages/platform-node/migrations/0001_jobs.sql', 'packages/control/migrations-postgres/0002_jobs.sql']) {
+		for (const path of ['packages/platform-node/migrations/0001_jobs.sql', 'packages/control/migrations-postgres/0001_init.sql']) {
 			const sql = readFileSync(join(REPO_ROOT, path), 'utf8')
 			expect(sql, path).toContain('CREATE TABLE IF NOT EXISTS jobs')
 			expect(sql, path).toContain('CREATE INDEX IF NOT EXISTS idx_jobs_due')

@@ -58,8 +58,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   equality. Never ask the engine to case-fold an identity — SQLite's `LOWER()` is ASCII-only where
   Postgres's is full Unicode, so `LOWER(email) = LOWER(?)` used to make the BACKEND decide whether two
   addresses were one person. `principal_email_claims` is the second lock over the same rule and moves
-  with a principal whose address changes; migration `0011`/`0005` normalized every legacy row and
-  REFUSES to run on data it cannot fold identically on both engines.
+  with a principal whose address changes.
 - **The OIDC flight cookie is signed** (`Signer.signInternal`, audience `fabrika:iam:oidc-flight`).
   Its `state` cannot authenticate itself — whoever writes the cookie writes `state` too — and
   `Path=/auth` does not stop a sibling host under a shared domain from tossing in a second one. Every
@@ -97,8 +96,8 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A SESSION IS USABLE ONLY WHILE THE INSTALLATION STILL ENABLES ITS METHOD.** `sessionUsable`
   (`src/auth.ts`) is checked at USE — at mint and at `currentSession` — because
   turning OIDC or password off changes what the NEXT login may do and nothing about the thirty days
-  already issued. The local-dev bypass carries its own `authentication_method` (`local_dev`, migration
-  `0013`/`0007`) instead of an exemption inside the predicate: a local composition runs OIDC off, so
+  already issued. The local-dev bypass carries its own `authentication_method` (`local_dev`) instead of an
+  exemption inside the predicate: a local composition runs OIDC off, so
   "refuse an `oidc` session when OIDC is off" would have disabled the bypass itself. Anything that
   seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
   seeds `password` for exactly that reason.
@@ -114,8 +113,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   at issue and were delegation-checked against one app, so without the binding authority granted at
   one app was spendable installation-wide. A principal-bound credential may be cross-app (`NULL`) —
   it carries no frozen authority and its permissions resolve per app through `grants`. An app
-  mismatch is reported as `invalid_key`, never as a distinct reason. Migration `0012`/`0006` is a
-  hard cutover: pre-existing share links have no app and must be reissued.
+  mismatch is reported as `invalid_key`, never as a distinct reason.
 - **A self-bound key (`issueKey` in `principalId` mode) MUST state an expiry.** It carries the
   issuer's live permissions with no inline downscope, so without one a 300-second access token
   could mint a permanent installation-wide credential from itself.
@@ -189,13 +187,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   already-fetched rows, so it is unit-testable without a database. Unparseable inline grant JSON and
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
   in `@fabrika/auth-core` matches them; never pre-expand.
-- **Both migration sets must land the same OUTCOME.** `migrations/` is immutable SQLite history;
-  `migrations-postgres/` states the final schema once. `src/db.ts` runs unmodified against both, and
+- **Both migration sets must land the same OUTCOME.** `migrations/` (SQLite/D1) and
+  `migrations-postgres/` state the same schema; `src/db.ts` runs unmodified against both, and
   `src/__tests__/postgres-schema.test.ts` pins it against a real database. Add a change to both,
-  knowingly. Bundle `iam`, its ledger, and advisory lock `7214839201` are durable identity (ADR-0017).
-  A migration that cannot state a correct outcome for existing rows REFUSES rather than guesses —
-  `src/__tests__/migration-guards.test.ts` proves both engines refuse the same data. Note that Bun's
-  `Database.exec()` swallows a step error and runs on, so that test applies the file one statement at
+  knowingly. Bundle `iam`, its ledger, and advisory lock `7214839201` are durable identity; before 1.0
+  the history may be squashed when installations are reinstalled (ADR-0017). A migration that cannot
+  state a correct outcome for existing rows REFUSES rather than guesses. Bun's `Database.exec()`
+  swallows a step error and runs on, so a test that proves a refusal applies the file one statement at
   a time, the way `wrangler d1 migrations apply` does.
 - **Never log a secret, a key, or an error object that may quote a connection string.** Log which
   surfaces are enabled, not what enabled them. `src/log.ts` (`logError`/`logWarn`) is the ONE place a

@@ -2,7 +2,6 @@ import type { SqlDatabase } from '@fabrika/platform'
 import {
 	applyPostgresMigrations,
 	definePostgresMigrationPlan,
-	type PostgresLegacyMigrationLedger,
 	type PostgresMigration,
 	type PostgresMigrationBundle,
 	postgresMigrationFilenames,
@@ -18,7 +17,6 @@ export interface PostgresServiceMigrationsConfig {
 	/** Stable service advisory lock. */
 	readonly lockKey: number
 	readonly directory: string
-	readonly legacy: PostgresLegacyMigrationLedger
 	/** Runtime-owned bundles applied before the service schema. */
 	readonly dependencies?: readonly PostgresMigrationBundle[]
 }
@@ -32,14 +30,13 @@ export interface PostgresServiceMigrations {
 
 /**
  * Define the repeated service migration wrapper while keeping service identity and lifecycle local.
- * Bundle names, ledgers, lock ids, dependency order, and legacy evidence remain explicit inputs.
+ * Bundle names, ledgers, lock ids, and dependency order remain explicit inputs.
  */
 export function definePostgresServiceMigrations(config: PostgresServiceMigrationsConfig): PostgresServiceMigrations {
 	const read = (directory: string = config.directory): PostgresMigration[] => [
 		...readPostgresMigrationBundle({
 			name: config.name,
 			directory,
-			adoptLegacy: true,
 		}).migrations,
 	]
 	const plan = (migrations: readonly PostgresMigration[] = read()): PostgresMigrationPlan =>
@@ -48,9 +45,8 @@ export function definePostgresServiceMigrations(config: PostgresServiceMigration
 			lockKey: config.lockKey,
 			bundles: [
 				...(config.dependencies ?? []),
-				{ name: config.name, migrations, adoptLegacy: true },
+				{ name: config.name, migrations },
 			],
-			legacy: config.legacy,
 		})
 	const applyQualified = (
 		db: SqlDatabase,

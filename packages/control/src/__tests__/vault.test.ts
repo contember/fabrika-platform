@@ -3,7 +3,7 @@ import { importMasterKey, parseVaultRef, Vault, vaultRef } from '../vault'
 import { createHarness, queryRows } from './helpers/harness'
 
 // The encrypted D1 vault (M4): AES-256-GCM envelope encryption over a real in-memory D1 (the harness
-// applies migrations/0002_vault.sql). These cover the crypto contract end-to-end — round-trip,
+// applies migrations/0001_init.sql). These cover the crypto contract end-to-end — round-trip,
 // authenticated tamper-detection, wrong-key failure, value rotation, and MASTER-KEY rotation
 // (reencryptAll) — plus that plaintext never appears in the stored row.
 

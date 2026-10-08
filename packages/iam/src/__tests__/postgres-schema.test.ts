@@ -86,23 +86,16 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			.all<{ bundle: string; name: string }>()
 		expect(results).toEqual([
 			{ bundle: 'iam', name: '0001_init.sql' },
-			{ bundle: 'iam', name: '0002_provisioning_principal.sql' },
-			{ bundle: 'iam', name: '0003_password_auth.sql' },
-			{ bundle: 'iam', name: '0004_cross_host_sso.sql' },
-			{ bundle: 'iam', name: '0005_one_mailbox_rule.sql' },
-			{ bundle: 'iam', name: '0006_credential_app.sql' },
-			{ bundle: 'iam', name: '0007_session_method_local_dev.sql' },
-			{ bundle: 'iam', name: '0008_device_authorizations.sql' },
 		])
 	})
 
-	test('seeds the provisioning principal (0002), idempotently', async () => {
+	test('seeds the provisioning principal', async () => {
 		const row = await db.principals.getPrincipalById('provisioning-admin')
 		expect(row?.type).toBe('service')
 		expect(row?.label).toBe('provisioning')
 	})
 
-	test('creates exactly the tables the service reads/writes, and none of the retired ones', async () => {
+	test('creates the tables the service reads/writes', async () => {
 		const { results } = await raw
 			.prepare(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = ?`)
 			.bind(fixture?.schema ?? '')
@@ -132,11 +125,6 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		) {
 			expect(names).toContain(table)
 		}
-		// Retired by migrations/0003, /0006 and /0007 — this set never creates them in the first place.
-		expect(names).not.toContain('projects')
-		expect(names).not.toContain('capability_tokens')
-		expect(names).not.toContain('capability_grants')
-		expect(names).not.toContain('group_role_mappings')
 	})
 })
 
@@ -230,7 +218,7 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 		await expect(db.principals.createUser('sub-shared', 'second@x.cz')).rejects.toThrow()
 	})
 
-	// ── One mailbox rule (0005), pinned against the SQLite twin in password-db.test.ts ──────────
+	// ── One mailbox rule, pinned against the SQLite twin in password-db.test.ts ──────────
 	//
 	// This is the half that could not be discovered on D1: `LOWER()` folds ASCII only there and all of
 	// Unicode here, so the SAME input used to resolve to different principals per backend.
@@ -283,9 +271,9 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 		).rejects.toThrow()
 	})
 
-	test('the session method enum and its subject pairing widened for the bypass, exactly as on SQLite', async () => {
-		// 0007 replaces both CHECKs 0003 left. `local_dev` joins the arm that requires a subject, because
-		// the bypass records its fixed one; a row without it, or an unknown method, is still refused.
+	test('the session method enum and its subject pairing admit the bypass, exactly as on SQLite', async () => {
+		// `local_dev` joins the arm that requires a subject, because the bypass records its fixed one; a
+		// row without it, or an unknown method, is refused.
 		await reset()
 		const p = await db.principals.createUser('local-dev-admin', 'dev@local.test')
 		await db.sessions.createSession({

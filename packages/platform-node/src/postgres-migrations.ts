@@ -1,4 +1,4 @@
-import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import type { SqlDatabase } from '@fabrika/platform'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -15,23 +15,6 @@ export interface PostgresMigration {
 export interface PostgresMigrationBundle {
 	name: string
 	migrations: readonly PostgresMigration[]
-	/** Only service-owned bundles may adopt matching entries from the old unqualified ledger. */
-	adoptLegacy?: boolean
-}
-
-export interface PostgresLegacyMigrationLedger {
-	/** Old filename-only ledger. */
-	table: string
-	/** Tables created atomically by this service's first migration. Every sentinel must exist. */
-	sentinelTables: readonly string[]
-	/** Extra effect probes for migrations whose filename could have collided in a shared old ledger. */
-	effects?: readonly PostgresLegacyMigrationEffect[]
-}
-
-export interface PostgresLegacyMigrationEffect {
-	migration: string
-	/** A parameterless SELECT returning one boolean column named `proven`. */
-	probeSql: string
 }
 
 export interface PostgresMigrationPlan {
@@ -40,32 +23,17 @@ export interface PostgresMigrationPlan {
 	/** Service-specific session advisory lock. Keep this stable across runner upgrades. */
 	lockKey: number
 	bundles: readonly PostgresMigrationBundle[]
-	legacy?: PostgresLegacyMigrationLedger
 }
 
 export interface ReadPostgresMigrationBundleOptions {
 	name: string
 	directory: string
 	files?: readonly string[]
-	adoptLegacy?: boolean
 }
 
 interface LedgerRow {
 	bundle: string
 	name: string
-}
-
-interface LegacyLedgerRow {
-	name: string
-	applied_at: number | string
-}
-
-interface PresenceRow {
-	present: boolean
-}
-
-interface ProvenRow {
-	proven: boolean
 }
 
 /** Read one ordered migration bundle from disk. An explicit file list fails closed when a file is absent. */
@@ -88,7 +56,6 @@ export function readPostgresMigrationBundle(options: ReadPostgresMigrationBundle
 			name,
 			sql: readFileSync(join(options.directory, name), 'utf8'),
 		})),
-		...(options.adoptLegacy === true ? { adoptLegacy: true } : {}),
 	}
 	validateBundle(bundle)
 	return bundle
@@ -120,36 +87,6 @@ export function definePostgresMigrationPlan(plan: PostgresMigrationPlan): Postgr
 			const identity = postgresMigrationIdentity(bundle.name, migration.name)
 			if (identities.has(identity)) throw new Error(`Duplicate Postgres migration identity ${identity}`)
 			identities.add(identity)
-		}
-	}
-	if (plan.legacy !== undefined) {
-		validateIdentifier(plan.legacy.table, 'legacy migration ledger table')
-		if (plan.legacy.sentinelTables.length === 0) {
-			throw new Error('Legacy migration adoption requires at least one service sentinel')
-		}
-		for (const sentinel of plan.legacy.sentinelTables) {
-			validateIdentifier(sentinel, 'legacy migration sentinel table')
-		}
-		const adoptingBundles = plan.bundles.filter((bundle) => bundle.adoptLegacy === true)
-		if (adoptingBundles.length !== 1) {
-			throw new Error('Legacy migration adoption requires exactly one adopting bundle')
-		}
-		const adoptable = new Set(
-			adoptingBundles.flatMap((bundle) => bundle.migrations.map((migration) => migration.name)),
-		)
-		const effectNames = new Set<string>()
-		for (const effect of plan.legacy.effects ?? []) {
-			validateMigrationName(effect.migration)
-			if (!adoptable.has(effect.migration)) {
-				throw new Error(`Legacy migration effect references non-adoptable migration ${effect.migration}`)
-			}
-			if (effectNames.has(effect.migration)) {
-				throw new Error(`Duplicate legacy migration effect ${effect.migration}`)
-			}
-			if (effect.probeSql.trim() === '') {
-				throw new Error(`Legacy migration effect ${effect.migration} is empty`)
-			}
-			effectNames.add(effect.migration)
 		}
 	}
 	return plan
@@ -194,8 +131,6 @@ export async function applyPostgresMigrations(
 	const fresh: string[] = []
 	try {
 		await ensureLedger(db, plan.ledgerTable)
-		const beforeAdoption = await appliedIdentities(db, plan.ledgerTable)
-		if (beforeAdoption.size === 0) await adoptLegacyMigrations(db, plan)
 		const applied = await appliedIdentities(db, plan.ledgerTable)
 		for (const bundle of plan.bundles) {
 			for (const migration of bundle.migrations) {
@@ -270,84 +205,6 @@ async function ensureLedger(db: SqlDatabase, ledgerTable: string): Promise<void>
 async function appliedIdentities(db: SqlDatabase, ledgerTable: string): Promise<Set<string>> {
 	const { results } = await db.prepare(`SELECT bundle, name FROM ${ledgerTable}`).all<LedgerRow>()
 	return new Set(results.map((row) => postgresMigrationIdentity(row.bundle, row.name)))
-}
-
-async function adoptLegacyMigrations(db: SqlDatabase, plan: PostgresMigrationPlan): Promise<void> {
-	const legacy = plan.legacy
-	if (legacy === undefined) return
-	const sentinelStates = await Promise.all(legacy.sentinelTables.map((sentinel) => relationExists(db, sentinel)))
-	const presentSentinels = sentinelStates.filter(Boolean).length
-	if (presentSentinels === 0) return
-	if (presentSentinels !== sentinelStates.length) {
-		throw new Error('Legacy migration service sentinels are inconsistent')
-	}
-	if (!(await relationExists(db, legacy.table))) {
-		throw new Error('Legacy migration ledger is missing for an existing service schema')
-	}
-	for (const sentinel of legacy.sentinelTables) {
-		if (!(await relationExists(db, sentinel))) {
-			throw new Error('Legacy migration service sentinels changed during adoption')
-		}
-	}
-	const { results } = await db.prepare(`SELECT name, applied_at FROM ${legacy.table}`).all<LegacyLedgerRow>()
-	const legacyApplied = new Map(results.map((row) => [row.name, appliedAt(row.applied_at)]))
-	const adoptingBundle = plan.bundles.find((bundle) => bundle.adoptLegacy === true)
-	if (adoptingBundle === undefined) throw new Error('Legacy migration adopting bundle is missing')
-	const firstMigration = adoptingBundle.migrations[0]
-	if (firstMigration === undefined || !legacyApplied.has(firstMigration.name)) {
-		throw new Error(`Legacy migration ledger does not prove ${adoptingBundle.name}'s first migration`)
-	}
-	for (const effect of legacy.effects ?? []) {
-		if (!legacyApplied.has(effect.migration)) continue
-		const row = await db.prepare(effect.probeSql).first<ProvenRow>()
-		if (row === null || typeof row.proven !== 'boolean') {
-			throw new Error(`Legacy migration effect ${effect.migration} did not return a boolean proven column`)
-		}
-		if (!row.proven) {
-			throw new Error(`Legacy migration effect ${effect.migration} is missing`)
-		}
-	}
-	const statements: SqlStatement[] = []
-	for (const bundle of plan.bundles) {
-		if (bundle.adoptLegacy !== true) continue
-		for (const migration of bundle.migrations) {
-			const timestamp = legacyApplied.get(migration.name)
-			if (timestamp === undefined) continue
-			statements.push(
-				db
-					.prepare(`INSERT INTO ${plan.ledgerTable} (bundle, name, applied_at)
-						VALUES (?, ?, ?)
-						ON CONFLICT (bundle, name) DO NOTHING`)
-					.bind(
-						bundle.name,
-						migration.name,
-						timestamp,
-					),
-			)
-		}
-	}
-	if (statements.length > 0) await db.batch(statements)
-}
-
-async function relationExists(db: SqlDatabase, name: string): Promise<boolean> {
-	const row = await db
-		.prepare(`SELECT EXISTS (
-			SELECT 1
-			FROM pg_catalog.pg_class relation
-			JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
-			WHERE namespace.nspname = current_schema()
-				AND relation.relname = ?
-				AND relation.relkind IN ('r', 'p')
-		) AS present`)
-		.bind(name)
-		.first<PresenceRow>()
-	return row?.present === true
-}
-
-function appliedAt(value: number | string): number {
-	const parsed = typeof value === 'number' ? value : Number(value)
-	if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error('Legacy migration ledger contains an invalid timestamp')
-	return parsed
 }
 
 function unixNow(): number {

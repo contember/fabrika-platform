@@ -38,9 +38,10 @@ Read this before moving a service onto this driver.
   terminates the process by default, which would turn a failed log flush into an outage. Log a short
   message and drop it. `drain()` exists for shutdown and for tests that assert on background work
   without sleeping.
-- **Bundle names, filenames, ledger tables, and advisory lock ids are durable migration identity**
+- **Bundle names, filenames, ledger tables, and advisory lock ids are migration identity**
   (ADR-0017). `definePostgresServiceMigrations` keeps service identity and dependency order explicit
-  inputs — do not rename them, and do not introduce a shared ledger.
+  inputs — do not rename them, and do not introduce a shared ledger. There is no adoption of an older
+  ledger: an empty service ledger means a fresh schema.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**
 
 ## Patterns

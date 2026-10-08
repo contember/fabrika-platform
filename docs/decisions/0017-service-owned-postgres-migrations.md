@@ -10,109 +10,88 @@ date: 2026-07-30
 ## Context
 
 The Bun runtimes for IAM, Control, and Operations apply Postgres migrations at
-container start. Each service originally carried a copy of the same loader and
-runner. Each runner ordered SQL files by filename, recorded those filenames in a
-global `schema_migrations` table, and serialized its own containers with a
-service-specific session advisory lock.
-
-This fails in the Zerops platform topology. IAM and Control use the same
-Postgres connection and the same default schema. Their domain tables do not
-collide, but both migration sets contain `0001_init.sql` and a service-specific
-`0002_*.sql`. A filename-only ledger lets whichever service starts first claim
-the other service's migration names. The later service then skips SQL that it
-still needs. Separate advisory locks do not prevent this because the collision
-is persisted in the shared ledger.
+container start. A runner that orders SQL files by filename and records only
+the filename in one global ledger fails in the Zerops platform topology. IAM and
+Control use the same Postgres connection and the same default schema, and both
+migration sets contain `0001_init.sql`. A filename-only ledger lets whichever
+service starts first claim the other service's migration names, and the later
+service then skips SQL that it still needs. Separate advisory locks do not
+prevent this, because the collision is persisted in the shared ledger.
 
 Operations uses `PostgresJobQueue`, whose `jobs` table belongs to
-`@fabrika/platform-node`, but its service migration runner previously loaded
-only the Operations migrations. Copying that runtime DDL into every consumer
-would recreate the duplication that the runtime package is meant to remove.
+`@fabrika/platform-node`. Copying that runtime DDL into every consumer would
+recreate the duplication that the runtime package is meant to remove.
 
-Local development does not expose the IAM/Control collision because it creates
-separate `iam` and `control` databases. Existing Postgres tests also isolate
-services in separate schemas. The migration model therefore has to express
-ownership directly rather than depend on accidental database isolation.
+Local development creates separate `iam` and `control` databases, and the
+Postgres tests isolate services in separate schemas, so neither exposes the
+collision. The migration model therefore has to express ownership directly
+rather than depend on accidental database isolation.
 
 ## Decision
 
-`@fabrika/platform-node` will own the reusable Postgres migration loader and
-runner. It will also publish migration bundles for generic runtime
-infrastructure that the package itself owns, such as the Postgres job queue.
-Service-domain SQL remains in the service package that owns its schema.
+`@fabrika/platform-node` owns the reusable Postgres migration loader and
+runner. It also publishes migration bundles for generic runtime infrastructure
+that the package itself owns, such as the Postgres job queue. Service-domain
+SQL remains in the service package that owns its schema.
 
-Each Bun service will retain a thin migration wrapper. The wrapper owns:
+Each Bun service keeps a thin migration wrapper. The wrapper owns:
 
 - its database environment variable and connection lifecycle;
 - its service migration directory;
 - its physical ledger table;
 - its stable advisory lock identifier;
-- its ordered migration-bundle plan;
-- its service-specific legacy ownership evidence.
+- its ordered migration-bundle plan.
 
 IAM, Control, and Operations use separate physical ledgers:
 `iam_schema_migrations`, `control_schema_migrations`, and
 `operations_schema_migrations`. A migration's identity is the pair
-`(bundle, filename)`. Bundle names and existing filenames are durable history:
-renaming either changes the identity and is not a refactor.
+`(bundle, filename)`. Renaming a bundle or a migration file changes its
+identity and is not a refactor.
 
 A plan contains one or more bundles in explicit order. The runner preserves
 that bundle order and orders files by filename only within a bundle. It applies
 each SQL file and its qualified ledger row in one transaction.
 
 Operations composes the `platform-node` job-queue bundle before its
-`operations` service bundle. Control keeps its existing immutable
-`migrations-postgres/0002_jobs.sql`; this repair does not replace, rename, or
-rewrite that historical file.
+`operations` service bundle. Control states the same `jobs` table in its own
+initial migration with `IF NOT EXISTS`, column for column, because on the light
+Zerops tier both services create it in one shared schema.
 
-The existing advisory lock identifiers remain unchanged:
+The advisory lock identifiers are stable:
 
 - IAM: `7214839201`;
 - Control: `4471902583`;
 - Operations: `6384217905`.
 
-Keeping these identifiers serializes old and new containers of the same service
-during a rolling deployment. One service lock covers ledger initialization,
-legacy adoption, and every bundle in its plan. The runner uses one Postgres
-session for the complete operation.
+They serialize old and new containers of the same service during a rolling
+deployment. One service lock covers ledger initialization and every bundle in
+its plan. The runner uses one Postgres session for the complete operation.
 
-The old filename-only `schema_migrations` table becomes read-only migration
-evidence. It is never renamed, rewritten, or dropped. A new service ledger may
-adopt legacy rows into exactly one service-owned bundle, and only during its
-initial bootstrap:
+There is no adoption of an older ledger. A service ledger that is empty means a
+fresh schema, and the runner applies every file in the plan.
 
-1. The wrapper checks service-specific base-table sentinels in the current
-   schema.
-2. If none exist, the old ledger is treated as foreign or the service is
-   treated as new; no rows are adopted.
-3. If all exist, the old ledger and any migration-specific effects must prove
-   that the service owns each adopted filename.
-4. If only some sentinels exist, a required effect is absent, or ledger and
-   schema disagree, migration stops without guessing.
-
-Only current-schema base tables count as table sentinels. Migration-specific
-effects cover ambiguous filenames whose durable result needs additional proof,
-including Control's `0002_jobs.sql` and IAM's provisioning-principal migration.
-Legacy rows are copied only when their filename exists in the adopting bundle's
-current manifest.
-
-**Invariant:** A legacy filename is never adopted from
-`schema_migrations` unless one service's current-schema sentinels and required
-effects prove ownership; partial or inconsistent evidence fails closed.
+**Pre-1.0 squash rule.** Until 1.0, the migration history of a bundle may be
+squashed into one initial file per dialect when the installations that hold it
+are reinstalled. A squash keeps each bundle name, ledger, and lock, and must
+produce exactly the schema and seed rows the previous history produced, on
+both Postgres and D1. An installation that applied the old history is not
+upgraded across a squash; it is reinstalled. From 1.0 on, applied migration
+files are immutable and every change is a new file.
 
 The public `@fabrika/operations/node/migrate` entrypoint remains a thin
-compatibility wrapper. Callers keep a service-level migration surface and do not
-need to know how Operations composes generic runtime bundles. The shared runner
-is an implementation mechanism, not a transfer of Operations schema ownership
-to `@fabrika/platform-node`.
+wrapper. Callers keep a service-level migration surface and do not need to know
+how Operations composes generic runtime bundles. The shared runner is an
+implementation mechanism, not a transfer of Operations schema ownership to
+`@fabrika/platform-node`.
 
-This repair does not introduce schema isolation and does not move existing
-data. IAM and Control continue to use disjoint service-owned tables in the
-shared default schema on Zerops. Moving either service into a dedicated schema
-would require coordinated runtime `search_path` changes, table and sequence
-moves, data migration, rollback handling, and downtime planning. That is a
-separate decision, not a prerequisite for correct migration ownership.
+This decision does not introduce schema isolation. IAM and Control continue to
+use disjoint service-owned tables in the shared default schema on Zerops.
+Moving either service into a dedicated schema would require coordinated
+runtime `search_path` changes and is a separate decision.
 
-Cloudflare D1 migration history and deployment remain unchanged.
+Cloudflare D1 migrations are applied by `wrangler d1 migrations apply` from
+each service's `migrations/` directory, and D1 keeps its own ledger. The same
+squash rule applies to them.
 
 ## Consequences
 
@@ -124,15 +103,12 @@ Cloudflare D1 migration history and deployment remain unchanged.
   `PostgresJobQueue`.
 - A service can add more bundles without flattening their filenames into one
   namespace.
-- Existing installations keep their data and immutable SQL history. Their old
-  ledger remains as read-only evidence after adoption.
-- Broken or ambiguous legacy states stop startup and require operator
-  intervention instead of being silently recorded as valid.
-- Migration wrappers remain small, but each service must define and test its
-  sentinels, effects, bundle order, ledger, and lock identity.
-- Real Postgres tests must cover fresh installation, legacy adoption,
-  cross-service filename collisions, per-file atomicity, and concurrent
-  container startup.
+- Each wrapper must define and test its bundle order, ledger, and lock
+  identity.
+- Real Postgres tests cover fresh installation, cross-service filename
+  collisions, per-file atomicity, and concurrent container startup.
+- A pre-1.0 squash costs a reinstall of every live installation, and the person
+  who squashes must prove schema equality on both dialects.
 - IAM and Control still share a database failure and capacity domain. This ADR
   fixes migration ownership, not storage isolation.
 
@@ -140,11 +116,9 @@ Cloudflare D1 migration history and deployment remain unchanged.
 
 ### Put IAM and Control in separate Postgres schemas
 
-This would provide a stronger namespace boundary, but it is a data migration
-rather than a migration-runner repair. Existing tables live in the default
-schema, and every runtime and maintenance process would need a coordinated
-`search_path` cutover. The added rollback and downtime risk is disproportionate
-when the current domain table names are already disjoint.
+This would provide a stronger namespace boundary, but every runtime and
+maintenance process would need a coordinated `search_path`. The current domain
+table names are already disjoint.
 
 ### Give IAM and Control separate database services
 
@@ -161,7 +135,16 @@ DDL.
 
 ### Copy platform runtime migrations into each service
 
-Control historically did this for its job queue. Repeating the pattern for
-Operations would leave several independently maintained copies of the same
-runtime schema and make drift likely. Bundle composition keeps the generic DDL
-with the implementation that consumes it.
+Repeating the job-queue DDL in every consumer would leave several
+independently maintained copies of the same runtime schema and make drift
+likely. Bundle composition keeps the generic DDL with the implementation that
+consumes it. Control's single restatement exists only because both services
+create the table in one shared schema on the light tier, and a test pins the
+two declarations to each other.
+
+### Adopt the old filename-only ledger
+
+Earlier revisions adopted rows from the unqualified `schema_migrations` table
+when service-specific sentinel tables proved ownership. No production
+installation depends on that ledger, so the adoption code and its fail-closed
+probes were removed rather than maintained.

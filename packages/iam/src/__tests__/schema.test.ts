@@ -30,7 +30,7 @@ function seedP1(db: Database, externalId: string | null = 'sub1', email = 'a@x.c
 	)
 }
 
-test('creates every table the worker reads/writes (and retires projects)', () => {
+test('creates every table the worker reads/writes', () => {
 	const db = freshDb()
 	const rows = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'").all()
 	const names = rows.map((r) => r.name)
@@ -51,24 +51,17 @@ test('creates every table the worker reads/writes (and retires projects)', () =>
 			'password_credentials',
 			'password_action_tokens',
 			'password_login_throttles',
-			// ADR-0022's cross-host handoff (0004): the return-origin registry and the single-use codes.
+			// ADR-0022's cross-host handoff: the return-origin registry and the single-use codes.
 			'app_return_origins',
 			'auth_codes',
 		]
 	) {
 		expect(names).toContain(t)
 	}
-	// `projects` is gone — scope values are app-owned now, not a Propustka table.
-	expect(names).not.toContain('projects')
-	// `capability_tokens` is folded into `credentials` (0006).
-	expect(names).not.toContain('capability_tokens')
-	expect(names).not.toContain('capability_grants')
-	// `group_role_mappings` is dropped (0007) — no IdP groups in native auth.
-	expect(names).not.toContain('group_role_mappings')
 })
 
 test('created_at carries no DDL default — an INSERT that omits it is rejected', () => {
-	// The portability contract in one assertion: the migrations no longer stamp `created_at` with
+	// The portability contract in one assertion: the schema does not stamp `created_at` with
 	// SQLite's `unixepoch()`, so a writer that forgets to bind it fails LOUDLY here (rather than
 	// silently on Postgres, where the same DDL default cannot exist at all).
 	const db = freshDb()
@@ -76,7 +69,7 @@ test('created_at carries no DDL default — an INSERT that omits it is rejected'
 		.toThrow()
 })
 
-test('password migration backfills activation and enforces session authentication shape', () => {
+test('the provisioning principal is active and sessions enforce their authentication shape', () => {
 	const db = freshDb()
 	const provisioning = db.query<{ activated_at: number | null }, []>("SELECT activated_at FROM principals WHERE id = 'provisioning-admin'").get()
 	expect(provisioning?.activated_at).not.toBeNull()
@@ -97,7 +90,7 @@ test('password migration backfills activation and enforces session authenticatio
 })
 
 test('the local-dev bypass is a method of its own, and it belongs to the subject-bearing arm', () => {
-	// 0013 widened BOTH checks: the enum, and the row check pairing a method with `idp_sub`. The bypass
+	// Both checks name it: the enum, and the row check pairing a method with `idp_sub`. The bypass
 	// records its fixed subject, so it sits with `oidc` — a `local_dev` row without one is refused.
 	const db = freshDb()
 	seedP1(db)

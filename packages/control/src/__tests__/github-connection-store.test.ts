@@ -6,7 +6,7 @@ import { connectionDto, workflowDto } from '../github/connections/status'
 import { GitHubConnectionStore } from '../github/connections/store'
 import { GitHubConnectionWebhookSecretProvider } from '../github/connections/webhook-secret'
 import { Vault } from '../vault'
-import { createHarness, createHarnessThrough, type Harness, migrationsAfter, queryRows } from './helpers/harness'
+import { createHarness, type Harness, queryRows } from './helpers/harness'
 
 function testKey(): string {
 	let binary = ''
@@ -16,7 +16,6 @@ function testKey(): string {
 
 const STATE_DIGEST = 'a'.repeat(64)
 const OTHER_STATE_DIGEST = 'b'.repeat(64)
-const LEGACY_DIGEST = 'c'.repeat(64)
 
 function insertKeyedConnection(sqlite: Harness['sqlite'], connectionId: string, owner: string, installationId: number): void {
 	sqlite.query(`INSERT INTO github_source_connections_keyed (
@@ -180,51 +179,6 @@ async function configuredAttempt() {
 }
 
 describe('GitHubConnectionStore', () => {
-	test('drops the singleton table and every legacy row, leaving a legacy-bound app failing closed', async () => {
-		const harness = createHarnessThrough('0020_github_manifest_state.sql', () => 1_000)
-		const { sqlite } = harness
-		sqlite.query(`INSERT INTO github_source_connections (
-			singleton, connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
-			installation_account_login, installation_selection, verified_repositories_json,
-			requested_repositories_json, connected_by, connected_at, verified_at, version
-		) VALUES (1, ?, '123', 'legacy-app', 'https://github.com/apps/legacy-app', 'Acme', 'legacy-app', 0,
-			?, 'https://control.example/webhooks/github', 'vault:legacy-webhook', 45,
-			'acme', 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 3)`)
-			.run('legacy-connection', LEGACY_DIGEST)
-		for (const [id, installationId] of [['zerops-match', 45], ['cloudflare-only', 45]] as const) {
-			sqlite.query('INSERT INTO apps (id, repo_url, github_installation_id) VALUES (?, ?, ?)')
-				.run(id, `github.com/acme/${id}`, installationId)
-		}
-		const insertEnvironment = sqlite.query(`INSERT INTO app_envs (
-			app_id, env, provider, provider_target_json, provider_artifact_json
-		) VALUES (?, ?, ?, '{}', '{}')`)
-		insertEnvironment.run('zerops-match', 'prod', 'zerops')
-		insertEnvironment.run('cloudflare-only', 'prod', 'cloudflare')
-		// An adoption attempt could not decode once `setup_kind` stops being read, so it must not survive.
-		sqlite.query(`INSERT INTO github_source_setup_attempts (
-			id, setup_kind, status, phase, version, initiated_by, expected_origin, desired_owner, desired_app_name,
-			desired_public, requested_repositories_json, app_id, app_slug, app_html_url, credential_sha256,
-			webhook_secret_ref, created_at, updated_at, expires_at
-		) VALUES ('adopted', 'adoption', 'active', 'webhook_configured', 1, 'principal-1',
-			'https://control.example', 'acme', 'legacy-app', 0, '[]', '123', 'legacy-app',
-			'https://github.com/apps/legacy-app', ?, 'vault:adopted-webhook', 1, 1, 9999)`)
-			.run(LEGACY_DIGEST)
-
-		sqlite.exec(migrationsAfter('0020_github_manifest_state.sql'))
-
-		expect(() => queryRows(sqlite, 'SELECT * FROM github_source_connections')).toThrow()
-		expect(queryRows(sqlite, `SELECT connection_id FROM github_source_connections_keyed`)).toEqual([])
-		expect(queryRows(sqlite, `SELECT id FROM github_source_setup_attempts`)).toEqual([])
-		// The 0021 backfill still ran, so the row keeps pointing at a connection that is gone: the
-		// binding fails closed rather than resolving to some other organization's credential.
-		expect(queryRows(sqlite, 'SELECT id, github_connection_id FROM apps ORDER BY id')).toEqual([
-			{ id: 'cloudflare-only', github_connection_id: null },
-			{ id: 'zerops-match', github_connection_id: 'legacy-connection' },
-		])
-		await expect(harness.repositories.registry.getSourceBinding('zerops-match')).rejects.toThrow('incomplete')
-	})
-
 	test('keeps keyed connections unique per owner and paged', async () => {
 		const harness = createHarness(() => 1_000)
 		const { sqlite } = harness
