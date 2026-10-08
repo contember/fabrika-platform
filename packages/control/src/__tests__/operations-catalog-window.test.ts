@@ -3,7 +3,7 @@
 // records whether the real catalog code can exhibit it, with a fake Operations HTTP service and the
 // real `SqlDeployLocks` lease the production composition uses.
 
-import { OPERATIONS_CATALOG_PROTOCOL_VERSION, type OperationsCatalogReconcileOutcome } from '@fabrika/operations-contract/catalog'
+import type { OperationsCatalogReconcileOutcome } from '@fabrika/operations-contract/catalog'
 import { type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { type AppliedOperationsIngestConfig, OperationsCatalogRepository, type OperationsCatalogSyncState } from '../db'
@@ -49,14 +49,8 @@ class CatalogService {
 		}
 		this.accepted.push(sources.map((source) => sourceAppId(source)))
 		return Response.json({
-			protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 			revision: this.revision,
 			outcome,
-			created: 0,
-			updated: 0,
-			disabled: 0,
-			reenabled: 0,
-			unchanged: 0,
 			ingest: sources.filter((source) => sourceAppId(source) !== this.omitSource).map((source) => ingestFor(source)),
 		})
 	}

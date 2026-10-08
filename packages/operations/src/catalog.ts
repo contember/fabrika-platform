@@ -1,8 +1,7 @@
 import {
 	canonicalOperationsCatalogSources,
-	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	type OperationsCatalogReconcileRequestV2,
-	type OperationsCatalogReconcileResponseV2,
+	type OperationsCatalogReconcileRequest,
+	type OperationsCatalogReconcileResponse,
 	operationsCatalogSnapshotHash,
 } from '@fabrika/operations-contract/catalog'
 import { z } from 'zod'
@@ -31,7 +30,6 @@ const catalogSourceSchema = z.object({
 	}),
 }).transform(({ publicOrigin, ...source }) => ({ ...source, ...(publicOrigin === undefined ? {} : { publicOrigin }) }))
 const catalogRequestSchema = z.object({
-	protocolVersion: z.literal(OPERATIONS_CATALOG_PROTOCOL_VERSION),
 	revision: z.number().int().safe().min(1),
 	snapshotHash: z.string().regex(HASH_PATTERN),
 	sources: z.array(catalogSourceSchema).max(MAX_CATALOG_SOURCES),
@@ -44,8 +42,8 @@ export interface CatalogHandlerOptions {
 
 export async function reconcileOperationsCatalog(
 	repositories: OperationsRepositories,
-	request: OperationsCatalogReconcileRequestV2,
-): Promise<OperationsCatalogReconcileResponseV2> {
+	request: OperationsCatalogReconcileRequest,
+): Promise<OperationsCatalogReconcileResponse> {
 	const sources = canonicalOperationsCatalogSources(request.sources)
 	assertUniqueCoordinates(sources)
 	const hash = await operationsCatalogSnapshotHash(sources)
@@ -55,7 +53,7 @@ export async function reconcileOperationsCatalog(
 		snapshotHash: request.snapshotHash,
 		sources,
 	})
-	if (response.outcome === 'stale') return response
+	if (response.outcome === 'stale') return { ...response, ingest: [] }
 	const ingest = []
 	for (const source of sources) {
 		const stored = await repositories.sources.getByCoordinate(
@@ -110,14 +108,13 @@ export async function handleOperationsCatalogRequest(request: Request, options: 
 	}
 }
 
-export function parseCatalogRequest(value: unknown): OperationsCatalogReconcileRequestV2 {
+export function parseCatalogRequest(value: unknown): OperationsCatalogReconcileRequest {
 	const result = catalogRequestSchema.safeParse(value)
 	if (!result.success) {
 		const issue = result.error.issues[0]
 		const field = issue?.path[0]
 		let message = 'invalid catalog request'
-		if (field === 'protocolVersion') message = 'unsupported catalog protocol version'
-		else if (field === 'revision') message = 'invalid catalog revision'
+		if (field === 'revision') message = 'invalid catalog revision'
 		else if (field === 'snapshotHash') message = 'invalid catalog snapshot hash'
 		else if (field === 'sources') {
 			message = issue.path.length === 1 ? 'invalid catalog sources' : 'invalid catalog source'

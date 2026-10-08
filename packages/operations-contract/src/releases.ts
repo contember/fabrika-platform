@@ -1,4 +1,4 @@
-/** Versioned private Delivery → Operations release and artifact protocol. */
+/** Private Delivery → Operations release and artifact protocol; both services ship together. */
 
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from './catalog.js'
 import { operationsReleaseIssueMessage, operationsReleasePayloadSchema, operationsReleaseRequestSchema } from './release-schemas.js'
@@ -11,7 +11,6 @@ export {
 	operationsReleaseRequestSchema,
 } from './release-schemas.js'
 
-export const OPERATIONS_RELEASE_PROTOCOL_VERSION = 1
 export const FABRIKA_RELEASE = 'FABRIKA_RELEASE'
 export const OPERATIONS_RELEASE_RECONCILE_PATH = '/private/releases/reconcile'
 export const OPERATIONS_SOURCE_MAP_UPLOAD_PATH = '/api/artifacts/source-maps/'
@@ -31,13 +30,13 @@ export type OperationsReleaseOutcome = 'succeeded' | 'failed' | null
 export type OperationsArtifactState = 'pending' | 'complete' | 'incomplete' | 'not_applicable'
 export type OperationsReleaseUnavailableReason = 'dry_run' | 'missing_commit'
 
-export interface OperationsReleaseCoordinateV1 {
+export interface OperationsReleaseCoordinate {
 	appId: string
 	environment: string
 	serviceKey?: string
 }
 
-export type OperationsReleaseAvailabilityV1 =
+export type OperationsReleaseAvailability =
 	| {
 		kind: 'available'
 		name: string
@@ -48,37 +47,36 @@ export type OperationsReleaseAvailabilityV1 =
 		reason: OperationsReleaseUnavailableReason
 	}
 
-export interface OperationsArtifactUploadCredentialV1 {
+export interface OperationsArtifactUploadCredential {
 	/** SHA-256 verifier. The bearer itself never crosses the private projection boundary. */
 	verifier: string
 	expiresAt: number
 }
 
-export interface OperationsReleaseReconcileRequestV1 {
-	protocolVersion: typeof OPERATIONS_RELEASE_PROTOCOL_VERSION
+export interface OperationsReleaseReconcileRequest {
 	revision: number
 	runId: string
-	coordinate: OperationsReleaseCoordinateV1
+	coordinate: OperationsReleaseCoordinate
 	phase: OperationsReleasePhase
 	providerRunId: string | null
 	outcome: OperationsReleaseOutcome
 	artifactState: OperationsArtifactState
-	release: OperationsReleaseAvailabilityV1
-	uploadCredential?: OperationsArtifactUploadCredentialV1
+	release: OperationsReleaseAvailability
+	uploadCredential?: OperationsArtifactUploadCredential
 	observedAt: number
 }
 
-export type OperationsReleaseProjectionPayloadV1 = Omit<OperationsReleaseReconcileRequestV1, 'protocolVersion' | 'revision'>
+export type OperationsReleaseProjectionPayload = Omit<OperationsReleaseReconcileRequest, 'revision'>
 
 export class OperationsReleaseDecodeError extends Error {}
 
-export function parseOperationsReleaseRequest(value: unknown): OperationsReleaseReconcileRequestV1 {
+export function parseOperationsReleaseRequest(value: unknown): OperationsReleaseReconcileRequest {
 	const result = operationsReleaseRequestSchema.safeParse(value)
 	if (!result.success) throw new OperationsReleaseDecodeError(operationsReleaseIssueMessage(result.error.issues))
 	return result.data
 }
 
-export function parseOperationsReleasePayload(value: unknown): OperationsReleaseProjectionPayloadV1 {
+export function parseOperationsReleasePayload(value: unknown): OperationsReleaseProjectionPayload {
 	const result = operationsReleasePayloadSchema.safeParse(value)
 	if (!result.success) throw new OperationsReleaseDecodeError(operationsReleaseIssueMessage(result.error.issues))
 	return result.data
@@ -86,11 +84,9 @@ export function parseOperationsReleasePayload(value: unknown): OperationsRelease
 
 export type OperationsReleaseReconcileOutcome = 'applied' | 'unchanged' | 'stale'
 
-export interface OperationsReleaseReconcileResponseV1 {
-	protocolVersion: typeof OPERATIONS_RELEASE_PROTOCOL_VERSION
+export interface OperationsReleaseReconcileResponse {
 	revision: number
 	outcome: OperationsReleaseReconcileOutcome
-	releaseId: string | null
 }
 
 export interface OperationsArtifactUploadConfiguration {

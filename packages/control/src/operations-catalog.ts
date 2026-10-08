@@ -1,16 +1,15 @@
 import {
 	DEFAULT_OPERATIONS_SERVICE_KEY,
-	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	type OperationsCatalogReconcileRequestV2,
-	type OperationsCatalogReconcileResponseV2,
+	type OperationsCatalogReconcileRequest,
+	type OperationsCatalogReconcileResponse,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV2,
+	type OperationsCatalogSource,
 } from '@fabrika/operations-contract/catalog'
 import { buildOperationsDsn } from '@fabrika/operations-contract/ingest'
 import type { DeployLocks, HttpService } from '@fabrika/platform'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import type { OperationsCatalogRepository, OperationsCatalogSyncState } from './db'
+import type { OperationsCatalogRepository } from './db'
 import { acquireLease, CATALOG_LEASE_KEY, type Lease } from './lease'
 import { canonicalPublicOrigin, PublicOriginValidationError } from './public-origin'
 
@@ -154,8 +153,7 @@ async function flushCatalog(
 		const snapshot = await catalog.snapshot()
 		const sources = snapshot.sources.map(projectSource)
 		const snapshotHash = await operationsCatalogSnapshotHash(sources)
-		const request: OperationsCatalogReconcileRequestV2 = {
-			protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
+		const request: OperationsCatalogReconcileRequest = {
 			revision: snapshot.revision,
 			snapshotHash,
 			sources,
@@ -207,7 +205,7 @@ function projectSource(row: {
 	service_key: string
 	credential_id: string
 	public_key: string
-}): OperationsCatalogSourceV2 {
+}): OperationsCatalogSource {
 	return {
 		coordinate: {
 			appId: row.app_id,
@@ -238,9 +236,9 @@ function catalogPublicOrigin(value: string | null): string | null {
 async function sendCatalog(
 	service: HttpService,
 	syncKey: string,
-	payload: OperationsCatalogReconcileRequestV2,
+	payload: OperationsCatalogReconcileRequest,
 	signal: AbortSignal,
-): Promise<OperationsCatalogReconcileResponseV2> {
+): Promise<OperationsCatalogReconcileResponse> {
 	let response: Response
 	try {
 		response = await service.fetch(
@@ -274,30 +272,13 @@ async function sendCatalog(
 	const { revision, outcome, ingest } = parsed.data
 	const parsedIngest = ingest.map(parseIngestResult)
 	if (outcome !== 'stale') assertCompleteIngestResponse(payload, parsedIngest)
-	const counts = catalogCountsSchema.safeParse(value)
-	if (!counts.success) throw new CatalogSyncError('operations catalog returned an invalid response')
-	return {
-		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
-		revision,
-		outcome,
-		...counts.data,
-		ingest: parsedIngest,
-	}
+	return { revision, outcome, ingest: parsedIngest }
 }
 
 const catalogResponseSchema = z.object({
-	protocolVersion: z.literal(OPERATIONS_CATALOG_PROTOCOL_VERSION),
 	revision: z.number().int().safe().positive(),
 	outcome: z.enum(['applied', 'unchanged', 'stale']),
 	ingest: z.array(z.unknown()),
-})
-const catalogCount = z.number().int().safe().nonnegative()
-const catalogCountsSchema = z.object({
-	created: catalogCount,
-	updated: catalogCount,
-	disabled: catalogCount,
-	reenabled: catalogCount,
-	unchanged: catalogCount,
 })
 const catalogIngestSchema = z.object({
 	coordinate: z.object({ appId: z.string(), environment: z.string(), serviceKey: z.string() }),
@@ -305,15 +286,15 @@ const catalogIngestSchema = z.object({
 	ingestProjectId: z.string().regex(/^[1-9][0-9]{0,18}$/),
 })
 
-function parseIngestResult(value: unknown): OperationsCatalogReconcileResponseV2['ingest'][number] {
+function parseIngestResult(value: unknown): OperationsCatalogReconcileResponse['ingest'][number] {
 	const parsed = catalogIngestSchema.safeParse(value)
 	if (!parsed.success) throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
 	return parsed.data
 }
 
 function assertCompleteIngestResponse(
-	request: OperationsCatalogReconcileRequestV2,
-	ingest: OperationsCatalogReconcileResponseV2['ingest'],
+	request: OperationsCatalogReconcileRequest,
+	ingest: OperationsCatalogReconcileResponse['ingest'],
 ): void {
 	if (ingest.length !== request.sources.length) {
 		throw new CatalogSyncError('operations catalog returned an incomplete ingest configuration')
@@ -346,10 +327,6 @@ async function recordCatalogFailure(catalog: OperationsCatalogRepository, messag
 	} catch {
 		console.warn('operations catalog failure status could not be stored')
 	}
-}
-
-export function operationsCatalogDrift(state: OperationsCatalogSyncState): number {
-	return Math.max(0, state.desiredRevision - state.appliedRevision)
 }
 
 class CatalogSyncError extends Error {}

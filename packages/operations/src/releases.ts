@@ -1,10 +1,9 @@
 import {
 	canonicalOperationsServiceKey,
 	normalizeOperationsCommit,
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
 	operationsReleaseName,
-	type OperationsReleaseReconcileRequestV1,
-	type OperationsReleaseReconcileResponseV1,
+	type OperationsReleaseReconcileRequest,
+	type OperationsReleaseReconcileResponse,
 } from '@fabrika/operations-contract'
 import { OperationsReleaseDecodeError, parseOperationsReleaseRequest } from '@fabrika/operations-contract/releases'
 import { uuidv7 } from '@fabrika/platform'
@@ -20,8 +19,8 @@ export interface ReleaseHandlerOptions {
 
 export async function reconcileOperationsRelease(
 	repositories: OperationsRepositories,
-	request: OperationsReleaseReconcileRequestV1,
-): Promise<OperationsReleaseReconcileResponseV1> {
+	request: OperationsReleaseReconcileRequest,
+): Promise<OperationsReleaseReconcileResponse> {
 	const serviceKey = canonicalOperationsServiceKey(request.coordinate.serviceKey)
 	const source = await repositories.sources.getByCoordinate(
 		request.coordinate.appId,
@@ -36,7 +35,7 @@ export async function reconcileOperationsRelease(
 		request.revision,
 		projectionHash,
 	)
-	if (disposition === 'stale') return releaseResponse(request.revision, 'stale', null)
+	if (disposition === 'stale') return { revision: request.revision, outcome: 'stale' }
 
 	let release: ReleaseRow | null = null
 	if (request.release.kind === 'available') {
@@ -90,7 +89,7 @@ export async function reconcileOperationsRelease(
 		})
 		if (!stored) throw new ArtifactProjectionConflictError('artifact upload credential conflicts with this run')
 	}
-	return releaseResponse(request.revision, outcome, release?.id ?? null)
+	return { revision: request.revision, outcome }
 }
 
 export async function handleOperationsReleaseRequest(request: Request, options: ReleaseHandlerOptions): Promise<Response> {
@@ -120,7 +119,7 @@ export async function handleOperationsReleaseRequest(request: Request, options: 
 	}
 }
 
-export function parseReleaseRequest(value: unknown): OperationsReleaseReconcileRequestV1 {
+export function parseReleaseRequest(value: unknown): OperationsReleaseReconcileRequest {
 	try {
 		return parseOperationsReleaseRequest(value)
 	} catch (error) {
@@ -129,15 +128,7 @@ export function parseReleaseRequest(value: unknown): OperationsReleaseReconcileR
 	}
 }
 
-function releaseResponse(
-	revision: number,
-	outcome: OperationsReleaseReconcileResponseV1['outcome'],
-	releaseId: string | null,
-): OperationsReleaseReconcileResponseV1 {
-	return { protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION, revision, outcome, releaseId }
-}
-
-async function hashProjection(request: OperationsReleaseReconcileRequestV1): Promise<string> {
+async function hashProjection(request: OperationsReleaseReconcileRequest): Promise<string> {
 	const bytes = new TextEncoder().encode(JSON.stringify(request))
 	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
 	return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')

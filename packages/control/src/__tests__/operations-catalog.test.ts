@@ -1,4 +1,4 @@
-import { OPERATIONS_CATALOG_PROTOCOL_VERSION, type OperationsCatalogReconcileOutcome } from '@fabrika/operations-contract/catalog'
+import type { OperationsCatalogReconcileOutcome } from '@fabrika/operations-contract/catalog'
 import type { DeployLocks, HttpService } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { projectOperationsCatalogChange, replayOperationsCatalog } from '../operations-catalog'
@@ -71,14 +71,8 @@ class CatalogService implements HttpService {
 		}
 		const ingest = catalogIngest(payload, this.mismatchCredential)
 		return Response.json({
-			protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 			revision: this.revision,
 			outcome,
-			created: 0,
-			updated: 0,
-			disabled: 0,
-			reenabled: 0,
-			unchanged: 0,
 			ingest,
 		})
 	}

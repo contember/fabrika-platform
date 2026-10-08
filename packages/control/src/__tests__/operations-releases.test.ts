@@ -1,9 +1,8 @@
 import {
 	FABRIKA_RELEASE,
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
 	operationsReleaseName,
-	type OperationsReleaseProjectionPayloadV1,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseProjectionPayload,
+	type OperationsReleaseReconcileRequest,
 	parseOperationsReleaseRequest,
 } from '@fabrika/operations-contract/releases'
 import type { HttpService } from '@fabrika/platform'
@@ -28,7 +27,7 @@ const envelope = (payload: string): ProviderEnvelope => ({
 
 class ReleaseService implements HttpService {
 	available = false
-	readonly requests: OperationsReleaseReconcileRequestV1[] = []
+	readonly requests: OperationsReleaseReconcileRequest[] = []
 	readonly bodies: string[] = []
 
 	async fetch(request: Request): Promise<Response> {
@@ -38,16 +37,11 @@ class ReleaseService implements HttpService {
 		const decoded: unknown = JSON.parse(body)
 		const value = parseOperationsReleaseRequest(decoded)
 		this.requests.push(value)
-		return Response.json({
-			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
-			revision: value.revision,
-			outcome: 'applied',
-			releaseId: `release-${value.runId}`,
-		})
+		return Response.json({ revision: value.revision, outcome: 'applied' })
 	}
 }
 
-function storedPayload(runId: string): OperationsReleaseProjectionPayloadV1 {
+function storedPayload(runId: string): OperationsReleaseProjectionPayload {
 	return {
 		runId,
 		coordinate: { appId: 'notes', environment: 'prod' },
@@ -244,7 +238,6 @@ describe('Control release projection', () => {
 			phase: payload.phase,
 			coordinate: { environment: 'prod', appId: 'notes', extra: 'ignored' },
 			runId,
-			protocolVersion: 999,
 			revision: 999,
 			extra: 'ignored',
 		})
@@ -257,7 +250,6 @@ describe('Control release projection', () => {
 			pending: 0,
 		})
 		expect(service.bodies).toEqual([JSON.stringify({
-			protocolVersion: 1,
 			revision: 1,
 			runId,
 			coordinate: payload.coordinate,

@@ -49,7 +49,7 @@ export const operationsReleasePayloadSchema = z.object({
 	observedAt,
 }))
 
-const releaseRequestHeaderSchema = z.object({ protocolVersion: z.literal(1), revision: z.number().int().safe().min(1) }).passthrough()
+const releaseRequestHeaderSchema = z.object({ revision: z.number().int().safe().min(1) }).passthrough()
 
 export const operationsReleaseRequestSchema = releaseRequestHeaderSchema.transform((value, ctx) => {
 	const payload = operationsReleasePayloadSchema.safeParse(value)
@@ -57,7 +57,7 @@ export const operationsReleaseRequestSchema = releaseRequestHeaderSchema.transfo
 		for (const issue of payload.error.issues) ctx.addIssue(issue)
 		return z.NEVER
 	}
-	return { protocolVersion: value.protocolVersion, revision: value.revision, ...payload.data }
+	return { revision: value.revision, ...payload.data }
 })
 
 /** Preserve the public decoder's error categories and first-failure precedence. */

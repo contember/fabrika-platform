@@ -1,9 +1,8 @@
 import {
 	type IngestMessage,
 	OPERATIONS_ARTIFACT_HEADERS,
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
 	operationsReleaseName,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseReconcileRequest,
 } from '@fabrika/operations-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { S3BlobStore, type S3BlobStoreOptions } from '@fabrika/platform-node'
@@ -94,8 +93,7 @@ describe.skipIf(!hasS3)('Operations S3 integration', () => {
 			environment: 'prod',
 			commitSha: COMMIT,
 		})
-		const release: OperationsReleaseReconcileRequestV1 = {
-			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
+		const release: OperationsReleaseReconcileRequest = {
 			revision: 1,
 			runId: 'run-s3-integration',
 			coordinate: { appId: 'notes', environment: 'prod' },

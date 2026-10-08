@@ -1,5 +1,4 @@
-import type { CanonicalOperationsCatalogSourceV2, OperationsCatalogReconcileResponseV2 } from '@fabrika/operations-contract'
-import { OPERATIONS_CATALOG_PROTOCOL_VERSION } from '@fabrika/operations-contract'
+import type { CanonicalOperationsCatalogSource, OperationsCatalogReconcileOutcome } from '@fabrika/operations-contract'
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import type { SourceRow } from './sources.js'
 import { number } from './values.js'
@@ -8,6 +7,11 @@ export interface CatalogCursorRow {
 	revision: number
 	snapshot_hash: string
 	applied_at: number | string
+}
+
+export interface CatalogReconcileResult {
+	revision: number
+	outcome: OperationsCatalogReconcileOutcome
 }
 
 export class CatalogRepository {
@@ -38,19 +42,17 @@ export class CatalogRepository {
 	async reconcile(input: {
 		revision: number
 		snapshotHash: string
-		sources: CanonicalOperationsCatalogSourceV2[]
-	}): Promise<OperationsCatalogReconcileResponseV2> {
+		sources: CanonicalOperationsCatalogSource[]
+	}): Promise<CatalogReconcileResult> {
 		const cursor = await this.getCursor()
-		if (input.revision < cursor.revision) return catalogResponse(cursor.revision, 'stale')
+		if (input.revision < cursor.revision) return { revision: cursor.revision, outcome: 'stale' }
 		if (input.revision === cursor.revision) {
 			if (input.snapshotHash !== cursor.snapshot_hash) {
 				throw new CatalogRevisionConflictError()
 			}
-			return catalogResponse(input.revision, 'unchanged', { unchanged: input.sources.length })
+			return { revision: input.revision, outcome: 'unchanged' }
 		}
 
-		const before = await this.listControlSources()
-		const beforeByCoordinate = new Map(before.map((source) => [sourceCoordinateKey(source.app_id, source.environment, source.service_key), source]))
 		const statements = [
 			this.db
 				.prepare(`UPDATE sources SET
@@ -58,8 +60,7 @@ export class CatalogRepository {
 					disabled_at = COALESCE(disabled_at, ?),
 					updated_at = ?
 				WHERE origin = 'control' AND enabled = 1
-					AND (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?
-				RETURNING id`)
+					AND (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?`)
 				.bind(this.now(), this.now(), input.revision),
 			...input.sources.map((source) => {
 				const id = uuidv7(this.now())
@@ -74,8 +75,7 @@ export class CatalogRepository {
 						disabled_at = NULL,
 						public_origin = excluded.public_origin,
 						updated_at = excluded.updated_at
-					WHERE (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?
-					RETURNING id`)
+					WHERE (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?`)
 					.bind(
 						id,
 						source.coordinate.appId,
@@ -97,71 +97,21 @@ export class CatalogRepository {
 					RETURNING revision`)
 				.bind(input.revision, input.snapshotHash, this.now(), input.revision),
 		)
-		const results = await this.db.batch<{ id?: string; revision?: number }>(statements)
+		const results = await this.db.batch<{ revision?: number }>(statements)
 		const cursorResult = results.at(-1)?.results[0]
 		if (cursorResult?.revision !== input.revision) {
 			const current = await this.getCursor()
 			if (current.revision === input.revision && current.snapshot_hash !== input.snapshotHash) {
 				throw new CatalogRevisionConflictError()
 			}
-			return catalogResponse(current.revision, current.revision === input.revision ? 'unchanged' : 'stale', {
-				unchanged: current.revision === input.revision ? input.sources.length : 0,
-			})
+			return { revision: current.revision, outcome: current.revision === input.revision ? 'unchanged' : 'stale' }
 		}
-
-		let created = 0
-		let updated = 0
-		let reenabled = 0
-		let unchanged = 0
-		for (const source of input.sources) {
-			const key = sourceCoordinateKey(source.coordinate.appId, source.coordinate.environment, source.coordinate.serviceKey)
-			const prior = beforeByCoordinate.get(key)
-			if (!prior) {
-				created++
-			} else if (prior.enabled !== 1) {
-				reenabled++
-			} else if (prior.display_name !== source.displayName || prior.public_origin !== source.publicOrigin) {
-				updated++
-			} else {
-				unchanged++
-			}
-		}
-		const desiredSet = new Set(
-			input.sources.map((source) => sourceCoordinateKey(source.coordinate.appId, source.coordinate.environment, source.coordinate.serviceKey)),
-		)
-		const disabled = before.filter((source) =>
-			source.enabled === 1 && !desiredSet.has(
-				sourceCoordinateKey(source.app_id, source.environment, source.service_key),
-			)
-		).length
-		return catalogResponse(input.revision, 'applied', { created, updated, disabled, reenabled, unchanged })
+		return { revision: input.revision, outcome: 'applied' }
 	}
 }
 
 export class CatalogRevisionConflictError extends Error {
 	constructor() {
 		super('catalog revision was reused with different content')
-	}
-}
-
-function sourceCoordinateKey(appId: string, environment: string, serviceKey: string): string {
-	return JSON.stringify([appId, environment, serviceKey])
-}
-
-function catalogResponse(
-	revision: number,
-	outcome: OperationsCatalogReconcileResponseV2['outcome'],
-	counts: Partial<Pick<OperationsCatalogReconcileResponseV2, 'created' | 'updated' | 'disabled' | 'reenabled' | 'unchanged'>> = {},
-): OperationsCatalogReconcileResponseV2 {
-	return {
-		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
-		revision,
-		outcome,
-		created: counts.created ?? 0,
-		updated: counts.updated ?? 0,
-		disabled: counts.disabled ?? 0,
-		reenabled: counts.reenabled ?? 0,
-		unchanged: counts.unchanged ?? 0,
-		ingest: [],
 	}
 }

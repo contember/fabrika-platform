@@ -1,9 +1,8 @@
 import {
 	DEFAULT_OPERATIONS_SERVICE_KEY,
-	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	type OperationsCatalogReconcileRequestV2,
+	type OperationsCatalogReconcileRequest,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV2,
+	type OperationsCatalogSource,
 } from '@fabrika/operations-contract/catalog'
 import { describe, expect, test } from 'bun:test'
 import { handleOperationsCatalogRequest, parseCatalogRequest, reconcileOperationsCatalog } from '../catalog.js'
@@ -13,15 +12,14 @@ import { createHarness } from './helpers/sqlite.js'
 const CREDENTIAL_ID = '0198a000-0000-7000-8000-000000000001'
 const PUBLIC_KEY = '0123456789abcdef0123456789abcdef'
 
-const source = (displayName = 'App A production'): OperationsCatalogSourceV2 => ({
+const source = (displayName = 'App A production'): OperationsCatalogSource => ({
 	coordinate: { appId: 'app-a', environment: 'production' },
 	displayName,
 	ingestCredential: { id: CREDENTIAL_ID, publicKey: PUBLIC_KEY },
 })
 
-async function snapshot(revision: number, sources: OperationsCatalogSourceV2[]): Promise<OperationsCatalogReconcileRequestV2> {
+async function snapshot(revision: number, sources: OperationsCatalogSource[]): Promise<OperationsCatalogReconcileRequest> {
 	return {
-		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 		revision,
 		snapshotHash: await operationsCatalogSnapshotHash(sources),
 		sources,
@@ -33,7 +31,8 @@ describe('Operations catalog reconciliation', () => {
 		let now = 1_000
 		const harness = createHarness(() => now)
 		const created = await reconcileOperationsCatalog(harness.repositories, await snapshot(1, [source()]))
-		expect(created).toMatchObject({ outcome: 'applied', created: 1 })
+		expect(created).toMatchObject({ outcome: 'applied' })
+		expect(Object.keys(created).sort()).toEqual(['ingest', 'outcome', 'revision'])
 		const first = await harness.repositories.catalog.listControlSources()
 		expect(first).toHaveLength(1)
 		expect(first[0]?.service_key).toBe(DEFAULT_OPERATIONS_SERVICE_KEY)
@@ -50,7 +49,7 @@ describe('Operations catalog reconciliation', () => {
 
 		now = 2_000
 		const renamed = await reconcileOperationsCatalog(harness.repositories, await snapshot(2, [source('Renamed display')]))
-		expect(renamed).toMatchObject({ outcome: 'applied', updated: 1 })
+		expect(renamed).toMatchObject({ outcome: 'applied' })
 		expect((await harness.repositories.catalog.listControlSources())[0]).toMatchObject({
 			id: sourceId,
 			display_name: 'Renamed display',
@@ -60,7 +59,7 @@ describe('Operations catalog reconciliation', () => {
 
 		now = 3_000
 		const disabled = await reconcileOperationsCatalog(harness.repositories, await snapshot(3, []))
-		expect(disabled).toMatchObject({ outcome: 'applied', disabled: 1 })
+		expect(disabled).toMatchObject({ outcome: 'applied' })
 		expect((await harness.repositories.catalog.listControlSources())[0]).toMatchObject({
 			id: sourceId,
 			enabled: 0,
@@ -69,7 +68,7 @@ describe('Operations catalog reconciliation', () => {
 
 		now = 4_000
 		const reenabled = await reconcileOperationsCatalog(harness.repositories, await snapshot(4, [source('Back')]))
-		expect(reenabled).toMatchObject({ outcome: 'applied', reenabled: 1 })
+		expect(reenabled).toMatchObject({ outcome: 'applied' })
 		expect((await harness.repositories.catalog.listControlSources())[0]).toMatchObject({
 			id: sourceId,
 			display_name: 'Back',
@@ -78,16 +77,12 @@ describe('Operations catalog reconciliation', () => {
 		})
 	})
 
-	test('reports public origin changes as updates', async () => {
+	test('stores public origin changes', async () => {
 		const harness = createHarness()
 		const initial = source()
-		expect((await reconcileOperationsCatalog(harness.repositories, await snapshot(1, [initial]))).created).toBe(1)
-		const withOrigin: OperationsCatalogSourceV2 = { ...initial, publicOrigin: 'https://app.example.test' }
-		expect(await reconcileOperationsCatalog(harness.repositories, await snapshot(2, [withOrigin]))).toMatchObject({
-			outcome: 'applied',
-			updated: 1,
-			unchanged: 0,
-		})
+		expect((await reconcileOperationsCatalog(harness.repositories, await snapshot(1, [initial]))).outcome).toBe('applied')
+		const withOrigin: OperationsCatalogSource = { ...initial, publicOrigin: 'https://app.example.test' }
+		expect((await reconcileOperationsCatalog(harness.repositories, await snapshot(2, [withOrigin]))).outcome).toBe('applied')
 		expect((await harness.repositories.catalog.listControlSources())[0]?.public_origin).toBe('https://app.example.test')
 	})
 

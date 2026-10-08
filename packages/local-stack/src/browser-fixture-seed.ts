@@ -2,13 +2,11 @@
 import {
 	DEFAULT_OPERATIONS_SERVICE_KEY,
 	OPERATIONS_ARTIFACT_HEADERS,
-	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
-	type OperationsCatalogReconcileResponseV2,
+	type OperationsCatalogReconcileResponse,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV2,
+	type OperationsCatalogSource,
 	operationsReleaseName,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseReconcileRequest,
 } from '@fabrika/operations-contract'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync } from 'node:fs'
@@ -21,7 +19,7 @@ const OUTPUT_FILE = resolve(OUTPUT_DIR, 'browser-fixtures.json')
 const COMMIT_SHA = 'b'.repeat(40)
 const NEXT_COMMIT_SHA = 'c'.repeat(40)
 
-const source = (appId: string, environment: string, displayName: string): OperationsCatalogSourceV2 => ({
+const source = (appId: string, environment: string, displayName: string): OperationsCatalogSource => ({
 	coordinate: { appId, environment },
 	displayName,
 	publicOrigin: 'http://control:3000',
@@ -44,7 +42,7 @@ async function postPrivate(path: string, body: unknown): Promise<unknown> {
 }
 
 async function projectRelease(
-	source: OperationsCatalogSourceV2,
+	source: OperationsCatalogSource,
 	commitSha = COMMIT_SHA,
 ): Promise<{ name: string; runId: string; uploadBearer: string }> {
 	const appId = source.coordinate.appId
@@ -53,8 +51,7 @@ async function projectRelease(
 	const uploadBearer = randomBytes(32).toString('hex')
 	const name = operationsReleaseName({ appId, environment, commitSha })
 	const verifier = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(uploadBearer))
-	const request: OperationsReleaseReconcileRequestV1 = {
-		protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
+	const request: OperationsReleaseReconcileRequest = {
 		revision: 1,
 		runId,
 		coordinate: { appId, environment },
@@ -82,7 +79,6 @@ async function seed(): Promise<void> {
 	const hidden = source('browser-hidden', 'secret', 'Hidden sibling / secret')
 	const sources = [visible, hidden]
 	const catalog = await postPrivate('/private/catalog/reconcile', {
-		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 		revision: 1,
 		snapshotHash: await operationsCatalogSnapshotHash(sources),
 		sources,
@@ -115,7 +111,7 @@ async function seed(): Promise<void> {
 }
 
 async function uploadSourceMap(
-	source: OperationsCatalogSourceV2,
+	source: OperationsCatalogSource,
 	release: { name: string; runId: string; uploadBearer: string },
 ): Promise<void> {
 	const body = JSON.stringify({
@@ -146,7 +142,7 @@ async function uploadSourceMap(
 	if (!response.ok) throw new Error(`browser source-map fixture failed with status ${response.status}`)
 }
 
-function parseCatalogIngest(value: unknown): OperationsCatalogReconcileResponseV2['ingest'] {
+function parseCatalogIngest(value: unknown): OperationsCatalogReconcileResponse['ingest'] {
 	const parsed = catalogIngestSchema.safeParse(value)
 	if (!parsed.success) {
 		const path = parsed.error.issues[0]?.path ?? []
@@ -157,8 +153,8 @@ function parseCatalogIngest(value: unknown): OperationsCatalogReconcileResponseV
 }
 
 function fixtureSource(
-	source: OperationsCatalogSourceV2,
-	ingest: OperationsCatalogReconcileResponseV2['ingest'],
+	source: OperationsCatalogSource,
+	ingest: OperationsCatalogReconcileResponse['ingest'],
 	release: { name: string; runId: string; uploadBearer: string },
 	nextRelease?: { name: string; runId: string; uploadBearer: string },
 ) {

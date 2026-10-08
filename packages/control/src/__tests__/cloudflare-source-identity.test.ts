@@ -3,7 +3,7 @@ import {
 	FABRIKA_RELEASE,
 	OPERATIONS_ARTIFACT_HEADERS,
 	OPERATIONS_RELEASE_RECONCILE_PATH,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseReconcileRequest,
 	parseOperationsReleasePayload,
 	parseOperationsReleaseRequest,
 } from '@fabrika/operations-contract/releases'
@@ -99,7 +99,7 @@ interface CheckoutObservation {
 }
 
 interface ProjectionObservation {
-	payload: OperationsReleaseReconcileRequestV1
+	payload: OperationsReleaseReconcileRequest
 	persistedCommit: string | null
 	persistedRef: string
 }
@@ -253,7 +253,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 						const run = await db.runs.getRun(payload.runId)
 						if (run === null) throw new Error('projection has no persisted run')
 						projections.push({ payload, persistedCommit: run.commit_sha, persistedRef: run.ref })
-						return Response.json({ protocolVersion: payload.protocolVersion, revision: payload.revision, outcome: 'applied', releaseId: 'offline-release' })
+						return Response.json({ revision: payload.revision, outcome: 'applied' })
 					},
 				},
 			},

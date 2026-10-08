@@ -75,9 +75,8 @@ describe('Operations boundary compatibility', () => {
 			ingestCredential: { id: '00000000-0000-0000-0000-000000000000', publicKey: 'a'.repeat(32), ignored: true },
 			ignored: true,
 		}
-		const input = { protocolVersion: 2, revision: 1, snapshotHash: 'a'.repeat(64), sources: [source], ignored: true }
+		const input = { revision: 1, snapshotHash: 'a'.repeat(64), sources: [source], ignored: true }
 		expect(parseCatalogRequest(input)).toEqual({
-			protocolVersion: 2,
 			revision: 1,
 			snapshotHash: 'a'.repeat(64),
 			sources: [{

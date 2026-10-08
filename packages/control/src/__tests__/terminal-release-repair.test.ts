@@ -1,7 +1,7 @@
 import {
 	operationsReleaseName,
-	type OperationsReleaseProjectionPayloadV1,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseProjectionPayload,
+	type OperationsReleaseReconcileRequest,
 	parseOperationsReleasePayload,
 	parseOperationsReleaseRequest,
 } from '@fabrika/operations-contract/releases'
@@ -70,7 +70,7 @@ class QueryBudgetDatabase implements SqlDatabase {
 	}
 }
 
-function frozen(runId: string): OperationsReleaseProjectionPayloadV1 {
+function frozen(runId: string): OperationsReleaseProjectionPayload {
 	return {
 		runId,
 		coordinate: { appId: 'notes', environment: 'prod' },
@@ -98,7 +98,7 @@ for (const backend of ['sqlite', 'postgres']) {
 		let owned: ReturnType<typeof fixtureRuns>
 		let deps: OperationsReleaseProjectionDeps
 		let close: () => Promise<void>
-		let requests: OperationsReleaseReconcileRequestV1[]
+		let requests: OperationsReleaseReconcileRequest[]
 		let transportAvailable: boolean
 
 		/** The row turns authoritative `failed` after the projection recorded `succeeded`. */
@@ -139,7 +139,7 @@ for (const backend of ['sqlite', 'postgres']) {
 						const decoded: unknown = await request.json()
 						const payload = parseOperationsReleaseRequest(decoded)
 						requests.push(payload)
-						return Response.json({ protocolVersion: 1, revision: payload.revision, outcome: 'applied' })
+						return Response.json({ revision: payload.revision, outcome: 'applied' })
 					},
 				},
 			}
@@ -155,7 +155,7 @@ for (const backend of ['sqlite', 'postgres']) {
 			if (clean) await repositories.operationsReleases.markApplied(runId, 1)
 		}
 
-		async function stored(runId: string): Promise<OperationsReleaseProjectionPayloadV1> {
+		async function stored(runId: string): Promise<OperationsReleaseProjectionPayload> {
 			const row = await repositories.operationsReleases.get(runId)
 			if (row === null) throw new Error('expected frozen context')
 			const decoded: unknown = JSON.parse(row.payload_json)
@@ -192,7 +192,7 @@ for (const backend of ['sqlite', 'postgres']) {
 			await seed('z-pending')
 			const budget = new QueryBudgetDatabase(database)
 			const counted = createControlRepositories(budget)
-			const delivered: OperationsReleaseReconcileRequestV1[] = []
+			const delivered: OperationsReleaseReconcileRequest[] = []
 			expect(
 				await replayOperationsReleases({
 					repository: counted.operationsReleases,
@@ -203,7 +203,7 @@ for (const backend of ['sqlite', 'postgres']) {
 							const decoded: unknown = await request.json()
 							const payload = parseOperationsReleaseRequest(decoded)
 							delivered.push(payload)
-							return Response.json({ protocolVersion: 1, revision: payload.revision, outcome: 'applied' })
+							return Response.json({ revision: payload.revision, outcome: 'applied' })
 						},
 					},
 				}),
@@ -315,7 +315,7 @@ for (const backend of ['sqlite', 'postgres']) {
 		})
 
 		test('corrects succeeded to authoritative failed while preserving known artifact results and frozen identity', async () => {
-			const payload: OperationsReleaseProjectionPayloadV1 = {
+			const payload: OperationsReleaseProjectionPayload = {
 				...frozen('corrected'),
 				phase: 'terminal',
 				outcome: 'succeeded',
@@ -374,7 +374,7 @@ for (const backend of ['sqlite', 'postgres']) {
 		test('refetches frozen context before repairing instead of repairing the discovery snapshot', async () => {
 			await seed('refetch', frozen('refetch'), true)
 			await owned.finish('refetch', 'succeeded', 0)
-			const fresh: OperationsReleaseProjectionPayloadV1 = { ...frozen('refetch'), artifactState: 'complete', observedAt: NOW_MS + 20_000 }
+			const fresh: OperationsReleaseProjectionPayload = { ...frozen('refetch'), artifactState: 'complete', observedAt: NOW_MS + 20_000 }
 			class ChangeAfterDiscovery extends OperationsReleaseRepository {
 				override async listTerminalPage(...args: Parameters<OperationsReleaseRepository['listTerminalPage']>) {
 					const page = await super.listTerminalPage(...args)

@@ -32,8 +32,7 @@ test('release schemas produce the canonical bytes and omit explicitly undefined 
 	expect(Object.hasOwn(parsed, 'uploadCredential')).toBe(false)
 	expect(Object.hasOwn(parsed.coordinate, 'serviceKey')).toBe(false)
 	expect(JSON.stringify(operationsReleasePayloadSchema.parse(input))).toBe(expected)
-	expect(JSON.stringify(operationsReleaseRequestSchema.parse({ ...input, revision: 1, protocolVersion: 1 })))
-		.toBe(`{"protocolVersion":1,"revision":1,${expected.slice(1)}`)
+	expect(JSON.stringify(operationsReleaseRequestSchema.parse({ ...input, revision: 1 }))).toBe(`{"revision":1,${expected.slice(1)}`)
 })
 
 test('release errors retain structural and domain precedence', () => {
@@ -61,7 +60,7 @@ test('release errors retain structural and domain precedence', () => {
 		expect(() => parseOperationsReleasePayload(value)).toThrow(OperationsReleaseDecodeError)
 		expect(() => parseOperationsReleasePayload(value)).toThrow(message)
 	}
-	expect(() => parseOperationsReleaseRequest({ ...payload, revision: 0, protocolVersion: 1, coordinate: {} })).toThrow('invalid release request')
+	expect(() => parseOperationsReleaseRequest({ ...payload, revision: 0, coordinate: {} })).toThrow('invalid release request')
 })
 
 test('release schemas keep numeric bounds and both immutable commit widths', () => {

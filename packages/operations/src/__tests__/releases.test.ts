@@ -1,10 +1,9 @@
 import {
 	OPERATIONS_ARTIFACT_HEADERS,
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
 	type OperationsArtifactState,
-	type OperationsReleaseAvailabilityV1,
+	type OperationsReleaseAvailability,
 	operationsReleaseName,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseReconcileRequest,
 } from '@fabrika/operations-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
@@ -85,11 +84,11 @@ function projection(input: {
 	dryRun?: boolean
 	verifier?: string
 	observedAt?: number
-}): OperationsReleaseReconcileRequestV1 {
+}): OperationsReleaseReconcileRequest {
 	const appId = input.appId ?? 'notes'
 	const phase = input.phase ?? 'started'
 	const commit = input.commit === undefined ? COMMIT_A : input.commit
-	let release: OperationsReleaseAvailabilityV1
+	let release: OperationsReleaseAvailability
 	if (input.dryRun === true) {
 		release = { kind: 'unavailable', reason: 'dry_run' }
 	} else if (commit === null) {
@@ -102,7 +101,6 @@ function projection(input: {
 		}
 	}
 	return {
-		protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
 		revision: input.revision ?? 1,
 		runId: input.runId,
 		coordinate: { appId, environment: 'prod' },
@@ -153,11 +151,11 @@ function uploadRequest(input: {
 
 describe('Operations release projection', () => {
 	test.each([
-		{ serviceKey: false, credential: false, hash: '21a7302bc8f15805f2cf22fa68457d1cf8a2bdf6e6d95f00d59fb2938abe038e' },
-		{ serviceKey: false, credential: true, hash: 'bbf7537f3d4e440a198d670f9b692debbb9a74824bbde6cf343600d70a54f92e' },
-		{ serviceKey: true, credential: false, hash: '1e544bd700d46e40342624ec5c68f2629fb55fbfbdd46473e360a069446964e3' },
-		{ serviceKey: true, credential: true, hash: 'eff82a75ea4af653512e8e54df2057ec560202ad34e4d5a605807c9e76170a2a' },
-	])('preserves historical bytes and HTTP revision reuse: serviceKey=$serviceKey credential=$credential', async (fixture) => {
+		{ serviceKey: false, credential: false, hash: '2691c127d3cd2fad6bc9ff4a07a8ce6c536b6c6bfe8a65de509d117309ff4f74' },
+		{ serviceKey: false, credential: true, hash: 'f0f9254220f2ee8adf0a517c88a83d22941d1086ce585a6245a0b5957009e57e' },
+		{ serviceKey: true, credential: false, hash: '2c08f2deaaca067be55e4d11cd6cc2aacdff0c0bf14dd0e70c60ba3f2565c694' },
+		{ serviceKey: true, credential: true, hash: '29df6f618ea91167f366c646a1e2a80d660ea062e72ac941782d3205b266cfa5' },
+	])('pins projection bytes and HTTP revision reuse: serviceKey=$serviceKey credential=$credential', async (fixture) => {
 		const harness = createHarness(() => NOW_MS)
 		await seedSource(harness, 'source-notes', 'notes')
 		const original = projection({
@@ -171,13 +169,13 @@ describe('Operations release projection', () => {
 			? ',"uploadCredential":{"verifier":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","expiresAt":1700007200000}'
 			: ''
 		const serviceKeyJson = fixture.serviceKey ? ',"serviceKey":"default"' : ''
-		const historicalJson = '{"protocolVersion":1,"revision":7,"runId":"historical-run","coordinate":{"appId":"notes","environment":"prod"'
+		const historicalJson = '{"revision":7,"runId":"historical-run","coordinate":{"appId":"notes","environment":"prod"'
 			+ serviceKeyJson
 			+ '},"phase":"started","providerRunId":null,"outcome":null,"artifactState":"pending","release":{"kind":"available","name":"fabrika/notes/prod/default/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","commitSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 			+ credentialJson + ',"observedAt":1700000000000}'
 		expect(JSON.stringify(original)).toBe(historicalJson)
 		expect(await sha256Hex(historicalJson)).toBe(fixture.hash)
-		const prior = await reconcileOperationsRelease(harness.repositories, original)
+		await reconcileOperationsRelease(harness.repositories, original)
 		expect(rows(harness, 'SELECT projection_hash FROM deploy_run_links')).toEqual([{ projection_hash: fixture.hash }])
 		const raw = {
 			observedAt: NOW_MS,
@@ -190,7 +188,6 @@ describe('Operations release projection', () => {
 			coordinate: { environment: 'prod', serviceKey: fixture.serviceKey ? 'default' : undefined, appId: 'notes', extra: 'ignored' },
 			runId: 'historical-run',
 			revision: 7,
-			protocolVersion: 1,
 			extra: 'ignored',
 		}
 		const parsed = parseReleaseRequest(raw)
@@ -209,7 +206,7 @@ describe('Operations release projection', () => {
 		const replay = await send(raw)
 		expect(replay.status).toBe(200)
 		const replayBody: unknown = await replay.json()
-		expect(replayBody).toEqual({ protocolVersion: 1, revision: 7, outcome: 'unchanged', releaseId: prior.releaseId })
+		expect(replayBody).toEqual({ revision: 7, outcome: 'unchanged' })
 		const conflict = await send({ ...raw, artifactState: 'complete' })
 		expect(conflict.status).toBe(409)
 		const conflictBody: unknown = await conflict.json()
@@ -217,12 +214,12 @@ describe('Operations release projection', () => {
 		const newer = await send({ ...raw, revision: 8 })
 		expect(newer.status).toBe(200)
 		const newerBody: unknown = await newer.json()
-		expect(newerBody).toEqual({ protocolVersion: 1, revision: 8, outcome: 'applied', releaseId: prior.releaseId })
+		expect(newerBody).toEqual({ revision: 8, outcome: 'applied' })
 		expect(rows(harness, 'SELECT projection_hash FROM deploy_run_links')).not.toEqual([{ projection_hash: fixture.hash }])
 		const stale = await send({ ...raw, revision: 6 })
 		expect(stale.status).toBe(200)
 		const staleBody: unknown = await stale.json()
-		expect(staleBody).toEqual({ protocolVersion: 1, revision: 6, outcome: 'stale', releaseId: null })
+		expect(staleBody).toEqual({ revision: 6, outcome: 'stale' })
 	})
 
 	test('preserves public parser and HTTP structural error messages', async () => {
@@ -232,7 +229,6 @@ describe('Operations release projection', () => {
 		const cases = [
 			{ value: null, message: 'invalid release request' },
 			{ value: [], message: 'invalid release request' },
-			{ value: { ...base, protocolVersion: 2 }, message: 'invalid release request' },
 			{ value: { ...base, revision: '1' }, message: 'invalid release request' },
 			{ value: { ...base, revision: 0 }, message: 'invalid release request' },
 			{ value: { ...base, providerRunId: undefined }, message: 'invalid release request' },

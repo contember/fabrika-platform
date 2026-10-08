@@ -1,15 +1,10 @@
 import { buildAccessClaims, type IamRpc, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { operationsCatalogSnapshotHash, type OperationsCatalogSource } from '@fabrika/operations-contract/catalog'
 import {
-	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV2,
-} from '@fabrika/operations-contract/catalog'
-import {
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
 	OPERATIONS_RELEASE_RECONCILE_PATH,
 	OPERATIONS_SOURCE_MAP_UPLOAD_PATH,
 	operationsReleaseName,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseReconcileRequest,
 } from '@fabrika/operations-contract/releases'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
@@ -114,7 +109,6 @@ function sessionRpc(token: string): IamRpc {
 		approveDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 		denyDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 		listOwnDeviceAuthorizations: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
-		issueJwt: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 		getJwks: () => Promise.resolve(jwks),
 		listPrincipals: () => Promise.resolve({ ok: true, principals: [] }),
 		audit: () => Promise.resolve(),
@@ -123,7 +117,7 @@ function sessionRpc(token: string): IamRpc {
 }
 
 async function reconcileSource(fetch: (request: Request) => Promise<Response>, sourceId: string): Promise<Response> {
-	const sources: OperationsCatalogSourceV2[] = [{
+	const sources: OperationsCatalogSource[] = [{
 		coordinate: { appId: 'app', environment: 'prod' },
 		displayName: 'App production',
 		ingestCredential: {
@@ -139,7 +133,6 @@ async function reconcileSource(fetch: (request: Request) => Promise<Response>, s
 				'content-type': 'application/json',
 			},
 			body: JSON.stringify({
-				protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 				revision: 1,
 				snapshotHash: await operationsCatalogSnapshotHash(sources),
 				sources,
@@ -254,8 +247,7 @@ describe('Operations public/private HTTP isolation', () => {
 		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
 		const commitSha = 'a'.repeat(40)
 		const releaseName = operationsReleaseName({ appId: 'app', environment: 'prod', commitSha })
-		const request: OperationsReleaseReconcileRequestV1 = {
-			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
+		const request: OperationsReleaseReconcileRequest = {
 			revision: 1,
 			runId: '0198a000-0000-7000-8000-000000000002',
 			coordinate: { appId: 'app', environment: 'prod' },
@@ -282,7 +274,6 @@ describe('Operations public/private HTTP isolation', () => {
 		)
 		expect(response.status).toBe(200)
 		expect(await response.json()).toMatchObject({
-			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
 			revision: 1,
 			outcome: 'applied',
 		})

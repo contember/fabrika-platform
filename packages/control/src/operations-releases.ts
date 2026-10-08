@@ -1,15 +1,14 @@
 import {
 	FABRIKA_RELEASE,
 	normalizeOperationsCommit,
-	OPERATIONS_RELEASE_PROTOCOL_VERSION,
 	OPERATIONS_RELEASE_RECONCILE_PATH,
 	type OperationsArtifactState,
 	type OperationsArtifactUploadConfiguration,
-	type OperationsReleaseAvailabilityV1,
+	type OperationsReleaseAvailability,
 	operationsReleaseName,
 	type OperationsReleasePhase,
-	type OperationsReleaseProjectionPayloadV1,
-	type OperationsReleaseReconcileRequestV1,
+	type OperationsReleaseProjectionPayload,
+	type OperationsReleaseReconcileRequest,
 	operationsSourceMapUploadUrl,
 	parseOperationsReleasePayload,
 } from '@fabrika/operations-contract/releases'
@@ -56,7 +55,7 @@ export async function projectOperationsRun(
 	const observedAt = now()
 	const uploadExpiresAt = (run.started_at === null ? observedAt : run.started_at * 1_000) + UPLOAD_LIFETIME_MS
 	const commitSha = normalizeOperationsCommit(run.commit_sha)
-	let release: OperationsReleaseAvailabilityV1
+	let release: OperationsReleaseAvailability
 	if (input.dryRun) {
 		release = { kind: 'unavailable', reason: 'dry_run' }
 	} else if (commitSha === null) {
@@ -77,7 +76,7 @@ export async function projectOperationsRun(
 			verifier: await sha256Hex(context.artifactUpload.bearer),
 			expiresAt: uploadExpiresAt,
 		}
-	const payload: OperationsReleaseProjectionPayloadV1 = {
+	const payload: OperationsReleaseProjectionPayload = {
 		runId: run.id,
 		coordinate: { appId: run.app_id, environment: run.env },
 		phase: input.phase,
@@ -150,7 +149,7 @@ async function repairTerminalReleases(deps: OperationsReleaseProjectionDeps): Pr
 			try {
 				const current = await deps.repository.getTerminal(candidate.run_id)
 				if (current === null || current.app_id !== candidate.app_id || current.env !== candidate.env) continue
-				let payload: OperationsReleaseProjectionPayloadV1 | null
+				let payload: OperationsReleaseProjectionPayload | null
 				try {
 					integer(current.desired_revision)
 					payload = terminalPayload(current)
@@ -180,7 +179,7 @@ function validatedTerminalSnapshotAgrees(row: TerminalOperationsReleaseRow): boo
 	}
 }
 
-function terminalPayload(row: TerminalOperationsReleaseRow): OperationsReleaseProjectionPayloadV1 | null {
+function terminalPayload(row: TerminalOperationsReleaseRow): OperationsReleaseProjectionPayload | null {
 	const payload = parseStoredPayload(row.payload_json)
 	if (
 		payload.runId !== row.run_id || payload.coordinate.appId !== row.app_id || payload.coordinate.environment !== row.env
@@ -217,8 +216,7 @@ async function flushOne(deps: OperationsReleaseProjectionDeps, row: OperationsRe
 		}
 		const payload = parseStoredPayload(row.payload_json)
 		if (payload.runId !== row.run_id) throw new ReleaseProjectionError('operations release run does not match its outbox key')
-		const request: OperationsReleaseReconcileRequestV1 = {
-			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
+		const request: OperationsReleaseReconcileRequest = {
 			revision,
 			...payload,
 		}
@@ -300,7 +298,7 @@ function hex(bytes: Uint8Array): string {
 	return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function parseStoredPayload(raw: string): OperationsReleaseProjectionPayloadV1 {
+function parseStoredPayload(raw: string): OperationsReleaseProjectionPayload {
 	const decoded: unknown = JSON.parse(raw)
 	return parseOperationsReleasePayload(decoded)
 }
@@ -311,7 +309,6 @@ function validResponse(value: unknown, revision: number): boolean {
 }
 
 const releaseResponseSchema = z.object({
-	protocolVersion: z.literal(OPERATIONS_RELEASE_PROTOCOL_VERSION),
 	revision: z.number(),
 	outcome: z.coerce.string().pipe(z.enum(['applied', 'unchanged', 'stale'])),
 })
