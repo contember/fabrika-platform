@@ -62,8 +62,9 @@ installation's own services (IAM, Control, Operations), including the `oauth` ga
 an application's contract. It protects every contract application. Control's metadata selects the form
 per service. Both forms are evaluated only by the proxy, with the matchers in `@fabrika/auth-core`.
 
-The code does not do the endpoint-table form yet: the proxy evaluates generated gates for contract
-applications (part B, work units B2, B3 and B4).
+Today the proxy evaluates authored gates for every service. Part A generates an application's gates
+from its contract. Part B, work units B2 to B4, replaces that intermediate path with endpoint tables,
+the authenticated hop and the response headers.
 
 ### 1. Only the proxy is publicly routed
 
@@ -78,8 +79,10 @@ Worker has no public route, and nothing else can bind it
 ([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)). Cloudflare has no proxy secret.
 
 IAM stays **global**: one identity database, one audit log, one console. The proxy is **stateless**
-and per deployment boundary: one per namespace on Zerops, one per app environment on Cloudflare. Only
-the cold path calls IAM; the warm path verifies a token locally.
+and per deployment boundary: one per namespace on Zerops, one per app environment on Cloudflare. An
+ordinary request calls IAM only on the cold path; the warm path verifies a cached token locally. A
+membership-management request is the exception: it obtains a fresh single-use delegation grant from IAM
+even when the token cache is warm (rule 6).
 
 **Invariant: the proxy holds no state that a decision depends on.** Its token cache is best-effort,
 in memory and per process. Without it IAM is called more often; no decision changes. Never make it
@@ -108,9 +111,31 @@ client's own `X-Fabrika-Token` would otherwise reach the app on a `public` path.
 
 **Response headers.** The proxy sets one conservative header policy on every application response and
 on its own denials: Caddy through its response operations, the Cloudflare proxy Worker in code, and
-`@fabrika/proxy-core` on every denial it answers. An application cannot omit the policy. A download
-endpoint gets the file treatment instead. The framework sets the same policy in-process.
-Per-endpoint profiles are not part of v1.
+`@fabrika/proxy-core` on every denial it answers. An application cannot omit the policy. The framework
+sets the same policy in-process. Per-endpoint profiles and caching of static assets are not part of v1.
+
+The policy:
+
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' <operations ingest>;
+  form-action 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. `<operations ingest>`
+  is the installation's Operations ingest origin. The contract may extend `connect-src`, `img-src` and
+  `frame-ancestors` with named origins; such an extension is approvable
+  ([ADR-0050](0050-approved-access.md)).
+- `X-Content-Type-Options: nosniff`.
+- `Cache-Control: no-store`, static assets included.
+- `Referrer-Policy: no-referrer`.
+- `Cross-Origin-Opener-Policy: same-origin`.
+- `Permissions-Policy` with every powerful feature off. Work unit B4 decides the exact value.
+
+A download endpoint gets the **file treatment** instead:
+
+- `Content-Disposition: attachment` for every type except the inert images `image/png`, `image/jpeg`,
+  `image/gif` and `image/webp`, which are served `inline`. SVG and HTML are always attachments.
+- `Content-Type` from the recorded, sniffed type, never from the upload request.
+- `X-Content-Type-Options: nosniff`.
+- `Content-Security-Policy: sandbox; default-src 'none'`.
+- `Cache-Control: private, no-store`, so a revoked user cannot read a cached copy.
 
 **Invariant: a header a client can set never reaches a decision.**
 
@@ -266,7 +291,14 @@ registry of its own.
 - **An application token cannot call `issueKey`, `revokeKey` or `listPrincipals`**, on any transport.
 - **Delegation grants.** For an endpoint whose action is a dimension's `members.manage`, the proxy
   obtains a single-use grant bound to the endpoint and the request. IAM requires it for membership
-  operations, so a handler on another endpoint cannot spend the caller's authority.
+  operations, so a handler on another endpoint cannot spend the caller's authority. The proxy obtains
+  a fresh grant for every such request, also when the token cache is warm.
+- **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
+  every write path, and refuses a global grant of a role declared with `member.scope`.
+- **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
+  limit. Work unit B5 decides the number.
+- **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
+  share links included. Membership operations are checked live at IAM.
 
 The code does none of rule 6 yet (part B, work unit B5).
 
