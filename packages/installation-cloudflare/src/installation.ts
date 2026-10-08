@@ -1,5 +1,5 @@
-import type { InstallationCli, InstallationCommand } from '@fabrika/installation-contract'
 import { deployCloudflareConfig, parseCloudflareArgs, platformComponents } from '@fabrika/provider-cloudflare'
+import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
 import { runInit } from './init'
 

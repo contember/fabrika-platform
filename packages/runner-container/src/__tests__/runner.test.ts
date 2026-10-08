@@ -1,6 +1,4 @@
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_OUTCOME_FILE_ENV } from '@fabrika/runner-contract'
+import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, RUNNER_OUTCOME_FILE_ENV } from '@fabrika/provider-cloudflare/runner'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'

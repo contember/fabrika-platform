@@ -16,12 +16,14 @@ import type {
 } from '@fabrika/provider-contract'
 import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
-import { type RunnerIamReconcile, runnerIamReconcileSchema } from '@fabrika/runner-contract'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
+import { type RunnerIamReconcile, runnerIamReconcileSchema } from './runner-protocol'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
 import { defaultReconcileSchema, parseAppSchema } from './schema'
+
+export * from './runner-protocol'
 
 /** Persisted Cloudflare target data. Installation credentials never enter this envelope. */
 export interface CloudflareStoredTarget {

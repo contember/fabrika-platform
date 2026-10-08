@@ -24,7 +24,6 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/github-app',
 	'@fabrika/iam-contract',
 	'@fabrika/installation-cloudflare',
-	'@fabrika/installation-contract',
 	'@fabrika/installation-init',
 	'@fabrika/installation-zerops',
 	'@fabrika/jwks',
@@ -37,7 +36,6 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/provider-zerops',
 	'@fabrika/proxy-contract',
 	'@fabrika/proxy-core',
-	'@fabrika/runner-contract',
 ]
 const TAG_PATTERN =
 	/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/

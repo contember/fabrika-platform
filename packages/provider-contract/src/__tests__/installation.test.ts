@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { type InstallationCli, installationCliFromModule, isInstallationCli, isInstallationCommand, supportsInstallationCommand } from '..'
+import {
+	type InstallationCli,
+	installationCliFromModule,
+	isInstallationCli,
+	isInstallationCommand,
+	supportsInstallationCommand,
+} from '../installation'
 
 const installationCli: InstallationCli = {
 	provider: 'cloudflare',

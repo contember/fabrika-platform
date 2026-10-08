@@ -50,7 +50,7 @@ label the envelope a registration carries.
 - Platform commands use the same resolver. Pass `--provider` when the working
   directory has no provider-authored app config.
 - `cloudflare` and `zerops` are built-in installation aliases. Any other value is
-  loaded as a package specifier implementing `@fabrika/installation-contract`.
+  loaded as a package specifier implementing `@fabrika/provider-contract/installation`.
 
 ## Invariants
 

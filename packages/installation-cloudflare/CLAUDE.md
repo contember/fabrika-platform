@@ -1,6 +1,6 @@
 # @fabrika/installation-cloudflare
 
-The Cloudflare implementation of `@fabrika/installation-contract`.
+The Cloudflare implementation of `@fabrika/provider-contract/installation`.
 `fabrika platform init --provider=cloudflare <account>` stands up a Cloudflare
 account's Fabrika platform base. Init scaffolds a workflow that deploys IAM,
 Operations, then the runner/control pair — every stage through `platform deploy`,

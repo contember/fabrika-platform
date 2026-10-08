@@ -1,7 +1,7 @@
 // The runner's durable record of a run is its R2 `status.json`, written once the run is terminal. The
 // control plane reads it back through `recoverRun` and is the only writer of the run's database row.
 
-import type { RunnerStatus } from '@fabrika/runner-contract'
+import type { RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { parseRunnerStatus, stampDryRun } from './protocol'
 import { statusKey } from './relay'
 

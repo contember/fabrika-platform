@@ -1,5 +1,5 @@
 import { runLogLineSchema } from '@fabrika/control-contract'
-import { type RunnerStatus, runnerStatusSchema } from '@fabrika/runner-contract'
+import { type RunnerStatus, runnerStatusSchema } from '@fabrika/provider-cloudflare/runner'
 import { z } from 'zod'
 
 export const backstopPayloadSchema = z.object({ runId: z.string(), deadline: z.number().finite() })

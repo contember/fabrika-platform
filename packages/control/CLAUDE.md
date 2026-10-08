@@ -197,7 +197,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   app's whole vocabulary, so a re-application after a lost lease is harmless. A redelivery or a second
   reconcile finds the row terminal and applies nothing. A dry status is projected dry and applies nothing.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
-  `@fabrika/provider-cloudflare`; `@fabrika/runner-contract` contains only transport schemas, types and
+  `@fabrika/provider-cloudflare`; its oblaka-free `./runner` entry also carries the transport schemas, types and
   endpoint constants, `@fabrika/runner-container` owns the Bun process and image, and
   `@fabrika/runner-cloudflare` owns the executor Worker.
   The control plane has NO `Container` binding. The split exists because a deploy's final

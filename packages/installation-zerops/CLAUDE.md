@@ -1,6 +1,6 @@
 # @fabrika/installation-zerops
 
-The Zerops implementation of `@fabrika/installation-contract` plus the typed
+The Zerops implementation of `@fabrika/provider-contract/installation` plus the typed
 platform topology and generated installation artifacts.
 
 Six public commands. `fabrika platform plan --provider=zerops` validates the

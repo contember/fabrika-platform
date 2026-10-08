@@ -1,4 +1,4 @@
-import type { RunnerStatus } from '@fabrika/runner-contract'
+import type { RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { statusKey } from '../relay'
 import {

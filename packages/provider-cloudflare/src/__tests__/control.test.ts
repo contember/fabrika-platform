@@ -7,7 +7,6 @@ import type {
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
 import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
-import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import {
 	cloudflareArtifact,
@@ -18,6 +17,7 @@ import {
 	createCloudflareControlProvider,
 } from '..'
 import { cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
+import type { RunnerIamReconcile } from '../runner-protocol'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
 	if (provider.normalizeRegistration === undefined) throw new Error('the Cloudflare provider normalizes registrations')

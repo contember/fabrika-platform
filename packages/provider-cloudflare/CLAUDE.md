@@ -10,8 +10,9 @@ this one import.
 
 ## Invariants
 
-- **This package OWNS `CloudflareRunnerJob` and its validator.** `@fabrika/runner-contract` holds
-  only transport types and endpoint constants; `@fabrika/runner-container` owns the Bun process and
+- **This package OWNS `CloudflareRunnerJob` and its validator.** The Worker↔container transport
+  schemas, types and endpoint constants live in `src/runner-protocol.ts`, re-exported from the oblaka-free
+  `./runner` entry; `@fabrika/runner-container` owns the Bun process and
   image; `@fabrika/runner-cloudflare` owns the executor Worker. Provider job semantics stay here.
 - **Installation credentials never enter a persisted envelope.** `CloudflareStoredTarget` holds
   coordinates only; the account credentials go to `createCloudflareDeployer` when it is constructed,

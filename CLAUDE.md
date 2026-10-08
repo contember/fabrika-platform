@@ -68,9 +68,9 @@ packages/
   dashboard                       # the unified console SPA (all three planes)
   platform platform-node          # runtime PORTS · the Postgres/S3/Bun implementation set
   provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
-  installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
+  installation-{cloudflare,zerops}            # `fabrika platform init/plan/deploy` per cloud
   installation-init               # the operator-side `init` mechanics both installations share
-  runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
+  runner-{container,cloudflare}               # the Cloudflare out-of-band deploy executor
   github-app                      # the shared GitHub App client
   proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack

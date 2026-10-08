@@ -1,5 +1,4 @@
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import type { RunnerStatus } from '@fabrika/runner-contract'
+import type { CloudflareRunnerJob, RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, mock, test } from 'bun:test'
 import { statusKey } from '../relay'
 import type { Env } from '../worker-env'

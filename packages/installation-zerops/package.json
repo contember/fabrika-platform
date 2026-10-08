@@ -29,7 +29,6 @@
 		"zod": "^3.25.76",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/installation-contract": "workspace:*",
 		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",

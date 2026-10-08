@@ -1,7 +1,5 @@
 import { z } from 'zod'
 
-export type { RunLogLine } from '@fabrika/control-contract'
-
 export const runnerStateSchema = z.enum(['pending', 'cloning', 'installing', 'deploying', 'succeeded', 'failed'])
 
 /** The lifecycle a run moves through inside the transport container. */

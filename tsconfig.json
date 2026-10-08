@@ -24,13 +24,11 @@
 		{ "path": "./packages/control-contract" },
 		{ "path": "./packages/control" },
 		{ "path": "./packages/daemon-kit" },
-		{ "path": "./packages/installation-contract" },
 		{ "path": "./packages/installation-cloudflare" },
 		{ "path": "./packages/installation-zerops" },
 		{ "path": "./packages/platform-artifacts" },
 		{ "path": "./packages/cli" },
 		{ "path": "./packages/dashboard" },
-		{ "path": "./packages/runner-contract" },
 		{ "path": "./packages/runner-container" },
 		{ "path": "./packages/runner-cloudflare" },
 		{ "path": "./packages/local-stack" }

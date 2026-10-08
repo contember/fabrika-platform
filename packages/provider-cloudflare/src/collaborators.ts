@@ -1,9 +1,9 @@
 import type { SchemaReconciler } from '@fabrika/provider-contract'
-import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from '@fabrika/runner-contract'
 import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { type Definition, deploy as oblakaDeploy, type DeployResult as OblakaDeployResult } from 'oblaka-iac'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
+import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from './runner-protocol'
 
 export interface CommandSpec {
 	readonly command: string

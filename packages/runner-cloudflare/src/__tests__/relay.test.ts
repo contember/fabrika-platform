@@ -1,6 +1,5 @@
 import type { RunLogLine } from '@fabrika/control-contract'
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import type { RunnerStatus } from '@fabrika/runner-contract'
+import type { CloudflareRunnerJob, RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, test } from 'bun:test'
 import { type ContainerLike, logsKey, type R2Like, relayRun, statusKey } from '../relay'
 

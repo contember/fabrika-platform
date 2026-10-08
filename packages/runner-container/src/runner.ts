@@ -7,14 +7,14 @@
 
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_ARTIFACT_HEADERS } from '@fabrika/operations-contract/releases'
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import {
+	type CloudflareRunnerJob,
 	RUNNER_OUTCOME_FILE_ENV,
 	type RunnerIamReconcile,
 	type RunnerOutcomeFile,
 	type RunnerState,
 	type RunnerStatus,
-} from '@fabrika/runner-contract'
+} from '@fabrika/provider-cloudflare/runner'
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'

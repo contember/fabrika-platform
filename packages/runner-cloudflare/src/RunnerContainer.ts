@@ -8,7 +8,7 @@
 // running that very deploy — the self-reset that previously orphaned fabrika's own runs.
 
 import { Container } from '@cloudflare/containers'
-import { RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
+import { RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { z } from 'zod'
 import { backstopPayloadSchema, parseRunLogLine, parseRunnerStatus } from './protocol'
 import { logsKey } from './relay'

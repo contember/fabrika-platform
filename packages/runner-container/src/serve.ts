@@ -2,7 +2,7 @@
 // Container entrypoint: start the job-protocol HTTP server on the fixed runner port, backed by the
 // real Bun spawner and a workspace dir for clones. This is what the Dockerfile's ENTRYPOINT runs.
 
-import { RUNNER_PORT } from '@fabrika/runner-contract'
+import { RUNNER_PORT } from '@fabrika/provider-cloudflare/runner'
 import { createServer } from './server'
 import { bunSpawner } from './spawn'
 

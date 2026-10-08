@@ -10,8 +10,14 @@
 // they are never echoed back and (via the Runner) never reach a log line verbatim.
 
 import type { RunLogLine } from '@fabrika/control-contract'
-import { cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH } from '@fabrika/runner-contract'
+import {
+	cloudflareRunnerJobSchema,
+	RUNNER_HEALTH_PATH,
+	RUNNER_LOGS_PATH,
+	RUNNER_PORT,
+	RUNNER_RUN_PATH,
+	RUNNER_STATUS_PATH,
+} from '@fabrika/provider-cloudflare/runner'
 import { Runner, type RunnerEnv } from './runner'
 
 const json = (body: unknown, status = 200): Response =>

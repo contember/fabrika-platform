@@ -1,4 +1,3 @@
-import type { RunnerOutcomeFile } from '@fabrika/runner-contract'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
@@ -15,6 +14,7 @@ import type {
 	ProvisionInput,
 } from '..'
 import { createCloudflareDeployer, defaultCloudflareCollaborators, defineApp } from '..'
+import type { RunnerOutcomeFile } from '../runner-protocol'
 
 interface Recorded {
 	readonly commands: CommandSpec[]

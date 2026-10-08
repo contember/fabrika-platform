@@ -1,4 +1,5 @@
-import type { RunLogLine, RunnerStatus } from '@fabrika/runner-contract'
+import type { RunLogLine } from '@fabrika/control-contract'
+import type { RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { expect, test } from 'bun:test'
 import { backstopPayloadSchema, parseRunLogLine, parseRunnerStatus } from '../protocol'
 

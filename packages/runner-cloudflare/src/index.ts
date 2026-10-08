@@ -1,4 +1,4 @@
-export { type RunnerStatus, runnerStatusSchema } from '@fabrika/runner-contract'
+export { type RunnerStatus, runnerStatusSchema } from '@fabrika/provider-cloudflare/runner'
 export { logsKey, relayRun, statusKey } from './relay'
 export type { ContainerLike, R2Like, RelayOptions, RelayResult } from './relay'
 

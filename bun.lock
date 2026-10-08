@@ -163,7 +163,6 @@
         "@fabrika/builder": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/installation-cloudflare": "workspace:*",
-        "@fabrika/installation-contract": "workspace:*",
         "@fabrika/installation-zerops": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
@@ -316,18 +315,14 @@
       "name": "@fabrika/installation-cloudflare",
       "version": "0.0.4",
       "dependencies": {
-        "@fabrika/installation-contract": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
+        "@fabrika/provider-contract": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
         "@types/bun": "latest",
       },
-    },
-    "packages/installation-contract": {
-      "name": "@fabrika/installation-contract",
-      "version": "0.0.4",
     },
     "packages/installation-init": {
       "name": "@fabrika/installation-init",
@@ -348,7 +343,6 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
-        "@fabrika/installation-contract": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
@@ -483,7 +477,6 @@
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
-        "@fabrika/runner-contract": "workspace:*",
         "oblaka-iac": "^0.0.18",
         "zod": "^3.25.76",
       },
@@ -563,7 +556,6 @@
         "@cloudflare/containers": "^0.0.30",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
-        "@fabrika/runner-contract": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -580,18 +572,6 @@
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
-        "@fabrika/runner-contract": "workspace:*",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-      },
-    },
-    "packages/runner-contract": {
-      "name": "@fabrika/runner-contract",
-      "version": "0.0.4",
-      "dependencies": {
-        "@fabrika/control-contract": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -796,8 +776,6 @@
 
     "@fabrika/installation-cloudflare": ["@fabrika/installation-cloudflare@workspace:packages/installation-cloudflare"],
 
-    "@fabrika/installation-contract": ["@fabrika/installation-contract@workspace:packages/installation-contract"],
-
     "@fabrika/installation-init": ["@fabrika/installation-init@workspace:packages/installation-init"],
 
     "@fabrika/installation-zerops": ["@fabrika/installation-zerops@workspace:packages/installation-zerops"],
@@ -833,8 +811,6 @@
     "@fabrika/runner-cloudflare": ["@fabrika/runner-cloudflare@workspace:packages/runner-cloudflare"],
 
     "@fabrika/runner-container": ["@fabrika/runner-container@workspace:packages/runner-container"],
-
-    "@fabrika/runner-contract": ["@fabrika/runner-contract@workspace:packages/runner-contract"],
 
     "@fontsource-variable/ibm-plex-sans": ["@fontsource-variable/ibm-plex-sans@5.3.0", "", {}, "sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ=="],
 
@@ -1322,8 +1298,6 @@
 
     "@fabrika/runner-container/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
-    "@fabrika/runner-contract/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
     "@opice/harness/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.3", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.3", "tslib": "^2.4.0" }, "bundled": true }, "sha512-zLpS5asjEb7lq8jYLq37N6XKaE41DIexlY1rF/z4/tIl3wo13Sqm28fRyfIsKZD+NZ8mM5RoKkpW/rBcuoSZSg=="],
@@ -1409,7 +1383,5 @@
     "@fabrika/runner-cloudflare/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/runner-container/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "@fabrika/runner-contract/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
   }
 }

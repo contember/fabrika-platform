@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
 import { BUILDER_USAGE, runBuilderCli } from '@fabrika/builder'
-import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/installation-contract'
 import { authoredAppProvider } from '@fabrika/provider-contract'
+import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
 import { CONTROL_USAGE, runControlCli } from './control.js'
 

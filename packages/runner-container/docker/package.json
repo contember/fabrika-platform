@@ -14,7 +14,6 @@
 		"packages/platform",
 		"packages/control-contract",
 		"packages/operations-contract",
-		"packages/runner-contract",
 		"packages/runner-container"
 	],
 	"//": "Slim workspace baked into the runner image. The provider CLI and runner resolve local workspace packages; wrangler is installed globally.",

@@ -1,7 +1,7 @@
 import { reconcileSchema } from '@fabrika/auth'
-import type { InstallationCli, InstallationCommand } from '@fabrika/installation-contract'
 import { info as consoleInfo, ok as consoleOk, step as consoleStep, warn as consoleWarn } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
+import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { createZeropsApi, defaultSleep } from '@fabrika/provider-zerops'
 import { consoleAdminCollaborators, runPlatformAdmin } from './admin'
 import { parsePlatformAdminArgs, REISSUE_FLAG } from './admin-options'

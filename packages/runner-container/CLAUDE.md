@@ -3,7 +3,7 @@
 The plain-Bun deploy container. One process accepts one provider-owned job, clones its repository,
 installs dependencies, and runs `fabrika-cloudflare-executor deploy`.
 
-The Worker↔container transport types and paths live in `@fabrika/runner-contract`.
+The Worker↔container transport types and paths come from `@fabrika/provider-cloudflare/runner`.
 `CloudflareRunnerJob` remains owned and validated by `@fabrika/provider-cloudflare`.
 
 ## Commands

@@ -6,8 +6,13 @@
 // run-keyed object), then polls `/status` for the terminal outcome and persists that too.
 
 import type { RunLogLine } from '@fabrika/control-contract'
-import { type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_LOGS_PATH, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
+import {
+	type CloudflareRunnerJob,
+	RUNNER_LOGS_PATH,
+	RUNNER_RUN_PATH,
+	RUNNER_STATUS_PATH,
+	type RunnerStatus,
+} from '@fabrika/provider-cloudflare/runner'
 import { parseRunLogLine, parseRunnerStatus, stampDryRun } from './protocol'
 
 /** The slice of a Cloudflare R2 bucket the relay needs. Real `R2Bucket` satisfies this. */

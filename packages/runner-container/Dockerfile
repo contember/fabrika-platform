@@ -53,7 +53,6 @@ COPY packages/provider-cloudflare ./packages/provider-cloudflare
 COPY packages/platform ./packages/platform
 COPY packages/control-contract ./packages/control-contract
 COPY packages/operations-contract ./packages/operations-contract
-COPY packages/runner-contract ./packages/runner-contract
 COPY packages/runner-container/src ./packages/runner-container/src
 COPY packages/runner-container/docker/smoke ./packages/runner-container/docker/smoke
 COPY packages/runner-container/package.json ./packages/runner-container/package.json

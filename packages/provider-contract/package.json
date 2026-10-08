@@ -19,6 +19,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./installation": {
+			"bun": "./src/installation.ts",
+			"types": "./src/installation.ts",
+			"default": "./src/installation.ts"
 		}
 	},
 	"scripts": {

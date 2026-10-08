@@ -5,7 +5,7 @@ container logs and the terminal status to R2, where Control reads them back. It 
 no public route and is called through a service binding — but a binding is not a capability, so it
 also holds ONE credential, `FABRIKA_RUNNER_KEY`, and verifies it on every RPC.
 
-The Worker↔container protocol lives in `@fabrika/runner-contract`. The plain-Bun process and Docker
+The Worker↔container protocol comes from `@fabrika/provider-cloudflare/runner`. The plain-Bun process and Docker
 image live in `@fabrika/runner-container`. `CloudflareRunnerJob` remains owned and validated by
 `@fabrika/provider-cloudflare`.
 

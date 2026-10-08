@@ -21,8 +21,7 @@
 		"zod": "^3.25.76",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
-		"@fabrika/provider-cloudflare": "workspace:*",
-		"@fabrika/runner-contract": "workspace:*"
+		"@fabrika/provider-cloudflare": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"
