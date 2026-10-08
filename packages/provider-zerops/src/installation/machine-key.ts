@@ -11,8 +11,7 @@
 // The acceptance is a fresh shell holding nothing: paste the block, supply the two keys, mint a key on
 // the first try. So the origin is an `export` — a bare `NAME=value` sets a shell variable the child
 // process never sees — and EVERY other line is a `#` comment. The command line is commented too, and
-// that is not timidity: `--label=<name>` is a shell redirection, and `[--expires-in=<seconds>]` ends in
-// a `>` that would create a file called `]` in whatever directory the operator pasted into.
+// that is not timidity: `--label=<name>` is a shell redirection, and so is every other `<…>` placeholder.
 //
 // HARD RULE: no function here takes a key. The block is composed from an ORIGIN and variable NAMES,
 // so a caller that is holding the real values (both verbs are) cannot leak one through it.
@@ -28,8 +27,8 @@ export interface MachineKeyNextStep {
 /** The boxed hand-off's title. Exported so a test names it once. */
 export const MACHINE_KEY_NEXT_STEP_TITLE = 'NEXT — mint a machine key for `fabrika control`'
 
-/** The command the block leads to, with the two flags `key issue` requires. */
-export const MACHINE_KEY_ISSUE_COMMAND = 'fabrika control key issue --label=<name> --permissions=<a,b,c> [--expires-in=<seconds>]'
+/** The command the block leads to, with the three flags `key issue` requires. */
+export const MACHINE_KEY_ISSUE_COMMAND = 'fabrika control key issue --label=<name> --permissions=<a,b,c> --expires-in=<seconds>'
 
 const WIDEST_NAME = 'FABRIKA_IAM_PROVISIONING_KEY'.length + 1
 

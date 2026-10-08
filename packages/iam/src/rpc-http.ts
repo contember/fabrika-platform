@@ -8,11 +8,12 @@
 // ── AUTHENTICATING THE SURFACE, and why it needs its own answer ───────────────────────────────────
 //
 // On Workers these methods sit behind a service binding, which is not addressable from outside the
-// account: "who may call this" is answered by the topology, so four of the eight methods authenticate
+// account: "who may call this" is answered by the topology, so three of the methods authenticate
 // no caller at all. `issueKey`/`revokeKey`/`listPrincipals` resolve a caller from a
-// forwarded credential and are safe on their own — but `audit` would let anyone forge audit rows
-// against any app, and `mintToken`/`mintFromKey` are credential-checking oracles worth rate-limiting
-// even though they fail closed. Over HTTP the topology guarantees nothing, so it has to be replaced,
+// forwarded credential and are safe on their own; `audit` takes its app from a verified token but
+// trusts the rest of the event, so anyone holding an app's token could write that app's audit rows;
+// and `mintToken`/`mintFromKey` are credential-checking oracles worth rate-limiting even though they
+// fail closed. Over HTTP the topology guarantees nothing, so it has to be replaced,
 // not assumed.
 //
 // The replacement is a SHARED SECRET on the transport: `Authorization: Bearer <rpcKey>`, compared as
@@ -47,9 +48,9 @@
 // unconsumed handoff code into a SESSION. That is a real capability, and it is still the smaller
 // grant — the code is single-use through a conditional UPDATE, stored only as a hash, bound to
 // `(session, app, return URL)`, and dead after two minutes, so holding the key without also holding a
-// fresh code buys nothing. Handing the proxy the MANAGEMENT key instead would hand it `audit`, whose
-// surface is unauthenticated by design (fire-and-forget with a self-asserted app), so a compromised
-// proxy could forge audit rows for any app. It could not escalate through
+// fresh code buys nothing. Handing the proxy the MANAGEMENT key instead would hand it `audit`, which
+// proves only the app (from a token) and takes the actor on the caller's word — and the proxy holds a
+// token for every app it fronts, so a compromised proxy could forge audit rows for any of them. It could not escalate through
 // `issueKey`/`revokeKey`/`listPrincipals` — those resolve a caller from a forwarded
 // credential and enforce delegation regardless of the transport key — but the audit trail is exactly
 // the thing that must survive a compromise of the edge. One extra env var buys that.

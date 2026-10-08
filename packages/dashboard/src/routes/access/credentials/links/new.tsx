@@ -128,8 +128,8 @@ export default createPage()
 						<input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Q3 report share" />
 					</label>
 					<label>
-						Expires (optional)
-						<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+						Expires (within 30 days)
+						<input type="datetime-local" required value={expiry} onChange={(e) => setExpiry(e.target.value)} />
 					</label>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">

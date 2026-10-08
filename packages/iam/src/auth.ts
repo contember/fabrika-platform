@@ -3,7 +3,7 @@ import type { SessionRow } from './db'
 import type { Env } from './env'
 import { hashToken, timingSafeEqualHex } from './secret'
 import type { Config, Services } from './services'
-import { getSigner, verifyAccessToken } from './signing'
+import { getSigner, verifyAccessToken, verifyResourceAccessToken } from './signing'
 import { resolveCredential } from './tokens'
 
 /** Fixed identity of the local-dev login (`LOCAL_DEV_LOGIN`, `auth/login.ts`). */
@@ -120,4 +120,22 @@ export async function resolveCaller(
 		caller: { id: claims.sub, ...(claims.ptype === undefined ? {} : { type: claims.ptype }), label: claims.label, permissions: claims.perms },
 		verifiedApp: claims.aud,
 	}
+}
+
+/**
+ * The app an `audit` event belongs to, read from the caller's own token rather than from the event: a
+ * native access token's `aud`, or an OAuth resource token's signed `app`. Null when neither verifies.
+ */
+export async function verifiedTokenApp(
+	services: Services,
+	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>,
+	credential: string,
+): Promise<string | null> {
+	const signer = await getSigner(env)
+	const native = await verifyAccessToken(signer, credential, { issuer: services.config.issuer })
+	if (native !== null) {
+		return native.aud
+	}
+	const resource = await verifyResourceAccessToken(signer, credential, { issuer: services.config.issuer })
+	return resource?.oauth?.app ?? null
 }

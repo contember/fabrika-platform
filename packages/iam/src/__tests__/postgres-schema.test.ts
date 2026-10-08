@@ -11,6 +11,7 @@
 //
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
+import { buildAccessClaims } from '@fabrika/auth-core'
 import { createBackgroundTasks, type PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createIamRepositories, type IamRepositories } from '../db'
@@ -22,6 +23,7 @@ import { createFetchHandler } from '../node/server'
 import { pkceChallenge, randomToken } from '../oidc'
 import { MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 import { hashToken } from '../secret'
+import { getSigner } from '../signing'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
@@ -891,13 +893,26 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		await reset()
 		const { handler, drain } = runtime()
 		const principal = await db.principals.createUser('sub-rpc', 'rpc@x.cz')
+		const issuedAt = Math.floor(Date.now() / 1000)
+		// The same env as `runtime()`, so this is the process's own ephemeral signer.
+		const signer = await getSigner({ FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' })
+		const credential = await signer.sign(buildAccessClaims({
+			iss: BASE,
+			app: 'opice',
+			subject: principal.id,
+			type: 'user',
+			label: 'rpc@x.cz',
+			permissions: [],
+			issuedAt,
+			expiresAt: issuedAt + 300,
+		}))
 
 		const res = await handler(
 			new Request(`${BASE}/rpc/audit`, {
 				method: 'POST',
 				headers: { Authorization: `Bearer ${RPC_KEY}`, 'content-type': 'application/json' },
 				body: JSON.stringify({
-					app: 'opice',
+					credential,
 					requestId: 'req-rpc',
 					principalId: principal.id,
 					principalLabel: 'rpc@x.cz',
@@ -914,6 +929,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const [event] = await db.audit.listAuditEvents({ limit: 10, requestId: 'req-rpc' })
 		expect(event?.action).toBe('report.read')
 		expect(event?.principal_id).toBe(principal.id)
+		expect(event?.app).toBe('opice')
 	})
 
 	test('an unauthenticated mint attempt never touches the database', async () => {

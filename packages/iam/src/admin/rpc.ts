@@ -148,7 +148,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 				app: nonEmpty,
 				grants: z.array(shareGrantSchema),
 				label: z.string().optional(),
-				expiresAt: z.number().finite().optional(),
+				expiresAt: z.number().finite(),
 			}))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.createShareLink(context(ctx), input)),

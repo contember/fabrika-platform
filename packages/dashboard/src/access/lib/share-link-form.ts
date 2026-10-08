@@ -27,12 +27,12 @@ const shareLinkForm = z.object({
 	rows: grants,
 	app: z.string().min(1, 'Choose the app this link is for.'),
 	label: z.string().trim(),
-	expiry: z.string().transform(parseDateTimeLocal),
+	expiry: z.string().transform(parseDateTimeLocal).pipe(z.number({ message: 'Choose when the link expires.' })),
 }).transform(({ rows, app, label, expiry }): IssueShareLinkRequest => ({
 	app,
 	grants: rows,
 	...(label === '' ? {} : { label }),
-	...(expiry === null ? {} : { expiresAt: expiry }),
+	expiresAt: expiry,
 }))
 
 export function parseShareLinkForm(input: z.input<typeof shareLinkForm>): IssueShareLinkRequest {

@@ -9,7 +9,7 @@ import { IamRpcStub, makeRequest } from './stub'
 // whether the claims came from a cookie session or a `px_` key.
 function ctxWith(
 	perms: PermissionEntry[],
-	opts: { binding?: IamRpcStub; appId?: string; sub?: string; label?: string | null; requestId?: string } = {},
+	opts: { binding?: IamRpcStub; appId?: string; token?: string; sub?: string; label?: string | null; requestId?: string } = {},
 ): AuthContext {
 	const appId = opts.appId ?? 'app-x'
 	const claims: AccessTokenClaims = {
@@ -22,7 +22,7 @@ function ctxWith(
 		ptype: 'user',
 		label: opts.label ?? 'alice@example.com',
 	}
-	return buildAuthContext(opts.binding ?? new IamRpcStub(), appId, claims, opts.requestId ?? 'req-1')
+	return buildAuthContext(opts.binding ?? new IamRpcStub(), opts.token ?? 'verified-token', claims, opts.requestId ?? 'req-1')
 }
 
 describe('AuthContext.can', () => {
@@ -81,12 +81,12 @@ describe('AuthContext.scopedTo', () => {
 })
 
 describe('AuthContext.audit', () => {
-	test('injects app/principal/requestId and forwards domain fields', async () => {
+	test('forwards the verified token instead of naming an app, plus principal/requestId and domain fields', async () => {
 		const stub = new IamRpcStub()
-		const auth = ctxWith([], { binding: stub, appId: 'app-y', sub: 'pr-9', label: 'bob@x', requestId: 'req-42' })
+		const auth = ctxWith([], { binding: stub, appId: 'app-y', token: 'token-for-app-y', sub: 'pr-9', label: 'bob@x', requestId: 'req-42' })
 		await auth.audit({ action: 'project.update', resourceType: 'project', resourceId: 'p1', diff: { a: [1, 2] } })
 		expect(stub.auditCalls[0]).toEqual({
-			app: 'app-y',
+			credential: 'token-for-app-y',
 			requestId: 'req-42',
 			principalId: 'pr-9',
 			principalLabel: 'bob@x',

@@ -201,6 +201,18 @@ describe('authenticate', () => {
 		expect(result.context.can('demo.write')).toBe(false)
 	})
 
+	test('audit forwards the injected token, so IAM reads the app from it rather than from the SDK', async () => {
+		const stub = new IamRpcStub({ jwks: JWKS })
+		const token = await sign()
+		const result = await createIam(iamEnv(stub)).authenticate(proxied(token))
+		if (!result.ok) throw new Error('expected ok')
+
+		await result.context.audit({ action: 'demo.write', resourceType: 'demo' })
+
+		expect(stub.auditCalls.map((event) => event.credential)).toEqual([token])
+		expect(stub.auditCalls[0]).not.toHaveProperty('app')
+	})
+
 	test('an anonymous token (no ptype) resolves with principal null', async () => {
 		const iam = createIam(iamEnv(new IamRpcStub({ jwks: JWKS })))
 		const result = await iam.authenticate(proxied(await sign({ anonymous: true })))

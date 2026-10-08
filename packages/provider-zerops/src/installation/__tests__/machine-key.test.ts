@@ -20,6 +20,7 @@ describe('the machine-key next step', () => {
 		expect(lines.join('\n')).toContain(MACHINE_KEY_ISSUE_COMMAND)
 		expect(MACHINE_KEY_ISSUE_COMMAND).toContain('--label=<name>')
 		expect(MACHINE_KEY_ISSUE_COMMAND).toContain('--permissions=<a,b,c>')
+		expect(MACHINE_KEY_ISSUE_COMMAND).toContain('--expires-in=<seconds>')
 	})
 
 	test('pastes safely: one export, and every other line a comment', () => {

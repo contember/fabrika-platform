@@ -25,6 +25,8 @@ label the envelope a registration carries.
 - `control key issue` is the bootstrap: a fresh installation's provisioning key is
   held in env and never in the DB, so the proxy — which resolves bearers through
   IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
+  `--expires-in` is required and at most `MAX_KEY_LIFETIME_SECONDS` (30 days), the
+  bound IAM enforces; the CLI checks it first only to say so before the call.
   `FABRIKA_IAM_RPC_URL` is IAM's PUBLIC origin; the private hostname services use
   between themselves resolves only inside the provider's project, so the help text
   and the unreachable-IAM message both say so.

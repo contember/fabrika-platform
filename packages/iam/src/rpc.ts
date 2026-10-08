@@ -13,10 +13,10 @@
 // SECURITY MODEL (unchanged by the move): the management RPCs (`issueKey`/`revokeKey`/`listPrincipals`)
 // resolve the CALLER server-side from a forwarded propustka-native credential (`resolveCaller` — a
 // `px_token` verified against our own signing keys, or a `px_` key), never app-asserted. On a valid `px_token` the credential's `aud` identifies the app and supersedes the
-// SDK-passed `app` for the audit row. Note what this does NOT cover: `mintToken`, `mintFromKey`,
-// `getJwks` and `audit` authenticate no caller of their own — on Workers the binding's
-// unreachability is what stands in for that, so an HTTP transport MUST supply an equivalent (see
-// `rpc-http.ts`).
+// SDK-passed `app` for the audit row. `audit` takes its app from the caller's verified token the same
+// way (`verifiedTokenApp`). Note what this does NOT cover: `mintToken`, `mintFromKey` and `getJwks`
+// authenticate no caller of their own — on Workers the binding's unreachability is what stands in for
+// that, so an HTTP transport MUST supply an equivalent (see `rpc-http.ts`).
 
 import type {
 	AuditInput,
@@ -37,7 +37,7 @@ import type {
 	RevokeKeyInput,
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
-import { resolveCaller } from './auth'
+import { resolveCaller, verifiedTokenApp } from './auth'
 import { approveDeviceAuthorization, denyDeviceAuthorization, inspectDeviceAuthorization, listOwnDeviceAuthorizations } from './device'
 import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
@@ -178,25 +178,32 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		},
 
 		/**
-		 * Fire-and-forget domain audit write. Returns void and NEVER throws to the
-		 * caller — a failed audit write must not fail or delay the user-facing op. The
-		 * `app` here is self-asserted (no token on this call); audit labeling only.
+		 * Fire-and-forget domain audit write. Returns void and NEVER throws to the caller — a failed
+		 * audit write must not fail or delay the user-facing op. The app is the one the caller's token
+		 * was minted for; an event whose token does not verify is dropped with a warning, never written
+		 * under an app nobody proved.
 		 */
 		audit(raw: AuditInput): Promise<void> {
-			const event = withAcceptedRequestId(raw)
+			const { credential, ...event } = withAcceptedRequestId(raw)
 			ctx.waitUntil(
-				services.repositories.audit
-					.writeAuditEvent({
-						requestId: event.requestId,
-						principalId: event.principalId,
-						principalLabel: event.principalLabel,
-						credentialId: event.credentialId ?? null,
-						app: event.app,
-						action: event.action,
-						resourceType: event.resourceType,
-						resourceId: event.resourceId ?? null,
-						diff: event.diff,
-						metadata: event.metadata,
+				verifiedTokenApp(services, env, credential)
+					.then((app) => {
+						if (app === null) {
+							console.warn(`audit event refused for request '${event.requestId}': the credential does not verify`)
+							return
+						}
+						return services.repositories.audit.writeAuditEvent({
+							requestId: event.requestId,
+							principalId: event.principalId,
+							principalLabel: event.principalLabel,
+							credentialId: event.credentialId ?? null,
+							app,
+							action: event.action,
+							resourceType: event.resourceType,
+							resourceId: event.resourceId ?? null,
+							diff: event.diff,
+							metadata: event.metadata,
+						})
 					})
 					.catch((err: unknown) => {
 						logError('audit write failed', err)
@@ -250,7 +257,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				}
 				const revoker = res.caller
 
-				const result = await revokeKey(services, input, { id: revoker.id, permissions: revoker.permissions })
+				const result = await revokeKey(services, input, { id: revoker.id, permissions: revoker.permissions }, res.verifiedApp)
 
 				// Audit only an actual state change (revoked === true); a no-op idempotent
 				// revoke or a denied/not-found attempt writes no domain event.

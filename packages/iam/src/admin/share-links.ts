@@ -77,16 +77,16 @@ export async function createShareLinkUseCase(c: AdminContext, input: IssueShareL
 		requestId: c.requestId,
 		permissions: grants,
 		...(label !== undefined ? { label } : {}),
-		...(expiresAt !== undefined ? { expiresAt } : {}),
+		expiresAt,
 	}
 
 	// An admin holding the cross-app `admin` role keeps `*` at every app; an app-scoped admin only
 	// delegates what they hold THERE, which is the whole point of naming the app.
 	const issuer = { id: c.admin.id, permissions: await effectiveIssuerPermissions(c, app) }
-	const { result, auditLabel } = await issueKey(c.services, issueInput, issuer, app)
+	const { result, auditLabel, problem } = await issueKey(c.services, issueInput, issuer, app)
 	if (!result.ok) {
-		// Admin already gated; the only failure here is the delegation rule.
-		return fail(403, `not allowed: ${result.reason}`)
+		// Admin already gated: a `problem` is a malformed request, anything else the delegation rule.
+		return problem === undefined ? fail(403, `not allowed: ${result.reason}`) : fail(400, problem)
 	}
 	await adminAudit(c, {
 		action: 'iam.credential.create',

@@ -253,7 +253,8 @@ export interface IssueShareLinkRequest {
 	/** Each grant is delegation-checked against the issuer on its `scope` (omitted → global). */
 	grants: { action: string; scope?: { type: string; value: string } | null }[]
 	label?: string
-	expiresAt?: number
+	/** Absolute expiry (unix seconds). REQUIRED, and at most `MAX_KEY_LIFETIME_SECONDS` ahead: no key is permanent. */
+	expiresAt: number
 }
 
 /** Issued share-link result — the plaintext `px_` token returned ONCE. */

@@ -41,7 +41,7 @@ describe('RPC input normalization', () => {
 			service: null,
 			principalId: null,
 			label: null,
-			expiresAt: null,
+			expiresAt: 1,
 			permissions: [{ action: '', extra: true }, { action: 'read', scope: null }, { action: 'read', scope: { type: '', value: '', extra: true } }],
 			extra: true,
 		})
@@ -53,6 +53,7 @@ describe('RPC input normalization', () => {
 				credential: null,
 				requestId: '',
 				permissions: [{ action: '' }, { action: 'read', scope: null }, { action: 'read', scope: { type: '', value: '' } }],
+				expiresAt: 1,
 			},
 		}])
 	})
@@ -224,7 +225,7 @@ describe('dispatch', () => {
 
 	test('audit answers 204 — it returns void over the binding, so there is nothing to encode', async () => {
 		const { rpc, response } = call('audit', {
-			app: 'opice',
+			credential: 'token',
 			requestId: 'r1',
 			principalId: null,
 			principalLabel: 'anon',
@@ -236,7 +237,7 @@ describe('dispatch', () => {
 		})
 		expect((await response).status).toBe(204)
 		expect(rpc.calls[0]?.input).toEqual({
-			app: 'opice',
+			credential: 'token',
 			requestId: 'r1',
 			principalId: null,
 			principalLabel: 'anon',
@@ -289,24 +290,31 @@ describe('decoding', () => {
 	test('optional fields are OMITTED rather than set to undefined', async () => {
 		// `exactOptionalPropertyTypes`-shaped inputs: an absent field must not become `{ label: undefined }`,
 		// or a `'label' in input` check downstream reads the opposite of what the caller sent.
-		const { rpc, response } = call('issueKey', { app: 'opice', credential: null, requestId: 'r1' })
+		const { rpc, response } = call('issueKey', { app: 'opice', credential: null, requestId: 'r1', expiresAt: 1 })
 		expect((await response).status).toBe(200)
-		expect(rpc.calls[0]?.input).toEqual({ app: 'opice', credential: null, requestId: 'r1' })
-		expect(Object.keys(rpc.calls[0]?.input ?? {}).sort()).toEqual(['app', 'credential', 'requestId'])
+		expect(rpc.calls[0]?.input).toEqual({ app: 'opice', credential: null, requestId: 'r1', expiresAt: 1 })
+		expect(Object.keys(rpc.calls[0]?.input ?? {}).sort()).toEqual(['app', 'credential', 'expiresAt', 'requestId'])
 	})
 
 	test('a malformed body is 400 and never reaches the method', async () => {
 		const cases: [string, unknown][] = [
-			['app missing', { credential: null, requestId: 'r1' }],
-			['app not a string', { app: 7, credential: null, requestId: 'r1' }],
-			['credential absent (required, nullable)', { app: 'opice', requestId: 'r1' }],
-			['requestId missing', { app: 'opice', credential: null }],
+			['app missing', { credential: null, requestId: 'r1', expiresAt: 1 }],
+			['app not a string', { app: 7, credential: null, requestId: 'r1', expiresAt: 1 }],
+			['credential absent (required, nullable)', { app: 'opice', requestId: 'r1', expiresAt: 1 }],
+			['requestId missing', { app: 'opice', credential: null, expiresAt: 1 }],
 			['expiresAt not a number', { app: 'opice', credential: null, requestId: 'r1', expiresAt: 'soon' }],
-			['permissions not an array', { app: 'opice', credential: null, requestId: 'r1', permissions: 'all' }],
-			['a grant without an action', { app: 'opice', credential: null, requestId: 'r1', permissions: [{ scope: null }] }],
-			['a half-set scope', { app: 'opice', credential: null, requestId: 'r1', permissions: [{ action: 'x', scope: { type: 'team' } }] }],
-			['a service spec without permissions', { app: 'opice', credential: null, requestId: 'r1', service: { label: 'ci' } }],
-			['a service spec with a non-string permission', { app: 'opice', credential: null, requestId: 'r1', service: { label: 'ci', permissions: [1] } }],
+			['permissions not an array', { app: 'opice', credential: null, requestId: 'r1', permissions: 'all', expiresAt: 1 }],
+			['a grant without an action', { app: 'opice', credential: null, requestId: 'r1', permissions: [{ scope: null }], expiresAt: 1 }],
+			['a half-set scope', { app: 'opice', credential: null, requestId: 'r1', permissions: [{ action: 'x', scope: { type: 'team' } }], expiresAt: 1 }],
+			['a service spec without permissions', { app: 'opice', credential: null, requestId: 'r1', service: { label: 'ci' }, expiresAt: 1 }],
+			['a service spec with a non-string permission', {
+				app: 'opice',
+				credential: null,
+				requestId: 'r1',
+				service: { label: 'ci', permissions: [1] },
+				expiresAt: 1,
+			}],
+			['expiresAt missing (required in every mode)', { app: 'opice', credential: null, requestId: 'r1', permissions: [{ action: 'x' }] }],
 		]
 		for (const [name, body] of cases) {
 			const { rpc, response } = call('issueKey', body)

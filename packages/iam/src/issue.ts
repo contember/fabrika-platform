@@ -10,15 +10,18 @@
 
 import {
 	API_KEY_PREFIX,
+	isActionAllowed,
 	type IssueKeyInput,
 	type IssueKeyResult,
 	type KeyGrant,
+	MAX_KEY_LIFETIME_SECONDS,
 	type PermissionEntry,
 	permits,
 	type RevokeKeyInput,
 	type RevokeKeyResult,
 } from '@fabrika/auth-core'
 import type { CredentialGrantRow } from './db'
+import { unixNow } from './repositories/sql'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
 
@@ -26,6 +29,23 @@ import type { Services } from './services'
 interface Issuer {
 	id: string
 	permissions: PermissionEntry[]
+}
+
+/**
+ * What `issueKey` decided. A refusal with a `problem` was a malformed request (expiry, catalog), not a
+ * lack of authority: the admin path answers it with a 400 that names the problem, and the RPC still
+ * answers `not_allowed`, its only refusal reason.
+ */
+export interface IssueOutcome {
+	result: IssueKeyResult
+	auditLabel?: string
+	problem?: string
+}
+
+const NOT_ALLOWED: IssueOutcome = { result: { ok: false, reason: 'not_allowed' } }
+
+function refused(problem: string): IssueOutcome {
+	return { ...NOT_ALLOWED, problem }
 }
 
 /**
@@ -41,6 +61,23 @@ export function findUncoveredGrant(issuerPermissions: PermissionEntry[], grants:
 	return null
 }
 
+/** Why `expiresAt` is not an acceptable key expiry at `now` (both unix seconds), or null when it is. */
+export function keyExpiryProblem(expiresAt: number, now: number): string | null {
+	if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) {
+		return 'expiresAt must be a future unix time in seconds'
+	}
+	if (expiresAt - now > MAX_KEY_LIFETIME_SECONDS) {
+		return `expiresAt must be at most ${MAX_KEY_LIFETIME_SECONDS} seconds (30 days) ahead`
+	}
+	return null
+}
+
+/** The first requested action pattern the app's catalog does not declare, or null. */
+async function findUnknownAction(services: Services, app: string, actions: string[]): Promise<string | null> {
+	const catalog = await services.repositories.appSchema.listActionCatalog(app)
+	return actions.find((action) => !isActionAllowed(action, catalog)) ?? null
+}
+
 // ── issueKey ──────────────────────────────────────────────────────────────────
 
 /**
@@ -49,22 +86,32 @@ export function findUncoveredGrant(issuerPermissions: PermissionEntry[], grants:
  * `app` is the issuer's VERIFIED app, and every credential this function writes is bound to it. That
  * binding is what makes delegation mean anything: the grants below are checked against the issuer's
  * permissions *for this app*, so a credential that could be spent at another one would convert
- * app-scoped authority into installation-wide authority (SEC-2).
+ * app-scoped authority into installation-wide authority (SEC-2). For the same reason every granted
+ * action must be in that app's catalog, and every key must expire within `MAX_KEY_LIFETIME_SECONDS`.
  */
-export async function issueKey(
-	services: Services,
-	input: IssueKeyInput,
-	issuer: Issuer,
-	app: string,
-): Promise<{ result: IssueKeyResult; auditLabel?: string }> {
+export async function issueKey(services: Services, input: IssueKeyInput, issuer: Issuer, app: string): Promise<IssueOutcome> {
+	// Every mode: a self-bound key is a standing copy of a 300-second token, a service key a new
+	// principal, a share link frozen authority — none of them may outlive the bound (SEC-7).
+	const expiryProblem = keyExpiryProblem(input.expiresAt, unixNow())
+	if (expiryProblem !== null) {
+		return refused(expiryProblem)
+	}
+
 	// Service mode: create a NEW machine principal + grant and bind the key to it (the folded
 	// issueServiceToken). The grant is scoped to the issuer's verified `app`; the issuer must hold
 	// every requested action on `scope` (the same delegation rule as a grant).
 	if (input.service !== undefined) {
 		const svc = input.service
 		const grants = svc.permissions.map((action) => ({ action, scope: svc.scope ?? null }))
-		if (grants.length === 0 || findUncoveredGrant(issuer.permissions, grants) !== null) {
-			return { result: { ok: false, reason: 'not_allowed' } }
+		if (grants.length === 0) {
+			return NOT_ALLOWED
+		}
+		const unknown = await findUnknownAction(services, app, svc.permissions)
+		if (unknown !== null) {
+			return refused(`unknown action pattern: ${unknown}`)
+		}
+		if (findUncoveredGrant(issuer.permissions, grants) !== null) {
+			return NOT_ALLOWED
 		}
 		const principal = await services.repositories.principals.createService(svc.label)
 		await services.repositories.grants.createGrant({
@@ -74,7 +121,7 @@ export async function issueKey(
 			scopeType: svc.scope?.type ?? null,
 			scopeValue: svc.scope?.value ?? null,
 			grantedBy: issuer.id,
-			expiresAt: input.expiresAt ?? null,
+			expiresAt: input.expiresAt,
 		})
 		const token = `${API_KEY_PREFIX}${generateToken()}`
 		const id = await services.repositories.credentials.createCredential({
@@ -83,7 +130,7 @@ export async function issueKey(
 			principalId: principal.id,
 			app,
 			issuedBy: issuer.id,
-			expiresAt: input.expiresAt ?? null,
+			expiresAt: input.expiresAt,
 			grants: [],
 		})
 		return { result: { ok: true, token, id, principalId: principal.id }, auditLabel: svc.label }
@@ -92,22 +139,19 @@ export async function issueKey(
 	// v1: binding is only to the issuer's OWN principal (a personal token). A standalone credential
 	// needs grants.
 	if (input.principalId !== undefined && input.principalId !== issuer.id) {
-		return { result: { ok: false, reason: 'not_allowed' } }
+		return NOT_ALLOWED
 	}
 	const grants = input.permissions ?? []
 	if (input.principalId === undefined && grants.length === 0) {
-		return { result: { ok: false, reason: 'not_allowed' } }
+		return NOT_ALLOWED
 	}
-	// A self-bound key carries the issuer's LIVE permissions with no inline downscope, so it is a
-	// standing copy of whoever asked for it. When the issuer is itself a 300-second access token
-	// that is a permanent credential minted from a temporary one — so this mode must state an expiry
-	// (SEC-7). The standalone mode is exempt: its grants are frozen and delegation-checked.
-	if (input.principalId !== undefined && input.expiresAt === undefined) {
-		return { result: { ok: false, reason: 'not_allowed' } }
+	const unknown = await findUnknownAction(services, app, grants.map((grant) => grant.action))
+	if (unknown !== null) {
+		return refused(`unknown action pattern: ${unknown}`)
 	}
 	// Delegation: the issuer must hold every inline grant (trivially true for a self-bound downscope).
 	if (findUncoveredGrant(issuer.permissions, grants) !== null) {
-		return { result: { ok: false, reason: 'not_allowed' } }
+		return NOT_ALLOWED
 	}
 
 	const token = `${API_KEY_PREFIX}${generateToken()}`
@@ -117,7 +161,7 @@ export async function issueKey(
 		principalId: input.principalId ?? null,
 		app,
 		issuedBy: issuer.id,
-		expiresAt: input.expiresAt ?? null,
+		expiresAt: input.expiresAt,
 		grants: grants.map((g) => ({ action: g.action, scopeType: g.scope?.type ?? null, scopeValue: g.scope?.value ?? null })),
 	})
 	return { result: { ok: true, token, id, principalId: input.principalId }, auditLabel: input.label }
@@ -132,16 +176,18 @@ function credentialGrantToKeyGrant(row: CredentialGrantRow): KeyGrant {
 }
 
 /**
- * Revoke an opaque `px_` credential by id. Authorization mirrors the old capability revoke: the
- * original issuer may always revoke; otherwise, for an ANONYMOUS credential (a share link), the caller
- * must be able to re-issue its grants — hold every granted action, checked with the same
- * `findUncoveredGrant` as issue. A principal-bound credential is managed through the principal path
- * (the api-keys page), so a non-issuer caller cannot revoke it by id here. Idempotent — a
- * second revoke returns `{ ok: true, revoked: false }`; an unknown id → `not_found`.
+ * Revoke an opaque `px_` credential by id, for the caller's VERIFIED `app`. A credential bound to any
+ * other app — or to none, a cross-app key — is `not_found`, the same answer as an unknown id, so one
+ * app cannot probe or end another app's keys. Within the app, authorization mirrors the old capability
+ * revoke: the original issuer may always revoke; otherwise, for an ANONYMOUS credential (a share
+ * link), the caller must be able to re-issue its grants — hold every granted action, checked with the
+ * same `findUncoveredGrant` as issue. A principal-bound credential is managed through the principal
+ * path (the api-keys page), so a non-issuer caller cannot revoke it by id here. Idempotent — a second
+ * revoke returns `{ ok: true, revoked: false }`.
  */
-export async function revokeKey(services: Services, input: RevokeKeyInput, revoker: Issuer): Promise<RevokeKeyResult> {
+export async function revokeKey(services: Services, input: RevokeKeyInput, revoker: Issuer, app: string): Promise<RevokeKeyResult> {
 	const cred = await services.repositories.credentials.getCredentialById(input.id)
-	if (!cred) {
+	if (!cred || cred.app !== app) {
 		return { ok: false, reason: 'not_found' }
 	}
 	if (cred.issued_by !== revoker.id) {

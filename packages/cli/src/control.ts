@@ -10,7 +10,7 @@
 // `--json` prints the procedure's result verbatim so a caller never parses a table.
 
 import { createRpcClient, RpcError } from '@fabrika/app'
-import type { IssueKeyInput, IssueKeyResult } from '@fabrika/auth-core'
+import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import type {
 	AppDto,
 	ControlRpcContract,
@@ -46,7 +46,7 @@ const issueKeyResultSchema = z.union([
 const USAGE = `fabrika control — operate the Delivery control plane
 
 Usage:
-  fabrika control key issue --label=<name> --permissions=<a,b,c> [--expires-in=<seconds>] [--iam-url=<origin>]
+  fabrika control key issue --label=<name> --permissions=<a,b,c> --expires-in=<seconds> [--iam-url=<origin>]
   fabrika control apps list
   fabrika control apps get --app=<id>
   fabrika control apps environments list --app=<id>
@@ -111,7 +111,8 @@ process listing:
 
 \`key issue\` mints that credential and therefore authenticates differently — it presents the
 installation's IAM RPC key as transport authentication and its provisioning key as the ISSUING
-credential. Both are read from the environment only:
+credential. Every key expires: \`--expires-in\` is required and at most 2592000 (30 days). Both
+credentials are read from the environment only:
 
   FABRIKA_IAM_RPC_URL               required   IAM's PUBLIC origin, or --iam-url
   FABRIKA_IAM_RPC_KEY               required   the installation's IAM RPC key
@@ -289,14 +290,17 @@ const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | u
 	if (permissions.length === 0) {
 		throw new Error('--permissions needs at least one action')
 	}
-	const expiresIn = optional(flags, 'expires-in')
+	const expiresIn = positiveInteger(required(flags, 'expires-in'), 'expires-in')
+	if (expiresIn > MAX_KEY_LIFETIME_SECONDS) {
+		throw new Error(`--expires-in must be at most ${MAX_KEY_LIFETIME_SECONDS} seconds (30 days): IAM issues no longer-lived key`)
+	}
 	const body: IssueKeyInput = {
 		app: env['FABRIKA_CONTROL_APP_ID']?.trim() || DEFAULT_CONTROL_APP_ID,
 		credential: secret('FABRIKA_IAM_PROVISIONING_KEY', env),
 		requestId: crypto.randomUUID(),
 		service: { label: required(flags, 'label'), permissions },
 		label: required(flags, 'label'),
-		...(expiresIn === undefined ? {} : { expiresAt: Math.floor(Date.now() / 1000) + positiveInteger(expiresIn, 'expires-in') }),
+		expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
 	}
 	const base = origin(flags, 'iam-url', 'FABRIKA_IAM_RPC_URL', env, 'IAM')
 	const response = await fetch(`${base}/rpc/issueKey`, {

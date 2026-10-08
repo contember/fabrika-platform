@@ -120,9 +120,24 @@ fails if that stops being true — it is the guard, not documentation of one.
   one app was spendable installation-wide. A principal-bound credential may be cross-app (`NULL`) —
   it carries no frozen authority and its permissions resolve per app through `grants`. An app
   mismatch is reported as `invalid_key`, never as a distinct reason.
-- **A self-bound key (`issueKey` in `principalId` mode) MUST state an expiry.** It carries the
-  issuer's live permissions with no inline downscope, so without one a 300-second access token
-  could mint a permanent installation-wide credential from itself.
+- **EVERY KEY `issueKey` WRITES EXPIRES, AT MOST 30 DAYS OUT** (`MAX_KEY_LIFETIME_SECONDS`,
+  `@fabrika/auth-core`), in all three modes — service, standalone, self-bound. A self-bound key
+  carries the issuer's live permissions, so without a bound a 300-second access token could mint a
+  permanent credential from itself; a service key is a new principal and a share link frozen
+  authority, and neither may outlive the bound either. 30 days is the longest any current caller
+  asks for (the builder's device-authorized key; `fabrika control key issue` requires
+  `--expires-in`). The device repository caps its keys with the same constant.
+- **`issueKey` GRANTS ONLY ACTIONS IN THE APP'S CATALOG** (`isActionAllowed` over `app_actions`, the
+  rule policies use), checked before delegation, so an issuer holding `*` still cannot mint a key
+  for an action the app never declared. An expiry or catalog refusal is `not_allowed` over RPC and a
+  400 naming the problem on the admin share-link path (`IssueOutcome.problem`).
+- **`revokeKey` ACTS ONLY ON A CREDENTIAL OF THE CALLER'S VERIFIED APP.** Any other credential,
+  including a cross-app (`app IS NULL`) one, is `not_found` — the answer for an unknown id — so one
+  app can neither end nor probe another app's keys.
+- **`audit` RECORDS THE APP OF THE CALLER'S VERIFIED TOKEN, NEVER ONE THE EVENT NAMES.** `AuditInput`
+  has no `app`; it carries the proxy-injected token, and `verifiedTokenApp` (`src/auth.ts`) reads a
+  native token's `aud` or a resource token's signed `app`. A token that does not verify drops the
+  event with a warning. The principal fields are still the caller's word.
 - **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** The session cookie is
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding

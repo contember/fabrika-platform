@@ -63,7 +63,7 @@ describe('the wire', () => {
 		const { rpc, calls } = stub(204, null)
 
 		await rpc.audit({
-			app: 'vozka',
+			credential: 'verified-token',
 			requestId: 'req-2',
 			principalId: 'p1',
 			principalLabel: 'op@x.cz',
@@ -193,7 +193,7 @@ describe('successful results decode field by field', () => {
 
 	test('malformed optional key identity is omitted, while empty required strings remain valid', async () => {
 		for (const principalId of [undefined, null, 42, {}]) {
-			expect(await stub(200, { token: '', id: '', principalId }).rpc.issueKey({ app: 'a', credential: null, requestId: 'r' }))
+			expect(await stub(200, { token: '', id: '', principalId }).rpc.issueKey({ app: 'a', credential: null, requestId: 'r', expiresAt: 1 }))
 				.toStrictEqual({ ok: true, token: '', id: '' })
 		}
 	})
@@ -211,7 +211,7 @@ describe('successful results decode field by field', () => {
 
 	test('issueKey carries the optional principalId only when present', async () => {
 		const bound = stub(200, { ok: true, token: 'px_k', id: 'cred-1', principalId: 'p1' })
-		expect(await bound.rpc.issueKey({ app: 'vozka', credential: null, requestId: 'r' })).toEqual({
+		expect(await bound.rpc.issueKey({ app: 'vozka', credential: null, requestId: 'r', expiresAt: 1 })).toEqual({
 			ok: true,
 			token: 'px_k',
 			id: 'cred-1',
@@ -219,7 +219,11 @@ describe('successful results decode field by field', () => {
 		})
 
 		const standalone = stub(200, { ok: true, token: 'px_k', id: 'cred-2' })
-		expect(await standalone.rpc.issueKey({ app: 'vozka', credential: null, requestId: 'r' })).toEqual({ ok: true, token: 'px_k', id: 'cred-2' })
+		expect(await standalone.rpc.issueKey({ app: 'vozka', credential: null, requestId: 'r', expiresAt: 1 })).toEqual({
+			ok: true,
+			token: 'px_k',
+			id: 'cred-2',
+		})
 	})
 
 	test('listPrincipals narrows the principal type and defaults a missing email/disabled', async () => {

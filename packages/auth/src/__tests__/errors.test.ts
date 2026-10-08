@@ -16,7 +16,7 @@ function ctxWith(perms: PermissionEntry[]): AuthContext {
 		ptype: 'user',
 		label: 'alice@example.com',
 	}
-	return buildAuthContext(new IamRpcStub(), 'app-x', claims, 'req-1')
+	return buildAuthContext(new IamRpcStub(), 'verified-token', claims, 'req-1')
 }
 
 describe('typed errors expose the structural HttpError contract', () => {

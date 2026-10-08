@@ -1,4 +1,4 @@
-import { type DeviceAuthorizationConsent, type StartDeviceAuthorizationInput } from '@fabrika/auth-core'
+import { type DeviceAuthorizationConsent, MAX_KEY_LIFETIME_SECONDS, type StartDeviceAuthorizationInput } from '@fabrika/auth-core'
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { unixNow } from './sql'
 
@@ -42,7 +42,7 @@ export class DeviceAuthorizationRepository {
 			input.app,
 			input.label,
 			JSON.stringify(input.permissions),
-			Math.min(input.keyLifetimeSeconds, 2592000),
+			Math.min(input.keyLifetimeSeconds, MAX_KEY_LIFETIME_SECONDS),
 			input.redemptionChallenge,
 			input.approvalChallenge,
 			expiresAt,

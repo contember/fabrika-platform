@@ -70,8 +70,8 @@ they call the same typed contract through the same client; a procedure added to 
 is reachable from both or neither.
 
 Two things get harder. Machine credentials now exist in normal operation, so they must be revocable
-and short-lived by habit rather than by mechanism — `issueKey` accepts `expiresAt` and `revokeKey`
-exists, and nothing in this ADR forces either. And the bootstrap command needs the installation's IAM
+and short-lived. `revokeKey` exists, and `issueKey` requires an `expiresAt` at most 30 days ahead
+(`MAX_KEY_LIFETIME_SECONDS`), so `key issue` requires `--expires-in` and a client rotates its key. And the bootstrap command needs the installation's IAM
 RPC key, which is a service-to-service secret; an operator who can read it can mint an admin
 credential. That is already true of anyone who can read the installation's environment, but the
 command makes the path obvious, so it belongs to the operator's own tooling and not to a shared CI

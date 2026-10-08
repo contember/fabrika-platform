@@ -1,3 +1,4 @@
+import { MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { PROVISIONING_ADMIN_ID } from '../auth'
@@ -142,6 +143,10 @@ function freshDb(): Database {
 
 const PROVISIONING_KEY = 'px_index-test-provisioning'
 
+function inOneHour(): number {
+	return Math.floor(Date.now() / 1000) + 3600
+}
+
 function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}): Env {
 	const sql = new SqliteD1(db)
 	return {
@@ -253,6 +258,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	beforeEach(() => {
 		db = freshDb()
+		db.run("INSERT INTO app_actions (app, action, description) VALUES ('reports', 'report.read', NULL)")
 	})
 
 	test('device management on the Worker binding matches the shared RPC implementation', async () => {
@@ -325,6 +331,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions,
+			expiresAt: inOneHour(),
 		})
 
 		expect(result.ok).toBe(true)
@@ -363,6 +370,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions: [{ action: 'report.read', scope: null }],
+			expiresAt: inOneHour(),
 		})
 		if (!issued.ok) {
 			throw new Error('expected issueKey to succeed')
@@ -400,6 +408,43 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(revokeRows).toHaveLength(1)
 		expect(revokeRows[0]?.resource_id).toBe(issued.id)
 		expect(revokeRows[0]?.principal_id).toBe(PROVISIONING_ADMIN_ID)
+	})
+
+	test("revokeKey: the caller's verified app must be the credential's — another app gets not_found", async () => {
+		const ctx = makeCtx()
+		const worker = makeEntrypoint(ctx, makeEnv(db))
+		const issued = await worker.issueKey({
+			app: 'reports',
+			credential: PROVISIONING_KEY,
+			requestId: 'req-issue',
+			permissions: [{ action: 'report.read', scope: null }],
+			expiresAt: inOneHour(),
+		})
+		if (!issued.ok) {
+			throw new Error('expected issueKey to succeed')
+		}
+
+		const crossApp = await worker.revokeKey({ app: 'billing', credential: PROVISIONING_KEY, requestId: 'req-revoke', id: issued.id })
+		expect(crossApp).toEqual({ ok: false, reason: 'not_found' })
+		expect((await worker.mintFromKey({ app: 'reports', key: issued.token, requestId: 'req-mint' })).ok).toBe(true)
+		await settle(ctx)
+		expect(auditRows(db).filter((r) => r.action === 'iam.credential.revoke')).toHaveLength(0)
+	})
+
+	test('issueKey: a missing catalog action or an unbounded expiry is refused over the binding', async () => {
+		const ctx = makeCtx()
+		const worker = makeEntrypoint(ctx, makeEnv(db))
+		const base = { app: 'reports', credential: PROVISIONING_KEY, requestId: 'req-issue' }
+		expect(await worker.issueKey({ ...base, permissions: [{ action: 'report.delete' }], expiresAt: inOneHour() })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
+		expect(await worker.issueKey({ ...base, permissions: [{ action: 'report.read' }], expiresAt: inOneHour() + MAX_KEY_LIFETIME_SECONDS })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
+		await settle(ctx)
+		expect(auditRows(db)).toHaveLength(0)
 	})
 
 	test('revokeKey: unknown id → not_found', async () => {

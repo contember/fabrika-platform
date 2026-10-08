@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
 const optionalString = z.string().nullish().transform((value) => value ?? undefined)
-const optionalNumber = z.number().finite().nullish().transform((value) => value ?? undefined)
 const scopeSchema = z.object({ type: z.string(), value: z.string() }).nullish()
 const grantSchema = z.object({ action: z.string(), scope: scopeSchema }).transform(({ action, scope }) => ({
 	action,
@@ -22,7 +21,7 @@ export const issueKeySchema = z.object({
 	principalId: optionalString,
 	permissions: z.array(grantSchema).nullish().transform((value) => value ?? undefined),
 	label: optionalString,
-	expiresAt: optionalNumber,
+	expiresAt: z.number().finite(),
 	...caller,
 }).transform(({ app, credential, requestId, service, principalId, permissions, label, expiresAt }) => ({
 	app,
@@ -32,14 +31,14 @@ export const issueKeySchema = z.object({
 	...(principalId === undefined ? {} : { principalId }),
 	...(permissions === undefined ? {} : { permissions }),
 	...(label === undefined ? {} : { label }),
-	...(expiresAt === undefined ? {} : { expiresAt }),
+	expiresAt,
 })).catch(rejectRpcInput)
 export const revokeKeySchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
 export const listPrincipalsSchema = z.object(caller).catch(rejectRpcInput)
 export const auditSchema = z.object({
 	credentialId: optionalString,
 	resourceId: optionalString,
-	app: z.string(),
+	credential: z.string(),
 	requestId: z.string(),
 	principalId: z.string().nullable(),
 	principalLabel: z.string(),

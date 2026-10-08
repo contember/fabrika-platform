@@ -16,7 +16,8 @@ class RealAuthContext implements AuthContext {
 
 	constructor(
 		private readonly binding: IamRpc,
-		private readonly appId: string,
+		/** The verified token this context was built from — IAM reads the audit event's app from it. */
+		private readonly token: string,
 		private readonly permissions: PermissionEntry[],
 		private readonly requestId: string,
 		readonly principal: PrincipalIdentity | null,
@@ -41,7 +42,7 @@ class RealAuthContext implements AuthContext {
 
 	audit(event: DomainEvent): Promise<void> {
 		return this.binding.audit({
-			app: this.appId,
+			credential: this.token,
 			requestId: this.requestId,
 			principalId: this.principal?.id ?? null,
 			principalLabel: this.auditLabel,
@@ -56,18 +57,18 @@ class RealAuthContext implements AuthContext {
 }
 
 /**
- * Build an `AuthContext` from a verified access token's claims — the seam every authentication path
- * uses (the proxy-injected token). The SDK has verified the token LOCALLY; this wraps its claims in the
+ * Build an `AuthContext` from a verified access token and its claims — the seam every authentication
+ * path uses (the proxy-injected token). The SDK has verified the token LOCALLY; this wraps its claims in the
  * same `permits`-backed context the RPC path returns,
  * so `can()` / `scopedTo()` / `audit()` behave identically. A token with no `ptype` is anonymous
  * (`principal: null`).
  */
-export function buildAuthContext(binding: IamRpc, appId: string, claims: AccessTokenClaims, requestId: string): AuthContext {
+export function buildAuthContext(binding: IamRpc, token: string, claims: AccessTokenClaims, requestId: string): AuthContext {
 	const principal: PrincipalIdentity | null = claims.ptype === undefined
 		? null
 		: { id: claims.sub, type: claims.ptype, label: claims.label ?? claims.sub }
 	const auditLabel = claims.label ?? (principal === null ? `credential:${claims.sub}` : claims.sub)
-	return new RealAuthContext(binding, appId, claims.perms, requestId, principal, auditLabel, principal === null ? claims.sub : null, claims.oauth)
+	return new RealAuthContext(binding, token, claims.perms, requestId, principal, auditLabel, principal === null ? claims.sub : null, claims.oauth)
 }
 
 // ── IamClient ──────────────────────────────────────────────────────────────────

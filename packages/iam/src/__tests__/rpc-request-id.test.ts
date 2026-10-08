@@ -4,13 +4,14 @@
  * a failing value with a generated one rather than refusing the call.
  */
 
-import type { AuditInput } from '@fabrika/auth-core'
+import { type AuditInput, buildAccessClaims } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import type { Env, RequestContext } from '../env'
 import { createIamRpc } from '../rpc'
 import { handleRpcHttp } from '../rpc-http'
-import { createHarness, type Harness } from './helpers/harness'
+import { getSigner } from '../signing'
+import { createHarness, type Harness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const RPC_KEY = 'rpc-test-key-0123456789abcdefghij'
 const GENERATED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -37,13 +38,25 @@ function env(h: Harness): Env {
 		PASSWORD_ENABLED: 'true',
 		EMAIL_PROVIDER: 'none',
 		ISSUER: 'https://iam.example.test',
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 	}
 }
 
+const issuedAt = Math.floor(Date.now() / 1000)
+/** An anonymous share-link token for `reports`, as the proxy would inject it. */
+const REPORTS_TOKEN = await (await getSigner(TEST_SIGNING_ENV)).sign(buildAccessClaims({
+	iss: 'https://iam.example.test',
+	app: 'reports',
+	subject: 'cred-1',
+	label: 'share link',
+	permissions: [],
+	issuedAt,
+	expiresAt: issuedAt + 300,
+}))
+
 function auditEvent(requestId: string): AuditInput {
-	return { app: 'reports', requestId, principalId: null, principalLabel: 'share link', action: 'report.view', resourceType: 'report' }
+	return { credential: REPORTS_TOKEN, requestId, principalId: null, principalLabel: 'share link', action: 'report.view', resourceType: 'report' }
 }
 
 function requestIds(h: Harness, table: 'audit_events' | 'auth_log'): string[] {

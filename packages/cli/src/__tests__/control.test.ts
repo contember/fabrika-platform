@@ -252,7 +252,7 @@ describe('control key issue', () => {
 	test('issues against IAM with the provisioning key as the ISSUER credential', async () => {
 		const captured = captureFetch({ ok: true, token: 'px_new', id: 'cred-1', principalId: 'prin-1' })
 		const out = await captureStdout(() =>
-			runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage,deploy.read'], undefined, ISSUE_ENV)
+			runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage,deploy.read'], undefined, ISSUE_ENV)
 		)
 		expect(out).toBe('px_new')
 		expect(captured.calls[0]?.url).toBe('https://iam.example/rpc/issueKey')
@@ -265,9 +265,27 @@ describe('control key issue', () => {
 		})
 	})
 
+	test('sends an absolute expiry the requested number of seconds ahead', async () => {
+		const captured = captureFetch({ ok: true, token: 'px_new', id: 'cred-1' })
+		const before = Math.floor(Date.now() / 1000)
+		await captureStdout(() => runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+		const expiresAt = Reflect.get(Object(captured.calls[0]?.body), 'expiresAt')
+		expect(expiresAt).toBeGreaterThanOrEqual(before + 3600)
+		expect(expiresAt).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 3600)
+	})
+
+	test('refuses a key without an expiry, or one longer than IAM issues, before calling IAM', async () => {
+		const captured = captureFetch({ ok: true, token: 'px_new', id: 'cred-1' })
+		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+			.rejects.toThrow('--expires-in is required')
+		await expect(runControlCli('key', ['issue', '--expires-in=2592001', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+			.rejects.toThrow('--expires-in must be at most 2592000 seconds')
+		expect(captured.calls).toHaveLength(0)
+	})
+
 	test('reports a denial as a denial rather than printing an empty token', async () => {
 		captureFetch({ ok: false, reason: 'not_allowed' })
-		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+		await expect(runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
 			.rejects.toThrow('IAM denied the issue request: not_allowed')
 	})
 
@@ -276,7 +294,7 @@ describe('control key issue', () => {
 		async (reason) => {
 			captureFetch({ ok: false, reason, token: 'must-not-print' })
 			const expected = typeof reason === 'string' && reason !== 'future_reason' ? reason : 'not_allowed'
-			await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+			await expect(runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
 				.rejects.toThrow(`IAM denied the issue request: ${expected}`)
 		},
 	)
@@ -289,20 +307,22 @@ describe('control key issue', () => {
 		'rejects malformed success responses without exposing their fields: %j',
 		async ({ result }) => {
 			captureFetch(result)
-			await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+			await expect(runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
 				.rejects.toThrow('IAM returned an unreadable issueKey result')
 		},
 	)
 
 	test.each([null, 12, {}, undefined])('omits malformed optional principal ids from JSON output: %j', async (principalId) => {
 		captureFetch({ ok: true, token: '', id: '', principalId, extra: 'private' })
-		const out = await captureStdout(() => runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage', '--json'], undefined, ISSUE_ENV))
+		const out = await captureStdout(() =>
+			runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage', '--json'], undefined, ISSUE_ENV)
+		)
 		expect(JSON.parse(out)).toEqual({ ok: true, token: '', id: '' })
 	})
 
 	test('never quotes an upstream body back at the operator', async () => {
 		globalThis.fetch = asFetch(async () => new Response('px_leaked_in_an_error_page', { status: 500 }))
-		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+		await expect(runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
 			.rejects.toThrow('IAM refused the issue request: HTTP 500')
 	})
 
@@ -310,7 +330,7 @@ describe('control key issue', () => {
 		globalThis.fetch = asFetch(() =>
 			Promise.reject(Object.assign(new Error('Unable to connect. Is the computer able to access the url?'), { code: 'ConnectionRefused' }))
 		)
-		const failure = await runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+		const failure = await runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, {
 			...ISSUE_ENV,
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 		}).then(() => new Error('the run was expected to fail'), (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause))))
@@ -327,13 +347,13 @@ describe('control key issue', () => {
 
 	test('a cause with no usable code still gets the same one-line explanation', async () => {
 		globalThis.fetch = asFetch(() => Promise.reject(new Error('px_leaked_in_a_cause')))
-		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+		await expect(runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
 			.rejects.toThrow('IAM could not be reached at https://iam.example (the connection failed)')
 	})
 
 	test('names the parsed origin only, so userinfo in the value is not echoed back', async () => {
 		globalThis.fetch = asFetch(() => Promise.reject(Object.assign(new Error('nope'), { code: 'ConnectionRefused' })))
-		const failure = await runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+		const failure = await runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, {
 			...ISSUE_ENV,
 			FABRIKA_IAM_RPC_URL: 'https://operator:px_in_the_url@iam.example',
 		}).then(() => new Error('the run was expected to fail'), (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause))))
@@ -345,7 +365,7 @@ describe('control key issue', () => {
 
 	test('a value with no scheme is reported as not a URL, not as the wrong kind of host', async () => {
 		globalThis.fetch = asFetch(() => Promise.reject(Object.assign(new TypeError('fetch() URL is invalid'), { code: 'ERR_INVALID_URL' })))
-		const failure = await runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+		const failure = await runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, {
 			...ISSUE_ENV,
 			FABRIKA_IAM_RPC_URL: 'iam-with-no-scheme.invalid',
 		}).then(() => new Error('the run was expected to fail'), (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause))))
@@ -358,7 +378,7 @@ describe('control key issue', () => {
 	})
 
 	test('a missing origin on this path names the IAM variable, not the control one', async () => {
-		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+		await expect(runControlCli('key', ['issue', '--expires-in=3600', '--label=agent', '--permissions=app.manage'], undefined, {
 			FABRIKA_IAM_RPC_KEY: 'rpc-secret',
 			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		})).rejects.toThrow('IAM origin is required. Pass --iam-url=<origin> or set FABRIKA_IAM_RPC_URL.')

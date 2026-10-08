@@ -46,6 +46,8 @@ the service that owns identity.
   injected. A share link is a `px_` key the proxy resolves at a `service` gate, so it arrives as an
   anonymous token like any other (ADR-0022). `HttpIamRpc` still carries `issueKey` / `revokeKey`
   because they are `IamRpc` members other callers use, not SDK surface.
+- **`audit` forwards the verified token, not an app id.** `AuthContext.audit` sends the token it was
+  built from as `credential`; IAM files the event under that token's app.
 - **The SDK REQUESTS; IAM decides and writes.** The target (A12, A13; not built yet): the SDK asks
   IAM to create a scope, to assign, revoke or list members, and to issue or revoke a share link, on
   the caller's behalf with the caller's token as proof. IAM evaluates each request against the

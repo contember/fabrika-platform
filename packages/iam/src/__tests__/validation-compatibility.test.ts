@@ -55,8 +55,26 @@ describe('direct admin use-case contracts', () => {
 				.rejects.toMatchObject({ httpStatus: 400, message: 'scopeType and scopeValue must be both set or both omitted' })
 			await expect(provisionApiKeyUseCase(context(h), { label: ' ', type: 'service', app: 'missing', permissions: [] }))
 				.rejects.toMatchObject({ httpStatus: 400, message: 'label and type=service required' })
-			await expect(createShareLinkUseCase(context(h), { app: 'missing', grants: [{ action: '' }] }))
+			await expect(createShareLinkUseCase(context(h), { app: 'missing', grants: [{ action: '' }], expiresAt: 1 }))
 				.rejects.toMatchObject({ httpStatus: 400, message: 'grants required (each: { action, scope? })' })
+		} finally {
+			h.sqlite.close()
+		}
+	})
+})
+
+describe('share links: an expiry within the key bound and catalog actions only', () => {
+	test('a malformed request is a 400 naming the problem, not a 403', async () => {
+		const h = createHarness()
+		try {
+			seedAppAction(h.sqlite, 'example', 'read')
+			const inOneHour = Math.floor(Date.now() / 1000) + 3600
+			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: 'write' }], expiresAt: inOneHour }))
+				.rejects.toMatchObject({ httpStatus: 400, message: 'unknown action pattern: write' })
+			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: 'read' }], expiresAt: inOneHour + 31 * 24 * 3600 }))
+				.rejects.toMatchObject({ httpStatus: 400, message: 'expiresAt must be at most 2592000 seconds (30 days) ahead' })
+			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: 'read' }], expiresAt: 1 }))
+				.rejects.toMatchObject({ httpStatus: 400, message: 'expiresAt must be a future unix time in seconds' })
 		} finally {
 			h.sqlite.close()
 		}

@@ -151,7 +151,7 @@ export class Iam {
 				? { ok: false, reason: 'unavailable', status: 503 }
 				: { ok: false, reason: 'invalid_token', status: 401 }
 		}
-		return { ok: true, context: buildAuthContext(this.binding, this.appId, verified.claims, requestId) }
+		return { ok: true, context: buildAuthContext(this.binding, token, verified.claims, requestId) }
 	}
 }
 

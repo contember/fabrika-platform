@@ -171,9 +171,16 @@ export interface IssueKeyInput {
 	/** Inline grants — the frozen set (standalone) and/or a downscope restriction (bound). */
 	permissions?: KeyGrant[]
 	label?: string
-	/** Absolute credential expiry (unix seconds); NULL = no expiry. */
-	expiresAt?: number
+	/** Absolute credential expiry (unix seconds), after now and at most `MAX_KEY_LIFETIME_SECONDS` ahead. */
+	expiresAt: number
 }
+
+/**
+ * The longest a `px_` credential `issueKey` writes may live, in every mode. A key is a standing copy
+ * of authority that outlives any token it was issued from, so it must end; 30 days is also the
+ * builder's device-authorized key lifetime.
+ */
+export const MAX_KEY_LIFETIME_SECONDS = 30 * 24 * 60 * 60
 
 export type IssueKeyResult =
 	/**
@@ -198,7 +205,11 @@ export interface ResolvedPrincipal {
 }
 
 export interface AuditInput {
-	app: string
+	/**
+	 * The caller's verified access token — the one the proxy injected. IAM verifies it and records
+	 * the app it was minted for; there is no `app` field, so a caller cannot name another app.
+	 */
+	credential: string
 	requestId: string
 	/** NULL for an anonymous-credential event (a share link has no principal). */
 	principalId: string | null
@@ -288,7 +299,8 @@ export interface IamRpc {
 	mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult>
 	/**
 	 * Mint an opaque, stored, revocable `px_` credential (API key / share link). Delegated: the issuer
-	 * is resolved from the forwarded credentials and may only grant what it holds. Returns the
+	 * is resolved from the forwarded credentials and may only grant what it holds, only actions in the
+	 * app's catalog, and only with an expiry inside `MAX_KEY_LIFETIME_SECONDS`. Returns the
 	 * plaintext token ONCE; `id` is the durable handle for revoke.
 	 */
 	issueKey(input: IssueKeyInput): Promise<IssueKeyResult>
@@ -307,8 +319,9 @@ export interface IamRpc {
 	listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult>
 	/**
 	 * Revoke a previously-issued opaque `px_` credential (an API key / share link) by id. The caller
-	 * is resolved from the forwarded Access credentials and authorized: the original issuer may always
-	 * revoke; otherwise, for an anonymous credential, the caller must hold every granted action (an
+	 * is resolved from the forwarded Access credentials and authorized: the credential must be bound to
+	 * the caller's verified app (any other is `not_found`); then the original issuer may always revoke,
+	 * and otherwise, for an anonymous credential, the caller must hold every granted action (an
 	 * admin / app-wide operator). Idempotent — revoking an already-revoked credential returns
 	 * `{ ok: true, revoked: false }`. An unknown id returns `{ ok: false, reason: 'not_found' }`.
 	 */
