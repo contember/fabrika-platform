@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 
+import { CONTRACT_FILE, type EntryRuntime, writeGeneratedEntry } from '@fabrika/app/build'
 import { BUILDER_USAGE, runBuilderCli } from '@fabrika/builder'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
-import { resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
 
 const USAGE = `fabrika — application platform CLI
@@ -17,6 +18,7 @@ Usage:
   fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>]
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
+  fabrika app build --provider=cloudflare [--config=<path>]
   fabrika app register [--provider=zerops] --env=<env> --app=<id> --repo=<url> [--config=<path>]
                        [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                        [--namespace=<id>] [--installation-id=<n|none>] [--url=<origin>] [--json]
@@ -27,6 +29,9 @@ Usage:
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
+
+\`app build\` first writes fabrika/entry.generated.ts for a contract application (one with fabrika.contract.ts next
+to its config); on Cloudflare that is all it does.
 
 \`app register\` compiles the manifest in memory, exactly as \`app build\` would, and sends the request
 \`control register --manifest=<path>\` sends for it. It writes no file, CREATES only, and reads the
@@ -168,13 +173,31 @@ const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
 	})
 }
 
+const ENTRY_RUNTIMES: Readonly<Record<string, EntryRuntime>> = { cloudflare: 'cloudflare', zerops: 'bun' }
+
+/** A contract application gets its generated entrypoint before the provider builds it. False when it is none. */
+const writeContractEntry = async (argv: readonly string[], runtime: EntryRuntime): Promise<boolean> => {
+	const root = dirname(resolve(process.cwd(), configPath(argv)))
+	if (!(await Bun.file(join(root, CONTRACT_FILE)).exists())) {
+		return false
+	}
+	const written = await writeGeneratedEntry(root, runtime)
+	console.error(`fabrika: wrote ${relative(process.cwd(), written)}`)
+	return true
+}
+
 const runApp = async (parsed: ParsedCommand): Promise<void> => {
 	if (parsed.command === 'register') {
 		await runAppRegister(parsed)
 		return
 	}
 	const provider = await selectedAppProvider(parsed)
+	const runtime = ENTRY_RUNTIMES[provider]
+	const contract = parsed.command === 'build' && runtime !== undefined && (await writeContractEntry(parsed.rest, runtime))
 	if (provider === 'cloudflare') {
+		if (contract) {
+			return
+		}
 		if (parsed.command !== 'deploy') {
 			throw new Error(`Cloudflare app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
 		}

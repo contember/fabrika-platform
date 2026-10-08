@@ -65,6 +65,13 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   An error reaches the output only as the runner's own message or a server-reported
   Postgres error; any other driver error is replaced, because it may quote the URL.
 
+## The `app` area
+
+- `app build` writes `fabrika/entry.generated.ts` (`@fabrika/app/build`) when
+  `fabrika.contract.ts` sits next to the config: the Bun entrypoint on Zerops, then
+  the provider's build; the Worker entrypoint on Cloudflare, and nothing else. An
+  application without a contract builds as before.
+
 ## Provider selection
 
 - App commands first use `--provider`, then inspect the default-exported

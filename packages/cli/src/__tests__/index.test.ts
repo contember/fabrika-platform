@@ -1,5 +1,8 @@
+import { generatedEntry } from '@fabrika/app/build'
 import { describe, expect, test } from 'bun:test'
-import { resolve } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { appCliRunnerFromModule, parseCliArgs, providerFromConfig, runCli } from '..'
 
 const zeropsConfig = resolve(import.meta.dir, '../../../../examples/zerops-app/fabrika.config.ts')
@@ -64,6 +67,39 @@ describe('provider inference', () => {
 		await expect(runCli(['app', 'deploy', '--provider=cloudflare', `--config=${zeropsConfig}`])).rejects.toThrow(
 			'App config belongs to provider "zerops", but --provider=cloudflare was requested.',
 		)
+	})
+})
+
+describe('app build for a contract application', () => {
+	const withRoot = async (contract: boolean, run: (config: string, root: string) => Promise<void>): Promise<void> => {
+		const root = mkdtempSync(join(tmpdir(), 'fabrika-cli-'))
+		const stderr = console.error
+		console.error = () => {}
+		try {
+			if (contract) {
+				writeFileSync(join(root, 'fabrika.contract.ts'), 'export {}\n')
+			}
+			await run(join(root, 'fabrika.config.ts'), root)
+		} finally {
+			console.error = stderr
+			rmSync(root, { recursive: true, force: true })
+		}
+	}
+
+	test('writes the Worker entrypoint next to fabrika.contract.ts on Cloudflare', async () => {
+		await withRoot(true, async (config, root) => {
+			await runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])
+			expect(readFileSync(join(root, 'fabrika', 'entry.generated.ts'), 'utf8')).toBe(generatedEntry('cloudflare'))
+		})
+	})
+
+	test('still refuses app build on Cloudflare for an application without a contract', async () => {
+		await withRoot(false, async (config, root) => {
+			await expect(runCli(['app', 'build', '--provider=cloudflare', `--config=${config}`])).rejects.toThrow(
+				'Cloudflare app tooling does not support `app build`',
+			)
+			expect(existsSync(join(root, 'fabrika'))).toBe(false)
+		})
 	})
 })
 
