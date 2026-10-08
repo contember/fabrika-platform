@@ -44,7 +44,7 @@ src/
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope
   testing/            @fabrika/app/testing — no test-runner dependency
     kit.ts            testKit: boot behind a stand-in proxy and IAM
-    proxy.ts          ProxyDecision, the seam, and endpointDecision, its default
+    proxy.ts          gatesProxy (proxy-core's verify service, the default) and endpointsProxy
     caller.ts         test callers and their grants
     conformance.ts    the cross-runtime conformance helper of defineApp() services
   contract/           @fabrika/app/contract — browser-safe
@@ -273,22 +273,25 @@ src/
   client with a key refuses a `baseUrl` of another origin; a script names its target.
 - **The transport builds the request inside its guard** (`exchange` takes a builder):
   an input that does not serialize rejects with `RpcError`, it never throws.
-- **The kit runs the real `boot` and dispatcher**; only the proxy and IAM are stand-ins.
-  Its tokens are signed with a generated key and verified by the application's own
+- **The kit runs the real `boot` and dispatcher behind the real proxy decision**; only
+  IAM is a stand-in (`kit.iam`, an `IamGateway`). By default the decision is
+  proxy-core's `createVerifyService` over `gatesFromContract(artifact)`, asked the way
+  the Cloudflare proxy Worker asks it; its answer reaches the test verbatim. Never
+  re-implement gate semantics here: `test-kit-differential.test.ts` holds the kit to
+  proxy-core's `Authorizer` for every credential on every kind of path.
+- **`proxy: 'endpoints'` is an explicit opt-in**, for tests written ahead of B2:
+  ADR-0022's per-endpoint steps with `planEndpoint` and `satisfies`. It is a test
+  double, not a gate evaluator, and B2's proxy-core decision replaces it.
+- Its tokens are signed with a generated key and verified by the application's own
   verifier, so a test cannot reach a handler the production pipeline would refuse.
-- **`ProxyDecision` is a test double of the enforcement point, never one.** It runs
-  only in front of a kit's in-process application. `endpointDecision` follows
-  ADR-0022's endpoint steps with `planEndpoint` and `satisfies`; it is not a gate
-  evaluator. A decision over generated gates plugs in through `options.proxy`, and the
-  proxy's own decision function replaces both once the proxy decides per endpoint (B2).
 - **The kit answers only its own origin.** `kit.fetch` refuses another host, and
   `kit.browser` reads the effective request (a `Request` input's headers, `init`'s
   `credentials: 'omit'`) before it adds the session. A token above
   `MAX_ACCESS_TOKEN_BYTES` (`@fabrika/auth-core`) is 403, as IAM and the proxy answer.
 - **Only test files load the kit.** `@fabrika/check`'s `test-only-import` refuses
   `@fabrika/app/testing`, and any test module, in a non-test file.
-- **A forwarded request is stripped like the proxy strips it**: every `X-Fabrika-*`
-  header, `UNTRUSTED_FORWARD_HEADERS` and the `__Host-px_*` cookies; an anonymous
-  endpoint also loses `Authorization`.
+- **A request is stripped like the proxy strips it**: every `X-Fabrika-*` header,
+  `X-Request-Id` and `UNTRUSTED_FORWARD_HEADERS` before the decision, the `__Host-px_*`
+  cookies before the application. The proxy's token and request id are then set.
 - The client and test-kit type witnesses live in `src/__tests__/client-mistakes/`,
   compiled by `client-types.test.ts` like the contract mistakes.

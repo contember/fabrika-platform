@@ -323,15 +323,19 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   403, as IAM refuses to sign it.
 - Only test files may import the kit: `@fabrika/check` reports `test-only-import`
   for `@fabrika/app/testing`, or a test module, loaded from any other file.
-- The proxy decision (`ProxyDecision`) runs first: by default `endpointDecision`,
-  the steps of ADR-0022 over the endpoint table — canonical path (400),
-  `planEndpoint` (no endpoint is 403), a `px_` key whose caller kind must be a caller
-  (401 unknown, 403 wrong kind) or the session (401 when `human` is not a caller, the
-  login URL when there is none), and the requirement (403). `options.proxy` replaces
-  it, for example with a decision over the gates `gatesFromContract` generates.
-- A forwarded request loses every `X-Fabrika-*` header, the forwarding headers and
-  the `__Host-px_*` cookies, and carries a token the kit signed the way IAM does,
-  verified by the application's real verifier. The real dispatcher then answers it.
+- The proxy decision runs first, and by default it is production's: proxy-core's
+  verify service over the gates `gatesFromContract` generates, with the kit's IAM
+  (`kit.iam`) behind it. A denial or a login answer reaches the test as the proxy
+  sends it. So a `px_` key on a mount whose only caller is `human` gets the login
+  answer, because the human gate reads the session only.
+  `proxy: 'endpoints'` opts into ADR-0022's per-endpoint decision instead: canonical
+  path (400), `planEndpoint` (no endpoint is 403), a `px_` key whose caller kind must
+  be a caller (401 unknown, 403 wrong kind) or the session (401 when `human` is not a
+  caller, the login URL when there is none), and the requirement (403).
+- A request loses every `X-Fabrika-*` header, `X-Request-Id` and the forwarding
+  headers before the decision, and the `__Host-px_*` cookies before the application.
+  It carries the proxy's token, signed by the kit the way IAM signs, and the real
+  verifier and dispatcher answer it.
 
 ## What the platform writes into an application
 

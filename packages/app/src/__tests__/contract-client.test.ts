@@ -109,7 +109,7 @@ describe('an RPC mount client', () => {
 	test('an unauthenticated call carries the login URL', async () => {
 		const { kit } = kitWithNote()
 		const refused = await failure(createClient(contract, 'api', { fetch: kit.browser() }).me())
-		expect(refused).toMatchObject({ type: 'auth', httpStatus: 401, loginUrl: 'https://iam.test/auth/login' })
+		expect(refused).toMatchObject({ type: 'auth', httpStatus: 401, loginUrl: expect.stringMatching(/^https:\/\/iam\.test\/auth\/login\?/) })
 	})
 
 	test('a key client sends the key as a bearer and no cookie', async () => {

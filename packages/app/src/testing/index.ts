@@ -11,4 +11,3 @@ export {
 	runAppRuntimeConformance,
 } from './conformance'
 export { TEST_ENVIRONMENT, TEST_ISSUER, type TestKit, testKit, type TestKitOptions } from './kit'
-export { endpointDecision, type PresentedCredential, type ProxyDecision, type ProxyRequest, type ProxyVerdict } from './proxy'
