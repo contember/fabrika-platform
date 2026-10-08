@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { sql } from 'kysely'
-import type { Ref } from '../capability'
+import { MAX_WITHIN_VALUES, type Ref } from '../capability'
 import { CapabilityError, NotFoundError, QueryRefusedError } from '../errors'
 import { TestAuthority } from './fixtures/authority'
 import { call, type Outcome, recordingLayer } from './fixtures/harness'
@@ -142,6 +142,41 @@ describe('every statement carries its scope predicate', () => {
 		expect(layer.dialect.log).toEqual([])
 		const all = await layer.attempt(() => layer.stores.notes.list(layer.within('notes.read', 'all'), { limit: 10, offset: 0 }))
 		expect(all.statements[0]?.sql).toContain('where true order by')
+	})
+
+	test('a container grant is its own disjunct over the chain column, parenthesized after the caller conditions', async () => {
+		const layer = recordingLayer()
+		const organization = [{ dimension: 'organization', values: ['o1', 'o2'] }]
+		const both = layer.capabilities.within('workspace', 'notes.read', ['w9'], organization)
+		const searched = await layer.attempt(() => layer.stores.notes.search(both, 'x'))
+		expect(searched.statements[0]?.sql).toContain(
+			'where (("notes"."title" ilike $1 or "notes"."body" ilike $2)) and ("notes"."workspace_id" in ($3) or "notes"."organization_id" in ($4, $5))',
+		)
+		expect(searched.statements[0]?.parameters).toEqual(['%x%', '%x%', 'w9', 'o1', 'o2', 50])
+		const only = layer.capabilities.within('workspace', 'notes.read', [], organization)
+		const counted = await layer.attempt(() => layer.stores.comments.countPerNote(only))
+		expect(counted.statements[0]?.sql).toContain('where "note_comments"."organization_id" in ($1, $2)')
+	})
+
+	test('a container grant on a dimension that does not lie above the Within is refused, not ignored', async () => {
+		const layer = recordingLayer()
+		for (const dimension of ['workspace', 'note', 'region']) {
+			const within = layer.capabilities.within('workspace', 'notes.read', ['w1'], [{ dimension, values: ['x'] }])
+			refused(await layer.attempt(() => layer.stores.notes.all(within)), CapabilityError, `reaches through ${dimension}`)
+		}
+		const organizations = layer.capabilities.within('organization', 'notes.read', ['o1'], [{ dimension: 'organization', values: ['o2'] }])
+		refused(await layer.attempt(() => layer.stores.organizations.list(organizations)), CapabilityError, 'reaches through organization')
+	})
+
+	test(`a Within carries at most ${MAX_WITHIN_VALUES} scope values, its own and its containers' together`, async () => {
+		const layer = recordingLayer()
+		const values = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => `${prefix}${index}`)
+		const atCap = layer.capabilities.within('workspace', 'notes.read', values(600, 'w'), [{ dimension: 'organization', values: values(400, 'o') }])
+		const listed = await layer.attempt(() => layer.stores.notes.all(atCap))
+		expect(listed.error).toBeUndefined()
+		expect(listed.statements[0]?.parameters.length).toBe(MAX_WITHIN_VALUES)
+		const overCap = layer.capabilities.within('workspace', 'notes.read', values(600, 'w'), [{ dimension: 'organization', values: values(401, 'o') }])
+		refused(await layer.attempt(() => layer.stores.notes.all(overCap)), CapabilityError, `at most ${MAX_WITHIN_VALUES} scope values`)
 	})
 
 	test('a column with its own read action is never returned, selected or filtered', async () => {

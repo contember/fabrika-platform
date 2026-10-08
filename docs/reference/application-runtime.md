@@ -150,7 +150,7 @@ export const notes = defineStore('notes', (t) => ({
 
 // src/app.ts
 export default implement(contract, {
-	database, // the policies, and the locators `on`, `in` and `over` use, generated from them
+	database, // the policies, and the locator `on` and `in` use, generated from them
 	deps: () => ({}),
 	handlers: () => ({
 		api: {
@@ -218,18 +218,21 @@ Per request, in this order:
    the handler, project the output through its schema (a union through its first
    branch that accepts the value), answer `{ result }`.
 
-| Form                   | Hands the handler                         | Refuses with                       |
-| ---------------------- | ----------------------------------------- | ---------------------------------- |
-| `{ member: true }`     | nothing                                   | —                                  |
-| `{ action, over }`     | `ctx.within`, or `all` for a global grant | 403 when no value holds the action |
-| `{ action, in, from }` | `ctx.target` with its containment chain   | 403 not held, 404 missing          |
-| `{ action, on, from }` | `ctx.target` with its containment chain   | 404 when missing or not held       |
+| Form                   | Hands the handler                         | Refuses with                                            |
+| ---------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `{ member: true }`     | nothing                                   | —                                                       |
+| `{ action, over }`     | `ctx.within`, or `all` for a global grant | 403 when no value holds the action, or over 1000 values |
+| `{ action, in, from }` | `ctx.target` with its containment chain   | 403 not held, 404 missing                               |
+| `{ action, on, from }` | `ctx.target` with its containment chain   | 404 when missing or not held                            |
 
-A grant on a container reaches every value inside it. The framework reads where an
-object lies from the database on every request, with locators generated from the table
-policies: `on` and `in` read the chain of the object or scope and accept the action on
-any link of it; `over` adds the values that lie in a container where the caller holds
-the action (`notes.read` in `organization:o1` lists every workspace of `o1`). A missing
+A grant on a container reaches every value inside it. `on` and `in` read where the
+object or scope lies from the database on every request, with a locator generated from
+the table policies, and accept the action on any link of its chain. `over` reads
+nothing: `ctx.within` carries the values of its dimension and, separately, the
+containers where the caller holds the action (`notes.read` in `organization:o1`), and
+the data layer matches each row's chain columns in the same statement, so a workspace
+moved out of `o1` after the check is out. A `Within` carries at most 1000 values in
+total. A missing
 `in` scope is 404 only to a caller who holds the action on that value itself; to anyone
 else it is the same 403 as a scope they may not act in. Because the chain is read per
 request, a moved object's next `Ref` carries its new chain, and a `Ref` minted before

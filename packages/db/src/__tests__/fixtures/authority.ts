@@ -1,4 +1,4 @@
-import type { CapabilityAuthority, CapabilityGrant, Ref, RefGrant, Within, WithinGrant } from '../../capability'
+import type { CapabilityAuthority, CapabilityGrant, ContainerGrant, Ref, RefGrant, Within, WithinGrant } from '../../capability'
 import { CapabilityError } from '../../errors'
 
 class TestRef<D extends string, A extends string> implements Ref<D, A> {
@@ -43,8 +43,13 @@ export class TestAuthority implements CapabilityAuthority {
 		return new TestRef({ kind: 'ref', dimension, action, principal: this.#principal, id, chain: new Map(Object.entries(chain)) }, this)
 	}
 
-	within<const D extends string, const A extends string>(dimension: D, action: A, values: readonly string[] | 'all'): Within<D, A> {
-		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values }, this)
+	within<const D extends string, const A extends string>(
+		dimension: D,
+		action: A,
+		values: readonly string[] | 'all',
+		containers: readonly ContainerGrant[] = [],
+	): Within<D, A> {
+		return new TestWithin({ kind: 'within', dimension, action, principal: this.#principal, values, containers }, this)
 	}
 
 	resolve(capability: unknown): CapabilityGrant {

@@ -19,7 +19,7 @@ import {
 	recordOf,
 	setOwn,
 } from './builtins'
-import type { CapabilityAuthority, Ref, RefGrant, Within, WithinGrant } from './capability'
+import { type CapabilityAuthority, MAX_WITHIN_VALUES, type Ref, type RefGrant, type Within, type WithinGrant } from './capability'
 import { type Database, type Session, sessionOf } from './database'
 import {
 	finishSelect,
@@ -47,7 +47,6 @@ import {
 	existsNode,
 	inList,
 	insertNode,
-	keysNode,
 	locateNode,
 	lockNode,
 	scopedWhere,
@@ -77,7 +76,7 @@ import {
 	type UpdateValues,
 	type VersionArguments,
 } from './policy'
-import { type ContainerValues, type Locator, register } from './registry'
+import { type Locator, register } from './registry'
 import { type TablePolicies, tablePolicies } from './tables'
 
 export interface DataLayerRuntime {
@@ -180,12 +179,63 @@ function chainValue(grant: RefGrant, chain: Readonly<Record<string, string>>, di
 	return value
 }
 
-/** Undefined for an empty `Within`: the caller answers `[]` without a query. */
-function withinPredicate(table: string, column: string, grant: WithinGrant): OperationNode | undefined {
+/** The chain links that lie above the `Within`'s own dimension: the only columns a container grant may filter on. */
+function linksAbove(model: TableModel, dimension: string): readonly Container[] {
+	for (let index = 0; index < model.chain.length; index++) {
+		if (model.chain[index]?.dimension === dimension) {
+			const above: Container[] = []
+			for (let position = index + 1; position < model.chain.length; position++) {
+				const link = model.chain[position]
+				if (link !== undefined) {
+					above[above.length] = link
+				}
+			}
+			return above
+		}
+	}
+	return []
+}
+
+/**
+ * `column in (values) or <container column> in (container values) …`, one disjunct per container dimension, so
+ * the statement itself judges each row by the chain it carries now. Undefined for an empty `Within`: the caller
+ * answers `[]` without a query.
+ */
+function withinPredicate(model: TableModel, column: string, grant: WithinGrant): OperationNode | undefined {
 	if (grant.values === 'all') {
 		return everything()
 	}
-	return grant.values.length === 0 ? undefined : inList(table, column, grant.values)
+	const above = linksAbove(model, grant.dimension)
+	const predicates: OperationNode[] = []
+	let count = grant.values.length
+	if (grant.values.length > 0) {
+		predicates[predicates.length] = inList(model.name, column, grant.values)
+	}
+	for (let index = 0; index < grant.containers.length; index++) {
+		const container = grant.containers[index]
+		if (container === undefined) {
+			continue
+		}
+		let link: Container | undefined
+		for (let position = 0; position < above.length; position++) {
+			if (above[position]?.dimension === container.dimension) {
+				link = above[position]
+			}
+		}
+		if (link === undefined) {
+			throw new CapabilityError(
+				`the Within of ${grant.dimension} reaches through ${container.dimension}, which ${model.name} carries no column for above ${grant.dimension}; the layer cannot enforce it`,
+			)
+		}
+		count += container.values.length
+		if (container.values.length > 0) {
+			predicates[predicates.length] = inList(model.name, link.column, container.values)
+		}
+	}
+	if (count > MAX_WITHIN_VALUES) {
+		throw new CapabilityError(`a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
+	}
+	return predicates.length === 0 ? undefined : anyOf(predicates)
 }
 
 interface LinkValue {
@@ -246,7 +296,7 @@ function objectPredicate(context: TableContext, capability: unknown, operation: 
 function dimensionListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
 	const scope = dimensionScope(context.model)
 	const grant = withinGrant(context, capability, listDimension(scope), operation)
-	return withinPredicate(context.model.name, scope.container?.column ?? scope.key, grant)
+	return withinPredicate(context.model, scope.container?.column ?? scope.key, grant)
 }
 
 /** Rows of a child table that belong to the parent object the Ref names, over the whole chain. */
@@ -262,7 +312,7 @@ function childListPredicate(context: TableContext, capability: unknown, operatio
 		return parentPredicate(context, grant)
 	}
 	checkGrant(context, grant, listDimension(scope.parent), operation)
-	return withinPredicate(context.model.name, scope.parent.container?.column ?? scope.column, grant)
+	return withinPredicate(context.model, scope.parent.container?.column ?? scope.column, grant)
 }
 
 function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
@@ -821,10 +871,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			}
 			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities })
 			connection.runtime = bound
-			return freeze({
-				locate: async (dimension: string, id: string) => locateObject(models, bound, dimension, id),
-				contained: async (dimension: string, containers: readonly ContainerValues[]) => containedObjects(models, bound, dimension, containers),
-			})
+			return async (dimension, id) => locateObject(models, bound, dimension, id)
 		},
 	})
 	return database
@@ -883,85 +930,4 @@ async function locateObject(
 		chain.set(link.dimension, value)
 	}
 	return chain
-}
-
-interface ContainerLink {
-	readonly link: Container
-	readonly values: readonly string[]
-}
-
-/** An own data property of a framework-built record; an accessor is never run. */
-function dataProperty(value: unknown, key: string): unknown {
-	if (typeof value !== 'object' || value === null) {
-		return undefined
-	}
-	const descriptor = ownDescriptor(value, key)
-	return descriptor !== undefined && hasOwn(descriptor, 'value') ? descriptor.value : undefined
-}
-
-function scopeValue(value: unknown): string {
-	if (typeof value !== 'string' || value.length === 0) {
-		throw new QueryRefusedError('a scope value is a non-empty string')
-	}
-	return value
-}
-
-function chainLink(owner: TableModel, dimension: unknown): Container | undefined {
-	for (let index = 0; index < owner.chain.length; index++) {
-		const link = owner.chain[index]
-		if (link !== undefined && link.dimension === dimension) {
-			return link
-		}
-	}
-	return undefined
-}
-
-/** Each container against the owner's column for that dimension; a container it carries no column for is refused. */
-function containerLinks(owner: TableModel, containers: unknown): readonly ContainerLink[] {
-	const links = parseList(containers, (item): ContainerLink => {
-		const dimension = dataProperty(item, 'dimension')
-		const link = chainLink(owner, dimension)
-		if (link === undefined) {
-			throw new QueryRefusedError(`${owner.name} carries no column for ${String(dimension)}, so nothing in it can be located`)
-		}
-		const values = parseList(dataProperty(item, 'values'), scopeValue)
-		if (values === undefined) {
-			throw new QueryRefusedError(`the values of ${link.dimension} are a plain array of scope values`)
-		}
-		return freeze({ link, values: freeze(values) })
-	})
-	if (links === undefined) {
-		throw new QueryRefusedError('containers are a plain array of { dimension, values }')
-	}
-	return freeze(links)
-}
-
-/** One guarded select of the keys whose chain column holds one of the container values; nothing to match is no query. */
-async function containedObjects(models: TableModels, runtime: DataLayerRuntime, dimension: string, containers: unknown): Promise<readonly string[]> {
-	const owner = locatedOwner(models, dimension)
-	const links = containerLinks(owner, containers)
-	const predicates: OperationNode[] = []
-	for (let index = 0; index < links.length; index++) {
-		const container = links[index]
-		if (container !== undefined && container.values.length > 0) {
-			predicates[predicates.length] = inList(owner.name, container.link.column, container.values)
-		}
-	}
-	if (predicates.length === 0) {
-		return freeze([])
-	}
-	const key = keyOf(owner)
-	const scope = anyOf(predicates)
-	const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope }
-	const rows = await sessionOf(runtime.database).run<Readonly<Record<string, unknown>>>(keysNode(owner.name, key, scope), context)
-	const keys: string[] = []
-	for (let index = 0; index < rows.length; index++) {
-		const row = rows[index]
-		const value = row === undefined ? undefined : ownEntry(row, key)
-		if (typeof value !== 'string') {
-			throw new PolicyError(`${owner.name}.${key} came back as ${typeof value}; a scope key holds its value as text`)
-		}
-		keys[keys.length] = value
-	}
-	return freeze(keys)
 }

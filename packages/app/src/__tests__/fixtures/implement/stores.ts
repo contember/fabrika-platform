@@ -29,11 +29,6 @@ export function noteDatabase(rows: Map<string, NoteRow>): ContractDatabase {
 			const row = dimension === 'note' ? rows.get(id) : undefined
 			return Promise.resolve(row === undefined ? null : new Map([['workspace', row.workspaceId]]))
 		},
-		contained: (dimension, containers) => {
-			const workspaces = new Set(containers.flatMap((container) => container.dimension === 'workspace' ? container.values : []))
-			const ids = dimension === 'note' ? [...rows.values()].filter((row) => workspaces.has(row.workspaceId)).map((row) => row.id) : []
-			return Promise.resolve(ids)
-		},
 	}
 }
 

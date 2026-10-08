@@ -18,7 +18,7 @@ import {
 	satisfies,
 	scopedValues,
 } from '@fabrika/auth-core'
-import type { ContainerValues } from '@fabrika/db/framework'
+import { type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { z } from 'zod/v4'
 import type { Schema } from '../contract/define'
@@ -32,7 +32,7 @@ import {
 	toErrorResponse,
 	UnauthorizedError,
 } from '../errors'
-import { CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
+import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { presentedBy, type Principal } from './principal'
@@ -220,8 +220,7 @@ export class ContractRuntime {
 				if (direct.length === 0 && held.length === 0) {
 					throw new ForbiddenError(`The caller holds '${action}' in no ${access.dimension}`)
 				}
-				const values = held.length === 0 ? direct : [...new Set([...direct, ...await this.#contained(access.dimension, held)])]
-				return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, values) }, input }
+				return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, direct, held) }, input }
 			}
 			case 'in': {
 				const { value, rest } = takeField(input, access.from)
@@ -263,19 +262,11 @@ export class ContractRuntime {
 	}
 
 	/** The container values of `dimension` in which the caller holds `action`. */
-	#heldContainers(perms: PermissionEntry[], action: string, dimension: string): ContainerValues[] {
+	#heldContainers(perms: PermissionEntry[], action: string, dimension: string): ContainerGrant[] {
 		return (this.#parts.containers.get(dimension) ?? []).flatMap((container) => {
 			const values = scopedValues(perms, action, container) ?? []
 			return values.length === 0 ? [] : [{ dimension: container, values }]
 		})
-	}
-
-	async #contained(dimension: string, held: readonly ContainerValues[]): Promise<readonly string[]> {
-		const database = this.#parts.database
-		if (database === null || !this.#parts.ownedDimensions.has(dimension)) {
-			throw new ServerFault(`no table owns '${dimension}', so a grant on its containers reaches nothing`)
-		}
-		return await database.contained(dimension, held)
 	}
 }
 
@@ -385,7 +376,7 @@ function serverError(status: number): Response {
  * anything else, whose message the application or a driver wrote.
  */
 function logFailure(where: string, error: unknown): void {
-	const detail = error instanceof ServerFault || error instanceof CapabilityRefusedError
+	const detail = error instanceof ServerFault || error instanceof CapabilityRefusedError || error instanceof CapabilityLimitError
 		? error.message
 		: `${error instanceof Error ? error.name : typeof error} thrown`
 	console.error(`fabrika: ${where}: ${detail}`)
@@ -398,6 +389,10 @@ function logFailure(where: string, error: unknown): void {
 export function errorResponse(error: unknown, where: string): Response {
 	if (isStructuralError(error) && error.httpStatus < 500) {
 		return toErrorResponse(error)
+	}
+	if (error instanceof CapabilityLimitError) {
+		logFailure(where, error)
+		return toErrorResponse(new ForbiddenError(`The caller holds the action in more scope values than one list may carry (${MAX_WITHIN_VALUES})`))
 	}
 	const name = error instanceof Error ? error.name : ''
 	// `@fabrika/db` errors carry no status; they are read by name, never by a cross-package `instanceof`.

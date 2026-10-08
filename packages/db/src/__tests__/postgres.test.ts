@@ -116,28 +116,30 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 
 	test('the generated locator reads the chain of one object, null for a missing one, and the new chain after a move', async () => {
 		const id = await createNote('w1', 'located')
-		expect(Object.fromEntries((await stores.locator.locate('note', id)) ?? [])).toEqual({ workspace: 'w1', organization: 'o1' })
-		expect(Object.fromEntries((await stores.locator.locate('workspace', 'w1')) ?? [])).toEqual({ organization: 'o1' })
-		expect(Object.fromEntries((await stores.locator.locate('organization', 'o1')) ?? [])).toEqual({})
-		expect(await stores.locator.locate('note', 'missing')).toBeNull()
+		expect(Object.fromEntries((await stores.locate('note', id)) ?? [])).toEqual({ workspace: 'w1', organization: 'o1' })
+		expect(Object.fromEntries((await stores.locate('workspace', 'w1')) ?? [])).toEqual({ organization: 'o1' })
+		expect(Object.fromEntries((await stores.locate('organization', 'o1')) ?? [])).toEqual({})
+		expect(await stores.locate('note', 'missing')).toBeNull()
 		await stores.notes.move(note('notes.delete', id, 'w1'), into('w2'))
-		expect(Object.fromEntries((await stores.locator.locate('note', id)) ?? [])).toEqual({ workspace: 'w2', organization: 'o1' })
+		expect(Object.fromEntries((await stores.locate('note', id)) ?? [])).toEqual({ workspace: 'w2', organization: 'o1' })
 	})
 
-	test('the generated locator reads the values a container reaches, and follows a move', async () => {
+	test('a container grant reads by the chain each row carries now: a workspace moved out after the Within was minted is out', async () => {
 		await admin(async (sql) => {
 			await sql.unsafe(`insert into ${schema}.organizations (id, name) values ('oa', 'A'), ('ob', 'B')`)
 			await addWorkspaces(sql, ['wa', 'wb'], 'oa')
 		})
-		const id = await createNote('wa', 'contained', null, 'oa')
-		const inOa = [{ dimension: 'organization', values: ['oa'] }]
-		expect([...(await stores.locator.contained('workspace', inOa))].sort()).toEqual(['wa', 'wb'])
-		expect(await stores.locator.contained('note', inOa)).toEqual([id])
-		expect(await stores.locator.contained('note', [{ dimension: 'workspace', values: ['wb'] }])).toEqual([])
-		await stores.workspaces.move(workspaceAdmin('wa', 'oa'), intoOrganization('ob'))
-		expect(await stores.locator.contained('workspace', inOa)).toEqual(['wb'])
-		expect(await stores.locator.contained('note', inOa)).toEqual([])
-		expect(await stores.locator.contained('note', [{ dimension: 'organization', values: ['ob'] }])).toEqual([id])
+		const inA = await createNote('wa', 'in A', null, 'oa')
+		const alsoInA = await createNote('wb', 'also in A', null, 'oa')
+		const organizationA = alice.within('workspace', 'notes.read', [], [{ dimension: 'organization', values: ['oa'] }])
+		const page = { limit: 1000, offset: 0 }
+		expect((await stores.notes.list(organizationA, page)).map((row) => row.id).sort()).toEqual([inA, alsoInA].sort())
+		await stores.workspaces.move(workspaceAdmin('wb', 'oa'), intoOrganization('ob'))
+		const secret = await createNote('wb', 'written after the move', null, 'ob')
+		const listed = (await stores.notes.list(organizationA, page)).map((row) => row.id)
+		expect(listed).toEqual([inA])
+		expect(listed).not.toContain(secret)
+		expect(await stores.notes.countPerWorkspace(organizationA)).toEqual([{ workspace_id: 'wa', count: '1' }])
 	})
 
 	test('a list sees only the scope values of its Within', async () => {

@@ -22,13 +22,30 @@ export interface RefGrant {
 	readonly chain: ReadonlyMap<string, string>
 }
 
+/** The values of one container dimension in which the caller holds the action: `organization → [o1]`. */
+export interface ContainerGrant {
+	readonly dimension: string
+	readonly values: readonly string[]
+}
+
+/**
+ * The most scope values one `Within` carries, its own and its containers' together. Each becomes one bound
+ * parameter of every statement the `Within` scopes; Postgres binds at most 65535.
+ */
+export const MAX_WITHIN_VALUES = 1000
+
 export interface WithinGrant {
 	readonly kind: 'within'
 	readonly dimension: string
 	readonly action: string
 	readonly principal: string
-	/** `all` comes from a grant that is not limited to scope values. */
+	/** The values of `dimension` itself; `all` comes from a grant that is not limited to scope values. */
 	readonly values: readonly string[] | 'all'
+	/**
+	 * The containers of `dimension` whose grants also authorise this `Within`. They stay separate from `values`, so
+	 * every statement judges a row by the chain columns it carries now: a scope moved out of a container is out.
+	 */
+	readonly containers: readonly ContainerGrant[]
 }
 
 export type CapabilityGrant = RefGrant | WithinGrant

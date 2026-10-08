@@ -120,8 +120,8 @@ export const tables = defineTables<DB, typeof contract>()({
 - **Locators are generated from the policy.** The core's `on: 'note'` resolves `note → workspace` with a query
   the framework generates from `scope.in`; there is no hand-written locator to "fix". The resulting `Ref` carries
   the whole chain (`note:n1`, `workspace:w1`), and every statement for that `Ref` includes every chain column in
-  its predicate. `in` reads the same chain, and `over` reads the policy the other way: a grant on
-  `organization:o1` reaches the workspaces whose `organization_id` is `o1`.
+  its predicate. `in` reads the same chain. A `Within` carries a container grant (`organization:o1`) apart from
+  its own values, and the store matches it against `organization_id` in the same statement.
 - **Every row carries its whole containment chain.** When `workspaces` lies in `organization`, `notes` carries
   `organization_id` as well as `workspace_id` (the same column name as in the table that owns the dimension), and
   children inherit every chain column of their parent. A composite foreign key with `ON UPDATE CASCADE` keeps the

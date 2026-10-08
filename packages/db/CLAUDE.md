@@ -16,7 +16,7 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | Module           | What it owns                                                                                              |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
 | `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.         |
-| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`; `@fabrika/db/capability`, no Bun.  |
+| `capability.ts`  | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.          |
 | `policy.ts`      | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.  |
 | `tables.ts`      | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.     |
 | `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                   |
@@ -35,10 +35,8 @@ An application calls `scoped(tables)` once (its own `src/db/database.ts`), defin
 `defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
 `Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
 `requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request, through
-`@fabrika/db/framework`. The bind answers the locator the access forms use, generated from the policies: `locate`
-(one guarded select by key of the owning table's containment columns, for `on` and `in`) and `contained` (one
-guarded select of the keys whose containment column holds a container value the caller holds the action in, for
-`over`). Not built yet:
+`@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
+table's containment columns. Not built yet:
 `@fabrika/db/testing`, and stores for `reference` and `inbox` tables (`defineTables` accepts their policies; no store
 reaches them).
 
@@ -63,6 +61,15 @@ reaches them).
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
   shape (`checkRoot`); without the parenthesis, `true or 1=1` followed by the scope would match every
   row. An insert carries no WHERE and gets its scope columns stamped from the capability instead.
+- **A Within's predicate is `column in (values)`, plus one `<chain column> in (values)` disjunct per container
+  grant, in one parenthesis.** The container grants stay separate from the values (`WithinGrant.containers`), so
+  the statement judges each row by the chain it carries now; a scope moved out of a container is out. A container
+  must be a chain link above the Within's own dimension in that table, or the operation is refused. The guard
+  admits a scope predicate only as `true`, an AND tree of `column = $n`, a single membership, or a parenthesized
+  OR tree of memberships, over the statement's table.
+- **A Within carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own and its containers' together.** Each
+  is one bound parameter of every statement it scopes (Postgres binds at most 65535); the framework refuses to
+  mint a larger one and the layer refuses to use one.
 - **A Ref's predicate covers every link of its chain, one equality per chain column.** A table carries
   a column for each ancestor (`TableModel.chain`, resolved by `defineTables` through the tables that own
   each dimension); a `Ref` whose chain names a dimension the table has no column for is refused, never

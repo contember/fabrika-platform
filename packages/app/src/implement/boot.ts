@@ -238,8 +238,7 @@ function contractDatabase(database: ImplementationDatabase | null, connection: D
 		return null
 	}
 	try {
-		const locator = bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities })
-		return { tables: database.tables, locate: locator.locate, contained: locator.contained }
+		return { tables: database.tables, locate: bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities }) }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null

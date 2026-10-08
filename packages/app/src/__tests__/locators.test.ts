@@ -8,14 +8,14 @@
 // The file gets its own application schema `app_<id>`. The URL is a credential: it is never logged.
 
 import type { ContractApp } from '@fabrika/app/implement'
-import { applicationSchema, Database } from '@fabrika/db'
+import { applicationSchema, Database, MAX_WITHIN_VALUES } from '@fabrika/db'
 import { generateSchema } from '@fabrika/db/codegen'
 import { SQL } from 'bun'
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { join } from 'node:path'
 import { bootApp, errorType, grant, resultOf, send, type Sent, token } from './fixtures/implement/harness'
 import { migration } from './fixtures/scoped-organizations/migration'
-import { organizationsApp } from './fixtures/scoped-organizations/src/app'
+import { type Hooks, organizationsApp } from './fixtures/scoped-organizations/src/app'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -27,8 +27,19 @@ if (!hasPostgres) {
 
 const appId = `locators-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 const schema = applicationSchema(appId)
+const hooks: Hooks = { beforeStore: () => Promise.resolve() }
 let database: Database
 let app: ContractApp
+
+/** Runs `work` with `between` executed after the access check minted the capability and before the store reads. */
+async function betweenCheckAndStore<T>(between: () => Promise<void>, work: () => Promise<T>): Promise<T> {
+	hooks.beforeStore = between
+	try {
+		return await work()
+	} finally {
+		hooks.beforeStore = () => Promise.resolve()
+	}
+}
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
@@ -94,10 +105,10 @@ beforeAll(async () => {
 	}
 	await admin((sql) =>
 		sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${migration}
-		insert into workspaces (id, organization_id) values ('wa1', 'oA'), ('wa2', 'oA'), ('wb1', 'oB'), ('wm', 'oA');`)
+		insert into workspaces (id, organization_id) values ('wa1', 'oA'), ('wa2', 'oA'), ('wb1', 'oB'), ('wm', 'oA'), ('wr', 'oA'), ('wi', 'oA');`)
 	)
 	database = Database.postgres({ url, schema, max: 2 })
-	app = bootApp(organizationsApp(), { database })
+	app = bootApp(organizationsApp(hooks), { database })
 })
 
 afterAll(async () => {
@@ -137,6 +148,34 @@ describe.skipIf(!hasPostgres)('locators generated from the table policies', () =
 		expect(await list(await editorIn(scope('workspace', 'wb1'), scope('organization', 'oA')))).toEqual(expect.arrayContaining([inA1, inA2, inB1]))
 	})
 
+	test('over: a workspace moved out of the organization between the check and the store read returns nothing', async () => {
+		const before = await seedNote('wr', 'oA', 'before the move')
+		const organizationA = await editorIn(scope('organization', 'oA'))
+		const listed = await betweenCheckAndStore(async () => {
+			await moveWorkspace('wr', 'oB')
+			await seedNote('wr', 'oB', 'private to oB')
+		}, () => list(organizationA))
+		expect(listed).not.toContain(before)
+		const [leaked] = await admin((sql) => sql.unsafe(`select id from ${schema}.notes where title = 'private to oB'`))
+		expect(listed).not.toContain(leaked?.id)
+	})
+
+	test(`over: ${MAX_WITHIN_VALUES} scope values list; one more is 403 and a capability-limit log line`, async () => {
+		const workspaces = (count: number) => Array.from({ length: count }, (_, index) => grant('notes.read', scope('workspace', `cap-${index}`)))
+		const atCap = await token('user', [...workspaces(MAX_WITHIN_VALUES - 1), grant('notes.read', scope('organization', 'oA'))])
+		expect((await send(app, '/api/notes.list', { token: atCap, body: {} })).status).toBe(200)
+		const overCap = await token('user', [...workspaces(MAX_WITHIN_VALUES), grant('notes.read', scope('organization', 'oA'))])
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const sent = await send(app, '/api/notes.list', { token: overCap, body: {} })
+			expect(sent.status).toBe(403)
+			expect(errorType(sent)).toBe('forbidden')
+			expect(log.mock.calls.map((call) => String(call[0])).join('\n')).toContain(`a Within carries at most ${MAX_WITHIN_VALUES}`)
+		} finally {
+			log.mockRestore()
+		}
+	})
+
 	test('over: an organization without workspaces lists nothing; a grant in no workspace or organization is 403', async () => {
 		expect(await list(await editorIn(scope('organization', 'oEmpty')))).toEqual([])
 		const sent = await send(app, '/api/notes.list', { token: await editorIn(scope('note', Bun.randomUUIDv7())), body: {} })
@@ -156,6 +195,15 @@ describe.skipIf(!hasPostgres)('locators generated from the table policies', () =
 		expect((await create(organizationA, 'w-missing', 'intruder')).status).toBe(403)
 		expect((await create(await editorIn(scope('workspace', 'w-missing')), 'w-missing', 'intruder')).status).toBe(404)
 		expect(await notesTitled('intruder')).toBe(0)
+	})
+
+	test('in: a workspace moved out between the check and the insert writes nothing (the destination lock checks the chain)', async () => {
+		const sent = await betweenCheckAndStore(
+			() => moveWorkspace('wi', 'oB'),
+			async () => create(await editorIn(scope('organization', 'oA')), 'wi', 'raced'),
+		)
+		expect(sent.status).toBe(404)
+		expect(await notesTitled('raced')).toBe(0)
 	})
 
 	test('a moved note’s Ref carries its new workspace: the old workspace loses it, the new one reaches it', async () => {

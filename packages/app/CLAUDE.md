@@ -215,10 +215,10 @@ src/
 - **`@fabrika/db` is bound by `boot`, once.** An application passes `scoped(tables)`
   as `implement({ database })`. `boot` binds only an object `scoped` created
   (`@fabrika/db/framework`'s `bindScopedDatabase`), with the adapter's connection and
-  `requestCapabilities`, and keeps the locator the bind answers for `on`, `in` and
-  `over`. The application never receives the connection or the locator; a copy or a
-  wrapper of the layer does not boot. A `ContractDatabase` (`tables`, `locate` and
-  `contained`) of the application's own is served as it is and gets no connection.
+  `requestCapabilities`, and keeps the locator the bind answers for `on` and `in`. The
+  application never receives the connection or the locator; a copy or a wrapper of
+  the layer does not boot. A `ContractDatabase` (`tables` and `locate`) of the
+  application's own is served as it is and gets no connection.
   `serveContract` imports `@fabrika/db` before the application (it captures its
   built-ins and freezes the Kysely compiler at load) and opens `Database.postgres` on
   `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
@@ -234,8 +234,12 @@ src/
   yours". `in` does the same check but answers 403 when not held; it reads the
   database only when the caller holds the action on the value or in a container
   dimension, and a missing scope is 404 only to a caller holding the value itself.
-  `over` adds the values that lie in a container where the caller holds the action
-  (`contained`).
+  `over` reads nothing: its `Within` carries the direct values and, separately, the
+  container grants (`{ dimension, values }` per container on the chain), and the data
+  layer matches the containers against each row's chain columns in the same statement.
+  Never expand a container grant into values: a scope moved out after the check would
+  stay reachable. A `Within` over `MAX_WITHIN_VALUES` values in total is refused at mint
+  (`CapabilityLimitError`: 403 to the caller, one log line).
 - **Output is projected, then validated:** `project` walks the output's zod schema
   and keeps the fields it declares; a union takes the first branch, in order, whose
   schema accepts the value reduced to it. The strict output schema then validates

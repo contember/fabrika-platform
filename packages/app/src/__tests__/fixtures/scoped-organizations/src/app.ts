@@ -6,7 +6,12 @@ import { type Ref, scoped, type Within } from '@fabrika/db'
 import { contract } from '../fabrika.contract'
 import { tables } from './db/tables'
 
-export function organizationsApp() {
+/** Where the tests pause a handler between the access check and its store call. */
+export interface Hooks {
+	beforeStore: () => Promise<void>
+}
+
+export function organizationsApp(hooks: Hooks) {
 	const database = scoped(tables)
 	const notes = database.defineStore('notes', (t) => ({
 		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
@@ -19,12 +24,16 @@ export function organizationsApp() {
 		handlers: () => ({
 			api: {
 				notes: {
-					list: async ({ ctx }) => ({ items: await notes.list(ctx.within) }),
+					list: async ({ ctx }) => {
+						await hooks.beforeStore()
+						return { items: await notes.list(ctx.within) }
+					},
 					where: async ({ ctx }) => {
 						const note = await notes.get(ctx.target)
 						return { id: note.id, workspace: ctx.target.chain.get('workspace') ?? '', organization: ctx.target.chain.get('organization') ?? '' }
 					},
 					create: async ({ input, ctx }) => {
+						await hooks.beforeStore()
 						const created = await notes.create(ctx.target, input.title)
 						return { id: created.id, workspace: ctx.target.value, organization: ctx.target.chain.get('organization') ?? '' }
 					},

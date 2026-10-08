@@ -2,19 +2,26 @@
 // it can neither construct one nor use one outside the request that obtained it. `@fabrika/db` checks the kind, the
 // dimension and the action of every capability it is handed, and asks `requestCapabilities` whether it is authentic.
 
-import type {
-	CapabilityAuthority,
-	CapabilityGrant,
-	Ref as RefCapability,
-	RefGrant,
-	Within as WithinCapability,
-	WithinGrant,
+import {
+	type CapabilityAuthority,
+	type CapabilityGrant,
+	type ContainerGrant,
+	MAX_WITHIN_VALUES,
+	type Ref as RefCapability,
+	type RefGrant,
+	type Within as WithinCapability,
+	type WithinGrant,
 } from '@fabrika/db/capability'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 /** A capability that is forged, from a request that has ended, or from another request than the current one. */
 export class CapabilityRefusedError extends Error {
 	override readonly name = 'CapabilityRefusedError'
+}
+
+/** A `Within` that would carry more scope values than one statement may bind; the caller is refused, not truncated. */
+export class CapabilityLimitError extends Error {
+	override readonly name = 'CapabilityLimitError'
 }
 
 /** One request's lifetime. A capability minted in it is usable only while it runs, and only inside it. */
@@ -75,6 +82,26 @@ function mapOf(chain: Chain): Map<string, string> {
 		}
 	}
 	return map
+}
+
+function copyOf(values: readonly string[]): readonly string[] {
+	const copy: string[] = []
+	for (let index = 0; index < values.length; index++) {
+		copy[index] = values[index] ?? ''
+	}
+	return freeze(copy)
+}
+
+/** A frozen copy of the container grants, by index: a later patch to Array methods does not change what was minted. */
+function containerGrantsOf(containers: readonly ContainerGrant[]): readonly ContainerGrant[] {
+	const copy: ContainerGrant[] = []
+	for (let index = 0; index < containers.length; index++) {
+		const container = containers[index]
+		if (container !== undefined) {
+			copy[copy.length] = freeze({ dimension: container.dimension, values: copyOf(container.values) })
+		}
+	}
+	return freeze(copy)
 }
 
 interface RefFacts {
@@ -148,7 +175,10 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 	}
 }
 
-/** The values of one dimension in which the caller holds one action, in one request; `all` for a global grant. */
+/**
+ * The values of one dimension in which the caller holds one action, in one request; `all` for a global grant. The
+ * containers whose grants also authorise it stay separate, so the data layer matches them against each row's chain.
+ */
 export class Within<D extends string, A extends string> implements WithinCapability<D, A> {
 	declare readonly '~capability': { readonly kind: 'within'; readonly dimension: D; readonly action: A }
 	readonly #dimension: D
@@ -156,13 +186,38 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 	readonly #grant: WithinGrant
 	readonly #frame: RequestFrame
 
-	constructor(token: typeof MINT, frame: RequestFrame, dimension: D, action: A, principal: string, values: readonly string[] | 'all') {
+	constructor(
+		token: typeof MINT,
+		frame: RequestFrame,
+		dimension: D,
+		action: A,
+		principal: string,
+		values: readonly string[] | 'all',
+		containers: readonly ContainerGrant[],
+	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('a Within is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
+		const held = values === 'all' ? freeze([]) : containerGrantsOf(containers)
+		let count = values === 'all' ? 0 : values.length
+		for (let index = 0; index < held.length; index++) {
+			count += held[index]?.values.length ?? 0
+		}
+		if (count > MAX_WITHIN_VALUES) {
+			throw new CapabilityLimitError(
+				`the caller holds '${action}' in ${count} scope values for a ${dimension} list; a Within carries at most ${MAX_WITHIN_VALUES}`,
+			)
+		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#grant = freeze({ kind: 'within', dimension, action, principal, values: values === 'all' ? 'all' : freeze([...values]) })
+		this.#grant = freeze({
+			kind: 'within',
+			dimension,
+			action,
+			principal,
+			values: values === 'all' ? 'all' : copyOf(values),
+			containers: held,
+		})
 		this.#frame = frame
 	}
 
@@ -174,8 +229,14 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		return this.#action
 	}
 
+	/** The values of this dimension itself. */
 	get values(): readonly string[] | 'all' {
 		return this.#grant.values
+	}
+
+	/** The containers in which the caller also holds the action: `organization → [o1]` for a workspace list. */
+	get containers(): readonly ContainerGrant[] {
+		return this.#grant.containers
 	}
 
 	static {
@@ -204,8 +265,9 @@ export function mintWithin<D extends string, A extends string>(
 	action: A,
 	principal: string,
 	values: readonly string[] | 'all',
+	containers: readonly ContainerGrant[] = [],
 ): Within<D, A> {
-	return new Within(MINT, frame, dimension, action, principal, values)
+	return new Within(MINT, frame, dimension, action, principal, values, containers)
 }
 
 /**

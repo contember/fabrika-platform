@@ -28,6 +28,7 @@ import {
 	TableNode,
 	type UpdateQueryNode,
 	UsingNode,
+	ValueListNode,
 	ValueNode,
 	WhereNode,
 } from 'kysely'
@@ -35,7 +36,22 @@ import { nameSet } from '../builtins'
 import { finishSelect, startSelect, type TableShape } from '../description'
 import { QueryRefusedError } from '../errors'
 import { assertAllowedTree, type GuardContext } from '../guard'
-import { acknowledgement, column, deleteNode, existsNode, inList, insertNode, lockNode, scopedWhere, selectNode, updateNode } from '../nodes'
+import {
+	acknowledgement,
+	allOf,
+	anyOf,
+	column,
+	deleteNode,
+	equals,
+	everything,
+	existsNode,
+	inList,
+	insertNode,
+	lockNode,
+	scopedWhere,
+	selectNode,
+	updateNode,
+} from '../nodes'
 
 interface AttackDB {
 	notes: { id: string; workspace_id: string; title: string; body: string | null; word_count: number; data: { a: string } }
@@ -123,6 +139,54 @@ describe('statements the layer builds pass and compile', () => {
 		expect(compiler.compileQuery(legitJoin(), { queryId: 'q' }).sql).toContain(
 			'inner join "note_comments" on "note_comments"."note_id" = "notes"."id" and "note_comments"."workspace_id" = "notes"."workspace_id" and ("note_comments"."body" = $1)',
 		)
+	})
+})
+
+describe('the scope predicate has one of the shapes the layer builds', () => {
+	const scopedBy = (predicate: OperationNode): [SelectQueryNode, GuardContext] => [
+		select({ where: scopedWhere(equals('notes', 'title', 'x'), predicate) }),
+		{ ...selectContext, scope: predicate },
+	]
+	const workspaces = inList('notes', 'workspace_id', ['w1'])
+	const organizations = inList('notes', 'organization_id', ['o1', 'o2'])
+
+	test('true, an AND of column = value, a membership, and a parenthesized OR of memberships pass', () => {
+		const shapes = [
+			everything(),
+			allOf([equals('notes', 'id', 'n1'), allOf([equals('notes', 'workspace_id', 'w1'), equals('notes', 'organization_id', 'o1')])]),
+			workspaces,
+			anyOf([workspaces, organizations]),
+			anyOf([workspaces, organizations, inList('notes', 'region_id', ['r1'])]),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			expect(() => assertAllowedTree(node, context)).not.toThrow()
+		}
+		expect(compiler.compileQuery(scopedBy(anyOf([workspaces, organizations]))[0], { queryId: 'q' }).sql).toContain(
+			'where ("notes"."title" = $1) and ("notes"."workspace_id" in ($2) or "notes"."organization_id" in ($3, $4))',
+		)
+	})
+
+	test('nothing looser: an OR without its parenthesis, or with a leaf that is not a membership of this table', () => {
+		const shapes = [
+			OrNode.create(workspaces, organizations),
+			ParensNode.create(OrNode.create(workspaces, ValueNode.createImmediate(true))),
+			ParensNode.create(OrNode.create(workspaces, equals('notes', 'organization_id', 'o1'))),
+			ParensNode.create(OrNode.create(workspaces, inList('note_comments', 'organization_id', ['o1']))),
+			ParensNode.create(OrNode.create(workspaces, ParensNode.create(organizations))),
+			ParensNode.create(workspaces),
+			BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('in'), ValueListNode.create([])),
+			BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('in'), ValueListNode.create([ValueNode.createImmediate(true)])),
+			BinaryOperationNode.create(column('notes', 'workspace_id'), OperatorNode.create('not in'), ValueListNode.create([ValueNode.create('w1')])),
+			AndNode.create(equals('notes', 'id', 'n1'), workspaces),
+			AndNode.create(equals('notes', 'id', 'n1'), ValueNode.createImmediate(true)),
+			BinaryOperationNode.create(column('notes', 'id'), OperatorNode.create('<>'), ValueNode.create('n1')),
+			ValueNode.createImmediate(false),
+		]
+		for (const shape of shapes) {
+			const [node, context] = scopedBy(shape)
+			refuses(node, context, 'the scope predicate must be true')
+		}
 	})
 })
 

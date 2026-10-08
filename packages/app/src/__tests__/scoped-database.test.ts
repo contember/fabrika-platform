@@ -230,7 +230,7 @@ describe('boot binds the data layer once', () => {
 		const early = scoped(tables)
 		bindScopedDatabase(early, {
 			database: connection,
-			capabilities: { resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all' }) },
+			capabilities: { resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all', containers: [] }) },
 		})
 		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow(BootError)
 		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow('the data layer was bound before boot')

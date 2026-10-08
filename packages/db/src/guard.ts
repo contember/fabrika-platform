@@ -123,6 +123,66 @@ function checkRoot(root: OperationNode, context: GuardContext): void {
 	if (!scoped) {
 		throw new QueryRefusedError('the scope predicate must be the top-level conjunct of WHERE')
 	}
+	const scope = context.scope
+	const membership = (leaf: unknown) => isScopeMembership(leaf, context.table)
+	const shaped = isEverything(scope)
+		|| isTreeOf(scope, 'AndNode', (leaf) => isScopeEquality(leaf, context.table))
+		|| membership(scope)
+		|| (kindOf(scope) === 'ParensNode' && kindOf(read(scope, 'node')) === 'OrNode' && isTreeOf(read(scope, 'node'), 'OrNode', membership))
+	if (!shaped) {
+		throw new QueryRefusedError(
+			'the scope predicate must be true, an AND of column = value, or a parenthesized OR of column in (values), over the statement table',
+		)
+	}
+}
+
+/** A Within that is not limited to scope values. */
+function isEverything(node: unknown): boolean {
+	return kindOf(node) === 'ValueNode' && read(node, 'immediate') === true && read(node, 'value') === true
+}
+
+/** Nodes of one connective whose every leaf passes `leaf`; a leaf is never itself a connective. */
+function isTreeOf(node: unknown, connective: 'AndNode' | 'OrNode', leaf: (node: unknown) => boolean): boolean {
+	if (kindOf(node) === connective) {
+		return isTreeOf(read(node, 'left'), connective, leaf) && isTreeOf(read(node, 'right'), connective, leaf)
+	}
+	return leaf(node)
+}
+
+/** `table.column = $n`: one link of a Ref's chain. */
+function isScopeEquality(node: unknown, table: string): boolean {
+	return kindOf(node) === 'BinaryOperationNode'
+		&& read(read(node, 'operator'), 'operator') === '='
+		&& isOwnColumn(read(node, 'leftOperand'), table)
+		&& isBoundValue(read(node, 'rightOperand'))
+}
+
+/** `table.column in ($1, …)`: a Within's own values, or one container's. */
+function isScopeMembership(node: unknown, table: string): boolean {
+	if (
+		kindOf(node) !== 'BinaryOperationNode' || read(read(node, 'operator'), 'operator') !== 'in' || !isOwnColumn(read(node, 'leftOperand'), table)
+	) {
+		return false
+	}
+	const list = read(node, 'rightOperand')
+	const values = read(list, 'values')
+	if (kindOf(list) !== 'ValueListNode' || !isArray(values) || values.length === 0) {
+		return false
+	}
+	for (let index = 0; index < values.length; index++) {
+		if (!isBoundValue(values[index])) {
+			return false
+		}
+	}
+	return true
+}
+
+function isOwnColumn(node: unknown, table: string): boolean {
+	return kindOf(node) === 'ReferenceNode' && tableName(read(node, 'table')) === table && kindOf(read(node, 'column')) === 'ColumnNode'
+}
+
+function isBoundValue(node: unknown): boolean {
+	return kindOf(node) === 'ValueNode' && read(node, 'immediate') !== true
 }
 
 function soleFrom(from: unknown): unknown {

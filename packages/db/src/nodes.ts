@@ -54,12 +54,13 @@ export function allOf(nodes: readonly OperationNode[]): OperationNode {
 	return rest.reduce<OperationNode>((left, right) => AndNode.create(left, right), first)
 }
 
+/** One node, or the OR of several in a parenthesis: inside an AND, `a and b or c` would read as `(a and b) or c`. */
 export function anyOf(nodes: readonly OperationNode[]): OperationNode {
 	const [first, ...rest] = nodes
 	if (first === undefined) {
 		throw new QueryRefusedError('an empty disjunction')
 	}
-	return rest.reduce<OperationNode>((left, right) => OrNode.create(left, right), first)
+	return rest.length === 0 ? first : ParensNode.create(rest.reduce<OperationNode>((left, right) => OrNode.create(left, right), first))
 }
 
 export function inList(table: string, name: string, values: readonly string[]): OperationNode {
@@ -258,17 +259,6 @@ export function locateNode(table: string, columns: readonly string[], scope: Ope
 		selections: columns.map((name) => selection(table, name)),
 		where: scopedWhere(undefined, scope),
 		limit: LimitNode.create(ValueNode.create(1)),
-	}
-	return Object.freeze(node)
-}
-
-/** `select key from table where scope`: the keys of every object in the scope, for the framework's locator. */
-export function keysNode(table: string, key: string, scope: OperationNode): SelectQueryNode {
-	const node: SelectQueryNode = {
-		kind: 'SelectQueryNode',
-		from: FromNode.create([TableNode.create(table)]),
-		selections: [selection(table, key)],
-		where: scopedWhere(undefined, scope),
 	}
 	return Object.freeze(node)
 }
