@@ -21,7 +21,7 @@
  *      back on a 2xx, so the edge is the only thing that mints either.
  */
 
-import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, SESSION_COOKIE } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, isCanonicalPath, SESSION_COOKIE, splitRequestTarget } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'
@@ -108,10 +108,11 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				return textResponse(405, 'method not allowed')
 			}
 
-			const forwarded = readForwardedRequest(request, requestId)
-			if (forwarded === null) {
-				return denied(logger, { requestId }, { outcome: 'deny', status: 403, reason: 'bad_forward' })
+			const read = readForwardedRequest(request, requestId)
+			if (!read.ok) {
+				return denied(logger, { requestId }, { outcome: 'deny', status: read.reason === 'non_canonical_path' ? 400 : 403, reason: read.reason })
 			}
+			const forwarded = read.request
 
 			const resolved = selectApp(url, forwarded.url.host, byId, byHost)
 			if (resolved === null) {
@@ -204,9 +205,7 @@ function denied(
 			: loginRequired(decision.location, decision.handoff)
 	}
 	logger.warn('deny', { ...fields, reason, status: decision.status })
-	const response = isCallback
-		? callbackFailure(decision.status)
-		: textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
+	const response = isCallback ? callbackFailure(decision.status) : textResponse(decision.status, DENY_TEXT[decision.status])
 	if (decision.clearHandoffState !== undefined) {
 		response.headers.append('set-cookie', clearHandoffCookie(decision.clearHandoffState))
 	}
@@ -309,46 +308,57 @@ function secureCookie(name: string, value: string, maxAge: number): string {
 	return [`${name}=${value}`, 'Path=/', `Max-Age=${maxAge}`, 'HttpOnly', 'SameSite=Lax', 'Secure'].join('; ')
 }
 
+const DENY_TEXT: Record<Extract<Decision, { outcome: 'deny' }>['status'], string> = {
+	400: 'bad request',
+	401: 'unauthorized',
+	403: 'forbidden',
+	503: 'unavailable',
+}
+
 function textResponse(status: number, body: string): Response {
 	return new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })
 }
 
+type ForwardedRead = { ok: true; request: ForwardedRequest } | { ok: false; reason: 'bad_forward' | 'non_canonical_path' }
+
 /**
- * Rebuild the original request from the forwarded headers. Returns null — a DENY — whenever the
+ * Rebuild the original request from the forwarded headers. Refuses — a DENY — whenever the
  * description is incomplete or suspicious, because a proxy that guesses what was asked for is a proxy
- * that authorizes the wrong thing.
+ * that authorizes the wrong thing. That includes a missing method: there is no default to guess.
+ *
+ * The path is checked RAW, before any URL is built: assigning a pathname resolves `..` and `%2e%2e`, so
+ * `/a/../admin` would otherwise be matched as `/admin` while the upstream receives the original.
  *
  * The URL is assembled by assignment rather than by `new URL(uri, base)`: a request line of
  * `GET //evil.example/x` is a legal path, and relative resolution would read it as a protocol-relative
  * URL, silently changing the host — which would both mis-match the gates and turn the login bounce
  * into an open redirect.
  */
-function readForwardedRequest(request: Request, requestId: string): ForwardedRequest | null {
+function readForwardedRequest(request: Request, requestId: string): ForwardedRead {
 	const uri = request.headers.get(FORWARDED_URI_HEADER)
-	if (uri === null || !uri.startsWith('/')) {
-		return null
+	const method = request.headers.get(FORWARDED_METHOD_HEADER)
+	if (uri === null || !uri.startsWith('/') || method === null || method === '') {
+		return { ok: false, reason: 'bad_forward' }
+	}
+	const target = splitRequestTarget(uri)
+	if (!isCanonicalPath(target.pathname)) {
+		return { ok: false, reason: 'non_canonical_path' }
 	}
 	const host = request.headers.get(FORWARDED_HOST_HEADER) ?? request.headers.get('Host')
 	if (host === null || !HOST_PATTERN.test(host)) {
-		return null
+		return { ok: false, reason: 'bad_forward' }
 	}
 	const proto = request.headers.get(FORWARDED_PROTO_HEADER) === 'http' ? 'http' : 'https'
 
-	const query = uri.indexOf('?')
 	const url = new URL(`${proto}://${host}`)
-	url.pathname = query === -1 ? uri : uri.slice(0, query)
-	url.search = query === -1 ? '' : uri.slice(query)
+	url.pathname = target.pathname
+	url.search = target.search
 	if (url.host.toLowerCase() !== host.toLowerCase()) {
 		// Defensive: the assignment above must not have been able to move the host.
-		return null
+		return { ok: false, reason: 'bad_forward' }
 	}
 
-	return {
-		method: request.headers.get(FORWARDED_METHOD_HEADER) ?? 'GET',
-		url,
-		headers: request.headers,
-		requestId,
-	}
+	return { ok: true, request: { method, url, headers: request.headers, requestId } }
 }
 
 /**

@@ -338,7 +338,9 @@ service on Zerops, and a thin Worker calling the same code in-process on Cloudfl
 Caddy owns HTTP correctness and gets no vote on authorization: its configuration is a
 fixed three-step chain per app — delete the injected token and request-id headers,
 `forward_auth`, proxy to the private upstream — and gate rules are never compiled into
-route matchers. Gates are evaluated once, in TypeScript, against the manifest.
+route matchers. Gates are evaluated once, in TypeScript, against the manifest. Before any
+gate is matched, the proxy refuses a non-canonical raw path with 400 and a request without a
+forwarded method; the application router refuses the same paths.
 
 Nothing downstream of the proxy enforces. An application reads the proxy-injected
 `X-Fabrika-Token`, verifies it locally against IAM's JWKS, and builds its

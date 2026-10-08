@@ -42,7 +42,12 @@ bun test   # deny-matrix.test.ts is the authorization truth table — keep it ex
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
   condition. A request matching no gate rule is denied.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read the
-  incoming request's own method or path; a missing `X-Forwarded-Uri` must deny, not fall back.
+  incoming request's own method or path; a missing `X-Forwarded-Uri` or `X-Forwarded-Method` must
+  deny, not fall back.
+- **The forwarded path is checked RAW, before any URL is built.** `isCanonicalPath` from
+  `@fabrika/auth-core` runs on the header's path; a non-canonical one is a 400 (`non_canonical_path`)
+  before any gate is matched. Assigning a pathname resolves `..` and `%2e%2e`, so checking after it
+  would match `/admin` while the upstream receives `/a/../admin`.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay

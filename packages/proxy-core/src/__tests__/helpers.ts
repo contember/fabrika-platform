@@ -212,7 +212,8 @@ export interface VerifyRequestOptions {
 	/** The auth service endpoint the subrequest targets. Default `/verify`. */
 	endpoint?: string
 	path?: string
-	method?: string
+	/** Pass null to omit the forwarded method header. */
+	method?: string | null
 	host?: string
 	proto?: string
 	cookie?: string
@@ -236,7 +237,10 @@ export function verifyRequest(options: VerifyRequestOptions = {}): Request {
 	if (host !== null) {
 		headers.set(FORWARDED_HOST_HEADER, host)
 	}
-	headers.set(FORWARDED_METHOD_HEADER, options.method ?? 'GET')
+	const method = options.method === undefined ? 'GET' : options.method
+	if (method !== null) {
+		headers.set(FORWARDED_METHOD_HEADER, method)
+	}
 	headers.set(FORWARDED_PROTO_HEADER, options.proto ?? 'https')
 	if (options.cookie !== undefined) {
 		headers.set('Cookie', options.cookie)

@@ -52,6 +52,8 @@ export type DenyReason =
 	| 'no_app'
 	/** The forwarded-request headers are missing or malformed — we cannot know what was asked for. */
 	| 'bad_forward'
+	/** The forwarded path is not canonical (`isCanonicalPath`); refused before any gate is matched. */
+	| 'non_canonical_path'
 	/** IAM could not be consulted, or its keys could not be fetched. We do not know; we refuse. */
 	| 'iam_unavailable'
 	/** Anything that escaped. Always a deny. */
@@ -68,7 +70,7 @@ export type Decision =
 	}
 	| {
 		outcome: 'deny'
-		status: 401 | 403 | 503
+		status: 400 | 401 | 403 | 503
 		reason: DenyReason
 		clearHandoffState?: string
 		/** Set on an `oauth` rule's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */

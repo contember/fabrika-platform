@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { cacheKey, MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
 import { handoffChallenge } from '../handoff'
+import { OAUTH_METADATA_VERIFY_PATH } from '../oauth'
 import { createVerifyService, type VerifyService } from '../service'
 import { APP, FakeIam, type FakeIamOptions, foreignPrivateKey, ISSUER, manifestWith, signToken, signUserToken, verifyRequest } from './helpers'
 
@@ -112,6 +113,14 @@ describe('deny — the forwarded request is not describable', () => {
 		expect(response.status).toBeGreaterThanOrEqual(300)
 	})
 
+	test('a missing or empty method is denied rather than defaulting to GET', async () => {
+		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const missing = await verify(verifyRequest({ method: null }))
+		expect(missing.status).toBe(403)
+		expectDenied(missing)
+		expectDenied(await verify(verifyRequest({ method: '' })))
+	})
+
 	test('a missing host is denied', async () => {
 		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
 		const response = await verify(verifyRequest({ forwardedHost: null, app: null }))
@@ -133,6 +142,45 @@ describe('deny — the forwarded request is not describable', () => {
 	test('a request to any path other than /verify is 404, not a decision', async () => {
 		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
 		expect((await verify(new Request('http://127.0.0.1:9000/'))).status).toBe(404)
+	})
+})
+
+describe('deny — a non-canonical path is refused before any gate is matched', () => {
+	// Every rule is public: a path that slipped past the check would be allowed, not bounced.
+	const OPEN: AppGates = { rules: [{ path: '/*', kind: 'public' }] }
+
+	test.each([
+		['a repeated slash', '//admin/users'],
+		['a dot-dot segment', '/a/../admin'],
+		['an encoded dot-dot segment', '/a/%2e%2e/b'],
+		['an encoded slash', '/x%2Fy'],
+		['an encoded backslash', '/x%5Cy'],
+		['a literal backslash', '/a\\..\\admin'],
+		['a dot segment', '/a/./admin'],
+		['an empty segment before a trailing slash', '/admin//'],
+		['a dot-dot segment before the query', '/a/../admin?x=1'],
+	])('%s is a 400', async (_name, forwardedUri) => {
+		const response = await service(OPEN, iamWith({}))(verifyRequest({ forwardedUri }))
+		expect(response.status).toBe(400)
+		expectDenied(response)
+	})
+
+	test('the refusal holds on the OAuth metadata endpoint too', async () => {
+		const response = await service(HUMAN, iamWith({}))(verifyRequest({ endpoint: OAUTH_METADATA_VERIFY_PATH, forwardedUri: '/a/../mcp' }))
+		expect(response.status).toBe(400)
+	})
+
+	test('a trailing slash is significant: it is matched literally, never as the path without it', async () => {
+		const verify = service({ rules: [{ path: '/admin', kind: 'public' }] }, iamWith({}))
+		expect((await verify(verifyRequest({ forwardedUri: '/admin' }))).status).toBe(204)
+		const response = await verify(verifyRequest({ forwardedUri: '/admin/' }))
+		expect(response.status).toBe(403)
+		expectDenied(response)
+	})
+
+	test('a query may carry what the path may not', async () => {
+		const response = await service(OPEN, iamWith({}))(verifyRequest({ forwardedUri: '/search?q=../x%2Fy//' }))
+		expect(response.status).toBe(204)
 	})
 })
 

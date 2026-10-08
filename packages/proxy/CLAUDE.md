@@ -46,7 +46,8 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 - **The service binds to LOOPBACK.** It answers "is this request allowed" and hands back a signed
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read this
-  request's own method or path; a missing `X-Forwarded-Uri` must deny, not fall back.
+  request's own method or path; a missing `X-Forwarded-Uri` or `X-Forwarded-Method` must deny, not
+  fall back. A non-canonical raw path (`isCanonicalPath`) is a 400 before any gate is matched.
 - **The generated Caddy config strips the token header, the request id AND every name a client address
   travels under from the inbound request before `forward_auth` runs** (the Cloudflare Worker does the
   same). Caddy's `copy_headers` skips empty values rather than deleting, so without the strip a client
