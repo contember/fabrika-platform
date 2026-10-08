@@ -21,6 +21,8 @@ bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compile
 bun test src/__tests__/implement-types.test.ts  # the handler mistakes, compiled by tsc
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
+bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
 ```
 
 ## Structure
@@ -32,12 +34,19 @@ src/
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes
-  testing.ts          test-runner-neutral cross-runtime conformance helper
   router.ts           typed HTTP and RPC route matching
   middleware.ts       middleware runner over @fabrika/auth's canonical contract
   errors.ts           structural HTTP error mapping
-  client.ts           typed browser RPC client
   rpc/                procedure builder, types, and dispatcher
+  client/             @fabrika/app/client — browser-safe
+    contract.ts       createClient: the typed client of a contract mount
+    rpc.ts            createRpcClient: the defineApp() RPC client (exported from the root)
+    transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope
+  testing/            @fabrika/app/testing — no test-runner dependency
+    kit.ts            testKit: boot behind a stand-in proxy and IAM
+    proxy.ts          ProxyDecision, the seam, and endpointDecision, its default
+    caller.ts         test callers and their grants
+    conformance.ts    the cross-runtime conformance helper of defineApp() services
   contract/           @fabrika/app/contract — browser-safe
     define.ts         defineContract, the c.* kit and every type an agent meets
     declaration.ts    the contract as plain data, generic over its schema type
@@ -162,7 +171,6 @@ src/
   and `contractArtifactSchema` both refuse a `*` in any action name and a role named after
   `BUILTIN_ROLE_KEYS`; `buildArtifact` and the `CreatableDimension` type refuse `creates`
   for a dimension with `in`, because IAM's `createScope` makes only top-level values.
-- Still to come: the typed client (A5).
 - Later (A12, A13): membership, scopes and share links are requests to IAM through
   `@fabrika/auth`. The framework writes no grant and mints no credential.
 
@@ -250,3 +258,28 @@ src/
   `contract-scale.test.ts`; both generate their source in `scale-fixture.ts`.
 - The header policy (`headers.ts`) is ADR-0022's; B4 sets the same policy at the
   proxy and decides the final `Permissions-Policy`. Keep the two equal.
+
+## The typed client and the test kit
+
+- **`createClient` builds its tree from the contract value**, never a `Proxy`: only
+  declared procedures exist, and each path comes from `joinPath` and
+  `LINK_API_SEGMENT` in `contract/defaults.ts`, the code that gives the artifact its
+  paths. Never compute a procedure path anywhere else.
+- **An answer is parsed with the procedure's output schema** before the caller sees
+  it. The tree's type is tied to the value by one structural check (`coversTree`),
+  not a cast.
+- **A key client sends no cookie** (`credentials: 'omit'`): a request presents one
+  credential. A link mount's client requires its key.
+- **The kit runs the real `boot` and dispatcher**; only the proxy and IAM are stand-ins.
+  Its tokens are signed with a generated key and verified by the application's own
+  verifier, so a test cannot reach a handler the production pipeline would refuse.
+- **`ProxyDecision` is a test double of the enforcement point, never one.** It runs
+  only in front of a kit's in-process application. `endpointDecision` follows
+  ADR-0022's endpoint steps with `planEndpoint` and `satisfies`; it is not a gate
+  evaluator. A decision over generated gates plugs in through `options.proxy`, and the
+  proxy's own decision function replaces both once the proxy decides per endpoint (B2).
+- **A forwarded request is stripped like the proxy strips it**: every `X-Fabrika-*`
+  header, `UNTRUSTED_FORWARD_HEADERS` and the `__Host-px_*` cookies; an anonymous
+  endpoint also loses `Authorization`.
+- The client and test-kit type witnesses live in `src/__tests__/client-mistakes/`,
+  compiled by `client-types.test.ts` like the contract mistakes.

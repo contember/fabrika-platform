@@ -1,0 +1,199 @@
+// The test kit: the proxy's decision in front of the real dispatcher, the header stripping of the hop, and test
+// callers resolved from the contract's roles. It imports only `@fabrika/app/testing`, `@fabrika/app/client` and the
+// fixture application, as an application's own tests do.
+
+import { createClient, RpcError } from '@fabrika/app/client'
+import { testKit } from '@fabrika/app/testing'
+import { describe, expect, test } from 'bun:test'
+import { notesApp } from './fixtures/implement/app'
+import { contract } from './fixtures/implement/fabrika.contract'
+import type { NoteRow } from './fixtures/implement/stores'
+
+const N1 = '0190a0a0-0000-7000-8000-000000000001'
+const N2 = '0190a0a0-0000-7000-8000-000000000002'
+
+function seed(): Map<string, NoteRow> {
+	return new Map([
+		[N1, { id: N1, workspaceId: 'w1', title: 'first', internalScore: 7 }],
+		[N2, { id: N2, workspaceId: 'w2', title: 'second', internalScore: 9 }],
+	])
+}
+
+const W1 = { type: 'workspace', value: 'w1' } as const
+
+function post(body: unknown, headers: Record<string, string> = {}): RequestInit {
+	return { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }
+}
+
+async function failure(call: Promise<unknown>): Promise<RpcError> {
+	try {
+		await call
+	} catch (error) {
+		if (error instanceof RpcError) {
+			return error
+		}
+		throw error
+	}
+	throw new Error('expected the call to fail')
+}
+
+describe('the proxy decision refuses before the application', () => {
+	const kit = testKit(notesApp(seed()))
+
+	test('a non-canonical path is 400', async () => {
+		const response = await kit.fetch('/api//notes.list', post({}))
+		expect(response.status).toBe(400)
+		expect(await response.text()).toBe('bad request')
+	})
+
+	test('a path no endpoint serves is 403, and the denial carries the header policy', async () => {
+		const response = await kit.fetch('/nothing/here', post({}))
+		expect(response.status).toBe(403)
+		expect(response.headers.get('Cache-Control')).toBe('no-store')
+		expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'self'")
+	})
+
+	test('a bearer the test IAM never issued is 401', async () => {
+		const response = await kit.fetch('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }, { Authorization: 'Bearer px_forged' }))
+		expect(response.status).toBe(401)
+	})
+
+	test('a key whose principal kind is not a caller of the mount is 403', async () => {
+		const person = kit.testCaller([{ action: 'notes.write' }], { via: 'key' })
+		const link = kit.testCaller([{ action: 'notes.write' }], { kind: 'link' })
+		for (const caller of [person, link]) {
+			const response = await kit.fetch('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }, { Authorization: `Bearer ${caller.key}` }))
+			expect(response.status).toBe(403)
+		}
+	})
+
+	test('a session on a mount without human callers is 401, never a login', async () => {
+		const alice = kit.testCaller([{ action: 'notes.write' }])
+		const response = await kit.browser(alice)('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }))
+		expect(response.status).toBe(401)
+	})
+
+	test('no session on a human endpoint answers the login URL: 401 to a fetch, 302 to a navigation', async () => {
+		const fetched = await kit.browser()('/api/me', post({}))
+		expect(fetched.status).toBe(401)
+		expect(await fetched.json()).toEqual({ error: { type: 'auth', message: 'Authentication required', loginUrl: 'https://iam.test/auth/login' } })
+		const navigated = await kit.fetch('/')
+		expect(navigated.status).toBe(302)
+		expect(navigated.headers.get('Location')).toBe('https://iam.test/auth/login')
+	})
+
+	test('an unknown session is a login, not a caller', async () => {
+		const response = await kit.browser()('/api/me', post({}, { Cookie: '__Host-px_session=stale' }))
+		expect(response.status).toBe(401)
+	})
+
+	test('a caller without the required action is 403 at the proxy', async () => {
+		const reader = kit.testCaller([{ action: 'notes.read', scope: W1 }])
+		const response = await kit.browser(reader)('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }))
+		expect(response.status).toBe(403)
+		expect(await response.text()).toBe('forbidden')
+	})
+
+	test('a caller with no permission in the application is 403, even on a member endpoint', async () => {
+		const stranger = kit.testCaller([])
+		expect((await kit.browser(stranger)('/api/me', post({}))).status).toBe(403)
+		expect((await kit.browser(stranger)('/')).status).toBe(403)
+	})
+})
+
+describe('a forwarded request reaches the real dispatcher', () => {
+	test('the application refuses what the proxy forwards: a cross-site POST with a session', async () => {
+		const kit = testKit(notesApp(seed()))
+		const alice = kit.testCaller([{ role: 'editor', scope: W1 }])
+		const cookie = alice.cookie ?? ''
+		const response = await kit.fetch('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }, { Cookie: cookie, 'Sec-Fetch-Site': 'cross-site' }))
+		expect(response.status).toBe(403)
+		expect(await response.json()).toMatchObject({ error: { type: 'admission' } })
+	})
+
+	test('object access is the application’s: a note in another workspace is 404', async () => {
+		const kit = testKit(notesApp(seed()))
+		const api = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ action: 'notes.read', scope: W1 }])) })
+		expect(await api.notes.get({ id: N1 })).toEqual({ id: N1, title: 'first' })
+		expect((await failure(api.notes.get({ id: N2 }))).httpStatus).toBe(404)
+	})
+
+	test('a token a client sends never reaches the application', async () => {
+		const kit = testKit(notesApp(seed()), { proxy: () => ({ outcome: 'forward', caller: null }) })
+		const response = await kit.fetch('/api/me', post({}, { 'X-Fabrika-Token': 'forged', 'Sec-Fetch-Site': 'same-origin' }))
+		expect(response.status).toBe(401)
+		expect(await response.json()).toEqual({ error: { type: 'auth', message: 'This endpoint needs a credential, and the request carries none' } })
+	})
+
+	test('an anonymous endpoint is forwarded without a caller', async () => {
+		const kit = testKit(notesApp(seed()))
+		const response = await kit.fetch('/healthz')
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ status: 'ok' })
+	})
+
+	test('the SPA is served to a member through the asset server', async () => {
+		const kit = testKit(notesApp(seed()))
+		const response = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: W1 }]))('/')
+		expect(response.status).toBe(200)
+		expect(response.headers.get('Content-Type')).toContain('text/html')
+	})
+
+	test('the decision is a seam: the kit asks the one it is given', async () => {
+		const asked: string[] = []
+		const kit = testKit(notesApp(seed()), {
+			proxy: (request) => {
+				asked.push(`${request.method} ${request.rawPath} ${request.credential?.via ?? 'none'}`)
+				return { outcome: 'refuse', status: 403, reason: 'refused by the test' }
+			},
+		})
+		const alice = kit.testCaller([{ action: 'notes.read' }])
+		expect((await kit.browser(alice)('/api/me', post({}))).status).toBe(403)
+		expect(asked).toEqual(['POST /api/me session'])
+	})
+
+	test('an application that does not boot fails the kit like boot does', () => {
+		const app = notesApp(seed())
+		expect(() => testKit({ ...app, database: null })).toThrow("acts on a 'note'")
+	})
+})
+
+describe('test callers', () => {
+	const kit = testKit(notesApp(seed()))
+
+	test('a role grants its actions in its scope, and nothing else', async () => {
+		const editor = kit.testCaller([{ role: 'editor', scope: W1 }])
+		expect(editor.perms).toEqual([
+			{ action: 'notes.read', scope: { type: 'workspace', value: 'w1' }, source: 'grant' },
+			{ action: 'notes.write', scope: { type: 'workspace', value: 'w1' }, source: 'grant' },
+		])
+		const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
+		const created = await api.notes.create({ workspaceId: 'w1', title: 'new' })
+		expect(created.title).toBe('new')
+		expect((await failure(api.notes.remove({ id: created.id }))).httpStatus).toBe(403)
+		expect((await failure(api.notes.create({ workspaceId: 'w2', title: 'x' }))).httpStatus).toBe(403)
+	})
+
+	test('a membership role is granted in one value of its dimension', () => {
+		expect(() => kit.testCaller([{ role: 'editor' }])).toThrow("'editor' is a membership role: grant it in one workspace")
+		expect(() => kit.testCaller([{ role: 'editor', scope: { type: 'note', value: N1 } }])).toThrow('membership role')
+	})
+
+	test('every caller gets its own credential and principal', () => {
+		const a = kit.testCaller([{ action: 'notes.read' }])
+		const b = kit.testCaller([{ action: 'notes.read' }])
+		const bot = kit.testCaller([{ action: 'notes.write' }], { kind: 'machine' })
+		expect(a.cookie).not.toBe(b.cookie)
+		expect(a.id).not.toBe(b.id)
+		expect(a.key).toBeNull()
+		expect(bot.cookie).toBeNull()
+		expect(bot.key?.startsWith('px_')).toBe(true)
+		expect(() => kit.browser(bot)).toThrow("pass the machine's key to createClient")
+	})
+
+	test('a human with a key calls without a browser header', async () => {
+		const alice = kit.testCaller([{ action: 'notes.read' }], { via: 'key', id: 'alice', label: 'alice@notes.test' })
+		const api = createClient(contract, 'api', { fetch: kit.fetch, key: alice.key ?? '' })
+		expect(await api.me()).toEqual({ id: 'alice', label: 'alice@notes.test' })
+	})
+})

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { defineApp } from '../app.js'
 import { route } from '../router.js'
-import { assertAppRuntimeConformance, normalizeAppResponse, runAppRuntimeConformance } from '../testing.js'
+import { assertAppRuntimeConformance, normalizeAppResponse, runAppRuntimeConformance } from '../testing/conformance.js'
 
 describe('application runtime conformance', () => {
 	test('normalizes status, headers, and body', async () => {

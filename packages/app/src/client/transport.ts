@@ -1,15 +1,9 @@
-// ─── RPC client ──────────────────────────────────────────────────────
+// What both browser clients share: the error type, the login bounce, and reading the `{ result }` / `{ error }`
+// envelope off a response.
 //
-// A typed proxy: `client.a.b.c(input)` POSTs `{ method: 'a.b.c', input }` to the
-// configured endpoint and unwraps `{ result }` / `{ error }`. Errors surface as
-// `RpcError` (carrying `type`, `loginUrl`, … off the error envelope).
-//
-// `bounceOnAuth` folds the SSO redirect every SPA needs into the client: on a
-// human-gated 401 (`type: 'auth'` + `loginUrl`) it redirects the browser to the
-// login URL (returning the current page) instead of throwing, with a short
-// re-entry guard so an unprovisioned identity can't loop forever.
-
-import type { InferRpcClient } from './rpc/contract.js'
+// `bounceOnAuth` folds the SSO redirect every SPA needs into the client: on a human-gated 401 (`type: 'auth'` +
+// `loginUrl`) it redirects the browser to the login URL (returning the current page) instead of throwing, with a
+// short re-entry guard so an unprovisioned identity can't loop forever.
 
 export class RpcError extends Error {
 	readonly type: string
@@ -29,27 +23,21 @@ export class RpcError extends Error {
 /** Minimal Fetch API surface required by the RPC client. */
 export type RpcFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
-interface BounceConfig {
+/**
+ * Auto-redirect to SSO on a human-gated 401 (`type: 'auth'` + `loginUrl`) instead of throwing.
+ * `true` uses sane defaults; pass `{ sessionKey, windowMs }` to tune the re-entry guard.
+ */
+export type BounceOption = boolean | { sessionKey?: string; windowMs?: number }
+
+export interface BounceConfig {
 	readonly sessionKey: string
 	readonly windowMs: number
 }
 
-export interface RpcClientOptions {
-	/** Endpoint the RPC proxy POSTs to (e.g. `/rpc`). */
-	readonly baseUrl: string
-	/**
-	 * Auto-redirect to SSO on a human-gated 401 (`type: 'auth'` + `loginUrl`) instead of throwing.
-	 * `true` uses sane defaults; pass `{ sessionKey, windowMs }` to tune the re-entry guard.
-	 */
-	readonly bounceOnAuth?: boolean | { sessionKey?: string; windowMs?: number }
-	/** Override `fetch` (tests / non-browser). Defaults to the global `fetch`. */
-	readonly fetch?: RpcFetch
-}
-
-function resolveBounce(baseUrl: string, opt: RpcClientOptions['bounceOnAuth']): BounceConfig | null {
+export function resolveBounce(scope: string, opt: BounceOption | undefined): BounceConfig | null {
 	if (!opt) return null
 	const tuning = opt === true ? {} : opt
-	return { sessionKey: tuning.sessionKey ?? `fabrika:login-bounce:${baseUrl}`, windowMs: tuning.windowMs ?? 10_000 }
+	return { sessionKey: tuning.sessionKey ?? `fabrika:login-bounce:${scope}`, windowMs: tuning.windowMs ?? 10_000 }
 }
 
 /** Guarded SSO redirect. Returns true if it navigated (caller should hang), false if guarded/non-browser. */
@@ -90,16 +78,11 @@ function normalizeError(
 	return { type: 'error', message: `HTTP ${httpStatus}`, httpStatus }
 }
 
-async function callRpc(opts: RpcClientOptions, bounce: BounceConfig | null, method: string, input: unknown): Promise<unknown> {
-	const doFetch = opts.fetch ?? fetch
+/** Sends one request and answers the envelope's `result`; every failure is an `RpcError`. */
+export async function exchange(doFetch: RpcFetch, url: string, init: RequestInit, bounce: BounceConfig | null): Promise<unknown> {
 	let response: Response
 	try {
-		response = await doFetch(opts.baseUrl, {
-			method: 'POST',
-			credentials: 'include',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ method, input: input ?? null }),
-		})
+		response = await doFetch(url, init)
 	} catch {
 		throw new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 })
 	}
@@ -120,24 +103,4 @@ async function callRpc(opts: RpcClientOptions, bounce: BounceConfig | null, meth
 	}
 	clearBounce(bounce)
 	return data.result
-}
-
-function makeProxy(opts: RpcClientOptions, bounce: BounceConfig | null, path: string): unknown {
-	const fn = (input: unknown) => callRpc(opts, bounce, path, input)
-	return new Proxy(fn, {
-		get(_target, prop) {
-			if (typeof prop !== 'string') return undefined
-			return makeProxy(opts, bounce, path ? `${path}.${prop}` : prop)
-		},
-	})
-}
-
-function isClient<TApi>(value: unknown): value is InferRpcClient<TApi> {
-	return typeof value === 'function'
-}
-
-export function createRpcClient<TApi>(opts: RpcClientOptions): InferRpcClient<TApi> {
-	const proxy = makeProxy(opts, resolveBounce(opts.baseUrl, opts.bounceOnAuth), '')
-	if (!isClient<TApi>(proxy)) throw new Error('unreachable')
-	return proxy
 }

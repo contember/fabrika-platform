@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
-import { createRpcClient, RpcError } from '../client.js'
+import { createRpcClient, RpcError } from '../index.js'
 import { initRpc } from '../rpc/builder.js'
 import { record } from './helpers.js'
 

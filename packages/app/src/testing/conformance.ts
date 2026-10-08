@@ -1,6 +1,6 @@
-import type { FabrikaApp, RequestExecutionContext } from './app.js'
-import { createBunHandler } from './bun.js'
-import { type CloudflareExecutionContext, createCloudflareWorker } from './cloudflare.js'
+import type { FabrikaApp, RequestExecutionContext } from '../app.js'
+import { createBunHandler } from '../bun.js'
+import { type CloudflareExecutionContext, createCloudflareWorker } from '../cloudflare.js'
 
 export type AppTestRuntime = 'direct' | 'bun' | 'cloudflare'
 

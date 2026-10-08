@@ -82,11 +82,11 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/db": "workspace:*",
         "@fabrika/jwks": "workspace:*",
+        "jose": "^5.9.0",
       },
       "devDependencies": {
         "@fabrika/check": "workspace:*",
         "@types/bun": "latest",
-        "jose": "^5.9.0",
         "typescript": "^5.9.3",
         "zod": "^3.25.76",
       },

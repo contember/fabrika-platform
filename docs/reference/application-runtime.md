@@ -269,6 +269,63 @@ tests for routes that are intentionally portable. Keep composition-specific
 surfaces separate; for example, IAM's process health and shared-secret HTTP RPC
 transports exist only in the Bun composition.
 
+## The typed client of a contract
+
+`@fabrika/app/client` is browser-safe. `createClient(contract, mount, options?)`
+builds one function per procedure of an RPC or link mount from the contract value:
+
+```ts
+const api = createClient(contract, 'api')
+await api.notes.remove({ id }) // POST /api/notes.remove, body {"id":"…"}
+const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedure>
+```
+
+- The path is the one `compileContract` gives the procedure: `<prefix>/<dotted.path>`,
+  and `<prefix>/api/<dotted.path>` for a link mount. A procedure without input sends
+  `{}`.
+- Only declared procedures exist, the input is typed by the input schema, and the
+  answer is parsed with the output schema; an answer it refuses is an `RpcError` of
+  type `invalid-response`, never a value.
+- `key` sends a `px_` key as `Authorization: Bearer` and no cookie. A link mount's
+  client needs it: the share key is the caller. Without a key the request is
+  same-origin and carries the session cookie.
+- An error envelope, or a proxy denial, is an `RpcError` with `type`, `httpStatus`,
+  `issues` and `loginUrl`. `bounceOnAuth` sends the browser to sign in on a 401 that
+  carries a login URL, as `createRpcClient` does.
+
+## Testing a contract application
+
+`@fabrika/app/testing` exports `testKit(app, options?)`. It boots the application as
+its generated entrypoint would, for the audience `<app>@test`, behind a stand-in for
+the proxy and IAM; it has no test-runner dependency.
+
+```ts
+const kit = testKit(notesApp(rows))
+const editor = kit.testCaller([{
+	role: 'editor',
+	scope: { type: 'workspace', value: 'w1' },
+}])
+const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
+```
+
+- `kit.testCaller(grants, { kind, via })` makes a principal of the test IAM. A grant
+  is an action or a role of the contract, global or in one scope; a role resolves to
+  its actions in that scope, and a membership role needs a scope of its dimension.
+  A human signs in with a session (`cookie`) or a `px_` key; `machine` and `link`
+  callers present a key.
+- `kit.fetch` takes a request as it reaches the proxy; `kit.browser(caller?)` adds
+  what a page of the application sends: `Sec-Fetch-Site: same-origin` and the
+  caller's session cookie.
+- The proxy decision (`ProxyDecision`) runs first: by default `endpointDecision`,
+  the steps of ADR-0022 over the endpoint table — canonical path (400),
+  `planEndpoint` (no endpoint is 403), a `px_` key whose caller kind must be a caller
+  (401 unknown, 403 wrong kind) or the session (401 when `human` is not a caller, the
+  login URL when there is none), and the requirement (403). `options.proxy` replaces
+  it, for example with a decision over the gates `gatesFromContract` generates.
+- A forwarded request loses every `X-Fabrika-*` header, the forwarding headers and
+  the `__Host-px_*` cookies, and carries a token the kit signed the way IAM does,
+  verified by the application's real verifier. The real dispatcher then answers it.
+
 ## What the platform writes into an application
 
 A deploy writes a small, fixed set of names into the deployed application's environment on every
