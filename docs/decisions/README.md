@@ -61,7 +61,7 @@ a commit message suffices.
 | [0040](0040-share-one-token-verifier.md)                                | Share one token verifier between the SDK and the proxy                                  |
 | [0041](0041-one-administrative-transport-for-control-and-operations.md) | One administrative transport for Control and Operations                                 |
 | [0042](0042-connect-local-builders-through-human-consent.md)            | Connect local builders through human consent                                            |
-| [0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)       | Validate and render one Zerops descriptor meaning                                       |
+| [0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)       | Validate and render one Zerops descriptor; the platform owns `run` and the server build |
 | [0044](0044-zerops-delivery-ownership-and-recovery.md)                  | Zerops delivery binds the release, recovers by poll or delete, and runs under one lease |
 | [0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)   | Upload immutable installation and namespace proxy sources                               |
 | [0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)         | Bind Cloudflare delivery to the recorded application commit                             |
