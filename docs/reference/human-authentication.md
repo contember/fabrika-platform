@@ -140,7 +140,10 @@ exactly this and stores the result in `.state/machine.env`.
 A service key is bound to the app it was provisioned for. Provisioning it with no
 `app` makes it cross-app, which is the right choice for an operator credential
 that drives several planes and the wrong one for an integration that needs only
-one.
+one. A cross-app grant reaches only the installation's own services (IAM, the
+console, Operations): a token for an application `<app>@<env>` carries the grants
+of that id and nothing else, and neither does the bootstrap `admin`
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6).
 
 See [ADR-0020](../decisions/0020-compose-human-authentication-methods.md) for the
 decision and rejected mode/temporary-password alternatives.

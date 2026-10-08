@@ -50,7 +50,8 @@ installation coordinates from persistence; a bound operation refuses a missing
 capability or mismatched coordinates rather than using an unbound fallback.
 
 Every deploy receives a provider-neutral `managedEnvironment` map assembled by
-control: `FABRIKA_RELEASE`, `FABRIKA_IAM_ISSUER`, and the source-scoped
+control: `FABRIKA_RELEASE`, `FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID` (the IAM
+application id `<app>@<env>` the proxy mints for), and the source-scoped
 Operations keys (`FABRIKA_OPERATIONS_DSN`, `FABRIKA_APP_ID`,
 `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`). `null` removes a previously
 managed value. Providers merge these values at their native deployment seam and

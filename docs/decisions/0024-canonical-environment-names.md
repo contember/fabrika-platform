@@ -28,7 +28,9 @@ the setting:
 
 - `FABRIKA_CONTROL_*`, `FABRIKA_IAM_*`, `FABRIKA_OPERATIONS_*`, `FABRIKA_PROXY_*`,
   `FABRIKA_RUNNER_*`, and the other per-component families.
-- `FABRIKA_APP_ID` identifies the consuming application, not the IAM service.
+- `FABRIKA_APP_ID` identifies the consuming application, not the IAM service. `FABRIKA_IAM_APP_ID`
+  is that application's IAM application id `<app>@<env>`, the audience its tokens carry
+  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 6).
 - `FABRIKA_RUNNER_WORKSPACE` is the runner's filesystem path.
 - `FABRIKA_ZEROPS_*` replaces a bare `ZEROPS_*` prefix, because Zerops reserves that prefix
   and refuses to store a custom variable that uses it.

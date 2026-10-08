@@ -212,8 +212,9 @@ Cloudflare composition.
 Configuration uses component-owned names from
 [ADR-0024](../decisions/0024-canonical-environment-names.md):
 
-- applications use `FABRIKA_APP_ID` and `FABRIKA_IAM_ISSUER`; `fabrika db` reads the
-  application's database from `FABRIKA_APP_DATABASE_URL`;
+- applications use `FABRIKA_APP_ID`, `FABRIKA_IAM_APP_ID` (the IAM application id `<app>@<env>`)
+  and `FABRIKA_IAM_ISSUER`; `fabrika db` reads the application's database from
+  `FABRIKA_APP_DATABASE_URL`;
 - IAM service configuration uses `FABRIKA_IAM_*`;
 - Delivery service configuration uses `FABRIKA_CONTROL_*`;
 - runner-owned workspace configuration uses `FABRIKA_RUNNER_WORKSPACE`;

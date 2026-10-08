@@ -1071,7 +1071,7 @@ operator interfaces are described in
 Each application deploy writes `FABRIKA_RELEASE` as a literal into the selected setup's
 `run.envVariables` of the execution descriptor, so the release travels with the version; the source
 descriptor's bytes and digest are unchanged. The other managed keys (`FABRIKA_OPERATIONS_DSN`,
-`FABRIKA_IAM_ISSUER`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are ordinary
+`FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are ordinary
 service variables, overwritten before the build. Application-authored inputs and secret writes may not
 use a managed name. The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
 version and deletes an untriggered one

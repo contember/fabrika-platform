@@ -12,11 +12,11 @@ date: 2026-10-07
 Zerops service variables are mutable service state. A failed or cancelled build leaves new values in
 place, and the next restart of the old code reads them. A rollback to an archived version also boots
 with the current values ([platform facts](../reference/zerops-platform.md#verified-live-2026-09-23-account-prg1--service-variables-across-activation-and-rollback)).
-Fabrika writes six managed keys into an application service: `FABRIKA_RELEASE`,
-`FABRIKA_OPERATIONS_DSN`, `FABRIKA_IAM_ISSUER`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT` and
-`FABRIKA_SERVICE_KEY`. If a deploy writes them as service variables and then fails, the old code
+Fabrika writes seven managed keys into an application service: `FABRIKA_RELEASE`,
+`FABRIKA_OPERATIONS_DSN`, `FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID`, `FABRIKA_APP_ID`,
+`FABRIKA_ENVIRONMENT` and `FABRIKA_SERVICE_KEY`. If a deploy writes them as service variables and then fails, the old code
 restarts with the candidate's values. For `FABRIKA_RELEASE` that is wrong data: errors and source maps
-from the old code are attributed to a release that never ran. The other five keys change only when the
+from the old code are attributed to a release that never ran. The other six keys change only when the
 platform is reconfigured, and a newer value reaching older code is correct, not harmful.
 
 The execution descriptor sent with a build (`zeropsYaml` on `build-and-deploy`) belongs to that one
@@ -97,7 +97,7 @@ external work.
 ## Consequences
 
 - Failed or cancelled candidates cannot change the release identity that old code reports.
-- Accepted risk: a rollback runs with the current, not the historical, values of the five non-release
+- Accepted risk: a rollback runs with the current, not the historical, values of the six non-release
   keys. A newer issuer, DSN, service key or name reaching older code is benign.
 - No ownership markers, no admission of a prior binding, and no per-version service secrets. Nothing
   accumulates on the service, so nothing needs reclamation.
@@ -109,10 +109,10 @@ external work.
 
 ## Alternatives considered
 
-- **Bind all six managed keys to each version** as create-only per-version service secrets selected
+- **Bind all seven managed keys to each version** as create-only per-version service secrets selected
   by references in `run.envVariables`, with an ownership marker, admission of the prior binding, and a
   collision-rejecting first import. It also restored historical non-release keys on rollback. It lost:
-  the five other keys do not need history, it needed an admission protocol and legacy-conversion rules,
+  the six other keys do not need history, it needed an admission protocol and legacy-conversion rules,
   and the per-version secrets were never reclaimed.
 - **Native pipeline secret fields (`envSecretsFile`).** They changed service records even when the
   build failed and did not bind values to the uploaded version.

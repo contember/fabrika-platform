@@ -286,7 +286,7 @@ presigned upload URL; the Zerops token never leaves control
 
 Only `FABRIKA_RELEASE` is bound to the version: `trigger-build` writes it into the
 execution descriptor's `run.envVariables`. The other managed keys
-(`FABRIKA_OPERATIONS_DSN`, `FABRIKA_IAM_ISSUER`, `FABRIKA_APP_ID`,
+(`FABRIKA_OPERATIONS_DSN`, `FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID`, `FABRIKA_APP_ID`,
 `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are plain service variables that
 `write-service-env` overwrites
 ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)).

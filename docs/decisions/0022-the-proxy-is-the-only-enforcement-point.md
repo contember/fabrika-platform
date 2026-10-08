@@ -300,11 +300,18 @@ registry of its own.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
   every write path, and refuses a global grant of a role declared with `member.scope`.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
-  limit. Work unit B5 decides the number.
+  limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
+  into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
+  16 KiB of request headers; Caddy and Cloudflare allow more.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
   share links included. Membership operations are checked live at IAM.
 
-The code does none of rule 6 yet (part B, work unit B5).
+Work unit B5 built rule 6 except delegation grants, which need the membership operations of work
+unit A12 at IAM and the endpoint tables of B2 at the proxy. The platform audiences are IAM
+(`propustka`), the console (`vozka`), Operations and every admin audience. A contract application is
+one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. Until A12 replaces it with
+the membership operations, `listPrincipals` is narrowed for an application token rather than refused: it
+lists only holders of a grant in the caller's application id.
 
 ## Consequences
 

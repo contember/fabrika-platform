@@ -130,12 +130,14 @@ on a public hostname cannot hold a session at all.
 
 ### Who writes the registry
 
-The set IAM stores for an app is the set of `app_envs.public_origin` values the control
-plane holds for that app id, projected on every deploy:
+IAM's registry is keyed by the IAM application id `<app>@<env>`
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6), so the set it
+stores for `notes@prod` is the `app_envs.public_origin` of `notes`'s `prod` environment, projected
+on every deploy:
 
-1. `executeDeploy` collects every environment's public origin for the app (app-wide,
-   because IAM's registry is keyed by app id — a `stage` deploy must not un-register
-   `prod`) and puts it on the provider deploy input.
+1. `executeDeploy` reads the deploying environment's public origin and puts it on the
+   provider deploy input. Another environment's origin never travels with it: registered
+   under `notes@prod`, a `stage` host would be handed production sessions.
 2. It reaches the deploy step that already talks to IAM (`reconcileSchema`), which makes
    a **second** call — `apps.setReturnOrigins` over `/admin/rpc`, after the schema PUT,
    because that PUT is what registers the app and `setReturnOrigins` 404s for an unknown
@@ -143,7 +145,7 @@ plane holds for that app id, projected on every deploy:
 
 Three consequences worth knowing:
 
-- An app with no `publicOrigin` on any environment is **left alone**, not registered
+- An environment with no `publicOrigin` is **left alone**, not registered
   with a guess — and, since it then has an empty registry, nobody can sign in to it.
   Configure `publicOrigin` before expecting a login to work.
 - The projection is authoritative: an origin added by hand through the admin surface is

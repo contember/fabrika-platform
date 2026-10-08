@@ -39,9 +39,10 @@ protocol surfaces required by their platform roles. See
 [`core-application-composition.md`](core-application-composition.md) for their
 RPC, authorization, persistence, protocol, and environment boundaries.
 
-`@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
-origin from `FABRIKA_IAM_ISSUER`, straight off the `Env` it is handed. Those are the
-only names it accepts; the predecessor names were retired by
+`@fabrika/auth` reads application identity from `FABRIKA_IAM_APP_ID` — the IAM
+application id `<app>@<env>` ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)
+rule 6) — and the IAM origin from `FABRIKA_IAM_ISSUER`, straight off the `Env` it is
+handed. Those are the only names it accepts; the predecessor names were retired by
 [ADR-0024](../decisions/0024-canonical-environment-names.md), and
 there is no compatibility reader left to consult.
 
@@ -149,12 +150,13 @@ installation or per deploy that the control plane is the only thing to know, so 
 commits them nor sets them, and an application VARIABLE of the same name is refused at deploy
 ([ADR-0035](../decisions/0035-the-platform-owns-the-application-iam-issuer.md)).
 
-| Name                                                           | What it is                                                                   |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `FABRIKA_IAM_ISSUER`                                           | The IAM origin: the `iss` of every token the app verifies, and its JWKS base |
-| `FABRIKA_RELEASE`                                              | The deploy-scoped release name                                               |
-| `FABRIKA_OPERATIONS_DSN`                                       | The browser-safe public ingest DSN for this application environment          |
-| `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY` | The ingest coordinates that DSN reports under                                |
+| Name                                                           | What it is                                                                      |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `FABRIKA_IAM_ISSUER`                                           | The IAM origin: the `iss` of every token the app verifies, and its JWKS base    |
+| `FABRIKA_IAM_APP_ID`                                           | The IAM application id `<app>@<env>`: the `aud` of every token the app verifies |
+| `FABRIKA_RELEASE`                                              | The deploy-scoped release name                                                  |
+| `FABRIKA_OPERATIONS_DSN`                                       | The browser-safe public ingest DSN for this application environment             |
+| `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY` | The ingest coordinates that DSN reports under                                   |
 
 A name whose value the installation cannot supply is REMOVED from the service rather than left stale —
 an app verifying against a previous installation's issuer is worse than one that fails to boot.
