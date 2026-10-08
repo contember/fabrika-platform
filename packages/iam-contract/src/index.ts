@@ -335,8 +335,9 @@ export interface RotateApiKeyInput extends ApiKeyIdInput {
 	expiresAt?: number | null
 }
 
+/** Every procedure that names a principal keys it as `principalId`; a bare `id` names some other resource. */
 export interface PrincipalIdInput {
-	id: string
+	principalId: string
 }
 
 export interface ListSessionsInput extends PageInput {
@@ -455,6 +456,7 @@ export interface IamAdminRpcContract {
 		disable: RpcProcedure<PrincipalIdInput, OkResponse>
 	}
 	grants: {
+		/** A role grant the principal already holds — same role, scope and app — answers 409 naming it. */
 		create: RpcProcedure<CreateGrantRequest, GrantDto>
 		delete: RpcProcedure<GrantIdInput, OkResponse>
 	}

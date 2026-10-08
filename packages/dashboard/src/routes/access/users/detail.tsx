@@ -15,7 +15,7 @@ import { fmtAgo, fmtDate } from '../../../lib/format'
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => ({
-		principal: await api.principals.get({ id: params.id }),
+		principal: await api.principals.get({ principalId: params.id }),
 		sessions: await api.sessions.list({ principalId: params.id }),
 	}))
 	.route('/access/users/:id')
@@ -133,8 +133,8 @@ function Authentication({ principal, onDone }: { principal: PrincipalDetail; onD
 		setNotice(null)
 		try {
 			const result = purpose === 'enrollment'
-				? await api.passwords.issueEnrollment({ id: principal.id })
-				: await api.passwords.issueReset({ id: principal.id })
+				? await api.passwords.issueEnrollment({ principalId: principal.id })
+				: await api.passwords.issueReset({ principalId: principal.id })
 			if (result.delivery === 'manual') {
 				setManual({ purpose: purpose === 'enrollment' ? 'Enrollment' : 'Reset', result })
 			} else {
@@ -153,7 +153,7 @@ function Authentication({ principal, onDone }: { principal: PrincipalDetail; onD
 		setError(null)
 		setNotice(null)
 		try {
-			await api.passwords.disable({ id: principal.id })
+			await api.passwords.disable({ principalId: principal.id })
 			setNotice('Password authentication disabled. Existing OIDC sessions remain active.')
 			setConfirmDisable(false)
 			onDone()
@@ -268,7 +268,7 @@ function Sessions({ principalId, sessions, onDone }: { principalId: string; sess
 	const live = sessions.filter((session) => session.status === 'active')
 
 	async function revokeAll() {
-		await api.sessions.revokeAll({ id: principalId })
+		await api.sessions.revokeAll({ principalId })
 		setConfirmAll(false)
 		onDone()
 	}
@@ -382,7 +382,7 @@ function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDo
 
 	async function toggle() {
 		const body: UpdatePrincipalRequest = { disabled: !disabled }
-		await api.principals.update({ id: principal.id, ...body })
+		await api.principals.update({ principalId: principal.id, ...body })
 		onDone()
 	}
 

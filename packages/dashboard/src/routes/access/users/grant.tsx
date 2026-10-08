@@ -15,7 +15,7 @@ export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
 		const [principal, apps] = await Promise.all([
-			api.principals.get({ id: params.id }),
+			api.principals.get({ principalId: params.id }),
 			api.apps.list(),
 		])
 		return { principal, apps: apps.items }

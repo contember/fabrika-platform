@@ -14,8 +14,7 @@ const optionalNullableString = z.string().nullable().optional()
 
 const appInput = z.object({ app: nonEmpty })
 const pageInput = { before: z.string().optional(), limit: z.number().finite().optional() }
-const principalIdInput = z.object({ id: nonEmpty })
-const apiKeyIdInput = z.object({ principalId: nonEmpty })
+const principalIdInput = z.object({ principalId: nonEmpty })
 const shareLinkIdInput = z.object({ id: nonEmpty })
 const authorization = {
 	roleKey: nonEmpty.optional(),
@@ -56,7 +55,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.invitePrincipal(context(ctx), input)),
 		update: t.procedure
-			.input(z.object({ id: nonEmpty, disabled: z.boolean() }))
+			.input(z.object({ principalId: nonEmpty, disabled: z.boolean() }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.updatePrincipal(context(ctx), input)),
 	}),
@@ -137,7 +136,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ principalId: nonEmpty, expiresAt: z.number().finite().nullable().optional() }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.rotateApiKey(context(ctx), input)),
-		revoke: t.procedure.input(apiKeyIdInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.revokeApiKey(context(ctx), input)),
+		revoke: t.procedure.input(principalIdInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.revokeApiKey(context(ctx), input)),
 	}),
 	shareLinks: t.router({
 		list: t.procedure

@@ -6,6 +6,7 @@ import {
 	type ListPrincipalsInput,
 	type MeDto,
 	type PrincipalDetail,
+	type PrincipalIdInput,
 	type PrincipalListItem,
 	type UpdatePrincipalInput,
 } from '@fabrika/iam-contract'
@@ -52,8 +53,8 @@ export async function listPrincipalsUseCase(c: AdminContext, input: ListPrincipa
 	return { items, nextCursor: cursorOf(items, limit, (item) => item.id) }
 }
 
-export async function getPrincipalUseCase(c: AdminContext, input: { id: string }): Promise<PrincipalDetail> {
-	const id = input.id
+export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<PrincipalDetail> {
+	const id = input.principalId
 	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
 		return fail(404, 'principal not found')
@@ -144,7 +145,7 @@ export async function invitePrincipalUseCase(c: AdminContext, input: InviteReque
 }
 
 export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrincipalInput): Promise<PrincipalListItem> {
-	const { id, disabled } = input
+	const { principalId: id, disabled } = input
 	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
 		return fail(404, 'principal not found')

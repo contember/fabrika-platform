@@ -125,7 +125,7 @@ describe('POST /admin/rpc typed operations', () => {
 		expect(typeof id).toBe('string')
 		if (typeof id !== 'string') throw new Error('expected principal id')
 
-		const update = await call(h, 'principals.update', { id, disabled: true }, { bearer })
+		const update = await call(h, 'principals.update', { principalId: id, disabled: true }, { bearer })
 		expect(prop(prop(await update.json(), 'result'), 'status')).toBe('disabled')
 
 		const list = await call(h, 'principals.list', { type: 'user', status: 'disabled' }, { bearer })
@@ -157,8 +157,8 @@ describe('POST /admin/rpc typed operations', () => {
 	test('maps validation and use-case failures to structural RPC errors', async () => {
 		const h = createHarness()
 		const bearer = await admin(h)
-		const invalid = await call(h, 'principals.update', { id: '', disabled: 'yes' }, { bearer })
-		const missing = await call(h, 'principals.get', { id: 'missing' }, { bearer })
+		const invalid = await call(h, 'principals.update', { principalId: '', disabled: 'yes' }, { bearer })
+		const missing = await call(h, 'principals.get', { principalId: 'missing' }, { bearer })
 
 		expect(invalid.status).toBe(400)
 		expect(prop(prop(await invalid.json(), 'error'), 'type')).toBe('validation')
@@ -201,6 +201,61 @@ describe('POST /admin/rpc typed operations', () => {
 		h.repositories.principals.listPrincipals = () => Promise.reject(new Error('secret principal failure'))
 
 		const response = await call(h, 'principals.list', {}, { bearer })
+		const body: unknown = await response.json()
+
+		expect(response.status).toBe(500)
+		expect(body).toEqual({ error: { type: 'internal', message: 'internal error' } })
+	})
+})
+
+describe('grants.create', () => {
+	test('a duplicate cross-app grant answers 409 naming the grant it would duplicate', async () => {
+		const h = createHarness()
+		const bearer = await admin(h)
+		const principalId = seedUser(h.sqlite, { sub: 'sub-grantee', email: 'grantee@example.com' })
+		const grant = { principalId, roleKey: 'admin', app: null }
+
+		const first = await call(h, 'grants.create', grant, { bearer })
+		const held = prop(prop(await first.json(), 'result'), 'id')
+		const second = await call(h, 'grants.create', grant, { bearer })
+
+		expect(first.status).toBe(200)
+		expect(typeof held).toBe('string')
+		expect(second.status).toBe(409)
+		expect(prop(await second.json(), 'error')).toEqual({ type: 'conflict', message: `principal ${principalId} already holds this grant: ${held}` })
+		expect(await h.repositories.grants.listGrants(principalId)).toHaveLength(1)
+	})
+
+	test('a duplicate scoped grant for a registered app answers 409', async () => {
+		const h = createHarness()
+		const bearer = await admin(h)
+		seedAppAction(h.sqlite, 'delivery', 'deploy.run')
+		const principalId = seedUser(h.sqlite, { sub: 'sub-grantee', email: 'grantee@example.com' })
+		const grant = { principalId, roleKey: 'admin', app: 'delivery', scopeType: 'team', scopeValue: 'acme' }
+
+		expect((await call(h, 'grants.create', grant, { bearer })).status).toBe(200)
+		expect((await call(h, 'grants.create', grant, { bearer })).status).toBe(409)
+	})
+
+	test('the same role for a different app is a second grant, not a duplicate', async () => {
+		const h = createHarness()
+		const bearer = await admin(h)
+		seedAppAction(h.sqlite, 'delivery', 'deploy.run')
+		seedAppAction(h.sqlite, 'operations', 'errors.read')
+		const principalId = seedUser(h.sqlite, { sub: 'sub-grantee', email: 'grantee@example.com' })
+
+		expect((await call(h, 'grants.create', { principalId, roleKey: 'admin', app: 'delivery' }, { bearer })).status).toBe(200)
+		expect((await call(h, 'grants.create', { principalId, roleKey: 'admin', app: 'operations' }, { bearer })).status).toBe(200)
+		expect(await h.repositories.grants.listGrants(principalId)).toHaveLength(2)
+	})
+
+	test('a failed insert that duplicates nothing stays an opaque internal error', async () => {
+		const h = createHarness()
+		const bearer = await admin(h)
+		const principalId = seedUser(h.sqlite, { sub: 'sub-grantee', email: 'grantee@example.com' })
+		h.repositories.grants.createGrant = () => Promise.reject(new Error('secret grant failure'))
+
+		const response = await call(h, 'grants.create', { principalId, roleKey: 'admin', app: null }, { bearer })
 		const body: unknown = await response.json()
 
 		expect(response.status).toBe(500)

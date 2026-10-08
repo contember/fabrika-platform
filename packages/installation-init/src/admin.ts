@@ -7,14 +7,10 @@
  * nothing. WHERE an installation's IAM answers, and how an operator names it, is the provider's own
  * question and stays in its installation package.
  *
- * Two traps a live bring-up found are encoded here rather than left to each caller:
- *
- *   - **The grant is CROSS-APP (`app: null`).** Grants filter to the calling app, so an `admin` grant
- *     scoped to the console's own app id leaves Delivery and Operations working while the Access plane
- *     refuses. IAM's own app id is not a registered app, so naming it would dangle instead.
- *   - **The two admin inputs disagree.** `grants.create` keys on `principalId` while `principals.get`
- *     and `passwords.issueEnrollment` take `PrincipalIdInput`, which keys on `id` — the obvious call
- *     answers `400 id: Required`. Hidden here deliberately; harmonizing the surface is its own work.
+ * A trap a live bring-up found is encoded here rather than left to each caller: **the grant is
+ * CROSS-APP (`app: null`).** Grants filter to the calling app, so an `admin` grant scoped to the
+ * console's own app id leaves Delivery and Operations working while the Access plane refuses. IAM's
+ * own app id is not a registered app, so naming it would dangle instead.
  *
  * The enrollment URL is a CREDENTIAL IN TRANSIT. It is RETURNED, never logged: nothing in this module
  * prints, and `log.ts` deliberately has no helper that takes a secret value.
@@ -243,13 +239,11 @@ export const ensureFirstAdministrator = async (
 	if (principal.status === 'disabled') {
 		throw new Error(
 			`principal ${principal.id} holds ${email} and is disabled — a disabled principal cannot sign in. Name a different `
-				+ 'mailbox, or re-enable this one with `principals.update` ({ id, disabled: false }) before running this again',
+				+ 'mailbox, or re-enable this one with `principals.update` ({ principalId, disabled: false }) before running this again',
 		)
 	}
 
-	// `principals.get` keys on `id`; `grants.create` below keys on `principalId`. Same principal, two
-	// spellings — this is the difference the command hides.
-	const detail = await step('principals.get', () => client.principals.get({ id: principal.id }))
+	const detail = await step('principals.get', () => client.principals.get({ principalId: principal.id }))
 	const now = Math.floor(Date.now() / 1000)
 	const granted = detail.grants.some((grant) => isCrossAppAdminGrant(grant, now))
 	if (!granted) {
@@ -293,7 +287,7 @@ const ensureEnrollment = async (
 	if (state === 'pending' && !reissue) {
 		return { state: 'outstanding' }
 	}
-	const delivery = await step('passwords.issueEnrollment', () => client.passwords.issueEnrollment({ id: principalId }))
+	const delivery = await step('passwords.issueEnrollment', () => client.passwords.issueEnrollment({ principalId }))
 	return delivery.delivery === 'manual'
 		? { state: 'issued', url: delivery.url, expiresAt: delivery.expiresAt }
 		: { state: 'emailed', email: delivery.email, expiresAt: delivery.expiresAt }

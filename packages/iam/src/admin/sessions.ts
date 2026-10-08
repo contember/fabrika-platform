@@ -96,16 +96,16 @@ export async function revokeSessionUseCase(c: AdminContext, input: SessionIdInpu
 
 /** Revoke every live session a principal holds — the "sign them out everywhere" answer. */
 export async function revokeSessionsForPrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<RevokedSessionsResponse> {
-	const principal = await c.services.repositories.principals.getPrincipalById(input.id)
+	const principal = await c.services.repositories.principals.getPrincipalById(input.principalId)
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
-	const revoked = await c.services.repositories.sessions.revokeSessionsForPrincipal(input.id)
+	const revoked = await c.services.repositories.sessions.revokeSessionsForPrincipal(input.principalId)
 	if (revoked > 0) {
 		await adminAudit(c, {
 			action: 'iam.session.revoke_all',
 			resourceType: 'principal',
-			resourceId: input.id,
+			resourceId: input.principalId,
 			metadata: { revoked },
 		})
 	}

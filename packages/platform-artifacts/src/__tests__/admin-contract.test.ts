@@ -1,8 +1,8 @@
 // The first-administrator flow against the REAL IAM admin router.
 //
 // The admin tests in `@fabrika/provider-zerops/installation` stand up a fake `/admin/rpc`, which proves the flow but not the
-// CONTRACT: the input shapes are zod schemas in `packages/iam/src/admin/rpc.ts`, and the whole reason
-// this command exists is that two of them disagree about how a principal is named. So this one drives
+// CONTRACT: the input shapes are zod schemas in `packages/iam/src/admin/rpc.ts`, and a fake cannot
+// tell whether the command sends the shape IAM actually parses. So this one drives
 // `ensureFirstAdministrator` through `createIamApp` over the harness's in-memory SQLite, with the
 // provisioning key in the environment exactly as an installation holds it.
 //
@@ -95,7 +95,7 @@ describe('the first administrator, against the real admin router', () => {
 		const { client } = liveIam(createHarness())
 
 		const result = await ensureFirstAdministrator(client, { email: EMAIL })
-		const detail = await client.principals.get({ id: result.principalId })
+		const detail = await client.principals.get({ principalId: result.principalId })
 
 		expect(detail.grants).toHaveLength(1)
 		expect(detail.grants[0]).toMatchObject({ app: null, roleKey: 'admin', scopeType: null, scopeValue: null, dangling: false })
@@ -116,32 +116,29 @@ describe('the first administrator, against the real admin router', () => {
 
 		const users = await client.principals.list({ type: 'user' })
 		expect(users.items.filter((item) => item.email === EMAIL)).toHaveLength(1)
-		expect((await client.principals.get({ id: first.principalId })).grants).toHaveLength(1)
+		expect((await client.principals.get({ principalId: first.principalId })).grants).toHaveLength(1)
 	})
 
-	test('the two procedures really do disagree, and the command sends each the shape it wants', async () => {
+	test('both procedures the command calls with a principal name it `principalId`; `id` is refused', async () => {
 		const { client, raw } = liveIam(createHarness())
 		const result = await ensureFirstAdministrator(client, { email: EMAIL })
 
-		// What a caller writing the obvious sequence sends, and what IAM answers.
-		const enrollmentByPrincipalId = await raw('passwords.issueEnrollment', { principalId: result.principalId })
-		expect(enrollmentByPrincipalId.status).toBe(400)
-		const grantById = await raw('grants.create', { id: result.principalId, roleKey: 'admin', app: null })
-		expect(grantById.status).toBe(400)
-
-		// And what this command sends instead: `id` here, `principalId` there. Both accepted.
-		expect((await raw('passwords.issueEnrollment', { id: result.principalId })).status).toBe(200)
+		expect((await raw('passwords.issueEnrollment', { id: result.principalId })).status).toBe(400)
+		expect((await raw('passwords.issueEnrollment', { principalId: result.principalId })).status).toBe(200)
 		const other = await client.principals.invite({ email: 'second@example.test' })
 		expect((await raw('grants.create', { principalId: other.id, roleKey: 'admin', app: null })).status).toBe(200)
 	})
 
-	test('a second identical grant is not something IAM absorbs — which is why the command checks first', async () => {
+	test('a second identical grant answers 409 naming the grant it would duplicate', async () => {
 		const { client, raw } = liveIam(createHarness())
 		const result = await ensureFirstAdministrator(client, { email: EMAIL })
+		const [held] = (await client.principals.get({ principalId: result.principalId })).grants
 
-		// Re-sending the grant a re-run would otherwise send does NOT succeed, so `grant: 'present'` is a
-		// correctness requirement and not a nicety.
-		expect((await raw('grants.create', { principalId: result.principalId, roleKey: 'admin', app: null })).status).not.toBe(200)
+		const response = await raw('grants.create', { principalId: result.principalId, roleKey: 'admin', app: null })
+		const body: unknown = await response.json()
+
+		expect(response.status).toBe(409)
+		expect(body).toMatchObject({ error: { type: 'conflict', message: expect.stringContaining(held?.id ?? 'no grant was held') } })
 	})
 
 	test('a wrong provisioning key is refused before anything is written', async () => {

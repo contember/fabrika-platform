@@ -108,7 +108,7 @@ describe('password administration RPC', () => {
 		const h = createHarness()
 		const user = seedUser(h.sqlite, { sub: null, email: 'user@example.com' })
 
-		const response = await call(h, 'passwords.issueEnrollment', { id: user })
+		const response = await call(h, 'passwords.issueEnrollment', { principalId: user })
 
 		expect(response.status).toBe(401)
 		expect(prop(prop(await response.json(), 'error'), 'type')).toBe('auth')
@@ -122,7 +122,7 @@ describe('password administration RPC', () => {
 		const principalId = prop(prop(await invite.json(), 'result'), 'id')
 		if (typeof principalId !== 'string') throw new Error('expected principal id')
 
-		const enrollmentIssue = await call(h, 'passwords.issueEnrollment', { id: principalId }, options)
+		const enrollmentIssue = await call(h, 'passwords.issueEnrollment', { principalId: principalId }, options)
 		const result = prop(await enrollmentIssue.json(), 'result')
 
 		expect(invite.status).toBe(200)
@@ -181,21 +181,21 @@ describe('password administration RPC', () => {
 		const { bearer } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: null, email: 'pending@example.com' })
 
-		const before = await call(h, 'principals.get', { id: user }, { bearer })
+		const before = await call(h, 'principals.get', { principalId: user }, { bearer })
 		const beforeAuth = prop(prop(await before.json(), 'result'), 'authentication')
 		expect(prop(prop(beforeAuth, 'oidc'), 'state')).toBe('unlinked')
 		expect(prop(prop(beforeAuth, 'password'), 'state')).toBe('disabled')
 
-		const first = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer })
+		const first = await call(h, 'passwords.issueEnrollment', { principalId: user }, { bearer })
 		const firstUrl = prop(prop(await first.json(), 'result'), 'url')
-		const second = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer })
+		const second = await call(h, 'passwords.issueEnrollment', { principalId: user }, { bearer })
 		const secondUrl = prop(prop(await second.json(), 'result'), 'url')
 
 		expect(first.status).toBe(200)
 		expect(second.status).toBe(200)
 		expect(secondUrl).not.toBe(firstUrl)
 		expect((await h.repositories.passwords.getAccount(user))?.state).toBe('pending')
-		const after = await call(h, 'principals.get', { id: user }, { bearer })
+		const after = await call(h, 'principals.get', { principalId: user }, { bearer })
 		expect(prop(prop(prop(prop(await after.json(), 'result'), 'authentication'), 'password'), 'state')).toBe('pending')
 		const tokens = h.sqlite.query<{ consumed_at: number | null }, [string]>(
 			'SELECT consumed_at FROM password_action_tokens WHERE principal_id = ? ORDER BY created_at, id',
@@ -209,7 +209,7 @@ describe('password administration RPC', () => {
 		const { bearer } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'idp-subject', email: 'linked@example.com' })
 
-		const response = await call(h, 'principals.get', { id: user }, { bearer, env: { oidc: false } })
+		const response = await call(h, 'principals.get', { principalId: user }, { bearer, env: { oidc: false } })
 		const result = prop(await response.json(), 'result')
 
 		expect(prop(prop(prop(result, 'authentication'), 'oidc'), 'state')).toBe('unavailable')
@@ -222,8 +222,8 @@ describe('password administration RPC', () => {
 		const service = seedService(h.sqlite, { commonName: 'worker' })
 		const user = seedUser(h.sqlite, { sub: null, email: 'not-enabled@example.com' })
 
-		const serviceResponse = await call(h, 'passwords.issueEnrollment', { id: service }, { bearer })
-		const resetResponse = await call(h, 'passwords.issueReset', { id: user }, { bearer })
+		const serviceResponse = await call(h, 'passwords.issueEnrollment', { principalId: service }, { bearer })
+		const resetResponse = await call(h, 'passwords.issueReset', { principalId: user }, { bearer })
 
 		expect(serviceResponse.status).toBe(400)
 		expect(resetResponse.status).toBe(409)
@@ -245,7 +245,7 @@ describe('password administration RPC', () => {
 		)
 		let response: Response
 		try {
-			response = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer, env: { email: true } })
+			response = await call(h, 'passwords.issueEnrollment', { principalId: user }, { bearer, env: { email: true } })
 		} finally {
 			globalThis.fetch = originalFetch
 		}
@@ -274,7 +274,7 @@ describe('password administration RPC', () => {
 		}
 		let response: Response
 		try {
-			response = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer, env: { email: true } })
+			response = await call(h, 'passwords.issueEnrollment', { principalId: user }, { bearer, env: { email: true } })
 		} finally {
 			globalThis.fetch = originalFetch
 			console.error = originalError
@@ -300,7 +300,7 @@ describe('password administration delivery and audit', () => {
 		}
 		const c = directContext(h, passwordServices(h, sender), adminId)
 
-		const result = await adminUseCases.issuePasswordEnrollment(c, { id: user })
+		const result = await adminUseCases.issuePasswordEnrollment(c, { principalId: user })
 
 		expect(result).toEqual({ delivery: 'email', email: 'mail-user@example.com', expiresAt: expect.any(Number) })
 		expect(JSON.stringify(result)).not.toContain('token=')
@@ -332,7 +332,7 @@ describe('password administration delivery and audit', () => {
 			logs.push(args)
 		}
 		try {
-			await adminUseCases.issuePasswordEnrollment(c, { id: user })
+			await adminUseCases.issuePasswordEnrollment(c, { principalId: user })
 		} catch (cause) {
 			failure = cause
 		} finally {
@@ -363,7 +363,7 @@ describe('password administration delivery and audit', () => {
 		await h.repositories.passwords.upsertCredential(user, storedPassword())
 		const c = directContext(h, passwordServices(h), adminId)
 
-		const result = await adminUseCases.issuePasswordReset(c, { id: user })
+		const result = await adminUseCases.issuePasswordReset(c, { principalId: user })
 
 		expect(result.delivery).toBe('manual')
 		if (result.delivery !== 'manual') throw new Error('expected manual reset')
@@ -392,7 +392,7 @@ describe('password administration delivery and audit', () => {
 		})
 		const c = directContext(h, passwordServices(h), adminId)
 
-		await adminUseCases.disablePassword(c, { id: user })
+		await adminUseCases.disablePassword(c, { principalId: user })
 
 		expect((await h.repositories.passwords.getAccount(user))?.state).toBe('disabled')
 		expect(await h.repositories.passwords.getCredential(user)).toBeNull()

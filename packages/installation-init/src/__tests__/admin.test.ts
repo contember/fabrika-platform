@@ -107,13 +107,12 @@ const fakeIam = (options: FakeOptions = {}): FakeIam => {
 			principals.push(created)
 			return created.item
 		}
-		const id = String(Reflect.get(Object(input), 'id'))
+		const principalId = String(Reflect.get(Object(input), 'principalId'))
 		if (method === 'principals.get') {
-			const found = principals.find((entry) => entry.item.id === id)
+			const found = principals.find((entry) => entry.item.id === principalId)
 			return found === undefined ? undefined : detail(found)
 		}
 		if (method === 'grants.create') {
-			const principalId = String(Reflect.get(Object(input), 'principalId'))
 			const found = principals.find((entry) => entry.item.id === principalId)
 			if (found === undefined) {
 				throw new Error('the fake was asked to grant to a principal it does not hold')
@@ -123,7 +122,7 @@ const fakeIam = (options: FakeOptions = {}): FakeIam => {
 			return grant
 		}
 		if (method === 'passwords.issueEnrollment') {
-			const found = principals.find((entry) => entry.item.id === id)
+			const found = principals.find((entry) => entry.item.id === principalId)
 			if (found === undefined || found.password === 'enabled') {
 				throw new Error('the fake was asked to enroll a principal that cannot be enrolled')
 			}
@@ -193,14 +192,14 @@ describe('the first administrator', () => {
 		expect(created?.input).toEqual({ principalId: iam.principals[0]?.item.id ?? '', roleKey: 'admin', app: null })
 	})
 
-	test('sends `principalId` to grants.create and `id` to the procedures taking PrincipalIdInput', async () => {
+	test('names the principal as `principalId` in every call about it', async () => {
 		const iam = fakeIam()
 		await ensureFirstAdministrator(iam.client, { email: 'operator@example.test' })
-		const id = iam.principals[0]?.item.id ?? ''
+		const principalId = iam.principals[0]?.item.id ?? ''
 
-		expect(iam.calls.find((call) => call.method === 'grants.create')?.input).toMatchObject({ principalId: id })
-		expect(iam.calls.find((call) => call.method === 'principals.get')?.input).toEqual({ id })
-		expect(iam.calls.find((call) => call.method === 'passwords.issueEnrollment')?.input).toEqual({ id })
+		expect(iam.calls.find((call) => call.method === 'grants.create')?.input).toMatchObject({ principalId })
+		expect(iam.calls.find((call) => call.method === 'principals.get')?.input).toEqual({ principalId })
+		expect(iam.calls.find((call) => call.method === 'passwords.issueEnrollment')?.input).toEqual({ principalId })
 	})
 
 	test('every call carries the provisioning key as a bearer, at the admin RPC path', async () => {

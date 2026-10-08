@@ -20,6 +20,7 @@ import { adminRpcRouter } from '../admin/rpc'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
+import { routerLeaves } from './helpers/admin-router'
 import { createHarness, type Harness, seedGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
@@ -43,32 +44,7 @@ function env(h: Harness): Env {
 	}
 }
 
-interface Leaf {
-	method: string
-	requirements: number
-}
-
-/** Every procedure in the shipped router, as `a.b.c` with the number of authz requirements on it. */
-function leaves(node: unknown, path: string[] = []): Leaf[] {
-	if (node === null || typeof node !== 'object') {
-		return []
-	}
-	const tag = Reflect.get(node, '_tag')
-	if (tag === 'procedure') {
-		const requirements = Reflect.get(node, 'requirements')
-		return [{ method: path.join('.'), requirements: Array.isArray(requirements) ? requirements.length : 0 }]
-	}
-	if (tag === 'router') {
-		const def = Reflect.get(node, '_def')
-		if (def === null || typeof def !== 'object') {
-			return []
-		}
-		return Object.entries(def).flatMap(([key, child]) => leaves(child, [...path, key]))
-	}
-	return []
-}
-
-const ROUTER_METHODS = leaves(adminRpcRouter)
+const ROUTER_METHODS = routerLeaves(adminRpcRouter)
 
 /**
  * A minimally-shaped input for each method — enough to pass validation IF the gate were missing, so a
@@ -81,15 +57,15 @@ const INPUTS: Record<string, unknown> = {
 	'apps.list': null,
 	'apiKeys.list': null,
 	'shareLinks.list': null,
-	'principals.get': { id: 'nobody' },
+	'principals.get': { principalId: 'nobody' },
 	'principals.invite': { email: 'nobody@example.com' },
-	'principals.update': { id: 'nobody', disabled: true },
+	'principals.update': { principalId: 'nobody', disabled: true },
 	'sessions.list': { principalId: 'nobody' },
 	'sessions.revoke': { id: 'nobody' },
-	'sessions.revokeAll': { id: 'nobody' },
-	'passwords.issueEnrollment': { id: 'nobody' },
-	'passwords.issueReset': { id: 'nobody' },
-	'passwords.disable': { id: 'nobody' },
+	'sessions.revokeAll': { principalId: 'nobody' },
+	'passwords.issueEnrollment': { principalId: 'nobody' },
+	'passwords.issueReset': { principalId: 'nobody' },
+	'passwords.disable': { principalId: 'nobody' },
 	'grants.create': { principalId: 'nobody', roleKey: 'admin' },
 	'grants.delete': { id: 'nobody' },
 	'apps.getSchema': { app: 'nowhere' },

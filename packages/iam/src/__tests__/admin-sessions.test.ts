@@ -240,7 +240,7 @@ describe('sessions.revokeAll', () => {
 		await openSession(h, user, { token: 'all-2', app: 'opice', parentSessionId: parent })
 		await openSession(h, user, { token: 'all-3', method: 'password' })
 
-		expect(await ok(h, bearer, 'sessions.revokeAll', { id: user })).toEqual({ revoked: 3 })
+		expect(await ok(h, bearer, 'sessions.revokeAll', { principalId: user })).toEqual({ revoked: 3 })
 		for (const token of ['all-1', 'all-2', 'all-3']) {
 			expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(token))).toBeNull()
 		}
@@ -248,11 +248,11 @@ describe('sessions.revokeAll', () => {
 		expect((await h.repositories.principals.getPrincipalById(user))?.disabled_at).toBeNull()
 
 		// Already-revoked rows are not counted again.
-		expect(await ok(h, bearer, 'sessions.revokeAll', { id: user })).toEqual({ revoked: 0 })
+		expect(await ok(h, bearer, 'sessions.revokeAll', { principalId: user })).toEqual({ revoked: 0 })
 	})
 
 	test('an unknown principal is a 404', async () => {
 		const h = createHarness()
-		expect((await call(h, await admin(h), 'sessions.revokeAll', { id: 'nobody' })).status).toBe(404)
+		expect((await call(h, await admin(h), 'sessions.revokeAll', { principalId: 'nobody' })).status).toBe(404)
 	})
 })

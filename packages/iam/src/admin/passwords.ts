@@ -1,4 +1,4 @@
-import { type OkResponse, type PasswordActionDelivery } from '@fabrika/iam-contract'
+import { type OkResponse, type PasswordActionDelivery, type PrincipalIdInput } from '@fabrika/iam-contract'
 
 import { type PrincipalRow } from '../db'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
@@ -55,23 +55,23 @@ async function passwordDelivery(
 	return { delivery: 'email', email: principal.email, expiresAt: action.expiresAt }
 }
 
-export async function issuePasswordEnrollmentUseCase(c: AdminContext, input: { id: string }): Promise<PasswordActionDelivery> {
-	const principal = await passwordUser(c, input.id)
+export async function issuePasswordEnrollmentUseCase(c: AdminContext, input: PrincipalIdInput): Promise<PasswordActionDelivery> {
+	const principal = await passwordUser(c, input.principalId)
 	const account = await c.services.repositories.passwords.getAccount(principal.id)
 	if (account?.state === 'enabled') return fail(409, 'password authentication is already enabled')
 	await c.services.repositories.passwords.enableEnrollment(principal.id)
 	return passwordDelivery(c, principal, 'enrollment')
 }
 
-export async function issuePasswordResetUseCase(c: AdminContext, input: { id: string }): Promise<PasswordActionDelivery> {
-	const principal = await passwordUser(c, input.id)
+export async function issuePasswordResetUseCase(c: AdminContext, input: PrincipalIdInput): Promise<PasswordActionDelivery> {
+	const principal = await passwordUser(c, input.principalId)
 	const account = await c.services.repositories.passwords.getAccount(principal.id)
 	if (account?.state !== 'enabled') return fail(409, 'password authentication is not enabled')
 	return passwordDelivery(c, principal, 'reset')
 }
 
-export async function disablePasswordUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
-	const principal = await passwordUser(c, input.id, false)
+export async function disablePasswordUseCase(c: AdminContext, input: PrincipalIdInput): Promise<OkResponse> {
+	const principal = await passwordUser(c, input.principalId, false)
 	await c.services.repositories.passwords.disableCredential(principal.id)
 	await adminAudit(c, {
 		action: 'iam.password.disable',
