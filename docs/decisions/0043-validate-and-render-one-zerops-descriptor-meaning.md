@@ -69,15 +69,22 @@ The compiler refuses authored `run` keys, `build.addToRunPrepare`, `build.deploy
 **`build`** is one build in a fixed order:
 
 1. The authored SPA commands run first.
-2. Then the generated commands run: a frozen install with lifecycle scripts off, a hash check of
-   `@fabrika/*` in the lockfile, `tsc` with the platform's `tsconfig`, the checker, the contract check,
-   the migrations into a throwaway schema with codegen verification, the generated isolation tests,
-   and the server build.
+2. Then a frozen install with lifecycle scripts off, and the application's tests. The tests are
+   authored code too, so they run before every step that produces or checks what is deployed.
+3. Then `node_modules` is installed again, the entrypoint is generated again, and the checks run: the
+   checker (with the hash check of `@fabrika/*` in the lockfile and the contract check), `tsc` with the
+   platform's `tsconfig`, and the server build.
 
 No authored command runs after the checks. The build refuses the routine ways to replace `@fabrika/*`:
-`patchedDependencies`, `overrides`, `resolutions`, non-registry specifiers, a `bunfig` `preload`,
-`tsconfig` `paths` and `declare module '@fabrika/*'`. The checker version is pinned and recorded in the
-run's snapshot.
+`patchedDependencies`, `overrides`, `resolutions`, non-registry specifiers, another registry, a package
+named like a trusted one, an `exports` map in the root manifest, a `bunfig` `preload` under any key
+spelling, a test preload outside the checked files, `tsconfig` `paths` and `declare module '@fabrika/*'`.
+The checker version is pinned and recorded in the run's snapshot.
+
+The build has no database. The migrations and the verification of the committed schema types therefore
+run at container start: the start script runs `fabrika db migrate`, then `fabrika db codegen --verify`
+against the application's real schema, then the server, under `set -eu`. A stale `schema.generated.ts`
+leaves nothing that answers the readiness check, and the previous version keeps serving.
 
 The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).
@@ -103,12 +110,16 @@ The compiler refuses these fields on application services:
 - `buildFromGit`;
 - an inline `zeropsYaml`;
 - `mount`;
-- `enableCdn`.
+- `enableCdn`;
+- `startWithoutCode`: an import that carries it activates an empty version and demotes the running
+  code before any read-back. Only the platform's first provisioning imports a service without code.
 
 A bucket is accepted only when the platform created it as private and it carries that provenance. The
 provenance is the `FABRIKA_STORAGE_PROVENANCE` variable on the deploy service: the ids of the buckets a
-Fabrika import created, each from a document that carried `objectStoragePolicy: private`. A bucket that
-already existed under its hostname has none. Before activation, the deploy reads back `subdomainAccess`
+Fabrika import created, each from a document that carried `objectStoragePolicy: private`. The first
+registration's collision-refusing import keeps its creation evidence in the environment's stored target,
+and the first deploy writes it into the variable, so no failed write loses it. A bucket that already
+existed under its hostname has no evidence and is refused. Before activation, the deploy reads back `subdomainAccess`
 of every declared service from Zerops and checks every bucket's provenance. A failed check blocks
 activation and raises an Operations alert: an error event in the application's own Operations project,
 which its alert rules deliver.
@@ -127,8 +138,6 @@ A contract application is a Zerops config that carries its compiled contract. Fo
 refuses every setup key the platform owns and renders the generated setup, with the checker fetched at
 the provider's own version and recorded in the run log. Not built yet:
 
-- the migrations into a throwaway schema with codegen verification: the build container must reach a
-  database (an unverified platform fact) and `fabrika db` has no disposable schema;
 - the generated isolation tests (A11); the build runs the application's own tests;
 - `fabrika job run`, which the generated crontab calls (A15);
 - the checker version in the run's snapshot (B6), and the contract read from the commit (B6): until

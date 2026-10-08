@@ -90,7 +90,7 @@ bun test
   (`src/control.ts`), which lands on the same resolver.
 - **An application service cannot expose itself or choose its own build (ADR-0043), with no approval
   path.** `REFUSED_APPLICATION_SERVICE_FIELDS` (`src/manifest.ts`) refuses an `objectStoragePolicy` other
-  than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml` or `mount`, and an
+  than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml`, `mount` or `startWithoutCode`, and an
   `enableSubdomainAccess`/`enableCdn` other than `false`, in `parseFabrikaManifest` — so on build AND on
   every decode. The same boundary writes `objectStoragePolicy: private` on an object-storage service that
   omits it, because nothing establishes Zerops' default. Keep both out of `compileService`: the installation and namespace topologies compile through
@@ -109,18 +109,23 @@ bun test
   `target.contract` compiles to a manifest with `target.contract` (digest, health path, jobs) and optional
   `runtimePackages` from `ZEROPS_RUNTIME_PACKAGES`. `lockedAuthoredBuild` refuses every key of the selected
   setup except `build.base`, `build.os` and `build.buildCommands`, in `parseFabrikaManifest`, so on build AND
-  decode. `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands first, then the
-  frozen install, the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`), the generated
-  entrypoint, `tsc` with the platform tsconfig, `bun test`, and the scripts. The start script runs
-  `fabrika db migrate` before `exec`-ing the server, so a failed migration fails the httpGet readiness check
-  whether or not a failed `initCommands` stops activation (UNVERIFIED). Generated file lines go through
+  decode. The manifest must also carry the endpoint table of the same contract (`proxy.snapshot` equals
+  `contract.digest`, from `contractDigest`), and an endpoint table without the contract is refused.
+  `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
+  application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
+  the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`), `tsc` with the platform tsconfig and
+  the scripts. Keep the tests before every step that produces or checks what deploys. The start script runs
+  `fabrika db migrate`, then `fabrika db codegen --verify`, then `exec`s the server, so a failed migration or a
+  stale `schema.generated.ts` fails the httpGet readiness check whether or not a failed `initCommands` stops
+  activation (UNVERIFIED); the build has no database. Generated file lines go through
   `printf` single-quoted: they may hold no `'` and no `$`, which is why the app id must match
   `[a-z0-9][a-z0-9-]*` and the health path is a literal path.
 - **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
   `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
   service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`
-  marker on the deploy service. The first registration writes that marker for the buckets its
-  collision-refusing import created; an adopted bucket never gets one. A refusal fails the run before a
+  marker on the deploy service, or listed in the stored target's `createdBuckets`: the first registration keeps
+  there the buckets its collision-refusing import created, and the deploy writes them into the marker. An
+  adopted bucket never gets evidence. A refusal fails the run before a
   version is reserved and raises an Operations alert through the application's own ingest DSN
   (`alertExposure`, best-effort).
 - **The run checkpoint is `{ appVersionId, triggered }` and recovery never resumes (ADR-0044).** `appVersionId`

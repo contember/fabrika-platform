@@ -1102,8 +1102,13 @@ Before any version is reserved, every application deploy reads back each declare
 `GET /service-stack-by-name/{projectId}/{hostname}`: `subdomainAccess` must be `false`. An import cannot set
 it, but an earlier enable survives every import. Zerops has no API to read a bucket policy back, so a bucket
 is accepted only when this run's import created it (a `stack.create` process for it) or the
-`FABRIKA_STORAGE_PROVENANCE` variable on the deploy service names its id. The first registration writes that
-variable for the buckets its collision-refusing import created.
+`FABRIKA_STORAGE_PROVENANCE` variable on the deploy service names its id. The first registration keeps the
+buckets its collision-refusing import created in the environment's stored target, and the first deploy writes
+them into that variable.
+
+The build container has no database, so a contract application's start script runs `fabrika db migrate`, then
+`fabrika db codegen --verify`, then the server: a stale committed `schema.generated.ts` fails the readiness
+check.
 
 ## Alpine custom runtime
 
