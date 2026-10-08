@@ -31,9 +31,10 @@ import type { Env } from './env'
 import { createIamRpc } from './rpc'
 
 /**
- * The IAM Worker — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint` whose
- * default export carries BOTH the RPC methods (apps reach them over the `env.IAM` service binding,
- * which does not traverse any public edge) and `fetch()` (`/admin/*` + `/auth/*`).
+ * The IAM Worker — the CLOUDFLARE entrypoint, and nothing more. Two `WorkerEntrypoint`s, reached over
+ * `env.IAM` service bindings, which do not traverse any public edge: `PropustkaApplication`, the
+ * subset an application calls, and the default export `Propustka`, which adds key issuing, device
+ * approval, `fetch()` (`/admin/*` + `/auth/*`) and the cron for platform components.
  *
  * There is no logic here. Every method delegates: the RPC surface to `createIamRpc` (src/rpc.ts),
  * `fetch` to `workerApp`, `scheduled` to `runIamMaintenance` (src/cron.ts) — the same
@@ -76,66 +77,74 @@ export function iamEnv(bindings: WorkerBindings): Env {
 	}
 }
 
-export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRpc, IamHandoffRpc {
-	inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
-		return this.rpc.inspectDeviceAuthorization(input)
-	}
-	approveDeviceAuthorization(input: ApproveDeviceAuthorizationInput): Promise<ApproveDeviceAuthorizationResult> {
-		return this.rpc.approveDeviceAuthorization(input)
-	}
-	denyDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<DenyDeviceAuthorizationResult> {
-		return this.rpc.denyDeviceAuthorization(input)
-	}
-	listOwnDeviceAuthorizations(input: ListOwnDeviceAuthorizationsInput): Promise<ListOwnDeviceAuthorizationsResult> {
-		return this.rpc.listOwnDeviceAuthorizations(input)
-	}
-	private get iam(): Env {
-		return iamEnv(this.env)
-	}
+/** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
+function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc {
+	return createIamRpc(iamEnv(bindings), ctx)
+}
 
-	private get rpc(): IamRpc & IamHandoffRpc {
-		return createIamRpc(this.iam, this.ctx)
-	}
+/** What an application's Workers call over `IAM`: the proxy mints and redeems, the SDK verifies, lists and audits. */
+export type IamApplicationRpc = Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'> & IamHandoffRpc
 
+/**
+ * The entrypoint every application Worker and its proxy bind (`@fabrika/provider-cloudflare` refuses any
+ * other). It holds no getter or field: workerd serves every prototype member over RPC, and a getter
+ * returning the env or the RPC object would hand a caller IAM's secrets and every method withheld here.
+ */
+export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> implements IamApplicationRpc {
 	mintToken(input: MintTokenInput): Promise<MintTokenResult> {
-		return this.rpc.mintToken(input)
+		return iamRpc(this.env, this.ctx).mintToken(input)
 	}
 
 	mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
-		return this.rpc.mintFromKey(input)
+		return iamRpc(this.env, this.ctx).mintFromKey(input)
 	}
 
-	/**
-	 * Cross-host handoff redemption (ADR-0022). Present on the binding, absent from `IamRpc`: the
-	 * proxy Worker narrows this entrypoint structurally, so it reaches this method while an SDK
-	 * consumer typed against `IamRpc` never sees it.
-	 */
+	/** Cross-host handoff redemption (ADR-0022), absent from `IamRpc`: the proxy Worker narrows this binding structurally. */
 	exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
-		return this.rpc.exchangeAuthCode(input)
+		return iamRpc(this.env, this.ctx).exchangeAuthCode(input)
 	}
 
 	getJwks(): Promise<Jwks> {
-		return this.rpc.getJwks()
+		return iamRpc(this.env, this.ctx).getJwks()
 	}
 
 	audit(event: AuditInput): Promise<void> {
-		return this.rpc.audit(event)
+		return iamRpc(this.env, this.ctx).audit(event)
 	}
 
 	listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult> {
-		return this.rpc.listPrincipals(input)
+		return iamRpc(this.env, this.ctx).listPrincipals(input)
+	}
+}
+
+/** The default export: the whole `IamRpc`, `/admin/*` + `/auth/*`, and the cron. Only platform components bind it. */
+export class Propustka extends PropustkaApplication implements IamRpc, IamHandoffRpc {
+	inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
+		return iamRpc(this.env, this.ctx).inspectDeviceAuthorization(input)
+	}
+
+	approveDeviceAuthorization(input: ApproveDeviceAuthorizationInput): Promise<ApproveDeviceAuthorizationResult> {
+		return iamRpc(this.env, this.ctx).approveDeviceAuthorization(input)
+	}
+
+	denyDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<DenyDeviceAuthorizationResult> {
+		return iamRpc(this.env, this.ctx).denyDeviceAuthorization(input)
+	}
+
+	listOwnDeviceAuthorizations(input: ListOwnDeviceAuthorizationsInput): Promise<ListOwnDeviceAuthorizationsResult> {
+		return iamRpc(this.env, this.ctx).listOwnDeviceAuthorizations(input)
 	}
 
 	revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
-		return this.rpc.revokeKey(input)
+		return iamRpc(this.env, this.ctx).revokeKey(input)
 	}
 
 	issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
-		return this.rpc.issueKey(input)
+		return iamRpc(this.env, this.ctx).issueKey(input)
 	}
 
 	override fetch(request: Request): Promise<Response> {
-		return workerApp.fetch(request, this.iam, this.ctx)
+		return workerApp.fetch(request, iamEnv(this.env), this.ctx)
 	}
 
 	/**
@@ -143,7 +152,7 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 	 * `WorkerEntrypoint.scheduled` receives only the controller; `env`/`ctx` come from `this`.
 	 */
 	override scheduled(_controller: ScheduledController): Promise<void> {
-		runIamMaintenance(this.iam, this.ctx)
+		runIamMaintenance(iamEnv(this.env), this.ctx)
 		return Promise.resolve()
 	}
 }

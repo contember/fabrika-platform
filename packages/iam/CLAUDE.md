@@ -34,6 +34,17 @@ fails if that stops being true — it is the guard, not documentation of one.
 
 ## Invariants
 
+- **AN APPLICATION BINDS `PropustkaApplication`, NOT THE DEFAULT EXPORT** (`src/index.ts`). It carries
+  what an application's Workers call — the proxy's `mintToken`/`mintFromKey`/`exchangeAuthCode`, the
+  SDK's `getJwks`/`listPrincipals`/`audit` — and nothing else. The default `Propustka` extends it with
+  `issueKey`, `revokeKey`, device approval, `fetch` and the cron, for platform components only;
+  `@fabrika/provider-cloudflare` refuses an application binding to it. Adding a method to the narrow
+  class gives it to every application on the installation.
+- **AN ENTRYPOINT CLASS HOLDS NO GETTER AND NO FIELD.** workerd serves every member of the prototype
+  chain over RPC, getters included, and pipelines into what they return: a `get rpc()` made
+  `env.IAM.rpc.issueKey(…)` callable through any entrypoint, and a `get iam()` returned the signing
+  keys. Each method builds its surface with the module function `iamRpc(this.env, this.ctx)`.
+  `index.test.ts` lists both classes' members.
 - **Only the SHA-256 hash of a credential is stored** (`src/secret.ts`), for API keys, share links,
   and SSO sessions alike. Plaintext is shown once at issue. Compare digests with
   `timingSafeEqualHex`, never raw secrets.

@@ -33,7 +33,8 @@ mock.module('cloudflare:workers', () => ({
 	},
 }))
 
-const { Propustka, iamEnv } = await import('../index')
+const iamWorkerModule = await import('../index')
+const { Propustka, PropustkaApplication, iamEnv } = iamWorkerModule
 
 const migration = allMigrations()
 
@@ -532,5 +533,66 @@ describe('the Worker root chooses the audit correlation id', () => {
 		expect(ids).toHaveLength(1)
 		expect(ids[0]).not.toBe('caller-chosen')
 		expect(ids[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+	})
+})
+
+/** What workerd serves over a binding to `entrypoint`: every own member of its prototype chain, getters included. */
+function prototypeMembers(entrypoint: object): { methods: string[]; accessors: string[] } {
+	const methods: string[] = []
+	const accessors: string[] = []
+	let proto: object | null = Object(Reflect.get(entrypoint, 'prototype'))
+	while (proto !== null && proto !== Object.prototype) {
+		for (const name of Reflect.ownKeys(proto)) {
+			const descriptor = Reflect.getOwnPropertyDescriptor(proto, name)
+			if (name === 'constructor' || descriptor === undefined) continue
+			if (typeof descriptor.value === 'function') {
+				methods.push(String(name))
+			} else {
+				accessors.push(String(name))
+			}
+		}
+		proto = Reflect.getPrototypeOf(proto)
+	}
+	return { methods: methods.sort(), accessors }
+}
+
+describe('the entrypoint an application binds', () => {
+	const APPLICATION_METHODS = ['audit', 'exchangeAuthCode', 'getJwks', 'listPrincipals', 'mintFromKey', 'mintToken']
+
+	// The name `@fabrika/provider-cloudflare` binds (`IAM_APPLICATION_ENTRYPOINT`); its tests pin the same literal.
+	test('is exported as PropustkaApplication and has no issueKey, revokeKey or device approval', () => {
+		expect(Reflect.get(iamWorkerModule, 'PropustkaApplication')).toBe(PropustkaApplication)
+		expect(prototypeMembers(PropustkaApplication).methods).toEqual(APPLICATION_METHODS)
+	})
+
+	test('the default export keeps the whole IamRpc for platform components', () => {
+		expect(iamWorkerModule.default).toBe(Propustka)
+		expect(prototypeMembers(Propustka).methods).toEqual(
+			[
+				...APPLICATION_METHODS,
+				'approveDeviceAuthorization',
+				'denyDeviceAuthorization',
+				'fetch',
+				'inspectDeviceAuthorization',
+				'issueKey',
+				'listOwnDeviceAuthorizations',
+				'revokeKey',
+				'scheduled',
+			].sort(),
+		)
+	})
+
+	// A getter returning the env or the RPC object is reachable over RPC (`env.IAM.rpc.issueKey(…)`).
+	test('neither entrypoint exposes a getter', () => {
+		expect(prototypeMembers(PropustkaApplication).accessors).toEqual([])
+		expect(prototypeMembers(Propustka).accessors).toEqual([])
+	})
+
+	test('the narrow class serves a call from its own bindings', async () => {
+		const worker: unknown = Reflect.construct(PropustkaApplication, [makeCtx(), makeEnv(freshDb())])
+		if (!(worker instanceof PropustkaApplication)) throw new Error('failed to construct the mocked Worker entrypoint')
+
+		expect((await worker.getJwks()).keys.length).toBeGreaterThan(0)
+		expect(Reflect.get(worker, 'issueKey')).toBeUndefined()
 	})
 })
