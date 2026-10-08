@@ -7,6 +7,8 @@ service. Assumes the root CLAUDE.md.
 **This package does not enforce anything.** [ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)
 makes `@fabrika/proxy` the only enforcement point, and the duplicate in-process path is gone. There is
 no gate evaluation here, no session→token exchange, no login bounce, and no cookie is ever written.
+`can()` and the contract framework's requirement check in `@fabrika/app` are **authorization** in the
+vocabulary of `docs/reference/overview.md`, not a second gate evaluator.
 
 `createIam(env, opts)` is the single request-time entry point. It returns an `Iam` carrying:
 
@@ -44,6 +46,11 @@ the service that owns identity.
   injected. A share link is a `px_` key the proxy resolves at a `service` gate, so it arrives as an
   anonymous token like any other (ADR-0022). `HttpIamRpc` still carries `issueKey` / `revokeKey`
   because they are `IamRpc` members other callers use, not SDK surface.
+- **The SDK REQUESTS; IAM decides and writes.** The target (A12, A13; not built yet): the SDK asks
+  IAM to create a scope, to assign, revoke or list members, and to issue or revoke a share link, on
+  the caller's behalf with the caller's token as proof. IAM evaluates each request against the
+  caller's live permissions, generates the scope value and issues the key. The SDK mints nothing,
+  signs nothing, supplies no actor and writes no grant.
 - **THERE IS NO SECOND AUTHENTICATION MODEL HERE, and adding one back is the bug.** The SDK used to
   select a `FakeIamClient` plus synthetic personas from a `DEV` env var, resolved by `?__as=` / a
   cookie / a header, with a default persona holding a global-admin grant — so one misread flag handed
@@ -72,16 +79,19 @@ the service that owns identity.
   has never heard of. Omitting `returnOrigins` leaves IAM's registry untouched; an EMPTY array is a
   caller error, refused before any request, because clearing the registry is its own admin operation.
 - **`Middleware<Ctx>` / `AuthCarrier` are owned here and consumed by `@fabrika/app`** — do not add a
-  duplicate compatibility interface there. The SDK itself ships no middleware; each app writes the ~10
-  lines that call `authenticate` and shape its own error envelope.
+  duplicate compatibility interface there. The SDK itself ships no middleware. Today each service
+  writes the ~10 lines that call `authenticate`; with the contract (ADR-0012) an application writes
+  none, and the framework's `boot` calls `authenticate`.
 - **Never log credentials, secret values, or request headers.**
 
 ## Notes
 
-- `AppGates` & co. are still re-exported: apps DECLARE gates for the PROXY manifest
-  (`fabrika.config.ts`). Nothing in this package reads them.
+- `AppGates` & co. are still re-exported: gates go to the PROXY manifest (`fabrika.config.ts`).
+  Nothing in this package reads them. The target (A-M1): an application's gates are generated from
+  its contract; hand-written gates remain for the installation's own services.
 - The authz vocabulary each app declares (`AppSchema`: scope dimensions, action catalog, roles) is the
-  app's own; the first reconcile is also how it registers itself in IAM.
+  app's own; the first reconcile is also how it registers itself in IAM. The target (A-M1): an
+  application's `AppSchema` is generated from its contract.
 - `appSchemaSchema` (`src/app-schema.ts`) is the ONE parser for that vocabulary — both providers and IAM use it.
 - `src/verify.ts` no longer verifies anything itself: `@fabrika/jwks` owns the one implementation and
   `@fabrika/proxy-core` wraps the same class. The proxy must not depend on the app SDK and

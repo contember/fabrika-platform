@@ -64,6 +64,16 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts
   satisfied only by entries with `scope === null`; a concrete scope is satisfied by a global entry
   or by one matching the same `(type, value)` pair. `can()` in the SDK is this function; do not
   reimplement it with "close enough" behaviour.
+- **The contract matcher is a router, not a gate evaluator.** The target (A-M1; not built yet):
+  `planEndpoint` selects the endpoint of a contract's table after a canonical-path check, for the
+  framework's dispatch. It evaluates no gate rule. The proxy evaluates the gates generated from the
+  same table with `compileGates` / `applicableGates`, and the two must agree on every path, which a
+  property test checks.
+- **The requirement check is authorization.** The target (A-M1): `satisfies(requirement, perms)` —
+  `member` is any permission of the application; an action form is that action in some scope,
+  including global. It builds on `permits` semantics; it never becomes a gate and never replaces one.
+  Scopes stay flat here: the framework resolves a containment chain, and each link is checked as a
+  flat scope.
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.
