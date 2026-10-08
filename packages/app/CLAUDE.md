@@ -200,6 +200,7 @@ src/
   handler reaches its dependencies through that closure, not `ctx.deps`.
 - The handler type witnesses live in `src/__tests__/implement-mistakes/` (the
   parser spike's 05–10), compiled by `implement-types.test.ts` like the contract
-  mistakes.
+  mistakes. `implement-scale.test.ts` keeps 200 handlers under the same budget as
+  `contract-scale.test.ts`; both generate their source in `scale-fixture.ts`.
 - The header policy (`headers.ts`) is ADR-0022's; B4 sets the same policy at the
   proxy and decides the final `Permissions-Policy`. Keep the two equal.
