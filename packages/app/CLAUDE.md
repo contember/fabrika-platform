@@ -282,6 +282,8 @@ src/
 - **`proxy: 'endpoints'` is an explicit opt-in**, for tests written ahead of B2:
   ADR-0022's per-endpoint steps with `planEndpoint` and `satisfies`. It is a test
   double, not a gate evaluator, and B2's proxy-core decision replaces it.
+- `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
+  the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
 - Its tokens are signed with a generated key and verified by the application's own
   verifier, so a test cannot reach a handler the production pipeline would refuse.
 - **The kit answers only its own origin.** `kit.fetch` refuses another host, and

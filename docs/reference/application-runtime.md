@@ -298,8 +298,10 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
 ## Testing a contract application
 
 `@fabrika/app/testing` exports `testKit(app, options?)`. It boots the application as
-its generated entrypoint would, for the audience `<app>@test`, behind a stand-in for
-the proxy and IAM; it has no test-runner dependency.
+its generated entrypoint would, for the audience `<app>@test`, behind the production
+proxy decision and a stand-in for IAM; it has no test-runner dependency. An
+application on `@fabrika/db` passes its connection as `options.database`, which the kit
+hands to `boot` as a runtime adapter does; without one it does not boot.
 
 ```ts
 const kit = testKit(notesApp(rows))

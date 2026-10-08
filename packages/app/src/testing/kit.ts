@@ -17,6 +17,7 @@ import {
 	TOKEN_ALG,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/auth-core'
+import type { Database } from '@fabrika/db'
 import { type IamGateway, readBearer, readCookie, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import type { RpcFetch } from '../client/transport'
@@ -39,6 +40,8 @@ export interface TestKitOptions {
 	readonly env?: ApplicationEnvironment
 	/** Serves the SPA mounts. Defaults to an empty HTML document for every path. */
 	readonly assets?: SpaAssets
+	/** The connection a `scoped(tables)` database is bound to, as the runtime adapter supplies it to `boot`. */
+	readonly database?: Database
 	/**
 	 * The proxy decision in front of the application. `gates` (the default) is proxy-core's verify service over the
 	 * gates `gatesFromContract` generates, as production decides today; `endpoints` is ADR-0022's per-endpoint
@@ -110,6 +113,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		},
 		iam: { getJwks: () => jwks },
 		assets: options.assets ?? defaultAssets,
+		database: options.database,
 	})
 
 	const byKey = new Map<string, TestCaller>()
