@@ -4,6 +4,7 @@ import { positionOf } from './ast'
 export const RULE_IDS = [
 	'parse-error',
 	'literal',
+	'contract',
 	'forbidden-import',
 	'unchecked-import',
 	'forbidden-global',

@@ -16,6 +16,7 @@ import {
 } from './layout'
 import { moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
+import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkClientIdentity } from './rules/identity'
 import { checkJsonStrings } from './rules/json'
@@ -104,8 +105,10 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	}
 
 	const graph = new ModuleGraph(modules)
-	findings.push(...checkLiteralGraph([CONTRACT_FILE, TABLES_FILE], graph))
+	const literal = checkLiteralGraph([CONTRACT_FILE, TABLES_FILE], graph)
+	findings.push(...literal)
 	const contract = modules.get(CONTRACT_FILE)
+	if (contract !== undefined && literal.length === 0) findings.push(...checkContractRead(graph))
 	if (contract !== undefined) findings.push(...checkClientIdentity(contract, graph))
 	findings.push(...checkMigrationNames(checkedPaths))
 	const jobs = contract === undefined ? [] : contractJobs(contract, graph)

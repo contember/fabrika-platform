@@ -1,0 +1,365 @@
+// Reads the literal subset of `rules/literal.ts` into values, without executing the application: names resolve through
+// `ModuleGraph`, `z` chains build real zod schemas, `c.*` calls stay unapplied for `surface.ts`.
+
+import type { z } from 'zod/v4'
+import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
+import type { Located, ModuleGraph } from '../graph'
+import { BUILDER_IMPORTS, type BuilderKind, decompose, type Link } from '../rules/literal'
+import type { ReaderProblems } from './problems'
+import { buildSchema } from './schema'
+
+/** The builder kit a callback parameter denotes: `c` of `defineContract`, `l` of a link's `procedures`. */
+export type Kit = 'surface' | 'link'
+
+export type LiteralValue =
+	| { readonly kind: 'string'; readonly value: string; readonly at: Located }
+	| { readonly kind: 'number'; readonly value: number; readonly at: Located }
+	| { readonly kind: 'boolean'; readonly value: boolean; readonly at: Located }
+	| { readonly kind: 'null'; readonly at: Located }
+	| { readonly kind: 'regex'; readonly value: RegExp; readonly at: Located }
+	| { readonly kind: 'array'; readonly items: readonly LiteralValue[]; readonly at: Located }
+	/** Entries in source order; a repeated key keeps its first position and its last value, as in an object literal. */
+	| { readonly kind: 'object'; readonly entries: ReadonlyMap<string, LiteralValue>; readonly at: Located }
+	| { readonly kind: 'schema'; readonly schema: z.ZodType; readonly at: Located }
+	/** `c.rpc(…)` or `l.query(…)`, with its arguments read. */
+	| { readonly kind: 'builder'; readonly kit: Kit; readonly name: string; readonly args: readonly LiteralValue[]; readonly at: Located }
+	| { readonly kind: 'contract'; readonly args: readonly LiteralValue[]; readonly at: Located }
+	/** A builder callback: its parameter is only ever a kit, so its body is read once, as a value. */
+	| { readonly kind: 'callback'; readonly result: LiteralValue; readonly at: Located }
+
+type Scope = ReadonlyMap<string, Kit>
+
+/** Where a callback may stand, as `rules/literal.ts` allows it: `defineContract`'s second argument, a link's `procedures`. */
+type Role = { readonly callback: Kit } | { readonly linkOptions: true } | null
+
+const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'
+
+export class ValueReader {
+	readonly #graph: ModuleGraph
+	readonly #problems: ReaderProblems
+	/** Each const is read once, so a schema const used twice is one schema, as when the module is evaluated. */
+	readonly #consts = new Map<string, LiteralValue | null | 'reading'>()
+
+	constructor(graph: ModuleGraph, problems: ReaderProblems) {
+		this.#graph = graph
+		this.#problems = problems
+	}
+
+	/** The value `name` is exported as from `module`, or `null` after recording why there is none. */
+	exported(module: ParsedModule, name: string, at: AstNode): LiteralValue | null {
+		const binding = this.#graph.exported(module, name)
+		if (binding.kind === 'const' && binding.init !== undefined) {
+			return this.#const(binding.module, binding.name, binding.init)
+		}
+		if (binding.kind === 'default') {
+			return this.#const(binding.module, 'default', binding.expression)
+		}
+		this.#problems.add({ module, node: at }, `'${module.file}' exports no const '${name}'`, `export const ${name} = …`)
+		return null
+	}
+
+	#const(module: ParsedModule, name: string, init: AstNode): LiteralValue | null {
+		const key = `${module.file}#${name}`
+		const known = this.#consts.get(key)
+		if (known === 'reading') {
+			this.#problems.add({ module, node: init }, `'${name}' is defined through itself`, 'a const whose value is written out as a literal')
+			return null
+		}
+		if (known !== undefined) {
+			return known
+		}
+		this.#consts.set(key, 'reading')
+		const value = this.#read({ module, node: init }, new Map(), null)
+		this.#consts.set(key, value)
+		return value
+	}
+
+	#read(located: Located, scope: Scope, role: Role): LiteralValue | null {
+		const { module, node } = located
+		const fail = (message: string, allowed = ALLOWED_VALUE): null => {
+			this.#problems.add(located, message, allowed)
+			return null
+		}
+		switch (node.type) {
+			case 'Literal':
+				return this.#literal(located)
+			case 'TemplateLiteral': {
+				const quasi = children(node, 'quasis')[0]
+				const cooked = quasi ? templateCooked(quasi) : undefined
+				return children(node, 'expressions').length === 0 && cooked !== undefined
+					? { kind: 'string', value: cooked, at: located }
+					: fail('a template literal with ${…} or an invalid escape', 'a plain string')
+			}
+			case 'UnaryExpression': {
+				const argument = child(node, 'argument')
+				const value = argument?.type === 'Literal' ? argument['value'] : undefined
+				return node['operator'] === '-' && typeof value === 'number'
+					? { kind: 'number', value: -value, at: located }
+					: fail(`unary '${String(node['operator'])}'`, 'the resulting value written as a literal')
+			}
+			case 'TSSatisfiesExpression':
+			case 'TSAsExpression': {
+				const inner = child(node, 'expression')
+				if (node.type === 'TSAsExpression' && !isConstAssertion(node)) {
+					return fail('type assertion `as T`', '`as const` or `satisfies T`')
+				}
+				return inner === undefined ? fail('an empty expression') : this.#read({ module, node: inner }, scope, role)
+			}
+			case 'ArrayExpression':
+				return this.#array(located, scope)
+			case 'ObjectExpression':
+				return this.#object(located, scope, role !== null && 'linkOptions' in role)
+			case 'Identifier':
+				return this.#identifier(located, scope)
+			case 'ArrowFunctionExpression':
+				return role !== null && 'callback' in role
+					? this.#callback(located, scope, role.callback)
+					: fail('function', 'a function only as the builder callback of defineContract(…, (c) => ({ … })) or of a link')
+			case 'CallExpression':
+				return this.#call(located, scope)
+			default:
+				return fail(`${node.type} is not a literal`)
+		}
+	}
+
+	#literal(located: Located): LiteralValue | null {
+		const { node } = located
+		const value = node['value']
+		const regex = node['regex']
+		if (regex !== undefined) {
+			const pattern = isRecord(regex) ? regex['pattern'] : undefined
+			const flags = isRecord(regex) ? regex['flags'] : undefined
+			const compiled = typeof pattern === 'string' && typeof flags === 'string' ? compile(pattern, flags) : undefined
+			if (compiled === undefined) {
+				this.#problems.add(located, 'a regular expression the reader cannot compile', 'a regular expression literal without errors')
+				return null
+			}
+			return { kind: 'regex', value: compiled, at: located }
+		}
+		if (node['bigint'] !== undefined) {
+			this.#problems.add(located, 'bigint literal', 'a number or a string')
+			return null
+		}
+		if (typeof value === 'string') {
+			return { kind: 'string', value, at: located }
+		}
+		if (typeof value === 'number') {
+			return { kind: 'number', value, at: located }
+		}
+		if (typeof value === 'boolean') {
+			return { kind: 'boolean', value, at: located }
+		}
+		if (value === null) {
+			return { kind: 'null', at: located }
+		}
+		this.#problems.add(located, 'a literal the reader does not know', ALLOWED_VALUE)
+		return null
+	}
+
+	#array(located: Located, scope: Scope): LiteralValue | null {
+		const items: LiteralValue[] = []
+		let complete = true
+		for (const element of children(located.node, 'elements')) {
+			if (element === null || element.type === 'SpreadElement') {
+				this.#problems.add(element === null ? located : { module: located.module, node: element }, 'array hole or spread', 'every element written out')
+				complete = false
+				continue
+			}
+			const item = this.#read({ module: located.module, node: element }, scope, null)
+			if (item === null) {
+				complete = false
+			} else {
+				items.push(item)
+			}
+		}
+		return complete ? { kind: 'array', items, at: located } : null
+	}
+
+	#object(located: Located, scope: Scope, linkOptions: boolean): LiteralValue | null {
+		const entries = new Map<string, LiteralValue>()
+		let complete = true
+		for (const property of children(located.node, 'properties')) {
+			if (property === null) {
+				continue
+			}
+			const at = { module: located.module, node: property }
+			const key = staticKey(property, 'key')
+			const value = child(property, 'value')
+			if (
+				property.type !== 'Property' || property['computed'] === true || property['kind'] !== 'init' || property['method'] === true
+				|| key === undefined || key === '__proto__' || value === undefined
+			) {
+				this.#problems.add(at, 'a spread, computed key, method or __proto__ key', 'a plain or quoted key with a literal value')
+				complete = false
+				continue
+			}
+			const role: Role = linkOptions && key === 'procedures' ? { callback: 'link' } : null
+			const read = this.#read({ module: located.module, node: value }, scope, role)
+			if (read === null) {
+				complete = false
+			} else {
+				entries.set(key, read)
+			}
+		}
+		return complete ? { kind: 'object', entries, at: located } : null
+	}
+
+	#identifier(located: Located, scope: Scope): LiteralValue | null {
+		const name = identifierName(located.node) ?? ''
+		const builder = this.#builderOf(located.module, name)
+		if (scope.has(name) || builder !== undefined) {
+			this.#problems.add(located, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
+			return null
+		}
+		const binding = this.#graph.binding(located.module, name)
+		if (binding.kind === 'const' && binding.init !== undefined) {
+			return this.#const(binding.module, binding.name, binding.init)
+		}
+		if (binding.kind === 'default') {
+			return this.#const(binding.module, 'default', binding.expression)
+		}
+		const reason = binding.kind === 'unresolved' ? binding.reason : `'${name}' is not a const`
+		this.#problems.add(located, reason, 'a top-level const in this file, or a named import of one')
+		return null
+	}
+
+	#callback(located: Located, scope: Scope, kit: Kit): LiteralValue | null {
+		const { node } = located
+		const parameters = children(node, 'params')
+		const parameter = parameters.length === 1 ? identifierName(parameters[0] ?? undefined) : undefined
+		const body = child(node, 'body')
+		if (parameter === undefined || body === undefined || body.type === 'BlockStatement' || node['async'] === true) {
+			this.#problems.add(located, 'a builder callback of another shape', 'one parameter and an expression body: (c) => ({ … })')
+			return null
+		}
+		const result = this.#read({ module: located.module, node: body }, new Map([...scope, [parameter, kit]]), null)
+		return result === null ? null : { kind: 'callback', result, at: located }
+	}
+
+	#call(located: Located, scope: Scope): LiteralValue | null {
+		const { root, links } = decompose(located.node)
+		const rootName = identifierName(root) ?? ''
+		const kit = scope.get(rootName)
+		const optional = links.find((link) => link.kind === 'call' && link.node['optional'] === true)
+		if (optional !== undefined) {
+			this.#problems.add({ module: located.module, node: optional.node }, 'optional call', 'a plain call')
+			return null
+		}
+		if (kit !== undefined) {
+			return this.#kitCall(located, kit, links, scope)
+		}
+		switch (this.#builderOf(located.module, rootName)) {
+			case 'zod':
+				return this.#zodChain(located, links, scope)
+			case 'contract':
+				return this.#contractCall(located, links, scope)
+			case 'tables':
+				this.#problems.add(located, 'defineTables in the contract graph', 'table policies only in src/db/tables.ts')
+				return null
+			default:
+				this.#problems.add(located, 'call of a function that is not c.*, z.* or defineContract', 'the value the function returns, written as a literal')
+				return null
+		}
+	}
+
+	#kitCall(located: Located, kit: Kit, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [method, call] = links
+		const name = method?.kind === 'member' ? method.name : undefined
+		if (name === undefined || call?.kind !== 'call' || links.length !== 2) {
+			this.#problems.add(located, 'not a call of a contract builder', kit === 'link' ? 'l.query(…) or l.mutation(…)' : 'c.<builder>(…)')
+			return null
+		}
+		const args = this.#arguments(
+			located.module,
+			call.node,
+			scope,
+			(position) => (kit === 'surface' && name === 'link' && position === 1 ? { linkOptions: true } : null),
+		)
+		return args === null ? null : { kind: 'builder', kit, name, args, at: located }
+	}
+
+	#contractCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		if (call?.kind !== 'call' || links.length !== 1) {
+			this.#problems.add(located, 'defineContract used other than as one call', 'defineContract(vocabulary, (c) => ({ … }))')
+			return null
+		}
+		const args = this.#arguments(located.module, call.node, scope, (position) => (position === 1 ? { callback: 'surface' } : null))
+		return args === null ? null : { kind: 'contract', args, at: located }
+	}
+
+	/** `z.<factory>(…)` or `z.iso.<format>(…)`, then `.<method>(…)` links, each applied to a real zod schema. */
+	#zodChain(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const isIso = links[0]?.kind === 'member' && links[0].name === 'iso'
+		const steps: { readonly name: string; readonly call: AstNode }[] = []
+		for (let index = isIso ? 1 : 0; index < links.length; index += 2) {
+			const member = links[index]
+			const call = links[index + 1]
+			if (member?.kind !== 'member' || member.name === undefined || call?.kind !== 'call') {
+				this.#problems.add(located, 'a z chain other than z.<factory>(…).<method>(…)', 'a schema of the supported z subset (packages/check/CLAUDE.md)')
+				return null
+			}
+			steps.push({ name: member.name, call: call.node })
+		}
+		let schema: z.ZodType | undefined
+		for (const [position, step] of steps.entries()) {
+			const at = { module: located.module, node: step.call }
+			const args = this.#arguments(located.module, step.call, scope, () => null)
+			if (args === null) {
+				return null
+			}
+			const built = buildSchema(position === 0 ? { factory: step.name, iso: isIso } : { method: step.name, receiver: schema }, args)
+			if (!built.ok) {
+				this.#problems.add(at, built.message, built.allowed)
+				return null
+			}
+			schema = built.schema
+		}
+		return schema === undefined ? null : { kind: 'schema', schema, at: located }
+	}
+
+	#arguments(module: ParsedModule, call: AstNode, scope: Scope, roleAt: (position: number) => Role): LiteralValue[] | null {
+		const values: LiteralValue[] = []
+		let complete = true
+		for (const [position, argument] of children(call, 'arguments').entries()) {
+			if (argument === null || argument.type === 'SpreadElement') {
+				this.#problems.add({ module, node: argument ?? call }, 'spread', 'the arguments written out')
+				complete = false
+				continue
+			}
+			const value = this.#read({ module, node: argument }, scope, roleAt(position))
+			if (value === null) {
+				complete = false
+			} else {
+				values.push(value)
+			}
+		}
+		return complete ? values : null
+	}
+
+	/** What an imported name builds, when it is one of the builders the platform reads. */
+	#builderOf(module: ParsedModule, name: string): BuilderKind | undefined {
+		const imported = this.#graph.index(module).imports.get(name)
+		return imported === undefined ? undefined : BUILDER_IMPORTS[imported.specifier]?.[imported.imported]
+	}
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null
+
+const templateCooked = (element: AstNode): string | undefined => {
+	const value = element['value']
+	return isRecord(value) && typeof value['cooked'] === 'string' ? value['cooked'] : undefined
+}
+
+const compile = (pattern: string, flags: string): RegExp | undefined => {
+	try {
+		return new RegExp(pattern, flags)
+	} catch {
+		return undefined
+	}
+}
+
+/** The name of a value kind, for a problem that names what was expected. */
+export const describeKind = (
+	value: LiteralValue,
+): string => (value.kind === 'builder' ? `${value.kit === 'link' ? 'l' : 'c'}.${value.name}(…)` : value.kind)

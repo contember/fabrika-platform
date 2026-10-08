@@ -4,10 +4,10 @@ import type { Binding, ModuleGraph } from '../graph'
 import { isRelativeSpecifier } from '../layout'
 
 /** What a call root builds; `surface` is the parameter of a builder callback (`c`, `l`). */
-type BuilderKind = 'zod' | 'contract' | 'tables' | 'surface'
+export type BuilderKind = 'zod' | 'contract' | 'tables' | 'surface'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
-const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
+export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
 	'@fabrika/app/contract': { defineContract: 'contract' },
 	'@fabrika/db': { defineTables: 'tables' },
@@ -97,10 +97,13 @@ const ALLOWED_CALLBACK = 'a function only as the builder callback of defineContr
 const ALLOWED_IMPORT =
 	'z from zod/v4, defineContract from @fabrika/app/contract, defineTables from @fabrika/db, or a literal const of the application'
 
-type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | { readonly kind: 'call'; readonly node: AstNode }
+export type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | {
+	readonly kind: 'call'
+	readonly node: AstNode
+}
 
 /** `z.string().min(1)` → root `z`, links `.string` `()` `.min` `(1)`. */
-const decompose = (node: AstNode): { readonly root: AstNode; readonly links: readonly Link[] } => {
+export const decompose = (node: AstNode): { readonly root: AstNode; readonly links: readonly Link[] } => {
 	const links: Link[] = []
 	let current = node
 	for (;;) {
@@ -328,6 +331,10 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 			}
 			if (property['kind'] !== 'init' || property['method'] === true) {
 				fail(property, 'method or accessor', 'a property with a literal value')
+				continue
+			}
+			if (staticKey(property, 'key') === '__proto__') {
+				fail(property, 'a __proto__ key sets the prototype instead of a field', 'another key name')
 				continue
 			}
 			const value = child(property, 'value')

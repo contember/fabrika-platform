@@ -1,5 +1,7 @@
 /** Where an application keeps what the checker reads. Paths are relative to the application root. */
 export const CONTRACT_FILE = 'fabrika.contract.ts'
+/** The named export of the contract module that holds `defineContract(…)`. */
+export const CONTRACT_EXPORT = 'contract'
 export const TABLES_FILE = 'src/db/tables.ts'
 export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
 export const MIGRATIONS_DIR = 'db/migrations/'

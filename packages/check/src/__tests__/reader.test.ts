@@ -1,0 +1,226 @@
+// The static contract reader: every form it refuses, with its position, and the refusals it shares with the runtime.
+
+import { compileContract, ContractError, defineContract } from '@fabrika/app/contract'
+import { describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
+import { ContractSourceError, readContract, readContractSource } from '../contract'
+import { check } from './helpers'
+
+const BASE = `import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { Note } from './src/schemas'
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+	actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes' },
+	roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+		get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),
+	}),
+	health: c.health('/healthz'),
+}))
+`
+
+const SCHEMAS = `import { z } from 'zod/v4'
+
+export const Note = z.strictObject({ id: z.uuid(), title: z.string() })
+`
+
+const edited = (search: string, replacement: string, text = BASE): string => {
+	if (!text.includes(search)) throw new Error(`the base has no '${search}'`)
+	return text.replace(search, replacement)
+}
+
+const application = (contract: string, schemas = SCHEMAS): ReadonlyMap<string, string> =>
+	new Map([['fabrika.contract.ts', contract], ['src/schemas.ts', schemas]])
+
+/** The findings of a refused read, as `file:line:col rule message`. */
+const refusal = (files: ReadonlyMap<string, string>): string[] => {
+	try {
+		readContract(files)
+	} catch (error) {
+		if (error instanceof ContractSourceError) {
+			return error.findings.map((finding) => `${finding.file}:${finding.line}:${finding.column} ${finding.rule} ${finding.message}`)
+		}
+		throw error
+	}
+	return []
+}
+
+describe('the reader refuses what it cannot read, with the position and the allowed form', () => {
+	test('a missing contract module, a contract export of another name, and a contract that is no defineContract call', () => {
+		expect(refusal(new Map([['src/schemas.ts', SCHEMAS]]))).toEqual(['fabrika.contract.ts:1:1 contract the application has no fabrika.contract.ts'])
+		expect(refusal(application(edited('export const contract', 'export const surface')))).toEqual([
+			"fabrika.contract.ts:1:1 contract 'fabrika.contract.ts' exports no const 'contract'",
+		])
+		expect(refusal(application("export const contract = { app: 'notes' }\n"))).toEqual(['fabrika.contract.ts:1:25 contract the contract is a object'])
+	})
+
+	test('a source the parser rejects, and an import of a module the caller did not supply', () => {
+		expect(refusal(application(BASE, 'export const Note = {\n'))).toEqual(['src/schemas.ts:2:1 parse-error Unexpected token (2:0)'])
+		expect(refusal(new Map([['fabrika.contract.ts', BASE]]))).toEqual(["fabrika.contract.ts:3:10 literal unresolved module './src/schemas'"])
+	})
+
+	test('every form the literal rule refuses is refused before anything is read', () => {
+		expect(refusal(application(edited("app: 'notes'", 'app: process.env.APP')))).toEqual([
+			'fabrika.contract.ts:6:7 literal MemberExpression is not a literal',
+		])
+	})
+
+	test('a hand-written mount, a job among the mounts, and a mount that is a plain value', () => {
+		const contract = edited(
+			"health: c.health('/healthz'),",
+			"health: { kind: 'health', path: '/healthz' },\n\tpurge: c.cron('0 3 * * *', { actions: ['notes.write'], scope: 'app' }),\n\tlabel: 'notes',",
+		)
+		expect(refusal(application(contract))).toEqual([
+			'fabrika.contract.ts:14:10 contract a object where a builder call stands',
+			'fabrika.contract.ts:15:9 contract a c.cron(…) where a builder call stands',
+			'fabrika.contract.ts:16:9 contract a string where a builder call stands',
+		])
+	})
+
+	test('a builder of the wrong kit, a procedure that is a plain value, and a builder with extra arguments', () => {
+		const contract = edited(
+			"health: c.health('/healthz'),",
+			"health: c.health('/healthz', 'extra'),\n"
+				+ "\tshared: c.link('/s', { spa: 'dist/s', dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.write', maxDays: 7, procedures: (l) => ({\n"
+				+ "\t\tnested: l.rpc('/x', { callers: ['human'] }, {}),\n"
+				+ "\t\tlabel: 'x',\n"
+				+ '\t}) }),',
+		)
+		expect(refusal(application(contract))).toEqual([
+			'fabrika.contract.ts:14:10 contract c.health takes 1 arguments, not 2',
+			'fabrika.contract.ts:16:11 contract l.rpc(…) is not a procedure here',
+		])
+	})
+
+	test('a vocabulary field the contract does not have, a value of the wrong type, and a missing field', () => {
+		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\tlimits: { maxDays: 30 },")))).toEqual([
+			"fabrika.contract.ts:7:10 contract 'limits' is not a field of the vocabulary",
+		])
+		expect(refusal(application(edited("callers: ['human']", "callers: 'human'")))).toEqual(['fabrika.contract.ts:11:32 contract callers is a string'])
+		expect(refusal(application(edited("output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } ", 'output: Note ')))).toEqual([
+			'fabrika.contract.ts:12:8 contract access is missing',
+		])
+	})
+
+	test('callers outside the RPC callers, an empty caller list, and an access that mixes two forms', () => {
+		expect(refusal(application(edited("callers: ['human']", "callers: ['human', 'link']")))).toEqual([
+			"fabrika.contract.ts:11:32 contract 'link' is not a caller of an RPC mount",
+		])
+		expect(refusal(application(edited("callers: ['human']", 'callers: []')))).toEqual(['fabrika.contract.ts:11:32 contract callers is empty'])
+		expect(refusal(application(edited("on: 'note', from: 'id'", "on: 'note', from: 'id', over: 'workspace'")))).toEqual([
+			'fabrika.contract.ts:12:81 contract access is not one access form',
+		])
+	})
+
+	test('a webhook with an unknown scheme and a link without its procedures callback', () => {
+		const contract = edited(
+			"health: c.health('/healthz'),",
+			"hook: c.webhook('/hook', { scheme: 'stripe', boundTo: 'app', actions: ['notes.write'], input: Note }),\n"
+				+ "\tshared: c.link('/s', { spa: 'dist/s', dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.write', maxDays: 7 }),",
+		)
+		expect(refusal(application(contract))).toEqual([
+			'fabrika.contract.ts:14:37 contract c.webhook needs a known scheme',
+			'fabrika.contract.ts:15:10 contract c.link needs procedures as a builder callback',
+		])
+	})
+
+	test('schema arguments of the wrong type or count, an option the contract does not read, and a check on the wrong schema', () => {
+		const schemas = `import { z } from 'zod/v4'
+
+export const Note = z.strictObject({
+	a: z.string().min('1'),
+	b: z.string().min(1, { abort: true }),
+	c: z.string().positive(),
+	d: z.number().min(),
+	e: z.uuid({ version: 'v9' }),
+	f: z.string().includes('x', 'message'),
+})
+`
+		expect(refusal(application(BASE, schemas))).toEqual([
+			'src/schemas.ts:4:5 contract .min() takes a number, not a string',
+			"src/schemas.ts:5:5 contract 'abort' is not an option the contract reads for .min()",
+			'src/schemas.ts:6:5 contract .positive() is not a method of a string schema in the contract subset',
+			'src/schemas.ts:7:5 contract .min() takes 1 to 2 arguments, not 0',
+			"src/schemas.ts:8:5 contract 'v9' is not a UUID version",
+			'src/schemas.ts:9:5 contract .includes() takes its options as an object',
+		])
+	})
+
+	test('a schema zod itself refuses while building it', () => {
+		const schemas = "import { z } from 'zod/v4'\n\nexport const Note = z.strictObject({ id: z.uuid() }).pick({ title: true })\n"
+		expect(refusal(application(BASE, schemas))).toEqual(['src/schemas.ts:3:21 contract zod refuses this schema: Unrecognized key: "title"'])
+	})
+
+	test('defineTables in the contract graph, and a __proto__ key', () => {
+		const tables = "import { defineTables } from '@fabrika/db'\n\nexport const contract = defineTables()({})\n"
+		expect(refusal(application(tables))).toEqual(['fabrika.contract.ts:3:25 contract defineTables in the contract graph'])
+		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\t__proto__: { roles: {} },")))).toEqual([
+			'fabrika.contract.ts:7:2 literal a __proto__ key sets the prototype instead of a field',
+		])
+	})
+})
+
+describe('a contract the reader reads but that does not compile fails with the runtime problems', () => {
+	test('an option a builder sets itself, a typo in an action, and an option that changes a format', () => {
+		const contract = edited(
+			"health: c.health('/healthz'),",
+			"health: c.health('/healthz'),\n\tsite: c.spa('/', { dir: 'dist', access: { action: 'notes.raed', over: 'workspace' }, prefix: '/x' }),",
+		)
+		const schemas = "import { z } from 'zod/v4'\n\nexport const Note = z.strictObject({ id: z.uuid({ version: 'v4' }), title: z.string() })\n"
+		const runtime = defineContract({
+			app: 'notes',
+			dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+			actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes' },
+			roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+		}, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				get: c.query({
+					input: z.strictObject({ id: z.uuid() }),
+					output: z.strictObject({ id: z.uuid({ version: 'v4' }), title: z.string() }),
+					access: { action: 'notes.read', on: 'note', from: 'id' },
+				}),
+			}),
+			health: c.health('/healthz'),
+		}))
+		const problems = (compile: () => unknown): readonly string[] => {
+			try {
+				compile()
+			} catch (error) {
+				if (error instanceof ContractError) return error.problems
+				throw error
+			}
+			return []
+		}
+
+		expect(problems(() => readContractSource(application(BASE, schemas), {}))).toEqual(problems(() => compileContract(runtime, {})))
+		expect(problems(() => readContractSource(application(contract), {}))).toEqual([
+			"mount 'site': 'prefix' is set by c.spa itself and cannot be an option; remove it",
+			"mount 'site': 'notes.raed' is not an action of the contract — did you mean 'notes.read'?",
+		])
+	})
+})
+
+describe('the checker reports what the reader refuses', () => {
+	test('a schema the runtime refuses is a contract finding at the contract, with the allowed form', async () => {
+		const schemas = "import { z } from 'zod/v4'\n\nexport const Note = z.strictObject({ id: z.uuid(), title: z.string().regex(/^[a-z]+$/i) })\n"
+		const findings = await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': schemas })
+		expect(findings).toEqual([{
+			file: 'fabrika.contract.ts',
+			line: 5,
+			column: 25,
+			rule: 'contract',
+			message: "mount 'api' procedure 'get' output.title: the pattern /^[a-z]+$/ has flags",
+			allowed: 'a pattern without flags',
+		}])
+	})
+
+	test('a contract the reader reads is clean, error messages included', async () => {
+		const schemas =
+			"import { z } from 'zod/v4'\n\nexport const Note = z.strictObject({ id: z.uuid('bad id'), title: z.string({ error: 'text' }).min(1, { message: 'short' }) })\n"
+		expect(await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': schemas })).toEqual([])
+	})
+})

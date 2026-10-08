@@ -6,11 +6,12 @@ indirect call can escape a rule, and the runtime checks stay the real defence. A
 escape. Biome stays the linter for this repository's own code; this package is for applications. Assumes the root
 CLAUDE.md.
 
-Published (`publishConfig.access: public`), because applications run it in their own build.
+Published (`publishConfig.access: public`), because applications run it in their own build. It also holds the
+static contract reader (B1), which Control runs on the files of a commit.
 
 ```bash
 bun run typecheck
-bun test                    # rules · direct-forms · spike-contract · cli
+bun test                    # rules · direct-forms · spike-contract · cli · reader · differential
 bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check`
 ```
 
@@ -20,27 +21,42 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 - Bin: `fabrika-check [<root>]` prints one line per finding,
   `file:line:col rule-id message (allowed form: …)`, then a count on stderr. Exit 0 clean, 1 with findings, 2 on a
   usage or read error.
+- Reader: `@fabrika/check/contract` exports `readContractSource(files, tables) → ContractArtifact` and
+  `readContract(files) → AnyContract`. `files` holds `fabrika.contract.ts` and the modules it imports (path → text);
+  nothing else is read. It throws `ContractSourceError` (findings with file, line, column and allowed form) for a form
+  it refuses, and `ContractError` with the problems `compileContract` reports for a contract that does not compile.
+  Until `@fabrika/db` exposes its table policies as data (A8b), `tables` is the artifact form of each policy, as
+  `compileContract` takes it, and `src/db/tables.ts` is not read.
 
-| Module             | What it owns                                                                                         |
-| ------------------ | ---------------------------------------------------------------------------------------------------- |
-| `check.ts`         | `checkApplication`, the disk reader, and the order the rules run in.                                 |
-| `ast.ts`           | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.    |
-| `graph.ts`         | The one static resolver: what a name denotes through consts, imports and exports, without executing. |
-| `layout.ts`        | The application file layout the rules read, which files are read, and Bun's resolution candidates.   |
-| `references.ts`    | Every way a module names another, and which names a direct load takes.                               |
-| `resolution.ts`    | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.      |
-| `finding.ts`       | The rule ids, the `Finding` shape and its one-line format.                                           |
-| `rules/literal.ts` | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph. |
-| `rules/*.ts`       | One file per rule group.                                                                             |
+| Module              | What it owns                                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `check.ts`          | `checkApplication`, the disk reader, and the order the rules run in.                                  |
+| `ast.ts`            | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.     |
+| `graph.ts`          | The one static resolver: what a name denotes through consts, imports and exports, without executing.  |
+| `layout.ts`         | The application file layout the rules read, which files are read, and Bun's resolution candidates.    |
+| `references.ts`     | Every way a module names another, and which names a direct load takes.                                |
+| `resolution.ts`     | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.       |
+| `finding.ts`        | The rule ids, the `Finding` shape and its one-line format.                                            |
+| `rules/literal.ts`  | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.  |
+| `rules/contract.ts` | What the reader refuses, run by the checker once the literal rule passes.                             |
+| `rules/*.ts`        | One file per rule group.                                                                              |
+| `contract.ts`       | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.         |
+| `reader/value.ts`   | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                |
+| `reader/schema.ts`  | Each `z` factory and method applied to real zod, with its arguments and options checked.              |
+| `reader/surface.ts` | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does. |
 
 Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id; `direct-forms.test.ts` holds the
-directly spelled forms each rule must also refuse, and the documented escapes.
+directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
+of the reader; `differential.test.ts` compiles each fixture contract from source and from the evaluated module and
+expects the same artifact and canonical bytes (`fixtures/reader-forms/` holds every form the reader accepts;
+`fixtures/clean-app/` is the clean application of the rule tests).
 
 ## The rules
 
 | Rule id                      | Refuses                                                                                                                                                                                   |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `literal`                    | anything but the literal subset below in the contract graph, including every runtime import and export of its modules                                                                     |
+| `contract`                   | what the static reader refuses once the contract is a literal (the wrong builder or value type for a field, a hand-written mount), and a schema `describeContract` refuses                |
 | `forbidden-import`           | database drivers (Kysely included), S3 clients (`aws-sdk` too), `jose`, `node:http`/`https`/`http2`/`net`/`tls`/`dgram`, `child_process`                                                  |
 | `unchecked-import`           | an import outside what the checker reads: above the root, absolute or `file:`, into `node_modules`/`dist`/a dot-directory, also through an import map or `tsconfig` path; a symbolic link |
 | `forbidden-global`           | `Bun.sql`/`SQL`/`S3Client`/`s3`/`serve`/`connect`/`listen`/`udpSocket`/`spawn`/`spawnSync`/`$`, the same from `bun` by any load or re-export, `Bun` as a bare value                       |
@@ -66,11 +82,12 @@ directly spelled forms each rule must also refuse, and the documented escapes.
 
 ## The literal subset (shared with B1)
 
-The static contract reader (B1) must accept exactly what `rules/literal.ts` accepts. Change both together.
+The static contract reader (B1) runs `rules/literal.ts` first and reads exactly its forms; it refuses more only
+where the types refuse too (see below). Change the rule, `reader/value.ts` and `reader/schema.ts` together.
 
 - **Values:** strings, numbers (`-` before a number), booleans, `null`, templates without `${…}`, object and array
-  literals without spreads, computed keys, methods or holes; `x as const`, `x satisfies T`. A regular-expression
-  literal only as the argument of `.regex()`.
+  literals without spreads, computed keys, methods, holes or a `__proto__` key; `x as const`, `x satisfies T`. A
+  regular-expression literal only as the argument of `.regex()`.
 - **Names:** a top-level `const` of the module, or a named import of an exported literal `const` from a relative
   module (export aliases are followed). A const defined through itself is refused. Every runtime import and every
   export of a literal module is checked, used or not; no side-effect import, namespace import of a relative module
@@ -98,6 +115,22 @@ The static contract reader (B1) must accept exactly what `rules/literal.ts` acce
     see); `startsWith`, `endsWith` or `includes` with a format. `@fabrika/app`'s `compileContract` refuses the same
     combinations, and also a `.default()` on a discriminated union's discriminator, which a chain cannot show.
 
+## The reader beyond the literal subset
+
+The literal rule fixes the forms; the reader also checks what the types check, because Control reads a commit
+nobody has type-checked. It refuses with the `contract` rule:
+
+- a mount, procedure, file collection, job or export that is not its builder call (a hand-written
+  `{ kind: 'rpc', … }` is refused even where the types accept it), `l.<builder>` other than `query` and `mutation`, a
+  mutation in an export;
+- a field of the wrong type, a missing required field, an unknown key in the vocabulary, a dimension, a role, an
+  access, an import or the CSP, and a builder called with the wrong number of arguments. Unknown builder options are
+  recorded in `unknownOptions`, as the kit does, so `buildArtifact` refuses them in the runtime's words;
+- a `z` step on the wrong schema (`z.string().positive()`), an argument of the wrong type or count, and an option
+  other than `message` and `error` (a string or `{ message, error }`) plus, where zod takes them, `version` of a
+  UUID, `offset`/`local`/`precision` of `z.iso.datetime`, `precision` of `z.iso.time` and `position` of
+  `.includes()`. Those options reach zod unchanged, so `describeContract` refuses a non-default one as at runtime.
+
 ## Documented escapes (D11)
 
 Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that closing one is a visible change:
@@ -122,6 +155,14 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   producer.
 - **`@babel/parser` is pinned exactly (8.0.7).** It is plain JavaScript and also runs in a Worker, which B1 needs.
   A parser upgrade can move positions and change node shapes; rerun the spike fixture test.
+- **The reader evaluates no application code, and normalizes nothing itself.** It calls only zod's own builders on
+  literal arguments and copies fields as `@fabrika/app`'s kit does; `compileContract` (`describeContract` +
+  `buildArtifact`) does every check and default. A change to the kit's builders (`BUILDER_FIELDS`, a new option) is
+  a change to `reader/surface.ts`; `differential.test.ts` fails when they drift.
+- **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
+  `finding.ts` and `rules/literal.ts` import no `node:*`, `bun` or file API. A Worker bundle of the reader measured
+  630 KiB, 150 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes
+  contract in workerd.
 - **Read nothing outside the checked set.** `node_modules`, `dist` and dot-directories are skipped, and symbolic
   links are reported, never followed; `unchecked-import` is what keeps code from hiding there.
 
@@ -132,5 +173,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 - `cross-app-fetch` refuses every absolute URL with a static prefix: statically, another application's origin and a
   third party's look the same.
 - A setup in `zerops.yaml` without a `run` section is not checked for jobs; every other setup carries them all.
+- The checker runs the reader without table policies, so `buildArtifact`'s checks (unknown actions, paths, table
+  links) run only where the tables are known: in Control and `compileContract`. A8b reads `src/db/tables.ts`.
 - Not here yet: squawk rules and destructive-migration markers (deferred, not in v1), deletion of a generated test (A11), timers as
   job substitutes (A15), store functions that take bare ids (A8b).

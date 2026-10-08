@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { checkApplication } from '../check'
 import type { Finding, RuleId } from '../finding'
 
@@ -7,31 +9,15 @@ export const check = (files: Readonly<Record<string, string>>): Promise<Finding[
 export const locations = (findings: readonly Finding[], rule: RuleId): string[] =>
 	findings.filter((finding) => finding.rule === rule).map((finding) => `${finding.file}:${finding.line}:${finding.column}`)
 
+/** A file of the clean application; `differential.test.ts` also imports it as a module. */
+function readFixture(path: string): string {
+	return readFileSync(join(import.meta.dir, 'fixtures', 'clean-app', path), 'utf8')
+}
+
 /** A contract that every rule accepts, with one job, for the rules that read the contract. */
-export const CLEAN_CONTRACT = `import { defineContract } from '@fabrika/app/contract'
-import { z } from 'zod/v4'
-import { CreateNote, Note } from './src/schemas/notes'
+export const CLEAN_CONTRACT = readFixture('fabrika.contract.ts')
 
-export const contract = defineContract({
-	app: 'notes',
-	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
-	actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes' } as const,
-	roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
-}, (c) => ({
-	api: c.rpc('/api', { callers: ['human'] }, {
-		get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),
-		create: c.mutation({ input: CreateNote, output: Note, access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' } }),
-	}),
-	purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.write'], scope: 'app' }),
-	health: c.health('/healthz'),
-}))
-`
-
-export const CLEAN_SCHEMAS = `import { z } from 'zod/v4'
-
-export const Note = z.strictObject({ id: z.uuid(), title: z.string().min(1).max(200) })
-export const CreateNote = z.strictObject({ workspaceId: z.uuid(), title: z.string().min(1) })
-`
+export const CLEAN_SCHEMAS = readFixture('src/schemas/notes.ts')
 
 export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db'
 import { columns, type DB } from './schema.generated'

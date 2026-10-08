@@ -50,6 +50,15 @@ const cases: readonly RuleCase[] = [
 		good: CLEAN_APPLICATION,
 	},
 	{
+		rule: 'contract',
+		bad: {
+			...CLEAN_APPLICATION,
+			'fabrika.contract.ts': CLEAN_CONTRACT.replace("health: c.health('/healthz'),", "health: { kind: 'health', path: '/healthz' },"),
+		},
+		expected: ['fabrika.contract.ts:15:10'],
+		good: CLEAN_APPLICATION,
+	},
+	{
 		rule: 'forbidden-import',
 		bad: {
 			'src/data.ts': [

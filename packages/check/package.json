@@ -22,6 +22,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./contract": {
+			"bun": "./src/contract.ts",
+			"types": "./src/contract.ts",
+			"default": "./src/contract.ts"
 		}
 	},
 	"scripts": {
@@ -30,6 +35,8 @@
 	},
 	"dependencies": {
 		"@babel/parser": "8.0.7",
+		"@fabrika/app": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
 		"zod": "^3.25.76"
 	}
 }
