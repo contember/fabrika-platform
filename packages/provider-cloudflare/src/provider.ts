@@ -1,3 +1,4 @@
+import { appEnvironmentId } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from '@fabrika/provider-contract'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
@@ -248,7 +249,7 @@ export interface CloudflareDeployRun {
 	readonly appId: string
 	readonly env: string
 	readonly domain?: string
-	/** Every origin IAM may hand this app a session at; app-wide, because IAM's registry is keyed by app id. */
+	/** Every origin IAM may hand this environment a session at, registered under `<app>@<env>`. */
 	readonly returnOrigins?: readonly string[]
 	readonly cwd: string
 	readonly configPath: string
@@ -286,6 +287,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		...(run.domain === undefined ? {} : { domain: run.domain }),
 		stateNamespace: stateNamespace(loaded.config, run),
 		platformResources,
+		iamAppId: appEnvironmentId(run.appId, run.env),
 	})
 	const env: StepEnv = {
 		config: loaded.config,

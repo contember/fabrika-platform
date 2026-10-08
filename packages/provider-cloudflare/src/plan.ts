@@ -1,4 +1,4 @@
-import { isProxyHost } from '@fabrika/proxy-core/manifest'
+import { FABRIKA_PROXY_MANIFEST_JSON, isProxyHost, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { Container, D1Database, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 import { CLOUDFLARE_PROXY_WORKER_DIR, CLOUDFLARE_PROXY_WORKER_MAIN, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE } from './proxy'
@@ -283,6 +283,25 @@ export interface AuthoredGraphLimits {
 	readonly stateNamespace: string
 	/** Fabrika deploying its own components is the one caller allowed to name a platform resource. */
 	readonly platformResources: 'refuse' | 'allow'
+	/** The IAM application id `<app>@<env>` of the deployment, the only audience its proxy may mint for. */
+	readonly iamAppId: string
+}
+
+/**
+ * The proxy mints for the id its manifest names, so an authored manifest naming `notes@stage` or a
+ * platform audience would carry another environment's grants, or cross-app ones, into this app.
+ */
+const assertProxyAudience = (proxy: Worker, iamAppId: string): void => {
+	const raw = proxy.options.vars?.[FABRIKA_PROXY_MANIFEST_JSON]
+	const manifest = typeof raw === 'string' ? parseProxyManifestJson(raw) : null
+	if (manifest === null) {
+		throw new Error(`cloudflare: proxy Worker \`${proxy.options.name}\` carries no readable proxy manifest`)
+	}
+	for (const app of manifest.apps) {
+		if (app.id !== iamAppId) {
+			throw new Error(`cloudflare: proxy Worker \`${proxy.options.name}\` mints for \`${app.id}\`; this deployment is \`${iamAppId}\``)
+		}
+	}
 }
 
 /**
@@ -350,6 +369,9 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 		throw new Error(`cloudflare: state namespace \`${limits.stateNamespace}\` is a Fabrika platform resource and cannot be used by an app`)
 	}
 	visit(root)
+	if (refuse && isProviderProxyWorker(root)) {
+		assertProxyAudience(root, limits.iamAppId)
+	}
 }
 
 export const buildPlan = (config: CloudflareAppConfig, worker: Worker): readonly CloudflareStep[] => {

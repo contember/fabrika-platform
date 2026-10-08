@@ -1,3 +1,4 @@
+import { encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
@@ -51,8 +52,21 @@ const bindingIam = (iam: Bindable): Worker =>
 const INSTALLED_PROXY_DIR = '/repo/node_modules/@fabrika/provider-cloudflare/src'
 
 /** The proxy root owns the public route; the application Worker is reached only through `APP`. */
-const proxyRouting = (app: Worker, routes: Worker['options']['routes']): Worker =>
-	new Worker({ dir: INSTALLED_PROXY_DIR, name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: './proxy-worker.ts', routes })
+const proxyRouting = (app: Worker, routes: Worker['options']['routes'], iamAppId = 'demo@stage'): Worker =>
+	new Worker({
+		dir: INSTALLED_PROXY_DIR,
+		name: 'demo-proxy',
+		compatibility_flags: [],
+		bindings: { APP: app },
+		main: './proxy-worker.ts',
+		routes,
+		vars: { FABRIKA_PROXY_MANIFEST_JSON: proxyManifest(iamAppId) },
+	})
+
+const proxyManifest = (id: string): string =>
+	encodeProxyManifestJson({
+		apps: [{ id, hosts: ['stage.example.com'], upstream: 'APP', gates: { rules: [{ path: '/*', kind: 'public' }] }, scheme: 'https' }],
+	})
 
 /** A checkout is plain JavaScript: its options object carries whatever raw wrangler keys it likes. */
 const withRawOptions = (worker: Worker, raw: Record<string, unknown>): Worker => {
@@ -225,6 +239,7 @@ describe('Cloudflare provider', () => {
 			compatibility_flags: [],
 			bindings: { APP: app },
 			main: './proxy-worker.ts',
+			vars: { FABRIKA_PROXY_MANIFEST_JSON: proxyManifest('demo@stage') },
 		})
 		const authored = config({ resources: () => proxy })
 		const dsn = 'https://operations-public-key@errors.test/1'
@@ -248,6 +263,7 @@ describe('Cloudflare provider', () => {
 			compatibility_flags: [],
 			bindings: { APP: app },
 			main: './proxy-worker.ts',
+			vars: { FABRIKA_PROXY_MANIFEST_JSON: proxyManifest('demo@stage') },
 		})
 		const authored = config({ resources: () => proxy, pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] } })
 		const result = await deploy(rec, authored, { secrets: { API_KEY: 'secret-value' } })
@@ -520,7 +536,7 @@ describe('Cloudflare provider', () => {
 		const providerProxy = createCloudflareProxyWorker({
 			name: 'demo-proxy',
 			app: appWorker(),
-			appId: 'demo',
+			appId: 'demo@stage',
 			appHost: 'stage.example.com',
 			domain: 'stage.example.com',
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
@@ -641,7 +657,7 @@ describe('Cloudflare provider', () => {
 		const proxy = createCloudflareProxyWorker({
 			name: 'demo-proxy',
 			app,
-			appId: 'demo',
+			appId: 'demo@stage',
 			appHost: 'stage.example.com',
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
 		})
@@ -729,6 +745,23 @@ describe('Cloudflare provider', () => {
 			{ build: { command: 'cat /proc/self/environ' } },
 		)
 		await expect(deploy(rec, config({ resources: () => rawProxy }))).rejects.toThrow('Worker `demo-proxy` sets `build`, which an app may not configure')
+	})
+
+	test('refuses a proxy that mints for another environment or a platform audience', async () => {
+		const route = [{ pattern: 'stage.example.com', custom_domain: true }]
+		for (const audience of ['demo@prod', 'vozka', 'other@stage']) {
+			await expect(deploy(rec, config({ resources: () => proxyRouting(appWorker(), route, audience) }))).rejects.toThrow(
+				`proxy Worker \`demo-proxy\` mints for \`${audience}\`; this deployment is \`demo@stage\``,
+			)
+		}
+		// A production deployment whose proxy claims the staging id would accept a staging key.
+		await expect(deploy(rec, config({ resources: () => proxyRouting(appWorker(), route, 'demo@stage') }), { env: 'prod' })).rejects.toThrow(
+			'mints for `demo@stage`; this deployment is `demo@prod`',
+		)
+		const unreadable = withRawOptions(proxyRouting(appWorker(), route), { vars: {} })
+		await expect(deploy(rec, config({ resources: () => unreadable }))).rejects.toThrow('carries no readable proxy manifest')
+		expect(rec.provisions).toHaveLength(0)
+		await expect(deploy(rec, config({ resources: () => proxyRouting(appWorker(), route) }))).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('keeps the Worker options an application config legitimately sets', async () => {
