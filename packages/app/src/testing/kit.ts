@@ -12,6 +12,7 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
+	type IamMembershipRpc,
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
 	PROXY_TOKEN_HEADER,
@@ -47,6 +48,11 @@ export interface TestKitOptions {
 	readonly database?: Database
 	/** The object storage of the file collections, as the runtime adapter supplies it to `boot`. */
 	readonly files?: FileObjectStore
+	/**
+	 * IAM's membership operations, for an application that creates scopes, manages members or issues share links:
+	 * `boot` asks it as the adapter's transport, and the kit's proxy obtains each delegation grant from it.
+	 */
+	readonly membership?: IamMembershipRpc
 }
 
 export interface TestKit<C extends AnyContract> {
@@ -115,6 +121,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		assets: options.assets ?? defaultAssets,
 		database: options.database,
 		files: options.files,
+		membership: options.membership,
 	})
 
 	const byKey = new Map<string, TestCaller>()
@@ -182,7 +189,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		getJwks: () => jwks,
 	}
 
-	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER })
+	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER, delegations: options.membership ?? null })
 
 	const kitFetch: RpcFetch = async (input, init) => {
 		const request = toRequest(origin, input, init)

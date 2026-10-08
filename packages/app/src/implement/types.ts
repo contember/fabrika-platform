@@ -3,9 +3,11 @@
 
 import type { z } from 'zod/v4'
 import type { SurfaceSection } from '../contract/declaration'
-import type { InputOf, LinkMount, MemberAccess, Procedure, RpcMount, Schema } from '../contract/define'
+import type { InputOf, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Schema, WebhookMount } from '../contract/define'
 import type { Ref, Within } from './capability'
+import type { LinkIssuing, MemberManagement } from './membership'
 import type { LinkHolder, PrincipalOf } from './principal'
+import type { WebhookPrincipal } from './webhook'
 
 /** What every handler gets: who called, and this request's id. */
 export interface RequestContext<P> {
@@ -21,6 +23,35 @@ export type AccessContext<Acc> = Acc extends MemberAccess ? unknown
 	: Acc extends { readonly action: infer A extends string; readonly creates: infer D extends string } ? { readonly created: Ref<D, A> }
 	: never
 
+type DimensionsOf<C> = C extends { readonly dimensions: infer Dims } ? Dims : never
+
+/** The dimension and action of an access form that hands a `Ref` of an existing object. */
+type TargetOf<Acc> = Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? readonly [D, A]
+	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? readonly [D, A]
+	: never
+
+/** `ctx.members`, only where the action is the dimension's `members.manage` (the framework document, section 6). */
+type MembersContext<C, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
+	? DimensionsOf<C>[D & keyof DimensionsOf<C>] extends { readonly members: { readonly manage: A } }
+		? { readonly members: MemberManagement<D, A, RoleOf<C>> }
+	: unknown
+	: unknown
+
+/** The link mounts whose dimension and issuing action are `D` and `A`. */
+type IssuingMounts<C, D extends string, A extends string> =
+	& {
+		[M in keyof SurfaceOf<C>]: SurfaceOf<C>[M] extends { readonly kind: 'link'; readonly dimension: D; readonly issuedBy: A } ? M : never
+	}[keyof SurfaceOf<C>]
+	& string
+
+/** `ctx.links`, only where the `Ref` carries a link mount's issuing action for its dimension. */
+type LinksContext<C, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
+	? [IssuingMounts<C, D, A>] extends [never] ? unknown : { readonly links: LinkIssuing<D, A, IssuingMounts<C, D, A>> }
+	: unknown
+
+/** What a procedure's context carries for its access form in this contract. */
+export type ContractContext<C, Acc> = AccessContext<Acc> & MembersContext<C, Acc> & LinksContext<C, Acc>
+
 /** The input without the `from` field: the only copy of that id a handler has is the checked capability. */
 export type HandlerInput<I, Acc> = Acc extends { readonly from: infer F extends string }
 	? { readonly [K in keyof InputOf<I> as K extends F ? never : K]: InputOf<I>[K] }
@@ -28,10 +59,10 @@ export type HandlerInput<I, Acc> = Acc extends { readonly from: infer F extends 
 
 export type Handler<In, Ctx, O extends Schema> = (args: { readonly input: In; readonly ctx: Ctx }) => z.input<O> | Promise<z.input<O>>
 
-type RpcHandlers<P, T> = {
+type RpcHandlers<C, P, T> = {
 	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, infer Acc>
-		? Handler<HandlerInput<I, Acc>, RequestContext<P> & AccessContext<Acc>, O>
-		: RpcHandlers<P, T[K]>
+		? Handler<HandlerInput<I, Acc>, RequestContext<P> & ContractContext<C, Acc>, O>
+		: RpcHandlers<C, P, T[K]>
 }
 
 /** A link procedure acts on the object its key is bound to. */
@@ -41,17 +72,25 @@ type LinkHandlers<D extends string, T> = {
 		: LinkHandlers<D, T[K]>
 }
 
-type MountHandlers<M> = M extends RpcMount<infer C, infer T> ? RpcHandlers<PrincipalOf<C[number]>, T>
+/** A delivery's handler: the declared input, and a `Ref` of the bound value for each declared action. */
+export type WebhookHandler<B extends string, Acts extends string, I> = (args: {
+	readonly input: z.output<I>
+	readonly ctx: RequestContext<WebhookPrincipal> & { readonly refs: { readonly [A in Acts]: Ref<B, A> } }
+}) => void | Promise<void>
+
+type MountHandlers<C, M> = M extends RpcMount<infer Callers, infer T> ? RpcHandlers<C, PrincipalOf<Callers[number]>, T>
 	: M extends LinkMount<infer D, string, string, infer T> ? LinkHandlers<D, T>
+	: M extends WebhookMount<infer B, infer Acts, infer I> ? WebhookHandler<B, Acts, I>
 	: never
 
-type ServedMount<M> = M extends { readonly kind: 'rpc' | 'link' } ? true : false
+type ServedMount<M> = M extends { readonly kind: 'rpc' | 'link' | 'webhook' } ? true : false
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
 
-/** One handler tree per procedure mount, keyed like the contract. */
+/** One handler tree per procedure mount and one handler per webhook, keyed like the contract. */
 export type HandlersOf<C> = {
 	readonly [M in keyof SurfaceOf<C> as M extends SurfaceSection ? never : ServedMount<SurfaceOf<C>[M]> extends true ? M : never]: MountHandlers<
+		C,
 		SurfaceOf<C>[M]
 	>
 }
@@ -93,7 +132,8 @@ type ExactTree<H, E, Path extends string> = {
 type KindOf<M> = M extends { readonly kind: infer K extends string } ? K : 'section'
 
 export type ExactHandlers<H, C> = {
-	readonly [M in keyof H]: M extends keyof HandlersOf<C> ? ExactTree<H[M], HandlersOf<C>[M], `${M & string}.`>
+	readonly [M in keyof H]: M extends keyof HandlersOf<C> ? HandlersOf<C>[M] extends (args: never) => unknown ? H[M]
+		: ExactTree<H[M], HandlersOf<C>[M], `${M & string}.`>
 		: M extends keyof SurfaceOf<C> ? `'${M & string}' is a ${KindOf<SurfaceOf<C>[M]>} mount; it takes no handler. Remove it from handlers.`
 		: `'${M & string}' is not in the contract. Declare the mount in fabrika.contract.ts first.`
 }

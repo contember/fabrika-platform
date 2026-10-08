@@ -2,6 +2,7 @@
 // adapter captured the framework's variables and scrubbed them from the process. It compiles the contract, binds
 // every handler to its endpoint and refuses to start when anything declared cannot be served.
 
+import { IamMembership } from '@fabrika/auth'
 import {
 	compileEndpointTable,
 	type ContractArtifact,
@@ -12,22 +13,26 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_PROXY_SECRET,
+	type IamMembershipRpc,
 	type Jwks,
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
-import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
+import { bindScopedDatabase, type FrameworkTables, frameworkTablesOf, isScopedDatabase, type WebhookTables } from '@fabrika/db/framework'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { Schema } from '../contract/define'
 import { fileCollections } from '../files/collections'
+import { FormRateLimiter } from './anonymous'
 import { requestCapabilities } from './capability'
-import { ContractRuntime, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
+import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
+import { ServerFault } from './faults'
 import { headerPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
+import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
 export interface IamKeySource {
@@ -50,6 +55,11 @@ export interface BootOptions {
 	readonly requireProxySecret?: boolean
 	/** The object storage of the file collections, which the Bun adapter opens. Without it, a contract with files does not boot. */
 	readonly files?: FileObjectStore
+	/**
+	 * IAM's membership operations: the IAM binding on Cloudflare, `HttpIamRpc` elsewhere. Without it, a contract that
+	 * creates scopes, manages members or issues share links does not boot.
+	 */
+	readonly membership?: IamMembershipRpc
 }
 
 export interface ContractApp {
@@ -163,11 +173,15 @@ function unservable(
 	problems: string[],
 ): void {
 	for (const [name, mount] of Object.entries(artifact.mounts)) {
-		if (mount.kind === 'link' || mount.kind === 'form' || mount.kind === 'webhook') {
-			problems.push(`mount '${name}' is a ${mount.kind} mount, which this version of @fabrika/app does not serve yet`)
+		if ((mount.kind === 'spa' || mount.kind === 'link') && assets === undefined) {
+			problems.push(`mount '${name}' serves an SPA, and the runtime adapter supplies no asset server`)
 		}
-		if (mount.kind === 'spa' && assets === undefined) {
-			problems.push(`mount '${name}' is an SPA, and the runtime adapter supplies no asset server`)
+		if (mount.kind === 'link' && !owned.has(mount.dimension)) {
+			// Every link request re-reads where the object lies; without the table that records it, nothing could.
+			problems.push(`link mount '${name}' shares a '${mount.dimension}', but no table in src/db/tables.ts owns that dimension to locate it`)
+		}
+		if (mount.kind === 'webhook' && mount.boundTo.kind === 'app') {
+			problems.push(`webhook '${name}' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')`)
 		}
 	}
 	for (
@@ -187,7 +201,6 @@ function unservable(
 		}
 		const { access } = row.requirement
 		if (access.form === 'creates') {
-			problems.push(`'${row.id}' creates a '${access.dimension}', and this version cannot ask IAM for a new scope yet`)
 			continue
 		}
 		if (access.form === 'on' && access.from === null) {
@@ -247,17 +260,23 @@ function undeclaredHandlers(node: unknown, declared: ReadonlySet<string>, path: 
 	}
 }
 
+interface BoundDatabase {
+	readonly database: ContractDatabase
+	/** The framework's own writes; only a `scoped(tables)` layer has them. */
+	readonly framework: FrameworkTables | null
+}
+
 /**
  * The database `dispatch` reads. A `scoped(tables)` result is bound here, once, to the adapter's connection and the
  * authority that binds capabilities to requests; the application never receives either, nor the locator.
  */
-function contractDatabase(database: ImplementationDatabase | null, connection: Database | undefined, problems: string[]): ContractDatabase | null {
+function contractDatabase(database: ImplementationDatabase | null, connection: Database | undefined, problems: string[]): BoundDatabase | null {
 	if (database === null) {
 		return null
 	}
 	if (!isScopedDatabase(database)) {
 		if ('locate' in database) {
-			return database
+			return { database, framework: null }
 		}
 		problems.push('implement({ database }) takes the scoped(tables) result of @fabrika/db itself, not a copy or a wrapper of it')
 		return null
@@ -267,10 +286,54 @@ function contractDatabase(database: ImplementationDatabase | null, connection: D
 		return null
 	}
 	try {
-		return { tables: database.tables, locate: bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities }) }
+		const locate = bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities })
+		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database) }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null
+	}
+}
+
+/** `ctx.members` and `ctx.links` of an endpoint: decided from its access form and the artifact, once. */
+function facilitiesOf(artifact: ContractArtifact, row: EndpointRow): Facilities {
+	if (row.requirement?.kind !== 'action') {
+		return NO_FACILITIES
+	}
+	const { action, access } = row.requirement
+	if ((access.form !== 'in' && access.form !== 'on') || access.from === null) {
+		return NO_FACILITIES
+	}
+	const members = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
+	const links = Object.entries(artifact.mounts).flatMap(([name, mount]) =>
+		mount.kind === 'link' && mount.dimension === access.dimension && mount.issuedBy === action ? [{ name, prefix: mount.prefix }] : []
+	)
+	return Object.freeze({ members: members?.manage === action, links: Object.freeze(links) })
+}
+
+/** Whether serving the endpoint asks IAM for anything: a new scope, a membership change, or a share link. */
+function asksIam(served: ServedEndpoint): boolean {
+	if (served.kind !== 'procedure') {
+		return false
+	}
+	const creates = served.row.requirement.kind === 'action' && served.row.requirement.access.form === 'creates'
+	return creates || served.facilities.members || served.facilities.links.length > 0
+}
+
+/** A form and a webhook write the framework's own tables, which only `@fabrika/db`'s `scoped(tables)` reaches. */
+function frameworkProblems(artifact: ContractArtifact, framework: FrameworkTables | null, problems: string[]): void {
+	for (const [name, mount] of Object.entries(artifact.mounts)) {
+		if (mount.kind !== 'form' && mount.kind !== 'webhook') {
+			continue
+		}
+		if (framework === null) {
+			problems.push(`mount '${name}' is a ${mount.kind}, which writes through @fabrika/db: pass implement({ database: scoped(tables) })`)
+			continue
+		}
+		if (mount.kind === 'form') {
+			const input = artifact.endpoints.find((row) => row.id === name)?.input
+			const fields = input?.type === 'object' ? Object.keys(input.fields) : []
+			problems.push(...framework.inboxProblems(name, fields))
+		}
 	}
 }
 
@@ -278,9 +341,50 @@ function isCredentialed(row: EndpointRow | undefined): row is CredentialedEndpoi
 	return row !== undefined && row.requirement !== null
 }
 
+/** `frameworkProblems` refused a webhook without the framework tables, so this answers only after a bug. */
+function frameworkOf(framework: FrameworkTables | null): FrameworkTables {
+	if (framework === null) {
+		throw new ServerFault('a webhook was served without the framework tables')
+	}
+	return framework
+}
+
+/** The generated `webhooks.<name>.bind` and `.unbind` endpoints, served by the framework's own handlers. */
+function bindWebhookBindings(
+	name: string,
+	path: string,
+	rows: ReadonlyMap<string, EndpointRow>,
+	endpoints: Map<string, ServedEndpoint>,
+	tables: () => WebhookTables,
+): void {
+	const handlers = bindingHandlers(name, path, tables)
+	const bind = rows.get(`webhooks.${name}.bind`)
+	const unbind = rows.get(`webhooks.${name}.unbind`)
+	if (isCredentialed(bind)) {
+		endpoints.set(bind.id, {
+			kind: 'procedure',
+			row: bind,
+			input: webhookBindInput,
+			output: webhookBindOutput,
+			handler: handlers.bind,
+			facilities: NO_FACILITIES,
+		})
+	}
+	if (isCredentialed(unbind)) {
+		endpoints.set(unbind.id, {
+			kind: 'procedure',
+			row: unbind,
+			input: webhookUnbindInput,
+			output: webhookUnbindOutput,
+			handler: handlers.unbind,
+			facilities: NO_FACILITIES,
+		})
+	}
+}
+
 export function boot(app: ContractImplementation, options: BootOptions): ContractApp {
 	const problems: string[] = []
-	const framework = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
+	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
@@ -293,7 +397,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	unservable(artifact, options.assets, owned, containers, problems)
 	const files = fileCollections(artifact, app.database, options.files, problems)
 	const bound = contractDatabase(app.database, options.database, problems)
-	const database = files === null || bound === null ? bound : files.locating(bound)
+	const framework = bound?.framework ?? null
+	frameworkProblems(artifact, framework, problems)
+	const database = files === null || bound === null ? (bound?.database ?? null) : files.locating(bound.database)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -316,7 +422,13 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			if (isCredentialed(row)) {
 				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir })
 			}
-		} else if (mount.kind === 'rpc') {
+		} else if (mount.kind === 'rpc' || mount.kind === 'link') {
+			if (mount.kind === 'link') {
+				const row = rows.get(name)
+				if (row !== undefined) {
+					endpoints.set(name, { kind: 'link-spa', row, prefix: mount.prefix, dir: mount.spa })
+				}
+			}
 			for (const { id, path, procedure } of declaredProcedures(name, mount.procedures)) {
 				declared.add(id)
 				const row = rows.get(id)
@@ -332,8 +444,32 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						input: procedure.input,
 						output: procedure.output,
 						handler: (args) => Reflect.apply(handler, undefined, [args]),
+						facilities: facilitiesOf(artifact, row),
 					})
 				}
+			}
+		} else if (mount.kind === 'form') {
+			const row = rows.get(name)
+			if (row !== undefined) {
+				endpoints.set(name, { kind: 'form', row, form: name, input: mount.input })
+			}
+		} else if (mount.kind === 'webhook') {
+			declared.add(name)
+			const row = rows.get(name)
+			const handler = childAt(handlers, name)
+			if (row === undefined || typeof handler !== 'function') {
+				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
+			} else {
+				endpoints.set(name, {
+					kind: 'webhook',
+					row,
+					webhook: name,
+					dimension: mount.boundTo,
+					actions: mount.actions,
+					input: mount.input,
+					handler: (args) => Reflect.apply(handler, undefined, [args]),
+				})
+				bindWebhookBindings(name, mount.path, rows, endpoints, () => frameworkOf(framework).webhooks)
 			}
 		}
 	}
@@ -341,6 +477,12 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		endpoints.set(id, served)
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
+	const asking = [...endpoints.values()].find(asksIam)
+	if (asking !== undefined && options.membership === undefined) {
+		problems.push(
+			`'${asking.row.id}' asks IAM to create a scope, manage members or issue a link, and the runtime adapter supplies no IAM membership transport`,
+		)
+	}
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -349,13 +491,16 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		table: compileEndpointTable(artifact),
 		endpoints,
 		digests: new Map(artifact.endpoints.map((row) => [row.id, endpointDigest(artifact, row)])),
-		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: framework.issuer }),
-		audience: framework.iamAppId,
+		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: variables.issuer }),
+		audience: variables.iamAppId,
 		proxySecretDigest: proxySecret,
-		policy: headerPolicy(artifact.csp, framework.operationsOrigin),
+		policy: headerPolicy(artifact.csp, variables.operationsOrigin),
 		database,
 		ownedDimensions: owned,
 		containers,
 		assets: options.assets ?? null,
+		membership: options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId),
+		framework,
+		forms: new FormRateLimiter(),
 	})
 }

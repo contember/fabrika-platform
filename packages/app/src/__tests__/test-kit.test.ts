@@ -1,14 +1,18 @@
 // The test kit: the proxy's decision in front of the real dispatcher, the header stripping of the hop, and test
-// callers resolved from the contract's roles. It imports only `@fabrika/app/testing`, `@fabrika/app/client` and the
-// fixture application, as an application's own tests do.
+// callers resolved from the contract's roles. It reaches the application only through `@fabrika/app/testing` and
+// `@fabrika/app/client`, as an application's own tests do.
 
 import { createClient, RpcError } from '@fabrika/app/client'
+import { defineContract } from '@fabrika/app/contract'
+import { implement } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
 import type { NoteRow } from './fixtures/implement/stores'
+import { RecordingMembership } from './fixtures/multi-tenant/iam'
 
 const N1 = '0190a0a0-0000-7000-8000-000000000001'
 const N2 = '0190a0a0-0000-7000-8000-000000000002'
@@ -293,5 +297,39 @@ describe('the token size bound', () => {
 		const refused = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: { type: 'workspace', value: 'w'.repeat(tooLarge) } }]))('/')
 		expect(refused.status).toBe(403)
 		expect(await refused.text()).toBe('forbidden')
+	})
+})
+
+describe('the kit serves the IAM membership operations it is given', () => {
+	const starting = defineContract({
+		app: 'notes',
+		dimensions: { workspace: { creator: 'owner' } },
+		actions: { 'notes.read': 'Read', 'workspaces.create': 'Start' },
+		roles: { owner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+	}, (c) => ({
+		api: c.rpc('/api', { callers: ['human'] }, {
+			start: c.mutation({ output: z.strictObject({ workspace: z.string() }), access: { action: 'workspaces.create', creates: 'workspace' } }),
+		}),
+	}))
+	const app = implement(starting, {
+		database: null,
+		deps: () => null,
+		handlers: () => ({ api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) } }),
+	})
+
+	test("the kit's proxy obtains the delegation for the request, and the application spends it at IAM", async () => {
+		const membership = new RecordingMembership()
+		const kit = testKit(app, { membership })
+		const starter = kit.testCaller([{ action: 'workspaces.create' }])
+		const response = await kit.browser(starter)('/api/start', post({}))
+		expect(await response.json()).toEqual({ result: { workspace: 'w-new' } })
+		const [asked] = membership.delegations
+		const [created] = membership.calls
+		expect(asked?.endpoint).toBe('api.start')
+		expect(created?.method === 'createScope' ? created.input.delegation : null).toBe(`grant-for-${asked?.requestId}`)
+	})
+
+	test('without it, an application that creates scopes does not boot', () => {
+		expect(() => testKit(app)).toThrow('the runtime adapter supplies no IAM membership transport')
 	})
 })

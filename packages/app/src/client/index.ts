@@ -8,4 +8,5 @@ export {
 	type LinkClientOptions,
 	type ProcedureCall,
 } from './contract'
+export { shareKey } from './share'
 export { type BounceOption, RpcError, type RpcFetch } from './transport'

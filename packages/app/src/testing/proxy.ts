@@ -6,6 +6,7 @@ import {
 	APP_QUERY_PARAM,
 	createVerifyService,
 	DEFAULT_VERIFY_PATH,
+	type DelegationIssuer,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -42,6 +43,8 @@ export interface EndpointProxyOptions {
 	readonly host: string
 	readonly iam: IamGateway
 	readonly issuer: string
+	/** Issues the delegation grants of membership and scope-creating endpoints, as IAM does for the proxy. */
+	readonly delegations: DelegationIssuer | null
 }
 
 const ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]
@@ -54,6 +57,7 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 		},
 		iam: options.iam,
 		issuer: options.issuer,
+		delegations: options.delegations,
 	})
 	const verifyUrl = `https://fabrika-proxy.internal${DEFAULT_VERIFY_PATH}?${APP_QUERY_PARAM}=${encodeURIComponent(options.appId)}`
 	return async (request) => {

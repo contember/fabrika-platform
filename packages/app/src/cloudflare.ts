@@ -1,5 +1,7 @@
 // ─── Cloudflare Workers adapter ──────────────────────────────────────
 
+import { DecodedIamMembership } from '@fabrika/auth'
+import type { IamMembershipRpc } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
 import { boot, type ContractApp, type IamKeySource } from './implement/boot.js'
@@ -79,6 +81,24 @@ function bindingKeySource(binding: unknown): IamKeySource {
 	}
 }
 
+/**
+ * IAM's membership operations on the `IAM` binding (`PropustkaApplication`), every answer decoded like the HTTP
+ * transport's. A binding without them is no membership transport, and `boot` refuses a contract that needs one.
+ */
+function bindingMembership(binding: unknown): IamMembershipRpc | undefined {
+	const methods = ['requestDelegation', 'createScope', 'assignMember', 'revokeMember', 'listMembers', 'issueLink', 'revokeLink'] as const
+	if (!methods.every((name) => method(binding, name) !== null)) {
+		return undefined
+	}
+	return new DecodedIamMembership(async (name, input) => {
+		const call = method(binding, name)
+		if (call === null) {
+			throw new Error(`the IAM binding has no ${name}`)
+		}
+		return await call(input)
+	})
+}
+
 function bindingAssets(binding: unknown): SpaAssets | undefined {
 	const fetchAsset = method(binding, 'fetch')
 	if (fetchAsset === null) {
@@ -111,7 +131,12 @@ export function createContractWorker(load: ImplementationLoader): {
 		const variables = Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name)))
 		const environment = captureEnvironment(variables)
 		const { default: app } = await load()
-		return boot(app, { environment, iam: bindingKeySource(env['IAM']), assets: bindingAssets(env['ASSETS']) })
+		return boot(app, {
+			environment,
+			iam: bindingKeySource(env['IAM']),
+			assets: bindingAssets(env['ASSETS']),
+			membership: bindingMembership(env['IAM']),
+		})
 	}
 	return {
 		async fetch(request, env) {

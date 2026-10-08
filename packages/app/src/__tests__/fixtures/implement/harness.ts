@@ -20,6 +20,7 @@ import {
 	FABRIKA_CONTRACT_DIGEST,
 	formatEndpointHeader,
 	type Jwks,
+	type LinkTokenClaims,
 	type PermissionEntry,
 	planEndpoint,
 	PROXY_TOKEN_HEADER,
@@ -109,6 +110,22 @@ export async function token(kind: TokenKind, perms: PermissionEntry[], audience 
 		permissions: perms,
 		issuedAt: now - 10,
 		expiresAt: now + 300,
+	})
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+}
+
+/** A share-link token: no principal type, bound to `mount` and `chain` (the object first), as IAM mints from a link key. */
+export async function linkToken(perms: PermissionEntry[], link: LinkTokenClaims): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const claims = buildAccessClaims({
+		iss: ISSUER,
+		app: APP_ID,
+		subject: 'link-credential-1',
+		label: null,
+		permissions: perms,
+		issuedAt: now - 10,
+		expiresAt: now + 300,
+		link,
 	})
 	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
 }

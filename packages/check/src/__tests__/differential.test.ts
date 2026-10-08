@@ -10,6 +10,8 @@ import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
+import { contract as multiTenantContract } from '../../../app/src/__tests__/fixtures/multi-tenant/fabrika.contract'
+import { tables as multiTenantTables } from '../../../app/src/__tests__/fixtures/multi-tenant/src/db/tables'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
 import { contract as filesContract } from '../../../app/src/__tests__/fixtures/scoped-files/fabrika.contract'
 import { tables as filesTables } from '../../../app/src/__tests__/fixtures/scoped-files/src/db/tables'
@@ -104,6 +106,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app scoped-files (a file collection on a table read from source)',
 		root: join(APP_TESTS, 'fixtures', 'scoped-files'),
 		evaluated: () => compileContract(filesContract, filesTables),
+	},
+	{
+		name: '@fabrika/app multi-tenant (src/db/tables.ts read from source)',
+		root: join(APP_TESTS, 'fixtures', 'multi-tenant'),
+		evaluated: () => compileContract(multiTenantContract, multiTenantTables),
 	},
 ]
 

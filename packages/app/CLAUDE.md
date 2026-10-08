@@ -25,6 +25,7 @@ bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decisi
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
+bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 ## Structure
@@ -42,6 +43,7 @@ src/
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
     contract.ts       createClient: the typed client of a contract mount
+    share.ts          shareKey: the key the share SPA's bootstrap kept
     rpc.ts            createRpcClient: the defineApp() RPC client (exported from the root)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope
   testing/            @fabrika/app/testing — no test-runner dependency
@@ -64,6 +66,10 @@ src/
     boot.ts           boot: framework variables, refusals, handler binding
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
     capability.ts     Ref, Within, requestCapabilities (the CapabilityAuthority)
+    membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
+    anonymous.ts      the bounded body read, the form rate limit, the share bootstrap, GitHub's signature
+    webhook.ts        the generated binding endpoints and a delivery's principal
+    faults.ts         ServerFault: a framework failure whose message only the log sees
     principal.ts      caller kinds and principals from a verified token
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
@@ -174,8 +180,12 @@ src/
   and `contractArtifactSchema` both refuse a `*` in any action name and a role named after
   `BUILTIN_ROLE_KEYS`; `buildArtifact` and the `CreatableDimension` type refuse `creates`
   for a dimension with `in`, because IAM's `createScope` makes only top-level values.
-- Later (A12, A13): membership, scopes and share links are requests to IAM through
-  `@fabrika/auth`. The framework writes no grant and mints no credential.
+- Membership, scopes and share links are requests to IAM through `@fabrika/auth`'s
+  `IamMembership`. The framework writes no grant and mints no credential.
+- A webhook bound to a dimension generates `POST /api/webhooks.<name>.bind` and `.unbind`
+  (`WEBHOOKS_PREFIX`), for a holder of that dimension's `members.manage`; their shapes
+  (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `implement` parses with
+  (`webhook.ts`) must describe each other (`membership-shapes.test.ts`).
 
 ## Serving a contract
 
@@ -261,11 +271,38 @@ src/
   with no metadata, because a message may quote a connection string. The server log
   gets one line: a framework-authored message (`ServerFault`,
   `CapabilityRefusedError`) or only the error's name, never the error object.
-- **`boot` refuses to start rather than answer nothing**: a link, form or webhook
-  mount, a file collection with `link: true`, jobs, exports, imports, `creates`, an SPA without an asset server, a
-  handler outside the contract, a missing handler, an access form whose containment
-  no table locates. Each refusal lifts when its work
-  unit ships the runtime.
+- **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`, jobs, exports, imports,
+  a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
+  whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
+  form field that is not a column of its inbox, an endpoint that asks IAM with no
+  membership transport (`BootOptions.membership`), a handler outside the contract, a
+  missing handler, an access form whose containment no table locates. Each refusal
+  lifts when its work unit ships the runtime.
+- **The framework asks IAM; IAM decides** (`membership.ts`). Every request carries the
+  verified token, the proxy's `X-Request-Id` (a delegation grant is bound to it) and the
+  proxy's `X-Fabrika-Delegation`; `creates` without one is 503 and IAM is not asked.
+  `ctx.members` exists only where the action is the dimension's `members.manage`, and
+  `ctx.links` only where the `Ref`'s action is a link mount's `issuedBy` for its
+  dimension: the types (`ContractContext`) and `facilitiesOf` in `boot.ts` decide the
+  same, so change them together. A `Ref` passed to IAM must be this request's, for the
+  endpoint's own dimension and action. A workload (a webhook) gets neither.
+- **A link procedure re-reads the object's chain on every request** and answers 404 when
+  it differs from the chain the key was issued for, so a link stops working once its
+  object moves. It admits only a key of its own mount.
+- **The share SPA's bootstrap is the document's first script.** `withBootstrap` inserts
+  `<script src="<prefix>/__fabrika-share.js">` right after `<head>`, so it runs before
+  every module and every telemetry script; it removes the fragment and keeps the key in a
+  closure (`shareKey()`). Never serve the key anywhere else, and never read
+  `location.hash` in application code.
+- **The anonymous kinds read no token.** A form appends its declared fields to its inbox
+  and answers a constant; it runs no handler and reads nothing. Its body limit is enforced
+  while reading (`readBoundedBody`, 413), because the proxy never sees a body; its rate
+  limit is per form per instance (`FORM_RATE_LIMIT`).
+- **A webhook delivery is checked in a fixed order**: binding (404), signature over the
+  raw body with that binding's secret (401), account (403), input after dropping every
+  undeclared field (400, `project` then the strict schema), delivery id. The id is
+  recorded before the handler runs and forgotten when it throws, so a replay is ignored
+  and a redelivery of a failure runs. Never verify the signature after parsing.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
   before any application module loads.** The runtime adapter calls
   `captureEnvironment`, which keeps them in a frozen record and deletes them from
@@ -338,8 +375,10 @@ src/
   `X-Fabrika-Endpoint` — and drops `Authorization` on an anonymous endpoint. There is
   one decision and no option to swap it. Never re-implement proxy semantics here:
   `test-kit-differential.test.ts` holds the kit to proxy-core's `Authorizer` over the
-  same table for every credential on every kind of path. The kit's IAM issues no
-  delegation grants.
+  same table for every credential on every kind of path. The kit's own IAM issues no
+  delegation grants: `options.membership` (an `IamMembershipRpc`) is both the proxy's
+  delegation issuer and `boot`'s membership transport, and without it an application that
+  creates scopes, manages members or issues links does not boot in the kit.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
 - Its tokens are signed with a generated key and verified by the application's own

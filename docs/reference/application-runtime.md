@@ -181,7 +181,7 @@ own, on the `scoped(tables)` result of `@fabrika/db`; nothing reaches the databa
 Zerops, `createContractWorker(() => import('../src/app'))` on Cloudflare. The adapter
 first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
 the application, so no module of it can copy one, and calls
-`boot(app, { environment, iam, assets, database, files })`. For an application on `@fabrika/db`,
+`boot(app, { environment, iam, assets, database, files, membership })`. For an application on `@fabrika/db`,
 `serveContract` loads the data layer before the application and opens its connection on
 `FABRIKA_APP_DATABASE_URL`, in the schema `app_<FABRIKA_APP_ID>` its migrations created;
 `boot` binds the layer to it and to `requestCapabilities`, once, and keeps the locator the
@@ -193,11 +193,17 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
 (ADR-0022 rule 5), when the contract
-declares something this version cannot serve yet (link, form and webhook mounts,
-a file collection with `link: true`, jobs, exports, imports, `creates`), when a file
-collection cannot be served (below), when an `on` dimension has no table, when an
-access form reaches a dimension that lies in a container no table can locate it in, or
-when a handler is missing or undeclared.
+declares something this version cannot serve yet (a file collection with `link: true`,
+jobs, exports, imports, a webhook bound to the whole application), when a file collection
+cannot be served (below), when an `on` dimension or a link mount's dimension has no
+table, when an access form reaches a dimension that lies in a container no table can
+locate it in, when a form or a webhook has no `scoped(tables)` layer (a form's input
+field must be a column of its inbox), when an SPA or a link mount has no asset server,
+when an endpoint asks IAM for a scope, a membership change or a share link and the
+adapter supplies no membership transport, or when a handler is missing or undeclared.
+The membership transport is IAM's application entrypoint on the `IAM` binding on
+Cloudflare, and `HttpIamRpc` on `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY` on Bun
+when the platform sets both.
 
 Where the hop is not a service binding, `boot` also takes the proxy secret
 `FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, refuses
@@ -239,6 +245,7 @@ Per request, in this order:
 | `{ action, over }`     | `ctx.within`, or `all` for a global grant | 403 when no value holds the action, or over 1000 values |
 | `{ action, in, from }` | `ctx.target` with its containment chain   | 403 not held, 404 missing                               |
 | `{ action, on, from }` | `ctx.target` with its containment chain   | 404 when missing or not held                            |
+| `{ action, creates }`  | `ctx.created`, the value IAM generated    | 503 without the proxy's delegation grant; IAM's refusal |
 
 A grant on a container reaches every value inside it. `on` and `in` read where the
 object or scope lies from the database on every request, with a locator generated from
@@ -319,6 +326,47 @@ A `Ref` and a `Within` are classes with private fields, bound to their request w
 `@fabrika/db` — refuses one the framework did not mint, one whose request has ended
 and one from another live request. Each resolution returns a fresh frozen copy of the
 facts fixed at mint, so changing a returned chain changes nothing the data layer sees.
+
+## Membership, share links and the anonymous kinds
+
+The framework asks IAM on the caller's behalf through `@fabrika/auth`'s `IamMembership`,
+with the verified token, the proxy's `X-Request-Id` and the single-use grant the proxy
+forwarded in `X-Fabrika-Delegation`. IAM checks the caller's live permissions, generates
+every value and issues every key; the framework writes no grant and mints no credential.
+IAM's refusal is the caller's answer (401, 403, 404, 409 for the last creator, 400 for a
+request the schema cannot express); an IAM that cannot be asked is 503.
+
+- `creates` hands `ctx.created`. Without the delegation grant the answer is 503 and IAM
+  is not asked.
+- `ctx.members` (`assign`, `revoke`, `list`) exists only on an endpoint whose action is
+  its dimension's `members.manage`, and takes that endpoint's own `Ref`. One request
+  carries one grant, so it makes one membership change.
+- `ctx.links.issue(ref, { mount, days })` exists on an endpoint whose `Ref` carries a link
+  mount's `issuedBy` for its dimension. IAM binds the key to the object's whole chain;
+  the answer is `<prefix>/#<key>`.
+- A link mount serves its share SPA at `GET <prefix>/*` with
+  `<script src="<prefix>/__fabrika-share.js">` inserted as the document's first script.
+  That bootstrap takes the key out of the fragment, removes the fragment with
+  `history.replaceState` and keeps the key in a closure that `shareKey()` of
+  `@fabrika/app/client` reads. A link procedure admits only a key of its own mount and
+  re-reads where the object lies on every request: a key whose chain differs, because
+  the note moved, is 404.
+- `c.form` appends one row of its declared fields to its inbox table and answers
+  `{ result: { received: true } }`: it reads nothing and runs no handler. The body limit
+  is the framework's (413); the rate limit is a token bucket per form per instance
+  (10 at once, then 10 a minute, 429), so it grows with the number of instances.
+- `c.webhook` (GitHub) answers `POST <path>/:bindingId`. A holder of the bound
+  dimension's `members.manage` creates a binding with the generated
+  `POST /api/webhooks.<name>.bind` (`{ scope, account }`, where `account` is
+  `installation:<id>` or `repository:<id>`); the framework generates the secret and
+  answers it once with the URL. `webhooks.<name>.unbind` removes one. A delivery is
+  checked in order: the binding (404), `X-Hub-Signature-256` over the raw body with that
+  binding's secret (401), the payload's account (403), the input, parsed with its
+  schema after every undeclared field is dropped (400), and `X-GitHub-Delivery`: a
+  delivery id already recorded is answered 200 and not run again. The handler gets
+  `ctx.refs`, a `Ref` of the bound value for each declared action, and nothing else; a
+  failing handler forgets the delivery id so the redelivery runs. Bindings and delivery
+  ids live in the framework's `fabrika_*` tables, which `fabrika db migrate` applies.
 
 ## Runtime boundary
 

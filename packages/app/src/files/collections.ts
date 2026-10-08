@@ -9,7 +9,8 @@ import { type FileObjectStore, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
 import { HttpError, jsonResponse } from '../errors'
 import { requestCapabilities } from '../implement/capability'
-import { type ServedEndpoint, ServerFault } from '../implement/dispatch'
+import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
+import { ServerFault } from '../implement/faults'
 import type { ContractDatabase, ImplementationDatabase } from '../implement/implement'
 import { bytesAreOfType, SNIFF_BYTES, SNIFFABLE_TYPES } from './sniff'
 import { FileDownload } from './treatment'
@@ -183,6 +184,7 @@ export class FileCollections {
 					input: ById,
 					output: ById,
 					handler: async ({ ctx }) => this.#remove(collection, 'target' in ctx ? ctx.target : undefined),
+					facilities: NO_FACILITIES,
 				})
 			}
 		}

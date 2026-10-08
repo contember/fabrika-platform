@@ -2,14 +2,17 @@
 // endpoint the proxy applied (ADR-0022 rule 5), the token, the caller kind, the requirement, admission, strict input, the access form, the handler, output
 // projection. The caller-kind, requirement and access checks are authorization; the same-origin and content-type
 // checks are admission. Neither evaluates a gate: the proxy has already decided that the request may reach us.
+// The anonymous kinds (health, form, webhook, the share SPA) read no token and take their own fixed steps.
 
+import type { IamMembership } from '@fabrika/auth'
 import {
-	type AccessForm,
 	type CompiledEndpointTable,
 	type CredentialedEndpoint,
+	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
 	type EndpointPlan,
 	type EndpointRow,
+	type LinkTokenClaims,
 	parseEndpointHeader,
 	type PermissionEntry,
 	permits,
@@ -21,9 +24,11 @@ import {
 	scopedValues,
 } from '@fabrika/auth-core'
 import { type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
+import type { FrameworkTables } from '@fabrika/db/framework'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
+import { WEBHOOK_BINDING_PARAMETER } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import {
 	BadRequestError,
@@ -36,11 +41,23 @@ import {
 	UnauthorizedError,
 } from '../errors'
 import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
+import {
+	bootstrapPath,
+	bootstrapResponse,
+	type FormRateLimiter,
+	githubAccounts,
+	readBoundedBody,
+	verifyGithubSignature,
+	withBootstrap,
+} from './anonymous'
 import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
+import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
+import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
+import { deliveryIdOf, type WebhookPrincipal, webhookSubject } from './webhook'
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
 export function proxySecretDigest(secret: string): Uint8Array {
@@ -52,6 +69,16 @@ export interface SpaAssets {
 	serve(mount: { readonly prefix: string; readonly dir: string }, request: Request): Promise<Response>
 }
 
+/** What a procedure's context carries beyond its access form, decided once from the artifact. */
+export interface Facilities {
+	/** Whether the endpoint's action is its dimension's `members.manage`: only those endpoints get `ctx.members`. */
+	readonly members: boolean
+	/** The link mounts whose dimension and issuing action are the endpoint's. */
+	readonly links: readonly IssuableLink[]
+}
+
+export const NO_FACILITIES: Facilities = Object.freeze({ members: false, links: Object.freeze([]) })
+
 export type ServedEndpoint =
 	| {
 		readonly kind: 'procedure'
@@ -59,6 +86,7 @@ export type ServedEndpoint =
 		readonly input: Schema | null
 		readonly output: Schema
 		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }) => unknown
+		readonly facilities: Facilities
 	}
 	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
@@ -67,6 +95,18 @@ export type ServedEndpoint =
 		readonly kind: 'file'
 		readonly row: CredentialedEndpoint
 		readonly serve: (request: Request, target: unknown) => Promise<Response | FileDownload>
+	}
+	/** The shell of a link mount's share SPA: anonymous, and served with the fragment bootstrap. */
+	| { readonly kind: 'link-spa'; readonly row: EndpointRow; readonly prefix: string; readonly dir: string }
+	| { readonly kind: 'form'; readonly row: EndpointRow; readonly form: string; readonly input: Schema }
+	| {
+		readonly kind: 'webhook'
+		readonly row: EndpointRow
+		readonly webhook: string
+		readonly dimension: string
+		readonly actions: readonly string[]
+		readonly input: Schema
+		readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
 	}
 
 export interface RuntimeParts {
@@ -86,6 +126,11 @@ export interface RuntimeParts {
 	/** Each dimension's containers, nearest first; a grant on one reaches every value inside it. */
 	readonly containers: ReadonlyMap<string, readonly string[]>
 	readonly assets: SpaAssets | null
+	/** IAM's membership operations; `boot` refuses a contract that needs them when the adapter supplies none. */
+	readonly membership: IamMembership | null
+	/** The framework's own writes (inboxes, webhook tables); `boot` refuses a form or webhook without them. */
+	readonly framework: FrameworkTables | null
+	readonly forms: FormRateLimiter
 }
 
 interface Caller {
@@ -93,7 +138,16 @@ interface Caller {
 	/** The principal id a capability is granted to: the token's subject. */
 	readonly subject: string
 	readonly perms: PermissionEntry[]
+	/** The verified token, which IAM resolves the caller from on a membership request. */
+	readonly token: string
+	/** The mount and chain a share-link token is bound to. */
+	readonly link: LinkTokenClaims | null
 }
+
+/** The proxy's id of this request (proxy-core's `REQUEST_ID_HEADER`); a delegation grant is bound to it. */
+const REQUEST_ID_HEADER = 'X-Request-Id'
+/** A binding id is a UUID; anything else names no binding and reaches no query. */
+const BINDING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 interface Access {
 	readonly context: Readonly<Record<string, unknown>>
@@ -142,7 +196,7 @@ export class ContractRuntime {
 			if (plan.outcome === 'non-canonical') {
 				throw new BadRequestError('The request path is not canonical')
 			}
-			if (served === undefined) {
+			if (plan.outcome !== 'endpoint' || served === undefined) {
 				throw new NotFoundError(`No endpoint serves ${request.method} ${rawRequestTarget(request.url).pathname}`)
 			}
 			where = served.row.id
@@ -152,16 +206,21 @@ export class ContractRuntime {
 					return jsonResponse({ status: 'ok' }, 200)
 				case 'spa': {
 					await this.#authorize(served.row, request)
-					const assets = this.#parts.assets
-					if (assets === null) {
-						throw new ServerFault('no asset server serves the SPA')
-					}
-					return await assets.serve({ prefix: served.prefix, dir: served.dir }, request)
+					return await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request)
 				}
+				case 'link-spa':
+					if (rawRequestTarget(request.url).pathname === bootstrapPath(served.prefix)) {
+						return bootstrapResponse()
+					}
+					return await withBootstrap(await this.#assets().serve({ prefix: served.prefix, dir: served.dir }, request), served.prefix)
 				case 'procedure':
 					return await this.#procedure(served, request)
 				case 'file':
-					return await this.#file(served, request, plan.outcome === 'endpoint' ? plan.params : {})
+					return await this.#file(served, request, plan.params)
+				case 'form':
+					return await this.#form(served, request)
+				case 'webhook':
+					return await this.#webhook(served, request, plan.params)
 			}
 		} catch (error) {
 			return errorResponse(error, where)
@@ -201,6 +260,14 @@ export class ContractRuntime {
 		}
 	}
 
+	#assets(): SpaAssets {
+		const assets = this.#parts.assets
+		if (assets === null) {
+			throw new ServerFault('no asset server serves the SPA')
+		}
+		return assets
+	}
+
 	/** Token, caller kind, requirement, then admission. */
 	async #authorize(row: CredentialedEndpoint, request: Request): Promise<Caller> {
 		const token = request.headers.get(PROXY_TOKEN_HEADER)?.trim() ?? ''
@@ -222,7 +289,13 @@ export class ContractRuntime {
 			throw new ForbiddenError(`'${row.id}' needs ${describeRequirement(row)}, and the caller holds none`)
 		}
 		admit(row, request)
-		return { principal: presented.principal, subject: verified.claims.sub, perms: verified.claims.perms }
+		return {
+			principal: presented.principal,
+			subject: verified.claims.sub,
+			perms: verified.claims.perms,
+			token,
+			link: verified.claims.link ?? null,
+		}
 	}
 
 	async #procedure(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Response> {
@@ -232,8 +305,14 @@ export class ContractRuntime {
 		let result: unknown
 		try {
 			result = await runInRequest(frame, async () => {
-				const access = await this.#access(served.row, caller, input, frame)
-				const ctx = Object.freeze({ principal: caller.principal, requestId: frame.id, ...access.context })
+				const membership = this.#membershipRequest(served.row, caller, request, frame)
+				const access = await this.#access(served.row, caller, input, frame, membership)
+				const ctx = Object.freeze({
+					principal: caller.principal,
+					requestId: frame.id,
+					...access.context,
+					...this.#facilities(served.facilities, served.row, membership),
+				})
 				return await served.handler({ input: access.input, ctx })
 			})
 		} finally {
@@ -262,7 +341,7 @@ export class ContractRuntime {
 		const frame = new RequestFrame(crypto.randomUUID())
 		try {
 			return await runInRequest(frame, async () => {
-				const { context } = await this.#access(served.row, caller, { [from]: decodePathParameter(raw) }, frame)
+				const { context } = await this.#access(served.row, caller, { [from]: decodePathParameter(raw) }, frame, null)
 				return await served.serve(request, context['target'])
 			})
 		} finally {
@@ -270,7 +349,43 @@ export class ContractRuntime {
 		}
 	}
 
-	async #access(row: CredentialedEndpoint, caller: Caller, input: Readonly<Record<string, unknown>>, frame: RequestFrame): Promise<Access> {
+	/** The caller's authority at IAM for this request, when the endpoint's access form names a dimension and an action. */
+	#membershipRequest(row: CredentialedEndpoint, caller: Caller, request: Request, frame: RequestFrame): MembershipRequest | null {
+		const iam = this.#parts.membership
+		if (iam === null || row.requirement.kind !== 'action') {
+			return null
+		}
+		return {
+			iam,
+			caller: { credential: caller.token, requestId: request.headers.get(REQUEST_ID_HEADER) ?? frame.id },
+			delegation: request.headers.get(DELEGATION_HEADER),
+			dimension: row.requirement.access.dimension,
+			action: row.requirement.action,
+		}
+	}
+
+	/** `ctx.members` and `ctx.links`, for exactly the endpoints the artifact gives them. */
+	#facilities(facilities: Facilities, row: CredentialedEndpoint, membership: MembershipRequest | null): Readonly<Record<string, unknown>> {
+		if (!facilities.members && facilities.links.length === 0) {
+			return {}
+		}
+		if (membership === null) {
+			throw new ServerFault(`'${row.id}' manages members or links, and boot bound no IAM membership transport`)
+		}
+		const members = facilities.members ? { members: memberManagement(membership) } : {}
+		const links = facilities.links.length === 0
+			? {}
+			: { links: linkIssuing(membership, facilities.links, this.#parts.containers.get(membership.dimension) ?? []) }
+		return { ...members, ...links }
+	}
+
+	async #access(
+		row: CredentialedEndpoint,
+		caller: Caller,
+		input: Readonly<Record<string, unknown>>,
+		frame: RequestFrame,
+		membership: MembershipRequest | null,
+	): Promise<Access> {
 		if (row.requirement.kind === 'member') {
 			return { context: {}, input }
 		}
@@ -304,7 +419,10 @@ export class ContractRuntime {
 				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
 			}
 			case 'on': {
-				const { value, rest } = takeField(input, accessField(row, access))
+				if (access.from === null) {
+					return await this.#linkTarget(row, caller, action, access.dimension, input, frame)
+				}
+				const { value, rest } = takeField(input, access.from)
 				const chain = await this.#chain(access.dimension, value)
 				// An object the caller may not act on is indistinguishable from a missing one.
 				if (chain === null || !holdsOnChain(caller.perms, action, access.dimension, value, chain)) {
@@ -312,9 +430,118 @@ export class ContractRuntime {
 				}
 				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
 			}
-			case 'creates':
-				throw new ServerFault(`'${row.id}' creates a scope, which this version does not serve`)
+			case 'creates': {
+				if (membership === null) {
+					throw new ServerFault(`'${row.id}' creates a scope, and boot bound no IAM membership transport`)
+				}
+				const value = await createScope(membership)
+				return { context: { created: mintRef(frame, access.dimension, action, caller.subject, value, new Map()) }, input }
+			}
 		}
+	}
+
+	/**
+	 * A link procedure acts on the object its key is bound to. The key's mount must be this endpoint's, and the chain
+	 * it was issued for must still be where the object lies: a link for a note moved since stops working.
+	 */
+	async #linkTarget(
+		row: CredentialedEndpoint,
+		caller: Caller,
+		action: string,
+		dimension: string,
+		input: Readonly<Record<string, unknown>>,
+		frame: RequestFrame,
+	): Promise<Access> {
+		const link = caller.link
+		if (link === null || link.mount !== row.source.name) {
+			throw new ForbiddenError(`'${row.id}' admits only a key of the link mount '${row.source.name}'`)
+		}
+		const [object, ...containers] = link.chain
+		if (object === undefined || object.type !== dimension || !permits(caller.perms, action, object)) {
+			throw new ForbiddenError(`The link does not grant '${action}' on a ${dimension}`)
+		}
+		const chain = await this.#chain(dimension, object.value)
+		const unchanged = chain !== null && chain.size === containers.length && containers.every((scope) => chain.get(scope.type) === scope.value)
+		if (chain === null || !unchanged) {
+			throw new NotFoundError('This link no longer reaches its object')
+		}
+		return { context: { target: mintRef(frame, dimension, action, caller.subject, object.value, chain) }, input }
+	}
+
+	/** A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. */
+	async #form(served: Extract<ServedEndpoint, { kind: 'form' }>, request: Request): Promise<Response> {
+		admitContentType(served.row, request)
+		if (!this.#parts.forms.take(served.form)) {
+			throw new HttpError(429, 'rate_limited', `'${served.row.id}' takes no more submissions right now; try again in a minute`)
+		}
+		const body = await readBoundedBody(request, maxBytesOf(served.row))
+		const values = strictInput(served.row, served.input, parseJson(body))
+		await this.#framework().appendToInbox(served.form, values)
+		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	/**
+	 * A GitHub delivery, in order: the binding the path names, the signature over the raw body with that binding's
+	 * secret, the account the payload names, the input, then the delivery id, so a replay is ignored. The handler
+	 * gets a `Ref` of the bound value for each declared action, and nothing else.
+	 */
+	async #webhook(served: Extract<ServedEndpoint, { kind: 'webhook' }>, request: Request, params: Readonly<Record<string, string>>): Promise<Response> {
+		admitContentType(served.row, request)
+		const body = await readBoundedBody(request, maxBytesOf(served.row))
+		const tables = this.#framework().webhooks
+		const bindingId = params[WEBHOOK_BINDING_PARAMETER] ?? ''
+		const binding = BINDING_ID.test(bindingId) ? await tables.binding(served.webhook, bindingId) : null
+		if (binding === null) {
+			throw new NotFoundError('Not found')
+		}
+		if (!(await verifyGithubSignature(request.headers.get('X-Hub-Signature-256'), binding.secret, body))) {
+			throw new UnauthorizedError('The delivery signature does not verify with this binding')
+		}
+		const payload = parseJson(body)
+		if (!githubAccounts(payload).includes(binding.account)) {
+			throw new ForbiddenError('The delivery names another account than its binding accepts')
+		}
+		const deliveryId = deliveryIdOf(request)
+		if (deliveryId === null) {
+			throw new BadRequestError('A delivery carries its X-GitHub-Delivery id')
+		}
+		const input = strictInput(served.row, served.input, stripped(served, payload))
+		if (binding.scope.type !== served.dimension) {
+			throw new ServerFault(`binding '${binding.id}' reaches a '${binding.scope.type}', and '${served.webhook}' is bound to '${served.dimension}'`)
+		}
+		const chain = await this.#chain(binding.scope.type, binding.scope.value)
+		if (chain === null) {
+			throw new NotFoundError('The bound value no longer exists')
+		}
+		if (!(await tables.recordDelivery(binding.id, deliveryId, Date.now()))) {
+			return jsonResponse({ result: { received: true } }, 200)
+		}
+		const frame = new RequestFrame(crypto.randomUUID())
+		try {
+			await runInRequest(frame, async () => {
+				const subject = webhookSubject(binding.id)
+				const refs = Object.freeze(
+					Object.fromEntries(served.actions.map((action) => [action, mintRef(frame, served.dimension, action, subject, binding.scope.value, chain)])),
+				)
+				const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
+				await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs }) })
+			})
+		} catch (error) {
+			// The provider redelivers a failed delivery; forgetting its id lets the redelivery run.
+			await tables.forgetDelivery(binding.id, deliveryId)
+			throw error
+		} finally {
+			frame.end()
+		}
+		return jsonResponse({ result: { received: true } }, 200)
+	}
+
+	#framework(): FrameworkTables {
+		const framework = this.#parts.framework
+		if (framework === null) {
+			throw new ServerFault('no data layer serves the framework tables')
+		}
+		return framework
 	}
 
 	/** The object's containers, read now, so a Ref carries where it lies today; `null` for a missing object a table owns. */
@@ -341,13 +568,6 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
 	return scopes.some(([type, scope]) => permits(perms, action, { type, value: scope }))
 }
 
-function accessField(row: CredentialedEndpoint, access: Extract<AccessForm, { form: 'on' }>): string {
-	if (access.from === null) {
-		throw new ServerFault(`'${row.id}' is bound to a link's object, which this version does not serve`)
-	}
-	return access.from
-}
-
 function projectOutput(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown): unknown {
 	try {
 		return project(served.output, result)
@@ -368,12 +588,60 @@ function admit(row: CredentialedEndpoint, request: Request): void {
 	if (request.method !== 'GET' && !request.headers.has('Authorization') && request.headers.get('Sec-Fetch-Site') !== 'same-origin') {
 		throw new HttpError(403, 'admission', 'A session request that is not a GET must be same-origin (Sec-Fetch-Site: same-origin)')
 	}
+	admitContentType(row, request)
+}
+
+/** The content types an endpoint admits; an anonymous endpoint has no session, so this is its whole admission. */
+function admitContentType(row: EndpointRow, request: Request): void {
 	if (row.admission !== null) {
 		const type = mediaType(request.headers.get('Content-Type'))
 		if (type === null || !row.admission.contentTypes.includes(type)) {
 			throw new HttpError(400, 'admission', `'${row.id}' admits Content-Type ${row.admission.contentTypes.join(' or ')}`)
 		}
 	}
+}
+
+/** An anonymous endpoint's body limit: the framework's, because the proxy never sees the body. */
+function maxBytesOf(row: EndpointRow): number {
+	const limit = row.admission?.maxBytes
+	if (limit === null || limit === undefined) {
+		throw new ServerFault(`'${row.id}' declares no body limit`)
+	}
+	return limit
+}
+
+function parseJson(body: Uint8Array): unknown {
+	try {
+		return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+	} catch {
+		throw new BadRequestError('The body is not JSON')
+	}
+}
+
+/** A webhook input keeps only the fields it declares: a provider sends many more, and none reaches the handler. */
+function stripped(served: Extract<ServedEndpoint, { kind: 'webhook' }>, payload: unknown): unknown {
+	try {
+		return project(served.input, payload)
+	} catch (error) {
+		if (error instanceof ProjectionRefusedError) {
+			throw new BadRequestError(`'${served.row.id}': the delivery matches no branch of the declared input`)
+		}
+		throw error
+	}
+}
+
+/** `value` parsed with the endpoint's strict input schema; a refusal is a 400 naming each issue. */
+function strictInput(row: EndpointRow, schema: Schema, value: unknown): Readonly<Record<string, unknown>> {
+	const parsed = z.safeParse(schema, value)
+	if (!parsed.success) {
+		const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String).join('.'), code: issue.code, message: issue.message }))
+		const first = issues[0]
+		throw new HttpError(400, 'validation', first === undefined ? 'Invalid input' : `${first.path || 'input'}: ${first.message}`, { issues })
+	}
+	if (!isRecord(parsed.data)) {
+		throw new BadRequestError(`'${row.id}': the input is not an object`)
+	}
+	return parsed.data
 }
 
 /** The strictly parsed input; a procedure without input takes an empty body or `{}`. */
@@ -393,16 +661,7 @@ async function readInput(served: Extract<ServedEndpoint, { kind: 'procedure' }>,
 		}
 		return {}
 	}
-	const parsed = z.safeParse(served.input, body)
-	if (!parsed.success) {
-		const issues = parsed.error.issues.map((issue) => ({ path: issue.path.map(String).join('.'), code: issue.code, message: issue.message }))
-		const first = issues[0]
-		throw new HttpError(400, 'validation', first === undefined ? 'Invalid input' : `${first.path || 'input'}: ${first.message}`, { issues })
-	}
-	if (!isRecord(parsed.data)) {
-		throw new BadRequestError('The input is not an object')
-	}
-	return parsed.data
+	return strictInput(served.row, served.input, body)
 }
 
 /** A canonical path's segments all decode; a value that does not is no id of anything. */
@@ -425,17 +684,6 @@ function takeField(
 	}
 	const rest = Object.fromEntries(Object.entries(input).filter(([name]) => name !== field))
 	return { value, rest: Object.freeze(rest) }
-}
-
-/** A failure the framework itself describes; its message is safe for the server log, never for the response. */
-export class ServerFault extends Error {
-	override readonly name = 'ServerFault'
-	readonly status: number
-
-	constructor(message: string, status = 500) {
-		super(message)
-		this.status = status
-	}
 }
 
 /** The only body a 5xx carries: what failed stays on the server, because it may quote a credential. */

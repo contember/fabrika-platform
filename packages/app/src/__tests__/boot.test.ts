@@ -1,13 +1,18 @@
 // `boot` reads the framework's variables and removes them, and refuses to start when anything declared cannot be
-// served: a kind whose runtime is not built, a handler outside the contract, a missing handler.
+// served: a kind whose runtime is not built or whose dependency the adapter does not supply, a handler outside the
+// contract, a missing handler.
 
 import { defineContract } from '@fabrika/app/contract'
 import { boot, BootError, captureEnvironment, type ContractImplementation, implement } from '@fabrika/app/implement'
+import { Database } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
 import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource } from './fixtures/implement/harness'
-import { noteDatabase } from './fixtures/implement/stores'
+import { NOTE_TABLE, noteDatabase } from './fixtures/implement/stores'
+import { contract } from './fixtures/multi-tenant/fabrika.contract'
+import { RecordingMembership } from './fixtures/multi-tenant/iam'
+import { multiTenantApp } from './fixtures/multi-tenant/src/app'
 
 function problemsOf(start: () => unknown): readonly string[] {
 	try {
@@ -101,39 +106,94 @@ describe('captureEnvironment', () => {
 })
 
 describe('what this version does not serve yet stops the boot', () => {
-	test('link mounts, creates, jobs and an SPA without assets', () => {
-		const unserved = defineContract({
-			app: 'notes',
-			dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
-			actions: { 'notes.read': 'Read', 'notes.share': 'Share', 'workspaces.create': 'Start' },
-			roles: { owner: { grants: ['notes.read', 'notes.share'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
-		}, (c) => ({
-			api: c.rpc('/api', { callers: ['human'] }, {
-				start: c.mutation({ output: Ok, access: { action: 'workspaces.create', creates: 'workspace' } }),
-			}),
-			shared: c.link('/s', {
-				spa: 'dist/share',
-				dimension: 'note',
-				grants: ['notes.read'],
-				issuedBy: 'notes.share',
-				maxDays: 7,
-				procedures: (l) => ({ note: l.query({ output: Ok, access: { action: 'notes.read' } }) }),
-			}),
-			spa: c.spa('/', { dir: 'dist/app', access: { member: true } }),
+	const unserved = defineContract({
+		app: 'notes',
+		dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+		actions: { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.delete': 'Delete', 'notes.share': 'Share', 'workspaces.create': 'Start' },
+		roles: { owner: { grants: ['notes.read', 'notes.share'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+	}, (c) => ({
+		api: c.rpc('/api', { callers: ['human'] }, {
+			start: c.mutation({ output: Ok, access: { action: 'workspaces.create', creates: 'workspace' } }),
+		}),
+		shared: c.link('/s', {
+			spa: 'dist/share',
+			dimension: 'note',
+			grants: ['notes.read'],
+			issuedBy: 'notes.share',
+			maxDays: 7,
+			procedures: (l) => ({ note: l.query({ output: Ok, access: { action: 'notes.read' } }) }),
+		}),
+		spa: c.spa('/', { dir: 'dist/app', access: { member: true } }),
+	}))
+	const handlers = () => ({ api: { start: () => ({ ok: true }) }, shared: { note: () => ({ ok: true }) } })
+
+	test('jobs, an SPA or a share SPA without assets, and a link whose object no table locates', () => {
+		const withJobs = defineContract(unserved.vocabulary, (c) => ({
+			...unserved.surface,
 			jobs: { purge: c.cron('0 3 * * *', { actions: ['notes.read'], scope: 'app' }) },
 		}))
-		const app = implement(unserved, {
-			database: null,
-			deps: () => null,
-			handlers: () => ({ api: { start: () => ({ ok: true }) }, shared: { note: () => ({ ok: true }) } }),
-		})
+		const app = implement(withJobs, { database: null, deps: () => null, handlers })
 		const problems = problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))
 		expect(problems).toEqual([
-			"mount 'shared' is a link mount, which this version of @fabrika/app does not serve yet",
-			"mount 'spa' is an SPA, and the runtime adapter supplies no asset server",
+			"mount 'shared' serves an SPA, and the runtime adapter supplies no asset server",
+			"link mount 'shared' shares a 'note', but no table in src/db/tables.ts owns that dimension to locate it",
+			"mount 'spa' serves an SPA, and the runtime adapter supplies no asset server",
 			"jobs 'purge' is declared, and this version of @fabrika/app does not run jobs yet",
-			"'api.start' creates a 'workspace', and this version cannot ask IAM for a new scope yet",
 		])
+	})
+
+	test('creates and link mounts boot once the adapter supplies IAM membership, assets and a table that locates the object', () => {
+		const app = implement(unserved, { database: noteDatabase(new Map()), deps: () => null, handlers })
+		const options = { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets }
+		expect(problemsOf(() => boot(app, options))).toEqual([
+			"'api.start' asks IAM to create a scope, manage members or issue a link, and the runtime adapter supplies no IAM membership transport",
+		])
+		expect(() => boot(app, { ...options, membership: new RecordingMembership() })).not.toThrow()
+	})
+
+	test('a form and a webhook write through @fabrika/db, and a webhook bound to the whole application is not served', () => {
+		const anonymous = defineContract({
+			app: 'notes',
+			dimensions: { note: {} },
+			actions: { 'notes.write': 'Write', 'contacts.read': 'Read contacts' },
+			roles: { support: { grants: ['contacts.read'] } },
+		}, (c) => ({
+			contact: c.form('/contact', { input: z.strictObject({ email: z.string() }), appendTo: 'contact_messages' }),
+			hook: c.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'app', actions: ['notes.write'], input: ById }),
+		}))
+		const inbox = {
+			...NOTE_TABLE,
+			scope: { mode: 'inbox', form: 'contact' },
+			actions: { read: 'contacts.read', insert: null, update: null, delete: null },
+		} as const
+		const app = implement(anonymous, {
+			database: { tables: { contact_messages: { ...inbox, insert: [], update: [] } }, locate: () => Promise.resolve(null) },
+			deps: () => null,
+			handlers: () => ({ hook: () => undefined }),
+		})
+		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))).toEqual([
+			"webhook 'hook' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')",
+			"mount 'contact' is a form, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
+			"mount 'hook' is a webhook, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
+		])
+	})
+
+	test("a form's input field must be a column of its inbox", async () => {
+		const extended = defineContract(contract.vocabulary, (c) => ({
+			...contract.surface,
+			contact: c.form('/contact', { input: z.strictObject({ email: z.email(), phone: z.string() }), appendTo: 'contact_messages' }),
+		}))
+		const connection = Database.postgres({ url: 'postgres://unused@127.0.0.1:1/unused', schema: 'app_notes' })
+		try {
+			const base = multiTenantApp({ pushes: [], failNextPush: false })
+			const app: ContractImplementation = { ...base, contract: extended }
+			const options = { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets, database: connection }
+			expect(problemsOf(() => boot(app, { ...options, membership: new RecordingMembership() }))).toEqual([
+				"the input field 'phone' of 'contact' is not a column of its inbox contact_messages",
+			])
+		} finally {
+			await connection.close()
+		}
 	})
 })
 

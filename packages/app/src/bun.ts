@@ -5,6 +5,7 @@
 // contract application is served through `serveContract`, from the generated
 // entrypoint.
 
+import { HttpIamRpc } from '@fabrika/auth'
 import { rawRequestTarget } from '@fabrika/auth-core'
 import type * as DataLayer from '@fabrika/db'
 import type { Database } from '@fabrika/db'
@@ -175,6 +176,16 @@ export function openFileStorage(framework: Readonly<Record<string, string>>): Fi
 	})
 }
 
+/**
+ * IAM's membership operations over its HTTP transport, when the platform gives the process `FABRIKA_IAM_RPC_URL`
+ * and `FABRIKA_IAM_RPC_KEY`; without both, there is none, and `boot` refuses a contract that needs one.
+ */
+function httpMembership(framework: Readonly<Record<string, string>>): HttpIamRpc | undefined {
+	const origin = framework['FABRIKA_IAM_RPC_URL']?.trim() ?? ''
+	const key = framework['FABRIKA_IAM_RPC_KEY']?.trim() ?? ''
+	return origin === '' || key === '' ? undefined : new HttpIamRpc({ origin, key })
+}
+
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
@@ -194,9 +205,10 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const { default: app } = await load()
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
+	const membership = httpMembership(environment.framework)
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
 	const files = openFileStorage(environment.framework)
-	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, files, requireProxySecret: true })
+	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, files, membership, requireProxySecret: true })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
 	const stop = async (): Promise<void> => {
 		await server.stop(false)

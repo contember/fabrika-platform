@@ -329,12 +329,12 @@ There is no anonymous read API and no self-signup.
 Multi-tenant applications need three IAM operations the framework calls on the caller's behalf. IAM evaluates each
 against the caller's **live** permissions; the application supplies no actor and writes no grant.
 
-| Operation                              | Rule                                                                                                                                                                                                                     |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `creates: 'workspace'`                 | IAM mints the scope value and grants the caller the `creator` role                                                                                                                                                       |
-| `ctx.members.assign(ref, email, role)` | the caller holds the dimension's `members.manage` action there; the role is `assignableBy` one of the caller's roles there; the role grants nothing the caller lacks there; the email is verified; an invitation expires |
-| `ctx.members.revoke(ref, principal)`   | `members.manage` there; cannot revoke a role the caller could not assign; cannot remove the last `creator`                                                                                                               |
-| `ctx.members.list(ref)`                | the dimension's `members.list` action there; emails only to `members.manage`                                                                                                                                             |
+| Operation                                  | Rule                                                                                                                                                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `creates: 'workspace'`                     | IAM mints the scope value and grants the caller the `creator` role                                                                                                                                                       |
+| `ctx.members.assign(ref, { email }, role)` | the caller holds the dimension's `members.manage` action there; the role is `assignableBy` one of the caller's roles there; the role grants nothing the caller lacks there; the email is verified; an invitation expires |
+| `ctx.members.revoke(ref, principal)`       | `members.manage` there; cannot revoke a role the caller could not assign; cannot remove the last `creator`                                                                                                               |
+| `ctx.members.list(ref)`                    | the dimension's `members.list` action there; emails only to `members.manage`                                                                                                                                             |
 
 - Only endpoints whose action is the dimension's `members.manage` action get `ctx.members`.
 - A workload caller (jobs, webhooks, connectors) cannot create scopes or manage members. This closes "a form plus a
@@ -342,7 +342,7 @@ against the caller's **live** permissions; the application supplies no actor and
 
 **Share links.**
 
-- Issuing: `ctx.links.issue(ref, { days })` from an endpoint whose `Ref` carries the link mount's issuing action.
+- Issuing: `ctx.links.issue(ref, { mount, days })` from an endpoint whose `Ref` carries the link mount's issuing action.
   IAM issues an anonymous key bound to the whole containment chain (`note:n1`, `workspace:w1`) and the application,
   with a required expiry no longer than `maxDays`, and grants frozen to the mount's `grants`. On every link request
   the framework resolves the chain from the database and refuses the request when it differs, so a link for a note
