@@ -44,24 +44,40 @@
 import type {
 	ApproveDeviceAuthorizationInput,
 	ApproveDeviceAuthorizationResult,
+	AssignMemberInput,
+	AssignMemberResult,
 	AuditInput,
+	CreateScopeInput,
+	CreateScopeResult,
 	DenyDeviceAuthorizationResult,
+	IamMembershipRpc,
 	IamRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
 	IssueKeyInput,
 	IssueKeyResult,
+	IssueLinkInput,
+	IssueLinkResult,
 	Jwks,
+	ListMembersInput,
+	ListMembersResult,
 	ListOwnDeviceAuthorizationsInput,
 	ListOwnDeviceAuthorizationsResult,
 	ListPrincipalsInput,
 	ListPrincipalsResult,
+	MembershipFailure,
 	MintFromKeyInput,
 	MintFromKeyResult,
 	MintTokenInput,
 	MintTokenResult,
+	RequestDelegationInput,
+	RequestDelegationResult,
 	RevokeKeyInput,
 	RevokeKeyResult,
+	RevokeLinkInput,
+	RevokeLinkResult,
+	RevokeMemberInput,
+	RevokeMemberResult,
 } from '@fabrika/auth-core'
 import {
 	parseApproveDeviceAuthorizationResult,
@@ -89,6 +105,25 @@ const principalsSuccessSchema = z.object({
 	})),
 })
 const failureSchema = z.object({ ok: z.literal(false), reason: z.string().catch('') })
+const scopeSchema = z.object({ type: z.string(), value: z.string() })
+const delegationSuccessSchema = z.object({ grant: z.string().min(1), expiresAt: z.number().finite() })
+const createScopeSuccessSchema = z.object({ scope: scopeSchema, role: z.string() })
+const assignSuccessSchema = z.union([
+	z.object({ assigned: z.object({ principalId: z.string(), role: z.string() }) }),
+	z.object({ invited: z.object({ invitationId: z.string(), role: z.string(), expiresAt: z.number().finite() }) }),
+])
+const listMembersSuccessSchema = z.object({
+	members: z.array(z.object({
+		principalId: z.string(),
+		label: z.string(),
+		email: z.string().nullable(),
+		roles: z.array(z.string()),
+		disabled: z.boolean(),
+	})),
+	invitations: z.array(z.object({ id: z.string(), email: z.string(), role: z.string(), expiresAt: z.number().finite() })),
+})
+const issueLinkSuccessSchema = z.object({ key: z.string().min(1), id: z.string(), expiresAt: z.number().finite() })
+const membershipMessageSchema = z.object({ message: z.string().catch('') })
 
 /** Default per-call timeout. A hung IAM must fail the request, not hold a connection open forever. */
 const DEFAULT_TIMEOUT_MS = 5_000
@@ -124,7 +159,7 @@ export class IamTransportError extends Error {
 	}
 }
 
-export class HttpIamRpc implements IamRpc {
+export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 	async inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
 		const result = parseInspectDeviceAuthorizationResult(await this.call('inspectDeviceAuthorization', input))
 		if (!result) throw new IamTransportError('inspectDeviceAuthorization')
@@ -217,6 +252,39 @@ export class HttpIamRpc implements IamRpc {
 		return { ok: true, ...result.data }
 	}
 
+	async requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
+		const body = await this.call('requestDelegation', input)
+		return readMembershipFailure(body) ?? { ok: true, ...decode(delegationSuccessSchema, body, 'requestDelegation') }
+	}
+
+	async createScope(input: CreateScopeInput): Promise<CreateScopeResult> {
+		const body = await this.call('createScope', input)
+		return readMembershipFailure(body) ?? { ok: true, ...decode(createScopeSuccessSchema, body, 'createScope') }
+	}
+
+	async assignMember(input: AssignMemberInput): Promise<AssignMemberResult> {
+		const body = await this.call('assignMember', input)
+		return readMembershipFailure(body) ?? { ok: true, ...decode(assignSuccessSchema, body, 'assignMember') }
+	}
+
+	async revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult> {
+		return readMembershipFailure(await this.call('revokeMember', input)) ?? { ok: true }
+	}
+
+	async listMembers(input: ListMembersInput): Promise<ListMembersResult> {
+		const body = await this.call('listMembers', input)
+		return readMembershipFailure(body) ?? { ok: true, ...decode(listMembersSuccessSchema, body, 'listMembers') }
+	}
+
+	async issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {
+		const body = await this.call('issueLink', input)
+		return readMembershipFailure(body) ?? { ok: true, ...decode(issueLinkSuccessSchema, body, 'issueLink') }
+	}
+
+	async revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
+		return readMembershipFailure(await this.call('revokeLink', input)) ?? { ok: true }
+	}
+
 	async getJwks(): Promise<Jwks> {
 		// `getJwks` takes no input, so an empty object body is the natural call (the server tolerates a
 		// wholly empty body too). It goes through `/rpc/*` like every other method rather than the public
@@ -283,6 +351,41 @@ const MALFORMED = Symbol('malformed')
 function readFailure(body: unknown): string | null {
 	const result = failureSchema.safeParse(body)
 	return result.success ? result.data.reason : null
+}
+
+const MEMBERSHIP_REASONS = [
+	'missing_token',
+	'invalid_token',
+	'unknown_principal',
+	'disabled',
+	'not_allowed',
+	'invalid_delegation',
+	'not_found',
+	'last_creator',
+	'invitations_disabled',
+	'delivery_failed',
+] as const
+
+/** A membership refusal off the wire. An unknown reason degrades to `not_allowed`, never to an allow. */
+function readMembershipFailure(body: unknown): MembershipFailure | null {
+	const reason = readFailure(body)
+	if (reason === null) {
+		return null
+	}
+	if (reason === 'invalid_request') {
+		const message = membershipMessageSchema.safeParse(body)
+		return { ok: false, reason, message: message.success ? message.data.message : '' }
+	}
+	return { ok: false, reason: oneOf(reason, MEMBERSHIP_REASONS, 'not_allowed') }
+}
+
+/** Decode a success body, or treat IAM as unreachable: a body that breaks the contract is not an answer. */
+function decode<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown, method: string): T {
+	const result = schema.safeParse(body)
+	if (!result.success) {
+		throw new IamTransportError(method)
+	}
+	return result.data
 }
 
 /** The `{ ok: true, token, expiresAt }` half both mint methods share. */

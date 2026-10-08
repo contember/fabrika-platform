@@ -1,4 +1,4 @@
-import type { DomainEvent, IamRpc, OAuthTokenClaims, PrincipalListItem, PrincipalType, Scope } from '@fabrika/auth-core'
+import type { DomainEvent, IamRpc, LinkTokenClaims, OAuthTokenClaims, PrincipalListItem, PrincipalType, Scope } from '@fabrika/auth-core'
 
 /**
  * The `IamRpc` members the SDK calls. A Cloudflare application's `IAM` binding is IAM's
@@ -51,6 +51,11 @@ export interface AuthContext {
 	 * native credential. `perms` are already narrowed by the scopes, so `can()` stays the authority.
 	 */
 	readonly oauth?: OAuthTokenClaims
+	/**
+	 * The share link behind a link key's token — its mount and the containment chain it is bound to —
+	 * absent for every other credential. `principal` is then null.
+	 */
+	readonly link?: LinkTokenClaims
 	/**
 	 * Point check: may this principal do `action` (optionally within `scope`, an opaque
 	 * `{ type, value }` coordinate)? Scope-less → satisfied by GLOBAL permissions only; a

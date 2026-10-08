@@ -46,15 +46,19 @@ the service that owns identity.
   never falls back to the stale key set.
 - **THE SDK ISSUES AND REDEEMS NOTHING.** An app reaches a credential only as the token the proxy
   injected. A share link is a `px_` key the proxy resolves at a `service` gate, so it arrives as an
-  anonymous token like any other (ADR-0022). `HttpIamRpc` still carries `issueKey` / `revokeKey`
-  because they are `IamRpc` members other callers use, not SDK surface.
+  anonymous token (ADR-0022); a link of a contract link mount also carries `link: { mount, chain }`,
+  exposed as `AuthContext.link`. `issueLink` returns the key IAM issued — the SDK only asked for it.
+  `HttpIamRpc` still carries `issueKey` / `revokeKey` because they are `IamRpc` members other callers
+  use, not SDK surface.
 - **`audit` forwards the verified token, not an app id.** `AuthContext.audit` sends the token it was
   built from as `credential`; IAM files the event under that token's app.
-- **The SDK REQUESTS; IAM decides and writes.** The target (A12, A13; not built yet): the SDK asks
-  IAM to create a scope, to assign, revoke or list members, and to issue or revoke a share link, on
-  the caller's behalf with the caller's token as proof. IAM evaluates each request against the
-  caller's live permissions, generates the scope value and issues the key. The SDK mints nothing,
-  signs nothing, supplies no actor and writes no grant.
+- **The SDK REQUESTS; IAM decides and writes.** `IamMembership` (`src/membership.ts`,
+  `createIamMembership`) asks IAM for a delegation grant, to create a scope, to assign, revoke or list
+  members, and to issue or revoke a share link, on the caller's behalf with the caller's verified token
+  as proof. IAM evaluates each request against the caller's live permissions, generates the scope value
+  and issues the key. The SDK mints nothing, signs nothing, supplies no actor and writes no grant; its
+  binding is `IamMembershipRpc`, separate from `IamBinding`, so a platform `IamRpc` need not serve it.
+  The framework (A13) decides which endpoint may call which operation.
 - **THERE IS NO SECOND AUTHENTICATION MODEL HERE, and adding one back is the bug.** The SDK used to
   select a `FakeIamClient` plus synthetic personas from a `DEV` env var, resolved by `?__as=` / a
   cookie / a header, with a default persona holding a global-admin grant — so one misread flag handed

@@ -22,6 +22,9 @@ export type { AuthCarrier, Middleware } from './middleware'
 // (a long-running Bun/Node process). Drops into anywhere a binding goes — `createIam`, `IamClient`,
 // `env.IAM` — because the contract is unchanged and only the transport differs.
 export { HttpIamRpc, IamTransportError } from './rpc-http'
+// The membership operations an application requests on its caller's behalf (scopes, members, share links).
+export { createIamMembership, IamMembership } from './membership'
+export type { IamMembershipEnv, MembershipRequestCaller } from './membership'
 export type { FetchLike, HttpIamRpcOptions } from './rpc-http'
 // Local verification of the proxy-injected access token. `createIam` wires it for you; it is exported
 // for an app that resolves a token outside the `Iam` surface.
@@ -52,7 +55,10 @@ export type {
 	DomainEvent,
 	GateKind,
 	GateRule,
+	IamMembershipRpc,
 	IamRpc,
+	LinkTokenClaims,
+	MembershipFailure,
 	OAuthTokenClaims,
 	PrincipalListItem,
 	RoleDef,
