@@ -214,12 +214,12 @@ describe('Operations public/private HTTP isolation', () => {
 		}
 	})
 
-	test('malformed percent-encoding stays on the not-found boundary', async () => {
+	test('malformed percent-encoding is refused as a non-canonical path', async () => {
 		const fetch = handler()
-		expect((await fetch(new Request(`https://${publicHost}/%`))).status).toBe(404)
+		expect((await fetch(new Request(`https://${publicHost}/%`))).status).toBe(400)
 		expect(
 			(await fetch(new Request('https://operations.internal/api/%', { headers: { [PROXY_TOKEN_HEADER]: OPERATOR_TOKEN } }))).status,
-		).toBe(404)
+		).toBe(400)
 	})
 
 	test('the public hostname mounts only the exact source-map upload path', async () => {
