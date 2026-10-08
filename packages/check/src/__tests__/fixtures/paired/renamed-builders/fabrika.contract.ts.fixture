@@ -1,0 +1,16 @@
+import { defineContract as define } from '@fabrika/app/contract'
+import * as zod from 'zod/v4'
+import { Note } from './src/schemas'
+
+export const contract = define({
+	app: 'notes',
+	dimensions: { workspace: {} },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (kit) => ({
+	api: kit.rpc('/api', { callers: ['human'] }, {
+		list: kit.query({ output: zod.array(Note), access: { action: 'notes.read', over: 'workspace' } }),
+		get: kit.query({ input: zod.strictObject({ id: zod.uuid() }), output: Note, access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: kit.health('/healthz'),
+}))

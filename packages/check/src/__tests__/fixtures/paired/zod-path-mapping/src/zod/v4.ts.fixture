@@ -1,0 +1,4 @@
+import { z as real } from '../../../node_modules/zod/v4/index.js'
+
+// Every uuid becomes an unrestricted string at runtime.
+export const z = { ...real, uuid: () => real.string() }

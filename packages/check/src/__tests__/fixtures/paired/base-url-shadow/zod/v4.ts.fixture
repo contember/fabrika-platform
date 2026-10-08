@@ -1,0 +1,3 @@
+import { z as real } from '../../node_modules/zod/v4/index.js'
+
+export const z = { ...real, uuid: () => real.string() }

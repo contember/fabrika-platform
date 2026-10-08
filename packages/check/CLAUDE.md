@@ -22,8 +22,11 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   `file:line:col rule-id message (allowed form: …)`, then a count on stderr. Exit 0 clean, 1 with findings, 2 on a
   usage or read error.
 - Reader: `@fabrika/check/contract` exports `readContractSource(files, tables) → ContractArtifact` and
-  `readContract(files) → AnyContract`. `files` holds `fabrika.contract.ts` and the modules it imports (path → text);
-  nothing else is read. It throws `ContractSourceError` (findings with file, line, column and allowed form) for a form
+  `readContract(files) → AnyContract`. `files` holds `fabrika.contract.ts`, the modules it imports (path → text) and
+  every `package.json`, `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those
+  of each directory of a contract module. For an import without an extension, `files` holds every candidate that
+  exists, so the reader sees two of them. The reader cannot tell a missing file from an absent one, so the caller
+  (Control, B6) supplies them all; nothing else is read. It throws `ContractSourceError` (findings with file, line, column and allowed form) for a form
   it refuses, and `ContractError` with the problems `compileContract` reports for a contract that does not compile.
   Until `@fabrika/db` exposes its table policies as data (A8b), `tables` is the artifact form of each policy, as
   `compileContract` takes it, and `src/db/tables.ts` is not read.
@@ -33,9 +36,12 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `check.ts`          | `checkApplication`, the disk reader, and the order the rules run in.                                  |
 | `ast.ts`            | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.     |
 | `graph.ts`          | The one static resolver: what a name denotes through consts, imports and exports, without executing.  |
-| `layout.ts`         | The application file layout the rules read, which files are read, and Bun's resolution candidates.    |
+| `layout.ts`         | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.    |
 | `references.ts`     | Every way a module names another, and which names a direct load takes.                                |
 | `resolution.ts`     | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.       |
+| `trust.ts`          | Configuration that could redirect a package trusted by name; checker and reader both refuse it.       |
+| `jsonc.ts`          | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.            |
+| `limits.ts`         | `CONTRACT_LIMITS`, the reader's resource budget.                                                      |
 | `finding.ts`        | The rule ids, the `Finding` shape and its one-line format.                                            |
 | `rules/literal.ts`  | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.  |
 | `rules/contract.ts` | What the reader refuses, run by the checker once the literal rule passes.                             |
@@ -47,38 +53,41 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 
 Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id; `direct-forms.test.ts` holds the
 directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
-of the reader; `differential.test.ts` compiles each fixture contract from source and from the evaluated module and
-expects the same artifact and canonical bytes (`fixtures/reader-forms/` holds every form the reader accepts;
-`fixtures/clean-app/` is the clean application of the rule tests).
+of the reader and its budget; `differential.test.ts` compiles each fixture contract from source and from the evaluated
+module and expects the same artifact and canonical bytes (`fixtures/reader-forms/` holds every form the reader
+accepts; `fixtures/clean-app/` is the clean application of the rule tests). Its paired cases (`fixtures/paired/`,
+`.fixture` files) are written to a temporary directory and evaluated by Bun through `fixtures/paired-runner.mjs`:
+each either gives the reader's artifact, or the reader refuses it and the test shows what Bun does instead. A fixture
+directory that no table registers fails the test.
 
 ## The rules
 
-| Rule id                      | Refuses                                                                                                                                                                                   |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `literal`                    | anything but the literal subset below in the contract graph, including every runtime import and export of its modules                                                                     |
-| `contract`                   | what the static reader refuses once the contract is a literal (the wrong builder or value type for a field, a hand-written mount), and a schema `describeContract` refuses                |
-| `forbidden-import`           | database drivers (Kysely included), S3 clients (`aws-sdk` too), `jose`, `node:http`/`https`/`http2`/`net`/`tls`/`dgram`, `child_process`                                                  |
-| `unchecked-import`           | an import outside what the checker reads: above the root, absolute or `file:`, into `node_modules`/`dist`/a dot-directory, also through an import map or `tsconfig` path; a symbolic link |
-| `forbidden-global`           | `Bun.sql`/`SQL`/`S3Client`/`s3`/`serve`/`connect`/`listen`/`udpSocket`/`spawn`/`spawnSync`/`$`, the same from `bun` by any load or re-export, `Bun` as a bare value                       |
-| `raw-sql`                    | an `…sql` tagged template, `sql(…)`, `….sql.raw`/`lit`/`ref`/`id`/`table`/`val`/`join`/`unsafe`, importing `sql`                                                                          |
-| `type-assertion`, `any-type` | `as T` and `<T>x` except `as const`; `any` anywhere                                                                                                                                       |
-| `suppression-comment`        | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `biome-ignore`, `eslint-disable`, `oxlint-disable`                                                                                       |
-| `capability-widening`        | `Ref<…>` / `Within<…>` with `string`, or a union containing it, as a type argument                                                                                                        |
-| `prototype-assignment`       | writes and `delete` through `.prototype`/`.__proto__`/`Object.getPrototypeOf(…)`, `setPrototypeOf`, `defineProperty`/`assign` onto them                                                   |
-| `env-read`                   | `process.env`, `Bun.env`, `env` from `node:process` by any load or re-export, `process` as a bare value — outside the generated entrypoint                                                |
-| `public-env`                 | `import.meta.env` except a static `import.meta.env.FABRIKA_PUBLIC_*`                                                                                                                      |
-| `cross-app-fetch`            | `fetch`, `fetch.call` or `fetch.apply` of an absolute URL whose prefix is static (literal, template head, `+` concatenation, `new URL`)                                                   |
-| `key-literal`                | `px_` in any string, in a template's raw or decoded text, or in a JSON string                                                                                                             |
-| `client-identity`            | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId` (or snake_case) other than the `from` of an `in`/`on` access                                                   |
-| `sensitive-log`              | a `console.*` argument that is, or contains, an error object, a request, headers or an environment; `new …Error`/`Request`/`Headers`                                                      |
-| `unsafe-html`                | `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`                                                                                                                 |
-| `dynamic-code`               | `eval` (also `globalThis.eval`), `Function(…)`/`new Function(…)`/`Function.call`/`apply`, a string passed to `setTimeout`/`setInterval`                                                   |
-| `migration-name`             | a file in `db/migrations/` not named `YYYYMMDDHHMMSS_slug.sql` with a real UTC timestamp, or in a subdirectory                                                                            |
-| `crontab`                    | a `zerops.yaml` setup whose `run.crontab` is not exactly the contract's `c.cron` jobs with explicit, equal timings; a background `run.start`                                              |
-| `skipped-test`               | `.skip`, `.only`, `.todo`, `.skipIf`, `.if`, `.todoIf`, `.failing`, `xit`/`fit`/… in test files                                                                                           |
-| `test-without-assertion`     | a `test`/`it` registration (also `.concurrent`, `.each(…)(…)`) that runs no matcher on `expect(…)` and no `expect…`/`assert…` helper                                                      |
-| `generated-test-hash`        | a generated isolation test whose content no longer matches its header hash, or whose header is not the first line                                                                         |
-| `parse-error`                | a source file the parser does not accept                                                                                                                                                  |
+| Rule id                      | Refuses                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `literal`                    | anything but the literal subset below in the contract graph, including every runtime import and export of its modules                                                                                                                                                                                                                 |
+| `contract`                   | what the static reader refuses once the contract is a literal (the wrong builder or value type for a field, a hand-written mount), and a schema `describeContract` refuses                                                                                                                                                            |
+| `forbidden-import`           | database drivers (Kysely included), S3 clients (`aws-sdk` too), `jose`, `node:http`/`https`/`http2`/`net`/`tls`/`dgram`, `child_process`                                                                                                                                                                                              |
+| `unchecked-import`           | an import outside what the checker reads: above the root, absolute or `file:`, into `node_modules`/`dist`/a dot-directory, also through an import map or `tsconfig` path; a symbolic link; a relative import with two candidates or into a directory with a `package.json`; configuration that can redirect a trusted package (below) |
+| `forbidden-global`           | `Bun.sql`/`SQL`/`S3Client`/`s3`/`serve`/`connect`/`listen`/`udpSocket`/`spawn`/`spawnSync`/`$`, the same from `bun` by any load or re-export, `Bun` as a bare value                                                                                                                                                                   |
+| `raw-sql`                    | an `…sql` tagged template, `sql(…)`, `….sql.raw`/`lit`/`ref`/`id`/`table`/`val`/`join`/`unsafe`, importing `sql`                                                                                                                                                                                                                      |
+| `type-assertion`, `any-type` | `as T` and `<T>x` except `as const`; `any` anywhere                                                                                                                                                                                                                                                                                   |
+| `suppression-comment`        | `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `biome-ignore`, `eslint-disable`, `oxlint-disable`                                                                                                                                                                                                                                   |
+| `capability-widening`        | `Ref<…>` / `Within<…>` with `string`, or a union containing it, as a type argument                                                                                                                                                                                                                                                    |
+| `prototype-assignment`       | writes and `delete` through `.prototype`/`.__proto__`/`Object.getPrototypeOf(…)`, `setPrototypeOf`, `defineProperty`/`assign` onto them                                                                                                                                                                                               |
+| `env-read`                   | `process.env`, `Bun.env`, `env` from `node:process` by any load or re-export, `process` as a bare value — outside the generated entrypoint                                                                                                                                                                                            |
+| `public-env`                 | `import.meta.env` except a static `import.meta.env.FABRIKA_PUBLIC_*`                                                                                                                                                                                                                                                                  |
+| `cross-app-fetch`            | `fetch`, `fetch.call` or `fetch.apply` of an absolute URL whose prefix is static (literal, template head, `+` concatenation, `new URL`)                                                                                                                                                                                               |
+| `key-literal`                | `px_` in any string, in a template's raw or decoded text, or in a JSON string                                                                                                                                                                                                                                                         |
+| `client-identity`            | an input field `userId`, `ownerId`, `createdBy`, `tenantId`, `workspaceId` (or snake_case) other than the `from` of an `in`/`on` access                                                                                                                                                                                               |
+| `sensitive-log`              | a `console.*` argument that is, or contains, an error object, a request, headers or an environment; `new …Error`/`Request`/`Headers`                                                                                                                                                                                                  |
+| `unsafe-html`                | `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`                                                                                                                                                                                                                                                             |
+| `dynamic-code`               | `eval` (also `globalThis.eval`), `Function(…)`/`new Function(…)`/`Function.call`/`apply`, a string passed to `setTimeout`/`setInterval`                                                                                                                                                                                               |
+| `migration-name`             | a file in `db/migrations/` not named `YYYYMMDDHHMMSS_slug.sql` with a real UTC timestamp, or in a subdirectory                                                                                                                                                                                                                        |
+| `crontab`                    | a `zerops.yaml` setup whose `run.crontab` is not exactly the contract's `c.cron` jobs with explicit, equal timings; a background `run.start`                                                                                                                                                                                          |
+| `skipped-test`               | `.skip`, `.only`, `.todo`, `.skipIf`, `.if`, `.todoIf`, `.failing`, `xit`/`fit`/… in test files                                                                                                                                                                                                                                       |
+| `test-without-assertion`     | a `test`/`it` registration (also `.concurrent`, `.each(…)(…)`) that runs no matcher on `expect(…)` and no `expect…`/`assert…` helper                                                                                                                                                                                                  |
+| `generated-test-hash`        | a generated isolation test whose content no longer matches its header hash, or whose header is not the first line                                                                                                                                                                                                                     |
+| `parse-error`                | a source file the parser does not accept                                                                                                                                                                                                                                                                                              |
 
 ## The literal subset (shared with B1)
 
@@ -88,11 +97,15 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
 - **Values:** strings, numbers (`-` before a number), booleans, `null`, templates without `${…}`, object and array
   literals without spreads, computed keys, methods, holes or a `__proto__` key; `x as const`, `x satisfies T`. A
   regular-expression literal only as the argument of `.regex()`.
-- **Names:** a top-level `const` of the module, or a named import of an exported literal `const` from a relative
-  module (export aliases are followed). A const defined through itself is refused. Every runtime import and every
+- **Names:** a top-level `const` of the module declared above its use (the module reads it eagerly; an unused
+  forward reference is refused too), or a named import of an exported literal `const` from a relative module (export
+  aliases are followed). A const defined through itself and an import cycle among literal modules are refused. A
+  relative import names one file: its exact name, or exactly one extension candidate; two candidates (`m.ts` and
+  `m.tsx`) and a directory import are refused, because Bun's choice there is not one the reader repeats. Every runtime import and every
   export of a literal module is checked, used or not; no side-effect import, namespace import of a relative module
   or re-export with a source.
-- **Builders:** `z` (named or namespace) from `zod/v4`; `defineContract` from `@fabrika/app/contract`, called once
+- **Builders:** `z` (named, renamed or namespace) from `zod/v4`, its members written with a dot (`z['string']` is
+  refused); `defineContract` from `@fabrika/app/contract`, called once
   as `defineContract(vocabulary, (c) => ({ … }))`; `defineTables` from `@fabrika/db`, as
   `defineTables<DB, Action>(columns)({ … })`, with `columns` imported from the generated
   `src/db/schema.generated.ts`.
@@ -131,6 +144,36 @@ nobody has type-checked. It refuses with the `contract` rule:
   UUID, `offset`/`local`/`precision` of `z.iso.datetime`, `precision` of `z.iso.time` and `position` of
   `.includes()`. Those options reach zod unchanged, so `describeContract` refuses a non-default one as at runtime.
 
+## Trusted by name
+
+The literal rule and the reader recognise `z`, `defineContract` and `defineTables` by the package they come from.
+`trust.ts` refuses, in the checker (`unchecked-import`) and in the reader (`ContractSourceError`), everything that
+can make such an import load something else:
+
+- a `paths` (any `tsconfig.json` or `jsconfig.json`, and every file it `extends`) or `package.json` `imports` pattern
+  that can match `@fabrika/*`, `zod`, `zod/*` or `bun`, wildcards included (`*`, `@fab*`);
+- `baseUrl`, under which Bun resolves a bare `zod/v4` to an application file before `node_modules`;
+- an `extends` of a package or of a file outside the application, and a `tsconfig.json` that does not parse;
+- a top-level `preload` in `bunfig.toml`, whose plugin can resolve any import (`[test] preload` is allowed).
+
+Mappings for other specifiers stay; the contract graph imports only relative modules and the trusted packages anyway.
+Not covered: the installed packages themselves (a `dependencies` spec, `overrides`, a registry scope), which the
+platform build controls.
+
+## The resource budget
+
+`CONTRACT_LIMITS` (`limits.ts`, exported from `@fabrika/check/contract`), each enforced before the next step runs:
+
+| Limit         | Value   | Enforced                                                                                |
+| ------------- | ------- | --------------------------------------------------------------------------------------- |
+| `sourceBytes` | 512 KiB | UTF-8 bytes of the contract graph, before each module is parsed                         |
+| `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it     |
+| `schemaNodes` | 20 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed |
+| `schemaDepth` | 32      | nesting of one schema, while it is built                                                |
+
+A schema value carries its expanded node count, so a const reused at every level (`S1 = { left: S0, right: S0 }`,
+…) is refused at the level that crosses the budget, without expanding it.
+
 ## Documented escapes (D11)
 
 Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that closing one is a visible change:
@@ -160,8 +203,8 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   `buildArtifact`) does every check and default. A change to the kit's builders (`BUILDER_FIELDS`, a new option) is
   a change to `reader/surface.ts`; `differential.test.ts` fails when they drift.
 - **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
-  `finding.ts` and `rules/literal.ts` import no `node:*`, `bun` or file API. A Worker bundle of the reader measured
-  630 KiB, 150 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes
+  `finding.ts`, `trust.ts`, `jsonc.ts`, `limits.ts` and `rules/literal.ts` import no `node:*`, `bun` or file API. A Worker bundle of the reader measured
+  638 KiB, 153 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes
   contract in workerd.
 - **Read nothing outside the checked set.** `node_modules`, `dist` and dot-directories are skipped, and symbolic
   links are reported, never followed; `unchecked-import` is what keeps code from hiding there.

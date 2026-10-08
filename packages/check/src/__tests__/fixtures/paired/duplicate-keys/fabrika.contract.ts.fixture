@@ -1,0 +1,16 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+
+// A repeated key keeps its first position and its last value, in the reader as in the evaluated module.
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: {}, workspace: { members: { manage: 'notes.read', list: 'notes.read' } } },
+	actions: { 'notes.read': 'first', 'notes.write': 'Write notes', 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'], callers: ['human', 'machine'] }, {
+		list: c.query({ output: z.strictObject({ id: z.string(), id: z.uuid(), title: z.string() }), access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: c.health('/one'),
+	health: c.health('/healthz'),
+}))

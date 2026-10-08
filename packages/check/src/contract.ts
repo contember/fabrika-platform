@@ -4,17 +4,20 @@
 
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
-import { child, children, type ParsedModule, parseModule, staticString } from './ast'
+import { child, children, nodeDepth, type ParsedModule, parseModule, staticString, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
-import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, joinRelative, resolutionCandidates } from './layout'
+import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative } from './layout'
+import { CONTRACT_LIMITS } from './limits'
 import { ReaderProblems } from './reader/problems'
 import { readContractValue } from './reader/surface'
 import { ValueReader } from './reader/value'
 import { checkLiteralGraph } from './rules/literal'
+import { checkTrustedResolution } from './trust'
 
 export { ContractError } from '@fabrika/app/contract'
 export { type Finding, formatFinding } from './finding'
+export { CONTRACT_LIMITS } from './limits'
 
 /** Every form the reader refuses, each with its file, line, column and the allowed form. */
 export class ContractSourceError extends Error {
@@ -29,7 +32,8 @@ export class ContractSourceError extends Error {
 
 /**
  * The contract artifact of an application, read from the text of its files (path relative to the application root →
- * text). It needs `fabrika.contract.ts` and every module it imports; other files are not read. Until `@fabrika/db`
+ * text): `fabrika.contract.ts`, every module it imports and the configuration that applies to them (`readContract`).
+ * Until `@fabrika/db`
  * exposes its table policies as data (A8b), `tables` is the artifact form of each policy, as `compileContract` takes it.
  *
  * Throws `ContractSourceError` for a form the reader refuses, and `ContractError` with the same problems
@@ -39,8 +43,17 @@ export function readContractSource(files: ReadonlyMap<string, string>, tables: R
 	return compileContract(readContract(files), tables)
 }
 
-/** The contract `defineContract` returns in the evaluated module, read from source; throws `ContractSourceError`. */
+/**
+ * The contract `defineContract` returns in the evaluated module, read from source; throws `ContractSourceError`.
+ * Besides the contract's modules, `files` carries every `package.json`, `tsconfig.json`, `jsconfig.json` and
+ * `bunfig.toml` that applies to them (the root and each directory of a contract module): one of them can redirect the
+ * packages the reader trusts by name, and the reader cannot tell a missing file from an absent one.
+ */
 export function readContract(files: ReadonlyMap<string, string>): AnyContract {
+	const trust = checkTrustedResolution(files)
+	if (trust.length > 0) {
+		throw new ContractSourceError(trust)
+	}
 	const parsed = parseContractGraph(files)
 	if (!parsed.ok) {
 		throw new ContractSourceError(parsed.findings)
@@ -65,37 +78,92 @@ export function readContractModule(graph: ModuleGraph): ContractRead {
 	if (module === undefined) {
 		return { ok: false, findings: [missingFile(CONTRACT_FILE)] }
 	}
+	const budget = sourceBudget(contractModules(graph, module))
+	if (budget.length > 0) {
+		return { ok: false, findings: budget }
+	}
 	const value = new ValueReader(graph, problems).exported(module, CONTRACT_EXPORT, module.program)
 	const contract = value === null ? null : readContractValue(value, problems)
 	return contract === null || problems.findings.length > 0 ? { ok: false, findings: problems.findings } : { ok: true, contract }
 }
 
+/** The contract module and every module its value imports reach. */
+function contractModules(graph: ModuleGraph, entry: ParsedModule): ParsedModule[] {
+	const reached = new Map<string, ParsedModule>()
+	const queue = [entry]
+	for (let module = queue.shift(); module !== undefined; module = queue.shift()) {
+		if (reached.has(module.file)) {
+			continue
+		}
+		reached.set(module.file, module)
+		for (const imported of graph.index(module).imports.values()) {
+			const target = graph.resolve(module.file, imported.specifier)
+			if (target !== undefined) {
+				queue.push(target)
+			}
+		}
+	}
+	return [...reached.values()]
+}
+
+/** The source and syntax-depth limits of `CONTRACT_LIMITS` over the contract's modules. */
+function sourceBudget(modules: readonly ParsedModule[]): Finding[] {
+	const findings: Finding[] = []
+	const bytes = modules.reduce((total, module) => total + module.bytes, 0)
+	if (bytes > CONTRACT_LIMITS.sourceBytes) {
+		findings.push(overBudget(CONTRACT_FILE, `the contract and its modules are ${bytes} bytes, over ${CONTRACT_LIMITS.sourceBytes}`))
+	}
+	for (const module of modules) {
+		if (nodeDepth(module.program) > CONTRACT_LIMITS.astDepth) {
+			findings.push(overBudget(module.file, `the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`))
+		}
+	}
+	return findings
+}
+
+function overBudget(file: string, message: string): Finding {
+	return { file, line: 1, column: 1, rule: 'contract', message, allowed: 'a contract within CONTRACT_LIMITS (packages/check/CLAUDE.md)' }
+}
+
 type ParsedGraph = { readonly ok: true; readonly graph: ModuleGraph } | { readonly ok: false; readonly findings: readonly Finding[] }
 
-/** Parses `fabrika.contract.ts` and the modules its imports reach among `files`, and nothing else. */
+/**
+ * Parses `fabrika.contract.ts` and the modules its imports reach among `files`, and nothing else. Every candidate of an
+ * import is parsed, so that `rules/literal.ts` sees an ambiguous or directory import; the size limit holds before a
+ * module is parsed and the depth limit right after, before any recursive rule walks it.
+ */
 function parseContractGraph(files: ReadonlyMap<string, string>): ParsedGraph {
 	const modules = new Map<string, ParsedModule>()
 	const findings: Finding[] = []
 	if (!files.has(CONTRACT_FILE)) {
 		return { ok: false, findings: [missingFile(CONTRACT_FILE)] }
 	}
+	let bytes = 0
 	const queue = [CONTRACT_FILE]
 	for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
 		const text = files.get(path)
 		if (modules.has(path) || text === undefined || !isSourceFile(path)) {
 			continue
 		}
+		bytes += utf8Bytes(text)
+		if (bytes > CONTRACT_LIMITS.sourceBytes) {
+			return { ok: false, findings: [overBudget(path, `the contract and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`)] }
+		}
 		const parsed = parseModule(path, text)
 		if (!parsed.ok) {
 			findings.push({ file: path, ...parsed.position, rule: 'parse-error', message: parsed.message, allowed: 'source the TypeScript parser accepts' })
 			continue
 		}
+		if (nodeDepth(parsed.module.program) > CONTRACT_LIMITS.astDepth) {
+			return { ok: false, findings: [overBudget(path, `the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`)] }
+		}
 		modules.set(path, parsed.module)
 		for (const specifier of importedSpecifiers(parsed.module)) {
-			const base = isRelativeSpecifier(specifier) ? joinRelative(path, specifier) : undefined
-			const target = base === undefined ? undefined : resolutionCandidates(base).find((candidate) => files.has(candidate))
-			if (target !== undefined) {
-				queue.push(target)
+			const resolution = isRelativeSpecifier(specifier) ? resolveRelative((candidate) => files.has(candidate), path, specifier) : undefined
+			if (resolution?.kind === 'file') {
+				queue.push(resolution.path)
+			} else if (resolution?.kind === 'ambiguous' || resolution?.kind === 'directory') {
+				queue.push(...resolution.paths)
 			}
 		}
 	}

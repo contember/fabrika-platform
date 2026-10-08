@@ -1,5 +1,5 @@
 import type { Report } from '../finding'
-import { isIgnoredSegment, isRelativeSpecifier, joinRelative } from '../layout'
+import { isIgnoredSegment, isRelativeSpecifier, joinRelative, resolveRelative } from '../layout'
 import type { ModuleReference } from '../references'
 import { type ImportMappings, mappedTargets } from '../resolution'
 
@@ -102,6 +102,7 @@ export const checkModuleReferences = (
 	file: string,
 	references: readonly ModuleReference[],
 	mappings: ImportMappings,
+	exists: (path: string) => boolean,
 	report: Report,
 	isGeneratedEntry: boolean,
 ): void => {
@@ -120,6 +121,20 @@ export const checkModuleReferences = (
 			const problem = containmentProblem(joinRelative(file, specifier))
 			if (problem !== undefined) {
 				report(node, 'unchecked-import', `'${specifier}' ${problem}`, 'a module inside the application, outside node_modules, dist and dot-directories')
+				continue
+			}
+			const resolution = resolveRelative(exists, file, specifier)
+			const packageEntry = resolution.kind === 'directory' && resolution.paths.some((path) => path.endsWith('/package.json'))
+			if (resolution.kind === 'ambiguous' || packageEntry) {
+				const what = packageEntry
+					? 'is a directory with a package.json, whose entry point Bun follows'
+					: `resolves to each of ${resolution.paths.join(', ')}`
+				report(
+					node,
+					'unchecked-import',
+					`'${specifier}' ${what}, which the checker does not resolve as Bun does`,
+					'a relative import that names the module file, extension included',
+				)
 			}
 			continue
 		}

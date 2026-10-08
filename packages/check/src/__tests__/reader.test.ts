@@ -3,7 +3,7 @@
 import { compileContract, ContractError, defineContract } from '@fabrika/app/contract'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
-import { ContractSourceError, readContract, readContractSource } from '../contract'
+import { CONTRACT_LIMITS, ContractSourceError, readContract, readContractSource } from '../contract'
 import { check } from './helpers'
 
 const BASE = `import { defineContract } from '@fabrika/app/contract'
@@ -222,5 +222,100 @@ describe('the checker reports what the reader refuses', () => {
 		const schemas =
 			"import { z } from 'zod/v4'\n\nexport const Note = z.strictObject({ id: z.uuid('bad id'), title: z.string({ error: 'text' }).min(1, { message: 'short' }) })\n"
 		expect(await check({ 'fabrika.contract.ts': BASE, 'src/schemas.ts': schemas })).toEqual([])
+	})
+})
+
+describe('a configuration that can redirect a trusted package is refused', () => {
+	const withConfig = (path: string, text: string): ReadonlyMap<string, string> => new Map([...application(BASE), [path, text]])
+
+	test('paths patterns that can match a trusted specifier, in any tsconfig.json, and patterns that cannot', () => {
+		expect(refusal(withConfig('tsconfig.json', '{ "compilerOptions": { "paths": { "*": ["./vendor/*"] } } }'))).toEqual([
+			"tsconfig.json:1:35 unchecked-import the paths entry '*' can redirect a package the platform trusts by name",
+		])
+		expect(refusal(withConfig('src/tsconfig.json', '{ "compilerOptions": { "paths": { "@fab*": ["./x/*"] } } }'))).toEqual([
+			"src/tsconfig.json:1:35 unchecked-import the paths entry '@fab*' can redirect a package the platform trusts by name",
+		])
+		expect(refusal(withConfig('tsconfig.json', '{ "compilerOptions": { "paths": { "~/*": ["./src/*"], "zodiac": ["./z.ts"] } } }'))).toEqual([])
+	})
+
+	test('an extends the reader cannot follow, a tsconfig that does not parse, and an extended file with paths', () => {
+		expect(refusal(withConfig('tsconfig.json', '{ "extends": "@tsconfig/bun" }'))).toEqual([
+			"tsconfig.json:1:3 unchecked-import tsconfig.json extends '@tsconfig/bun', a configuration outside what the platform reads",
+		])
+		expect(refusal(withConfig('tsconfig.json', '{ "extends": "../base.json" }'))).toEqual([
+			"tsconfig.json:1:3 unchecked-import tsconfig.json extends '../base.json', which is not a file inside the application",
+		])
+		expect(refusal(withConfig('tsconfig.json', '{ "compilerOptions": '))).toEqual([
+			'tsconfig.json:1:1 unchecked-import tsconfig.json is not JSON with comments, so its import mappings cannot be checked',
+		])
+		const extended = new Map([
+			...withConfig('tsconfig.json', '{\n\t// shared settings\n\t"extends": "./config/base",\n}'),
+			['config/base.json', '{ "compilerOptions": { "paths": { "zod/v4": ["../fake.ts"] } } }'],
+		])
+		expect(refusal(extended)).toEqual([
+			"config/base.json:1:35 unchecked-import the paths entry 'zod/v4' can redirect a package the platform trusts by name",
+		])
+	})
+
+	test('a runtime preload in bunfig.toml; a test preload is not refused', () => {
+		expect(refusal(withConfig('bunfig.toml', 'preload = ["./plugin.ts"]\n'))).toEqual([
+			'bunfig.toml:1:1 unchecked-import a runtime preload can register a plugin that redirects any import, trusted packages included',
+		])
+		expect(refusal(withConfig('bunfig.toml', '[test]\npreload = ["./setup.ts"]\n'))).toEqual([])
+	})
+})
+
+describe('initialization order', () => {
+	test('a const used before its declaration is refused even when nothing reads it', () => {
+		const contract = edited('export const contract', "const early = { title: late }\nconst late = 'x'\n\nexport const contract")
+		expect(refusal(application(contract))).toEqual([
+			"fabrika.contract.ts:5:24 literal 'late' is used before its declaration, where the module cannot read it yet",
+		])
+	})
+})
+
+describe('the resource budget', () => {
+	/** `S0 = z.string()`, then each `Si` holds the previous one twice: 2^depth nodes once expanded. */
+	const exponential = (depth: number): string => {
+		const lines = ["import { z } from 'zod/v4'", '', 'export const S0 = z.string()']
+		for (let level = 1; level <= depth; level++) {
+			lines.push(`export const S${level} = z.strictObject({ left: S${level - 1}, right: S${level - 1} })`)
+		}
+		return `${lines.join('\n')}\nexport const Note = S${depth}\n`
+	}
+
+	for (const depth of [16, 30]) {
+		test(`a schema that doubles at each of ${depth} levels is refused at the level that crosses the budget, quickly`, () => {
+			const started = performance.now()
+			const findings = refusal(application(BASE, exponential(depth)))
+			const elapsed = performance.now() - started
+
+			expect(findings).toEqual([`src/schemas.ts:17:20 contract the schema expands to 32767 nodes nested 15 deep`])
+			expect(elapsed).toBeLessThan(1000)
+		})
+	}
+
+	test('a schema nested deeper than the limit', () => {
+		const nested = `${'z.array('.repeat(CONTRACT_LIMITS.schemaDepth)}z.string()${')'.repeat(CONTRACT_LIMITS.schemaDepth)}`
+		const findings = refusal(application(BASE, `import { z } from 'zod/v4'\n\nexport const Note = ${nested}\n`))
+		expect(findings).toEqual([`src/schemas.ts:3:21 contract the schema expands to 33 nodes nested 33 deep`])
+	})
+
+	test('placements that together expand past the budget, though each schema fits', () => {
+		const procedures = Array.from({ length: 30 }, (_, index) => `\t\tq${index}: c.query({ output: Note, access: { member: true } }),`).join('\n')
+		const contract = edited('\t\tget: c.query(', `${procedures}\n\t\tget: c.query(`)
+		const findings = refusal(application(contract, exponential(9)))
+		expect(findings[0]).toBe("fabrika.contract.ts:31:8 contract the contract's schemas expand to over 20000 nodes")
+	})
+
+	test('source over the byte limit, and syntax nested deeper than the limit', () => {
+		const padding = `// ${'x'.repeat(CONTRACT_LIMITS.sourceBytes)}\n`
+		expect(refusal(application(BASE, padding + SCHEMAS))).toEqual([
+			`src/schemas.ts:1:1 contract the contract and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
+		])
+		const deep = `export const Deep = ${'['.repeat(CONTRACT_LIMITS.astDepth)}${']'.repeat(CONTRACT_LIMITS.astDepth)}\n`
+		expect(refusal(application(BASE, SCHEMAS + deep))).toEqual([
+			`src/schemas.ts:1:1 contract the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`,
+		])
 	})
 })

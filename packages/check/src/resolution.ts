@@ -1,4 +1,5 @@
 import { z } from 'zod/v4'
+import { parseJsonc } from './jsonc'
 
 /** The application's own import mappings: `imports` in `package.json` (`#name`) and `compilerOptions.paths` in `tsconfig.json`. */
 export interface ImportMappings {
@@ -19,15 +20,6 @@ const targetStrings = (value: unknown): string[] => {
 	return []
 }
 
-const parseJsonc = (text: string | undefined): unknown => {
-	if (text === undefined) return undefined
-	try {
-		return Bun.JSONC.parse(text)
-	} catch {
-		return undefined
-	}
-}
-
 /** A `paths` target as a path from the root: `src/*` under `baseUrl: '.'` is `./src/*`. */
 const pathTarget = (baseUrl: string, target: string): string => {
 	if (target.startsWith('/')) return target
@@ -37,9 +29,9 @@ const pathTarget = (baseUrl: string, target: string): string => {
 
 export const readImportMappings = (files: ReadonlyMap<string, string>): ImportMappings => {
 	const entries = new Map<string, string[]>()
-	const manifest = packageJsonSchema.safeParse(parseJsonc(files.get('package.json')))
+	const manifest = packageJsonSchema.safeParse(parseJsonc(files.get('package.json') ?? ''))
 	for (const [pattern, value] of Object.entries(manifest.success ? (manifest.data.imports ?? {}) : {})) entries.set(pattern, targetStrings(value))
-	const tsconfig = tsconfigSchema.safeParse(parseJsonc(files.get('tsconfig.json')))
+	const tsconfig = tsconfigSchema.safeParse(parseJsonc(files.get('tsconfig.json') ?? ''))
 	const options = tsconfig.success ? tsconfig.data.compilerOptions : undefined
 	for (const [pattern, targets] of Object.entries(options?.paths ?? {})) {
 		entries.set(pattern, targets.map((target) => pathTarget(options?.baseUrl ?? '', target)))

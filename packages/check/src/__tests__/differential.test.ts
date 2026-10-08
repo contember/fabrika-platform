@@ -4,9 +4,10 @@
 
 import { type AnyContract, compileContract, ContractError } from '@fabrika/app/contract'
 import { canonicalArtifactJson, type TablePolicyArtifact } from '@fabrika/auth-core'
-import { describe, expect, test } from 'bun:test'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
+import { z } from 'zod/v4'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource } from '../contract'
@@ -149,5 +150,150 @@ describe('the reader refuses what the runtime cannot evaluate', () => {
 		expect(findings).toContain('fabrika.contract.ts:48:23 literal')
 		expect(findings).toContain('src/schemas/notes.ts:18:24 literal')
 		expect(findings.every((finding) => finding.endsWith(' literal'))).toBe(true)
+	})
+})
+
+// ── Paired cases: the reader and Bun on the same files ──────────────────────────────────────────
+
+const PAIRED_DIR = join(import.meta.dir, 'fixtures', 'paired')
+const RUNNER = join(import.meta.dir, 'fixtures', 'paired-runner.mjs')
+const PACKAGE_ROOT = join(import.meta.dir, '..', '..')
+
+/** What Bun does with a case the reader refuses: the divergence the refusal prevents, or the error evaluation throws. */
+type Runtime = { readonly includes: string } | { readonly excludes: string } | { readonly error: string }
+
+type PairedCase = { readonly kind: 'same'; readonly includes: string } | {
+	readonly kind: 'refused'
+	readonly reader: string
+	readonly runtime: Runtime
+}
+
+const PAIRED: Readonly<Record<string, PairedCase>> = {
+	'trusted-path-mapping': {
+		kind: 'refused',
+		reader: "tsconfig.json:3:34 unchecked-import the paths entry '@fabrika/app/contract' can redirect a package the platform trusts by name",
+		runtime: { includes: '"machine"' },
+	},
+	'zod-path-mapping': {
+		kind: 'refused',
+		reader: "tsconfig.json:1:35 unchecked-import the paths entry 'zod/*' can redirect a package the platform trusts by name",
+		runtime: { excludes: '"format":"uuid"' },
+	},
+	'base-url-shadow': {
+		kind: 'refused',
+		reader: 'tsconfig.json:1:24 unchecked-import baseUrl lets an application file shadow a package the platform trusts by name',
+		runtime: { excludes: '"format":"uuid"' },
+	},
+	'extension-collision': {
+		kind: 'refused',
+		reader:
+			"fabrika.contract.ts:3:10 literal './src/callers' resolves to each of src/callers.ts, src/callers.tsx, which the platform does not resolve as Bun does",
+		runtime: { includes: '"machine"' },
+	},
+	'directory-package-entry': {
+		kind: 'refused',
+		reader:
+			"fabrika.contract.ts:3:10 literal './src/callers' is a directory import (src/callers/index.ts), which the platform does not resolve as Bun does",
+		runtime: { includes: '"machine"' },
+	},
+	'forward-reference': {
+		kind: 'refused',
+		reader: "fabrika.contract.ts:4:38 literal 'Title' is used before its declaration, where the module cannot read it yet",
+		runtime: { error: 'ReferenceError' },
+	},
+	'import-cycle': {
+		kind: 'refused',
+		reader: "src/b.ts:1:10 literal './a' closes an import cycle",
+		runtime: { error: 'ReferenceError' },
+	},
+	'computed-builder-member': {
+		kind: 'refused',
+		reader: 'fabrika.contract.ts:11:27 literal a computed builder member',
+		runtime: { includes: '"format":"uuid"' },
+	},
+	'duplicate-keys': { kind: 'same', includes: '"machine"' },
+	'renamed-builders': { kind: 'same', includes: '"maxLength":200' },
+	'escaped-strings': { kind: 'same', includes: '"Read All Notes"' },
+	'negative-zero': { kind: 'same', includes: '"balance"' },
+}
+
+const runtimeResult = z.union([
+	z.strictObject({ ok: z.literal(true), json: z.string() }),
+	z.strictObject({ ok: z.literal(false), error: z.string() }),
+])
+
+const temporary: string[] = []
+afterAll(() => {
+	for (const directory of temporary) rmSync(directory, { recursive: true, force: true })
+})
+
+/** The case's files written out under the package, so that Bun resolves zod and the framework from its node_modules. */
+const materialize = (name: string): string => {
+	const directory = mkdtempSync(join(PACKAGE_ROOT, '.paired-'))
+	temporary.push(directory)
+	for (const [path] of readTree(join(PAIRED_DIR, name), '.fixture')) {
+		const target = join(directory, path)
+		mkdirSync(dirname(target), { recursive: true })
+		copyFileSync(join(PAIRED_DIR, name, `${path}.fixture`), target)
+	}
+	return directory
+}
+
+const evaluate = (directory: string) => {
+	const run = Bun.spawnSync([process.execPath, RUNNER, join(directory, 'fabrika.contract.ts')], { cwd: directory })
+	return runtimeResult.parse(JSON.parse(run.stdout.toString()))
+}
+
+/** The reader's canonical artifact, or its first refusal as `file:line:col rule message`. */
+const readSide = (files: ReadonlyMap<string, string>): { readonly json: string } | { readonly refusal: string } => {
+	try {
+		return { json: canonicalArtifactJson(readContractSource(files, {})) }
+	} catch (error) {
+		if (error instanceof ContractSourceError) {
+			const [finding] = error.findings
+			return { refusal: finding === undefined ? 'no finding' : `${finding.file}:${finding.line}:${finding.column} ${finding.rule} ${finding.message}` }
+		}
+		throw error
+	}
+}
+
+describe('paired cases: the reader agrees with Bun, or refuses where Bun would read something else', () => {
+	test('every paired fixture directory is registered', () => {
+		expect(readdirSync(PAIRED_DIR).sort()).toEqual(Object.keys(PAIRED).sort())
+	})
+
+	for (const [name, expected] of Object.entries(PAIRED)) {
+		test(name, () => {
+			const read = readSide(readTree(join(PAIRED_DIR, name), '.fixture'))
+			const runtime = evaluate(materialize(name))
+			if (expected.kind === 'same') {
+				expect(runtime.ok ? runtime.json : runtime.error).toContain(expected.includes)
+				expect(read).toEqual({ json: runtime.ok ? runtime.json : runtime.error })
+				return
+			}
+			expect(read).toEqual({ refusal: expected.reader })
+			const outcome = expected.runtime
+			if ('error' in outcome) {
+				expect(runtime.ok ? 'evaluated' : runtime.error).toStartWith(outcome.error)
+			} else if ('includes' in outcome) {
+				expect(runtime.ok ? runtime.json : runtime.error).toContain(outcome.includes)
+			} else {
+				expect(runtime.ok ? runtime.json : runtime.error).not.toContain(outcome.excludes)
+				expect(runtime.ok).toBe(true)
+			}
+		})
+	}
+})
+
+describe('every fixture directory is registered', () => {
+	test('in @fabrika/check and in @fabrika/app', () => {
+		const registered = new Set(fixtures.map((fixture) => relative(join(import.meta.dir, '..', '..', '..'), fixture.root)))
+		const directories = (root: string): string[] =>
+			readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) =>
+				relative(join(import.meta.dir, '..', '..', '..'), join(root, entry.name))
+			)
+		const refusedOnly = new Set(['check/src/__tests__/fixtures/spike-contract', 'check/src/__tests__/fixtures/paired'])
+		const found = [...directories(join(import.meta.dir, 'fixtures')), ...directories(join(APP_TESTS, 'fixtures'))]
+		expect(found.filter((directory) => !registered.has(directory) && !refusedOnly.has(directory))).toEqual([])
 	})
 })

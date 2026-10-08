@@ -1,0 +1,5 @@
+import { z } from 'zod/v4'
+import { Title } from './b'
+
+export const Base = z.string()
+export const Note = z.strictObject({ title: Title })

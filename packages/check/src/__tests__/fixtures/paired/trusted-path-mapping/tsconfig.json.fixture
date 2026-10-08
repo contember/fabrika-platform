@@ -1,0 +1,4 @@
+{
+	// A wrapper in place of the framework widens the callers at runtime.
+	"compilerOptions": { "paths": { "@fabrika/app/contract": ["./src/framework.ts"] } },
+}

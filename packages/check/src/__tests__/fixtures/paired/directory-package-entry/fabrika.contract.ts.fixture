@@ -1,0 +1,15 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { CALLERS } from './src/callers'
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: {} },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: CALLERS }, {
+		list: c.query({ output: z.strictObject({ id: z.uuid() }), access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: c.health('/healthz'),
+}))

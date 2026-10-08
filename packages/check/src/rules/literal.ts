@@ -102,6 +102,9 @@ export type Link = { readonly kind: 'member'; readonly name: string | undefined;
 	readonly node: AstNode
 }
 
+/** `z['string']()` names the same builder, but a key read through a const is no longer a name the reader sees. */
+export const isComputedMember = (link: Link): boolean => link.kind === 'member' && link.node['computed'] === true
+
 /** `z.string().min(1)` → root `z`, links `.string` `()` `.min` `(1)`. */
 export const decompose = (node: AstNode): { readonly root: AstNode; readonly links: readonly Link[] } => {
 	const links: Link[] = []
@@ -229,6 +232,15 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 	}
 }
 
+const offset = (node: AstNode | undefined): number | undefined => (typeof node?.['start'] === 'number' ? node['start'] : undefined)
+
+/** Whether `reference` stands before `declaration` in the source: evaluating it would read the const uninitialized. */
+const isBefore = (reference: AstNode, declaration: AstNode | undefined): boolean => {
+	const at = offset(reference)
+	const declared = offset(declaration)
+	return at !== undefined && declared !== undefined && at < declared
+}
+
 interface ConstInfo {
 	readonly node: AstNode
 	/** The initializer itself has no finding. */
@@ -263,6 +275,9 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 	const checkIdentifier = (node: AstNode, scope: Scope, dependencies: string[]): void => {
 		const name = identifierName(node) ?? ''
 		if (scope.has(name) || builders.has(name)) return fail(node, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
+		if (index.consts.has(name) && isBefore(node, index.consts.get(name))) {
+			return fail(node, `'${name}' is used before its declaration, where the module cannot read it yet`, 'declare a const above its first use')
+		}
 		if (index.consts.has(name) || index.imports.has(name)) {
 			dependencies.push(name)
 			return
@@ -300,6 +315,8 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		if (kind === undefined) {
 			return fail(node, 'call of a function that is not c.*, z.* or define*', 'the value the function returns, written as a literal')
 		}
+		const computed = links.find(isComputedMember)
+		if (computed !== undefined) return fail(computed.node, 'a computed builder member', `${rootName}.<builder>(…) written with a dot`)
 		const problem = shapeProblem(kind, root, links)
 		if (problem !== undefined) return fail(problem.node, problem.message, problem.allowed)
 		const builder = links[0]?.kind === 'member' ? links[0].name : undefined
@@ -465,6 +482,7 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 			if (target !== undefined) queue.push(target)
 		}
 	}
+	reportImportCycles(summaries, graph)
 
 	const states = new Map<string, 'visiting' | boolean>()
 	const cycles = new Set<string>()
@@ -507,6 +525,19 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 				summary.report(imported.node, 'literal', `namespace import of '${imported.specifier}'`, 'named imports of literal consts')
 				continue
 			}
+			const resolution = graph.resolution(summary.module.file, imported.specifier)
+			if (resolution.kind === 'ambiguous' || resolution.kind === 'directory') {
+				const what = resolution.kind === 'ambiguous'
+					? `resolves to each of ${resolution.paths.join(', ')}`
+					: `is a directory import (${resolution.paths.join(', ')})`
+				summary.report(
+					imported.node,
+					'literal',
+					`'${imported.specifier}' ${what}, which the platform does not resolve as Bun does`,
+					'a relative import that names the module file, extension included',
+				)
+				continue
+			}
 			const binding = graph.binding(summary.module, imported.local)
 			if (binding.kind === 'unresolved') summary.report(imported.node, 'literal', binding.reason, 'a named import of a const the module exports')
 			else if (!isLiteral(binding)) {
@@ -520,4 +551,30 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 		}
 	}
 	return findings
+}
+
+/** An import cycle among literal modules: one of them is evaluated while the other's consts are still uninitialized. */
+const reportImportCycles = (summaries: ReadonlyMap<string, LiteralSummary>, graph: ModuleGraph): void => {
+	const state = new Map<string, 'visiting' | 'done'>()
+	const visit = (summary: LiteralSummary): void => {
+		state.set(summary.module.file, 'visiting')
+		for (const imported of graph.index(summary.module).imports.values()) {
+			const target = graph.resolve(summary.module.file, imported.specifier)
+			const next = target === undefined ? undefined : summaries.get(target.file)
+			if (next === undefined) continue
+			const seen = state.get(next.module.file)
+			if (seen === 'visiting') {
+				summary.report(
+					imported.node,
+					'literal',
+					`'${imported.specifier}' closes an import cycle`,
+					'a module graph without cycles: move the shared consts into one module',
+				)
+			} else if (seen === undefined) visit(next)
+		}
+		state.set(summary.module.file, 'done')
+	}
+	for (const summary of summaries.values()) {
+		if (!state.has(summary.module.file)) visit(summary)
+	}
 }

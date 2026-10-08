@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { RuleId } from '../finding'
 import { generatedTestHeader } from '../rules/tests'
-import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, locations } from './helpers'
+import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, CLEAN_SCHEMAS, locations } from './helpers'
 
 /** A form written out directly; D11 accepts that aliased or indirect forms escape, but these must not. */
 interface DirectForm {
@@ -93,14 +93,22 @@ const refused: readonly DirectForm[] = [
 		expected: ['fabrika.contract.ts:1:10', 'fabrika.contract.ts:2:10'],
 	},
 	{
-		name: 'a const defined through itself, in one module and across two',
+		name: 'a const used before its declaration, and an import cycle across two modules',
 		rule: 'literal',
 		files: {
 			'fabrika.contract.ts': "import { left } from './src/left'\n\nconst a = b\nconst b = a\nexport const contract = { app: a, other: left }\n",
 			'src/left.ts': "import { right } from './right'\n\nexport const left = right\n",
 			'src/right.ts': "import { left } from './left'\n\nexport const right = left\n",
 		},
-		expected: ['fabrika.contract.ts:1:10', 'fabrika.contract.ts:3:7', 'src/left.ts:1:10', 'src/left.ts:3:14', 'src/right.ts:1:10'],
+		// right.ts:1:10 twice: the import closes a cycle, and what it imports is not a literal.
+		expected: [
+			'fabrika.contract.ts:1:10',
+			'fabrika.contract.ts:3:11',
+			'src/left.ts:1:10',
+			'src/left.ts:3:14',
+			'src/right.ts:1:10',
+			'src/right.ts:1:10',
+		],
 	},
 	{
 		name: 'an import of a const the module does not export',
@@ -110,6 +118,34 @@ const refused: readonly DirectForm[] = [
 			'src/values.ts': "const hidden = 'notes'\nexport const shown = hidden\n",
 		},
 		expected: ['fabrika.contract.ts:1:10'],
+	},
+	{
+		name: 'configuration that redirects a package the platform trusts by name',
+		rule: 'unchecked-import',
+		files: {
+			...CLEAN_APPLICATION,
+			'tsconfig.json': '{\n\t"compilerOptions": {\n\t\t"baseUrl": ".",\n\t\t"paths": { "zod/*": ["./vendor/zod/*"], "~/*": ["./src/*"] },\n\t},\n}\n',
+			'bunfig.toml': 'preload = ["./plugin.ts"]\n',
+		},
+		expected: ['bunfig.toml:1:1', 'tsconfig.json:3:3', 'tsconfig.json:4:14'],
+	},
+	{
+		name: 'relative imports Bun resolves otherwise: two extension candidates, a directory with a package.json',
+		rule: 'unchecked-import',
+		files: {
+			'src/main.ts': "import { a } from './a'\nimport { b } from './lib'\nexport { a, b }\n",
+			'src/a.ts': "export const a = 'ts'\n",
+			'src/a.tsx': "export const a = 'tsx'\n",
+			'src/lib/index.ts': "export const b = 'index'\n",
+			'src/lib/package.json': '{ "main": "./main.ts" }\n',
+		},
+		expected: ['src/main.ts:1:1', 'src/main.ts:2:1'],
+	},
+	{
+		name: 'a contract import with two candidates',
+		rule: 'literal',
+		files: { ...CLEAN_APPLICATION, 'src/schemas/notes.tsx': CLEAN_SCHEMAS },
+		expected: ['fabrika.contract.ts:3:10', 'fabrika.contract.ts:3:22'],
 	},
 	{
 		name: 'absolute and file-URL imports',
@@ -317,7 +353,7 @@ describe('allowed forms the rules must not refuse', () => {
 		expect(await check(files)).toEqual([])
 	})
 
-	test('a regex literal in .regex(), a const schedule, a const access, index and .mts modules, and export aliases', async () => {
+	test('a regex literal in .regex(), a const schedule, a const access, an .mts index module named in full, and export aliases', async () => {
 		const files = {
 			...CLEAN_APPLICATION,
 			'src/schemas/slug.mts': "import { z } from 'zod/v4'\n\nexport const Slug = z.string().regex(/^[a-z-]+$/)\n",
@@ -330,7 +366,7 @@ describe('allowed forms the rules must not refuse', () => {
 				'\tpurgeDeleted: c.cron(nightly,',
 			).replace(
 				'export const contract',
-				"import { Slug } from './src/schemas/slug'\nimport { Title } from './src/shapes'\n\nconst nightly = `0 3 * * *`\n"
+				"import { Slug } from './src/schemas/slug'\nimport { Title } from './src/shapes/index.mts'\n\nconst nightly = `0 3 * * *`\n"
 					+ "const InWorkspace = { action: 'notes.write', in: 'workspace', from: 'workspaceId' } as const\nexport const extras = [Slug, Title]\n"
 					+ 'export const contract',
 			),

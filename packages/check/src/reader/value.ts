@@ -4,7 +4,8 @@
 import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
-import { BUILDER_IMPORTS, type BuilderKind, decompose, type Link } from '../rules/literal'
+import { CONTRACT_LIMITS } from '../limits'
+import { BUILDER_IMPORTS, type BuilderKind, decompose, isComputedMember, type Link } from '../rules/literal'
 import type { ReaderProblems } from './problems'
 import { buildSchema } from './schema'
 
@@ -20,7 +21,8 @@ export type LiteralValue =
 	| { readonly kind: 'array'; readonly items: readonly LiteralValue[]; readonly at: Located }
 	/** Entries in source order; a repeated key keeps its first position and its last value, as in an object literal. */
 	| { readonly kind: 'object'; readonly entries: ReadonlyMap<string, LiteralValue>; readonly at: Located }
-	| { readonly kind: 'schema'; readonly schema: z.ZodType; readonly at: Located }
+	/** `nodes` counts the schema with every shared part expanded, as the artifact will hold it; `depth` its nesting. */
+	| { readonly kind: 'schema'; readonly schema: z.ZodType; readonly nodes: number; readonly depth: number; readonly at: Located }
 	/** `c.rpc(…)` or `l.query(…)`, with its arguments read. */
 	| { readonly kind: 'builder'; readonly kit: Kit; readonly name: string; readonly args: readonly LiteralValue[]; readonly at: Located }
 	| { readonly kind: 'contract'; readonly args: readonly LiteralValue[]; readonly at: Located }
@@ -245,6 +247,11 @@ export class ValueReader {
 			this.#problems.add({ module: located.module, node: optional.node }, 'optional call', 'a plain call')
 			return null
 		}
+		const computed = links.find(isComputedMember)
+		if (computed !== undefined) {
+			this.#problems.add({ module: located.module, node: computed.node }, 'a computed builder member', `${rootName}.<builder>(…) written with a dot`)
+			return null
+		}
 		if (kit !== undefined) {
 			return this.#kitCall(located, kit, links, scope)
 		}
@@ -302,10 +309,16 @@ export class ValueReader {
 			steps.push({ name: member.name, call: call.node })
 		}
 		let schema: z.ZodType | undefined
+		let size: SchemaSize = { nodes: 0, depth: 0 }
 		for (const [position, step] of steps.entries()) {
 			const at = { module: located.module, node: step.call }
 			const args = this.#arguments(located.module, step.call, scope, () => null)
 			if (args === null) {
+				return null
+			}
+			size = stepSize(position === 0 ? null : step.name, size, schemaParts(args))
+			if (size.nodes > CONTRACT_LIMITS.schemaNodes || size.depth > CONTRACT_LIMITS.schemaDepth) {
+				this.#problems.add(at, `the schema expands to ${size.nodes} nodes nested ${size.depth} deep`, schemaLimits())
 				return null
 			}
 			const built = buildSchema(position === 0 ? { factory: step.name, iso: isIso } : { method: step.name, receiver: schema }, args)
@@ -315,7 +328,7 @@ export class ValueReader {
 			}
 			schema = built.schema
 		}
-		return schema === undefined ? null : { kind: 'schema', schema, at: located }
+		return schema === undefined ? null : { kind: 'schema', schema, nodes: size.nodes, depth: size.depth, at: located }
 	}
 
 	#arguments(module: ParsedModule, call: AstNode, scope: Scope, roleAt: (position: number) => Role): LiteralValue[] | null {
@@ -342,6 +355,49 @@ export class ValueReader {
 		const imported = this.#graph.index(module).imports.get(name)
 		return imported === undefined ? undefined : BUILDER_IMPORTS[imported.specifier]?.[imported.imported]
 	}
+}
+
+interface SchemaSize {
+	readonly nodes: number
+	readonly depth: number
+}
+
+export const schemaLimits = (): string =>
+	`a schema within ${CONTRACT_LIMITS.schemaNodes} expanded nodes and ${CONTRACT_LIMITS.schemaDepth} levels (CONTRACT_LIMITS)`
+
+/** The schemas among a step's arguments, through the arrays and objects that hold them, summed and at their deepest. */
+const schemaParts = (values: readonly LiteralValue[]): SchemaSize => {
+	let nodes = 0
+	let depth = 0
+	const pending = [...values]
+	for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
+		if (value.kind === 'schema') {
+			nodes += value.nodes
+			depth = Math.max(depth, value.depth)
+		} else if (value.kind === 'array') {
+			pending.push(...value.items)
+		} else if (value.kind === 'object') {
+			pending.push(...value.entries.values())
+		}
+	}
+	return { nodes, depth }
+}
+
+/** Methods whose result holds the schema they are called on as one more level. */
+const WRAPPING_METHODS = new Set(['optional', 'nullable', 'nullish', 'default', 'array', 'or'])
+
+/**
+ * The size after one step: a factory is one node above its argument schemas; a wrapping method one node above the
+ * schema and its argument; `extend` and friends merge shapes; a check adds no node.
+ */
+const stepSize = (method: string | null, receiver: SchemaSize, parts: SchemaSize): SchemaSize => {
+	if (method === null) {
+		return { nodes: parts.nodes + 1, depth: parts.depth + 1 }
+	}
+	if (WRAPPING_METHODS.has(method)) {
+		return { nodes: receiver.nodes + parts.nodes + 1, depth: Math.max(receiver.depth, parts.depth) + 1 }
+	}
+	return { nodes: receiver.nodes + parts.nodes, depth: Math.max(receiver.depth, parts.depth) }
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null

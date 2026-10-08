@@ -27,8 +27,9 @@ import {
 } from '@fabrika/app/contract'
 import type { CspSource, RpcCaller } from '@fabrika/auth-core'
 import type { Located } from '../graph'
+import { CONTRACT_LIMITS } from '../limits'
 import type { ReaderProblems } from './problems'
-import { describeKind, type Kit, type LiteralValue } from './value'
+import { describeKind, type Kit, type LiteralValue, schemaLimits } from './value'
 
 /** A refused value; thrown inside this module and recorded where the reader can go on with the next entry. */
 class Refused {
@@ -61,6 +62,7 @@ export function readContractValue(value: LiteralValue, problems: ReaderProblems)
 class SurfaceReader {
 	readonly #problems: ReaderProblems
 	#complete = true
+	#schemaNodes = 0
 
 	constructor(problems: ReaderProblems) {
 		this.#problems = problems
@@ -95,6 +97,19 @@ class SurfaceReader {
 			this.#complete = false
 			return null
 		}
+	}
+
+	/**
+	 * A schema where the contract places it. `compileContract` describes each placement apart, so the expanded nodes of
+	 * every placement count towards one budget for the whole contract.
+	 */
+	#schema(value: LiteralValue | undefined, owner: Owner, field: string): Schema {
+		const read = schema(value, owner, field)
+		this.#schemaNodes += value?.kind === 'schema' ? value.nodes : 0
+		if (this.#schemaNodes > CONTRACT_LIMITS.schemaNodes) {
+			throw new Refused(owner.at, `the contract's schemas expand to over ${CONTRACT_LIMITS.schemaNodes} nodes`, schemaLimits())
+		}
+		return read
 	}
 
 	#each<T>(entries: Entries, read: (name: string, value: LiteralValue) => T): Record<string, T> {
@@ -239,7 +254,7 @@ class SurfaceReader {
 				return {
 					kind: 'form',
 					path: text(path, at, 'the path'),
-					input: schema(options.get('input'), at, 'input'),
+					input: this.#schema(options.get('input'), at, 'input'),
 					appendTo: text(options.get('appendTo'), at, 'appendTo'),
 					maxBytes: optionalNumber(options.get('maxBytes'), 'maxBytes'),
 					unknownOptions: optionKeys(options, 'form'),
@@ -258,7 +273,7 @@ class SurfaceReader {
 					scheme: scheme.value,
 					boundTo: text(options.get('boundTo'), at, 'boundTo'),
 					actions: texts(options.get('actions'), at, 'actions'),
-					input: schema(options.get('input'), at, 'input'),
+					input: this.#schema(options.get('input'), at, 'input'),
 					maxBytes: optionalNumber(options.get('maxBytes'), 'maxBytes'),
 					unknownOptions: optionKeys(options, 'webhook'),
 				}
@@ -307,8 +322,8 @@ class SurfaceReader {
 		return {
 			'~kind': 'procedure',
 			type,
-			input: input === undefined || input.kind === 'null' ? null : schema(input, builder, 'input'),
-			output: schema(options.get('output'), builder, 'output'),
+			input: input === undefined || input.kind === 'null' ? null : this.#schema(input, builder, 'input'),
+			output: this.#schema(options.get('output'), builder, 'output'),
 			access: access(options.get('access'), builder),
 			unknownOptions: optionKeys(options, 'procedure'),
 		}

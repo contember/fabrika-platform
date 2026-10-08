@@ -1,0 +1,17 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+
+const Note = z.strictObject({ title: Title })
+const Title = z.string()
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: {} },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+		list: c.query({ output: Note, access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: c.health('/healthz'),
+}))

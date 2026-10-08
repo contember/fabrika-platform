@@ -10,7 +10,7 @@ import {
 	stringField,
 	unwrap,
 } from './ast'
-import { isRelativeSpecifier, joinRelative, resolutionCandidates } from './layout'
+import { isRelativeSpecifier, type Resolution, resolveRelative } from './layout'
 
 export interface Located {
 	readonly module: ParsedModule
@@ -138,15 +138,17 @@ export class ModuleGraph {
 		return index
 	}
 
-	/** The checked module a relative specifier names. */
+	/** How a relative specifier resolves among the checked modules. */
+	resolution(from: string, specifier: string): Resolution {
+		return resolveRelative((path) => this.#modules.has(path), from, specifier)
+	}
+
+	/** The checked module a relative specifier names; none when two candidates compete, the index of a directory import. */
 	resolve(from: string, specifier: string): ParsedModule | undefined {
 		if (!isRelativeSpecifier(specifier)) return undefined
-		const base = joinRelative(from, specifier)
-		if (base === undefined) return undefined
-		for (const candidate of resolutionCandidates(base)) {
-			const module = this.#modules.get(candidate)
-			if (module !== undefined) return module
-		}
+		const resolution = this.resolution(from, specifier)
+		if (resolution.kind === 'file') return this.#modules.get(resolution.path)
+		if (resolution.kind === 'directory') return resolution.paths.map((path) => this.#modules.get(path)).find((module) => module !== undefined)
 		return undefined
 	}
 

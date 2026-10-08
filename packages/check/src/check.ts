@@ -26,6 +26,7 @@ import { checkModuleReferences } from './rules/modules'
 import { checkRuntimeNode } from './rules/runtime'
 import { checkGeneratedTest, checkTestNode } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
+import { checkTrustedResolution } from './trust'
 
 export interface CheckInput {
 	/** The application's root directory. */
@@ -58,7 +59,13 @@ export const readApplicationTree = async (root: string): Promise<ApplicationTree
 	return { files, links }
 }
 
-const checkSourceModule = async (module: ParsedModule, text: string, mappings: ImportMappings, findings: Finding[]): Promise<void> => {
+const checkSourceModule = async (
+	module: ParsedModule,
+	text: string,
+	mappings: ImportMappings,
+	exists: (path: string) => boolean,
+	findings: Finding[],
+): Promise<void> => {
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
@@ -69,7 +76,7 @@ const checkSourceModule = async (module: ParsedModule, text: string, mappings: I
 		if (isTest) checkTestNode(node, report)
 	})
 	checkComments(module.comments, report)
-	checkModuleReferences(module.file, moduleReferences(module.program), mappings, report, isGeneratedEntry)
+	checkModuleReferences(module.file, moduleReferences(module.program), mappings, exists, report, isGeneratedEntry)
 	await checkGeneratedTest(text, module.comments, report)
 }
 
@@ -80,6 +87,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const modules = new Map<string, ParsedModule>()
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
+	findings.push(...checkTrustedResolution(tree.files))
 
 	for (const link of tree.links) {
 		findings.push({
@@ -101,7 +109,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 			continue
 		}
 		modules.set(path, parsed.module)
-		await checkSourceModule(parsed.module, text, mappings, findings)
+		await checkSourceModule(parsed.module, text, mappings, (candidate) => tree.files.has(candidate), findings)
 	}
 
 	const graph = new ModuleGraph(modules)

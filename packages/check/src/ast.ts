@@ -20,6 +20,8 @@ export interface ParsedModule {
 	readonly file: string
 	readonly program: AstNode
 	readonly comments: readonly Comment[]
+	/** The UTF-8 size of the source text. */
+	readonly bytes: number
 }
 
 export type ParseResult = { readonly ok: true; readonly module: ParsedModule } | {
@@ -215,12 +217,32 @@ const syntaxErrorPosition = (error: unknown): Position => {
 	return { line: 1, column: 1 }
 }
 
+export const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength
+
+/** The nesting depth of the tree below `root`, measured without recursion, so a deep tree cannot exhaust the stack. */
+export const nodeDepth = (root: AstNode): number => {
+	let deepest = 0
+	const pending: [AstNode, number][] = [[root, 1]]
+	for (let entry = pending.pop(); entry !== undefined; entry = pending.pop()) {
+		const [node, depth] = entry
+		deepest = Math.max(deepest, depth)
+		for (const [key, value] of Object.entries(node)) {
+			if (NON_CHILD_KEYS.has(key)) continue
+			if (isNode(value)) pending.push([value, depth + 1])
+			else if (Array.isArray(value)) {
+				for (const item of value) if (isNode(item)) pending.push([item, depth + 1])
+			}
+		}
+	}
+	return deepest
+}
+
 export const parseModule = (file: string, text: string): ParseResult => {
 	try {
 		const ast = parse(text, { sourceType: 'module', sourceFilename: file, plugins: pluginsFor(file) })
 		const program: unknown = ast.program
 		if (!isNode(program)) return { ok: false, message: 'the parser returned no program', position: { line: 1, column: 1 } }
-		return { ok: true, module: { file, program, comments: readComments(ast.comments) } }
+		return { ok: true, module: { file, program, comments: readComments(ast.comments), bytes: utf8Bytes(text) } }
 	} catch (error) {
 		const message = error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : 'unparseable source'
 		return { ok: false, message, position: syntaxErrorPosition(error) }

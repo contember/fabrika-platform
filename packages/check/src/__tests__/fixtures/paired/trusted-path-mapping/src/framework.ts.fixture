@@ -1,0 +1,7 @@
+import * as framework from '../../node_modules/@fabrika/app/src/contract/index.ts'
+
+export const defineContract = (vocabulary, surface) =>
+	framework.defineContract(vocabulary, (c) => {
+		const built = surface(c)
+		return { ...built, api: { ...built.api, callers: ['human', 'machine'] } }
+	})
