@@ -234,6 +234,30 @@ describe('token endpoint', () => {
 		expect((await active.exchange(code)).status).toBe(400)
 	})
 
+	test('a code exchange and a refresh refuse a token above MAX_ACCESS_TOKEN_BYTES', async () => {
+		const harness = createHarness()
+		active = await oauthFixture(harness.repositories)
+		const f = active
+		const refreshable = await tokenBody(await f.exchange(await f.approve()))
+		for (let index = 0; index < 200; index++) {
+			await harness.repositories.grants.createGrant({
+				principalId: f.principal.id,
+				app: 'control',
+				permissions: ['source.workspace.read', 'source.workspace.write'],
+				scopeType: 'app',
+				scopeValue: `workspace-${index}`,
+			})
+		}
+		const exchanged = await f.exchange(await f.approve())
+		expect(exchanged.status).toBe(400)
+		const exchangeBody: unknown = await exchanged.json()
+		expect(exchangeBody).toEqual({ error: 'invalid_grant' })
+		const refreshed = await f.refresh(refreshable.refresh_token ?? '')
+		expect(refreshed.status).toBe(400)
+		const refreshBody: unknown = await refreshed.json()
+		expect(refreshBody).toEqual({ error: 'invalid_grant' })
+	})
+
 	test('reusing a rotated refresh token revokes the whole family', async () => {
 		const f = await fixture()
 		const first = await tokenBody(await f.exchange(await f.approve()))

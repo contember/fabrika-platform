@@ -28,6 +28,7 @@ import { resolvePermissionsAt } from './resolve'
 import { generateToken, hashToken, timingSafeEqualHex } from './secret'
 import type { Services } from './services'
 import { getSigner, verifyResourceAccessToken } from './signing'
+import { boundedToken } from './tokens'
 
 /** An authorization code is redeemed by the client's back end within seconds of the redirect. */
 export const OAUTH_CODE_TTL_SECONDS = 60
@@ -196,8 +197,10 @@ async function mintForGrant(services: Services, env: SigningEnv, grant: OAuthGra
 		grantId: grant.id,
 		tokenId: uuidv7(),
 	})
+	const token = await boundedToken((await getSigner(env)).signResourceToken(claims), { app: grant.app, subject: authority.principal.id })
+	if (token === null) return null
 	return {
-		access_token: await (await getSigner(env)).signResourceToken(claims),
+		access_token: token,
 		token_type: 'Bearer',
 		expires_in: expiresAt - now,
 		scope: authority.scopes.join(' '),

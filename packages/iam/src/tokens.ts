@@ -86,16 +86,19 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	// minted a minute before the session ends must not outlive it, or logging out (or an expiry) would
 	// leave a valid token in the app's hands for the rest of its TTL (SEC-27).
 	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, session.expires_at)
-	const token = await signAccessToken(services, env, {
-		app: input.app,
-		subject: principal.id,
-		type: principal.type,
-		label: principal.label,
-		permissions,
-		issuedAt: now,
-		expiresAt,
-	})
-	if (exceedsTokenBound(token, input.app, principal.id)) {
+	const token = await boundedToken(
+		signAccessToken(services, env, {
+			app: input.app,
+			subject: principal.id,
+			type: principal.type,
+			label: principal.label,
+			permissions,
+			issuedAt: now,
+			expiresAt,
+		}),
+		{ app: input.app, subject: principal.id },
+	)
+	if (token === null) {
 		return { result: { ok: false, reason: 'token_too_large' }, principalId: principal.id }
 	}
 	return { result: { ok: true, token, expiresAt }, principalId: principal.id }
@@ -134,16 +137,19 @@ export async function mintFromKey(
 
 	const now = Math.floor(Date.now() / 1000)
 	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, cred.expires_at ?? Number.POSITIVE_INFINITY)
-	const token = await signAccessToken(services, env, {
-		app: input.app,
-		subject: effective.subject,
-		...(effective.type === undefined ? {} : { type: effective.type }),
-		label: effective.label,
-		permissions: effective.permissions,
-		issuedAt: now,
-		expiresAt,
-	})
-	if (exceedsTokenBound(token, input.app, effective.subject)) {
+	const token = await boundedToken(
+		signAccessToken(services, env, {
+			app: input.app,
+			subject: effective.subject,
+			...(effective.type === undefined ? {} : { type: effective.type }),
+			label: effective.label,
+			permissions: effective.permissions,
+			issuedAt: now,
+			expiresAt,
+		}),
+		{ app: input.app, subject: effective.subject },
+	)
+	if (token === null) {
 		return { result: { ok: false, reason: 'token_too_large' }, principalId: cred.principal_id, credentialId: cred.id }
 	}
 	return { result: { ok: true, token, expiresAt }, principalId: cred.principal_id, credentialId: cred.id }
@@ -210,13 +216,19 @@ function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry {
 	return { action: row.action, scope, source: 'grant' }
 }
 
-/** True, with a warning naming the subject and the size, when `token` is above `MAX_ACCESS_TOKEN_BYTES`. */
-function exceedsTokenBound(token: string, app: string, subject: string): boolean {
+/**
+ * The signed token, or null — with a warning naming the subject and the size — when it is above
+ * `MAX_ACCESS_TOKEN_BYTES`. Every bearer IAM issues passes here: native tokens and OAuth resource tokens.
+ */
+export async function boundedToken(signed: Promise<string>, who: { app: string; subject: string }): Promise<string | null> {
+	const token = await signed
 	if (token.length <= MAX_ACCESS_TOKEN_BYTES) {
-		return false
+		return token
 	}
-	console.warn(`access token for '${subject}' at app '${app}' is ${token.length} bytes, above the ${MAX_ACCESS_TOKEN_BYTES}-byte bound; refused`)
-	return true
+	console.warn(
+		`access token for '${who.subject}' at app '${who.app}' is ${token.length} bytes, above the ${MAX_ACCESS_TOKEN_BYTES}-byte bound; refused`,
+	)
+	return null
 }
 
 /** Sign an access token with the isolate's active signing key. Shared by every mint front. */
