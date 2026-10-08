@@ -52,7 +52,8 @@ Control does not negotiate a source protocol with them.
   them statically ([ADR-0005](0005-compile-app-config-to-static-manifest.md)). The run stores the
   result as its snapshot (ADR-0050).
 - The deployer builds the proxy Worker from the snapshot's endpoint table. An application config that
-  builds its own proxy is refused.
+  builds its own proxy is refused. Until the installation's services move to contracts, an application
+  without a contract hands the deployer its gates, and the deployer builds that proxy too.
 - IAM receives the schema from `approvedSnapshot(app, env)`, never from the runner's outcome.
 - The application config is still imported inside the credentialed runner. The checker and the type
   checks therefore stay advisory on Cloudflare until the runner separates a credential-free step.
@@ -68,17 +69,21 @@ The provider refuses these on application Workers:
   the installation, checked against Control's registry. A remote name `<env>-<name>` belongs to the
   registered deployment whose `<env>-<app>` is its longest prefix (exact, or followed by `-`).
 
+The provider checks what `wrangler deploy` reads — the wrangler configs oblaka generates — and never the
+objects that emitted them, because any binding object can write any key into a config.
+
 An application Worker is therefore reachable only through its proxy Worker's service binding, and that
 binding is the authenticated hop ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). Only CSP
 extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
 
-What is built (work unit B8): the deployer builds a contract application's proxy Worker from the
-contract's endpoint table and writes the contract digest into the application Worker; a config that returns
-its own proxy is refused; the exposure refusals above apply to every application Worker; Control sends its
-registry of Cloudflare deployments with each job. Until work unit B6 sends the run's snapshot, the deployer
-reads the contract from the checkout with the same static reader, so a contract application is one whose
-checkout has `fabrika.contract.ts`; an application without one keeps the gate proxy its config builds. IAM
-still receives the schema from the runner's outcome until B6.
+What is built (work unit B8): the deployer builds every application's proxy Worker from the runner
+image's own copy — from the contract's endpoint table for a contract application, from the `gates` the
+config hands it otherwise — and writes the contract digest into the application Worker; a config Worker that
+binds `APP` is refused; the exposure and name refusals above are checked on the wrangler configs oblaka
+generates, before provisioning and again before deploying; Control sends its registry of Cloudflare
+deployments with each job. Until work unit B6 sends the run's snapshot, the deployer reads the contract from
+the checkout with the same static reader, so a contract application is one whose checkout has
+`fabrika.contract.ts`. IAM still receives the schema from the runner's outcome until B6.
 
 ### On Cloudflare these are a strong default, not a security boundary
 

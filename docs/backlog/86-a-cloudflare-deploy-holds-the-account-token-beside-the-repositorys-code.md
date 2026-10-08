@@ -23,7 +23,7 @@ its names: `createCloudflareControlProvider` exposes no `namespaces` capability,
 
 What the review fixed (commit series of 2026-09-02): `job.credentials` is exactly the account id and
 token and nothing else, the `pipeline.build` child runs with those names removed from its
-environment, the authored graph is bounded before any Cloudflare call (`assertAuthoredGraph`), and the
+environment, the authored graph is bounded before any Cloudflare call (since B8, on the wrangler configs oblaka generates: `assertGeneration`), and the
 runner Worker authenticates its caller. The closure validation of 2026-09-03 found the graph bound
 bypassable twice — raw wrangler keys on `Worker.options` (`services`, `durable_objects`, `r2_buckets`,
 `build`) were never inspected, and an env named `prod-propustka` with a Worker named `worker` adopted

@@ -24,6 +24,10 @@ export const buildExampleWorker = (): Worker =>
 		// can point itself at a different one.
 	})
 
+/**
+ * The proxy + app composition for a local run (`oblaka.ts`, lopata). A deploy never takes it: the config hands the
+ * platform its gates, and the deployer builds the proxy Worker from its own copy (ADR-0048).
+ */
 export const buildExampleProxy = (ctx: ResourceContext): Worker =>
 	createCloudflareProxyWorker({
 		name: 'propustka-example-proxy',
@@ -39,7 +43,8 @@ export const buildExampleProxy = (ctx: ResourceContext): Worker =>
 
 export default defineApp({
 	id: exampleAppId,
-	resources: buildExampleProxy,
+	resources: buildExampleWorker,
+	gates: exampleGates,
 	schema: exampleAppSchema,
 	pipeline: {
 		workerDir: '.',

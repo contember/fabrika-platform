@@ -30,43 +30,47 @@ this one import.
 - **`cloudflareRunnerJobSchema` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading
   `-` and no whitespace, `[a-z0-9-]` env, contained relative `workerDir`/`configPath`, literal
   `domain`. Every field becomes an argv element, a path or a hostname inside the container.
-- **The authored graph is bounded before any Cloudflare call** (`assertAuthoredGraph`): no
-  `PLATFORM_RESOURCE_NAMES` name — as a declared resource, as the oblaka state namespace, or as a
-  `ServiceReference` target (IAM's `propustka-worker`, at its application entrypoint, is the one binding every app may keep) — no
-  Worker off the `APP` chain, and every route on the run's own domain. `platformResources: 'allow'` exists for fabrika deploying its OWN components (the
-  installation CLI and `dryrun-verify`); a checkout is never opened with it.
-- **The bound is on the name oblaka ADOPTS, `${env}-${name}`, not the authored one.** An env name may
-  contain `-`, so env `prod-propustka` + Worker `worker` lands on IAM's `prod-propustka-worker`. A
-  remote name that equals or ends with `-<platform name>` is refused, whatever the env/name split.
-  The state namespace is the one exception — `KVStateStorage` uses it verbatim, so it is matched exactly.
+- **The generated wrangler configs are the one thing checked** (`src/bounds.ts`), never the objects that
+  emitted them: a checkout's own `Bindable`, a `ServiceReference` subclass or a raw option writes whatever it
+  likes into a config. `generateWranglerConfigs` runs oblaka's own `ResourceProcessor` (a deep import of
+  `oblaka-iac/src/commands/…`, so a pin bump re-checks it) with every resource applied in dry-run mode and a
+  client that refuses to authenticate, before provisioning; `assertGeneration` checks those configs, every
+  resource the run applies by the remote name it adopts (a KV namespace's config holds only its id), and that
+  every D1 `database_id` and KV `id` is one this run handed out. `assertGeneratedConfigs` runs again in
+  `deploy-worker` on the configs oblaka really wrote, before the first `wrangler deploy`, because a stateful
+  binding can emit differently the second time. `platformResources: 'allow'` exists for fabrika deploying its
+  OWN components (the installation CLI and `dryrun-verify`); it keeps only the route bound. A checkout is
+  never opened with it.
+- **What a generated config may carry:**
+  - keys only from `CONFIG_KEYS`; anything else (`build`, `site`, `tail_consumers`, an unreviewed binding
+    kind) is refused. Adding a key is a security decision: it must not be able to name a resource, run a
+    command, or publish a directory;
+  - exactly one application config beside the platform proxy's: "only the application Worker and its proxy
+    are deployable";
+  - on every name it binds — the Worker's own name, `services`, D1, R2, queues, containers, workflows, a
+    Durable Object's `script_name` — no `PLATFORM_RESOURCE_NAMES` name and no other application's name. The
+    bound is on the REMOTE name: an env name may contain `-`, so env `prod-propustka` + Worker `worker` lands on
+    IAM's `prod-propustka-worker`; a remote name that equals or ends with `-<platform name>` is refused. The
+    state namespace is matched exactly, because `KVStateStorage` uses it verbatim;
+  - an application config has no `routes`, and `workers_dev` and `preview_urls` are `false`. Cloudflare turns
+    both URLs on by default. Only the proxy the deployer built is routed, and only on the run's own domain.
+    Repository code holds the account token, so on Cloudflare this is a strong default, not a boundary
+    (backlog 86).
 - **An app binds IAM only at its `PropustkaApplication` entrypoint** (`iamServiceReference()`,
-  `IAM_APPLICATION_ENTRYPOINT` in `src/proxy.ts`), and so does the proxy Worker the provider builds.
-  IAM's default export also issues and revokes keys and approves devices, which only platform
-  components (`platformResources: 'allow'`) may bind. `assertApplicationServices` checks the `services`
-  a Worker's config CARRIES, never the binding's class — a checkout's own `Bindable` or a
-  `ServiceReference` subclass emits whatever it likes: an entry naming IAM's remote Worker without
-  `PropustkaApplication`, or naming any other platform service, is refused. It runs twice: in
-  `assertAuthoredGraph` on the bindings folded in oblaka's order (a later binding can rewrite an earlier
-  entry), and in `deploy-worker` on each config oblaka generated, before its `wrangler deploy`, because a
-  stateful binding can emit differently the second time. The entrypoint name is pinned against IAM's
-  exports by `packages/iam/src/__tests__/index.test.ts`.
-- **`Worker.options` is an ALLOWLIST for an app (`APP_WORKER_OPTIONS`), not a denylist.** oblaka spreads
-  every option but `dir`/`bindings`/`deleteDurableObjectsOnRemoval` verbatim into the generated wrangler
-  config, so a raw `services`, `durable_objects`, `r2_buckets` or `build` key would bind or run what the
-  typed `bindings` walk never sees. Adding a key to the allowlist is a security decision: it must not be
-  able to name a resource, run a command, or publish a directory. Only `platformResources: 'allow'` skips it.
-- **An application Worker is reachable only through its proxy's `APP` binding (ADR-0048).**
-  `assertUnexposedApplication` (`src/plan.ts`) refuses a non-empty `routes`, and any `workers_dev` or
-  `preview_urls` other than `false` — Cloudflare turns both URLs on by default. Only the root that
-  `createCloudflareProxyWorker` builds is exempt: `CLOUDFLARE_PROXY_WORKER_MAIN`, from this package's own
-  `src` (the runner's copy; for an application without a contract also a checkout's `node_modules` copy), binding `APP`. Every other Worker, the root
-  included, is an application Worker. `platformResources: 'allow'` skips it (IAM routes its own Worker). Repository code holds the account token, so on Cloudflare this is a
-  strong default, not a boundary (backlog 86).
-- **`assets` is ALLOWED but BOUNDED** (`assertBoundedAssets`). Its `directory` is resolved against the
+  `IAM_APPLICATION_ENTRYPOINT` in `src/proxy.ts`), and so does the proxy Worker the deployer builds. IAM's
+  default export also issues and revokes keys and approves devices, which only platform components
+  (`platformResources: 'allow'`) may bind. The entrypoint name is pinned against IAM's exports by
+  `packages/iam/src/__tests__/index.test.ts`.
+- **A checkout's Worker graph is rebuilt from this package's `Worker` class** (`runnerWorkerGraph`,
+  `src/checkout.ts`). The checkout installs its own `oblaka-iac`, so `instanceof Worker` fails on its objects,
+  and oblaka's processor itself recurses only into Workers of its own class. A Worker is recognised by
+  `getId().resource === 'worker'`; its options are carried over as they are, and other bindings stay the
+  checkout's objects. `isolated-checkout.test.ts` deploys a config with a second copy of `oblaka-iac`.
+- **`assets` is ALLOWED but BOUNDED** (on the generated config). Its `directory` is resolved against the
   generated `wrangler.jsonc`'s own directory and uploaded publicly, and wrangler's walk ignores only
   `.assetsignore`/`_redirects`/`_headers` — no dotfile or `.git` skip — so `.` on a root `workerDir` would
   publish the checkout's `.git/config` and the clone token in it. It must be a relative path with no `..`,
-  no `.git` segment, and at least one real segment; sub-keys are their own allowlist (`APP_ASSETS_OPTIONS`).
+  no `.git` segment, and at least one real segment; sub-keys are their own allowlist (`ASSETS_KEYS`).
 - **A contained `assets.directory` is then WALKED on disk** (`src/assets.ts`). wrangler `stat`s each asset
   instead of `lstat`ing it, so a committed symlink to `/proc/self/environ` or to `.git/config` would upload
   publicly; the walk uses `lstat` and refuses the first link, or anything that is neither a regular file nor
@@ -86,22 +90,26 @@ this one import.
   order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
-- **A contract application's proxy Worker is the platform's (ADR-0048).** The application is a contract
-  application when the run carries its snapshot (`CloudflareDeployRun.contract`, B6's seam) or, until
-  then, when the config's directory holds `fabrika.contract.ts`, read by `@fabrika/check/contract`'s static
-  reader (`readContract` collaborator) — never evaluated. The deployer wraps the Worker `resources` returns in
-  `createCloudflareProxyWorker({ endpoints: contractProxyTable(artifact) })`, named `<app>-proxy`, from this
-  package's own copy, and writes `FABRIKA_CONTRACT_DIGEST` into the application Worker. A config that returns
-  a Worker binding `APP` (its own proxy) is refused, and so is an IAM schema whose `contract: true` disagrees
-  with the contract. An application without a contract keeps the proxy its config builds, with gates.
-  `createCloudflareProxyWorker` takes `endpoints` or `gates`, never both; `assertAuthoredGraph` refuses a
-  proxy with gates for a contract application. Its `IAM` binding is also the delegation issuer the proxy asks for grants.
+- **Every application's proxy Worker is the platform's (ADR-0048).** The config's `resources` returns the
+  application Worker; a Worker that binds `APP` (a proxy of its own) is refused. The deployer wraps it in
+  `createCloudflareProxyWorker`, named `<app>-proxy`, from this package's own entrypoint and directory — the
+  runner image's copy, never a checkout's `node_modules` copy. What the proxy enforces:
+  - a contract application's endpoint table (`contractProxyTable(artifact)`). The application is a contract
+    application when the run carries its snapshot (`CloudflareDeployRun.contract`, B6's seam) or, until then,
+    when the config's directory holds `fabrika.contract.ts`, read by `@fabrika/check/contract`'s static reader
+    (`readContract` collaborator) — never evaluated. The deployer writes `FABRIKA_CONTRACT_DIGEST` into the
+    application Worker. An IAM schema whose `contract: true` disagrees with the contract is refused, and so are
+    `gates` beside a contract;
+  - otherwise the config's `gates`, parsed with `proxyAppGatesSchema`;
+  - neither: no proxy, and the application Worker is reachable by nothing.
+    `createCloudflareProxyWorker` takes `endpoints` or `gates`, never both. Its `IAM` binding is also the
+    delegation issuer the proxy asks for grants. An authored variable under a `FRAMEWORK_VARIABLE_NAMES` name is refused.
 - **Another application's names are refused** (ADR-0048). Control sends `<app>@<env>` of every Cloudflare
   deployment in its registry (`CloudflareRunnerJob.installationApps` → `FABRIKA_INSTALLATION_APPS` →
   `CloudflareDeployRun.installationApps`). A remote name belongs to the deployment with the longest
-  `${env}-${app}` prefix (exact, or followed by `-`); one that belongs to another application is refused
-  wherever the platform-name bound applies — declared resources, `ServiceReference` targets and emitted
-  `services`, in both passes. It is a naming rule, not an ownership record (backlog 86).
+  `${env}-${app}` prefix (exact, or followed by `-`); one that belongs to another application is refused on
+  every name the generated configs and the applied resources carry. It is a naming rule, not an ownership
+  record (backlog 86).
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.

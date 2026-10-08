@@ -1,3 +1,4 @@
+import type { AppGates } from '@fabrika/auth'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
@@ -5,23 +6,18 @@ import {
 	contractDigest,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_ISSUER,
+	isFrameworkVariableName,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from '@fabrika/provider-contract'
-import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, proxyAppGatesSchema } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
+import { assertGeneratedConfigs, assertGeneration, assertStateNamespace, type DeploymentBounds, generateWranglerConfigs } from './bounds'
+import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
-import {
-	type ApplicationNames,
-	applicationNames,
-	assertApplicationServices,
-	assertAuthoredGraph,
-	buildPlan,
-	type CloudflareStep,
-	findMigratableDatabases,
-} from './plan'
+import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker } from './proxy'
 
 const CANCELLED = 'deploy cancelled'
@@ -49,6 +45,15 @@ const commandError = (label: string, result: { exitCode: number; stdout: string;
 const assertRunning = (signal: AbortSignal): void => {
 	if (signal.aborted) {
 		throw new Error(CANCELLED)
+	}
+}
+
+/** An application never names a variable only the platform writes, whether or not this deploy writes it. */
+const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: CloudflareDeployRun): void => {
+	const authored = [...(config.pipeline?.vars ?? []), ...Object.keys(application.options.vars ?? {}), ...Object.keys(run.vars)]
+	const reserved = authored.find(isFrameworkVariableName)
+	if (reserved !== undefined) {
+		throw new Error(`cloudflare: application variable \`${reserved}\` is managed by Fabrika`)
 	}
 }
 
@@ -101,18 +106,35 @@ const assertContractSchema = (config: CloudflareAppConfig, contract: ContractArt
 	if (contract !== null && !declared) {
 		throw new Error('cloudflare: this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)` (`contract: true`)')
 	}
+	if (contract !== null && config.gates !== undefined) {
+		throw new Error('cloudflare: a contract application is protected by its endpoint table; remove `gates` from the config')
+	}
+}
+
+/** What the platform-built proxy enforces: the contract's endpoint table, or the config's gates parsed at the boundary. */
+const proxyProtection = (
+	config: CloudflareAppConfig,
+	contract: ContractArtifact | null,
+): { readonly endpoints: ReturnType<typeof contractProxyTable> } | { readonly gates: AppGates } | null => {
+	if (contract !== null) return { endpoints: contractProxyTable(contract) }
+	if (config.gates === undefined) return null
+	const gates = proxyAppGatesSchema.safeParse(config.gates)
+	if (!gates.success) throw new Error("cloudflare: the config's `gates` are not a valid gate list")
+	return { gates: gates.data }
 }
 
 /**
- * A contract application's proxy Worker is the platform's (ADR-0048): built here from the contract's endpoint table,
- * around the application Worker the config returns. A config that returns a proxy of its own is refused.
+ * The proxy Worker is the platform's (ADR-0048): built here, from this package's own entrypoint, around the
+ * application Worker the config returns, never taken from the checkout. A config that returns a proxy is refused.
  */
-const contractProxyWorker = (authored: Worker, contract: ContractArtifact, run: CloudflareDeployRun): Worker => {
-	if (authored.options.bindings?.['APP'] instanceof Worker) {
+const platformProxied = (authored: Worker, config: CloudflareAppConfig, contract: ContractArtifact | null, run: CloudflareDeployRun): Worker => {
+	if (authored.options.bindings?.['APP'] !== undefined) {
 		throw new Error(
-			`cloudflare: \`resources\` returns the proxy Worker \`${authored.options.name}\`; a contract application returns its application Worker, and the platform builds the proxy Worker from the contract`,
+			`cloudflare: \`resources\` returns the Worker \`${authored.options.name}\` binding \`APP\`, a proxy of its own; return the application Worker and declare \`gates\` (or a contract), and the platform builds the proxy Worker`,
 		)
 	}
+	const protection = proxyProtection(config, contract)
+	if (protection === null) return authored
 	const name = `${run.appId}-proxy`
 	if (authored.options.name === name) {
 		throw new Error(`cloudflare: application Worker \`${name}\` takes the name of the proxy Worker the platform builds; rename it`)
@@ -123,7 +145,7 @@ const contractProxyWorker = (authored: Worker, contract: ContractArtifact, run: 
 		appId: appEnvironmentId(run.appId, run.env),
 		appHost: run.domain ?? 'localhost',
 		...(run.domain === undefined ? {} : { domain: run.domain }),
-		endpoints: contractProxyTable(contract),
+		...protection,
 		iamUrl: run.managedEnvironment[FABRIKA_IAM_ISSUER] ?? '',
 	})
 }
@@ -171,7 +193,7 @@ interface StepEnv {
 	readonly dir: string
 	readonly cf: CloudflareCollaborators
 	readonly platformResources: 'refuse' | 'allow'
-	readonly names: ApplicationNames
+	readonly bounds: DeploymentBounds
 	generatedConfigs: readonly GeneratedConfig[]
 }
 
@@ -231,12 +253,9 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 		}
 		case 'deploy-worker': {
 			const configs = env.generatedConfigs
-			// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
-			const assertAssets = async (configDir: string): Promise<void> => {
-				if (env.platformResources === 'refuse') await assertLiteralAssets(worker, dir, configDir)
-			}
+			// The configs oblaka wrote, not the generation checked before the run: a stateful binding can emit differently twice.
+			assertGeneratedConfigs(configs, env.bounds)
 			if (configs.length === 0) {
-				await assertAssets(dir)
 				if (dryRun) {
 					run.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
 					return
@@ -248,11 +267,8 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			}
 			for (const generated of configs) {
 				const generatedDir = dirname(resolve(dir, generated.path))
-				await assertAssets(generatedDir)
-				// The config oblaka wrote, not the graph checked before the run: a stateful binding can emit differently twice.
-				if (env.platformResources === 'refuse') {
-					assertApplicationServices(generated.config.name ?? generated.path, generated.config.services, env.names)
-				}
+				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
+				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
 				if (dryRun) {
 					run.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
 					continue
@@ -355,35 +371,35 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	if (loaded.config.id !== run.appId) {
 		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 	}
+	const platformResources = options.platformResources ?? 'refuse'
 	const contract = run.contract ?? (await cf.readContract(loaded.cwd))
 	assertContractSchema(loaded.config, contract)
-	const authored = loaded.config.resources({ env: run.env, domain: run.domain })
-	const worker = withManagedEnvironment(
-		loaded.config,
-		contract === null ? authored : contractProxyWorker(authored, contract, run),
-		run,
-		contractEnvironment(run.managedEnvironment, contract),
-	)
-	const platformResources = options.platformResources ?? 'refuse'
-	const limits = {
+	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
+	// Fabrika's own components compose their own proxies; every application gets the platform's.
+	const served = platformResources === 'refuse' ? platformProxied(authored, loaded.config, contract, run) : authored
+	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(served), run)
+	const worker = withManagedEnvironment(loaded.config, served, run, contractEnvironment(run.managedEnvironment, contract))
+	const dir = workerDir(loaded.config, loaded.cwd)
+	const bounds: DeploymentBounds = {
 		env: run.env,
 		...(run.domain === undefined ? {} : { domain: run.domain }),
-		stateNamespace: stateNamespace(loaded.config, run),
+		cwd: dir,
 		platformResources,
 		iamAppId: appEnvironmentId(run.appId, run.env),
-		contract: contract !== null,
 		installation: run.installationApps ?? [],
+		proxy: served === authored ? null : `${run.env}-${run.appId}-proxy`,
 	}
-	assertAuthoredGraph(worker, limits)
+	assertStateNamespace(stateNamespace(loaded.config, run), platformResources)
+	assertGeneration(await generateWranglerConfigs(worker, run.env), bounds)
 	const env: StepEnv = {
 		config: loaded.config,
 		run,
 		credentials: { accountId: options.accountId, apiToken: options.apiToken },
 		worker,
-		dir: workerDir(loaded.config, loaded.cwd),
+		dir,
 		cf,
 		platformResources,
-		names: applicationNames(limits),
+		bounds,
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker), run, (step) => runStep(step, env))

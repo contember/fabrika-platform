@@ -370,24 +370,28 @@ import { defineApp, Worker } from '@fabrika/provider-cloudflare'
 ```
 
 Cloudflare app resources are composed as a public proxy Worker with a private
-application Worker child. The child has no routes and explicitly disables
-`workers.dev` and preview URLs; `assertAuthoredGraph` refuses an application
-Worker that sets `routes`, or leaves `workers_dev` or `preview_urls` other than
-`false` (ADR-0048). Only the proxy Worker that `createCloudflareProxyWorker`
-builds is exempt, recognised by its entrypoint and package directory; every other
-Worker in the config, the root included, is an application Worker. For a contract
-application (`fabrika.contract.ts` in the checkout, read statically) the config
-returns only the application Worker: the deployer builds the proxy Worker
-`<app>-proxy` from the contract's endpoint table and writes `FABRIKA_CONTRACT_DIGEST`
-into the application Worker, and a config that returns a proxy of its own is
-refused. A name that belongs to another application of the installation — the
-deployment in Control's registry whose `<env>-<app>` is the longest prefix of the
-remote name — is refused for every resource and service binding. Every Worker in
-the graph, the proxy included, binds IAM at its `PropustkaApplication` entrypoint
+application Worker child (ADR-0048). The config's `resources` returns only the
+application Worker; the deployer builds the proxy Worker `<app>-proxy` from this
+package's own entrypoint and directory, never from the checkout, and refuses a
+config Worker that binds `APP`. The proxy enforces a contract application's
+endpoint table (`fabrika.contract.ts` in the checkout, read statically, until the
+run carries its snapshot) and the deployer writes `FABRIKA_CONTRACT_DIGEST` into
+the application Worker; an application without a contract hands its `gates` in the
+config. The checkout's Worker graph is rebuilt from the runner's own `Worker`
+class, because the checkout installs its own `oblaka-iac`.
+
+The checks read the wrangler configs oblaka generates, whatever object emitted
+them: once from a dry generation run before provisioning, and again on the
+configs oblaka wrote before the first `wrangler deploy`. An application config has
+no routes and sets `workers_dev` and `preview_urls` to `false`; only the platform
+proxy is routed, on the run's own domain. Config keys are an allowlist. No name a
+config binds, and no name a resource adopts, may be a platform resource or a name
+of another application of the installation — the deployment in Control's registry
+whose `<env>-<app>` is the longest prefix of the remote name. A D1 or KV binding
+must carry an id the generation run handed out. Every Worker in the graph, the
+proxy included, binds IAM at its `PropustkaApplication` entrypoint
 (`iamServiceReference()`); a binding to IAM's default entrypoint, which also issues
-keys and approves devices, is refused. The check reads the `services` each Worker's
-config carries, before provisioning and again on each generated config before its
-`wrangler deploy`, so it holds whatever object emitted the binding. The provider preserves the generated Wrangler config for every
+keys and approves devices, is refused. The provider preserves the generated Wrangler config for every
 Worker in that graph, deploys each config, and targets application migrations,
 managed variables, and secrets at the child Worker. The proxy embeds only its
 manifest and service bindings; application secrets stay on the child.

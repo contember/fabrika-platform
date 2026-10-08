@@ -27,7 +27,7 @@ export type CloudflareProxyWorkerOptions =
 	| (CloudflareProxyWorkerBase & { readonly endpoints: ContractProxyTable; readonly gates?: never })
 	| (CloudflareProxyWorkerBase & { readonly gates: AppGates; readonly endpoints?: never })
 
-/** Where `createCloudflareProxyWorker` points its Worker; `assertAuthoredGraph` recognises the proxy by it. */
+/** Where `createCloudflareProxyWorker` points its Worker: the deployer builds every application's proxy from here. */
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
 export const CLOUDFLARE_PROXY_WORKER_MAIN = './proxy-worker.ts'
 
@@ -37,7 +37,7 @@ export const IAM_SERVICE = 'propustka-worker'
 /** IAM's narrow `WorkerEntrypoint`, which carries neither key issuing nor device approval (`packages/iam/src/index.ts`). */
 export const IAM_APPLICATION_ENTRYPOINT = 'PropustkaApplication'
 
-/** The `IAM` binding of an application Worker; `assertAuthoredGraph` refuses any other binding to IAM. */
+/** The `IAM` binding of an application Worker; a generated config that binds IAM any other way is refused. */
 export const iamServiceReference = (): ServiceReference => new ServiceReference(IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT)
 
 /**

@@ -1,0 +1,388 @@
+import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { isProxyHost } from '@fabrika/proxy-core/manifest'
+import { resolve } from 'node:path'
+import type { GeneratedConfig, Worker } from 'oblaka-iac'
+import { CloudflareClient } from 'oblaka-iac/src/client'
+import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
+import { PLATFORM_RESOURCE_NAMES } from './plan'
+import { CLOUDFLARE_PROXY_WORKER_DIR, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE } from './proxy'
+
+type WranglerConfig = GeneratedConfig['config']
+
+/** What a deployment may claim on the account. The generated wrangler configs are checked against it. */
+export interface DeploymentBounds {
+	/** The environment oblaka provisions into. Every remote name is `${env}-${name}`. */
+	readonly env: string
+	/** The one hostname this environment may route; a route on any other host belongs to another app. */
+	readonly domain?: string
+	/** The directory a generated config's relative `path` is resolved against: the deploy's worker directory. */
+	readonly cwd: string
+	/** Fabrika deploying its own components is the one caller allowed to name a platform resource. */
+	readonly platformResources: 'refuse' | 'allow'
+	/** The IAM application id `<app>@<env>` of the deployment. */
+	readonly iamAppId: string
+	/** Every Cloudflare deployment of the installation in Control's registry; their names are refused. Empty outside a run. */
+	readonly installation: readonly AppEnvironment[]
+	/** The remote name of the proxy Worker the deployer built, or null when it built none. */
+	readonly proxy: string | null
+}
+
+/** Where the proxy Worker the deployer builds has its generated config: the runner's own copy of this package. */
+const PROXY_CONFIG_PATH = resolve(CLOUDFLARE_PROXY_WORKER_DIR, 'wrangler.jsonc')
+
+/**
+ * Every key a generated config may carry. Each one either names nothing, or names a resource the checks below read.
+ * Fail closed: a key not listed here (`build`, `site`, `tail_consumers`, a new binding kind) is refused until reviewed.
+ */
+const CONFIG_KEYS: ReadonlySet<string> = new Set([
+	'name',
+	'main',
+	'compatibility_date',
+	'compatibility_flags',
+	'observability',
+	'routes',
+	'workers_dev',
+	'preview_urls',
+	'triggers',
+	'vars',
+	'assets',
+	'migrations',
+	'services',
+	'd1_databases',
+	'kv_namespaces',
+	'r2_buckets',
+	'queues',
+	'durable_objects',
+	'containers',
+	'workflows',
+])
+
+/** Everything wrangler reads out of `assets`. `directory` is the only one that names a path. */
+const ASSETS_KEYS: ReadonlySet<string> = new Set(['binding', 'directory', 'html_handling', 'not_found_handling', 'run_worker_first'])
+
+const RESOURCE_LABELS: Readonly<Record<string, string>> = {
+	worker: 'Worker',
+	d1_database: 'D1 database',
+	kv_namespace: 'KV namespace',
+	r2_bucket: 'R2 bucket',
+	queue: 'queue',
+	container: 'container',
+	workflow: 'workflow',
+	vectorize_index: 'Vectorize index',
+	analytics_engine: 'Analytics Engine dataset',
+}
+
+/** One resource oblaka would apply: the name it was declared under, the remote name it adopts, and its generated id. */
+export interface GeneratedResource {
+	readonly kind: string
+	readonly name: string
+	readonly remote: string
+	readonly id: string | null
+}
+
+export interface ConfigGeneration {
+	readonly configs: readonly GeneratedConfig[]
+	readonly resources: readonly GeneratedResource[]
+}
+
+const stateId = (state: unknown): string | null => {
+	const id: unknown = typeof state === 'object' && state !== null ? Reflect.get(state, 'id') : undefined
+	return typeof id === 'string' ? id : null
+}
+
+/**
+ * Generate the wrangler configs of a graph with oblaka's own processor, before any Cloudflare call: every resource is
+ * applied in dry-run mode with a client that refuses to authenticate, and nothing is written to disk.
+ */
+export const generateWranglerConfigs = async (definition: Worker, env: string): Promise<ConfigGeneration> => {
+	const client = new CloudflareClient({
+		accountId: '',
+		getToken: () => Promise.reject(new Error('cloudflare: the config generation run makes no Cloudflare call')),
+	})
+	const resources: GeneratedResource[] = []
+	const processor = new ResourceProcessor({
+		applyResource: async (resource) => {
+			const state = await resource.apply({ dryRun: true, context: { env, client } })
+			const { resource: kind, id: name } = resource.getId()
+			resources.push({ kind, name, remote: `${env}-${name}`, id: stateId(state) })
+			return state
+		},
+	}, async () => {})
+	return { configs: await processor.process({ definition, env }), resources }
+}
+
+/** The deployment being deployed, and every Cloudflare deployment of the installation in Control's registry. */
+interface ApplicationNames {
+	readonly self: AppEnvironment
+	readonly installation: readonly AppEnvironment[]
+}
+
+const applicationNames = ({ env, iamAppId, installation }: DeploymentBounds): ApplicationNames => {
+	const self = parseAppEnvironmentId(iamAppId)
+	if (self === null || self.env !== env) {
+		throw new Error(`cloudflare: \`${iamAppId}\` is not the application id of environment \`${env}\``)
+	}
+	return { self, installation }
+}
+
+/**
+ * The other application whose names `remote` falls under, or null. oblaka adopts `${env}-${name}`, and an application's
+ * names are `${env}-${app}` and `${env}-${app}-…`. The longest prefix decides, so `notes-admin` keeps its own names
+ * from `notes`; a prefix that two applications share is refused.
+ */
+const foreignApplication = (remote: string, { self, installation }: ApplicationNames): AppEnvironment | null => {
+	let longest = 0
+	let owner: AppEnvironment | null = null
+	for (const deployment of [self, ...installation]) {
+		const prefix = `${deployment.env}-${deployment.app}`
+		if (remote !== prefix && !remote.startsWith(`${prefix}-`)) continue
+		if (prefix.length > longest) {
+			longest = prefix.length
+			owner = deployment
+		} else if (prefix.length === longest && deployment.app !== self.app) {
+			owner = deployment
+		}
+	}
+	return owner === null || owner.app === self.app ? null : owner
+}
+
+/**
+ * An env name may contain `-`, so env `prod-propustka` + Worker `worker` lands on IAM's `prod-propustka-worker`: a
+ * remote name that equals or ends with `-<platform name>` is a platform resource, wherever the env/name split falls.
+ */
+const platformRemoteName = (remote: string): string | null => {
+	for (const platform of PLATFORM_RESOURCE_NAMES) {
+		if (remote === platform || remote.endsWith(`-${platform}`)) return platform
+	}
+	return null
+}
+
+/** `subject` reads as the start of the refusal: "Worker `demo` binds service" or "D1 database `db` becomes". */
+const assertOwnRemote = (subject: string, remote: unknown, names: ApplicationNames): void => {
+	if (typeof remote !== 'string' || remote === '') {
+		throw new Error(`cloudflare: ${subject} a name that cannot be read, so it cannot be checked`)
+	}
+	const platform = platformRemoteName(remote)
+	if (platform !== null) {
+		throw new Error(`cloudflare: ${subject} \`${remote}\`, which would take over the Fabrika platform resource \`${platform}\``)
+	}
+	const owner = foreignApplication(remote, names)
+	if (owner !== null) {
+		throw new Error(
+			`cloudflare: ${subject} \`${remote}\`, a name of application \`${owner.app}\` (environment \`${owner.env}\`); an application binds only its own resources`,
+		)
+	}
+}
+
+const entries = (value: unknown, worker: string, key: string): readonly unknown[] => {
+	if (value === undefined) return []
+	if (!Array.isArray(value)) throw new Error(`cloudflare: Worker \`${worker}\` emits unreadable \`${key}\`, which cannot be checked`)
+	return value
+}
+
+const field = (entry: unknown, name: string): unknown => typeof entry === 'object' && entry !== null ? Reflect.get(entry, name) : undefined
+
+/**
+ * The one platform service an application may bind is IAM, and only at `IAM_APPLICATION_ENTRYPOINT`: the default
+ * export issues keys and approves devices. Another application's Worker is never bound.
+ */
+const assertServices = (worker: string, config: WranglerConfig, names: ApplicationNames): void => {
+	const env = names.self.env
+	const iam = env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`
+	for (const entry of entries(config.services, worker, 'services')) {
+		const service = field(entry, 'service')
+		const entrypoint = field(entry, 'entrypoint')
+		if (service === iam) {
+			if (entrypoint !== IAM_APPLICATION_ENTRYPOINT) {
+				const bound = entrypoint === undefined ? 'its default entrypoint' : `entrypoint \`${String(entrypoint)}\``
+				throw new Error(
+					`cloudflare: Worker \`${worker}\` binds \`${service}\` to ${bound}; an application binds \`${IAM_APPLICATION_ENTRYPOINT}\` (use \`iamServiceReference()\`)`,
+				)
+			}
+			continue
+		}
+		assertOwnRemote(`Worker \`${worker}\` binds service`, service, names)
+	}
+}
+
+/** Every remote name a config's bindings carry, beside the services. */
+const assertResourceBindings = (worker: string, config: WranglerConfig, names: ApplicationNames): void => {
+	const binds = (kind: string, remote: unknown): void => assertOwnRemote(`Worker \`${worker}\` binds ${kind}`, remote, names)
+	for (const entry of entries(config.d1_databases, worker, 'd1_databases')) binds('D1 database', field(entry, 'database_name'))
+	for (const entry of entries(config.r2_buckets, worker, 'r2_buckets')) binds('R2 bucket', field(entry, 'bucket_name'))
+	for (const entry of entries(config.containers, worker, 'containers')) binds('container', field(entry, 'name'))
+	for (const entry of entries(config.workflows, worker, 'workflows')) {
+		binds('workflow', field(entry, 'name'))
+		const script = field(entry, 'script_name')
+		if (script !== undefined) binds('the workflow script', script)
+	}
+	const queues = config.queues
+	for (const entry of entries(queues?.producers, worker, 'queues.producers')) binds('queue', field(entry, 'queue'))
+	for (const entry of entries(queues?.consumers, worker, 'queues.consumers')) {
+		binds('queue', field(entry, 'queue'))
+		const deadLetter = field(entry, 'dead_letter_queue')
+		if (deadLetter !== undefined) binds('dead-letter queue', deadLetter)
+	}
+	for (const entry of entries(config.durable_objects?.bindings, worker, 'durable_objects.bindings')) {
+		const script = field(entry, 'script_name')
+		if (script !== undefined) binds('the Durable Object script', script)
+	}
+}
+
+/**
+ * `assets.directory` is resolved against the generated `wrangler.jsonc`'s own directory and uploaded PUBLICLY: wrangler
+ * walks it and ignores only `.assetsignore`/`_redirects`/`_headers`, so `.` would publish the checkout's `.git/config`.
+ */
+const isContainedAssetDirectory = (value: unknown): value is string => {
+	if (typeof value !== 'string' || value.startsWith('/')) return false
+	const segments = value.split('/')
+	if (segments.includes('..') || segments.includes('.git')) return false
+	return segments.some((segment) => segment !== '' && segment !== '.')
+}
+
+const assertBoundedAssets = (worker: string, assets: unknown): void => {
+	if (assets === undefined) return
+	if (typeof assets !== 'object' || assets === null || Array.isArray(assets)) {
+		throw new Error(`cloudflare: Worker \`${worker}\` sets \`assets\` to something that is not an object`)
+	}
+	for (const key of Object.keys(assets)) {
+		if (!ASSETS_KEYS.has(key)) {
+			throw new Error(`cloudflare: Worker \`${worker}\` sets \`assets.${key}\`, which an app may not configure`)
+		}
+	}
+	const directory: unknown = Reflect.get(assets, 'directory')
+	if (!isContainedAssetDirectory(directory)) {
+		throw new Error(
+			`cloudflare: Worker \`${worker}\` sets \`assets.directory\` to \`${
+				typeof directory === 'string' ? directory : '(not a string)'
+			}\`; it must be a relative path strictly inside the worker directory, with no \`..\` or \`.git\` segment`,
+		)
+	}
+}
+
+/**
+ * An application Worker is reachable only through its proxy's service binding (ADR-0048), so nothing may route it, and
+ * `workers.dev` and preview URLs must be off: Cloudflare enables both by default.
+ */
+const assertUnexposed = (worker: string, config: WranglerConfig): void => {
+	const routes: unknown = config.routes
+	if (routes !== undefined && !(Array.isArray(routes) && routes.length === 0)) {
+		throw new Error(`cloudflare: application Worker \`${worker}\` declares \`routes\`; only its proxy Worker is routed (omit it or set \`[]\`)`)
+	}
+	if (config.workers_dev !== false) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` leaves \`workers_dev\` on; it would be public on workers.dev (set \`workers_dev: false\`)`,
+		)
+	}
+	if (config.preview_urls !== false) {
+		throw new Error(
+			`cloudflare: application Worker \`${worker}\` leaves \`preview_urls\` on; every version would be public on workers.dev (set \`preview_urls: false\`)`,
+		)
+	}
+}
+
+const routeHostname = (route: unknown): string | null => {
+	const pattern = typeof route === 'string' ? route : field(route, 'pattern')
+	if (typeof pattern !== 'string') return null
+	const host = pattern.split('/')[0]
+	return host === undefined ? null : host.toLowerCase()
+}
+
+const assertRoutedHere = (worker: string, config: WranglerConfig, bounds: DeploymentBounds): void => {
+	for (const route of entries(config.routes, worker, 'routes')) {
+		const host = routeHostname(route)
+		if (host === null || !isProxyHost(host) || host !== bounds.domain?.toLowerCase()) {
+			throw new Error(`cloudflare: Worker \`${worker}\` routes \`${host ?? '(unreadable)'}\`, which is not this environment's domain`)
+		}
+	}
+}
+
+const isPlatformProxy = (generated: GeneratedConfig, bounds: DeploymentBounds): boolean =>
+	bounds.proxy !== null && generated.config.name === bounds.proxy && resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH
+
+/**
+ * Check the wrangler configs oblaka generated — what `wrangler deploy` reads, whatever objects emitted them — before
+ * provisioning and again before the deploy. Only the proxy Worker the deployer built is routed; every other config is
+ * an application Worker, and there is exactly one of those.
+ */
+export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], bounds: DeploymentBounds): void => {
+	if (bounds.platformResources === 'allow') {
+		for (const generated of configs) assertRoutedHere(generated.config.name ?? generated.path, generated.config, bounds)
+		return
+	}
+	const names = applicationNames(bounds)
+	if (configs.length === 0) {
+		throw new Error('cloudflare: oblaka generated no wrangler config, so there is nothing that can be checked')
+	}
+	const applications = configs.filter((generated) => !isPlatformProxy(generated, bounds))
+	if (applications.length > 1) {
+		const extra = applications.slice(1).map((generated) => `\`${generated.config.name ?? generated.path}\``).join(', ')
+		throw new Error(`cloudflare: config declares Worker ${extra}; only the application Worker and its proxy are deployable`)
+	}
+	for (const generated of configs) {
+		const config = generated.config
+		const worker = config.name ?? generated.path
+		for (const key of Object.keys(config)) {
+			if (!CONFIG_KEYS.has(key)) {
+				throw new Error(`cloudflare: Worker \`${worker}\` sets \`${key}\`, which an app may not configure; declare resources in \`bindings\``)
+			}
+		}
+		assertOwnRemote('the Worker is named', config.name, names)
+		assertServices(worker, config, names)
+		assertResourceBindings(worker, config, names)
+		assertBoundedAssets(worker, config.assets)
+		if (isPlatformProxy(generated, bounds)) {
+			assertRoutedHere(worker, config, bounds)
+			continue
+		}
+		if (resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH) {
+			throw new Error(`cloudflare: Worker \`${worker}\` lives in the directory of the proxy Worker the platform builds`)
+		}
+		assertUnexposed(worker, config)
+	}
+}
+
+/** The ids a resource of this generation run was given; a literal id in a config would bind something else by id. */
+const assertGeneratedIds = (generation: ConfigGeneration): void => {
+	const ids = new Set(generation.resources.map((resource) => resource.id).filter((id) => id !== null))
+	for (const generated of generation.configs) {
+		const worker = generated.config.name ?? generated.path
+		const bound = (kind: string, id: unknown): void => {
+			if (typeof id !== 'string' || !ids.has(id)) {
+				throw new Error(`cloudflare: Worker \`${worker}\` binds a ${kind} by an id no resource of this deployment declares`)
+			}
+		}
+		for (const entry of entries(generated.config.d1_databases, worker, 'd1_databases')) bound('D1 database', field(entry, 'database_id'))
+		for (const entry of entries(generated.config.kv_namespaces, worker, 'kv_namespaces')) bound('KV namespace', field(entry, 'id'))
+	}
+}
+
+/**
+ * The generation run's checks: every generated config, every resource oblaka would apply by the remote name it adopts
+ * (a KV namespace's config carries only its id), and every id-bound binding against the ids the run handed out.
+ */
+export const assertGeneration = (generation: ConfigGeneration, bounds: DeploymentBounds): void => {
+	if (bounds.platformResources === 'refuse') {
+		const names = applicationNames(bounds)
+		for (const resource of generation.resources) {
+			// A Durable Object class lives inside its script and adopts no account-wide name.
+			if (resource.kind === 'durable_object') continue
+			assertOwnRemote(`${RESOURCE_LABELS[resource.kind] ?? resource.kind} \`${resource.name}\` becomes`, resource.remote, names)
+		}
+	}
+	assertGeneratedConfigs(generation.configs, bounds)
+	if (bounds.platformResources === 'refuse') assertGeneratedIds(generation)
+}
+
+/** The KV namespace oblaka keeps deploy state in is the ONE name it uses verbatim (`KVStateStorage`): no env prefix. */
+export const assertStateNamespace = (stateNamespace: string, platformResources: 'refuse' | 'allow'): void => {
+	if (platformResources === 'refuse' && PLATFORM_RESOURCE_NAMES.has(stateNamespace)) {
+		throw new Error(`cloudflare: state namespace \`${stateNamespace}\` is a Fabrika platform resource and cannot be used by an app`)
+	}
+}
+
+/** The `assets.directory` of a generated config, relative to the config's own directory, once it has been bounded. */
+export const assetDirectory = (generated: GeneratedConfig): string | null => {
+	const directory = field(generated.config.assets, 'directory')
+	return typeof directory === 'string' && directory !== '' ? directory : null
+}

@@ -118,7 +118,7 @@ hands both to its provider: `target.proxy` (`{ upstream, ...contractProxyTable(a
 and `schema`. On Cloudflare the config returns only the application Worker and `schema`; the
 deployer reads `fabrika.contract.ts` from the checkout with `@fabrika/check/contract` and
 builds the proxy Worker from `contractProxyTable(artifact)` itself (ADR-0048), refusing a
-config that builds its own. A contract application generates no gates; both providers refuse
+config Worker that binds `APP`. A contract application generates no gates; both providers refuse
 one whose proxy carries gates.
 
 - `contractProxyTable(artifact)` (`@fabrika/proxy-core/manifest`) emits every endpoint row's

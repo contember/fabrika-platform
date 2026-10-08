@@ -26,7 +26,7 @@ import {
 } from '../../../app/src/__tests__/fixtures/implement/harness'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { FakeIam } from '../../../proxy-core/src/__tests__/helpers'
-import { createCloudflareDeployer, defineApp } from '..'
+import { createCloudflareDeployer, defineApp, generateWranglerConfigs } from '..'
 import { createCloudflareProxyWorker } from '../proxy'
 import { createCloudflareProxyHandler } from '../proxy-worker'
 
@@ -64,8 +64,10 @@ async function deployedProxy(): Promise<Worker> {
 			readContract: async () => artifact,
 			runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
 			provision: async (input) => {
-				if (input.definition instanceof Worker) provisioned.push(input.definition)
-				return { wranglerConfigs: [], wranglerConfig: {} }
+				if (input.definition === undefined) throw new Error('nothing to provision')
+				provisioned.push(input.definition)
+				const { configs } = await generateWranglerConfigs(input.definition, input.env)
+				return { wranglerConfigs: [...configs], wranglerConfig: configs[0]?.config ?? {} }
 			},
 			writeOutcome: async () => {},
 		},
