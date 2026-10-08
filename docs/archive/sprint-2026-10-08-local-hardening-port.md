@@ -1,3 +1,13 @@
+> **OUTCOME — shipped 2026-10-08.** The nine fixes of the unmerged `sprint/local-hardening` branch are redone on
+> `main`, each after an independent review and its fix rounds. Commit map: P1 → `0d4fdee1`, `c3a6ce45`; P2 →
+> `c2723261`; P3 → `dd09ed6f`, `b2a1cfa9`, `22e3d07a`; P4 → `64db75aa`, `3b6afbd7`; P5 → `11b94a04`, `9df43a00` (+ fix
+> commits); P6 → `3b1bba74`, `c49f048f`; P7 → `afce86aa`, `b83b29d6`. Verification: per work unit typecheck, lint,
+> format and the touched packages' tests with Postgres and S3 set; `bun run local:up && bun run local:smoke` passed
+> (run `01a11cd2-2fd4-7036-a837-826e0f4d9ec0`). Backlog closed: 57, 78, 79, 80, 81, 82; 84 narrowed; 89 narrowed to
+> its residual; 92 and 94 re-filed. Deferred: 88 needed nothing (closed on `main` by `b2935a15`); old 93 no longer
+> holds; `app build`, `app deploy` and `control register` still echo raw exceptions. The `sprint/local-hardening`
+> branch and worktree are kept for reference; delete them when no longer needed.
+
 # Sprint — Port local-hardening onto main (2026-10-08)
 
 **Goal.** Land the nine backlog fixes of the unmerged `sprint/local-hardening` branch on current `main`.
@@ -127,3 +137,13 @@ integrator gate → fast-forward to `main`.
   from driver error codes.
 - 2026-10-08: Owner checkpoints answered: parser `@babel/parser` 8.0.7 (H4), `kysely-postgres-js` 5.0.1 over
   `Bun.SQL` (H5), A8 split into A8a and A8b (H3) — recorded in the implementation plan.
+- 2026-10-08: P2 landed (`c2723261`). IAM bounds and generates correlation ids; 92 re-filed (the app SDK still
+  trusts `cf-ray` on Zerops).
+- 2026-10-08: P3 landed after two fix rounds: the reconcile write is fenced by the lease inside its transaction,
+  every catalog lease release is bounded at 5 s, and the Zerops pool closure at 2 s.
+- 2026-10-08: P1 landed after one fix round. P7 landed after one fix round: codeload grants are bound to their
+  repository and commit; the origin witness covers keyed minting and archive download.
+- 2026-10-08: P5 landed after one fix round. Integrator decisions: a namespace marked by an unconfirmed update refuses
+  deploys and republish until the retry (replaces the old sprint's "usable while marked"); a PostgreSQL type change
+  goes through a new namespace id; control migration `0003_namespace_update.sql`.
+- 2026-10-08: The owner left the run to the integrator ("decide everything, ask nothing").
