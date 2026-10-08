@@ -9,7 +9,14 @@
 // same round trip, whereas S3 needs a HEAD first. `get()` therefore costs one extra request on a hit.
 // Nothing here logs the credentials, the endpoint, or an error object that might quote a signed URL.
 
-import type { BlobStore } from '@fabrika/platform'
+import {
+	type BlobStore,
+	type FileObjectStore,
+	type ObjectMetadata,
+	ObjectTooLargeError,
+	type ObjectWriteOptions,
+	type StoredObject,
+} from '@fabrika/platform'
 
 /** Connection details for an S3-compatible bucket. `endpoint` is what makes it R2, MinIO, or AWS. */
 export interface S3BlobStoreOptions {
@@ -32,7 +39,7 @@ interface BlobBody {
 	text(): Promise<string>
 }
 
-export class S3BlobStore implements BlobStore {
+export class S3BlobStore implements BlobStore, FileObjectStore {
 	constructor(private readonly client: Bun.S3Client) {}
 
 	/** Build a store from plain connection options. Never logs them. */
@@ -75,5 +82,50 @@ export class S3BlobStore implements BlobStore {
 
 	async delete(key: string): Promise<void> {
 		await this.client.delete(key)
+	}
+
+	async write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata> {
+		let size = 0
+		// Erroring the transform cancels `body` and fails the upload, so no more than one chunk past the limit is read.
+		const bounded = body.pipeThrough(
+			new TransformStream<Uint8Array, Uint8Array>({
+				transform(chunk, controller) {
+					size += chunk.byteLength
+					if (size > options.maxBytes) {
+						controller.error(new ObjectTooLargeError(options.maxBytes))
+						return
+					}
+					controller.enqueue(chunk)
+				},
+			}),
+		)
+		try {
+			await this.client.write(key, new Response(bounded), { type: options.contentType })
+		} catch (error) {
+			await this.client.delete(key).catch(() => undefined)
+			throw size > options.maxBytes ? new ObjectTooLargeError(options.maxBytes) : error
+		}
+		return { size, contentType: options.contentType }
+	}
+
+	async read(key: string): Promise<StoredObject | null> {
+		const file = this.client.file(key)
+		const stat = await statOrNull(file)
+		if (stat === null) {
+			return null
+		}
+		return { size: stat.size, contentType: stat.type === '' ? null : stat.type, body: file.stream() }
+	}
+}
+
+/** One HEAD; a missing key is `null`, any other failure propagates. */
+async function statOrNull(file: Bun.S3File): Promise<Bun.S3Stats | null> {
+	try {
+		return await file.stat()
+	} catch (error) {
+		if (error instanceof Error && 'code' in error && error.code === 'NoSuchKey') {
+			return null
+		}
+		throw error
 	}
 }

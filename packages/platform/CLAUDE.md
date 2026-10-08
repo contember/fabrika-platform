@@ -20,6 +20,10 @@ The Postgres/S3/Bun implementations live in `@fabrika/platform-node`.
   `R2Bucket.put` resolves to `R2Object | null`, `Queue.send` to `QueueSendResponse`. The Cloudflare
   side wraps them in await-and-discard adapters (`packages/control/src/platform-cf.ts`). Adopting one
   of these ports costs a small adapter rather than nothing.
+- **`FileObjectStore` is not `BlobStore`.** Application files need a size bound enforced while the body streams
+  and their metadata read back; an R2 adapter of `BlobStore` that ignored a new option would silently drop the
+  bound, so the files port is separate and only `@fabrika/platform-node`'s S3 store implements it. Its
+  `ObjectTooLargeError` is read by `name` across packages.
 - **`JobQueue` is `send()` only.** The consumer side has no honest common supertype: Workers invert
   control (the platform delivers a batch to `queue()`), a process owns its own loop. Do not add
   `poll()`/`start()`/`queue(batch)` to the port.

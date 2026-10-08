@@ -61,4 +61,7 @@ Read this before moving a service onto this driver.
 
 - One S3 implementation covers both R2 and Zerops object storage (MinIO); only endpoint and
   credentials differ. Note `get()` costs an extra HEAD on a hit, which the R2 binding does not.
+  `S3BlobStore` also implements `FileObjectStore`: `write` counts the bytes in a transform that errors past
+  `maxBytes`, which cancels the body and fails the upload, then deletes the key; `read` is one HEAD (`stat`)
+  for the size and type, then the stream.
 - Real Postgres and S3 tests skip unless `FABRIKA_TEST_POSTGRES_URL` / `FABRIKA_TEST_S3_*` are set.

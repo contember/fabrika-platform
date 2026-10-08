@@ -91,3 +91,54 @@ describe.skipIf(!hasS3)('S3BlobStore', () => {
 		expect(await (await store?.get(path))?.text()).toBe('nested')
 	})
 })
+
+/** A body of `total` zero bytes in 64 KiB chunks, counting what the reader pulled. */
+function countedBody(total: number): { readonly body: ReadableStream<Uint8Array>; pulled(): number } {
+	let pulled = 0
+	const body = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (pulled >= total) {
+				controller.close()
+				return
+			}
+			pulled += 65536
+			controller.enqueue(new Uint8Array(65536))
+		},
+	})
+	return { body, pulled: () => pulled }
+}
+
+describe.skipIf(!hasS3)('S3BlobStore as a FileObjectStore', () => {
+	test('writes a stream with its content type and reads both back with the size', async () => {
+		const path = key('image.png')
+		const written = await store?.write(path, new Blob([new Uint8Array([137, 80, 78, 71])]).stream(), { contentType: 'image/png', maxBytes: 10 })
+		expect(written).toEqual({ size: 4, contentType: 'image/png' })
+		const object = await store?.read(path)
+		expect(object?.size).toBe(4)
+		expect(object?.contentType).toBe('image/png')
+		expect([...new Uint8Array(await new Response(object?.body).arrayBuffer())]).toEqual([137, 80, 78, 71])
+	})
+
+	test('a body over maxBytes stops while streaming and leaves nothing stored', async () => {
+		const path = key('too-large.bin')
+		const source = countedBody(64 * 1024 * 1024)
+		const failure = await store?.write(path, source.body, { contentType: 'application/pdf', maxBytes: 1024 * 1024 }).then(() => null, (error) => error)
+		expect(failure).toBeInstanceOf(Error)
+		expect(failure instanceof Error ? failure.name : '').toBe('ObjectTooLargeError')
+		// The upload read about the limit, not the whole body.
+		expect(source.pulled()).toBeLessThan(4 * 1024 * 1024)
+		expect(await store?.read(path)).toBeNull()
+	})
+
+	test('a body of exactly maxBytes is stored', async () => {
+		const path = key('exact.bin')
+		expect(await store?.write(path, countedBody(65536 * 2).body, { contentType: 'application/pdf', maxBytes: 65536 * 2 })).toEqual({
+			size: 65536 * 2,
+			contentType: 'application/pdf',
+		})
+	})
+
+	test('read() returns NULL for a missing key', async () => {
+		expect(await store?.read(key('missing.bin'))).toBeNull()
+	})
+})

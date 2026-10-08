@@ -16,6 +16,51 @@ export interface BlobStore {
 	delete(key: string): Promise<void>
 }
 
+/** What the store recorded for an object. `contentType` is what the writer declared, or null. */
+export interface ObjectMetadata {
+	readonly size: number
+	readonly contentType: string | null
+}
+
+export interface StoredObject extends ObjectMetadata {
+	/** One stream, consumable once. */
+	readonly body: ReadableStream<Uint8Array>
+}
+
+export interface ObjectWriteOptions {
+	readonly contentType: string
+	/** The most bytes the object may have. The write stops reading `body` once more arrive. */
+	readonly maxBytes: number
+}
+
+/** The body of a write was longer than its `maxBytes`. Read by `name`, never by a cross-package `instanceof`. */
+export class ObjectTooLargeError extends Error {
+	override readonly name = 'ObjectTooLargeError'
+	readonly maxBytes: number
+
+	constructor(maxBytes: number) {
+		super(`the object is larger than ${maxBytes} bytes`)
+		this.maxBytes = maxBytes
+	}
+}
+
+/**
+ * The objects of an application's file collections (S3/MinIO). Separate from `BlobStore` because its callers
+ * need a size bound enforced while the bytes stream and the metadata read back; an R2 adapter that ignored
+ * either would silently drop a limit.
+ */
+export interface FileObjectStore {
+	/**
+	 * Streams `body` to `key`. Past `options.maxBytes` it stops reading, keeps nothing under `key` and rejects with
+	 * `ObjectTooLargeError`. Any other failure also leaves nothing stored.
+	 */
+	write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata>
+	/** The object with its metadata, or `null` for a missing key. */
+	read(key: string): Promise<StoredObject | null>
+	/** Idempotent: a missing key is not an error. */
+	delete(key: string): Promise<void>
+}
+
 /** Enqueue a deploy job. The CONSUMER side is platform-specific and deliberately not modelled here. */
 export interface JobQueue<T> {
 	send(message: T, options?: { delaySeconds?: number }): Promise<void>

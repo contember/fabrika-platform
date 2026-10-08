@@ -1,4 +1,12 @@
-import type { BlobStore, JobQueue } from './ports'
+import {
+	type BlobStore,
+	type FileObjectStore,
+	type JobQueue,
+	type ObjectMetadata,
+	ObjectTooLargeError,
+	type ObjectWriteOptions,
+	type StoredObject,
+} from './ports'
 import type { SqlDatabase } from './sql'
 
 /** A blob store that keeps string values in memory. */
@@ -19,6 +27,44 @@ export class MemoryBlobs implements BlobStore {
 
 	delete(key: string): Promise<void> {
 		this.values.delete(key)
+		return Promise.resolve()
+	}
+}
+
+/** A file object store in memory, with the port's size bound enforced while the body streams. */
+export class MemoryFileObjects implements FileObjectStore {
+	readonly objects = new Map<string, { readonly bytes: Uint8Array<ArrayBuffer>; readonly contentType: string }>()
+
+	async write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata> {
+		const reader = body.getReader()
+		const chunks: Uint8Array[] = []
+		let size = 0
+		for (let next = await reader.read(); !next.done; next = await reader.read()) {
+			size += next.value.byteLength
+			if (size > options.maxBytes) {
+				await reader.cancel()
+				throw new ObjectTooLargeError(options.maxBytes)
+			}
+			chunks.push(next.value)
+		}
+		const bytes = new Uint8Array(size)
+		let offset = 0
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset)
+			offset += chunk.byteLength
+		}
+		this.objects.set(key, { bytes, contentType: options.contentType })
+		return { size, contentType: options.contentType }
+	}
+
+	read(key: string): Promise<StoredObject | null> {
+		const object = this.objects.get(key)
+		if (object === undefined) return Promise.resolve(null)
+		return Promise.resolve({ size: object.bytes.byteLength, contentType: object.contentType, body: new Blob([object.bytes]).stream() })
+	}
+
+	delete(key: string): Promise<void> {
+		this.objects.delete(key)
 		return Promise.resolve()
 	}
 }

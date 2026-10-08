@@ -9,6 +9,18 @@
 // Runtime-specific implementations live with the workers that use them, or in @fabrika/platform-node.
 
 export { SqlDeployLocks, type SqlDeployLocksOptions } from './deploy-locks-sql'
-export type { AssetServer, BlobStore, DeployLocks, HttpService, JobQueue, WaitUntil } from './ports'
+export { ObjectTooLargeError } from './ports'
+export type {
+	AssetServer,
+	BlobStore,
+	DeployLocks,
+	FileObjectStore,
+	HttpService,
+	JobQueue,
+	ObjectMetadata,
+	ObjectWriteOptions,
+	StoredObject,
+	WaitUntil,
+} from './ports'
 export type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from './sql'
 export { uuidv7 } from './uuid'
