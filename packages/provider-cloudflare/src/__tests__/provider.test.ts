@@ -13,7 +13,14 @@ import type {
 	CommandSpec,
 	ProvisionInput,
 } from '..'
-import { createCloudflareDeployer, createCloudflareProxyWorker, defaultCloudflareCollaborators, defineApp } from '..'
+import {
+	createCloudflareDeployer,
+	createCloudflareProxyWorker,
+	defaultCloudflareCollaborators,
+	defineApp,
+	IAM_APPLICATION_ENTRYPOINT,
+	iamServiceReference,
+} from '..'
 import type { RunnerOutcomeFile } from '../runner-protocol'
 
 interface Recorded {
@@ -36,6 +43,9 @@ const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAp
 const PRIVATE: { readonly workers_dev: false; readonly preview_urls: false } = { workers_dev: false, preview_urls: false }
 
 const appWorker = (): Worker => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
+
+const bindingIam = (iam: ServiceReference): Worker =>
+	new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { IAM: iam }, main: 'src/index.ts' })
 
 /** Where a checkout's own `bun install` puts this package, so its proxy Worker points here. */
 const INSTALLED_PROXY_DIR = '/repo/node_modules/@fabrika/provider-cloudflare/src'
@@ -538,18 +548,54 @@ describe('Cloudflare provider', () => {
 			'service binding to `vozka-runner` becomes `stage-vozka-runner` on Cloudflare, which would take over the Fabrika platform resource `vozka-runner`',
 		)
 
-		const toIam = config({
-			resources: () =>
-				new Worker({
-					dir: '.',
-					...PRIVATE,
-					name: 'demo',
-					compatibility_flags: [],
-					bindings: { IAM: new ServiceReference('propustka-worker') },
-					main: 'src/index.ts',
-				}),
-		})
+		const toIam = config({ resources: () => bindingIam(iamServiceReference()) })
 		await expect(deploy(rec, toIam)).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test("refuses IAM's default entrypoint and any entrypoint but the application one", async () => {
+		await expect(deploy(rec, config({ resources: () => bindingIam(new ServiceReference('propustka-worker')) }))).rejects.toThrow(
+			'Worker `demo` binds `propustka-worker` to its default entrypoint; an application binds `PropustkaApplication`',
+		)
+		for (const entrypoint of ['Propustka', '', 'default']) {
+			await expect(deploy(rec, config({ resources: () => bindingIam(new ServiceReference('propustka-worker', entrypoint)) }))).rejects.toThrow(
+				`Worker \`demo\` binds \`propustka-worker\` to entrypoint \`${entrypoint}\``,
+			)
+		}
+		const proxyToFullIam = new Worker({
+			dir: INSTALLED_PROXY_DIR,
+			name: 'demo-proxy',
+			compatibility_flags: [],
+			bindings: { APP: appWorker(), IAM: new ServiceReference('propustka-worker') },
+			main: './proxy-worker.ts',
+		})
+		await expect(deploy(rec, config({ resources: () => proxyToFullIam }))).rejects.toThrow(
+			'Worker `demo-proxy` binds `propustka-worker` to its default entrypoint',
+		)
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	// `packages/iam/src/__tests__/index.test.ts` pins the same name as the narrow class IAM exports.
+	test('an application and its provider-built proxy bind IAM at PropustkaApplication', async () => {
+		expect(IAM_APPLICATION_ENTRYPOINT).toBe('PropustkaApplication')
+		const app = bindingIam(iamServiceReference())
+		const proxy = createCloudflareProxyWorker({
+			name: 'demo-proxy',
+			app,
+			appId: 'demo',
+			appHost: 'stage.example.com',
+			gates: { rules: [{ path: '/*', kind: 'public' }] },
+		})
+		for (const worker of [app, proxy]) {
+			const iam = worker.options.bindings?.['IAM']
+			const services = iam instanceof ServiceReference ? iam.configureBinding({ config: {}, binding: 'IAM', env: 'stage' }).services : undefined
+			expect(services).toEqual([{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication' }])
+		}
+		await expect(deploy(rec, config({ resources: () => proxy }))).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test('a platform component keeps binding the default entrypoint under the platform policy', async () => {
+		const control = config({ resources: () => bindingIam(new ServiceReference('propustka-worker')) })
+		await expect(deploy(rec, control, { platformResources: 'allow' })).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test("refuses a deploy whose oblaka state namespace is the platform's own", async () => {

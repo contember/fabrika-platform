@@ -275,5 +275,5 @@ curl -i http://127.0.0.1:18190/private
 
 The first request reaches the private example app through the proxy and returns
 `200 public`. The second stops at the proxy and returns a login redirect. Lopata
-must show `APP -> propustka-example-app` and `IAM -> propustka-worker`; the app
-Worker config has no public route and sets `workers_dev: false` and `preview_urls: false`.
+must show `APP -> propustka-example-app` and
+`IAM -> propustka-worker (PropustkaApplication)`; the app Worker config has no public route and sets `workers_dev: false` and `preview_urls: false`.

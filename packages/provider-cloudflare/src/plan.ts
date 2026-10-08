@@ -1,7 +1,7 @@
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { Container, D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
-import { CLOUDFLARE_PROXY_WORKER_DIR, CLOUDFLARE_PROXY_WORKER_MAIN } from './proxy'
+import { CLOUDFLARE_PROXY_WORKER_DIR, CLOUDFLARE_PROXY_WORKER_MAIN, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE } from './proxy'
 
 export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
 
@@ -80,15 +80,35 @@ const namedResource = (value: unknown): { readonly kind: string; readonly name: 
 	return null
 }
 
+interface ServiceTarget {
+	readonly service: string
+	/** Absent means the target Worker's default export. */
+	readonly entrypoint: string | undefined
+}
+
 /**
  * A `ServiceReference` binds `${env}-${name}` without declaring it, so it never reaches `namedResource`
  * — it is how an app would call the control plane or the runner directly. IAM is the one exception:
- * every app binds `propustka-worker` (`proxy.ts`), which is the platform's intended front door.
+ * every app binds `propustka-worker` (`proxy.ts`), the platform's front door, at its narrow entrypoint.
  */
-const serviceReferenceTarget = (value: unknown): string | null => {
+const serviceReferenceTarget = (value: unknown): ServiceTarget | null => {
 	if (!(value instanceof ServiceReference)) return null
-	const target = Reflect.get(value, 'serviceName')
-	return typeof target === 'string' && target !== '' ? target : '(unreadable)'
+	const service = Reflect.get(value, 'serviceName')
+	const entrypoint = Reflect.get(value, 'entrypoint')
+	return {
+		service: typeof service === 'string' && service !== '' ? service : '(unreadable)',
+		entrypoint: entrypoint === undefined || typeof entrypoint === 'string' ? entrypoint : '(unreadable)',
+	}
+}
+
+/** IAM's default export issues keys and approves devices for the platform; an application gets the narrow entrypoint. */
+const assertApplicationIamEntrypoint = (worker: Worker, target: ServiceTarget): void => {
+	if (target.entrypoint !== IAM_APPLICATION_ENTRYPOINT) {
+		const bound = target.entrypoint === undefined ? 'its default entrypoint' : `entrypoint \`${target.entrypoint}\``
+		throw new Error(
+			`cloudflare: Worker \`${worker.options.name}\` binds \`${IAM_SERVICE}\` to ${bound}; an application binds \`${IAM_APPLICATION_ENTRYPOINT}\` (use \`iamServiceReference()\`)`,
+		)
+	}
 }
 
 const routeHostname = (route: unknown): string | null => {
@@ -279,12 +299,14 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 			if (resource !== null) {
 				assertAdoptable(resource.kind, resource.name)
 			}
-			const service = serviceReferenceTarget(value)
-			if (service !== null && refuse && service !== 'propustka-worker') {
-				if (service === '(unreadable)') {
+			const target = serviceReferenceTarget(value)
+			if (target !== null && refuse && target.service === IAM_SERVICE) {
+				assertApplicationIamEntrypoint(worker, target)
+			} else if (target !== null && refuse) {
+				if (target.service === '(unreadable)') {
 					throw new Error('cloudflare: service binding to `(unreadable)` cannot be checked against the Fabrika platform services')
 				}
-				assertAdoptable('service binding to', service)
+				assertAdoptable('service binding to', target.service)
 			}
 			if (value instanceof Worker) {
 				if (!deployable.has(value)) {

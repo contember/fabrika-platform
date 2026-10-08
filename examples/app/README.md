@@ -1,8 +1,8 @@
 # Example app — consuming Fabrika IAM over a service binding
 
 A minimal `@fabrika/app` Worker that uses **`@fabrika/auth`** middleware to authenticate a request
-through the IAM Worker via a service binding (`oblaka` `ServiceReference('propustka-worker')`), then
-does local `can()` / `scopedTo()` checks and emits a fire-and-forget audit event. See
+through the IAM Worker via a service binding (`iamServiceReference()`, IAM's `PropustkaApplication`
+entrypoint), then does local `can()` / `scopedTo()` checks and emits a fire-and-forget audit event. See
 the portable [`src/app.ts`](./src/app.ts) application and its
 [`src/index.ts`](./src/index.ts) Cloudflare entrypoint.
 
@@ -35,8 +35,8 @@ Location: http://localhost:18191/auth/login?redirect=...
 
 The first response proves that the public gate passed through the proxy and reached the private app
 Worker. The second proves that an unauthenticated protected request stopped in the proxy and bounced
-to IAM. The Lopata log must show `APP -> propustka-example-app` and `IAM -> propustka-worker` service
-bindings. The app Worker has no public route and disables `workers_dev` and `preview_urls`, so calling
+to IAM. The Lopata log must show `APP -> propustka-example-app` and
+`IAM -> propustka-worker (PropustkaApplication)` service bindings. The app Worker has no public route and disables `workers_dev` and `preview_urls`, so calling
 its Worker directly is not a bypass path.
 
 The Cloudflare proxy uses the same TypeScript authorizer as the Zerops Caddy stack. Unit conformance

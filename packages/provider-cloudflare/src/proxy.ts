@@ -25,6 +25,15 @@ export interface CloudflareProxyWorkerOptions {
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
 export const CLOUDFLARE_PROXY_WORKER_MAIN = './proxy-worker.ts'
 
+/** IAM's Worker: the one platform service an application binds, and only through the entrypoint below. */
+export const IAM_SERVICE = 'propustka-worker'
+
+/** IAM's narrow `WorkerEntrypoint`, which carries neither key issuing nor device approval (`packages/iam/src/index.ts`). */
+export const IAM_APPLICATION_ENTRYPOINT = 'PropustkaApplication'
+
+/** The `IAM` binding of an application Worker; `assertAuthoredGraph` refuses any other binding to IAM. */
+export const iamServiceReference = (): ServiceReference => new ServiceReference(IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT)
+
 /**
  * Build the Cloudflare side of the accepted proxy topology: the public Worker owns the route and
  * binds the private application Worker. IAM remains a global service binding.
@@ -67,7 +76,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 			FABRIKA_IAM_ISSUER: options.iamUrl ?? '',
 		},
 		bindings: {
-			IAM: new ServiceReference(options.iamService ?? 'propustka-worker'),
+			IAM: new ServiceReference(options.iamService ?? IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT),
 			APP: options.app,
 		},
 	})

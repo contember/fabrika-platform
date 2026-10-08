@@ -336,9 +336,11 @@ The code does none of rule 6 yet (part B, work unit B5).
   and answer 503 to everything.
 - **The least-privilege split around redemption is real only on Zerops**, where `/rpc/*` takes
   `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, and an unset key makes its surface
-  404. On Cloudflare one IAM `WorkerEntrypoint` implements `IamRpc` and `IamHandoffRpc`, so any holder of
-  the `IAM` binding can call `exchangeAuthCode`. We accept this: exploiting it needs a first-party Worker
-  with the binding, a live code and that browser's handoff verifier.
+  404. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,
+  `PropustkaApplication`, which serves both the proxy's mint and redemption calls and the SDK's, so any
+  application Worker can call `exchangeAuthCode`. We accept this: exploiting it needs a first-party Worker
+  with the binding, a live code and that browser's handoff verifier. Key issuing and device approval are
+  not on that entrypoint; only platform components bind IAM's default one.
 
 ## Alternatives considered
 

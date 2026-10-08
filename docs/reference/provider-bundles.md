@@ -374,7 +374,10 @@ application Worker child. The child has no routes and explicitly disables
 Worker that sets `routes`, or leaves `workers_dev` or `preview_urls` other than
 `false` (ADR-0048). Only the proxy Worker that `createCloudflareProxyWorker`
 builds is exempt, recognised by its entrypoint and package directory; every other
-Worker in the config, the root included, is an application Worker. The provider preserves the generated Wrangler config for every
+Worker in the config, the root included, is an application Worker. Every Worker in
+the graph, the proxy included, binds IAM at its `PropustkaApplication` entrypoint
+(`iamServiceReference()`); a binding to IAM's default entrypoint, which also issues
+keys and approves devices, is refused. The provider preserves the generated Wrangler config for every
 Worker in that graph, deploys each config, and targets application migrations,
 managed variables, and secrets at the child Worker. The proxy embeds only its
 manifest and service bindings; application secrets stay on the child.

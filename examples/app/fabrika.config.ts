@@ -1,4 +1,4 @@
-import { createCloudflareProxyWorker, defineApp, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import { createCloudflareProxyWorker, defineApp, iamServiceReference, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 import { exampleGates } from './fabrika.gates'
 import { exampleAppId, exampleAppSchema } from './fabrika.schema'
 
@@ -15,7 +15,8 @@ export const buildExampleWorker = (): Worker =>
 		// Public routing belongs to the proxy Worker. The application is reached through its APP service binding.
 		routes: [],
 		bindings: {
-			IAM: new ServiceReference('propustka-worker'),
+			// IAM's application entrypoint: token verification, the people directory, audit. No key issuing.
+			IAM: iamServiceReference(),
 		},
 		// No `FABRIKA_IAM_ISSUER` here: the platform owns it and every deploy writes it into this Worker's
 		// environment (ADR-0035). Declaring it would be REFUSED, because an app that names its own issuer

@@ -1,7 +1,7 @@
 import type { IamRpc } from '@fabrika/auth'
 
 export interface Env {
-	// The IAM Worker, reached over a service binding (oblaka `ServiceReference('propustka-worker')`).
+	// The IAM Worker's application entrypoint, reached over a service binding (`iamServiceReference()`).
 	// Typed as the `IamRpc` contract re-exported by the SDK — the app needs no dependency on the
 	// worker package itself.
 	IAM: IamRpc

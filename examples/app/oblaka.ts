@@ -5,6 +5,6 @@ import config from './fabrika.config'
 // OWN repo an app would keep its application Worker private and add the proxy root around it; here
 // both are a whole tiny graph so the boundary runs on its own.
 //
-// `ServiceReference('propustka-worker')` resolves to the deployed IAM Worker by name.
+// `iamServiceReference()` resolves to the deployed IAM Worker by name, at its `PropustkaApplication` entrypoint.
 // Locally, lopata wires the two workers in-process (see lopata.config.ts).
 export default define(({ env }) => config.resources({ env }))

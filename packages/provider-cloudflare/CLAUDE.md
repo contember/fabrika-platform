@@ -32,13 +32,19 @@ this one import.
   `domain`. Every field becomes an argv element, a path or a hostname inside the container.
 - **The authored graph is bounded before any Cloudflare call** (`assertAuthoredGraph`): no
   `PLATFORM_RESOURCE_NAMES` name — as a declared resource, as the oblaka state namespace, or as a
-  `ServiceReference` target (IAM's `propustka-worker` is the one binding every app may keep) — no
+  `ServiceReference` target (IAM's `propustka-worker`, at its application entrypoint, is the one binding every app may keep) — no
   Worker off the `APP` chain, and every route on the run's own domain. `platformResources: 'allow'` exists for fabrika deploying its OWN components (the
   installation CLI and `dryrun-verify`); a checkout is never opened with it.
 - **The bound is on the name oblaka ADOPTS, `${env}-${name}`, not the authored one.** An env name may
   contain `-`, so env `prod-propustka` + Worker `worker` lands on IAM's `prod-propustka-worker`. A
   remote name that equals or ends with `-<platform name>` is refused, whatever the env/name split.
   The state namespace is the one exception — `KVStateStorage` uses it verbatim, so it is matched exactly.
+- **An app binds IAM only at its `PropustkaApplication` entrypoint** (`iamServiceReference()`,
+  `IAM_APPLICATION_ENTRYPOINT` in `src/proxy.ts`), and so does the proxy Worker the provider builds.
+  `assertAuthoredGraph` refuses a `propustka-worker` reference with no entrypoint or another one: IAM's
+  default export also issues and revokes keys and approves devices, which only platform components
+  (`platformResources: 'allow'`) may bind. The entrypoint name is pinned against IAM's exports by
+  `packages/iam/src/__tests__/index.test.ts`.
 - **`Worker.options` is an ALLOWLIST for an app (`APP_WORKER_OPTIONS`), not a denylist.** oblaka spreads
   every option but `dir`/`bindings`/`deleteDurableObjectsOnRemoval` verbatim into the generated wrangler
   config, so a raw `services`, `durable_objects`, `r2_buckets` or `build` key would bind or run what the
@@ -74,7 +80,7 @@ this one import.
   `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `runSteps` executes them in the
   order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
-  IAM remains a global service binding. See ADR-0022.
+  IAM remains a global service binding, at its application entrypoint. See ADR-0022.
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.
