@@ -34,3 +34,9 @@ Per-application Postgres roles and RLS (D2); streaming.
 A8a → A9; A8a + A3 → A8b → A10 → A11.
 
 ## Run log
+
+- 2026-10-08: A8a landed after one fix round; a second review on `main` found column-role overlaps, caller-owned
+  array methods, mutable-prototype checks and BIGINT versions — fixed as A8a.2. Accepted limit: same-process code
+  that patches built-ins used while building the query (documented in `packages/db/CLAUDE.md`).
+- 2026-10-08: A9 landed after one fix round: the runner refuses transaction-control and setting statements lexically
+  and verifies the transaction and settings after each file. Squawk and destructive-migration rules are deferred.

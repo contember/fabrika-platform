@@ -43,3 +43,12 @@ A1 → A2 → A3 → {A4, A5, A6}; A7 independent.
 ## Run log
 
 - 2026-10-08: A7 landed after one fix round covering 25 review findings.
+- 2026-10-08: A1 landed after one fix round. The gate matcher reads a `:name` segment as one non-empty segment, the
+  same rule as `planEndpoint`; a differential test checks gate/table parity. Under a reserved prefix the part-A gates
+  are coarser than the table (the app refuses with 404); B2 closes it. An undecodable escape is non-canonical (400).
+- 2026-10-08: A1's merge let one Operations test fail (`/%` now 400); fixed in `1acad151`. Merges now go through a
+  script that stops on any failing test.
+- 2026-10-08: A2 landed after one fix round: builder-owned option fields cannot be overwritten; order-dependent
+  string checks, defaulted discriminators and boolean coercion are refused; the artifact is canonical
+  (`canonicalArtifactJson` in auth-core); `compileContract` parses its own result. Open for A13: webhook bodies parse
+  with a stripping schema. Open for A8b: table policies as data from a browser-safe `@fabrika/db` subpath.
