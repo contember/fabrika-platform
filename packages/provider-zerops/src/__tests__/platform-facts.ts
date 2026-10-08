@@ -137,6 +137,8 @@ const SECTION_USER_DATA_PROCESS = 'Verified live (2026-08-19) — a user-data wr
 const SECTION_POSTGRES_TLS = 'Verified live (2026-08-19) — PostgreSQL TLS is per service type — docs/reference/zerops-platform.md:837'
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
+const SECTION_UNVERIFIED_ACTIVATION =
+	'UNVERIFIED: what stops an activation besides an httpGet readiness check — docs/reference/zerops-platform.md:407'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
 const SECTION_ENV_ACTIVATION = 'Verified live (2026-09-23) — service variables across activation and rollback — docs/reference/zerops-platform.md:874'
 
@@ -709,6 +711,28 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		live: 'build',
 		emulator: false,
 		emulatorNote: 'the double has none of the three upload routes and runs no build',
+	},
+
+	// ── UNVERIFIED: activation gates the generated run section does not rely on ─────
+	{
+		id: 'unverified-exec-readiness-gates-a-deploy',
+		section: SECTION_UNVERIFIED_ACTIVATION,
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		script: 'failing-exec-readiness',
+		live: 'build',
+		emulator: false,
+		emulatorNote: 'the double runs no build and no readiness check',
+	},
+	{
+		id: 'unverified-failed-init-command-stops-activation',
+		section: SECTION_UNVERIFIED_ACTIVATION,
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		script: 'failing-init-command',
+		live: 'build',
+		emulator: false,
+		emulatorNote: 'the double runs no build and no init command',
 	},
 
 	// ── deleting, and what an absent id answers ──────────────────────────────────

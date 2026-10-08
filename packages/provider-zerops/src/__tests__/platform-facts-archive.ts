@@ -24,8 +24,16 @@ export const PROBE_FILES: readonly ArchiveFile[] = [
 	{ path: 'src/lib/greet.ts', contents: "export const greet = (): string => 'ok'\n" },
 ]
 
+/** What a probe's descriptor makes fail on purpose, for the rows that ask whether a failure stops activation. */
+export interface ProbeFailure {
+	/** A `deploy.readinessCheck` whose `exec` command always fails. */
+	readonly execReadiness?: boolean
+	/** A `run.initCommands` entry that always fails. */
+	readonly initCommand?: boolean
+}
+
 /** The build descriptor the probe deploys with. `setup` must equal the service's hostname. */
-export const probeDescriptor = (hostname: string): string =>
+export const probeDescriptor = (hostname: string, failure: ProbeFailure = {}): string =>
 	[
 		'zerops:',
 		`  - setup: ${hostname}`,
@@ -35,8 +43,19 @@ export const probeDescriptor = (hostname: string): string =>
 		'      deployFiles:',
 		'        - package.json',
 		'        - src',
+		...(failure.execReadiness === true
+			? [
+				'    deploy:',
+				'      readinessCheck:',
+				'        exec:',
+				'          command: "exit 1"',
+				'        retryPeriod: 10s',
+				'        failureTimeout: 60s',
+			]
+			: []),
 		'    run:',
 		'      base: alpine/bun@1.3',
+		...(failure.initCommand === true ? ['      initCommands:', '        - "exit 1"'] : []),
 		'      start: bun src/index.ts',
 		'      ports:',
 		'        - port: 3000',

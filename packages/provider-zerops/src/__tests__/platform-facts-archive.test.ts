@@ -6,6 +6,7 @@
 // the row would pass while proving nothing.
 
 import { describe, expect, test } from 'bun:test'
+import { parseZeropsDescriptor } from '../descriptor'
 import { PROBE_FILES, probeArchive, probeDescriptor } from './platform-facts-archive'
 
 const BLOCK_BYTES = 512
@@ -94,5 +95,14 @@ describe('the unpacker probe archives', () => {
 
 	test('builds a descriptor whose setup is the service hostname', () => {
 		expect(probeDescriptor('wu1abcdefghij')).toContain('- setup: wu1abcdefghij')
+	})
+
+	test('fails only what an UNVERIFIED activation row asks about, in a descriptor the platform parser accepts', () => {
+		const readiness = parseZeropsDescriptor(probeDescriptor('wu1a', { execReadiness: true })).document
+		expect(JSON.stringify(readiness)).toContain('"readinessCheck":{"exec":{"command":"exit 1"}')
+		expect(JSON.stringify(readiness)).not.toContain('initCommands')
+		const init = parseZeropsDescriptor(probeDescriptor('wu1a', { initCommand: true })).document
+		expect(JSON.stringify(init)).toContain('"initCommands":["exit 1"]')
+		expect(JSON.stringify(init)).not.toContain('readinessCheck')
 	})
 })

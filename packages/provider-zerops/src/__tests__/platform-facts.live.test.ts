@@ -29,7 +29,7 @@ import {
 	resolvePath,
 	runFact,
 } from './platform-facts'
-import { probeArchive, probeDescriptor } from './platform-facts-archive'
+import { probeArchive, probeDescriptor, type ProbeFailure } from './platform-facts-archive'
 
 const PREFIX = 'FABRIKA_LIVE_ZEROPS_'
 const TOKEN_VAR = `${PREFIX}TOKEN`
@@ -118,41 +118,42 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
  * Reserve an upload-backed version, upload the archive, ask for the build, and report the status it settles
  * on. The presigned PUT carries NO bearer — the URL is the credential, and it is never logged.
  */
-const unpackerProbe = (options: { directoryEntries: boolean; expected: string }): FactScript => async ({ transport, context, fact }) => {
-	const serviceId = required(context, 'serviceId')
-	const hostname = required(context, 'hostname')
-	const reserved = await callApi(transport, 'POST', `/service-stack/${serviceId}/app-version`, {
-		name: `${hostname}-${options.directoryEntries ? 'dirs' : 'flat'}`,
-	})
-	if (reserved.status < 200 || reserved.status >= 300) {
-		throw new PlatformFactError(fact.id, fact.section, `reserving an app version answered ${reserved.status}`)
+const unpackerProbe =
+	(options: { directoryEntries: boolean; expected: string; failure?: ProbeFailure }): FactScript => async ({ transport, context, fact }) => {
+		const serviceId = required(context, 'serviceId')
+		const hostname = required(context, 'hostname')
+		const reserved = await callApi(transport, 'POST', `/service-stack/${serviceId}/app-version`, {
+			name: `${hostname}-${options.directoryEntries ? 'dirs' : 'flat'}`,
+		})
+		if (reserved.status < 200 || reserved.status >= 300) {
+			throw new PlatformFactError(fact.id, fact.section, `reserving an app version answered ${reserved.status}`)
+		}
+		const appVersionId = text(first(reserved.body, 'id'))
+		const uploadUrl = text(first(reserved.body, 'uploadUrl'))
+		if (appVersionId === undefined || uploadUrl === undefined) {
+			throw new PlatformFactError(fact.id, fact.section, 'the app-version reservation carried no id or no upload URL')
+		}
+		const uploaded = await transport.fetch(uploadUrl, {
+			method: 'PUT',
+			body: probeArchive({ directoryEntries: options.directoryEntries }),
+			signal: transport.signal,
+		})
+		if (!uploaded.ok) {
+			// Never the URL and never the body: both can carry the presigned credential.
+			throw new PlatformFactError(fact.id, fact.section, `uploading the probe archive answered ${uploaded.status}`)
+		}
+		const started = await callApi(transport, 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
+			zeropsYaml: probeDescriptor(hostname, options.failure),
+			zeropsYamlSetup: hostname,
+		})
+		if (started.status < 200 || started.status >= 300) {
+			throw new PlatformFactError(fact.id, fact.section, `build-and-deploy answered ${started.status}`)
+		}
+		const settled = await pollAppVersion(transport, appVersionId)
+		if (settled !== options.expected) {
+			throw new PlatformFactError(fact.id, fact.section, `the app version settled on ${settled}, expected ${options.expected}`)
+		}
 	}
-	const appVersionId = text(first(reserved.body, 'id'))
-	const uploadUrl = text(first(reserved.body, 'uploadUrl'))
-	if (appVersionId === undefined || uploadUrl === undefined) {
-		throw new PlatformFactError(fact.id, fact.section, 'the app-version reservation carried no id or no upload URL')
-	}
-	const uploaded = await transport.fetch(uploadUrl, {
-		method: 'PUT',
-		body: probeArchive({ directoryEntries: options.directoryEntries }),
-		signal: transport.signal,
-	})
-	if (!uploaded.ok) {
-		// Never the URL and never the body: both can carry the presigned credential.
-		throw new PlatformFactError(fact.id, fact.section, `uploading the probe archive answered ${uploaded.status}`)
-	}
-	const started = await callApi(transport, 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
-		zeropsYaml: probeDescriptor(hostname),
-		zeropsYamlSetup: hostname,
-	})
-	if (started.status < 200 || started.status >= 300) {
-		throw new PlatformFactError(fact.id, fact.section, `build-and-deploy answered ${started.status}`)
-	}
-	const settled = await pollAppVersion(transport, appVersionId)
-	if (settled !== options.expected) {
-		throw new PlatformFactError(fact.id, fact.section, `the app version settled on ${settled}, expected ${options.expected}`)
-	}
-}
 
 const pollAppVersion = async (transport: FactTransport, appVersionId: string): Promise<string> => {
 	for (let attempt = 0;; attempt += 1) {
@@ -184,6 +185,8 @@ const required = (context: FactContext, name: string): string => {
 const scripts: Record<string, FactScript> = {
 	'unpacker-flat-archive': unpackerProbe({ directoryEntries: false, expected: 'BUILD_FAILED' }),
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
+	'failing-exec-readiness': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { execReadiness: true } }),
+	'failing-init-command': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { initCommand: true } }),
 }
 
 describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerops account', () => {
