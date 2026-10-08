@@ -68,6 +68,12 @@ export interface AppScopeDef {
 	members?: { manage: string; list: string }
 }
 
+/**
+ * The role keys IAM defines itself for every app. A built-in wins over an app role of the same key at
+ * resolution, so a membership role, and any role of a contract application, may not use one.
+ */
+export const BUILTIN_ROLE_KEYS: readonly string[] = ['admin']
+
 /** One action in an app's catalog (used for validation + admin UI discovery). */
 export interface AppActionDef {
 	action: string

@@ -11,6 +11,8 @@ import type { RoleDef, RoleSource } from '@fabrika/auth-core'
  * always has a concrete app). Validate the key at write time against the built-ins OR
  * the app's `roles` rows; a key that resolves to nothing at read time confers zero
  * permissions (fail-closed) and shows as dangling.
+ *
+ * Its keys are `BUILTIN_ROLE_KEYS` (`@fabrika/auth-core`), which the schema parser reserves; a test pins the two.
  */
 export const BUILTIN_ROLES: Record<string, RoleDef> = {
 	admin: { name: 'Admin', permissions: ['*'] },

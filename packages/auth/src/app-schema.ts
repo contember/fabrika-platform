@@ -1,4 +1,4 @@
-import { type AppSchema, isActionAllowed } from '@fabrika/auth-core'
+import { type AppSchema, BUILTIN_ROLE_KEYS, isActionAllowed } from '@fabrika/auth-core'
 import { z } from 'zod'
 
 /** Quote an untrusted fragment for an error message a run log may carry. */
@@ -76,6 +76,12 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 		}
 	}
 	for (const [key, role] of Object.entries(schema.roles)) {
+		if (BUILTIN_ROLE_KEYS.includes(key) && (role.member !== undefined || schema.contract === true)) {
+			issues.push({
+				path: ['roles', key, 'name'],
+				message: `role ${quote(key)} is a built-in IAM role; a membership role or a contract application role needs another key`,
+			})
+		}
 		for (const [index, assigner] of (role.member?.assignableBy ?? []).entries()) {
 			if (role.member !== undefined && !membershipRoleOf(assigner, role.member.scope)) {
 				issues.push({

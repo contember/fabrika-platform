@@ -123,4 +123,15 @@ describe('appSchemaSchema — membership metadata', () => {
 		)
 			.toBe(false)
 	})
+
+	test('a membership role, or any role of a contract application, cannot take a built-in key', () => {
+		const schema = notes()
+		const roles = { ...schema.roles, admin: { name: 'Admin', permissions: ['notes.read'], member: { scope: 'workspace' } } }
+		expect(messages({ ...schema, roles })).toContain(
+			'role `admin` is a built-in IAM role; a membership role or a contract application role needs another key',
+		)
+		const plain = { ...schema.roles, admin: { name: 'Admin', permissions: ['notes.read'] } }
+		expect(messages({ ...schema, roles: plain })).toHaveLength(1)
+		expect(appSchemaSchema.safeParse({ ...schema, contract: false, roles: plain }).success).toBe(true)
+	})
 })
