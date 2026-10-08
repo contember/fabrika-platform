@@ -39,8 +39,6 @@ const result = await deploy({
 	// The runtime worker secrets fabrika.config declares in pipeline.secrets — dummy values offline.
 	secrets: {
 		FABRIKA_CONTROL_VAULT_KEY: 'dummy-vault-key',
-		GITHUB_APP_PRIVATE_KEY: 'dummy-pem',
-		GITHUB_WEBHOOK_SECRET: 'dummy-hmac',
 		CLOUDFLARE_API_TOKEN: 'dummy-tok',
 		FABRIKA_IAM_PROVISIONING_KEY: 'px_dummy-admin',
 		FABRIKA_RUNNER_KEY: 'dummy-runner-key',

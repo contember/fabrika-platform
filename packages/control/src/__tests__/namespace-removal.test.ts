@@ -11,7 +11,6 @@ import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope } f
 import { describe, expect, test } from 'bun:test'
 import { runNamespaceJob } from '../api/namespaces'
 import type { ControlRepositories } from '../db'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
@@ -90,7 +89,6 @@ function makeHarness(): Harness {
 				},
 			},
 			logs: { get: () => Promise.resolve(null) },
-			repoSource: new FakeRepoSource(),
 			provider: control,
 			cancelRun: () => Promise.resolve(),
 		},

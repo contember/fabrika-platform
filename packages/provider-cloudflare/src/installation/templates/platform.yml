@@ -151,10 +151,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}
-          # GitHub reserves the GITHUB_ prefix for Environment secret/variable NAMES, so the App key/secret/id
-          # are stored as GH_* and mapped to the GITHUB_* env vars the deploy + Worker bindings expect here.
-          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          GITHUB_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
           # The seeded IAM provisioning key — the control plane reconciles its own schema with it (Bearer px_).
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
@@ -164,7 +160,6 @@ jobs:
           FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}
           # Non-secret config (Environment Variables).
           FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}
-          GITHUB_APP_ID: ${{ vars.GH_APP_ID }}
           FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
           OPERATIONS_ARTIFACT_ORIGIN: https://${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}

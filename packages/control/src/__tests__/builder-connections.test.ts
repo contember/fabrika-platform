@@ -5,7 +5,6 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { appScope } from '../iam'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlRpcDeps } from '../services'
 import { approvalVerifier, pairingIam, pairingRequest as rpcRequest } from './helpers/builder-pairing'
 import { createHarness } from './helpers/harness'
@@ -41,7 +40,6 @@ function deps(repositories: ControlRepositories, auth = allowAllAuth()): Control
 		repositories,
 		auth,
 		provider,
-		repoSource: new FakeRepoSource({ fakeInstallationId: null }),
 		queue: { send: unexpected },
 		logs: { get: unexpected },
 		cancelRun: unexpected,

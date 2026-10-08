@@ -6,10 +6,9 @@ import { describe, expect, test } from 'bun:test'
 import { controlApp } from '../app'
 import type { Env } from '../env'
 import { controlOriginGuard } from '../origin-guard'
-import { FakeRepoSource } from '../repo-source'
-import { unavailableSourceConnection } from '../source/connections'
 import { createHarness, type Harness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv, testToken } from './helpers/tokens'
 
 const CONTROL_ORIGIN = 'https://control.test'
@@ -167,14 +166,13 @@ function application(overrides: Partial<Env> = {}, harness: Harness = createHarn
 		},
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
-		REPO_EVENTS: new FakeRepoSource(),
 		ENVIRONMENT: 'local',
 		FABRIKA_CONTROL_DOMAIN: CONTROL_ORIGIN,
 		...testIamEnv,
 		...overrides,
 	}
 	return (request: Request) =>
-		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unavailableSourceConnection('harbor') }, {
+		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
 			waitUntil() {},
 		})
 }

@@ -14,11 +14,10 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
-import { ConnectionWebhookVerifier, type PushWebhookVerifier, type RepoEvents } from './repo-source'
+import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
-import type { WebhookBinding } from './webhook'
 
 export const DEPLOY_LOCK_REQUEUE_DELAY_S = 30
 export const STALE_RUN_MAX_AGE_S = 30 * 60
@@ -63,29 +62,9 @@ export function replayOperationsCatalogProjection(env: Env): Promise<OperationsC
 	return replayOperationsCatalog(operationsCatalogDeps(env))
 }
 
-export interface WebhookRoute {
-	readonly repoSource: PushWebhookVerifier
-	readonly binding: WebhookBinding
-}
-
-/**
- * Resolve one webhook route before its request body is read, by the provider's source mode (ADR-0029).
- *
- * Without keyed connections the installation's single App keeps its static secret on the unscoped path.
- * In the `connection` mode each route selects one exact connection's vault secret, and the unscoped
- * path refuses rather than trying any stored secret.
- */
-export function webhookRoute(env: Env, provider: ControlProvider, connectionId?: string): WebhookRoute | null {
-	if (provider.source?.binding !== 'connection') {
-		if (connectionId !== undefined || env.REPO_EVENTS === undefined) return null
-		return { repoSource: env.REPO_EVENTS, binding: { kind: 'installation-only' } }
-	}
-	if (connectionId === undefined) return null
-	const secrets = new GitHubConnectionWebhookSecretProvider(env.REPOSITORIES.githubConnections, () => vault(env), connectionId)
-	return {
-		repoSource: new ConnectionWebhookVerifier(secrets),
-		binding: { kind: 'connection', connectionId },
-	}
+/** A route selects one exact connection's vault secret before its request body is read (ADR-0029). */
+export function connectionWebhookVerifier(env: Env, connectionId: string): PushWebhookVerifier {
+	return new ConnectionWebhookVerifier(new GitHubConnectionWebhookSecretProvider(env.REPOSITORIES.githubConnections, () => vault(env), connectionId))
 }
 
 export function vault(env: Env): Promise<Vault> {
@@ -122,8 +101,6 @@ export interface ControlRpcDeps {
 	auth: AuthContext
 	queue: DeployQueue
 	logs: LogReader
-	/** Absent in a `connection`-mode composition, which never resolves an installation id. */
-	repoSource?: RepoEvents
 	provider: ControlProvider
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
@@ -138,7 +115,6 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		auth,
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
-		...(env.REPO_EVENTS === undefined ? {} : { repoSource: env.REPO_EVENTS }),
 		provider,
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),

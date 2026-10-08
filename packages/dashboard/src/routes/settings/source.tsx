@@ -220,8 +220,10 @@ function SourceAction(
 	if (status.state === 'unavailable') {
 		return (
 			<section className="source-checkpoint">
-				<CheckpointHead lamp="idle" title="UI connection unavailable" />
-				<p>This provider or installation setup does not expose source connection management in the console. Use its supported operator setup path.</p>
+				<CheckpointHead lamp="idle" title="Source connections unavailable" />
+				<p>
+					Control has no vault key (<code>FABRIKA_CONTROL_VAULT_KEY</code>), so it cannot keep a GitHub App key. Configure the key and redeploy Control.
+				</p>
 			</section>
 		)
 	}

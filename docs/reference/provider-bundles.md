@@ -35,8 +35,8 @@ The control plane receives one `ControlProvider`. Every provider implements
 - `normalizeRegistration` to validate and canonicalize its target and artifact;
   absent means control stores the registration as submitted;
 - `resolveSource` to resolve a requested source revision before deployment;
-- `source: { binding: 'connection' | 'installation' }` to accept a private-source binding, which
-  Control then passes as `sourceBinding` to `resolveSource` and `deploy`;
+- `source: { binding: 'connection' }` to accept a private-source binding — a `(connectionId,
+  installationId)` pair — which Control then passes as `sourceBinding` to `resolveSource` and `deploy`;
 - `cancel` for platform-owned work;
 - `reconcile` for unfinished external operations;
 - `secrets` for immediate writes to provider-managed secret storage.
@@ -132,7 +132,11 @@ The GitHub composition resolves the requested ref, or a recorded commit, with on
 `GET /commits/{ref}`; GitHub resolves branch-versus-tag names and peels annotated
 tags.
 Public resolution uses anonymous GitHub data requests; private resolution
-uses the recorded installation's repository-scoped read-only token.
+uses a repository-scoped read-only token minted from the app's bound GitHub
+connection — its App key read from Control's vault (see
+[GitHub source connections](#github-source-connections)). The clone URL handed to
+the runner carries a second such token as `x-access-token`; a public clone URL
+carries none.
 
 Control persists the selected commit under its ownership fence before creating
 the release context. The original requested ref remains in run history. Non-dry
@@ -190,12 +194,11 @@ installation on a Zerops runtime requires `sudo`. App ids and private keys of ev
 live in control's vault; a request that names no connection resolves no credential, and there is no
 credential search.
 
-Each connection has an independent webhook secret encrypted in Control's platform vault. Every Zerops
-App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and secret before
-reading and authenticating the bounded body, then requires the payload installation, repository and
-registered application pair to match it. A Zerops composition REFUSES the generic `/webhooks/github`
-route with 401 and never falls back to a keyed connection. Cloudflare keeps that generic route, on its
-static secret and installation-id path, because it has no source connection row at all.
+Each connection has an independent webhook secret encrypted in Control's platform vault. Every
+connection's App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and
+secret before reading and authenticating the bounded body, then requires the payload installation,
+repository and registered application pair to match it. There is no generic `/webhooks/github` route
+(it answers 404) and no fallback to another connection.
 
 Production origins are fixed to `api.github.com` and `codeload.github.com`. There is no operator-facing
 GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected test seams only.
@@ -269,11 +272,11 @@ end to end: verified event, webhook-triggered run, private source resolve and up
 active version and healthy app. The inspected application version used source `CLI` and carried no
 GitHub, GitLab or public-Git source.
 
-### Zerops GitHub source connections
+### GitHub source connections
 
-Normal GitHub App setup runs in the authenticated Control console at **Settings → Source**
-([ADR-0029](../decisions/0029-github-app-sources.md)). Fresh Zerops installations
-boot with anonymous source access. The page lists stable connections in bounded pages and presents the
+GitHub App setup runs in the authenticated Control console at **Settings → Source**
+([ADR-0029](../decisions/0029-github-app-sources.md)), the same way on Cloudflare and Zerops. Fresh
+installations boot with anonymous source access; neither `platform init` creates an App. The page lists stable connections in bounded pages and presents the
 one global setup or repair workflow separately. A human principal holding `source.connection.manage`
 can add another private organization-owned App while stable rows remain. Only one nonterminal workflow
 may exist, and the same organization cannot be connected twice, but Fabrika imposes no total
@@ -303,14 +306,12 @@ is still pending.
 
 A stable connection can be reconciled from the same page. Reconciliation re-verifies the App identity
 with the vault key and reapplies the connection's exact stored webhook URL, content type, TLS setting
-and secret. It never changes the App, webhook secret, connection id or application binding. The
-generic webhook route is reserved for Cloudflare and refused here.
+and secret. It never changes the App, webhook secret, connection id or application binding.
 
-A Zerops private application is registered against the connection whose canonical organization owns
-its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
+A private application is registered against the connection whose canonical organization owns its
+repository. Control persists both the connection id and GitHub installation id or neither. Deploy
 resolution and scoped webhooks require that exact pair. Changing the repository owner of an already
-bound application is refused; re-registration is required. Public Zerops repositories need no pair,
-and Cloudflare's installation-only rows remain valid.
+bound application is refused; re-registration is required. Public repositories need no pair.
 
 Verified live on 2026-08-20: after a webhook repair, the next private repository push reached that
 connection's scoped webhook route, passed HMAC verification and created run

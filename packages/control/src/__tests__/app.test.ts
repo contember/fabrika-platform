@@ -1,24 +1,18 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE, type GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
-import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
 import { projectSingletonSourceConnectionPage } from '../control-rpc'
 import type { Env } from '../env'
 import { githubWebhookSecretLabel } from '../github-connection-store'
-import { FakeRepoSource } from '../repo-source'
-import { unavailableSourceConnection } from '../source/connections'
 import { Vault } from '../vault'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
 import { fakeControlProvider, TEST_PROVIDER_ID } from './helpers/provider'
+import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, operatorToken, testIamEnv, testToken, viewerToken } from './helpers/tokens'
 
-/** The routing choice comes from the declared source mode, not from the provider id. */
-const connectionProvider: ControlProvider = { ...fakeControlProvider, source: { binding: 'connection' } }
-
-function application(overrides: Partial<Env> = {}, harness: Harness = createHarness(), provider: ControlProvider = fakeControlProvider) {
-	const { REPO_EVENTS = new FakeRepoSource(), ...rest } = overrides
+function application(overrides: Partial<Env> = {}, harness: Harness = createHarness()) {
 	const env: Env = {
 		DB: harness.d1,
 		REPOSITORIES: harness.repositories,
@@ -30,14 +24,13 @@ function application(overrides: Partial<Env> = {}, harness: Harness = createHarn
 		},
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
-		REPO_EVENTS,
 		ENVIRONMENT: 'local',
 		FABRIKA_CONTROL_DOMAIN: 'https://control.test',
 		...testIamEnv,
-		...rest,
+		...overrides,
 	}
 	return (request: Request) =>
-		controlApp.fetch(request, { env, provider, sourceConnection: unavailableSourceConnection('harbor') }, {
+		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
 			waitUntil() {},
 		})
 }
@@ -277,7 +270,7 @@ describe('controlApp', () => {
 		expect(projectSingletonSourceConnectionPage(connected, { cursor: 'later-page' })).toEqual({ items: [], nextCursor: null, workflow: null })
 	})
 
-	test('mounts scoped webhooks in the connection source mode with their exact vault secret and no static fallback', async () => {
+	test('mounts scoped webhooks with their exact vault secret and no unscoped route', async () => {
 		const harness = createHarness()
 		const vaultKey = testVaultKey()
 		const vault = await Vault.create(harness.d1, vaultKey)
@@ -309,7 +302,7 @@ describe('controlApp', () => {
 			})
 			await seedZeropsTrigger(harness, app.id)
 		}
-		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey }, harness, connectionProvider)
+		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey }, harness)
 		const exactA = await webhookRequest('/webhooks/github/connection-a', 'secret-a', 'github.com/acme/app', 42)
 		const exactB = await webhookRequest('/webhooks/github/connection-b', 'secret-b', 'github.com/beta/app', 43)
 		const crossConnection = await webhookRequest('/webhooks/github/connection-b', 'secret-a', 'github.com/acme/app', 42)
@@ -323,64 +316,10 @@ describe('controlApp', () => {
 		expect((await fetch(crossConnection)).status).toBe(401)
 		expect((await fetch(swappedInstallation)).status).toBe(204)
 		expect((await fetch(unknownConnection)).status).toBe(401)
-		expect((await fetch(unscoped)).status).toBe(401)
+		const unscopedResponse = await fetch(unscoped)
+		expect(unscopedResponse.status).toBe(404)
+		expect(await unscopedResponse.text()).not.toBe('dashboard')
 		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(2)
-	})
-
-	test('refuses the unscoped route in the connection source mode, which has no connection to resolve', async () => {
-		const harness = createHarness()
-		const vaultKey = testVaultKey()
-		const vault = await Vault.create(harness.d1, vaultKey)
-		const keyedRef = await vault.putSecret('platform', githubWebhookSecretLabel('keyed'), 'keyed-secret')
-		insertConnection(harness, {
-			connectionId: 'keyed',
-			owner: 'beta',
-			installationId: 43,
-			webhookSecretRef: keyedRef,
-		})
-		await harness.repositories.registry.createApp({
-			id: 'keyed-app',
-			repoUrl: 'github.com/beta/app',
-			githubConnectionId: 'keyed',
-			githubInstallationId: 43,
-		})
-		await seedZeropsTrigger(harness, 'keyed-app')
-		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey }, harness, connectionProvider)
-
-		// Since ADR-0029 nothing keyed can be selected without a connection id, so the unscoped path is
-		// refused rather than trying a stored secret — even the one that would verify on its own route.
-		expect((await fetch(await webhookRequest('/webhooks/github', 'keyed-secret', 'github.com/beta/app', 43))).status).toBe(401)
-		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(0)
-		// The scoped route still triggers its bound app.
-		expect((await fetch(await webhookRequest('/webhooks/github/keyed', 'keyed-secret', 'github.com/beta/app', 43))).status).toBe(200)
-		const runs = await harness.repositories.runs.listRuns({ limit: 10 })
-		expect(runs).toHaveLength(1)
-		expect(runs[0]?.app_id).toBe('keyed-app')
-	})
-
-	test('keeps the Cloudflare generic route static-secret and installation-only', async () => {
-		const harness = createHarness()
-		await harness.repositories.registry.createApp({
-			id: 'cloudflare-app',
-			repoUrl: 'github.com/acme/app',
-			githubInstallationId: 42,
-		})
-		await harness.repositories.registry.upsertAppEnv({
-			appId: 'cloudflare-app',
-			env: 'prod',
-			namespaceId: null,
-			provider: 'cloudflare',
-			providerTargetJson: '{}',
-			providerArtifactJson: '{}',
-			triggerRef: 'refs/heads/deploy/prod',
-		})
-		const fetch = application({ REPO_EVENTS: new FakeRepoSource({ webhookSecret: 'cloudflare-secret' }) }, harness)
-
-		expect((await fetch(await webhookRequest('/webhooks/github', 'cloudflare-secret', 'github.com/acme/app', 43))).status).toBe(204)
-		expect((await fetch(await webhookRequest('/webhooks/github', 'cloudflare-secret', 'github.com/acme/app', 42))).status).toBe(200)
-		const runs = await harness.repositories.runs.listRuns({ limit: 10 })
-		expect(runs).toHaveLength(1)
-		expect(runs[0]?.app_id).toBe('cloudflare-app')
 	})
 })
 

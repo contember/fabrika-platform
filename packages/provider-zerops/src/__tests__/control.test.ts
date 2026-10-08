@@ -1166,21 +1166,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		])
 	})
 
-	test('rejects an installation-only binding before source calls', async () => {
-		const calls: string[] = []
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source: makeSource(calls) })
-		const signal = new AbortController().signal
-		const sourceBinding: ProviderSourceBinding = { installationId: 42 }
-		expect(control.source).toEqual({ binding: 'connection' })
-		if (control.resolveSource === undefined) throw new Error('expected source resolution')
-		await expect(control.resolveSource({ runId: 'run-1', app, environment: environment(), signal, sourceBinding })).rejects.toThrow(
-			'requires a connection binding',
-		)
-		await expect(control.deploy({ ...deployInput(recorded), sourceBinding })).rejects.toThrow('requires a connection binding')
-		expect(calls).toEqual([])
-		expect(recorded.calls).toEqual([])
-	})
-
 	test('rejects structured manifest drift before the Zerops API', async () => {
 		const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)
 		// The manifest type cannot carry the drift, so it is spliced into the encoded artifact.

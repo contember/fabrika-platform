@@ -182,8 +182,10 @@ describe('entrypoint isolation', () => {
 		// Not vacuous: the shared workflows do reach the vault-backed connection port, and the process reaches the rest.
 		expect(walk('control-rpc.ts').files).toContain('source/connections.ts')
 		expect(walk('zerops/server.ts').files).toEqual(expect.arrayContaining(processOnly))
-		// The Worker resolves commits through the runtime-neutral metadata client.
-		expect(walk('index.ts').files).toEqual(expect.arrayContaining(['source/metadata.ts', 'source/tree.ts']))
+		// The Worker resolves commits through the runtime-neutral metadata client and mints tokens from the vault.
+		expect(walk('index.ts').files).toEqual(
+			expect.arrayContaining(['source/metadata.ts', 'source/tree.ts', 'source/credentials.ts', 'source/connections.ts']),
+		)
 	})
 
 	test('no source module names a provider package', () => {
@@ -195,10 +197,10 @@ describe('entrypoint isolation', () => {
 		}
 	})
 
-	test('the Zerops process graph does not read or expose GitHub App credentials', () => {
-		for (const file of walk('zerops/server.ts').files) {
+	test('neither entrypoint graph reads GitHub App credentials from its environment', () => {
+		for (const file of [...walk('zerops/server.ts').files, ...walk('index.ts').files]) {
 			const source = readFileSync(resolve(SRC, file), 'utf8')
-			expect(`${file}: ${source.includes('GITHUB_APP_ID') || source.includes('GITHUB_APP_PRIVATE_KEY')}`).toBe(`${file}: false`)
+			expect(`${file}: ${/GITHUB_(APP_ID|APP_PRIVATE_KEY|WEBHOOK_SECRET)/.test(source)}`).toBe(`${file}: false`)
 		}
 	})
 })

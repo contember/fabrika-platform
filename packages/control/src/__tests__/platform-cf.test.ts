@@ -5,12 +5,13 @@ import {
 	cloudflareStoredTargetCodec,
 	createCloudflareControlProvider,
 } from '@fabrika/provider-cloudflare'
-import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
+import { type ProviderDeployInput, type ProviderEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import {
 	cancelRunOnRunner,
 	cloudflareControlProvider,
+	cloudflareGitHubSource,
 	cloudflareIamControlOptions,
 	type CloudflareRunnerService,
 	controlEnv,
@@ -18,7 +19,6 @@ import {
 	startRunOnRunner,
 	type WorkerBindings,
 } from '../platform-cf'
-import { GitHubAppRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 
 const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelope['payload'] }, value: T): ProviderEnvelope => ({
@@ -94,50 +94,58 @@ describe('Cloudflare control IAM options', () => {
 	})
 })
 
+function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindings {
+	const unexpected = (): never => {
+		throw new Error('unexpected binding access')
+	}
+	return {
+		ENVIRONMENT: 'stage',
+		DB: harness.d1,
+		ASSETS: { fetch: unexpected, connect: unexpected },
+		RUN_LOGS: {
+			head: unexpected,
+			get: unexpected,
+			put: unexpected,
+			createMultipartUpload: unexpected,
+			resumeMultipartUpload: unexpected,
+			delete: unexpected,
+			list: unexpected,
+		},
+		DEPLOY_QUEUE: { send: unexpected, sendBatch: unexpected, metrics: unexpected },
+		FABRIKA_RUNNER_KEY: 'test-runner-key',
+		CLOUDFLARE_ACCOUNT_ID: 'account',
+		CLOUDFLARE_API_TOKEN: 'token',
+	}
+}
+
 describe('the Cloudflare source composition', () => {
-	test('resolves the recorded commit or requested ref through the concrete adapter; a missing runner binding refuses acceptance', async () => {
+	test('resolves the recorded commit or requested ref anonymously; a missing runner binding refuses acceptance', async () => {
 		const harness = createHarness()
 		const effects: string[] = []
+		const requests: string[] = []
 		const input = deployInput()
-		const resolution = spyOn(GitHubAppRepoSource.prototype, 'resolveCommit').mockResolvedValue({ commitSha: input.app.source.ref })
-		const clone = spyOn(GitHubAppRepoSource.prototype, 'clone').mockResolvedValue({ cloneUrl: 'https://github.com/example/api', ref: 'b'.repeat(40) })
-		const unexpected = (): never => {
-			throw new Error('unexpected binding access')
-		}
-		const bindings: WorkerBindings = {
-			ENVIRONMENT: 'stage',
-			DB: harness.d1,
-			ASSETS: { fetch: unexpected, connect: unexpected },
-			RUN_LOGS: {
-				head: unexpected,
-				get: unexpected,
-				put: unexpected,
-				createMultipartUpload: unexpected,
-				resumeMultipartUpload: unexpected,
-				delete: unexpected,
-				list: unexpected,
+		const bindings = workerBindings(harness)
+		const seams = {
+			metadataFetch: async (url: string | URL | Request, init?: RequestInit) => {
+				requests.push(`${String(url)} ${new Headers(init?.headers).has('authorization')}`)
+				return Response.json({ sha: input.app.source.ref })
 			},
-			DEPLOY_QUEUE: { send: unexpected, sendBatch: unexpected, metrics: unexpected },
-			FABRIKA_RUNNER_KEY: 'test-runner-key',
-			CLOUDFLARE_ACCOUNT_ID: 'account',
-			CLOUDFLARE_API_TOKEN: 'token',
 		}
 		try {
-			const provider = cloudflareControlProvider(bindings, controlEnv(bindings, () => {}))
+			const provider = cloudflareControlProvider(bindings, controlEnv(bindings, () => {}), seams)
 			if (provider.resolveSource === undefined) throw new Error('missing resolver')
-			const source = { ...input.app.source, ref: 'refs/heads/main' }
-			const selection = { ...input, app: { ...input.app, source }, sourceBinding: { installationId: 99 }, expectedCommitSha: input.app.source.ref }
+			const source = { ...input.app.source, repoUrl: 'github.com/example/api', ref: 'refs/heads/main' }
+			const selection = { ...input, app: { ...input.app, source }, expectedCommitSha: input.app.source.ref }
 			expect(await provider.resolveSource(selection)).toEqual({ commitSha: input.app.source.ref })
-			expect(resolution.mock.calls[0]).toEqual([source.repoUrl, input.app.source.ref, 99, input.signal])
 			const { expectedCommitSha: _recorded, ...unrecorded } = selection
 			await provider.resolveSource(unrecorded)
-			expect(resolution.mock.calls[1]).toEqual([source.repoUrl, source.ref, 99, input.signal])
-			expect(clone).not.toHaveBeenCalled()
-			expect(effects).toEqual([])
+			expect(requests).toEqual([
+				`https://api.github.com/repos/example/api/commits/${input.app.source.ref} false`,
+				'https://api.github.com/repos/example/api/commits/refs%2Fheads%2Fmain false',
+			])
 			await expect(provider.deploy({
 				...input,
 				app: { ...input.app, source: { ...source, ref: input.app.source.ref } },
-				sourceBinding: { installationId: 99 },
 				events: {
 					...input.events,
 					externalId: async () => {
@@ -145,13 +153,85 @@ describe('the Cloudflare source composition', () => {
 					},
 				},
 			})).rejects.toThrow('Cloudflare provider requires the RUNNER_SVC service binding')
-			expect(clone.mock.calls[0]).toEqual([source.repoUrl, input.app.source.ref, 99, input.signal])
 			expect(effects).toEqual([])
 		} finally {
-			resolution.mockRestore()
-			clone.mockRestore()
 			harness.sqlite.close()
 		}
+	})
+
+	test('a public clone is the bare canonical URL and needs no vault', async () => {
+		const harness = createHarness()
+		const source = cloudflareGitHubSource(controlEnv(workerBindings(harness), () => {}))
+		const signal = new AbortController().signal
+		expect(await source.prepareClone({ repoUrl: 'github.com/acme/public', ref: 'refs/heads/main' }, signal)).toEqual({
+			repoUrl: 'https://github.com/acme/public',
+		})
+		expect((await source.prepareClone({ repoUrl: 'github.com/acme/public.git', ref: 'refs/tags/v1' }, signal)).repoUrl).toBe(
+			'https://github.com/acme/public',
+		)
+		harness.sqlite.close()
+	})
+
+	test('refuses caller-controlled repositories before any request', async () => {
+		const harness = createHarness()
+		let requests = 0
+		const counted = () => {
+			requests += 1
+			return Promise.reject(new Error('must not be called'))
+		}
+		const source = cloudflareGitHubSource(controlEnv(workerBindings(harness), () => {}), { metadataFetch: counted, githubAppFetch: counted })
+		const signal = new AbortController().signal
+		for (
+			const repoUrl of [
+				'https://evil.example/acme/repo',
+				'https://github.com/acme/repo',
+				'http://github.com/acme/repo',
+				'github.com@evil.example/acme/repo',
+				'github.com/acme/repo?next=evil',
+				'github.com/acme/repo#fragment',
+				'github.com/acme/repo/extra',
+			]
+		) {
+			await expect(source.prepareClone({ repoUrl, ref: 'refs/heads/main' }, signal, { connectionId: 'c', installationId: 7 })).rejects.toThrow(
+				'invalid canonical GitHub repository',
+			)
+		}
+		expect(requests).toBe(0)
+		harness.sqlite.close()
+	})
+
+	test('preserves pre-aborted and in-flight deployment reasons through resolution', async () => {
+		const harness = createHarness()
+		let requests = 0
+		const started = Promise.withResolvers<void>()
+		const source = cloudflareGitHubSource(controlEnv(workerBindings(harness), () => {}), {
+			metadataFetch: (_url, init) => {
+				requests += 1
+				started.resolve()
+				const signal = init?.signal
+				if (!(signal instanceof AbortSignal)) throw new Error('expected caller-linked signal')
+				return new Promise<Response>((_resolve, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('private reason')), { once: true })
+				})
+			},
+		})
+		const input = deployInput()
+		const app = { ...input.app, source: { ...input.app.source, repoUrl: 'github.com/acme/private', ref: 'refs/heads/main' } }
+
+		const preAborted = new AbortController()
+		const firstReason = new ProviderInvocationAbort('lease_lost')
+		preAborted.abort(firstReason)
+		expect(await source.resolveSource({ ...input, app, signal: preAborted.signal }).catch((error: unknown) => error)).toBe(firstReason)
+		expect(requests).toBe(0)
+
+		const inFlight = new AbortController()
+		const pending = source.resolveSource({ ...input, app, signal: inFlight.signal })
+		await started.promise
+		const secondReason = new ProviderInvocationAbort('cancel_requested')
+		inFlight.abort(secondReason)
+		expect(await pending.catch((error: unknown) => error)).toBe(secondReason)
+		expect(requests).toBe(1)
+		harness.sqlite.close()
 	})
 })
 

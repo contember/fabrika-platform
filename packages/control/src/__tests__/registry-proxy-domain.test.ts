@@ -1,6 +1,5 @@
 import type { ControlProvider, ProviderEnvelope, ProviderRegistration } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -80,7 +79,6 @@ function makeDeps(provider: ControlProvider): { deps: ControlRpcDeps; repositori
 		auth: allowAllAuth(),
 		queue: { send: () => Promise.resolve() },
 		logs: { get: () => Promise.resolve(null) },
-		repoSource: new FakeRepoSource({ fakeInstallationId: null }),
 		provider,
 		cancelRun: () => Promise.resolve(),
 	}

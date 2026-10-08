@@ -10,28 +10,29 @@
 
 import type { IamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
+import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import {
+	type CloudflareControlOptions,
 	type CloudflareRunnerJob,
 	type CloudflareRunOutcome,
 	type CloudflareRunRecovery,
 	createCloudflareControlProvider,
 } from '@fabrika/provider-cloudflare/runner'
-import type { ControlProvider, ProviderSource, ProviderSourceBinding } from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type RelayResult, type RunnerStatus, runnerStatusSchema, type VozkaRunner } from '@fabrika/runner-cloudflare'
 import { z } from 'zod'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
 import { controlPublicOrigin } from './iam'
-import { GitHubAppRepoSource } from './repo-source'
 import type { ControlJobMessage } from './run-lifecycle'
+import { gitHubAppClientFactory, vaultGitHubCredentials } from './source/credentials'
+import { GitHubMetadataClient, type GitHubMetadataFetch } from './source/metadata'
+import type { SourceRepository } from './source/types'
 
-/**
- * The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills
- * `this.env` with. GitHub App credentials stay in this adapter and are never copied into shared `Env`.
- */
+/** The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills `this.env` with. */
 export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'REPO_EVENTS' | 'IAM' | 'IAM_ADMIN'>
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN'>
 {
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
@@ -45,12 +46,6 @@ export interface WorkerBindings
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
 	CLOUDFLARE_API_TOKEN?: string
-	/** GitHub App webhook secret — HMAC-verifies inbound deliveries. */
-	GITHUB_WEBHOOK_SECRET?: string
-	/** GitHub App id used only by the Cloudflare source adapter. */
-	GITHUB_APP_ID?: string
-	/** GitHub App private key used only by the Cloudflare source adapter. */
-	GITHUB_APP_PRIVATE_KEY?: string
 	/**
 	 * vozka-runner — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
 	 * of fabrika never resets the container running that deploy. OPTIONAL because it is declared
@@ -75,9 +70,8 @@ export function cloudflareIamControlOptions(
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
-	const { GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, ...sharedBindings } = bindings
 	return {
-		...sharedBindings,
+		...bindings,
 		// The Worker's equivalent of the process's boot check: a Worker has no boot, so the first request
 		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
 		ENVIRONMENT: readEnvironmentName(bindings.ENVIRONMENT, controlPublicOrigin(bindings)),
@@ -87,19 +81,8 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
 		WAIT_UNTIL: waitUntil,
-		REPO_EVENTS: cloudflareRepoSource({ GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET }),
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 	}
-}
-
-function cloudflareRepoSource(
-	bindings: Pick<WorkerBindings, 'GITHUB_APP_ID' | 'GITHUB_APP_PRIVATE_KEY' | 'GITHUB_WEBHOOK_SECRET'>,
-): GitHubAppRepoSource {
-	return new GitHubAppRepoSource({
-		appId: bindings.GITHUB_APP_ID ?? '',
-		privateKeyPem: bindings.GITHUB_APP_PRIVATE_KEY ?? '',
-		webhookSecret: bindings.GITHUB_WEBHOOK_SECRET ?? '',
-	})
 }
 
 /** Present an R2 bucket as a `BlobStore` (the control plane reads run logs; vozka-runner writes them). */
@@ -158,21 +141,6 @@ const requireRunner = (bindings: WorkerBindings, env: Env): CloudflareRunnerServ
 	return runner(bindings)
 }
 
-const prepareClone = async (
-	bindings: WorkerBindings,
-	source: ProviderSource,
-	signal: AbortSignal,
-	sourceBinding: ProviderSourceBinding | undefined,
-) => {
-	const target = await cloudflareRepoSource(bindings).clone(
-		source.repoUrl,
-		source.ref,
-		sourceBinding?.installationId,
-		signal,
-	)
-	return { repoUrl: target.cloneUrl }
-}
-
 // The runner is a separately deployed Worker: parse what its RPC returns rather than trust the type.
 const relayResultSchema = z.object({ status: runnerStatusSchema })
 const recoveredStatusSchema = runnerStatusSchema.nullable()
@@ -220,24 +188,82 @@ export const cancelRunOnRunner = async (
 	await svc.cancelRun(runId, required(runnerKey, 'FABRIKA_RUNNER_KEY'))
 }
 
+/** Transport seams only tests inject; the GitHub origins stay fixed (ADR-0029). */
+export interface CloudflareSourceSeams {
+	readonly metadataFetch?: GitHubMetadataFetch
+	readonly githubAppFetch?: GitHubAppFetch
+}
+
+/**
+ * Exact-commit resolution and the runner's clone URL. A private source mints a repository-scoped
+ * installation token from its bound connection's vault-held App key; a public one stays anonymous.
+ */
+export function cloudflareGitHubSource(
+	env: Env,
+	seams: CloudflareSourceSeams = {},
+): Pick<CloudflareControlOptions, 'resolveSource' | 'prepareClone'> {
+	const credentials = vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) })
+	const metadata = new GitHubMetadataClient(seams.metadataFetch === undefined ? {} : { fetch: seams.metadataFetch })
+	const repositoryToken = (repository: SourceRepository, binding: ProviderSourceBinding | undefined, signal: AbortSignal) =>
+		binding === undefined
+			? Promise.resolve(undefined)
+			: credentials.repositoryToken({ connectionId: binding.connectionId, installationId: binding.installationId, repository, signal })
+	return {
+		resolveSource: async (input) => {
+			input.signal.throwIfAborted()
+			const repository = canonicalRepository(input.app.source.repoUrl)
+			try {
+				const token = await repositoryToken(repository, input.sourceBinding, input.signal)
+				const commitSha = await metadata.commit(repository, input.expectedCommitSha ?? input.app.source.ref, token, input.signal, 'resolve')
+				return { commitSha }
+			} catch (error) {
+				// The deployment's own abort reason (lease lost, cancel requested) outranks the source's `cancelled`.
+				input.signal.throwIfAborted()
+				throw error
+			}
+		},
+		prepareClone: async (source, signal, binding) => {
+			signal.throwIfAborted()
+			const repository = canonicalRepository(source.repoUrl)
+			const cloneUrl = new URL(`https://github.com/${repository.owner}/${repository.name}`)
+			try {
+				const token = await repositoryToken(repository, binding, signal)
+				if (token !== undefined) {
+					// x-access-token is GitHub's documented installation-token clone scheme.
+					cloneUrl.username = 'x-access-token'
+					cloneUrl.password = token
+				}
+			} catch (error) {
+				signal.throwIfAborted()
+				throw error
+			}
+			return { repoUrl: cloneUrl.toString() }
+		},
+	}
+}
+
+/** The registry stores `github.com/<owner>/<repo>`; anything else never becomes a clone destination. */
+function canonicalRepository(repoUrl: string): SourceRepository {
+	const match = /^github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100}?)(?:\.git)?$/.exec(repoUrl)
+	const owner = match?.[1]
+	const name = match?.[2]
+	if (owner === undefined || name === undefined || owner === '.' || owner === '..' || name === '.' || name === '..') {
+		throw new Error('invalid canonical GitHub repository')
+	}
+	return { owner, name }
+}
+
 /** Compose the only provider available in the Cloudflare installation. */
-export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): ControlProvider {
+export function cloudflareControlProvider(bindings: WorkerBindings, env: Env, seams: CloudflareSourceSeams = {}): ControlProvider {
+	const source = cloudflareGitHubSource(env, seams)
 	return createCloudflareControlProvider({
 		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
 		...cloudflareIamControlOptions(env),
 		runnerKey: env.FABRIKA_RUNNER_KEY ?? '',
-		resolveSource: (input) => {
-			const source = input.app.source
-			return cloudflareRepoSource(bindings).resolveCommit(
-				source.repoUrl,
-				input.expectedCommitSha ?? source.ref,
-				input.sourceBinding?.installationId,
-				input.signal,
-			)
-		},
-		prepareClone: async (source, signal, sourceBinding) => {
-			const clone = await prepareClone(bindings, source, signal, sourceBinding)
+		resolveSource: source.resolveSource,
+		prepareClone: async (selected, signal, sourceBinding) => {
+			const clone = await source.prepareClone(selected, signal, sourceBinding)
 			requireRunner(bindings, env)
 			return clone
 		},

@@ -13,7 +13,6 @@ import { describe, expect, test } from 'bun:test'
 import { type NamespaceJobDeps, runNamespaceJob } from '../api/namespaces'
 import { decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage, NamespaceJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness, type Harness } from './helpers/harness'
@@ -98,7 +97,6 @@ function apiDeps(harness: Harness, provider: ControlProvider, sent: ControlJobMe
 			},
 		},
 		logs: { get: () => Promise.resolve(null) },
-		repoSource: new FakeRepoSource(),
 		provider,
 		cancelRun: () => Promise.resolve(),
 	}
@@ -118,7 +116,6 @@ function jobEnv(harness: Harness, sent: ControlJobMessage[]): Env {
 			},
 		},
 		WAIT_UNTIL: () => {},
-		REPO_EVENTS: new FakeRepoSource(),
 		ENVIRONMENT: 'local',
 	}
 }

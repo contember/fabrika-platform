@@ -195,7 +195,7 @@ export function sourceChain(status: GitHubSourceConnectionStatusDto): readonly S
 			{ label: 'Webhook', detail: 'not verified', lamp: 'stop' },
 		]
 	}
-	const detail = status.state === 'unavailable' ? 'unsupported setup' : 'not configured'
+	const detail = status.state === 'unavailable' ? 'vault not configured' : 'not configured'
 	return [
 		{ label: 'GitHub App', detail, lamp: 'idle' },
 		{ label: 'Private source', detail: 'not connected', lamp: 'idle' },

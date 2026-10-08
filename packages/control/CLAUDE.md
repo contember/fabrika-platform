@@ -45,9 +45,8 @@ entrypoint reaches the other provider or runtime.
 
 ## Architecture
 
-`fetch` routes: `/api/health` → ok · `POST /webhooks/github/:connectionId` → webhook ·
-the unscoped `POST /webhooks/github` exists for a Cloudflare composition only, and a Zerops
-composition refuses it with 401 (ADR-0029) ·
+`fetch` routes: `/api/health` → ok · `POST /webhooks/github/:connectionId` → webhook, verified with that
+one connection's vault secret (ADR-0029); any other `/webhooks/*` path is a 404 ·
 `/iam/admin/*` → transport-only IAM gateway · `/operations/api/rpc` →
 transport-only Operations RPC gateway · `/api/rpc` → ACL-gated control RPC surface.
 Unmatched `/api` and `/operations/api` paths return 404; they never reach dashboard `ASSETS`.
@@ -84,7 +83,7 @@ adapters) · `src/services.ts` (how every dependency bag is built). Persistence 
 for Postgres).
 
 Three deploy TRIGGERS, all converging on the same `createRun` + enqueue: (1) the GitHub-App push
-webhook (`src/webhook.ts`, private repos); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
+webhook (`src/webhook.ts`, private repos, scoped to one connection); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
 poller (`src/repo-poll.ts`, wired in `scheduled`) for PUBLIC repos with no App install — it conditional-
 GETs the repo's commits/tags Atom feed (ETag) and enqueues on a new head sha (`runs.trigger='poll'`).
 
@@ -135,13 +134,16 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   a full origin mean the same thing; stating no origin is supported and means no claim.
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
-- **Zerops GitHub sources run in process (`src/source/`, ADR-0029).** Each connection's App id and key are a
-  platform vault entry (`platform:github-source:<id>:app-credential`), written in the callback's checkpoint
-  transaction and read per operation; nothing caches them. A private operation names `(connectionId,
-  installationId)` and never falls back to another connection. Origins are fixed; `createRuntime` takes
-  transport seams only from code (the local stack's `control-server.ts`), never from env. `archive.ts`,
-  `repository.ts`, `transport.ts` are process-only; the shared layer reaches `connections.ts`,
-  `credentials.ts`, and `metadata.ts` (commit resolution on Cloudflare). Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
+- **GitHub sources are one model on both clouds (`src/source/`, ADR-0029).** Each connection's App id and key
+  are a platform vault entry (`platform:github-source:<id>:app-credential`), written in the callback's
+  checkpoint transaction and read per operation; nothing caches them, and no App key is a Worker secret or
+  env var. Both compositions manage connections from the console (`createSourceConnections`) and mint
+  repository tokens with `vaultGitHubCredentials`. A private operation names `(connectionId,
+  installationId)` and never falls back to another connection. Origins are fixed; seams come only from code
+  (the local stack's `control-server.ts`, tests), never from env. `archive.ts`, `repository.ts`,
+  `transport.ts` are process-only; the Worker and the shared layer reach `connections.ts`, `credentials.ts`,
+  and `metadata.ts`. On Cloudflare `cloudflareGitHubSource` (`src/platform-cf.ts`) resolves the commit and
+  builds the runner's clone URL with a repository-scoped token as `x-access-token`. Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
 - **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
   plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.

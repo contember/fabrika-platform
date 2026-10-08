@@ -13,7 +13,8 @@ Fabrika deploys application code from GitHub. Public repositories need no creden
 repositories need a machine identity that is not a person, is short-lived at the point of use, and can
 be limited to read-only Contents on selected repositories. A GitHub App gives exactly that.
 
-On Zerops, the native GitHub integration does not help: the OAuth grant made in the Zerops GUI is not
+Fabrika runs on two clouds. On Cloudflare, a runner container clones the repository and runs the
+build. On Zerops, the native GitHub integration does not help: the OAuth grant made in the Zerops GUI is not
 inherited by the installation's project-scoped token, so Fabrika cannot connect a service to a private
 repository by API (see [Zerops platform reference](../reference/zerops-platform.md)). Zerops does
 accept an uploaded archive: create an application version, PUT the archive to the returned upload
@@ -29,9 +30,9 @@ durably before it reports success, or the App is unrecoverable.
 ## Decision
 
 **Ownership.** Each installation uses GitHub Apps that its operator owns. There is no central
-Fabrika App and no credential shared across operators. The operator installs the platform, Fabrika
-deploys applications, and Zerops executes every application build and deploy
-([ADR-0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md)).
+Fabrika App and no credential shared across operators. The operator installs the platform and Fabrika
+deploys applications ([ADR-0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md)).
+Both clouds use the one model below; nothing in it depends on the provider.
 
 **Connections.** An installation holds any number of GitHub connections. Each connection is one
 private App owned by one GitHub organization plus one verified installation of that App, keyed by a
@@ -43,9 +44,9 @@ default connection.
 (`packages/control/src/vault.ts`) as platform-scoped, purpose-labelled entries, next to that
 connection's webhook secret. Control mints installation tokens in-process when it needs them. The App key is an installation
 credential, not an application secret, so the vault does not conflict with
-[ADR-0004](0004-secrets-live-in-the-platform.md). Connections, console setup and vault custody are
-the Zerops composition. Cloudflare has one App whose id and key are Worker secrets. On both
-providers the process that resolves sources holds the App key and nothing else does.
+[ADR-0004](0004-secrets-live-in-the-platform.md). No App key is a Worker secret, an environment variable
+or an installation-time value: `platform init` creates no App on either cloud. Control, which resolves
+sources, holds the App keys and nothing else does.
 
 **Setup from the console.** A fresh installation starts anonymous and deploys public repositories.
 A user principal with `source.connection.manage` (service tokens are refused) creates a connection from the console:
@@ -76,8 +77,17 @@ id alone never selects a credential, and a mismatch fails without trying another
 
 **Webhooks.** Each connection's App delivers to `/webhooks/github/:connectionId`. Control selects that
 connection's secret before reading the body, verifies the HMAC, requires the payload's installation id
-to equal the connection's, and triggers only applications bound to that pair and repository. The
-unscoped `/webhooks/github` route exists only for the Cloudflare composition's single App.
+to equal the connection's, and triggers only applications bound to that pair and repository. There is
+no unscoped `/webhooks/github` route.
+
+**Public repositories** need no connection. They deploy anonymously, and the cron poller triggers them
+from the repository's Atom feed instead of a webhook.
+
+**Cloudflare delivery.** For each deploy, Control resolves the requested ref to one exact commit with a
+repository-scoped, read-only installation token minted from the bound connection's vault key. It mints a
+second such token for the runner job and hands the container a clone URL that carries it as
+`x-access-token`. The runner redacts every form of that URL and token from its logs and never persists
+them.
 
 **Zerops delivery, in-process in Control.** For each deploy, Control:
 
@@ -98,7 +108,8 @@ unscoped `/webhooks/github` route exists only for the Cloudflare composition's s
 **Invariants:**
 
 - No GitHub token, private key or credential-bearing URL reaches Zerops state, a database row outside
-  the vault, a response, an event or a log. Upstream errors are redacted before they reach a run log.
+  the vault, a response, an event or a log. On Cloudflare the only token to leave Control is the
+  repository-scoped clone token in the runner job, in transit. Upstream errors are redacted before they reach a run log.
 - The codeload URL and the Zerops upload URL are credentials in transit: never persisted, never
   logged, never returned in an error.
 - Production origins are fixed to `api.github.com` and `codeload.github.com`. The upload destination
@@ -116,8 +127,10 @@ unscoped `/webhooks/github` route exists only for the Cloudflare composition's s
 
 - A private application needs one App installation per organization, not a GUI step per service.
   Removing a repository from the App removes future deploy access at once.
-- Zerops installations have no source service, no source RPC key and no credential environment
-  slots. Source handling is Control code, testable in-process.
+- Installations have no source service, no source RPC key and no GitHub credential in their
+  environment, on either cloud. Source handling is Control code, testable in-process.
+- A fresh installation deploys public repositories only, until an administrator connects GitHub from
+  the console.
 - Losing the vault KEK loses every connection; each must be recreated, which creates a new App.
 - Peak memory per upload is one chunk; no disk scales with repository size.
 - The tarball is `git archive` output, so `.gitattributes` `export-ignore` and `export-subst` apply. A
@@ -154,6 +167,9 @@ unscoped `/webhooks/github` route exists only for the Cloudflare composition's s
 - **Try every webhook secret, or route by owner or installation id.** Work grows with the connection
   set, owner text is mutable, and an installation id does not name the App credential.
 - **Keep an unkeyed legacy credential path.** Two selectors invite answering through the wrong App.
+- **Keep Cloudflare's single App in Worker secrets.** It needed a second webhook route with a static
+  secret, a second application-binding mode keyed by installation id alone, and a second token-minting
+  path. It also capped a Cloudflare installation at one organization's private repositories.
 - **Assemble the archive from Git objects, or stage the tarball on disk.** Both keep a disk ceiling
   (and the first needs `git` subprocesses and a second tree read) to buy byte determinism or error
   ordering that nothing needs.

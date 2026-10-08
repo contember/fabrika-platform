@@ -17,7 +17,7 @@ const PROVIDER_ID = 'memory'
 const envelope = (payload: string): ProviderEnvelope => ({ provider: PROVIDER_ID, version: 1, payload })
 
 async function seedRun(db: ControlRepositories): Promise<string> {
-	await db.registry.createApp({ id: 'app', repoUrl: 'https://github.com/acme/app.git', githubInstallationId: 42 })
+	await db.registry.createApp({ id: 'app', repoUrl: 'https://github.com/acme/app.git' })
 	await db.registry.upsertAppEnv({
 		appId: 'app',
 		env: 'prod',
@@ -63,7 +63,7 @@ function deps(db: ControlRepositories, logs: BlobStore, inputs: ProviderDeployIn
 	const provider: ControlProvider = {
 		id: PROVIDER_ID,
 		normalizeRegistration: (input) => input,
-		source: { binding: 'installation' },
+		source: { binding: 'connection' },
 		deploy: (input) => {
 			inputs.push(input)
 			return Promise.resolve({ state: 'succeeded' })
@@ -148,7 +148,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 		const provider: ControlProvider = {
 			id: PROVIDER_ID,
 			normalizeRegistration: (input) => input,
-			source: { binding: 'installation' },
+			source: { binding: 'connection' },
 			deploy: () => {
 				writes.push('deploy')
 				return Promise.resolve({ state: 'succeeded' })

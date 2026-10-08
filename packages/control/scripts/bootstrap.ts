@@ -43,7 +43,6 @@
  *                                                    `px_` key. Become fabrika's runtime config.
  *   FABRIKA_CONTROL_DOMAIN                         — fabrika's hostname.
  *   FABRIKA_CONTROL_VAULT_KEY                      — the M4 vault master key (32 raw bytes, base64).
- *   GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET  — the GitHub App PEM key + webhook HMAC secret.
  * Optional:
  *   FABRIKA_CONTROL_BOOTSTRAP_ADMINS               — JSON array of the first operator email(s). Set ONLY for
  *                                                    the FIRST bring-up (or recovery); omit on a routine
@@ -91,16 +90,8 @@ async function main(): Promise<void> {
 	// `pipeline.secrets`. Read from the environment; never inlined, never logged. CLOUDFLARE_API_TOKEN +
 	// the IAM provisioning key are fabrika's RUNTIME platform creds (it injects them into every
 	// deploy it runs), so they are required Worker secrets — a fabrika without them can't deploy/reconcile.
-	for (
-		const name of [
-			'CLOUDFLARE_ACCOUNT_ID',
-			'CLOUDFLARE_API_TOKEN',
-			'GITHUB_APP_PRIVATE_KEY',
-			'GITHUB_WEBHOOK_SECRET',
-		]
-	) {
-		required(name)
-	}
+	required('CLOUDFLARE_ACCOUNT_ID')
+	required('CLOUDFLARE_API_TOKEN')
 	required('FABRIKA_IAM_ISSUER')
 	required('FABRIKA_IAM_PROVISIONING_KEY')
 	required('FABRIKA_CONTROL_VAULT_KEY')

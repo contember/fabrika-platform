@@ -144,16 +144,15 @@ const providerApp = (app: AppRow, run: RunRow): ProviderApp => ({
 	},
 })
 
-/** The app's private-source selector in the provider's declared source mode (ADR-0029); undefined for a public source. */
+/** The app's private-source selector (ADR-0029); undefined for a public source. */
 const loadSourceBinding = async (deps: Pick<RunDeps, 'repositories' | 'provider'>, app: AppRow): Promise<ProviderSourceBinding | undefined> => {
-	const mode = deps.provider.source?.binding
-	if (mode === undefined) {
+	if (deps.provider.source === undefined) {
 		if (app.github_connection_id !== null || app.github_installation_id !== null) {
 			throw new Error(`provider "${deps.provider.id}" cannot deploy a private source`)
 		}
 		return undefined
 	}
-	return (await deps.repositories.registry.getSourceBinding(app.id, mode)) ?? undefined
+	return (await deps.repositories.registry.getSourceBinding(app.id)) ?? undefined
 }
 
 /** Convert one validated namespace row into the provider contract. */

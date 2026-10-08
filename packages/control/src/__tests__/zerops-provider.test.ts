@@ -1,7 +1,6 @@
 import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import type { Env } from '../env'
-import { FakeRepoSource } from '../repo-source'
 import { buildControlRpcDeps } from '../services'
 import { zeropsControlProvider, zeropsGitHubSource, zeropsNamespaceProcessConfig } from '../zerops/provider'
 import { createRuntime } from '../zerops/runtime'
@@ -47,7 +46,7 @@ describe('the Zerops namespace process configuration', () => {
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
 			ENVIRONMENT: 'stage',
 		})
-		expect(runtime.sourceConnection).toMatchObject({ provider: 'zerops', available: true })
+		expect(runtime.sourceConnection).toMatchObject({ provider: 'zerops' })
 		expect(runtime.provider.source).toEqual({ binding: 'connection' })
 		await runtime.shutdown()
 	})
@@ -88,7 +87,6 @@ describe('the Zerops namespace process configuration', () => {
 			},
 			DEPLOY_QUEUE: { send: () => Promise.resolve() },
 			WAIT_UNTIL: () => {},
-			REPO_EVENTS: new FakeRepoSource(),
 			ENVIRONMENT: 'prod',
 		}
 		const provider = zeropsControlProvider(env, {

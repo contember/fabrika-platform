@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createHarness } from '../../__tests__/helpers/harness'
 import { githubAppCredentialSecretLabel } from '../../github-connection-store'
 import { Vault } from '../../vault'
-import { createSourceConnections, type SourceConnectionPort, unavailableSourceConnection } from '../connections'
+import { createSourceConnections, type SourceConnectionPort } from '../connections'
 import { encodeGitHubAppCredential, type GitHubAppCredential, type SourceGitHubClient } from '../credentials'
 
 const PEM = '-----BEGIN PRIVATE KEY-----\nMAMCAQE=\n-----END PRIVATE KEY-----\n'
@@ -199,11 +199,5 @@ describe('GitHub App administration over vault-held keys', () => {
 				signal: signal(),
 			}),
 		).toEqual({ status: 'missing' })
-	})
-
-	test('a composition without connection setup refuses every operation', async () => {
-		const port = unavailableSourceConnection('cloudflare')
-		expect(port).toMatchObject({ provider: 'cloudflare', available: false })
-		await expect(port.verifyApp({ credentialRef: 'vault:x', connectionId: 'x', signal: signal() })).rejects.toThrow('unavailable')
 	})
 })

@@ -159,8 +159,6 @@ describe('Pipeline', () => {
 		expect(config.pipeline?.build).toContain('@fabrika/dashboard')
 		expect(config.pipeline?.secrets).toEqual([
 			'FABRIKA_CONTROL_VAULT_KEY',
-			'GITHUB_APP_PRIVATE_KEY',
-			'GITHUB_WEBHOOK_SECRET',
 			'CLOUDFLARE_API_TOKEN',
 			'FABRIKA_IAM_PROVISIONING_KEY',
 			'FABRIKA_RUNNER_KEY',

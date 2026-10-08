@@ -332,7 +332,6 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
 		return {
 			repositories: deps.repositories,
-			...(deps.repoSource === undefined ? {} : { repoSource: deps.repoSource }),
 			provider: deps.provider,
 			auth: ctx.auth,
 			signal: ctx.request.signal,

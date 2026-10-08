@@ -38,8 +38,7 @@ export async function sourceConnectionList(
 }
 
 function emptySourceStatus(deps: SourceConnectionWorkflowDeps): GitHubSourceConnectionWorkflowDto {
-	const available = deps.source.available && deps.env.FABRIKA_CONTROL_VAULT_KEY !== undefined
-	return baseStatus(deps.source.provider, available ? 'anonymous' : 'unavailable')
+	return baseStatus(deps.source.provider, deps.env.FABRIKA_CONTROL_VAULT_KEY === undefined ? 'unavailable' : 'anonymous')
 }
 
 export const MANIFEST_PATH = '/api/source/github/manifest'

@@ -17,7 +17,6 @@ import {
 	runNamespaceJob,
 } from '../api/namespaces'
 import { acquireLease, namespaceLeaseKey } from '../lease'
-import { FakeRepoSource } from '../repo-source'
 import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
@@ -172,7 +171,6 @@ function makeDeps(
 				},
 			},
 			logs: { get: () => Promise.resolve(null) },
-			repoSource: new FakeRepoSource(),
 			provider,
 			cancelRun: () => Promise.resolve(),
 		},

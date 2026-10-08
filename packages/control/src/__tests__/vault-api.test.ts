@@ -1,7 +1,6 @@
 import type { AuthContext } from '@fabrika/auth'
 import { type ControlProvider, type ProviderEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { parseVaultRef, Vault } from '../vault'
@@ -57,7 +56,6 @@ function makeDeps(auth: AuthContext): { deps: ControlRpcDeps; vault: Promise<Vau
 			},
 		},
 		logs: { get: () => Promise.resolve(null) },
-		repoSource: new FakeRepoSource(),
 		provider: vaultProvider,
 		cancelRun: () => Promise.resolve(),
 		vault: () => vault,
@@ -154,7 +152,6 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			auth: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
-			repoSource: new FakeRepoSource(),
 			provider,
 			cancelRun: () => Promise.resolve(),
 		}
@@ -271,7 +268,6 @@ describe('vault not configured', () => {
 			auth: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
-			repoSource: new FakeRepoSource(),
 			provider: vaultProvider,
 			cancelRun: () => Promise.resolve(),
 			// no `vault` factory

@@ -1,5 +1,5 @@
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
-import type { ProviderSourceBinding, ProviderSourceCapabilities } from '@fabrika/provider-contract'
+import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type LeaseFence, namespaceLeaseKey } from '../lease'
 import {
 	type AppEnvInput,
@@ -37,16 +37,6 @@ export class ControlRegistryRepository {
 		return this.d1.prepare('SELECT * FROM apps WHERE id = ?').bind(id).first<AppRow>()
 	}
 
-	/**
-	 * The apps registered for a repo URL (the webhook narrows by repo first, then by ref). A repo can
-	 * back more than one app entry, so this returns all matches. Matched on the normalized URL (the
-	 * caller normalizes both the stored and the incoming URL the same way — see normalizeRepoUrl).
-	 */
-	async getAppsByRepoUrl(repoUrl: string): Promise<AppRow[]> {
-		const { results } = await this.d1.prepare('SELECT * FROM apps WHERE repo_url = ?').bind(repoUrl).all<AppRow>()
-		return results
-	}
-
 	/** Exact repository, connection and installation lookup for a connection-scoped webhook. */
 	async getAppsByRepoUrlAndSourceConnection(
 		repoUrl: string,
@@ -66,10 +56,10 @@ export class ControlRegistryRepository {
 	}
 
 	/**
-	 * The credential selector a deploy of this app hands its provider; null for a public source. In the
-	 * `connection` mode partial, stale and cross-owner bindings fail closed (ADR-0029).
+	 * The credential selector a deploy of this app hands its provider; null for a public source. Partial,
+	 * stale and cross-owner bindings fail closed (ADR-0029).
 	 */
-	async getSourceBinding(appId: string, mode: ProviderSourceCapabilities['binding']): Promise<ProviderSourceBinding | null> {
+	async getSourceBinding(appId: string): Promise<ProviderSourceBinding | null> {
 		const row = await this.d1.prepare(`SELECT a.repo_url, a.github_connection_id, a.github_installation_id, c.app_owner
 			FROM apps a
 			LEFT JOIN github_source_connections_keyed c
@@ -79,7 +69,6 @@ export class ControlRegistryRepository {
 		if (row === null) return null
 		const connectionId = row.github_connection_id
 		const installationId = row.github_installation_id
-		if (mode === 'installation') return installationId === null ? null : { installationId }
 		if (connectionId === null && installationId === null) return null
 		if (connectionId === null || installationId === null || row.app_owner === null) {
 			throw new Error('incomplete GitHub source binding')

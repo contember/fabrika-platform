@@ -28,9 +28,8 @@ function Field({ label, value, mono }: { label: string; value: string | null; mo
 }
 
 /**
- * The GitHub installation id, editable in place: "Detect" auto-resolves it from the installed GitHub App
- * (server-side, by repo URL), "Edit" sets it manually. Needed to clone a private repo — a null here makes
- * fabrika treat the app as public and the clone fails.
+ * The app's GitHub source binding: "Detect" binds the source connection of the repository's organization
+ * (server-side); "Edit" names the installation, which must be that connection's. Without one the app is public.
  */
 function InstallationIdField({ app, onDone }: { app: AppDto; onDone: () => void }) {
 	const [editing, setEditing] = useState(false)

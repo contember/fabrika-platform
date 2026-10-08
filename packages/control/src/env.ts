@@ -21,7 +21,6 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
-import type { RepoEvents } from './repo-source'
 import type { ControlJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -44,11 +43,6 @@ export interface Env {
 	DEPLOY_QUEUE: JobQueue<ControlJobMessage>
 	/** Runtime-specific supervised background work (`ctx.waitUntil` or the Bun task tracker). */
 	WAIT_UNTIL: WaitUntil
-	/**
-	 * The installation's single GitHub App: verified push events and installation lookup. Cloudflare only;
-	 * a `connection`-mode composition verifies each route with its connection's vault secret (ADR-0029).
-	 */
-	REPO_EVENTS?: RepoEvents
 	/**
 	 * IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
 	 * (`@fabrika/auth`) over the project's private network in a process. Required in practice —
@@ -101,8 +95,8 @@ export interface Env {
 	 * The vault MASTER key (KEK) for the encrypted secret vault — 32 raw bytes, base64. Seals every
 	 * per-value data key (src/vault.ts). Provisioned out-of-band, once per environment:
 	 *   `head -c 32 /dev/urandom | base64 | wrangler secret put FABRIKA_CONTROL_VAULT_KEY`
-	 * (`.dev.vars` locally, an `envSecret` on Zerops). OPTIONAL on the type because the env/literal dev
-	 * path never needs it; the vault management API + `vault:` ref resolution fail loudly when absent.
+	 * (`.dev.vars` locally, an `envSecret` on Zerops). OPTIONAL on the type because most tests compose
+	 * `Env` without it; app secrets, the vault API and GitHub source connections fail loudly when absent.
 	 */
 	FABRIKA_CONTROL_VAULT_KEY?: string
 }

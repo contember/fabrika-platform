@@ -45,8 +45,6 @@ export interface SourceInstallationVerificationInput extends SourceConnectionCre
 /** Privileged GitHub App administration for the authenticated setup and recovery workflows. */
 export interface SourceConnectionPort {
 	readonly provider: string
-	/** False where this composition has no connection setup (Cloudflare holds its one App as Worker secrets). */
-	readonly available: boolean
 	verifyApp(input: SourceConnectionCredential): Promise<SourceGitHubAppIdentity>
 	/** Applies the webhook and proves URL, JSON content type and TLS verification by readback; GitHub masks the secret. */
 	configureWebhook(input: SourceWebhookConfigurationInput): Promise<void>
@@ -79,7 +77,6 @@ export function createSourceConnections(options: SourceConnectionsOptions): Sour
 	}
 	return {
 		provider: options.provider,
-		available: true,
 		verifyApp: (input) =>
 			withClient(input, async (client, appId) => verifiedIdentity(await abortable(client.getAuthenticatedApp(input.signal), input.signal), appId)),
 		configureWebhook: (input) =>
@@ -105,11 +102,6 @@ export function createSourceConnections(options: SourceConnectionsOptions): Sour
 				}
 			}),
 	}
-}
-
-export function unavailableSourceConnection(provider: string): SourceConnectionPort {
-	const unavailable = (): Promise<never> => Promise.reject(new Error('source connection is unavailable'))
-	return { provider, available: false, verifyApp: unavailable, configureWebhook: unavailable, verifyInstallations: unavailable }
 }
 
 async function resolveRepositoryInstallations(

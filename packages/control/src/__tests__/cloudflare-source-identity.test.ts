@@ -16,10 +16,11 @@ import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, createCloudflareCo
 import { type ArtifactFetch, Runner, type SpawnSpec } from '../../../runner-container/src/runner'
 import { bunSpawner } from '../../../runner-container/src/spawn'
 import { type ControlRepositories, type RunTrigger } from '../db'
-import { GitHubAppRepoSource } from '../repo-source'
+import type { Env } from '../env'
+import { cloudflareGitHubSource } from '../platform-cf'
 import { executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
-import { createHarness } from './helpers/harness'
+import { createHarness, type Harness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
 const REPO_URL = 'https://github.com/acme/source-identity'
@@ -87,6 +88,19 @@ async function seedCloudflareRun(db: ControlRepositories, trigger: RunTrigger, r
 	return runId
 }
 
+/** Public sources never reach the vault, so the environment carries no key. */
+function sourceEnvironment(harness: Harness): Env {
+	return {
+		DB: harness.d1,
+		REPOSITORIES: harness.repositories,
+		ASSETS: { fetch: () => Promise.reject(new Error('unexpected asset read')) },
+		RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
+		DEPLOY_QUEUE: { send: () => Promise.resolve() },
+		WAIT_UNTIL: () => {},
+		ENVIRONMENT: 'test',
+	}
+}
+
 interface CheckoutObservation {
 	command: string
 	head: string
@@ -111,7 +125,8 @@ interface UploadObservation {
 
 async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailable = false): Promise<void> {
 	const root = await mkdtemp('/tmp/opencode/cloudflare-source-identity-')
-	const { db, sqlite } = createHarness()
+	const harness = createHarness()
+	const { db, sqlite } = harness
 	try {
 		const origin = join(root, 'origin.git')
 		const author = join(root, 'author')
@@ -128,11 +143,9 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		expect(beforeResolution?.commit_sha).toBe(trigger === 'manual' ? null : commitA)
 
 		const sourceRequests: string[] = []
-		const source = new GitHubAppRepoSource({
-			appId: 'unused-public-app',
-			privateKeyPem: 'public-resolution-must-not-create-an-app-client',
-			webhookSecret: '',
-			fetch: async (input) => {
+		const source = cloudflareGitHubSource(sourceEnvironment(harness), {
+			githubAppFetch: () => Promise.reject(new Error('public resolution must not create an App client')),
+			metadataFetch: async (input) => {
 				const url = new URL(input instanceof Request ? input.url : String(input))
 				if (url.origin !== 'https://api.github.com') throw new Error('unexpected source API origin')
 				sourceRequests.push(url.pathname)
@@ -167,17 +180,8 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			accountId: 'offline-account',
 			apiToken: 'offline-account-token',
 			runnerKey: 'offline-runner-key',
-			resolveSource: (input) =>
-				source.resolveCommit(
-					input.app.source.repoUrl,
-					input.expectedCommitSha ?? input.app.source.ref,
-					input.sourceBinding?.installationId,
-					input.signal,
-				),
-			prepareClone: async (selected, signal, sourceBinding) => {
-				const clone = await source.clone(selected.repoUrl, selected.ref, sourceBinding?.installationId, signal)
-				return { repoUrl: clone.cloneUrl }
-			},
+			resolveSource: source.resolveSource,
+			prepareClone: source.prepareClone,
 			startRun: async (job) => {
 				jobs.push(job)
 				phasesAtRunnerStart = projections.map(({ payload }) => payload.phase)

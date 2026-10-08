@@ -364,7 +364,7 @@ const isTransientIamFailure = (error: unknown): boolean => {
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
 	normalizeRegistration,
-	source: { binding: 'installation' },
+	source: { binding: 'connection' },
 	resolveSource: async (input) => {
 		input.signal.throwIfAborted()
 		const registration = normalizeRegistration(input)

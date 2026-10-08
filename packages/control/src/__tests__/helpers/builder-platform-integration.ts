@@ -14,10 +14,9 @@ import { CONTROL_PROXY_GATES } from '../../../fabrika.gates'
 import { controlApp } from '../../app'
 import { runControlJob } from '../../consumer'
 import type { Env as ControlEnv } from '../../env'
-import { FakeRepoSource } from '../../repo-source'
 import type { ControlJobMessage } from '../../run-lifecycle'
-import { unavailableSourceConnection } from '../../source/connections'
 import { createHarness as createControlHarness } from './harness'
+import { unusedSourceConnection } from './source-connection'
 
 export async function integrationFixture() {
 	const directory = mkdtempSync('/tmp/opencode/builder-cross-plane-')
@@ -136,7 +135,7 @@ export async function integrationFixture() {
 				return controlApp.fetch(new Request(request, { headers }), {
 					env: controlEnv,
 					provider,
-					sourceConnection: unavailableSourceConnection(provider.id),
+					sourceConnection: unusedSourceConnection(provider.id),
 				}, exec)
 			},
 		})
@@ -153,7 +152,6 @@ export async function integrationFixture() {
 				},
 			},
 			WAIT_UNTIL: exec.waitUntil,
-			REPO_EVENTS: new FakeRepoSource({ fakeInstallationId: null }),
 			ENVIRONMENT: 'local',
 			IAM: new HttpIamRpc({ origin: issuer, key: rpcKey }),
 			FABRIKA_IAM_ISSUER: issuer,

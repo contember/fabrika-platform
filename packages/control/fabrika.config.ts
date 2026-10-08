@@ -9,8 +9,9 @@
 // and `wrangler d1 migrations apply DB --local` keep working unchanged. The resource graph lives in
 // ONE place; the two entry points differ only in what surrounds it.
 //
-// Secrets are never inlined: the GitHub App key/webhook secret + the M4 vault key are declared by
-// NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
+// Secrets are never inlined: the vault key and the platform credentials are declared by NAME in
+// `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`). GitHub App keys
+// are not among them: each source connection's key lives in the vault (ADR-0029).
 
 import {
 	createCloudflareProxyWorker,
@@ -85,10 +86,6 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			...(operationsArtifactOrigin === undefined || operationsArtifactOrigin === ''
 				? {}
 				: { OPERATIONS_ARTIFACT_ORIGIN: operationsArtifactOrigin }),
-			// The GitHub App's numeric id (public, not a secret) — it's the `iss` of the App JWT that mints
-			// installation tokens to clone PRIVATE app repos. The PEM key is a `pipeline.secret`; the id is
-			// just config, so it rides as a var. Without it the JWT iss is empty and GitHub answers 401.
-			GITHUB_APP_ID: process.env['GITHUB_APP_ID'] ?? '',
 		},
 		bindings: {
 			// Run logs + terminal status, keyed by run id (runs/<id>/logs.ndjson, runs/<id>/status.json).
@@ -98,7 +95,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// so two triggers can't race on cf-state / wrangler / IAM. D1 is region-specific → pinned
 			// to EU West. Migrations in ./migrations.
 			DB: new D1Database({ name: 'vozka', migrationsDir: './migrations', locationHint: 'weur' }),
-			// Deploy job queue: producer (POST /webhooks/github + triggerDeploy) + consumer (queue()).
+			// Deploy job queue: producer (POST /webhooks/github/:connectionId + triggerDeploy) + consumer (queue()).
 			// A run is enqueued by id; the consumer loads it from D1, assembles the job, and runs it.
 			DEPLOY_QUEUE: new Queue({
 				name: 'vozka-deploy',
@@ -151,9 +148,8 @@ export default defineApp({
 		// Build the dashboard SPA into ../dashboard/dist (the ASSETS directory) before deploy.
 		build: 'bun run --filter @fabrika/dashboard build',
 		// Runtime Worker secrets fabrika needs, provisioned via `wrangler secret put` at deploy:
-		//   - FABRIKA_CONTROL_VAULT_KEY — the M4 vault master key (KEK) for the encrypted D1 secret vault.
-		//   - GITHUB_APP_PRIVATE_KEY  — the GitHub App PEM key (signs the App JWT for install tokens).
-		//   - GITHUB_WEBHOOK_SECRET   — HMAC-verifies inbound POST /webhooks/github.
+		//   - FABRIKA_CONTROL_VAULT_KEY — the M4 vault master key (KEK) for the encrypted D1 secret vault,
+		//                               which also holds every GitHub source connection's App key.
 		//   - CLOUDFLARE_API_TOKEN    — the account-wide CF token fabrika deploys every app with (single
 		//                               account → one token; same token that authenticated THIS deploy).
 		//   - FABRIKA_IAM_PROVISIONING_KEY — fabrika's seeded IAM provisioning `px_` key, injected into
@@ -163,8 +159,6 @@ export default defineApp({
 		// Their VALUES are read from the environment by name at deploy time (never inlined here).
 		secrets: [
 			'FABRIKA_CONTROL_VAULT_KEY',
-			'GITHUB_APP_PRIVATE_KEY',
-			'GITHUB_WEBHOOK_SECRET',
 			'CLOUDFLARE_API_TOKEN',
 			'FABRIKA_IAM_PROVISIONING_KEY',
 			'FABRIKA_RUNNER_KEY',

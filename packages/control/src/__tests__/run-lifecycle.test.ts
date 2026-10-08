@@ -65,7 +65,7 @@ async function seedRun(
 		workerDir: 'worker',
 		configPath: 'fabrika.config.ts',
 		...(options.sourceBinding === undefined
-			? { githubInstallationId: 42 }
+			? {}
 			: {
 				githubConnectionId: options.sourceBinding.connectionId,
 				githubInstallationId: options.sourceBinding.installationId,
@@ -148,7 +148,6 @@ function makeProvider(
 	outcome: RunOutcome,
 	options: {
 		id?: string
-		sourceBinding?: 'connection' | 'installation'
 		managedSecrets?: boolean
 		cancelled?: string[]
 		cancelledNamespaces?: string[]
@@ -158,7 +157,7 @@ function makeProvider(
 	return {
 		id,
 		normalizeRegistration: (input) => normalize(id, input),
-		source: { binding: options.sourceBinding ?? 'installation' },
+		source: { binding: 'connection' },
 		deploy: async (input) => {
 			inputs.push(input)
 			await input.events.externalId(`${id}-run-1`)
@@ -287,7 +286,7 @@ describe('provider-neutral run lifecycle', () => {
 					.run(current.appBinding.connectionId, current.appBinding.installationId)
 			}
 			let calls = 0
-			const provider = makeProvider([], { state: 'succeeded' }, { id: 'zerops', sourceBinding: 'connection' })
+			const provider = makeProvider([], { state: 'succeeded' }, { id: 'zerops' })
 			provider.resolveSource = () => {
 				calls++
 				return Promise.resolve({ commitSha: 'a'.repeat(40) })
@@ -297,9 +296,10 @@ describe('provider-neutral run lifecycle', () => {
 		}
 	})
 
-	test('Cloudflare persists a manual commit before release projection and preserves installation-only source coordinates', async () => {
+	test('Cloudflare persists a manual commit before release projection and carries the keyed source binding', async () => {
 		const { db, d1, sqlite } = createHarness()
-		const runId = await seedRun(db, { provider: 'cloudflare' })
+		insertSourceConnection(sqlite, { connectionId: 'connection-1', installationId: 42 })
+		const runId = await seedRun(db, { provider: 'cloudflare', sourceBinding: { connectionId: 'connection-1', installationId: 42 } })
 		const commitSha = 'a'.repeat(40)
 		const jobs: CloudflareRunnerJob[] = []
 		const phases: string[] = []
@@ -321,12 +321,12 @@ describe('provider-neutral run lifecycle', () => {
 			resolveSource: async (input) => {
 				expect(input.expectedCommitSha).toBeUndefined()
 				expect(input.app.source).toMatchObject({ ref: 'refs/heads/deploy/prod' })
-				expect(input.sourceBinding).toEqual({ installationId: 42 })
+				expect(input.sourceBinding).toEqual({ connectionId: 'connection-1', installationId: 42 })
 				return { commitSha }
 			},
 			prepareClone: async (source, _signal, sourceBinding) => {
 				expect(source.ref).toBe(commitSha)
-				expect(sourceBinding).toEqual({ installationId: 42 })
+				expect(sourceBinding).toEqual({ connectionId: 'connection-1', installationId: 42 })
 				return { repoUrl: source.repoUrl }
 			},
 			startRun: async (job) => {
@@ -601,7 +601,7 @@ describe('provider-neutral run lifecycle', () => {
 				configPath: 'fabrika.config.ts',
 			},
 		})
-		expect(input.sourceBinding).toEqual({ installationId: 42 })
+		expect(input.sourceBinding).toBeUndefined()
 		expect(input.environment.domain).toBe('app.example.com')
 		expect(input.environment.publicOrigin).toBe('https://public.example.com')
 		expect(input.secrets).toEqual({ API_KEY: 'prod' })

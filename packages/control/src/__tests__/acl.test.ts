@@ -1,7 +1,6 @@
 import type { AuthContext } from '@fabrika/auth'
 import { uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
@@ -26,7 +25,6 @@ function makeDeps(auth: AuthContext): { deps: ControlRpcDeps; queue: ControlJobM
 			},
 		},
 		logs: { get: () => Promise.resolve(null) },
-		repoSource: new FakeRepoSource(),
 		provider: fakeControlProvider,
 		cancelRun: () => Promise.resolve(),
 	}

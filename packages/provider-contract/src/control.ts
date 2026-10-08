@@ -78,18 +78,17 @@ export interface ProviderSourceResolution {
 }
 
 /**
- * Credential-free selector of the GitHub App installation that reads a private source (ADR-0029).
- * Absent means a public source. `connectionId` is present exactly in the `connection` source mode.
+ * Credential-free selector of the GitHub connection and installation that read a private source
+ * (ADR-0029). Absent means a public source; an installation id alone never selects a credential.
  */
 export interface ProviderSourceBinding {
+	readonly connectionId: string
 	readonly installationId: number
-	readonly connectionId?: string
 }
 
-/** How private GitHub sources reach a provider (ADR-0029). */
+/** How private GitHub sources reach a provider (ADR-0029): one keyed connection's App and installation. */
 export interface ProviderSourceCapabilities {
-	/** `connection`: one keyed connection's App and installation. `installation`: the installation's single App. */
-	readonly binding: 'connection' | 'installation'
+	readonly binding: 'connection'
 }
 
 /** One control-plane deploy invocation. */

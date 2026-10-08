@@ -3,7 +3,6 @@ import type { DeviceAuthorizationRequest } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { FakeRepoSource } from '../repo-source'
 import type { ControlRpcDeps } from '../services'
 import { approvalVerifier, humanCredential, pairingIam, pairingRequest } from './helpers/builder-pairing'
 import { createHarness, queryRows } from './helpers/harness'
@@ -20,7 +19,6 @@ async function setup() {
 		auth: allowAllAuth(),
 		provider: fakeControlProvider,
 		builderPairingIam: stub.iam,
-		repoSource: new FakeRepoSource(),
 		queue: { send: async () => {} },
 		logs: { get: async () => null },
 		cancelRun: async () => {},

@@ -11,11 +11,10 @@ import { CONTROL_PROXY_GATES } from '../../fabrika.gates'
 import { controlApp } from '../app'
 import { builderPublicResponse } from '../builder-bootstrap'
 import type { Env } from '../env'
-import { FakeRepoSource } from '../repo-source'
-import { unavailableSourceConnection } from '../source/connections'
 import { approvalVerifier } from './helpers/builder-pairing'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { unusedSourceConnection } from './helpers/source-connection'
 import { testIamEnv } from './helpers/tokens'
 
 const configured = { FABRIKA_CONTROL_DOMAIN: 'https://control.test', FABRIKA_IAM_ISSUER: 'https://iam.test' }
@@ -175,13 +174,12 @@ test('public bootstrap runs before authentication; protected RPC remains authent
 			RUN_LOGS: { get: async () => null, put: async () => {}, delete: async () => {} },
 			DEPLOY_QUEUE: { send: async () => {} },
 			WAIT_UNTIL: () => {},
-			REPO_EVENTS: new FakeRepoSource(),
 			ENVIRONMENT: 'local',
 			...testIamEnv,
 			...configured,
 		}
 		const fetch = (request: Request) =>
-			controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unavailableSourceConnection('harbor') }, { waitUntil() {} })
+			controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, { waitUntil() {} })
 		expect((await fetch(new Request('https://control.test/builder/connect'))).status).toBe(200)
 		expect((await fetch(new Request('https://control.test/.well-known/fabrika-builder'))).status).toBe(200)
 		expect(

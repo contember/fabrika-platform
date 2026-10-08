@@ -228,8 +228,7 @@ describe('GitHubConnectionStore', () => {
 			{ id: 'cloudflare-only', github_connection_id: null },
 			{ id: 'zerops-match', github_connection_id: 'legacy-connection' },
 		])
-		await expect(harness.repositories.registry.getSourceBinding('zerops-match', 'connection')).rejects.toThrow('incomplete')
-		expect(await harness.repositories.registry.getSourceBinding('cloudflare-only', 'installation')).toEqual({ installationId: 45 })
+		await expect(harness.repositories.registry.getSourceBinding('zerops-match')).rejects.toThrow('incomplete')
 	})
 
 	test('keeps keyed connections unique per owner and paged', async () => {
@@ -254,7 +253,7 @@ describe('GitHubConnectionStore', () => {
 			.run('zerops-match', 'github.com/acme/zerops-match', 'keyed-alpha', 45)
 		sqlite.query(`INSERT INTO app_envs (app_id, env, provider, provider_target_json, provider_artifact_json)
 			VALUES ('zerops-match', 'prod', 'zerops', '{}', '{}')`).run()
-		expect(await harness.repositories.registry.getSourceBinding('zerops-match', 'connection')).toEqual({
+		expect(await harness.repositories.registry.getSourceBinding('zerops-match')).toEqual({
 			connectionId: 'keyed-alpha',
 			installationId: 45,
 		})

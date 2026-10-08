@@ -29,7 +29,7 @@ export default createPage()
 		const [namespaceId, setNamespaceId] = useState('')
 		const [manifest, setManifest] = useState('')
 		const [configPath, setConfigPath] = useState('fabrika.config.ts')
-		const [installationId, setInstallationId] = useState('')
+		const [source, setSource] = useState<'public' | 'connection'>('public')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
 
@@ -47,11 +47,6 @@ export default createPage()
 				setError(cause instanceof Error ? cause.message : 'Paste a valid fabrika.manifest.json.')
 				return
 			}
-			const installTrimmed = installationId.trim()
-			// Blank → auto-detect from the installed GitHub App; a number → set it manually.
-			const installField = installTrimmed === ''
-				? { resolveInstallationId: true }
-				: { githubInstallationId: Number(installTrimmed) }
 			const body: RegisterAppRequest = {
 				id: id.trim(),
 				repoUrl: repoUrl.trim(),
@@ -60,7 +55,7 @@ export default createPage()
 				...(publicOrigin.trim() === '' ? {} : { publicOrigin: publicOrigin.trim() }),
 				...(triggerRef.trim() === '' ? {} : { triggerRef: triggerRef.trim() }),
 				...registration,
-				...installField,
+				...(source === 'connection' ? { resolveInstallationId: true } : {}),
 			}
 			setBusy(true)
 			try {
@@ -207,17 +202,14 @@ export default createPage()
 						</>
 					)}
 					<label>
-						GitHub installation id (optional)
-						<input
-							type="number"
-							min="1"
-							value={installationId}
-							onChange={(e) => setInstallationId(e.target.value)}
-							placeholder="auto-detect"
-							autoComplete="off"
-						/>
+						Repository access
+						<select value={source} onChange={(e) => setSource(e.target.value === 'connection' ? 'connection' : 'public')}>
+							<option value="public">Public repository (no GitHub credentials)</option>
+							<option value="connection">Private, through the organization's GitHub source connection</option>
+						</select>
 						<span className="hint">
-							Needed to clone a <strong>private</strong> repo. Leave blank to auto-detect from the installed GitHub App; set a number to override.
+							A private repository binds the GitHub source connection of its organization. Connect it first in{' '}
+							<Link to="settings/source">Source connection</Link>.
 						</span>
 					</label>
 					{error && <p className="error-text" role="alert">{error}</p>}

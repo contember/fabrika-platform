@@ -28,8 +28,7 @@
 		"FABRIKA_CONTROL_DOMAIN": "",
 		"FABRIKA_CONTROL_BOOTSTRAP_ADMINS": "[]",
 		"CLOUDFLARE_ACCOUNT_ID": "",
-		"FABRIKA_IAM_ISSUER": "http://localhost:18191",
-		"GITHUB_APP_ID": ""
+		"FABRIKA_IAM_ISSUER": "http://localhost:18191"
 	},
 	"migrations": [
 		{

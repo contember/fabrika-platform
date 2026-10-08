@@ -107,15 +107,15 @@ Typed RPC is the only administrative API for Control and Operations, for browser
 and machine callers alike ([ADR-0041](../decisions/0041-one-administrative-transport-for-control-and-operations.md)).
 Protocol-specific HTTP surfaces remain:
 
-| Application | Compatibility or protocol surface                   | Why it remains                                                                                                  |
-| ----------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| IAM         | `/admin/*` REST — four machine operations           | App-schema reconciliation and machine-key provisioning; outside the Control/Operations transport consolidation. |
-| IAM         | `/auth/*`, `/.well-known/jwks.json`                 | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                         |
-| IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport | Applications and Control use the process-to-process management contract; it is separate from browser admin RPC. |
-| IAM         | `/auth/mint/*`                                      | The proxy's own least-privilege surface — session mint, key mint, handoff redemption; see below.                |
-| Delivery    | `/webhooks/github`, health, and assets              | Webhooks, probes, and static files have protocol-specific HTTP semantics.                                       |
-| Operations  | Sentry envelope ingest and source-map upload        | SDK ingest and artifact upload are established streaming/binary HTTP protocols.                                 |
-| Operations  | private catalog and release reconciliation          | Control-to-Operations synchronization is a service protocol, not a browser domain API.                          |
+| Application | Compatibility or protocol surface                    | Why it remains                                                                                                  |
+| ----------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| IAM         | `/admin/*` REST — four machine operations            | App-schema reconciliation and machine-key provisioning; outside the Control/Operations transport consolidation. |
+| IAM         | `/auth/*`, `/.well-known/jwks.json`                  | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                         |
+| IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport  | Applications and Control use the process-to-process management contract; it is separate from browser admin RPC. |
+| IAM         | `/auth/mint/*`                                       | The proxy's own least-privilege surface — session mint, key mint, handoff redemption; see below.                |
+| Delivery    | `/webhooks/github/:connectionId`, health, and assets | Webhooks, probes, and static files have protocol-specific HTTP semantics.                                       |
+| Operations  | Sentry envelope ingest and source-map upload         | SDK ingest and artifact upload are established streaming/binary HTTP protocols.                                 |
+| Operations  | private catalog and release reconciliation           | Control-to-Operations synchronization is a service protocol, not a browser domain API.                          |
 
 Control serves `/api/rpc`; its Operations gateway forwards `/operations/api/rpc`
 to Operations' private `/api/rpc`. Administrative REST routes are removed, with

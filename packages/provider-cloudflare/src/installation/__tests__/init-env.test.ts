@@ -1,4 +1,4 @@
-import { action, type GitHubAppManifestInput, type GitHubAppManifestRuntime } from '@fabrika/installation-init'
+import { action } from '@fabrika/installation-init'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { envPath, openEnvFile } from '../envfile'
 import {
 	type Collected,
-	ensureGitHubApp,
 	ensureRunnerKey,
 	ensureVaultKey,
 	environmentPayload,
@@ -30,7 +29,6 @@ const COLLECTED: Collected = {
 	apiToken: 'cf-api-token',
 	controlPlaneDomain: 'fabrika.example.com',
 	operationsHostname: 'errors.example.com',
-	githubOrg: 'acme',
 	platformRepo: 'acme/fabrika-platform',
 	iamUrl: 'https://iam.example.com',
 	iamHostname: 'iam.example.com',
@@ -42,7 +40,6 @@ const COLLECTED: Collected = {
 	emailProvider: 'none',
 	emailFrom: '',
 	bootstrapAdmins: ['ops@example.com'],
-	installRepos: [],
 }
 
 /** Point XDG at a throwaway directory and open a real env file for the length of one test. */
@@ -146,177 +143,6 @@ describe('Cloudflare installer IAM method resume', () => {
 	})
 })
 
-describe('Cloudflare installer GitHub App resume', () => {
-	const app = {
-		id: 123,
-		slug: 'fabrika-test',
-		htmlUrl: 'https://github.com/apps/fabrika-test',
-		pem: '-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----',
-		webhookSecret: 'webhook-secret',
-	}
-	const context = {
-		account: 'test-account',
-		controlPlaneDomain: 'control.example.test',
-		githubOrg: 'contember',
-		installRepos: ['contember/app'],
-	}
-
-	test('fresh rejection persists one complete bundle and resume still requires confirmation', async () => {
-		const source: Record<string, string | undefined> = {}
-		const persisted: Array<Readonly<Record<string, string>>> = []
-		const actions: string[] = []
-		let creations = 0
-		let confirmations = 0
-		const dependencies = {
-			source,
-			create: async (_input: GitHubAppManifestInput, runtime?: GitHubAppManifestRuntime) => {
-				creations++
-				await runtime?.onCreated?.(app, new AbortController().signal)
-				return app
-			},
-			persist: (values: Readonly<Record<string, string>>) => {
-				persisted.push(values)
-				Object.assign(source, values)
-				return Promise.resolve()
-			},
-			appName: () => Promise.resolve('fabrika-test'),
-			confirmInstallation: () => {
-				confirmations++
-				return Promise.resolve(confirmations > 1)
-			},
-			installAction: (title: string) => actions.push(title),
-		}
-
-		await expect(ensureGitHubApp(context, dependencies)).rejects.toThrow('GitHub App installation is required')
-		expect(await ensureGitHubApp(context, dependencies)).toEqual(app)
-
-		expect(creations).toBe(1)
-		expect(confirmations).toBe(2)
-		expect(actions).toEqual(['OPERATOR ACTION — install the GitHub App', 'OPERATOR ACTION — install the GitHub App'])
-		expect(persisted).toEqual([{
-			GITHUB_APP_PRIVATE_KEY: app.pem,
-			GITHUB_WEBHOOK_SECRET: app.webhookSecret,
-			GITHUB_APP_ID: String(app.id),
-			GITHUB_APP_SLUG: app.slug,
-			GITHUB_APP_URL: app.htmlUrl,
-		}])
-	})
-
-	test('partial or malformed stored state fails before creating a replacement App, naming the real file', async () => {
-		await withOpenEnvFile(async () => {
-			for (
-				const source of [
-					{ GITHUB_APP_PRIVATE_KEY: app.pem },
-					{
-						GITHUB_APP_PRIVATE_KEY: app.pem,
-						GITHUB_WEBHOOK_SECRET: app.webhookSecret,
-						GITHUB_APP_ID: 'not-an-id',
-						GITHUB_APP_SLUG: app.slug,
-						GITHUB_APP_URL: app.htmlUrl,
-					},
-				]
-			) {
-				let creations = 0
-				let confirmations = 0
-				await expect(ensureGitHubApp(context, {
-					source,
-					create: () => {
-						creations++
-						return Promise.resolve(app)
-					},
-					persist: () => Promise.resolve(),
-					appName: () => Promise.resolve('fabrika-test'),
-					confirmInstallation: () => {
-						confirmations++
-						return Promise.resolve(true)
-					},
-					installAction: () => {},
-				})).rejects.toThrow(`restore all GitHub App values in ${envPath()} or remove all five`)
-				expect(creations).toBe(0)
-				expect(confirmations).toBe(0)
-			}
-		})
-	})
-
-	test('an interrupted installation confirmation is required again on resume', async () => {
-		const source = {
-			GITHUB_APP_PRIVATE_KEY: app.pem,
-			GITHUB_WEBHOOK_SECRET: app.webhookSecret,
-			GITHUB_APP_ID: String(app.id),
-			GITHUB_APP_SLUG: app.slug,
-			GITHUB_APP_URL: app.htmlUrl,
-		}
-		let confirmations = 0
-		let creations = 0
-		const dependencies = {
-			source,
-			create: () => {
-				creations++
-				return Promise.resolve(app)
-			},
-			persist: () => Promise.resolve(),
-			appName: () => Promise.resolve('fabrika-test'),
-			confirmInstallation: () => {
-				confirmations++
-				return confirmations === 1 ? Promise.reject(new Error('operator interrupted')) : Promise.resolve(true)
-			},
-			installAction: () => {},
-		}
-
-		await expect(ensureGitHubApp(context, dependencies)).rejects.toThrow('operator interrupted')
-		expect(await ensureGitHubApp(context, dependencies)).toEqual(app)
-		expect(confirmations).toBe(2)
-		expect(creations).toBe(0)
-	})
-
-	test('resumed bundles reject noncanonical ids and unsafe credentials without exposing values', async () => {
-		await withOpenEnvFile(async () => {
-			const valid = {
-				GITHUB_APP_PRIVATE_KEY: app.pem,
-				GITHUB_WEBHOOK_SECRET: app.webhookSecret,
-				GITHUB_APP_ID: String(app.id),
-				GITHUB_APP_SLUG: app.slug,
-				GITHUB_APP_URL: app.htmlUrl,
-			}
-			const invalid: Record<string, string>[] = [
-				{ GITHUB_APP_ID: '01' },
-				{ GITHUB_APP_ID: '1e2' },
-				{ GITHUB_APP_ID: '9007199254740992' },
-				{ GITHUB_APP_ID: '0' },
-				{ GITHUB_APP_PRIVATE_KEY: 'sensitive-invalid-key' },
-				{ GITHUB_WEBHOOK_SECRET: 'sensitive\nsecret' },
-				{ GITHUB_WEBHOOK_SECRET: 'x'.repeat(4097) },
-				{ GITHUB_APP_SLUG: 'Invalid' },
-				{ GITHUB_APP_URL: `https://github.com/apps/${app.slug}?secret=value` },
-				{ GITHUB_APP_URL: 'https://github.com/apps/other-app' },
-				{ GITHUB_APP_URL: `https://operator:secret@github.com/apps/${app.slug}` },
-			]
-			for (const override of invalid) {
-				await expect(ensureGitHubApp(context, {
-					source: { ...valid, ...override },
-					create: () => {
-						throw new Error('must not create')
-					},
-					persist: () => {
-						throw new Error('must not persist')
-					},
-					appName: () => {
-						throw new Error('must not prompt')
-					},
-					confirmInstallation: () => {
-						throw new Error('must not confirm')
-					},
-					installAction: () => {
-						throw new Error('must not print credentials')
-					},
-				})).rejects.toThrow(
-					`Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in ${envPath()} or remove all five and rerun init`,
-				)
-			}
-		})
-	})
-})
-
 describe('Cloudflare installer runner key', () => {
 	test('generates one 256-bit key, persists it, and reuses it on a resume', async () => {
 		await withOpenEnvFile(async () => {
@@ -342,7 +168,6 @@ describe('Cloudflare installer runner key', () => {
 
 	test('reaches the GitHub Environment as a SECRET and never as a variable', () => {
 		const payload = environmentPayload(COLLECTED, {
-			app: { id: 7, slug: 'fabrika', htmlUrl: 'https://github.com/apps/fabrika', pem: 'pem', webhookSecret: 'hook' },
 			vaultKey: 'vault',
 			provisioning: 'px_key',
 			operationsSyncKey: 'ops',
@@ -354,6 +179,18 @@ describe('Cloudflare installer runner key', () => {
 		expect(Object.keys(payload.vars)).not.toContain('FABRIKA_RUNNER_KEY')
 		expect(Object.values(payload.vars)).not.toContain('runner-key-value')
 	})
+
+	test('carries no GitHub App credential: source connections live in the control vault', () => {
+		const payload = environmentPayload(COLLECTED, {
+			vaultKey: 'vault',
+			provisioning: 'px_key',
+			operationsSyncKey: 'ops',
+			runnerKey: 'runner-key-value',
+			signingKeys: '[]',
+		})
+
+		expect([...Object.keys(payload.secrets), ...Object.keys(payload.vars)].filter((name) => /^(GH|GITHUB)_/.test(name))).toEqual([])
+	})
 })
 
 describe('Cloudflare installer closing summary', () => {
@@ -363,6 +200,7 @@ describe('Cloudflare installer closing summary', () => {
 				finalNotes({
 					repo: 'acme/fabrika-platform',
 					account: 'mangoweb',
+					controlPlaneDomain: 'fabrika.example.com',
 					dir: '/tmp/checkout',
 					ref: 'v0.1.0',
 					passwordEnabled: false,
@@ -377,6 +215,7 @@ describe('Cloudflare installer closing summary', () => {
 			expect(printed).toContain('Branch protection on main: applied.')
 			expect(printed).toContain('Environment deployment-branch policy: NOT applied (HTTP 403')
 			expect(printed).toContain('gh api …later…')
+			expect(printed).toContain('https://fabrika.example.com/settings/source')
 		})
 	})
 })
@@ -400,7 +239,14 @@ describe('Cloudflare installer env-file precedence', () => {
 })
 
 describe('Cloudflare installer protection summary', () => {
-	const base = { repo: 'acme/fabrika-platform', account: 'mangoweb', dir: '/tmp/checkout', ref: 'v0.1.0', passwordEnabled: false }
+	const base = {
+		repo: 'acme/fabrika-platform',
+		account: 'mangoweb',
+		controlPlaneDomain: 'fabrika.example.com',
+		dir: '/tmp/checkout',
+		ref: 'v0.1.0',
+		passwordEnabled: false,
+	}
 
 	test('an applied policy over an unprotected main is reported as restricting nothing', async () => {
 		await withOpenEnvFile(async () => {

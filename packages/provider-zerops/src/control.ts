@@ -160,12 +160,9 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 
 const abortSignal = (): AbortSignal => new AbortController().signal
 
-/** Every private Zerops source names its keyed connection; an installation id alone selects no credential (ADR-0029). */
-const privateBinding = (binding: ProviderSourceBinding | undefined): ZeropsSourcePrivateBinding | undefined => {
-	if (binding === undefined) return undefined
-	if (binding.connectionId === undefined) throw new Error('Zerops private source requires a connection binding')
-	return { connectionId: binding.connectionId, installationId: binding.installationId }
-}
+/** Every private Zerops source names its keyed connection (ADR-0029). */
+const privateBinding = (binding: ProviderSourceBinding | undefined): ZeropsSourcePrivateBinding | undefined =>
+	binding === undefined ? undefined : { connectionId: binding.connectionId, installationId: binding.installationId }
 
 const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 

@@ -100,14 +100,11 @@ export async function sourceBindingFields(
 	repoUrl: string,
 	existing?: AppRow,
 ): Promise<{ githubConnectionId?: string | null; githubInstallationId?: number | null }> {
-	const mode = c.provider.source?.binding
-	if (mode !== 'connection') {
+	const bindsSource = input.githubInstallationId !== undefined || input.resolveInstallationId === true
+	if (c.provider.source === undefined) {
 		if (input.githubInstallationId === null) return { githubInstallationId: null }
-		if (input.githubInstallationId === undefined && input.resolveInstallationId !== true) return {}
-		if (mode === undefined) fail(409, `provider ${c.provider.id} deploys public sources only`)
-		if (input.githubInstallationId !== undefined) return { githubInstallationId: input.githubInstallationId }
-		if (c.repoSource === undefined) return { githubInstallationId: null }
-		return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
+		if (bindsSource) fail(409, `provider ${c.provider.id} deploys public sources only`)
+		return {}
 	}
 	if (existing?.github_connection_id !== null && existing?.github_connection_id !== undefined) {
 		if (repoOwnerChanged(existing.repo_url, repoUrl) || input.githubInstallationId === null) {
@@ -115,23 +112,21 @@ export async function sourceBindingFields(
 		}
 	}
 	if (input.githubInstallationId === null) return { githubConnectionId: null, githubInstallationId: null }
-	if (input.githubInstallationId !== undefined || input.resolveInstallationId === true) {
-		const repository = parseGitHubRepo(repoUrl)
-		if (repository === null) fail(400, 'a private source must be a GitHub repository')
-		const connection = await c.repositories.githubConnections.getConnectionByOwner(repository.owner)
-		if (connection === null) fail(409, 'the repository organization has no GitHub source connection')
-		if (
-			existing?.github_connection_id !== null && existing?.github_connection_id !== undefined
-			&& existing.github_connection_id !== connection.connectionId
-		) {
-			fail(409, 'an application source connection cannot be reassigned')
-		}
-		if (input.githubInstallationId !== undefined && input.githubInstallationId !== connection.installationId) {
-			fail(409, 'the GitHub installation does not match the repository organization')
-		}
-		return { githubConnectionId: connection.connectionId, githubInstallationId: connection.installationId }
+	if (!bindsSource) return {}
+	const repository = parseGitHubRepo(repoUrl)
+	if (repository === null) fail(400, 'a private source must be a GitHub repository')
+	const connection = await c.repositories.githubConnections.getConnectionByOwner(repository.owner)
+	if (connection === null) fail(409, 'the repository organization has no GitHub source connection')
+	if (
+		existing?.github_connection_id !== null && existing?.github_connection_id !== undefined
+		&& existing.github_connection_id !== connection.connectionId
+	) {
+		fail(409, 'an application source connection cannot be reassigned')
 	}
-	return {}
+	if (input.githubInstallationId !== undefined && input.githubInstallationId !== connection.installationId) {
+		fail(409, 'the GitHub installation does not match the repository organization')
+	}
+	return { githubConnectionId: connection.connectionId, githubInstallationId: connection.installationId }
 }
 
 function repoOwnerChanged(currentRepoUrl: string, nextRepoUrl: string): boolean {

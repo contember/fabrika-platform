@@ -8,7 +8,7 @@ import { controlAuthMiddleware, controlPublicOrigin } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
 import { controlOriginGuard } from './origin-guard'
-import { repositories, type WebhookRoute, webhookRoute } from './services'
+import { connectionWebhookVerifier, repositories } from './services'
 import { manifestCallback, manifestHandoff, SourceConnectionWorkflowError } from './source-connection'
 import type { SourceConnectionPort } from './source/connections'
 import { handleWebhook } from './webhook'
@@ -47,7 +47,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		route.all('/healthz', () => Response.json({ status: 'ok' })),
 		route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),
 		route.post('/webhooks/github/:connectionId', (ctx, params) => webhook(ctx, params.connectionId)),
-		route.post('/webhooks/github', (ctx) => webhook(ctx)),
+		route.all('/webhooks/*path', () => error(404, 'not found')),
 		route.get(
 			'/api/source/github/manifest/:connectionId',
 			(ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params.connectionId)),
@@ -72,19 +72,12 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 	},
 })
 
-async function webhook(ctx: ControlAppContext, connectionId?: string): Promise<Response> {
-	let target: WebhookRoute | null
-	try {
-		target = await webhookRoute(ctx.env, ctx.provider, connectionId)
-	} catch {
-		return error(401, 'invalid webhook signature')
-	}
-	if (target === null) return error(401, 'invalid webhook signature')
+function webhook(ctx: ControlAppContext, connectionId: string): Promise<Response> {
 	return handleWebhook(ctx.request, {
 		repositories: repositories(ctx.env),
-		repoSource: target.repoSource,
+		verifier: connectionWebhookVerifier(ctx.env, connectionId),
 		queue: ctx.env.DEPLOY_QUEUE,
-		binding: target.binding,
+		connectionId,
 	})
 }
 

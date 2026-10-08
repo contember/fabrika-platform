@@ -28,15 +28,14 @@ import {
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
 } from '../github-connection-store'
-import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
-import { unavailableSourceConnection } from '../source/connections'
 import { Vault } from '../vault'
 import { applyMigrations } from '../zerops/migrate'
 import { createFetchHandler } from '../zerops/server'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
+import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv } from './helpers/tokens'
 
 if (!hasPostgres) {
@@ -286,8 +285,6 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 		expect((await db.registry.getApp('acme'))?.worker_dir).toBe('apps/web')
 		expect(await db.registry.getApp('nope')).toBeNull()
-		expect((await db.registry.getAppsByRepoUrl('github.com/acme/app')).map((a) => a.id)).toEqual(['acme'])
-		expect(await db.registry.getAppsByRepoUrl('github.com/other/app')).toHaveLength(0)
 
 		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
 		expect((await db.registry.listApps()).map((a) => a.id)).toEqual(['acme', 'beta'])
@@ -907,7 +904,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 	test('serves liveness, the API and the SPA fallback from one handler', async () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		const handler = createFetchHandler(env(), fakeControlProvider, unavailableSourceConnection('harbor'))
+		const handler = createFetchHandler(env(), fakeControlProvider, unusedSourceConnection('harbor'))
 
 		// The process-level liveness route is claimed before the SPA fallback.
 		expect((await handler(new Request('http://localhost:18291/healthz'))).status).toBe(200)
@@ -943,7 +940,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 				},
 			},
 			fakeControlProvider,
-			unavailableSourceConnection('harbor'),
+			unusedSourceConnection('harbor'),
 		)
 		const response = await handler(new Request('http://localhost:18291/anything'))
 		expect(response.status).toBe(500)
@@ -1057,7 +1054,6 @@ function env(): Env {
 		RUN_LOGS: logs,
 		DEPLOY_QUEUE: new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' }),
 		WAIT_UNTIL: () => {},
-		REPO_EVENTS: new FakeRepoSource(),
 		ENVIRONMENT: 'local',
 		...testIamEnv,
 		// No feed fetch happens in these tests (the poller needs a resolvable feed), so the maintenance

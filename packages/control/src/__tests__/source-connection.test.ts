@@ -56,7 +56,6 @@ function auth(type: 'user' | 'service' = 'user', allowed = true, auditFails = fa
 
 class FakeSourceConnection implements SourceConnectionPort {
 	readonly provider = 'zerops'
-	available = true
 	installation: SourceInstallationVerification = {
 		status: 'installed',
 		installationId: 456,
@@ -159,7 +158,6 @@ function environment(now: () => number = () => 1_000): Env {
 		RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
-		REPO_EVENTS: { verifyWebhook: () => Promise.resolve(null), resolveInstallationId: () => Promise.resolve(null) },
 		ENVIRONMENT: 'test',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
 		FABRIKA_CONTROL_VAULT_KEY: testKey(),
@@ -450,16 +448,7 @@ describe('GitHub source connection workflow', () => {
 		expect(await readGitHubAppCredential(vault, attempt.appCredentialRef, attempt.id)).toEqual({ appId: '123', privateKeyPem: 'private-pem' })
 	})
 
-	test('reports unavailable and refuses to start without connection support or a vault', async () => {
-		const env = environment()
-		const source = new FakeSourceConnection()
-		source.available = false
-		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({ state: 'unavailable' })
-		await expect(startSourceConnection(
-			deps(env, source, mutationRequest('/api/rpc')),
-			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
-		)).rejects.toMatchObject({ httpStatus: 503 })
-
+	test('reports unavailable and refuses to start without a vault', async () => {
 		const { FABRIKA_CONTROL_VAULT_KEY: _vaultKey, ...withoutVault } = environment()
 		const available = new FakeSourceConnection()
 		expect((await sourceConnectionList(deps(withoutVault, available, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({

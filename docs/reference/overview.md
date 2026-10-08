@@ -76,10 +76,9 @@ The code lives in `packages/control/src/source/`.
 
 Private repositories are read through operator-owned GitHub Apps — one App per
 GitHub organization, created and verified from the authenticated console
-([ADR-0029](../decisions/0029-github-app-sources.md)). On Zerops, every
+([ADR-0029](../decisions/0029-github-app-sources.md)). On both clouds, every
 connection's App id and private key live in control's vault next to that
-connection's webhook secret; Cloudflare has one App whose id and key are Worker
-secrets. `@fabrika/github-app` is the shared client: the least-authority manifest
+connection's webhook secret. `@fabrika/github-app` is the shared client: the least-authority manifest
 builder, the bounded manifest-code exchange, installation-token minting, and
 webhook configuration. A public repository is fetched anonymously and needs no
 App at all.

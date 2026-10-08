@@ -28,7 +28,6 @@
 	"dependencies": {
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
-		"@fabrika/github-app": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*"
 	},
 	"devDependencies": {

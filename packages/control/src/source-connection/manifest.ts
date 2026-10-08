@@ -53,7 +53,7 @@ export async function startSourceConnection(
 	const attemptId = uuidv7()
 	buildManifest(owner, input.appName, origin, attemptId)
 	// The App key has nowhere to go without the vault, and GitHub hands it over exactly once.
-	if (!deps.source.available || deps.env.FABRIKA_CONTROL_VAULT_KEY === undefined) throw new SourceConnectionWorkflowError(503)
+	if (deps.env.FABRIKA_CONTROL_VAULT_KEY === undefined) throw new SourceConnectionWorkflowError(503)
 	const [workflow, sameOwner] = await Promise.all([
 		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
 		deps.env.REPOSITORIES.githubConnections.getConnectionByOwner(owner),

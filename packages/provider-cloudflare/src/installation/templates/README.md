@@ -15,7 +15,7 @@ the **`{{ACCOUNT}}` GitHub Environment** (Settings → Environments) and are wri
 Scaffold commits use `[skip ci]`; init explicitly dispatches the workflow only after that Environment is configured.
 
 Every credential this installation has is in that Environment — the Cloudflare API token, the vault KEK,
-IAM's signing key, the GitHub App key, the provisioning key and `FABRIKA_RUNNER_KEY` (the shared key the
+IAM's signing key, the provisioning key and `FABRIKA_RUNNER_KEY` (the shared key the
 control plane presents to the deploy runner; Stage 3 pushes it to both Workers). Init therefore protects
 `main` (no force pushes, no deletions) on a repository it creates, and restricts the Environment to
 protected branches. The two go together: the Environment policy admits any branch that carries no
@@ -38,8 +38,12 @@ a safe redeploy.
 ## First bring-up
 
 Run `fabrika platform init --provider=cloudflare {{ACCOUNT}}` from a laptop with the Cloudflare API token in hand. It creates this repo,
-the GitHub App, the Environment with its secrets and variables, and triggers the workflow. The run
-builds and pushes the runner container image into the account.
+the Environment with its secrets and variables, and triggers the workflow. The run builds and pushes the
+runner container image into the account.
+
+Public repositories deploy without a GitHub App. To deploy private repositories, connect GitHub from the
+control plane at **Settings → Source**: each connection is an organization-owned GitHub App whose key
+Control keeps in its encrypted vault, never in this Environment.
 
 To close the escape hatch once IAM grants you admin, set the `{{ACCOUNT}}` Environment variable
 `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` to `[]` and re-run the workflow.

@@ -313,7 +313,6 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/app": "workspace:*",
-        "@fabrika/github-app": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "zod": "^3.25.76",
       },

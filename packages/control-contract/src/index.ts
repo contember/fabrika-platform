@@ -167,7 +167,9 @@ export interface AppOptionalFields {
 	workerDir?: string | null
 	buildCmd?: string | null
 	configPath?: string | null
+	/** Must equal the installation of the repository owner's GitHub connection. */
 	githubInstallationId?: number | null
+	/** Bind the app to the repository owner's GitHub connection (one per owner). */
 	resolveInstallationId?: boolean
 }
 

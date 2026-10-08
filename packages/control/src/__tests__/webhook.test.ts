@@ -1,16 +1,17 @@
 import { describe, expect, test } from 'bun:test'
-import { FakeRepoSource, normalizeRepoUrl } from '../repo-source'
+import { ConnectionWebhookVerifier, normalizeRepoUrl } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { handleWebhook, type WebhookDeps } from '../webhook'
 import { createHarness, pushWebhookRequest, signWebhook } from './helpers/harness'
 import { providerEnvironment } from './helpers/provider'
 
-// The webhook is the one unauthenticated route, HMAC-gated. These tests exercise: (1) signature
-// verification (good/bad), (2) repo+ref → (app, env) mapping driving run creation + enqueue, (3) the
-// verified-but-unsubscribed no-op. FakeRepoSource runs the REAL HMAC verify, so the signature path is
-// genuine — no GitHub, no Cloudflare.
+// The webhook is the one unauthenticated route, HMAC-gated by the route's connection secret. These tests
+// exercise: (1) signature verification (good/bad), (2) repo+ref → (app, env) mapping driving run
+// creation + enqueue, (3) the verified-but-unsubscribed no-op. The real verifier runs the HMAC check.
 
 const SECRET = 'webhook-test-secret'
+const CONNECTION_ID = 'connection-a'
+const verifier = new ConnectionWebhookVerifier({ getSecret: () => Promise.resolve(SECRET) })
 
 /** A tiny in-memory queue capturing enqueued messages. */
 function makeQueue(): { sent: DeployJobMessage[]; send(message: DeployJobMessage): Promise<void> } {
@@ -73,27 +74,29 @@ async function seedZeropsApp(
 }
 
 /**
- * Seed an account + app + app_env with a trigger ref pointing at `prod`. Stores the NORMALIZED repo
+ * Seed a connection + app + app_env with a trigger ref pointing at `prod`. Stores the NORMALIZED repo
  * URL (the handlers normalize on write; here we seed the Db directly, so we normalize explicitly).
  */
-async function seedRegistry(db: ReturnType<typeof createHarness>['db'], cloneUrl: string): Promise<void> {
-	await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubInstallationId: 42 })
+async function seedRegistry({ db, sqlite }: ReturnType<typeof createHarness>, cloneUrl: string): Promise<void> {
+	insertConnection(sqlite, CONNECTION_ID, 'acme', 42)
+	await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubConnectionId: CONNECTION_ID, githubInstallationId: 42 })
 	await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/deploy/prod' }))
 }
 
 describe('handleWebhook (HMAC + ref→env)', () => {
 	test('a valid signature on a subscribed ref creates a pending run + enqueues it', async () => {
-		const { db } = createHarness()
+		const harness = createHarness()
+		const { db } = harness
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await seedRegistry(db, cloneUrl)
+		await seedRegistry(harness, cloneUrl)
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl, after: 'sha-1', installationId: 42, secret: SECRET })
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 
 		expect(response.status).toBe(200)
@@ -112,9 +115,10 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 	})
 
 	test('a bad signature is rejected (401) and creates no run', async () => {
-		const { db } = createHarness()
+		const harness = createHarness()
+		const { db } = harness
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await seedRegistry(db, cloneUrl)
+		await seedRegistry(harness, cloneUrl)
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({
 			ref: 'refs/heads/deploy/prod',
@@ -126,9 +130,9 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 
 		expect(response.status).toBe(401)
@@ -137,9 +141,10 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 	})
 
 	test('a signature for the WRONG secret is rejected (401)', async () => {
-		const { db } = createHarness()
+		const harness = createHarness()
+		const { db } = harness
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await seedRegistry(db, cloneUrl)
+		await seedRegistry(harness, cloneUrl)
 		const queue = makeQueue()
 		// Sign with a different secret than the source verifies against.
 		const signatureOverride = await signWebhook(JSON.stringify({ ref: 'x', repository: { clone_url: cloneUrl } }), 'other-secret')
@@ -147,25 +152,26 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 		expect(response.status).toBe(401)
 	})
 
 	test('a verified push on an UNSUBSCRIBED ref is a 204 no-op (no run, no enqueue)', async () => {
-		const { db } = createHarness()
+		const harness = createHarness()
+		const { db } = harness
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await seedRegistry(db, cloneUrl) // only refs/heads/deploy/prod is subscribed
+		await seedRegistry(harness, cloneUrl) // only refs/heads/deploy/prod is subscribed
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/heads/main', cloneUrl, installationId: 42, secret: SECRET })
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 
 		expect(response.status).toBe(204)
@@ -174,8 +180,9 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 	})
 
 	test('a push for an UNREGISTERED repo is a 204 no-op', async () => {
-		const { db } = createHarness()
-		await seedRegistry(db, 'https://github.com/acme/app.git')
+		const harness = createHarness()
+		const { db } = harness
+		await seedRegistry(harness, 'https://github.com/acme/app.git')
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({
 			ref: 'refs/heads/deploy/prod',
@@ -186,27 +193,28 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 		expect(response.status).toBe(204)
 		expect(queue.sent).toHaveLength(0)
 	})
 
 	test('a v* tag pattern env triggers on a matching tag push; the DEPLOYED ref is the concrete tag', async () => {
-		const { db } = createHarness()
+		const { db, sqlite } = createHarness()
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubInstallationId: 42 })
+		insertConnection(sqlite, CONNECTION_ID, 'acme', 42)
+		await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubConnectionId: CONNECTION_ID, githubInstallationId: 42 })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/tags/v1.2.3', cloneUrl, after: 'sha-tag', installationId: 42, secret: SECRET })
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 
 		expect(response.status).toBe(200)
@@ -219,27 +227,29 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 	})
 
 	test('a tag push NOT matching the v* pattern is a 204 no-op', async () => {
-		const { db } = createHarness()
+		const { db, sqlite } = createHarness()
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubInstallationId: 42 })
+		insertConnection(sqlite, CONNECTION_ID, 'acme', 42)
+		await db.registry.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl), githubConnectionId: CONNECTION_ID, githubInstallationId: 42 })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/tags/release-1', cloneUrl, installationId: 42, secret: SECRET })
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 		expect(response.status).toBe(204)
 		expect(queue.sent).toHaveLength(0)
 	})
 
 	test('repo URL matching is normalized (registered https vs pushed .git/scp form both match)', async () => {
-		const { db } = createHarness()
+		const { db, sqlite } = createHarness()
+		insertConnection(sqlite, CONNECTION_ID, 'acme', 42)
 		// Registered WITHOUT .git; pushed WITH .git and mixed case host — must still match.
-		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/App', githubInstallationId: 42 })
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/App', githubConnectionId: CONNECTION_ID, githubInstallationId: 42 })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/deploy/prod' }))
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({
@@ -251,26 +261,27 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 
 		const response = await handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})
 		expect(response.status).toBe(200)
 		expect(queue.sent).toHaveLength(1)
 	})
 
-	test('requires the payload installation id and an exact installation-only app binding', async () => {
-		const { db } = createHarness()
+	test("requires the payload installation id and the connection's installation", async () => {
+		const harness = createHarness()
+		const { db } = harness
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await seedRegistry(db, cloneUrl)
+		await seedRegistry(harness, cloneUrl)
 		const queue = makeQueue()
 		const missingInstallation = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl, secret: SECRET })
 		const swappedInstallation = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl, installationId: 43, secret: SECRET })
 		const deps: WebhookDeps = {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		}
 
 		expect((await handleWebhook(missingInstallation, deps)).status).toBe(204)
@@ -305,9 +316,9 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 		})
 		const deps: WebhookDeps = {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue,
-			binding: { kind: 'connection', connectionId: 'connection-a' },
+			connectionId: 'connection-a',
 		}
 
 		expect((await handleWebhook(exact, deps)).status).toBe(200)
@@ -321,9 +332,10 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 	})
 
 	test('does not misreport a post-verification queue failure as an authentication failure', async () => {
-		const { db } = createHarness()
+		const harness = createHarness()
+		const { db } = harness
 		const cloneUrl = 'https://github.com/acme/app.git'
-		await seedRegistry(db, cloneUrl)
+		await seedRegistry(harness, cloneUrl)
 		const request = await pushWebhookRequest({
 			ref: 'refs/heads/deploy/prod',
 			cloneUrl,
@@ -333,9 +345,9 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 
 		await expect(handleWebhook(request, {
 			repositories: db,
-			repoSource: new FakeRepoSource({ webhookSecret: SECRET }),
+			verifier,
 			queue: { send: () => Promise.reject(new Error('queue unavailable')) },
-			binding: { kind: 'installation-only' },
+			connectionId: CONNECTION_ID,
 		})).rejects.toThrow('queue unavailable')
 	})
 })

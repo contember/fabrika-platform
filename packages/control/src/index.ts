@@ -6,8 +6,9 @@ import type { Env } from './env'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
 import type { ControlJobMessage } from './run-lifecycle'
-import { locks, operationsReleaseDeps } from './services'
-import { unavailableSourceConnection } from './source/connections'
+import { locks, operationsReleaseDeps, vault } from './services'
+import { createSourceConnections } from './source/connections'
+import { gitHubAppClientFactory } from './source/credentials'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -34,7 +35,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		return controlApp.fetch(request, {
 			env,
 			provider: cloudflareControlProvider(this.env, env),
-			sourceConnection: unavailableSourceConnection('cloudflare'),
+			sourceConnection: createSourceConnections({ provider: 'cloudflare', vault: () => vault(env), createClient: gitHubAppClientFactory() }),
 		}, this.ctx)
 	}
 

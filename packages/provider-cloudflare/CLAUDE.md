@@ -85,13 +85,13 @@ the two forms are mutually exclusive. Each component deploys through `deployClou
 
 - `installation.ts` — `installationCli`: init, plan, and deploy dispatch. `index.ts` — the subpath surface.
 - `init.ts` — the orchestrator: CF token → account/zones → smart-default prompts → vault key → provisioning
-  key → GitHub App → scaffold repo → GitHub Environment → trigger.
+  key → runner key → scaffold repo → GitHub Environment → trigger. It creates no GitHub App: the operator
+  connects GitHub from the console at **Settings → Source** after install (ADR-0029), as on Zerops.
 - `scaffold.ts` — which files `<org>/fabrika-platform` carries (`templates/`: `platform.yml`, `fabrika.ref`,
   `README.md`, `gitignore`) and the legacy two-ref migration that must stop a refresh.
 - `cloudflare.ts` — CF API helpers and response schemas. `envfile.ts` — env-file resume.
-- Prompts, console formatting, child processes, `gh`, the GitHub Environment write, the repository
-  mechanics and the GitHub App manifest handshake live in `@fabrika/installation-init`. This code decides
-  only the Cloudflare-specific flow, homepage, webhook URL, visibility and installation prompt. The
+- Prompts, console formatting, child processes, `gh`, the GitHub Environment write and the repository
+  mechanics live in `@fabrika/installation-init`. This code decides only the Cloudflare-specific flow. The
   Cloudflare and Zerops inits are not mirror images (ADR-0027).
 
 Invariants:
@@ -105,10 +105,10 @@ Invariants:
   `openEnvFile(account)` binds it, loads it into `process.env` (Bun no longer auto-loads it) and must run
   before any `persistEnv`. Never claim the file is gitignored. A `$PWD/.env` is warned about, because Bun
   loaded it first and its values outrank the per-account file.
-- **Idempotent + resumable.** Every captured value persists to that file; a re-run reuses external
-  resources (GitHub App, vault key) instead of orphaning them.
-- **App visibility is DERIVED:** public iff any install repo is in a different org than the App's owner org
-  (GitHub forbids a private App installing cross-org). Same-org stays private.
+- **Idempotent + resumable.** Every captured value persists to that file; a re-run reuses generated
+  values (vault key, provisioning, runner and signing keys) instead of rolling them.
+- **No GitHub credential in the Environment.** Every GitHub App key lives in Control's vault; the
+  Environment and the Worker secrets carry none.
 - **The provisioning key is a SEEDED `px_` key:** the CLI generates one opaque `px_` bearer
   (`FABRIKA_IAM_PROVISIONING_KEY`); IAM admits a bearer matching it as a synthetic admin (`resolveCaller`),
   and fabrika reconciles its schema with it. No local IAM mint. Stage 1 deploys IAM from the shared

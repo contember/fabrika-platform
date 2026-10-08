@@ -14,7 +14,6 @@ import {
 	updateAppUseCase,
 } from '../api/registry'
 import { normalizeRegistration } from '../api/registry/registration'
-import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { parseVaultRef, Vault } from '../vault'
@@ -29,7 +28,7 @@ import { testVaultKey } from './helpers/vault'
 // the data path here; ACL is covered separately in acl.test.ts.
 
 function makeDeps(
-	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void; repoSource?: RepoEvents } = {},
+	opts: { provider?: ControlProvider; catalogChanged?: () => void } = {},
 ): { deps: ControlRpcDeps; queue: ControlJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
 	const { db, d1, sqlite } = createHarness()
 	const queue: ControlJobMessage[] = []
@@ -53,7 +52,6 @@ function makeDeps(
 				return Promise.resolve(v === undefined ? null : { body: new Blob([v]).stream(), text: () => Promise.resolve(v) })
 			},
 		},
-		repoSource: opts.repoSource ?? new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
 		provider: opts.provider ?? fakeProvider,
 		// Stand in for the runner: mark the run failed (the real seam destroys the container + frees the lock).
 		cancelRun: (run) => fixtureRuns(db.runs, makeFakeLock(db)).finish(run.id, 'failed').then(() => {}),
@@ -102,7 +100,7 @@ const fakeProvider: ControlProvider = {
 		}
 	},
 	deploy: () => Promise.resolve({ state: 'succeeded' }),
-	source: { binding: 'installation' },
+	source: { binding: 'connection' },
 }
 
 /** A provider that CAN read its own artifact's declarations — the shape `declaredVariables` exists for. */
@@ -177,22 +175,6 @@ const storedEnvironment = (
 }
 
 describe('onboarding + registry CRUD', () => {
-	test('passes the registry request signal into delegated installation lookup', async () => {
-		let observed: AbortSignal | undefined
-		const { deps } = makeDeps({
-			repoSource: {
-				verifyWebhook: () => Promise.resolve(null),
-				resolveInstallationId(_repoUrl, signal) {
-					observed = signal
-					return Promise.resolve(42)
-				},
-			},
-		})
-		const request = rpcRequest('apps.create', { id: 'signal-app', repoUrl: 'https://github.com/acme/signal-app', resolveInstallationId: true })
-		expect((await rpcResult(request, deps)).status).toBe(200)
-		expect(observed).toBe(request.signal)
-	})
-
 	test('schedules every catalog-affecting mutation without letting a scheduling failure change the response', async () => {
 		let scheduled = 0
 		const { deps } = makeDeps({
@@ -381,8 +363,9 @@ describe('onboarding + registry CRUD', () => {
 		expect(await deps.repositories.registry.getAppEnv('origin-drift', 'prod')).toBeNull()
 	})
 
-	test('registerApp auto-detects the installation id when resolveInstallationId is set', async () => {
-		const { deps } = makeDeps({ installationId: 424242 })
+	test("registerApp binds the repository owner's connection when resolveInstallationId is set", async () => {
+		const { deps, sqlite } = makeDeps()
+		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 424242)
 		const response = await rpcResult(
 			rpcRequest('register', {
 				...registrationEnvelopes(),
@@ -394,38 +377,29 @@ describe('onboarding + registry CRUD', () => {
 			deps,
 		)
 		expect(response.status).toBe(200)
-		expect((await deps.repositories.registry.getApp('auto'))?.github_installation_id).toBe(424242)
+		expect(await deps.repositories.registry.getApp('auto')).toMatchObject({
+			github_connection_id: 'connection-acme',
+			github_installation_id: 424242,
+		})
 	})
 
-	test('an explicit githubInstallationId overrides auto-detect', async () => {
-		const { deps } = makeDeps({ installationId: 424242 })
-		await rpcResult(
-			rpcRequest('register', {
-				...registrationEnvelopes(),
-				id: 'manual',
-				repoUrl: 'https://github.com/acme/private',
-				env: 'prod',
-				resolveInstallationId: true,
-				githubInstallationId: 999,
-			}),
-			deps,
-		)
-		expect((await deps.repositories.registry.getApp('manual'))?.github_installation_id).toBe(999)
-	})
-
-	test('updateApp can back-fill the installation id via Detect on an existing app', async () => {
-		const { deps } = makeDeps({ installationId: 555 })
+	test('updateApp can back-fill the connection binding via Detect on an existing app', async () => {
+		const { deps, sqlite } = makeDeps()
+		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 555)
 		await rpcResult(rpcRequest('apps.create', { id: 'existing', repoUrl: 'https://github.com/acme/private' }), deps)
 		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(null)
 
 		const patched = await rpcResult(rpcRequest('apps.update', { appId: 'existing', app: { resolveInstallationId: true } }), deps)
 		expect(patched.status).toBe(200)
-		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(555)
+		expect(await deps.repositories.registry.getApp('existing')).toMatchObject({
+			github_connection_id: 'connection-acme',
+			github_installation_id: 555,
+		})
 	})
 
-	test('registration picks the private-source binding from the declared source mode, not the provider id', async () => {
+	test('a provider without private sources refuses a binding', async () => {
 		const register = async (provider: ControlProvider, id: string) => {
-			const { deps, sqlite } = makeDeps({ provider, installationId: 777 })
+			const { deps, sqlite } = makeDeps({ provider })
 			insertSourceConnection(sqlite, 'connection-acme', 'Acme', 101)
 			const response = await rpcResult(
 				rpcRequest('register', { ...registrationEnvelopes(), id, repoUrl: 'https://github.com/acme/private', env: 'prod', resolveInstallationId: true }),
@@ -434,10 +408,8 @@ describe('onboarding + registry CRUD', () => {
 			return { status: response.status, app: await deps.repositories.registry.getApp(id) }
 		}
 
-		const connection = await register({ ...fakeProvider, source: { binding: 'connection' } }, 'connection-app')
+		const connection = await register(fakeProvider, 'connection-app')
 		expect(connection.app).toMatchObject({ github_connection_id: 'connection-acme', github_installation_id: 101 })
-		const installation = await register({ ...fakeProvider, source: { binding: 'installation' } }, 'installation-app')
-		expect(installation.app).toMatchObject({ github_connection_id: null, github_installation_id: 777 })
 		const { source: _source, ...publicOnly } = fakeProvider
 		const refused = await register(publicOnly, 'public-only-app')
 		expect(refused.status).toBe(409)
@@ -445,22 +417,11 @@ describe('onboarding + registry CRUD', () => {
 	})
 
 	test('Zerops onboarding persists the repository owner pair and rejects direct or two-step reassignment', async () => {
-		let installationLookups = 0
-		const { deps, sqlite } = makeDeps({
-			provider: zeropsProvider,
-			repoSource: {
-				verifyWebhook: () => Promise.resolve(null),
-				resolveInstallationId: () => {
-					installationLookups += 1
-					return Promise.resolve(999)
-				},
-			},
-		})
+		const { deps, sqlite } = makeDeps({ provider: zeropsProvider })
 		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 101)
 		insertSourceConnection(sqlite, 'connection-beta', 'Beta', 202)
 		const context = {
 			repositories: deps.repositories,
-			repoSource: deps.repoSource,
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
@@ -480,7 +441,6 @@ describe('onboarding + registry CRUD', () => {
 			github_connection_id: 'connection-beta',
 			github_installation_id: 202,
 		})
-		expect(installationLookups).toBe(0)
 		await expect(updateAppUseCase(context, 'beta-app', {
 			repoUrl: 'https://github.com/acme/private-app',
 			resolveInstallationId: true,
@@ -865,7 +825,6 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 		const { deps } = await seededApp()
 		const context: RegistryUseCaseContext = {
 			repositories: deps.repositories,
-			repoSource: deps.repoSource,
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
@@ -907,7 +866,6 @@ describe('the namespace proxy follows the registry', () => {
 	function context(deps: ControlRpcDeps, recording: ProxyRecording): RegistryUseCaseContext {
 		return {
 			repositories: deps.repositories,
-			repoSource: deps.repoSource,
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,

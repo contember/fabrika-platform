@@ -5,8 +5,9 @@
  * `fabrika platform deploy`), so this laptop never needs the CF toolchain or docker.
  *
  * Order: CF token → account + zones → smart-default prompts → vault key → provisioning key → runner key →
- * GitHub App (manifest) → scaffold the base repo → write the GitHub Environment → trigger. Secret VALUES
- * flow only into the env file, `gh` over stdin, and child env — never through `log.ts`.
+ * scaffold the base repo → write the GitHub Environment → trigger. Secret VALUES flow only into the env
+ * file, `gh` over stdin, and child env — never through `log.ts`. GitHub source connections are made later
+ * from the console (ADR-0029); init creates no GitHub App.
  */
 
 import {
@@ -14,10 +15,7 @@ import {
 	branchProtectionCommand,
 	configureEnvironment,
 	confirm,
-	type CreatedGitHubApp,
-	createGitHubAppViaManifest,
 	detail,
-	githubAppInstallationUrl,
 	info,
 	ok,
 	type ProtectionOutcome,
@@ -32,9 +30,8 @@ import {
 	warn,
 } from '@fabrika/installation-init'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
-import { z } from 'zod'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
-import { envPath, fromEnv, openEnvFile, persistEnv, persistEnvBundle } from './envfile'
+import { envPath, fromEnv, openEnvFile, persistEnv } from './envfile'
 import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
@@ -44,7 +41,6 @@ export interface Collected {
 	apiToken: string
 	controlPlaneDomain: string
 	operationsHostname: string
-	githubOrg: string
 	platformRepo: string
 	iamUrl: string
 	/** IAM's admin hostname (the host of `iamUrl`) — its Custom Domain + token `iss`. */
@@ -60,7 +56,6 @@ export interface Collected {
 	emailProvider: 'none' | 'resend'
 	emailFrom: string
 	bootstrapAdmins: string[]
-	installRepos: string[]
 }
 
 /**
@@ -135,7 +130,6 @@ export async function runInit(account: string): Promise<void> {
 		: undefined
 	const emailApiKey = collected.emailProvider === 'resend' ? await ensureResendApiKey() : undefined
 	const runnerKey = await ensureRunnerKey()
-	const app = await ensureGitHubApp(collected)
 
 	const { dir, branchProtection } = await scaffoldPlatformRepo({
 		repo: collected.platformRepo,
@@ -151,7 +145,6 @@ export async function runInit(account: string): Promise<void> {
 			environmentPolicy = outcome
 		},
 		...environmentPayload(collected, {
-			app,
 			vaultKey,
 			provisioning,
 			operationsSyncKey,
@@ -166,6 +159,7 @@ export async function runInit(account: string): Promise<void> {
 	finalNotes({
 		repo: collected.platformRepo,
 		account: collected.account,
+		controlPlaneDomain: collected.controlPlaneDomain,
 		dir,
 		ref: await readFabrikaRef(dir),
 		passwordEnabled: collected.passwordEnabled,
@@ -176,7 +170,6 @@ export async function runInit(account: string): Promise<void> {
 
 /** Everything `init` generated or fetched, ready to be split into the Environment's two halves. */
 export interface GeneratedInstallation {
-	readonly app: CreatedGitHubApp
 	readonly vaultKey: string
 	readonly provisioning: string
 	readonly operationsSyncKey: string
@@ -188,9 +181,7 @@ export interface GeneratedInstallation {
 
 /**
  * What the GitHub Environment holds, split by the one rule: a credential is a SECRET, never a variable
- * (a variable value reaches `gh` on argv). GitHub RESERVES the `GITHUB_` prefix for Environment names
- * (422), so the App's key/secret/id ride under `GH_`; platform.yml maps each back to the `GITHUB_*` env
- * var the deploy and the Worker bindings expect.
+ * (a variable value reaches `gh` on argv).
  */
 export function environmentPayload(
 	collected: Collected,
@@ -201,8 +192,6 @@ export function environmentPayload(
 			CLOUDFLARE_ACCOUNT_ID: collected.accountId,
 			CLOUDFLARE_API_TOKEN: collected.apiToken,
 			FABRIKA_CONTROL_VAULT_KEY: generated.vaultKey,
-			GH_APP_PRIVATE_KEY: generated.app.pem,
-			GH_WEBHOOK_SECRET: generated.app.webhookSecret,
 			FABRIKA_IAM_PROVISIONING_KEY: generated.provisioning,
 			OPERATIONS_SYNC_KEY: generated.operationsSyncKey,
 			// The shared key the control plane presents to the deploy runner; both Workers take the same value.
@@ -215,7 +204,6 @@ export function environmentPayload(
 		vars: {
 			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
 			OPERATIONS_HOSTNAME: collected.operationsHostname,
-			GH_APP_ID: String(generated.app.id),
 			FABRIKA_IAM_ISSUER: collected.iamUrl,
 			FABRIKA_CONTROL_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 			// IAM Stage 1 non-secret config (read by IAM's fabrika config).
@@ -284,7 +272,7 @@ async function collect(account: string): Promise<Collected> {
 	} else {
 		ok(`Zone found: ${operationsZone.name}`)
 	}
-	const githubOrg = await text('GitHub org that owns the fabrika App + platform repo', account)
+	const githubOrg = await text('GitHub org that owns the platform repo', account)
 	const platformRepo = await text('Platform repo (org/fabrika-platform)', `${githubOrg}/fabrika-platform`)
 	const iamUrl = await retry('IAM base URL', async () => {
 		const raw = (await text('IAM base URL', primaryZone !== undefined ? `https://iam.${primaryZone}` : undefined)).replace(/\/+$/, '')
@@ -295,8 +283,6 @@ async function collect(account: string): Promise<Collected> {
 	})
 	const adminsRaw = await text('First-admin email(s) for the escape hatch (comma-separated)')
 	const bootstrapAdmins = adminsRaw.split(',').map((s) => s.trim()).filter(Boolean)
-	const reposRaw = await text('App repos to install the GitHub App on (comma-separated, e.g. contember/poplach)', '')
-	const installRepos = reposRaw.split(',').map((s) => s.trim()).filter(Boolean)
 
 	// IAM Stage 1 config: select independent authentication methods, then ask only for the
 	// provider-specific values that the selection needs.
@@ -354,7 +340,6 @@ async function collect(account: string): Promise<Collected> {
 		apiToken,
 		controlPlaneDomain,
 		operationsHostname,
-		githubOrg,
 		platformRepo,
 		iamUrl,
 		iamHostname,
@@ -366,7 +351,6 @@ async function collect(account: string): Promise<Collected> {
 		emailProvider,
 		emailFrom,
 		bootstrapAdmins,
-		installRepos,
 	}
 }
 
@@ -528,120 +512,6 @@ async function ensureResendApiKey(): Promise<string> {
 	return value
 }
 
-const githubAppResumeError = (): string =>
-	`Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in ${envPath()} or remove all five and rerun init`
-const GITHUB_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
-const GITHUB_APP_PEM = /^-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]+-----END (?:RSA )?PRIVATE KEY-----\s*$/
-const githubAppResumeSchema = z.object({
-	id: z.string().refine((value) => Number.isSafeInteger(Number(value)) && Number(value) > 0 && String(Number(value)) === value)
-		.transform(Number),
-	slug: z.string().regex(GITHUB_APP_SLUG),
-	pem: z.string().max(64 * 1024).regex(GITHUB_APP_PEM),
-	webhookSecret: z.string().min(1).max(4096).refine((value) =>
-		![...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-	),
-	htmlUrl: z.string(),
-}).refine(({ htmlUrl, slug }) => {
-	try {
-		const url = new URL(htmlUrl)
-		return url.protocol === 'https:' && url.hostname === 'github.com' && url.port === ''
-			&& url.username === '' && url.password === '' && url.search === '' && url.hash === ''
-			&& url.pathname === `/apps/${slug}`
-	} catch {
-		return false
-	}
-})
-
-const readGitHubAppResume = (source: Readonly<Record<string, string | undefined>>): CreatedGitHubApp | undefined => {
-	const pem = readResumeValue(source, 'GITHUB_APP_PRIVATE_KEY')
-	const webhookSecret = readResumeValue(source, 'GITHUB_WEBHOOK_SECRET')
-	const idText = readResumeValue(source, 'GITHUB_APP_ID')
-	const slug = readResumeValue(source, 'GITHUB_APP_SLUG')
-	const htmlUrl = readResumeValue(source, 'GITHUB_APP_URL')
-	const values = [pem, webhookSecret, idText, slug, htmlUrl]
-	if (values.every((value) => value === undefined)) return undefined
-	const parsed = githubAppResumeSchema.safeParse({ id: idText, slug, htmlUrl, pem, webhookSecret })
-	if (!parsed.success) {
-		throw new Error(githubAppResumeError())
-	}
-	return parsed.data
-}
-
-interface GitHubAppInitContext {
-	account: string
-	controlPlaneDomain: string
-	githubOrg: string
-	installRepos: string[]
-}
-
-interface GitHubAppInitDependencies {
-	source: Readonly<Record<string, string | undefined>>
-	create: typeof createGitHubAppViaManifest
-	persist(values: Readonly<Record<string, string>>): Promise<void>
-	appName(defaultValue: string): Promise<string>
-	confirmInstallation(question: string, defaultYes: boolean): Promise<boolean>
-	installAction(title: string, details: string[]): void
-}
-
-const githubAppInitDependencies: GitHubAppInitDependencies = {
-	source: ENVIRONMENT_SOURCE,
-	create: createGitHubAppViaManifest,
-	persist: persistEnvBundle,
-	appName: (defaultValue) => text('GitHub App name', defaultValue),
-	confirmInstallation: confirm,
-	installAction: action,
-}
-
-/** Create or resume one complete GitHub App, then require the repository installation grant. */
-export async function ensureGitHubApp(
-	collected: GitHubAppInitContext,
-	dependencies: GitHubAppInitDependencies = githubAppInitDependencies,
-): Promise<CreatedGitHubApp> {
-	step('Create the fabrika GitHub App (manifest flow)')
-	let app = readGitHubAppResume(dependencies.source)
-	if (app !== undefined) {
-		ok('Reusing the GitHub App from the installer env file (resume) — skipping manifest creation.')
-	} else {
-		const appName = await dependencies.appName(`fabrika-${collected.account}`)
-		const ownerOrg = collected.githubOrg.toLowerCase()
-		const isPublic = collected.installRepos.some((repo) => (repo.split('/')[0] ?? '').toLowerCase() !== ownerOrg)
-		const controlOrigin = `https://${collected.controlPlaneDomain}`
-		app = await dependencies.create(
-			{
-				organization: collected.githubOrg,
-				appName,
-				homepageUrl: controlOrigin,
-				webhookUrl: `${controlOrigin}/webhooks/github`,
-				public: isPublic,
-			},
-			{
-				onCreated: (createdApp) =>
-					dependencies.persist({
-						GITHUB_APP_PRIVATE_KEY: createdApp.pem,
-						GITHUB_WEBHOOK_SECRET: createdApp.webhookSecret,
-						GITHUB_APP_ID: String(createdApp.id),
-						GITHUB_APP_SLUG: createdApp.slug,
-						GITHUB_APP_URL: createdApp.htmlUrl,
-					}),
-			},
-		)
-		ok('GitHub App credentials saved to the installer env file (resume-safe).')
-	}
-	if (collected.installRepos.length > 0) {
-		dependencies.installAction('OPERATOR ACTION — install the GitHub App', [
-			`1. Open: ${url(githubAppInstallationUrl(app.slug))}`,
-			`2. Install it on: ${collected.installRepos.join(', ')}`,
-			'3. Grant access to those repositories, then return here.',
-		])
-		if (!(await dependencies.confirmInstallation('Has the GitHub App been installed on those repositories?', false))) {
-			throw new Error('GitHub App installation is required before private repository deploys can run')
-		}
-	} else {
-		detail(`Install the App on the repos fabrika will deploy when you onboard them: ${url(githubAppInstallationUrl(app.slug))}`)
-	}
-	return app
-}
-
 /** Trigger the platform workflow (each deploy builds the runner image into this account's registry). */
 async function triggerDeploy(repo: string): Promise<void> {
 	step('Trigger the platform deploy (GitHub Actions)')
@@ -664,6 +534,7 @@ async function triggerDeploy(repo: string): Promise<void> {
 export interface FinalNotes {
 	readonly repo: string
 	readonly account: string
+	readonly controlPlaneDomain: string
 	readonly dir: string
 	readonly ref: string
 	readonly passwordEnabled: boolean
@@ -674,7 +545,7 @@ export interface FinalNotes {
 
 /** Closing notes: the checkout, the env file, what is protected, the escape hatch, and what runs in CI. */
 export function finalNotes(notes: FinalNotes): void {
-	const { repo, account, dir, ref, passwordEnabled } = notes
+	const { repo, account, controlPlaneDomain, dir, ref, passwordEnabled } = notes
 	step('Done')
 	ok(`Base repo: ${repo} (pinned fabrika ref: ${ref})`)
 	ok(`Local checkout: ${dir}`)
@@ -687,6 +558,8 @@ export function finalNotes(notes: FinalNotes): void {
 		`2. gh workflow run platform.yml --repo ${repo}`,
 		'3. Authorization is then fully IAM-owned.',
 	])
+	info('Public repositories deploy without a GitHub App. Connect private GitHub source in Control.')
+	action('OPERATOR ACTION — connect GitHub source in Control once the deploy is live', [url(`https://${controlPlaneDomain}/settings/source`)])
 	if (passwordEnabled) {
 		action('OPERATOR ACTION — enroll the first password user through IAM provisioning', [
 			'Password enrollment is provisioning-backed; the installer does not print or invent an administrative credential.',

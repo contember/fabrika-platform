@@ -2,7 +2,7 @@ import { defineApp, route } from '@fabrika/app'
 import { createControlRpcRouter } from '../../control-rpc'
 import type { Env } from '../../env'
 import type { ControlRpcDeps } from '../../services'
-import { unavailableSourceConnection } from '../../source/connections'
+import { unusedSourceConnection } from './source-connection'
 
 export function rpcRequest(method: string, input: unknown = null, signal?: AbortSignal): Request {
 	return new Request('https://control.test/api/rpc', {
@@ -31,11 +31,10 @@ export async function rpcResult(request: Request, deps: ControlRpcDeps): Promise
 		},
 		DEPLOY_QUEUE: deps.queue,
 		WAIT_UNTIL: () => {},
-		REPO_EVENTS: deps.repoSource,
 		ENVIRONMENT: 'local',
 	}
 	const app = defineApp({
-		context: () => ({ auth: deps.auth, request, env, provider: deps.provider, sourceConnection: unavailableSourceConnection(deps.provider.id) }),
+		context: () => ({ auth: deps.auth, request, env, provider: deps.provider, sourceConnection: unusedSourceConnection(deps.provider.id) }),
 		routes: [route.rpc('/api/rpc', createControlRpcRouter(() => deps))],
 	})
 	const response = await app.fetch(request, {}, { waitUntil() {} })

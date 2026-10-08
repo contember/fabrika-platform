@@ -104,7 +104,6 @@ describe('no credential reaches an error or a log', () => {
 			RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
 			DEPLOY_QUEUE: { send: () => Promise.resolve() },
 			WAIT_UNTIL: () => {},
-			REPO_EVENTS: { verifyWebhook: () => Promise.resolve(null), resolveInstallationId: () => Promise.resolve(null) },
 			ENVIRONMENT: 'test',
 			FABRIKA_CONTROL_DOMAIN: ORIGIN,
 			FABRIKA_CONTROL_VAULT_KEY: btoa(binary),
