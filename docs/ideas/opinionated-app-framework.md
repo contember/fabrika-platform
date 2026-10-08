@@ -223,23 +223,25 @@ dropped. All procedures are `POST`, so inputs never land in URLs, logs or browse
 export default implement(contract, {
 	database, // tables and policies: the framework generates locators and form inboxes from it
 	deps: (env) => ({ files: createFiles(env) }),
-	handlers: {
+	handlers: ({ files }) => ({
 		api: {
 			notes: {
-				list: ({ ctx }) => ctx.deps.db.notes.list(ctx.within),
+				list: ({ ctx }) => notes.list(ctx.within),
 				remove: async ({ ctx }) => {
-					await ctx.deps.db.notes.remove(ctx.target)
+					await notes.remove(ctx.target)
 					return { deleted: ctx.target.value }
 				},
 			},
 		},
-	},
+	}),
 })
 ```
 
 - `implement` is type-checked against the contract. A handler for an undeclared endpoint, a missing handler, or a
   handler of the wrong kind is an error (`'adminDump' is not in the contract. Declare the endpoint in
   fabrika.contract.ts first.`).
+- `handlers` receives what `deps` returned (A3: TypeScript cannot carry `deps`' type into `ctx` through the
+  contract's handler types). Stores come from `src/db/stores/`.
 - There is **no slot** for middleware, raw routes, `authenticate`, a custom server or WebSocket upgrades.
 - The entrypoint is generated (`fabrika app build` writes `fabrika/entry.generated.ts`). It calls
   `boot(app, { env, iam, origin })`, which reads the framework's variables, deletes them from `process.env`, and

@@ -16,7 +16,7 @@ bun test    # policy · store · guard · hardening · type-attacks · codegen �
 | Module           | What it owns                                                                                              |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
 | `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.         |
-| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`, which the framework implements.    |
+| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`; `@fabrika/db/capability`, no Bun.  |
 | `policy.ts`      | `defineTables`: the literal table policies, checked against the generated column list, and the row types. |
 | `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                   |
 | `nodes.ts`       | Kysely operation nodes built from a description and a scope predicate.                                    |
@@ -28,7 +28,9 @@ bun test    # policy · store · guard · hardening · type-attacks · codegen �
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
 
-Not built yet: binding a capability to its request (the framework's `CapabilityAuthority`), generated locators, `@fabrika/db/testing`, and stores for `reference` and `inbox` tables
+The framework's `CapabilityAuthority` is `requestCapabilities` in `@fabrika/app/implement`: it binds each capability
+to its request. Not built yet: wiring the stores to it (A8b), generated locators, `@fabrika/db/testing`, and stores
+for `reference` and `inbox` tables
 (`defineTables` accepts their policies; no store reaches them).
 
 ## Invariants

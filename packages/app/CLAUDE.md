@@ -5,12 +5,11 @@ HTTP routing, middleware, typed RPC, structural errors, and a typed browser clie
 
 [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md) makes the contract the
 target: an application declares `fabrika.contract.ts` and serves it through
-`implement`. That surface is the A-M1 work of the
+`implement` (`@fabrika/app/implement`), booted by the generated entrypoint that
+`fabrika app build` writes (`@fabrika/app/build`). `defineApp()` stays for the
+installation's own services (IAM, Control, Operations). The remaining surface is
+the A-M1 work of the
 [implementation plan](../../docs/ideas/app-framework-implementation-plan.md).
-`@fabrika/app/contract` (`defineContract`, `compileContract`) is built; `implement`,
-`boot` and dispatch (A3) are not. Until then the package serves only through
-`defineApp()`, which stays for the installation's own services (IAM, Control,
-Operations).
 
 ## Commands
 
@@ -19,6 +18,8 @@ bun run typecheck
 bun test
 bun test src/__tests__/rpc.test.ts
 bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compiled by tsc
+bun test src/__tests__/implement-types.test.ts  # the handler mistakes, compiled by tsc
+bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 ```
 
 ## Structure
@@ -27,8 +28,9 @@ bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compile
 src/
   index.ts            public surface
   app.ts              runtime-neutral request pipeline
-  cloudflare.ts       Worker module adapter and lifecycle types
-  bun.ts              Bun handler, background-task tracking, graceful drain
+  cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
+  bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
+  build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes
   testing.ts          test-runner-neutral cross-runtime conformance helper
   router.ts           typed HTTP and RPC route matching
   middleware.ts       middleware runner over @fabrika/auth's canonical contract
@@ -43,6 +45,15 @@ src/
     build.ts          buildArtifact: every check, default and generated endpoint
     defaults.ts       the defaults and generated paths, in one place
     artifact-schema.ts  parseContractArtifact, the zod parser of the artifact
+  implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
+    implement.ts      implement, ContractDatabase, ContractImplementation
+    types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
+    boot.ts           boot: framework variables, refusals, handler binding
+    dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
+    capability.ts     Ref, Within, requestCapabilities (the CapabilityAuthority)
+    principal.ts      caller kinds and principals from a verified token
+    headers.ts        the response header policy
+    project.ts        output projection over the endpoint's SchemaShape
 ```
 
 ## Invariants
@@ -70,9 +81,11 @@ src/
   capabilities and must not fork routing or RPC semantics.
 - Applications get no middleware, raw routes, `authenticate` or custom server.
   `implement` has no slot for them, and `defineApp()` is for the installation's own
-  services only.
+  services only. `defineApp()` is never a way to serve a contract.
 - The package root is runtime-neutral. Provider lifecycle APIs are exported only
-  from `@fabrika/app/cloudflare` and `@fabrika/app/bun`.
+  from `@fabrika/app/cloudflare` and `@fabrika/app/bun`. `@fabrika/app/implement`
+  imports `node:async_hooks`, so neither the root nor `/contract` may import it:
+  the SPA imports both.
 - The Bun adapter tracks every `waitUntil()` task. Shutdown drains them before
   application resources close.
 - Conformance tests create fresh requests and environment state for every runtime.
@@ -131,12 +144,62 @@ src/
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`; a webhook
   appends `/:bindingId`. No authored path may lie under `/__fabrika`.
-- Still to come: `implement`, `boot` and dispatch (A3), `gatesFromContract` and
-  `schemaFromContract` (A4), the typed client (A5). The router and the generated
-  gates both come from the artifact's one endpoint table; dispatch uses
-  `planEndpoint`. `boot` is called only by the generated entrypoint. Per request:
-  canonical path → `planEndpoint` → token verification → caller kind →
-  requirement → admission → strict input → access form → handler → output
-  projection → response headers.
+- Still to come: `gatesFromContract` and `schemaFromContract` (A4), the typed
+  client (A5). The router and the generated gates both come from the artifact's one
+  endpoint table.
 - Later (A12, A13): membership, scopes and share links are requests to IAM through
   `@fabrika/auth`. The framework writes no grant and mints no credential.
+
+## Serving a contract
+
+- **`boot` dispatches only through `planEndpoint`** over the compiled artifact's
+  table. There is no second router: an unknown procedure under an RPC prefix is 404
+  and never the SPA, and a non-canonical path is 400.
+- **Per request, in this order** (ADR-0012 §5): canonical path → `planEndpoint` →
+  token verification with `@fabrika/jwks`'s shared verifier → caller kind →
+  requirement (`satisfies`) → admission → strict input → access form → remove the
+  `from` field → handler → output projection → the header policy. Caller kind,
+  requirement and access form are authorization; same-origin and content type are
+  admission. Neither evaluates a gate; never reorder them so that admission or input
+  parsing answers a caller the requirement refused.
+- **Caller kinds** come from the token (`presentedBy`): `ptype: 'user'` is `human`,
+  `ptype: 'service'` is `machine`, an anonymous token (a share link) is `link`. No
+  token is an `app:<id>` caller yet, and an OAuth resource token is no caller.
+- **Admission** treats a request without an `Authorization` header as a session
+  request: when it is not a `GET` it needs `Sec-Fetch-Site: same-origin`. A
+  cross-site page cannot add that header without a preflight, and the application
+  answers none. Every RPC request needs `Content-Type: application/json`.
+- **`Ref` and `Within` are bound to their request** with `AsyncLocalStorage`.
+  `requestCapabilities.resolve` refuses a value the framework did not mint, one whose
+  request has ended, and one from another live request; `@fabrika/db` checks kind,
+  dimension and action itself. Both classes keep their grant in private fields and
+  need a module-private token to construct; never export that token or the mint
+  functions from `implement/index.ts`.
+- **`on` needs a table that owns its dimension** (`ContractDatabase.tables`); `boot`
+  refuses the contract otherwise. `on` checks the action on the object or any
+  container of its chain and answers 404 for both "missing" and "not yours"; `in`
+  checks the action on the value itself, then that it exists when a table owns it.
+- **Output is projected, then validated:** `project` keeps the fields the endpoint's
+  `SchemaShape` declares, and the strict zod output schema validates the rest. A
+  value it refuses is a 500 that names the endpoint and nothing else.
+- **One error envelope**, `{ error: { type, message, issues? } }`. Structural errors
+  keep their status; `@fabrika/db`'s `NotFoundError` and `ConflictError` are read by
+  `name` (404, 409); any other error is a 500 whose message says nothing about it,
+  because it may quote a connection string.
+- **`boot` refuses to start rather than answer nothing**: a link, form or webhook
+  mount, files, jobs, exports, imports, `creates`, an SPA without an asset server, a
+  handler outside the contract, a missing handler. Each refusal lifts when its work
+  unit ships the runtime.
+- **The framework's variables are every `FABRIKA_*` name.** `boot` reads
+  `FABRIKA_APP_ID` (the token audience), `FABRIKA_IAM_ISSUER` and
+  `FABRIKA_OPERATIONS_DSN` (its origin joins `connect-src`), deletes every
+  `FABRIKA_*` name from `process.env`, and hands `deps` the rest. The Worker adapter
+  also keeps the `IAM` and `ASSETS` bindings from it.
+- **`handlers` is a function of what `deps` returned.** TypeScript cannot infer
+  `deps`' type into `ctx` through the contract's conditional handler types, so a
+  handler reaches its dependencies through that closure, not `ctx.deps`.
+- The handler type witnesses live in `src/__tests__/implement-mistakes/` (the
+  parser spike's 05–10), compiled by `implement-types.test.ts` like the contract
+  mistakes.
+- The header policy (`headers.ts`) is ADR-0022's; B4 sets the same policy at the
+  proxy and decides the final `Permissions-Policy`. Keep the two equal.

@@ -1,9 +1,17 @@
 // ─── Bun process adapter ─────────────────────────────────────────────
 //
 // A long-running Bun process needs only request dispatch and explicit draining.
-// It does not emulate Worker cron, queues, or passThroughOnException().
+// It does not emulate Worker cron, queues, or passThroughOnException(). A
+// contract application is served through `serveContract`, from the generated
+// entrypoint.
 
+import { rawRequestTarget } from '@fabrika/auth-core'
+import { parseJwks } from '@fabrika/jwks'
+import { join, resolve, sep } from 'node:path'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
+import { boot, type IamKeySource } from './implement/boot.js'
+import type { SpaAssets } from './implement/dispatch.js'
+import type { ContractImplementation } from './implement/implement.js'
 
 export interface ManagedBunHandlerOptions {
 	/** Required sink for rejected background tasks. Do not log raw errors or secret-bearing values. */
@@ -60,4 +68,64 @@ export function createBunHandler<Env>(app: FabrikaApp<Env>, env: Env, options: B
 			}
 		},
 	}
+}
+
+// ─── Contract applications ───────────────────────────────────────────
+
+/** IAM's public key set at the issuer's `/.well-known/jwks.json`, for a process with no IAM binding. */
+export function issuerJwks(issuer: unknown): IamKeySource {
+	return {
+		async getJwks() {
+			if (typeof issuer !== 'string') {
+				throw new Error('FABRIKA_IAM_ISSUER is not set')
+			}
+			const response = await fetch(new URL('/.well-known/jwks.json', issuer), { headers: { accept: 'application/json' } })
+			const jwks = response.ok ? parseJwks(await response.json()) : null
+			if (jwks === null) {
+				throw new Error('the issuer published no usable key set')
+			}
+			return jwks
+		},
+	}
+}
+
+/** Serves each SPA mount from its build directory under `root`; a path that names no file gets the SPA's `index.html`. */
+export function diskAssets(root: string): SpaAssets {
+	return {
+		async serve(mount, request) {
+			const dir = resolve(root, mount.dir)
+			const pathname = rawRequestTarget(request.url).pathname
+			const relative = mount.prefix === '/' ? pathname.slice(1) : pathname.slice(mount.prefix.length + 1)
+			// The path is canonical, so every segment decodes and none is `.` or `..`.
+			const file = join(dir, ...relative.split('/').filter((segment) => segment !== '').map((segment) => decodeURIComponent(segment)))
+			const candidate = file.startsWith(`${dir}${sep}`) ? Bun.file(file) : null
+			const served = candidate !== null && (await candidate.exists()) ? candidate : Bun.file(join(dir, 'index.html'))
+			if (!(await served.exists())) {
+				return new Response('Not found', { status: 404 })
+			}
+			return new Response(served)
+		},
+	}
+}
+
+export interface ContractServer {
+	/** Stops accepting requests and waits for the ones in flight. */
+	stop(): Promise<void>
+}
+
+/**
+ * Boots a contract application and serves it on `PORT` (default 3000), on every interface: the project's private
+ * network is how the proxy reaches it. Called only by the generated entrypoint, with `process.env`. SIGTERM drains.
+ */
+export function serveContract(app: ContractImplementation, env: Readonly<Record<string, string | undefined>>): ContractServer {
+	const port = Number.parseInt(env['PORT'] ?? '3000', 10)
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw new Error('PORT must be an integer between 1 and 65535')
+	}
+	const iam = issuerJwks(env['FABRIKA_IAM_ISSUER'])
+	const served = boot(app, { env, iam, assets: diskAssets(process.cwd()) })
+	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
+	const stop = (): Promise<void> => server.stop(false)
+	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))
+	return { stop }
 }

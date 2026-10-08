@@ -7,6 +7,7 @@
 		"src/**/*"
 	],
 	"exclude": [
-		"src/__tests__/contract-mistakes"
+		"src/__tests__/contract-mistakes",
+		"src/__tests__/implement-mistakes"
 	]
 }

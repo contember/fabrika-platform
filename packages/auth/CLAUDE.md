@@ -85,7 +85,8 @@ the service that owns identity.
 - **`Middleware<Ctx>` / `AuthCarrier` are owned here and consumed by `@fabrika/app`** — do not add a
   duplicate compatibility interface there. The SDK itself ships no middleware. Today each service
   writes the ~10 lines that call `authenticate`; with the contract (ADR-0012) an application writes
-  none, and the framework's `boot` calls `authenticate`.
+  none: the framework's `boot` verifies the token with the same `@fabrika/jwks` verifier, because the
+  requirement check needs the token's permission list, which `AuthContext` does not expose.
 - **Never log credentials, secret values, or request headers.**
 
 ## Notes

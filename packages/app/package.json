@@ -36,6 +36,16 @@
 			"types": "./src/contract/index.ts",
 			"default": "./src/contract/index.ts"
 		},
+		"./implement": {
+			"bun": "./src/implement/index.ts",
+			"types": "./src/implement/index.ts",
+			"default": "./src/implement/index.ts"
+		},
+		"./build": {
+			"bun": "./src/build.ts",
+			"types": "./src/build.ts",
+			"default": "./src/build.ts"
+		},
 		"./testing": {
 			"bun": "./src/testing.ts",
 			"types": "./src/testing.ts",
@@ -48,7 +58,9 @@
 	},
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",
-		"@fabrika/auth-core": "workspace:*"
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/db": "workspace:*",
+		"@fabrika/jwks": "workspace:*"
 	},
 	"peerDependencies": {
 		"zod": "^3.25.76"
@@ -56,6 +68,7 @@
 	"devDependencies": {
 		"@fabrika/check": "workspace:*",
 		"@types/bun": "latest",
+		"jose": "^5.9.0",
 		"typescript": "^5.9.3",
 		"zod": "^3.25.76"
 	}

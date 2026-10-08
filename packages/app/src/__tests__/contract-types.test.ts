@@ -3,13 +3,9 @@
 // diagnostic text below. The repository forbids `@ts-expect-error`, so the files are compiled here and excluded
 // from the package typecheck. The parser spike's mistakes 05–10 are handler mistakes and belong to `implement`.
 
-import { describe, expect, test } from 'bun:test'
-import { readdirSync, readFileSync } from 'node:fs'
+import { describe } from 'bun:test'
 import { join } from 'node:path'
-import ts from 'typescript'
-
-const packageDir = join(import.meta.dir, '..', '..')
-const mistakesDir = join(import.meta.dir, 'contract-mistakes')
+import { expectMistakes } from './type-fixtures'
 
 const EXPECTED: Readonly<Record<string, string>> = {
 	'01-forgot-access.ts': "Property 'access' is missing",
@@ -27,54 +23,6 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'19-options-set-builder-fields.ts': `is not assignable to type 'Owned<"kind" | "path">'`,
 }
 
-interface Diagnostic {
-	readonly line: number
-	readonly text: string
-}
-
-function compile(): ReadonlyMap<string, readonly Diagnostic[]> {
-	const config = ts.readConfigFile(join(packageDir, 'tsconfig.json'), ts.sys.readFile)
-	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, packageDir)
-	const files = readdirSync(mistakesDir).filter((file) => file.endsWith('.ts')).map((file) => join(mistakesDir, file))
-	const program = ts.createProgram(files, { ...parsed.options, noEmit: true })
-	const byFile = new Map<string, Diagnostic[]>()
-	for (const file of files) {
-		const source = program.getSourceFile(file)
-		if (source === undefined) {
-			throw new Error(`${file} did not load`)
-		}
-		byFile.set(
-			file.slice(mistakesDir.length + 1),
-			ts.getPreEmitDiagnostics(program, source).map((diagnostic) => ({
-				line: diagnostic.start === undefined ? -1 : source.getLineAndCharacterOfPosition(diagnostic.start).line,
-				text: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
-			})),
-		)
-	}
-	return byFile
-}
-
-/** The zero-based line after the `// mistake:` marker. */
-function markedLine(file: string): number {
-	const lines = readFileSync(join(mistakesDir, file), 'utf8').split('\n')
-	return lines.findIndex((line) => line.trim().startsWith('// mistake:')) + 1
-}
-
 describe('the contract mistakes are type errors', () => {
-	const diagnostics = compile()
-
-	test('every fixture has an expectation, and every expectation a fixture', () => {
-		expect([...diagnostics.keys()].sort()).toEqual(Object.keys(EXPECTED).sort())
-	})
-
-	for (const [file, text] of Object.entries(EXPECTED)) {
-		test(file, () => {
-			const found = diagnostics.get(file) ?? []
-			expect(found.length).toBeGreaterThan(0)
-			expect(found.map((diagnostic) => diagnostic.text).join('\n')).toContain(text)
-			const line = markedLine(file)
-			expect(line).toBeGreaterThan(0)
-			expect(found.map((diagnostic) => diagnostic.line)).toEqual(found.map(() => line))
-		})
-	}
+	expectMistakes(join(import.meta.dir, 'contract-mistakes'), EXPECTED)
 })

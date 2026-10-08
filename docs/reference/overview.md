@@ -192,7 +192,10 @@ static path gates before a request reaches the private app service. Each app's o
 middleware calls `iam.authenticate(request)`, which verifies the injected Fabrika
 token and provides the canonical `@fabrika/auth` `AuthContext` — the SDK ships no
 middleware of its own. An RPC procedure's `.require(action, scope)` then
-checks the application-owned object coordinate that a path gate cannot know. See
+checks the application-owned object coordinate that a path gate cannot know. A
+contract application writes none of this: `implement` serves its contract, and the
+generated entrypoint's `boot` verifies the token and checks the caller kind, the
+requirement, admission and the access form of each endpoint. See
 [`application-runtime.md`](application-runtime.md) and
 [ADR-0012](../decisions/0012-fabrika-app-runtime.md) and
 [ADR-0013](../decisions/0013-explicit-runtime-adapter-entrypoints.md).
@@ -319,11 +322,13 @@ enforcement:
 - **Authorization** — the action-and-scope check a service makes against an
   application-owned object coordinate. A path gate cannot make it, because the
   coordinate is known only once request data is validated. Every
-  `.require(action, scope)`, every `can()` call, and control's per-route
-  `authorize` is this layer.
+  `.require(action, scope)`, every `can()` call, control's per-route
+  `authorize`, and a contract application's caller-kind, requirement and access-form
+  checks (`implement`, ADR-0012) are this layer.
 - **Admission** — the confused-deputy guards in front of ambient credentials:
-  control's origin guard on `/api/*` and the same-origin checks on the IAM and
-  Operations console gateways. They decide whether a cookie-bearing request is
+  control's origin guard on `/api/*`, the same-origin checks on the IAM and
+  Operations console gateways, and a contract application's `Sec-Fetch-Site` and
+  `Content-Type` checks. They decide whether a cookie-bearing request is
   considered at all. IAM's own admin surface reads no cookie — it accepts only a
   bearer — so it needs no admission check of its own. They resolve no
   principal and read no policy, so none of them is a second gate evaluator.

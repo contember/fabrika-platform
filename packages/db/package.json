@@ -20,6 +20,11 @@
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
 		},
+		"./capability": {
+			"bun": "./src/capability.ts",
+			"types": "./src/capability.ts",
+			"default": "./src/capability.ts"
+		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",
