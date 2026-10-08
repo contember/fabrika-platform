@@ -79,7 +79,11 @@ services:
   iam:
     <<: *bun
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/iam/src/node/server.ts"]
-    env_file: .state/iam.env
+    # `iam-oauth.env` is rewritten by every prepare: empty unless FABRIKA_LOCAL_MCP_CLIENTS_JSON is set.
+    env_file:
+      - path: .state/iam.env
+      - path: .state/iam-oauth.env
+        required: false
     environment:
       PORT: "18080"
       ENVIRONMENT: local

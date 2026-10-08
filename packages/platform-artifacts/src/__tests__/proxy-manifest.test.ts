@@ -6,7 +6,7 @@
 // listener the proxy never opens. Those are the ways this document can be wrong while every other test
 // in the repository passes, which is exactly how the hand-written live one was wrong for two days.
 
-import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
+import { CONTROL_PROXY_GATES, controlMcpResource, controlMcpResourceMetadata, controlProxyGates } from '@fabrika/control/gates'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
@@ -25,6 +25,7 @@ import {
 	PLATFORM_CONSOLE_APP_ID,
 	PLATFORM_IAM_APP_ID,
 	PLATFORM_PROXY_APPS,
+	type PlatformProxyComposition,
 	platformProxyManifestArtifact,
 	platformProxyManifestTemplate,
 	resolvePlatformProxyManifest,
@@ -143,6 +144,45 @@ describe('resolving the template', () => {
 				},
 			})
 		).toThrow()
+	})
+})
+
+describe('MCP authoring, resolved', () => {
+	const composition: PlatformProxyComposition = {
+		scheme: 'https',
+		placement: {
+			iam: { hosts: [subdomainHost(8080)] },
+			control: { hosts: [subdomainHost(8082)] },
+			operations: { hosts: [subdomainHost(8083)] },
+		},
+	}
+	const consoleOrigin = `https://${subdomainHost(8082)}`
+	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => manifest.apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+
+	test('enabled, the console carries exactly `controlProxyGates(origin)` and registers `controlMcpResource(origin)`', () => {
+		const manifest = resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
+			...composition,
+			authorizationServer: `https://${subdomainHost(8080)}`,
+		})
+		const console_ = consoleOf(manifest)
+		expect(console_?.gates).toEqual(controlProxyGates(consoleOrigin))
+		expect(console_?.oauthResources).toEqual([{
+			resource: controlMcpResource(consoleOrigin),
+			resourceMetadata: controlMcpResourceMetadata(consoleOrigin),
+			authorizationServers: [`https://${subdomainHost(8080)}`],
+			scopesSupported: ['authoring'],
+		}])
+		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
+	})
+
+	test('off, the console carries `controlProxyGates()` with no origin and registers nothing', () => {
+		const console_ = consoleOf(resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition))
+		expect(console_?.gates).toEqual(controlProxyGates())
+		expect(console_?.oauthResources).toBeUndefined()
+	})
+
+	test('only the console serves OAuth clients', () => {
+		expect(PLATFORM_PROXY_APPS.filter((app) => app.oauthResource !== undefined).map((app) => app.id)).toEqual([PLATFORM_CONSOLE_APP_ID])
 	})
 })
 

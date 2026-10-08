@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { parsePlatformDeployArgs as parseArgs } from '../deploy-options'
+import type { McpClient } from '../mcp'
 
 const parsePlatformDeployArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
 
@@ -102,5 +103,67 @@ describe('the rest', () => {
 
 	test('a repeated flag is an error rather than a last-one-wins guess', () => {
 		expect(() => parsePlatformDeployArgs(['--project-id=p1', '--project-id=p2', '--env=stage'], ENV)).toThrow('more than once')
+	})
+})
+
+describe('MCP authoring', () => {
+	const CLIENT: McpClient = {
+		provider: 'chatgpt',
+		clientId: 'https://chatgpt.com/oauth/client.json',
+		redirectUris: ['https://chatgpt.com/connector_platform_oauth_redirect'],
+	}
+	const BASE = ['--project-id=p1', '--env=stage']
+
+	test('is off unless a client list is supplied', () => {
+		expect(parsePlatformDeployArgs(BASE, ENV).mcpClients).toBeUndefined()
+	})
+
+	test('takes the client list from the environment or a flag', () => {
+		const raw = JSON.stringify([CLIENT])
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: raw }).mcpClients).toEqual([CLIENT])
+		expect(parsePlatformDeployArgs([...BASE, `--mcp-clients=${raw}`], ENV).mcpClients).toEqual([CLIENT])
+	})
+
+	test('keeps an explicit metadata URL', () => {
+		const withMetadata = { ...CLIENT, metadataUrl: 'https://chatgpt.com/oauth/metadata.json' }
+		const raw = JSON.stringify([withMetadata])
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: raw }).mcpClients).toEqual([withMetadata])
+	})
+
+	test.each([
+		['not JSON', '[{'],
+		['not an array', JSON.stringify(CLIENT)],
+		['an empty list', '[]'],
+		['an unknown provider', JSON.stringify([{ ...CLIENT, provider: 'other' }])],
+		['a non-https client id', JSON.stringify([{ ...CLIENT, clientId: 'http://chatgpt.com/oauth/client.json' }])],
+		['no redirect URI', JSON.stringify([{ ...CLIENT, redirectUris: [] }])],
+		['an unknown key', JSON.stringify([{ ...CLIENT, clientSecret: 'x' }])],
+		['a non-https metadata URL', JSON.stringify([{ ...CLIENT, metadataUrl: 'http://chatgpt.com/m.json' }])],
+		['a repeated client id', JSON.stringify([CLIENT, CLIENT])],
+		[
+			'more clients than IAM accepts',
+			JSON.stringify(Array.from({ length: 17 }, (_, index) => ({ ...CLIENT, clientId: `https://chatgpt.com/oauth/client-${index}.json` }))),
+		],
+	])('refuses %s', (_name, raw) => {
+		expect(() => parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: raw })).toThrow(/MCP client/)
+	})
+
+	test('accepts as many clients as IAM does', () => {
+		const sixteen = Array.from({ length: 16 }, (_, index) => ({ ...CLIENT, clientId: `https://chatgpt.com/oauth/client-${index}.json` }))
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(sixteen) }).mcpClients).toHaveLength(16)
+	})
+
+	test('refuses plain http, because Control reads its bare domain as https', () => {
+		const env = { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([CLIENT]) }
+		expect(() => parsePlatformDeployArgs([...BASE, '--scheme=http'], env)).toThrow('--scheme=https')
+	})
+
+	test('hosts are lowercased, so every origin built from them is the one `URL` writes', () => {
+		const hosts = ['--iam-host=IAM.Example.com', '--console-host=Console.Example.com', '--operations-host=Errors.Example.com']
+		expect(parsePlatformDeployArgs([...BASE, ...hosts], ENV).hosts).toEqual({
+			iam: 'iam.example.com',
+			control: 'console.example.com',
+			operations: 'errors.example.com',
+		})
 	})
 })

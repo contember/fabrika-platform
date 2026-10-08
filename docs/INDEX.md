@@ -8,6 +8,8 @@ decisions → reference → archive.
 fabrika-platform is and how the pieces fit — then skim
 [`decisions/README.md`](decisions/README.md) for the _why_.
 
+For editing an application from Claude or ChatGPT through MCP, see [MCP authoring](reference/mcp-authoring.md).
+
 ## Folders
 
 - [`reference/`](reference/README.md) — how the system works now.

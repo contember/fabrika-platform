@@ -81,20 +81,29 @@ installation already holds.
 
 **Variables** — the rest of the configuration, all non-secret.
 
-| Variable                           | Required | What it is                                                                                         |
-| ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the four platform runtime services.                                     |
-| `FABRIKA_PLATFORM_ENVIRONMENT`     | yes      | The name this installation calls itself; written to every service as `ENVIRONMENT`. Never `local`. |
-| `FABRIKA_PLATFORM_SCHEME`          | yes      | `https` for anything reachable from a browser.                                                     |
-| `FABRIKA_PLATFORM_IAM_HOST`        | no       | Where IAM answers publicly.                                                                        |
-| `FABRIKA_PLATFORM_CONSOLE_HOST`    | no       | Where the console answers publicly.                                                                |
-| `FABRIKA_PLATFORM_OPERATIONS_HOST` | no       | Where Operations ingest answers publicly.                                                          |
-| `FABRIKA_ZEROPS_API_URL`           | no       | Region API base, when this installation is not on the default one.                                 |
+| Variable                            | Required | What it is                                                                                         |
+| ----------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `FABRIKA_ZEROPS_PROJECT_ID`         | yes      | The Zerops project holding the four platform runtime services.                                     |
+| `FABRIKA_PLATFORM_ENVIRONMENT`      | yes      | The name this installation calls itself; written to every service as `ENVIRONMENT`. Never `local`. |
+| `FABRIKA_PLATFORM_SCHEME`           | yes      | `https` for anything reachable from a browser.                                                     |
+| `FABRIKA_PLATFORM_IAM_HOST`         | no       | Where IAM answers publicly.                                                                        |
+| `FABRIKA_PLATFORM_CONSOLE_HOST`     | no       | Where the console answers publicly.                                                                |
+| `FABRIKA_PLATFORM_OPERATIONS_HOST`  | no       | Where Operations ingest answers publicly.                                                          |
+| `FABRIKA_ZEROPS_API_URL`            | no       | Region API base, when this installation is not on the default one.                                 |
+| `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` | no       | The MCP clients that may author applications (JSON array). Unset leaves MCP authoring off.         |
 
 The three host variables go together: **all three, or none.** Naming none derives them from the
 proxy's generated Zerops subdomains, and the deploy publishes that subdomain. Naming all three makes
 this a custom-domain installation — the domains are bound to the project balancer out of band, and the
 deploy publishes no subdomain, because that would add a second public address nobody asked for.
+
+`FABRIKA_PLATFORM_MCP_CLIENTS_JSON` turns on MCP authoring (ADR-0049). A workflow generated before
+that variable existed does not forward it, and `platform upgrade` never rewrites the workflow — add
+this line to the `env:` of the _Deploy the platform_ step in `.github/workflows/platform.yml`:
+
+```yaml
+FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
+```
 
 There is deliberately **no bootstrap-admin variable here.** This pipeline writes no credential and no
 admission list — it configures where the installation answers and deploys it. Who may administer the

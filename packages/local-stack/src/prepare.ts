@@ -1,6 +1,7 @@
 import { notesGates } from '@fabrika/example-zerops-app/gates'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
+import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import type { ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
@@ -14,7 +15,8 @@ export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
 export const STATE_DIR = resolve(LOCAL_STACK_DIR, '.state')
 export const COMPOSE_FILE = resolve(LOCAL_STACK_DIR, 'compose.yaml')
 
-const IAM_ISSUER = 'http://iam.fabrika.localhost:18080'
+const LOCAL_PUBLIC_PORT = 18080
+const IAM_ISSUER = `http://iam.fabrika.localhost:${LOCAL_PUBLIC_PORT}`
 
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
@@ -190,20 +192,38 @@ export async function prepareLocalSourceConfiguration(directory: string = STATE_
  * the same `OPERATIONS_APP_ID`, which they must: a manifest may not name one app twice, so the
  * Cloudflare entry's old `vozka` was the one shape a shared manifest could never express.
  */
-export const localPlatformProxyManifest = (): ProxyManifest =>
-	resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
-		scheme: 'http',
-		placement: {
-			// IAM listens on the composition's public port here, because its issuer carries that port
-			// (`http://iam.fabrika.localhost:18080`); an installation runs it on 3000 like the rest.
-			iam: { hosts: ['iam.fabrika.localhost'], upstream: 'iam:18080' },
-			control: { hosts: ['control.fabrika.localhost'] },
-			operations: { hosts: ['errors.fabrika.localhost'] },
-		},
-	})
+const localComposition = (mcpClients: readonly McpClient[] | undefined): PlatformProxyComposition => ({
+	scheme: 'http',
+	placement: {
+		// IAM listens on the composition's public port here, because its issuer carries that port
+		// (`http://iam.fabrika.localhost:18080`); an installation runs it on 3000 like the rest.
+		iam: { hosts: ['iam.fabrika.localhost'], upstream: 'iam:18080' },
+		control: { hosts: ['control.fabrika.localhost'] },
+		operations: { hosts: ['errors.fabrika.localhost'] },
+	},
+	publicPort: LOCAL_PUBLIC_PORT,
+	...(mcpClients === undefined ? {} : { authorizationServer: IAM_ISSUER }),
+})
 
-const generateProxyConfigs = async (): Promise<void> => {
-	const platformManifest = localPlatformProxyManifest()
+export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): ProxyManifest =>
+	resolvePlatformProxyManifest(platformProxyManifestTemplate(), localComposition(mcpClients))
+
+/**
+ * MCP authoring is OFF locally unless `FABRIKA_LOCAL_MCP_CLIENTS_JSON` names clients before `local:up`:
+ * a managed client is a CIMD document IAM fetches over HTTPS, and no local one exists. Same JSON shape
+ * and parser as an installation's `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`.
+ */
+export const readLocalMcpClients = (env: Record<string, string | undefined>): readonly McpClient[] | undefined => {
+	const raw = env['FABRIKA_LOCAL_MCP_CLIENTS_JSON']
+	return raw === undefined || raw.trim() === '' ? undefined : parseMcpClientsJson(raw)
+}
+
+/** IAM's `FABRIKA_IAM_OAUTH_CONFIG` for the local composition; empty — OAuth off — without clients. */
+export const localIamOAuthConfig = (mcpClients: readonly McpClient[] | undefined): string =>
+	mcpClients === undefined ? '' : JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcpClients), mcpClients))
+
+const generateProxyConfigs = async (mcpClients: readonly McpClient[] | undefined): Promise<void> => {
+	const platformManifest = localPlatformProxyManifest(mcpClients)
 	const appsManifest: ProxyManifest = {
 		apps: [{
 			id: 'notes',
@@ -255,8 +275,11 @@ export const prepareLocalStack = async (): Promise<void> => {
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await prepareLocalSecrets()
 	await prepareLocalSourceConfiguration()
-	await generateProxyConfigs()
-	console.info(`Local stack prepared for ${IAM_ISSUER}`)
+	const mcpClients = readLocalMcpClients(process.env)
+	// Rewritten on every prepare, so turning MCP off is unsetting the variable and running `local:up`.
+	await writeEnv(STATE_DIR, 'iam-oauth.env', { FABRIKA_IAM_OAUTH_CONFIG: localIamOAuthConfig(mcpClients) })
+	await generateProxyConfigs(mcpClients)
+	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpClients === undefined ? 'off' : 'on'}`)
 }
 
 if (import.meta.main) {

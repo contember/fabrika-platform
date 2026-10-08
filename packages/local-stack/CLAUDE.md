@@ -38,6 +38,10 @@ bun run test:browser  # the opice suites in tests/browser/
   The single dev bypass is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at
   use once the flag is off; the browser composition runs with it off. Never widen a local gate to make
   something pass: a refusal here is a refusal in production.
+- **MCP authoring is OFF locally by default.** A managed MCP client is a CIMD document IAM fetches over
+  HTTPS, and there is no local one — do not add a fake CIMD server. Setting `FABRIKA_LOCAL_MCP_CLIENTS_JSON`
+  before `local:up` turns it on through the installation's own resolver: `prepareLocalStack` rewrites
+  `.state/iam-oauth.env` (empty = off) and the platform manifest on every run.
 - **`registerLocalApps` stands in for the deploy this composition does not have.** Since
   [ADR-0023](../../docs/decisions/0023-one-session-per-host.md) a session reaches an app's host ONLY
   through a one-time code for a REGISTERED return origin, and locally nothing deploys the console.

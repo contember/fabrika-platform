@@ -15,10 +15,16 @@
 // never reaches this file.
 
 import type { AppGates, GateRule } from '@fabrika/auth-core'
-import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
+import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, CONTROL_PROXY_GATES } from '@fabrika/control/gates'
+import { controlSchema } from '@fabrika/control/schema'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
-import { type PlatformProxyApp, type PlatformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/provider-zerops/installation'
+import {
+	type PlatformOAuthResourceTemplate,
+	type PlatformProxyApp,
+	type PlatformProxyManifestTemplate,
+	resolvePlatformProxyManifest,
+} from '@fabrika/provider-zerops/installation'
 import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
 export {
@@ -56,6 +62,19 @@ export const PLATFORM_CONSOLE_APP_ID = 'vozka'
 const IAM_PROXY_GATES: AppGates = { rules: [{ path: '/*', kind: 'public' }] }
 
 /**
+ * The console's MCP endpoint (ADR-0049). The `authoring` scope grants only what the MCP tools call;
+ * IAM still intersects it with the user's own grants, so a token never exceeds its holder.
+ */
+const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
+	path: CONTROL_MCP_PATH,
+	scopes: [CONTROL_MCP_SCOPE],
+	scopeGrants: [{
+		scope: CONTROL_MCP_SCOPE,
+		actions: ['source.workspace.read', 'source.workspace.write', 'source.pull-request.create', 'deploy.trigger', 'deploy.read'],
+	}],
+}
+
+/**
  * The apps, in manifest order.
  *
  * `port` is the public listener each answers on, and these three are the first three of
@@ -66,7 +85,14 @@ const IAM_PROXY_GATES: AppGates = { rules: [{ path: '/*', kind: 'public' }] }
  */
 export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 	{ id: PLATFORM_IAM_APP_ID, service: 'iam', port: 8080, upstream: 'iam:3000', gates: IAM_PROXY_GATES },
-	{ id: PLATFORM_CONSOLE_APP_ID, service: 'control', port: 8082, upstream: 'control:3000', gates: CONTROL_PROXY_GATES },
+	{
+		id: PLATFORM_CONSOLE_APP_ID,
+		service: 'control',
+		port: 8082,
+		upstream: 'control:3000',
+		gates: CONTROL_PROXY_GATES,
+		oauthResource: CONTROL_MCP_RESOURCE,
+	},
 	{ id: OPERATIONS_APP_ID, service: 'operations', port: 8083, upstream: 'operations:3000', gates: OPERATIONS_PROXY_GATES },
 ]
 
@@ -100,6 +126,9 @@ const HEADER = [
 	'// The gate rules below are `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES` as of the last',
 	'// regeneration, copied on purpose: a PUBLISHED deploy command may not import the private package that',
 	'// owns them. `gen:check` in CI is what makes the copy a fact rather than a hope.',
+	'//',
+	"// The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy gates and registers",
+	'// it only on an installation that enables MCP authoring.',
 	'',
 ].join('\n')
 
@@ -113,6 +142,21 @@ const renderRule = (rule: GateRule): string => {
 	return `{ path: ${quote(rule.path)}, kind: ${quote(rule.kind)}${credential} }`
 }
 
+const renderOAuthResource = (resource: PlatformOAuthResourceTemplate): string[] => [
+	'\t\t\toauthResource: {',
+	`\t\t\t\tpath: ${quote(resource.path)},`,
+	`\t\t\t\tscopes: [${resource.scopes.map(quote).join(', ')}],`,
+	'\t\t\t\tscopeGrants: [',
+	...resource.scopeGrants.flatMap((grant) => [
+		'\t\t\t\t\t{',
+		`\t\t\t\t\t\tscope: ${quote(grant.scope)},`,
+		`\t\t\t\t\t\tactions: [${grant.actions.map(quote).join(', ')}],`,
+		'\t\t\t\t\t},',
+	]),
+	'\t\t\t\t],',
+	'\t\t\t},',
+]
+
 const renderApp = (app: PlatformProxyApp): string =>
 	[
 		'\t\t{',
@@ -125,14 +169,30 @@ const renderApp = (app: PlatformProxyApp): string =>
 		...app.gates.rules.map((rule) => `\t\t\t\t\t${renderRule(rule)},`),
 		'\t\t\t\t],',
 		'\t\t\t},',
+		...(app.oauthResource === undefined ? [] : renderOAuthResource(app.oauthResource)),
 		'\t\t},',
 	].join('\n')
+
+/** A granted action the console's schema does not declare would be a scope that silently grants nothing. */
+const assertDeclaredActions = (template: PlatformProxyManifestTemplate): void => {
+	const declared = new Set(controlSchema.actions.map((entry) => entry.action))
+	for (const app of template.apps) {
+		for (const grant of app.oauthResource?.scopeGrants ?? []) {
+			const unknown = grant.actions.filter((action) => !declared.has(action))
+			if (unknown.length > 0) {
+				throw new Error(`\`${app.id}\` grants undeclared action(s) under \`${grant.scope}\`: ${unknown.join(', ')}`)
+			}
+		}
+	}
+}
 
 /** The committed template, as a typed module: `typecheck` then proves the artifact still fits its type. */
 export const platformProxyManifestArtifact = (): Artifact => {
 	const template = platformProxyManifestTemplate()
 	// Refuse to commit a template the proxy's own parser would reject.
 	resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT })
+	resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT, authorizationServer: 'https://iam.invalid' })
+	assertDeclaredActions(template)
 	const content = [
 		HEADER,
 		"import type { PlatformProxyManifestTemplate } from '../proxy-manifest'",

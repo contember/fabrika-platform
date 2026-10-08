@@ -62,9 +62,10 @@ import {
 } from './installation-source'
 import type { DeployLog } from './log'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
+import { type IamOAuthConfig, platformIamOAuthConfig } from './mcp'
 import type { PreparedPlatformSource } from './platform-source'
 import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-upload'
-import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manifest'
+import { platformProxyAppFor, type PlatformProxyComposition, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
  * The four services this command touches, in the order it RESOLVES and WRITES them.
@@ -268,29 +269,35 @@ const resolvePlacement = (input: PlatformDeployInput, proxyEnv: ReadonlyMap<stri
 	return { hosts: derivePlatformHosts(subdomains, listeners), scheme: input.scheme, zeropsSubdomain: true }
 }
 
+const IAM_OAUTH_CONFIG = 'FABRIKA_IAM_OAUTH_CONFIG'
+
 /**
  * The per-installation configuration each service needs, derived from the resolved hosts.
  *
  * The namespace source default comes from the verified snapshot. Values are compared but never logged.
+ * IAM's OAuth configuration is written only when MCP authoring is enabled; without it the variable is
+ * left as it is, and the manifest — which no longer gates `/mcp` for OAuth — is what turns MCP off.
  */
 const desiredServiceEnv = (
 	environment: string,
 	placement: PlatformPlacement,
 	manifestJson: string,
 	proxySource: ZeropsNamespaceProxySource,
+	oauthConfig: IamOAuthConfig | undefined,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const iamOrigin = platformOrigin(placement.scheme, placement.hosts.iam)
 	const operationsOrigin = platformOrigin(placement.scheme, placement.hosts.operations)
+	const iam = new Map([
+		['ENVIRONMENT', environment],
+		// The `iss` of every minted token AND the OIDC redirect base, so it must be the address
+		// routed to the proxy in front of this service.
+		['ISSUER', iamOrigin],
+	])
+	if (oauthConfig !== undefined) {
+		iam.set(IAM_OAUTH_CONFIG, JSON.stringify(oauthConfig))
+	}
 	return new Map<PlatformDeployService, ReadonlyMap<string, string>>([
-		[
-			'iam',
-			new Map([
-				['ENVIRONMENT', environment],
-				// The `iss` of every minted token AND the OIDC redirect base, so it must be the address
-				// routed to the proxy in front of this service.
-				['ISSUER', iamOrigin],
-			]),
-		],
+		['iam', iam],
 		[
 			'operations',
 			new Map([
@@ -589,14 +596,24 @@ export const deployPreparedPlatform = async (
 	log.info(`iam ${placement.hosts.iam} · operations ${placement.hosts.operations}`)
 
 	log.step('Compose the proxy manifest')
-	const platformManifest = resolvePlatformProxyManifest(PLATFORM_PROXY_MANIFEST_TEMPLATE, {
+	const composition: PlatformProxyComposition = {
 		scheme: placement.scheme,
 		placement: {
 			iam: { hosts: [placement.hosts.iam] },
 			control: { hosts: [placement.hosts.control] },
 			operations: { hosts: [placement.hosts.operations] },
 		},
-	})
+		...(input.mcpClients === undefined ? {} : { authorizationServer: platformOrigin(placement.scheme, placement.hosts.iam) }),
+	}
+	const platformManifest = resolvePlatformProxyManifest(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition)
+	const oauthConfig = input.mcpClients === undefined
+		? undefined
+		: platformIamOAuthConfig(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition, input.mcpClients)
+	log.info(
+		oauthConfig === undefined
+			? 'MCP authoring: off'
+			: `MCP authoring: on, ${oauthConfig.clients.length} client(s), resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
+	)
 	const merged = mergePlatformProxyManifest(platformManifest, readLiveProxyManifest(proxyEnv.get(FABRIKA_PROXY_MANIFEST_JSON)))
 	log.info(`${merged.manifest.apps.length} app(s): ${merged.manifest.apps.map((app) => app.id).join(', ')}`)
 	if (merged.carried.length > 0) {
@@ -610,11 +627,14 @@ export const deployPreparedPlatform = async (
 	}
 
 	log.step('Write the service environment')
-	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest), proxySource)
+	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest), proxySource, oauthConfig)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)
 		const keys = desired.get(hostname) ?? new Map<string, string>()
+		if (hostname === 'iam' && oauthConfig === undefined && (live.get(IAM_OAUTH_CONFIG) ?? '').trim() !== '') {
+			log.warn(`iam: MCP authoring is off but ${IAM_OAUTH_CONFIG} is still set; IAM keeps issuing MCP tokens until it is removed`)
+		}
 		const written = await applyServiceEnv(service, keys, live, input, collaborators)
 		log.info(
 			written.length === 0

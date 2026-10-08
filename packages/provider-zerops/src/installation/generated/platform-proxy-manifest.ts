@@ -11,6 +11,9 @@
 // The gate rules below are `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES` as of the last
 // regeneration, copied on purpose: a PUBLISHED deploy command may not import the private package that
 // owns them. `gen:check` in CI is what makes the copy a fact rather than a hope.
+//
+// The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy gates and registers
+// it only on an installation that enables MCP authoring.
 
 import type { PlatformProxyManifestTemplate } from '../proxy-manifest'
 
@@ -53,6 +56,16 @@ export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 					{ path: '/api/*', kind: 'service' },
 					{ path: '/api/*', kind: 'human' },
 					{ path: '/*', kind: 'human' },
+				],
+			},
+			oauthResource: {
+				path: '/mcp',
+				scopes: ['authoring'],
+				scopeGrants: [
+					{
+						scope: 'authoring',
+						actions: ['source.workspace.read', 'source.workspace.write', 'source.pull-request.create', 'deploy.trigger', 'deploy.read'],
+					},
 				],
 			},
 		},

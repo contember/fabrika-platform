@@ -1,10 +1,11 @@
 import { z } from 'zod'
 
 const scheme = z.enum(['http', 'https']).default('https')
+// Lowercased because every consumer compares origins as `URL` writes them, and `URL` lowercases the host.
 const bareHostname = z.string().refine(
 	(host) => !host.includes('/') && !host.includes(':'),
 	(host) => ({ message: `\`${host}\` is not a bare hostname — a platform host carries no scheme and no port` }),
-)
+).transform((host) => host.toLowerCase())
 const hosts = z.object({ iam: bareHostname, control: bareHostname, operations: bareHostname })
 
 export const parsePlatformScheme = (raw: string | undefined): 'http' | 'https' => {

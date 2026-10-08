@@ -20,7 +20,9 @@ import { parsePlatformUpgradeArgs, UPGRADE_DRY_RUN_FLAG } from './upgrade-option
 export { PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DEPLOY_ORDER, PLATFORM_PROXY_SERVICE, PLATFORM_SEQUENTIAL_DEPLOY } from './deploy'
 export { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
 export { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
+export { type IamOAuthConfig, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from './mcp'
 export {
+	type PlatformOAuthResourceTemplate,
 	type PlatformProxyApp,
 	platformProxyAppFor,
 	type PlatformProxyComposition,
@@ -178,12 +180,19 @@ Options (a flag beats the environment variable beside it):
   --operations-host=<host>          FABRIKA_PLATFORM_OPERATIONS_HOST
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --source-dir=<checkout>           required                       clean full checkout running this CLI
+  --mcp-clients=<json>              FABRIKA_PLATFORM_MCP_CLIENTS_JSON  MCP authoring clients; unset = off
   --dry-run                                                         read everything, change nothing
 
 Naming NO host derives all three from the proxy service's Zerops subdomains and makes this a
 \`zerops-subdomain\` installation, whose public entry point step 4 ensures. Naming all three makes it a
 \`custom-domain\` installation: the domains are bound to the project balancer out of band and no
 subdomain is published.
+
+MCP authoring (ADR-0049) is opt-in. --mcp-clients takes a JSON array of the MCP clients this
+installation trusts: [{"provider":"claude"|"chatgpt","clientId":"<https CIMD URL>","redirectUris":[...],
+"metadataUrl":"<https URL>"?}]. With it, the console's /mcp is gated for OAuth bearers and IAM gets
+FABRIKA_IAM_OAUTH_CONFIG. Without it, /mcp falls to the human gate and FABRIKA_IAM_OAUTH_CONFIG on iam
+is left as it is.
 
 Credentials are read from the ENVIRONMENT ONLY and have no flag, so they cannot reach a CI log or a
 process listing:

@@ -8,10 +8,16 @@
  * port is identical on both sides, so a gate change cannot reach one and miss the other.
  */
 
+import { controlMcpResource, controlProxyGates } from '@fabrika/control/gates'
 import { PLATFORM_PROXY_APPS, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
+import type { McpClient } from '@fabrika/provider-zerops/installation'
+import { encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parseOAuthConfig } from '../../../iam/src/oauth-config'
 import { localApps } from '../app-registration'
-import { localPlatformProxyManifest } from '../prepare'
+import { localIamOAuthConfig, localPlatformProxyManifest, readLocalMcpClients } from '../prepare'
 
 describe('the local platform manifest is the installation template, placed locally', () => {
 	test('the same apps in the same order, with the same gates', () => {
@@ -50,5 +56,48 @@ describe('what the local composition registers with IAM', () => {
 			if (hosts === undefined) continue
 			expect(app.returnOrigins.map((origin) => new URL(origin).hostname)).toEqual(hosts)
 		}
+	})
+})
+
+describe('MCP authoring in the local composition', () => {
+	const CLIENT: McpClient = {
+		provider: 'claude',
+		clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
+		redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
+	}
+	// What control derives its MCP resource from: its `FABRIKA_CONTROL_DOMAIN` in compose.yaml.
+	const controlDomain = (): string => {
+		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')
+		const match = /FABRIKA_CONTROL_DOMAIN: (\S+)/.exec(compose)
+		if (match?.[1] === undefined) throw new Error('compose.yaml names no FABRIKA_CONTROL_DOMAIN')
+		return match[1]
+	}
+	const consoleOf = (clients?: readonly McpClient[]) => localPlatformProxyManifest(clients).apps.find((app) => app.id === 'vozka')
+
+	test('is off by default: no OAuth gate, no registered resource, and IAM OAuth disabled', () => {
+		expect(readLocalMcpClients({})).toBeUndefined()
+		expect(consoleOf()?.gates).toEqual(controlProxyGates())
+		expect(consoleOf()?.oauthResources).toBeUndefined()
+		expect(localIamOAuthConfig(undefined)).toBe('')
+	})
+
+	test('turned on, the console is gated for the resource control derives from its own domain', () => {
+		const origin = controlDomain()
+		expect(consoleOf([CLIENT])?.gates).toEqual(controlProxyGates(origin))
+		expect(consoleOf([CLIENT])?.oauthResources?.map((entry) => entry.resource)).toEqual([controlMcpResource(origin)])
+		expect(consoleOf([CLIENT])?.oauthResources?.[0]?.authorizationServers).toEqual(['http://iam.fabrika.localhost:18080'])
+		const manifest = localPlatformProxyManifest([CLIENT])
+		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
+	})
+
+	test('turned on, IAM gets a config its own parser accepts, for that same resource', () => {
+		const config = parseOAuthConfig(localIamOAuthConfig([CLIENT]))
+		expect(config?.clients.map((client) => client.clientId)).toEqual([CLIENT.clientId])
+		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual([['vozka', controlMcpResource(controlDomain())]])
+	})
+
+	test('the opt-in variable is parsed at the boundary', () => {
+		expect(readLocalMcpClients({ FABRIKA_LOCAL_MCP_CLIENTS_JSON: JSON.stringify([CLIENT]) })).toEqual([CLIENT])
+		expect(() => readLocalMcpClients({ FABRIKA_LOCAL_MCP_CLIENTS_JSON: '[]' })).toThrow(/MCP client/)
 	})
 })

@@ -12,6 +12,7 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
+import { type McpClient, parseMcpClientsJson } from './mcp'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 
@@ -34,6 +35,8 @@ export interface PlatformDeployInput {
 	/** The scheme a browser speaks to this installation. `https` unless a local composition says otherwise. */
 	readonly scheme: 'http' | 'https'
 	readonly sourceDir: string
+	/** The MCP clients this installation trusts. Absent leaves MCP authoring off (ADR-0049). */
+	readonly mcpClients?: readonly McpClient[]
 	/** IAM-issued `px_` admin key, used only to reconcile the console's schema. Environment only. */
 	readonly iamAdminKey: string
 	/** Read everything, write nothing, trigger nothing. */
@@ -50,6 +53,7 @@ const FLAGS = [
 	'--operations-host',
 	'--scheme',
 	'--source-dir',
+	'--mcp-clients',
 ] as const
 
 const readFlag = (argv: readonly string[], name: string): string | undefined => {
@@ -137,6 +141,12 @@ export const parsePlatformDeployArgs = (
 	const dryRun = argv.includes('--dry-run')
 	const hosts = readHosts(argv, env)
 	const apiBaseUrl = readEnv(env, 'FABRIKA_ZEROPS_API_URL')
+	const mcpClients = setting(argv, env, '--mcp-clients', 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON')
+	const scheme = readScheme(argv, env)
+	// Control reads a bare `FABRIKA_CONTROL_DOMAIN` as https, so an http resource would never match its own.
+	if (mcpClients !== undefined && scheme === 'http') {
+		throw new Error('MCP clients need --scheme=https: an OAuth resource on plain http would not match the one Control serves')
+	}
 	return {
 		project: readProject(argv, env),
 		// A dry run reads, and reading still needs a token; it is the one credential it cannot do without.
@@ -146,10 +156,11 @@ export const parsePlatformDeployArgs = (
 		iamAdminKey: dryRun
 			? readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY') ?? ''
 			: required(readEnv(env, 'FABRIKA_IAM_PROVISIONING_KEY'), '(no flag)', 'FABRIKA_IAM_PROVISIONING_KEY'),
-		scheme: readScheme(argv, env),
+		scheme,
 		dryRun,
 		...(hosts === undefined ? {} : { hosts }),
 		sourceDir,
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
+		...(mcpClients === undefined ? {} : { mcpClients: parseMcpClientsJson(mcpClients) }),
 	}
 }

@@ -129,6 +129,8 @@ jobs:
           FABRIKA_PLATFORM_OPERATIONS_HOST: ${{ vars.FABRIKA_PLATFORM_OPERATIONS_HOST }}
           # Only for an installation outside the default region.
           FABRIKA_ZEROPS_API_URL: ${{ vars.FABRIKA_ZEROPS_API_URL }}
+          # MCP authoring (ADR-0049): a JSON array of the MCP clients this installation trusts. Unset = off.
+          FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
         run: fabrika platform deploy --provider=zerops --source-dir=. ${{ inputs.dry_run && '--dry-run' || '' }}
 
       - name: Summary

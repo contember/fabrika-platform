@@ -21,11 +21,29 @@
 // gate sets live in `@fabrika/control` (private) and reach a deployed installation as DATA, through the
 // generated artifact, so the published deploy path never depends on a package it cannot resolve.
 
-import type { AppGates } from '@fabrika/auth-core'
-import { parseProxyManifest, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import type { AppGates, GateRule } from '@fabrika/auth-core'
+import { type OAuthProtectedResource, parseProxyManifest, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /** The platform services an installation's proxy fronts. Each name is a service hostname in the topology. */
 export type PlatformProxyService = 'iam' | 'control' | 'operations'
+
+/** What one OAuth scope lets a token do: the owning app's actions, resolved by IAM at the token endpoint. */
+export interface PlatformOAuthScopeGrant {
+	readonly scope: string
+	readonly actions: readonly string[]
+}
+
+/**
+ * A path an app serves to OAuth clients, protected only on an installation that enables it.
+ *
+ * The resource URI is the app's public origin plus `path`, so the template holds the path and a deploy
+ * binds the origin. Copied from the owning gate module by the generator, like `gates`.
+ */
+export interface PlatformOAuthResourceTemplate {
+	readonly path: string
+	readonly scopes: readonly string[]
+	readonly scopeGrants: readonly PlatformOAuthScopeGrant[]
+}
 
 /** One fronted app, in the form that is the same on every installation. */
 export interface PlatformProxyApp {
@@ -45,6 +63,8 @@ export interface PlatformProxyApp {
 	readonly upstream: string
 	/** Owned by the service's own gate module and copied in by the generator. Never written by hand. */
 	readonly gates: AppGates
+	/** Present only on an app that can serve OAuth clients; off unless the composition names an authorization server. */
+	readonly oauthResource?: PlatformOAuthResourceTemplate
 }
 
 /** Everything about an installation's manifest that does not depend on WHICH installation it is. */
@@ -83,6 +103,53 @@ export interface PlatformProxyComposition {
 	/** The scheme the BROWSER speaks to these apps — configuration, never a header (see `ProxyApp.scheme`). */
 	readonly scheme: 'http' | 'https'
 	readonly placement: Readonly<Record<PlatformProxyService, PlatformProxyPlacement>>
+	/**
+	 * The public IAM origin that issues OAuth tokens. Present only when the installation enables MCP
+	 * authoring; absent leaves every `oauthResource` unregistered and ungated.
+	 */
+	readonly authorizationServer?: string
+	/** The port browsers reach every app on, when it is not the scheme's default. The local composition's is 18080. */
+	readonly publicPort?: number
+}
+
+/**
+ * The RFC 8707 resource URI and RFC 9728 metadata URL of an app's OAuth resource, bound to the app's
+ * FIRST host: the proxy refuses a resource on a host the app does not answer on.
+ */
+export const platformOAuthResourceUris = (
+	composition: Pick<PlatformProxyComposition, 'scheme' | 'publicPort'>,
+	hosts: readonly string[],
+	template: PlatformOAuthResourceTemplate,
+): { readonly resource: string; readonly resourceMetadata: string } => {
+	const host = hosts[0]
+	if (host === undefined) {
+		throw new Error('an OAuth resource needs a host to stand on')
+	}
+	const origin = composition.publicPort === undefined
+		? `${composition.scheme}://${host}`
+		: `${composition.scheme}://${host}:${composition.publicPort}`
+	return {
+		resource: `${origin}${template.path}`,
+		resourceMetadata: `${origin}/.well-known/oauth-protected-resource${template.path}`,
+	}
+}
+
+/** The gate rule goes FIRST, so the app's own catch-all rules cannot claim the path before it. */
+const withOAuthResource = (
+	app: ProxyApp,
+	template: PlatformOAuthResourceTemplate,
+	composition: PlatformProxyComposition,
+	authorizationServer: string,
+): ProxyApp => {
+	const { resource, resourceMetadata } = platformOAuthResourceUris(composition, app.hosts, template)
+	const rule: GateRule = { path: template.path, kind: 'oauth', resource, scopes: [...template.scopes] }
+	const registered: OAuthProtectedResource = {
+		resource,
+		resourceMetadata,
+		authorizationServers: [authorizationServer],
+		scopesSupported: [...template.scopes],
+	}
+	return { ...app, gates: { rules: [rule, ...app.gates.rules] }, oauthResources: [registered] }
 }
 
 /**
@@ -95,15 +162,18 @@ export const resolvePlatformProxyManifest = (
 	template: PlatformProxyManifestTemplate,
 	composition: PlatformProxyComposition,
 ): ProxyManifest => {
-	const apps = template.apps.map((app) => {
+	const apps = template.apps.map((app): ProxyApp => {
 		const placement = composition.placement[app.service]
-		return {
+		const resolved: ProxyApp = {
 			id: app.id,
 			hosts: [...placement.hosts],
 			upstream: placement.upstream ?? app.upstream,
 			gates: app.gates,
 			scheme: composition.scheme,
 		}
+		return app.oauthResource === undefined || composition.authorizationServer === undefined
+			? resolved
+			: withOAuthResource(resolved, app.oauthResource, composition, composition.authorizationServer)
 	})
 	const manifest = parseProxyManifest({ apps })
 	if (manifest === null) {
