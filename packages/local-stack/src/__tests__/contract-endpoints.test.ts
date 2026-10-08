@@ -9,6 +9,7 @@ import { compileContract, schemaFromContract } from '@fabrika/app/contract'
 import { boot } from '@fabrika/app/implement'
 import { appSchemaSchema } from '@fabrika/auth'
 import {
+	contractDigest,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
 	type MintFromKeyResult,
@@ -66,6 +67,8 @@ const proxyManifest = compileNamespaceProxyManifest('apps-prod', [{
 	env: 'prod',
 	domain: HOST,
 	artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
+	// Control's approved snapshot of the commit (ADR-0050): the proxy table comes from it, never from the artifact.
+	access: { contract: artifact, contractDigest: contractDigest(artifact), schema: schemaFromContract(artifact) },
 }])
 
 const inW1 = (action: string): PermissionEntry => grant(action, { type: 'workspace', value: 'w1' })
