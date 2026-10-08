@@ -1,59 +1,83 @@
-import { type AstNode, child, children, identifierName, memberPath, staticKey, walk } from '../ast'
+import { type AstNode, child, children, type Comment, identifierName, memberPath, walk } from '../ast'
 import type { Report } from '../finding'
 
 const TEST_ROOTS = new Set(['test', 'it', 'describe', 'bench'])
 const NOT_RUN = new Set(['skip', 'only', 'todo', 'skipIf', 'if', 'todoIf', 'failing'])
 const NOT_RUN_ALIASES = new Set(['xit', 'xtest', 'xdescribe', 'fit', 'fdescribe'])
+/** Modifiers that still register a test that runs: `test.concurrent(…)`, `test.each(table)(…)`. */
+const RUNNING_MODIFIERS = new Set(['concurrent', 'serial', 'each'])
 const ASSERTION_NAME = /^(?:expect|assert)/
+const FUNCTION_TYPES = new Set(['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'])
 
-const isFunction = (node: AstNode | null | undefined): node is AstNode =>
-	node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression'
+const isFunction = (node: AstNode | null | undefined): node is AstNode => node !== null && node !== undefined && FUNCTION_TYPES.has(node.type)
 
-/** A call of `expect…` or `assert…`, directly or as a member (`t.assert()`, `harness.expectDenied()`). */
-const isAssertionCall = (node: AstNode): boolean => {
-	if (node.type !== 'CallExpression') return false
-	let current = child(node, 'callee')
-	while (current !== undefined) {
-		if (current.type === 'Identifier') return ASSERTION_NAME.test(identifierName(current) ?? '')
-		if (current.type === 'MemberExpression') {
-			const property = staticKey(current, 'property')
-			if (property !== undefined && ASSERTION_NAME.test(property)) return true
-			current = child(current, 'object')
-		} else if (current.type === 'CallExpression') current = child(current, 'callee')
-		else return false
-	}
-	return false
+/** `expect(x).toBe(y)`, `expect(x).not.toThrow()`: a matcher called on the result of `expect(…)`. */
+const isMatcherCall = (callee: AstNode): boolean => {
+	let current = child(callee, 'object')
+	while (current?.type === 'MemberExpression') current = child(current, 'object')
+	return current?.type === 'CallExpression' && identifierName(child(current, 'callee')) === 'expect'
 }
 
+/** A matcher on `expect(…)`, or a call of an assertion helper: `assert(…)`, `assert.equal(…)`, `harness.expectDenied(…)`. */
+const isAssertionCall = (node: AstNode): boolean => {
+	const callee = node.type === 'CallExpression' ? child(node, 'callee') : undefined
+	if (callee === undefined) return false
+	const name = identifierName(callee)
+	if (name !== undefined) return name !== 'expect' && ASSERTION_NAME.test(name)
+	if (callee.type !== 'MemberExpression') return false
+	if (isMatcherCall(callee)) return true
+	const path = memberPath(callee)
+	const [root] = path ?? []
+	const last = path?.[path.length - 1]
+	return root !== undefined && root !== 'expect' && (/^assert/.test(root) || (last !== undefined && ASSERTION_NAME.test(last)))
+}
+
+/** Whether a test body runs an assertion; a nested function counts only where it is called or passed to a call. */
 const hasAssertion = (body: AstNode): boolean => {
 	let found = false
-	walk(body, (node) => {
-		if (!found && isAssertionCall(node)) found = true
+	walk(body, (node, ancestors) => {
+		if (found) return 'skip'
+		if (node !== body && FUNCTION_TYPES.has(node.type)) {
+			const parent = ancestors[ancestors.length - 1]
+			const isInvoked = parent?.type === 'CallExpression' && (parent['callee'] === node || children(parent, 'arguments').includes(node))
+			if (!isInvoked) return 'skip'
+		}
+		if (isAssertionCall(node)) found = true
 	})
 	return found
+}
+
+/** The path a registration is called through: `test.concurrent(…)` → `test.concurrent`; `test.each(t)(…)` → `test.each`. */
+const registrationPath = (node: AstNode): readonly string[] | undefined => {
+	const callee = child(node, 'callee')
+	if (callee?.type !== 'CallExpression') return callee === undefined ? undefined : memberPath(callee)
+	const inner = child(callee, 'callee')
+	const path = inner === undefined ? undefined : memberPath(inner)
+	return path?.[path.length - 1] === 'each' ? path : undefined
 }
 
 /** For test files: every test runs, and every test asserts. */
 export const checkTestNode = (node: AstNode, report: Report): void => {
 	if (node.type !== 'CallExpression') return
-	const callee = child(node, 'callee')
-	const path = callee === undefined ? undefined : memberPath(callee)
+	const path = registrationPath(node)
 	if (path === undefined) return
 	const [root, ...modifiers] = path
 	if (root === undefined) return
 	const notRun = TEST_ROOTS.has(root) ? modifiers.find((modifier) => NOT_RUN.has(modifier)) : undefined
 	if (notRun !== undefined || (NOT_RUN_ALIASES.has(root) && modifiers.length === 0)) {
-		report(node, 'skipped-test', `${path.join('.')} leaves tests out of the run`, 'a test that runs, or no test at all')
+		if (child(node, 'callee')?.type !== 'CallExpression') {
+			report(node, 'skipped-test', `${path.join('.')} leaves tests out of the run`, 'a test that runs, or no test at all')
+		}
 		return
 	}
-	if ((root !== 'test' && root !== 'it') || modifiers.length > 0) return
+	if ((root !== 'test' && root !== 'it') || !modifiers.every((modifier) => RUNNING_MODIFIERS.has(modifier))) return
 	const body = children(node, 'arguments').find(isFunction)
 	if (body !== undefined && !hasAssertion(body)) {
 		report(
 			node,
 			'test-without-assertion',
-			`this ${root}() asserts nothing, so it passes whatever the code does`,
-			'a call of expect(…), or of a helper named expect…/assert…',
+			`this ${path.join('.')}() asserts nothing, so it passes whatever the code does`,
+			'a matcher on expect(…), such as expect(x).toBe(y), or a call of a helper named expect…/assert…',
 		)
 	}
 }
@@ -70,8 +94,19 @@ const sha256 = async (text: string): Promise<string> => {
 /** The header `fabrika db test-scaffold` puts on a generated test with this body. */
 export const generatedTestHeader = async (body: string): Promise<string> => `${GENERATED_TEST_HEADER}${await sha256(body)}`
 
-export const checkGeneratedTest = async (text: string, report: Report): Promise<void> => {
-	if (!text.startsWith(GENERATED_TEST_MARKER)) return
+export const checkGeneratedTest = async (text: string, comments: readonly Comment[], report: Report): Promise<void> => {
+	if (!text.startsWith(GENERATED_TEST_MARKER)) {
+		const misplaced = comments.find((comment) => comment.text.includes(GENERATED_TEST_MARKER.slice('// '.length)))
+		if (misplaced !== undefined) {
+			report(
+				misplaced.position,
+				'generated-test-hash',
+				'the generated-test header is not the first line of the file',
+				'the file as fabrika db test-scaffold wrote it',
+			)
+		}
+		return
+	}
 	const newline = text.indexOf('\n')
 	const header = newline === -1 ? text : text.slice(0, newline)
 	const body = newline === -1 ? '' : text.slice(newline + 1)

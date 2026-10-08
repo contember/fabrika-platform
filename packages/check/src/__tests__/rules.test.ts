@@ -39,7 +39,7 @@ const cases: readonly RuleCase[] = [
 				"const appName = 'notes'.trim()\nexport const contract",
 			),
 			'src/schemas/notes.ts': `${CLEAN_SCHEMAS}export const Title = z.string().refine((value) => value !== '')\n`,
-			'src/db/tables.ts': "import { defineTables } from '@fabrika/app/contract'\n\nlet notes = {}\nexport const tables = defineTables()({ notes })\n",
+			'src/db/tables.ts': "import { defineTables } from '@fabrika/db'\n\nlet notes = {}\nexport const tables = defineTables()({ notes })\n",
 		},
 		expected: [
 			'fabrika.contract.ts:5:17',
@@ -215,7 +215,7 @@ const cases: readonly RuleCase[] = [
 				'get: c.query({ input: z.strictObject({ id: z.uuid(), workspaceId: z.uuid() }),',
 			),
 		},
-		expected: ['fabrika.contract.ts:12:18', 'fabrika.contract.ts:13:24'],
+		expected: ['fabrika.contract.ts:12:25', 'fabrika.contract.ts:13:31'],
 		good: CLEAN_APPLICATION,
 	},
 	{

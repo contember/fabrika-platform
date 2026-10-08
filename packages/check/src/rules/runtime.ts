@@ -1,6 +1,19 @@
-import { type AstNode, child, children, identifierName, isValueReference, memberPath, staticKey, stringField, stringLiteral, unwrap } from '../ast'
+import {
+	type AstNode,
+	child,
+	children,
+	identifierName,
+	isValueReference,
+	memberPath,
+	memberSuffix,
+	staticKey,
+	staticString,
+	stringField,
+	templateText,
+	unwrap,
+} from '../ast'
 import type { Report } from '../finding'
-import { FORBIDDEN_BUN_ALLOWED, FORBIDDEN_BUN_MEMBERS } from './modules'
+import { FORBIDDEN_BUN_MEMBERS } from './modules'
 
 export interface SourceContext {
 	readonly report: Report
@@ -11,6 +24,10 @@ export interface SourceContext {
 const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self'])
 /** Kysely's raw helpers (`sql.raw`, `sql.lit`, …) and Bun's `sql.unsafe`. */
 const RAW_SQL_HELPERS = new Set(['raw', 'lit', 'ref', 'id', 'table', 'val', 'join', 'unsafe'])
+const ALLOWED_ENV = 'values the framework hands the handler through deps or ctx'
+const ALLOWED_QUERY = 'a query through the scoped data layer of @fabrika/db'
+const ALLOWED_MARKUP = 'text content, or elements rendered by React'
+const ALLOWED_CODE = 'a function written in the source'
 
 /** `globalThis.Bun.serve` and `Bun.serve` name the same global. */
 const globalPath = (node: AstNode): readonly string[] | undefined => {
@@ -24,23 +41,38 @@ const globalPath = (node: AstNode): readonly string[] | undefined => {
 const pathIs = (path: readonly string[] | undefined, ...expected: string[]): boolean =>
 	path !== undefined && path.length === expected.length && expected.every((segment, index) => path[index] === segment)
 
-const firstArgument = (node: AstNode): AstNode | undefined => {
-	const first = children(node, 'arguments')[0]
+const argumentAt = (node: AstNode, position: number): AstNode | undefined => {
+	const argument = children(node, 'arguments')[position]
+	return argument === null || argument === undefined ? undefined : unwrap(argument)
+}
+
+/** The argument a direct call receives, also through `f.call(this, x)` and `f.apply(this, [x])`. */
+const invokedArgument = (node: AstNode, path: readonly string[], name: string): AstNode | undefined => {
+	if (pathIs(path, name)) return argumentAt(node, 0)
+	if (pathIs(path, name, 'call')) return argumentAt(node, 1)
+	const list = pathIs(path, name, 'apply') ? argumentAt(node, 1) : undefined
+	const first = list?.type === 'ArrayExpression' ? children(list, 'elements')[0] : undefined
 	return first === null || first === undefined ? undefined : unwrap(first)
 }
 
-/** The text a string or template literal starts with, as far as it is static. */
+/** The text a string expression starts with, as far as it is static: literals, templates and `+` concatenation. */
 const staticPrefix = (node: AstNode | undefined): string | undefined => {
 	if (node === undefined) return undefined
-	const literal = stringLiteral(node)
-	if (literal !== undefined) return literal
+	const whole = staticString(node)
+	if (whole !== undefined) return whole
 	if (node.type === 'TemplateLiteral') {
 		const head = children(node, 'quasis')[0]
-		const value = head ? head['value'] : undefined
-		return typeof value === 'object' && value !== null && 'cooked' in value && typeof value.cooked === 'string' ? value.cooked : undefined
+		return head ? templateText(head).cooked : undefined
+	}
+	if (node.type === 'BinaryExpression' && node['operator'] === '+') {
+		const left = child(node, 'left')
+		const leftText = left === undefined ? undefined : staticString(unwrap(left))
+		const right = child(node, 'right')
+		if (leftText !== undefined) return leftText + (staticPrefix(right === undefined ? undefined : unwrap(right)) ?? '')
+		return staticPrefix(left === undefined ? undefined : unwrap(left))
 	}
 	if (node.type === 'NewExpression' && ['URL', 'Request'].includes(identifierName(child(node, 'callee')) ?? '')) {
-		return staticPrefix(firstArgument(node))
+		return staticPrefix(argumentAt(node, 0))
 	}
 	return undefined
 }
@@ -48,9 +80,8 @@ const staticPrefix = (node: AstNode | undefined): string | undefined => {
 const ABSOLUTE_URL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i
 const LOCAL_SCHEMES = /^(?:data|blob):/i
 
-const checkFetch = (node: AstNode, path: readonly string[] | undefined, context: SourceContext): void => {
-	if (!pathIs(path, 'fetch')) return
-	const target = staticPrefix(firstArgument(node))
+const checkFetch = (node: AstNode, path: readonly string[], context: SourceContext): void => {
+	const target = staticPrefix(invokedArgument(node, path, 'fetch'))
 	if (target === undefined || !ABSOLUTE_URL.test(target) || LOCAL_SCHEMES.test(target)) return
 	context.report(
 		node,
@@ -60,33 +91,65 @@ const checkFetch = (node: AstNode, path: readonly string[] | undefined, context:
 	)
 }
 
-const checkDynamicCode = (node: AstNode, path: readonly string[] | undefined, context: SourceContext): void => {
-	const isFunctionConstructor = pathIs(path, 'Function') && (node.type === 'CallExpression' || node.type === 'NewExpression')
-	if (isFunctionConstructor) {
-		context.report(node, 'dynamic-code', 'the Function constructor compiles a string into code', 'a function written in the source')
+const checkDynamicCode = (node: AstNode, path: readonly string[], context: SourceContext): void => {
+	const isConstructor = pathIs(path, 'Function') || pathIs(path, 'Function', 'call') || pathIs(path, 'Function', 'apply')
+	if (isConstructor && (node.type === 'CallExpression' || node.type === 'NewExpression')) {
+		context.report(node, 'dynamic-code', 'the Function constructor compiles a string into code', ALLOWED_CODE)
 		return
 	}
 	if (node.type !== 'CallExpression' || !(pathIs(path, 'setTimeout') || pathIs(path, 'setInterval'))) return
-	const callback = firstArgument(node)
-	if (callback !== undefined && staticPrefix(callback) !== undefined && callback.type !== 'NewExpression') {
-		context.report(node, 'dynamic-code', `${path?.[0]} with a string evaluates it as code`, 'a function callback')
+	const callback = argumentAt(node, 0)
+	if (callback !== undefined && callback.type !== 'NewExpression' && staticPrefix(callback) !== undefined) {
+		context.report(node, 'dynamic-code', `${path[0]} with a string evaluates it as code`, 'a function callback')
 	}
 }
 
 const SENSITIVE_NAMES = new Set(['err', 'error', 'e', 'ex', 'exception', 'cause', 'req', 'request', 'headers', 'env'])
 const SENSITIVE_MEMBERS = new Set(['error', 'cause', 'request', 'headers', 'env'])
+const SENSITIVE_CONSTRUCTORS = /^(?:\w*Error|Request|Headers)$/
 
 const catchParameters = (ancestors: readonly AstNode[]): ReadonlySet<string> => {
 	const names = new Set<string>()
 	for (const ancestor of ancestors) {
-		if (ancestor.type !== 'CatchClause') continue
-		const name = identifierName(child(ancestor, 'param'))
+		const name = ancestor.type === 'CatchClause' ? identifierName(child(ancestor, 'param')) : undefined
 		if (name !== undefined) names.add(name)
 	}
 	return names
 }
 
-/** The first argument part that logs an error object, a request, headers or the environment. */
+/** The parts of an expression whose value is logged as is: a conditional's branches, a template's substitutions, … */
+const loggedParts = (value: AstNode): readonly AstNode[] => {
+	const parts = (key: string) => children(value, key).filter((item): item is AstNode => item !== null)
+	const single = (key: string) => {
+		const inner = child(value, key)
+		return inner === undefined ? [] : [inner]
+	}
+	switch (value.type) {
+		case 'ObjectExpression':
+			return parts('properties').flatMap((property) => {
+				const inner = child(property, property.type === 'SpreadElement' ? 'argument' : 'value')
+				return inner === undefined ? [] : [inner]
+			})
+		case 'ArrayExpression':
+			return parts('elements')
+		case 'CallExpression':
+		case 'NewExpression':
+			return parts('arguments')
+		case 'TemplateLiteral':
+			return parts('expressions')
+		case 'ConditionalExpression':
+			return [...single('consequent'), ...single('alternate')]
+		case 'LogicalExpression':
+			return [...single('left'), ...single('right')]
+		case 'SpreadElement':
+		case 'AwaitExpression':
+			return single('argument')
+		default:
+			return []
+	}
+}
+
+/** The first part of a logged value that is an error object, a request, headers or the environment. */
 const sensitiveArgument = (node: AstNode, caught: ReadonlySet<string>): AstNode | undefined => {
 	const value = unwrap(node)
 	const name = identifierName(value)
@@ -95,32 +158,19 @@ const sensitiveArgument = (node: AstNode, caught: ReadonlySet<string>): AstNode 
 		const property = staticKey(value, 'property')
 		return property !== undefined && SENSITIVE_MEMBERS.has(property) ? value : undefined
 	}
-	const nested: AstNode[] = []
-	if (value.type === 'ObjectExpression') {
-		for (const property of children(value, 'properties')) {
-			const inner = property && (property.type === 'SpreadElement' ? child(property, 'argument') : child(property, 'value'))
-			if (inner) nested.push(inner)
-		}
-	} else if (value.type === 'ArrayExpression' || value.type === 'CallExpression' || value.type === 'NewExpression') {
-		const key = value.type === 'ArrayExpression' ? 'elements' : 'arguments'
-		for (const element of children(value, key)) if (element) nested.push(element)
-	} else if (value.type === 'SpreadElement') {
-		const argument = child(value, 'argument')
-		if (argument) nested.push(argument)
-	}
-	for (const inner of nested) {
-		const found = sensitiveArgument(inner, caught)
+	if (value.type === 'NewExpression' && SENSITIVE_CONSTRUCTORS.test(identifierName(child(value, 'callee')) ?? '')) return value
+	for (const part of loggedParts(value)) {
+		const found = sensitiveArgument(part, caught)
 		if (found !== undefined) return found
 	}
 	return undefined
 }
 
-const checkConsole = (node: AstNode, path: readonly string[] | undefined, ancestors: readonly AstNode[], context: SourceContext): void => {
-	if (path === undefined || path.length !== 2 || path[0] !== 'console') return
+const checkConsole = (node: AstNode, path: readonly string[], ancestors: readonly AstNode[], context: SourceContext): void => {
+	if (path.length !== 2 || path[0] !== 'console') return
 	const caught = catchParameters(ancestors)
 	for (const argument of children(node, 'arguments')) {
-		if (argument === null) continue
-		const found = sensitiveArgument(argument, caught)
+		const found = argument === null ? undefined : sensitiveArgument(argument, caught)
 		if (found === undefined) continue
 		context.report(
 			found,
@@ -133,10 +183,12 @@ const checkConsole = (node: AstNode, path: readonly string[] | undefined, ancest
 }
 
 const PROTOTYPE_KEYS = new Set(['prototype', '__proto__'])
+const PROTOTYPE_READERS = ['Object.getPrototypeOf', 'Reflect.getPrototypeOf']
 const PROTOTYPE_WRITERS = ['Object.setPrototypeOf', 'Reflect.setPrototypeOf']
 const PROPERTY_WRITERS = ['Object.defineProperty', 'Object.defineProperties', 'Object.assign', 'Reflect.defineProperty', 'Reflect.set']
+const ALLOWED_PROTOTYPE = 'no patching of prototypes; the framework checks capabilities at runtime'
 
-/** Whether a member chain passes through `.prototype` or `.__proto__`, computed links included. */
+/** Whether an expression reaches a prototype: through `.prototype`, `.__proto__` or `Object.getPrototypeOf(…)`. */
 const touchesPrototype = (node: AstNode | undefined): boolean => {
 	let current = node === undefined ? undefined : unwrap(node)
 	while (current?.type === 'MemberExpression') {
@@ -145,44 +197,39 @@ const touchesPrototype = (node: AstNode | undefined): boolean => {
 		const object = child(current, 'object')
 		current = object === undefined ? undefined : unwrap(object)
 	}
-	return false
+	const callee = current?.type === 'CallExpression' ? child(current, 'callee') : undefined
+	return callee !== undefined && PROTOTYPE_READERS.includes(memberPath(callee)?.join('.') ?? '')
 }
 
-const PROTOTYPE_ALLOWED = 'no patching of prototypes; the framework checks capabilities at runtime'
-
-const checkPrototypeCall = (node: AstNode, path: readonly string[] | undefined, context: SourceContext): void => {
-	const name = path?.join('.') ?? ''
+const checkPrototypeCall = (node: AstNode, path: readonly string[], context: SourceContext): void => {
+	const name = path.join('.')
 	if (PROTOTYPE_WRITERS.includes(name)) {
-		context.report(node, 'prototype-assignment', `${name} replaces an object's prototype`, PROTOTYPE_ALLOWED)
-	} else if (PROPERTY_WRITERS.includes(name) && touchesPrototype(firstArgument(node))) {
-		context.report(node, 'prototype-assignment', `${name} writes to a prototype`, PROTOTYPE_ALLOWED)
+		context.report(node, 'prototype-assignment', `${name} replaces an object's prototype`, ALLOWED_PROTOTYPE)
+	} else if (PROPERTY_WRITERS.includes(name) && touchesPrototype(argumentAt(node, 0))) {
+		context.report(node, 'prototype-assignment', `${name} writes to a prototype`, ALLOWED_PROTOTYPE)
 	}
 }
 
 const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: SourceContext): void => {
 	const callee = child(node, 'callee')
 	const path = callee === undefined ? undefined : globalPath(callee)
+	if (path === undefined) return
 	checkDynamicCode(node, path, context)
 	if (node.type !== 'CallExpression') return
 	checkFetch(node, path, context)
 	checkConsole(node, path, ancestors, context)
 	checkPrototypeCall(node, path, context)
-	if (pathIs(path, 'sql')) context.report(node, 'raw-sql', 'sql(…) builds raw SQL', 'a query through the scoped data layer of @fabrika/db')
+	if (pathIs(path, 'sql')) context.report(node, 'raw-sql', 'sql(…) builds raw SQL', ALLOWED_QUERY)
 }
 
 const checkMember = (node: AstNode, parent: AstNode | undefined, context: SourceContext): void => {
 	const path = globalPath(node)
 	const property = staticKey(node, 'property')
-	if (path?.length === 2 && path[0] === 'Bun' && FORBIDDEN_BUN_MEMBERS.has(path[1] ?? '')) {
-		context.report(node, 'forbidden-global', `Bun.${path[1]} bypasses the framework`, FORBIDDEN_BUN_ALLOWED)
-	}
+	const bunMember = path?.length === 2 && path[0] === 'Bun' ? FORBIDDEN_BUN_MEMBERS.get(path[1] ?? '') : undefined
+	if (bunMember !== undefined) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
+	if (pathIs(path, 'eval') && (memberPath(node)?.length ?? 0) > 1) context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
 	if (!context.isGeneratedEntry && (pathIs(path, 'process', 'env') || pathIs(path, 'Bun', 'env'))) {
-		context.report(
-			node,
-			'env-read',
-			`${path?.join('.')} is read outside the generated entrypoint`,
-			'values the framework hands the handler through deps or ctx',
-		)
+		context.report(node, 'env-read', `${path?.join('.')} is read outside the generated entrypoint`, ALLOWED_ENV)
 	}
 	if (!context.isGeneratedEntry && pathIs(path, 'import.meta', 'env')) {
 		const name = parent?.type === 'MemberExpression' && parent['object'] === node ? staticKey(parent, 'property') : undefined
@@ -195,11 +242,12 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 			)
 		}
 	}
-	if (path?.length === 2 && path[0] === 'sql' && RAW_SQL_HELPERS.has(path[1] ?? '')) {
-		context.report(node, 'raw-sql', `sql.${path[1]} builds raw SQL`, 'a query through the scoped data layer of @fabrika/db')
+	const suffix = memberPath(node) ?? memberSuffix(node)
+	if (suffix.length >= 2 && suffix[suffix.length - 2] === 'sql' && RAW_SQL_HELPERS.has(suffix[suffix.length - 1] ?? '')) {
+		context.report(node, 'raw-sql', `sql.${suffix[suffix.length - 1]} builds raw SQL`, ALLOWED_QUERY)
 	}
 	if (property === 'innerHTML' || property === 'outerHTML' || property === 'insertAdjacentHTML') {
-		context.report(node, 'unsafe-html', `${property} injects markup that runs as the signed-in user`, 'text content, or elements rendered by React')
+		context.report(node, 'unsafe-html', `${property} injects markup that runs as the signed-in user`, ALLOWED_MARKUP)
 	}
 }
 
@@ -207,17 +255,13 @@ const checkIdentifier = (node: AstNode, parent: AstNode | undefined, context: So
 	if (!isValueReference(node, parent)) return
 	const name = stringField(node, 'name')
 	const isMemberObject = parent?.type === 'MemberExpression' && parent['object'] === node
-	if (name === 'eval') context.report(node, 'dynamic-code', 'eval runs a string as code', 'a function written in the source')
+	if (name === 'eval') context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
 	if (name === 'Bun' && !isMemberObject) {
 		context.report(node, 'forbidden-global', 'Bun used as a value hides which global is reached', 'Bun.<member> written out')
 	}
-	if (name === 'process' && !isMemberObject && !context.isGeneratedEntry && !(parent?.type === 'UnaryExpression' && parent['operator'] === 'typeof')) {
-		context.report(
-			node,
-			'env-read',
-			'process used as a value hides a read of process.env',
-			'values the framework hands the handler through deps or ctx',
-		)
+	const isTypeofCheck = parent?.type === 'UnaryExpression' && parent['operator'] === 'typeof'
+	if (name === 'process' && !isMemberObject && !context.isGeneratedEntry && !isTypeofCheck) {
+		context.report(node, 'env-read', 'process used as a value hides a read of process.env', ALLOWED_ENV)
 	}
 }
 
@@ -231,17 +275,18 @@ const checkDestructuredEnv = (node: AstNode, context: SourceContext): void => {
 	}
 }
 
-const checkAssignment = (node: AstNode, context: SourceContext): void => {
-	const target = child(node, node.type === 'UpdateExpression' ? 'argument' : 'left')
-	if (target !== undefined && touchesPrototype(target)) {
-		context.report(node, 'prototype-assignment', 'assignment to a prototype patches every instance', PROTOTYPE_ALLOWED)
+const checkPrototypeWrite = (node: AstNode, context: SourceContext): void => {
+	const target = node.type === 'AssignmentExpression' ? child(node, 'left') : child(node, 'argument')
+	const isWrite = node.type !== 'UnaryExpression' || node['operator'] === 'delete'
+	if (isWrite && target !== undefined && touchesPrototype(target)) {
+		context.report(node, 'prototype-assignment', 'a write to a prototype patches every instance', ALLOWED_PROTOTYPE)
 	}
 }
 
 const KEY_PREFIX = 'px_'
 
-const checkStringContent = (node: AstNode, text: string | undefined, context: SourceContext): void => {
-	if (text?.includes(KEY_PREFIX)) {
+const checkStringContent = (node: AstNode, texts: readonly (string | undefined)[], context: SourceContext): void => {
+	if (texts.some((text) => text?.includes(KEY_PREFIX))) {
 		context.report(
 			node,
 			'key-literal',
@@ -251,13 +296,10 @@ const checkStringContent = (node: AstNode, text: string | undefined, context: So
 	}
 }
 
-const templateText = (node: AstNode): string | undefined => {
-	const value = node['value']
-	return typeof value === 'object' && value !== null && 'raw' in value && typeof value.raw === 'string' ? value.raw : undefined
-}
-
 const isTypeOnlyImport = (specifier: AstNode, parent: AstNode | undefined): boolean =>
 	stringField(specifier, 'importKind') === 'type' || (parent !== undefined && stringField(parent, 'importKind') === 'type')
+
+const DANGEROUSLY_SET = 'dangerouslySetInnerHTML injects markup that runs as the signed-in user'
 
 /** The rules that read one node at a time, for every source file. */
 export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], context: SourceContext): void => {
@@ -274,47 +316,36 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 			return checkDestructuredEnv(node, context)
 		case 'AssignmentExpression':
 		case 'UpdateExpression':
-			return checkAssignment(node, context)
+		case 'UnaryExpression':
+			return checkPrototypeWrite(node, context)
 		case 'TaggedTemplateExpression': {
 			const tag = child(node, 'tag')
-			const path = tag === undefined ? undefined : memberPath(tag)
-			if (path !== undefined && path[path.length - 1] === 'sql') {
-				context.report(node, 'raw-sql', 'an sql`…` template is raw SQL', 'a query through the scoped data layer of @fabrika/db')
-			}
+			const suffix = tag === undefined ? [] : (memberPath(tag) ?? memberSuffix(tag))
+			if (suffix[suffix.length - 1] === 'sql') context.report(node, 'raw-sql', 'an sql`…` template is raw SQL', ALLOWED_QUERY)
 			return
 		}
 		case 'ImportSpecifier': {
 			const imported = child(node, 'imported')
-			if ((identifierName(imported) ?? stringLiteral(imported)) === 'sql' && !isTypeOnlyImport(node, parent)) {
-				context.report(node, 'raw-sql', `the sql tag imported`, 'a query through the scoped data layer of @fabrika/db')
+			if ((identifierName(imported) ?? staticString(imported)) === 'sql' && !isTypeOnlyImport(node, parent)) {
+				context.report(node, 'raw-sql', 'the sql tag imported', ALLOWED_QUERY)
 			}
 			return
 		}
 		case 'Literal':
-			return checkStringContent(node, stringLiteral(node), context)
-		case 'TemplateElement':
-			return checkStringContent(node, templateText(node), context)
+			return checkStringContent(node, [staticString(node)], context)
+		case 'TemplateElement': {
+			const { raw, cooked } = templateText(node)
+			return checkStringContent(node, [raw, cooked], context)
+		}
 		case 'JSXAttribute': {
 			const name = child(node, 'name')
 			if (name?.type === 'JSXIdentifier' && stringField(name, 'name') === 'dangerouslySetInnerHTML') {
-				context.report(
-					node,
-					'unsafe-html',
-					'dangerouslySetInnerHTML injects markup that runs as the signed-in user',
-					'text content, or elements rendered by React',
-				)
+				context.report(node, 'unsafe-html', DANGEROUSLY_SET, ALLOWED_MARKUP)
 			}
 			return
 		}
 		case 'Property':
-			if (staticKey(node, 'key') === 'dangerouslySetInnerHTML') {
-				context.report(
-					node,
-					'unsafe-html',
-					'dangerouslySetInnerHTML injects markup that runs as the signed-in user',
-					'text content, or elements rendered by React',
-				)
-			}
+			if (staticKey(node, 'key') === 'dangerouslySetInnerHTML') context.report(node, 'unsafe-html', DANGEROUSLY_SET, ALLOWED_MARKUP)
 			return
 	}
 }

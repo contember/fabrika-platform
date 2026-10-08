@@ -1,13 +1,18 @@
-import { type AstNode, child, children, type Comment, identifierName } from '../ast'
+import { type AstNode, child, children, type Comment, identifierName, isConstAssertion } from '../ast'
 import type { Report } from '../finding'
 
-/** `as const` and `<const>x` fix a literal's type; they assert nothing. */
-export const isConstAssertion = (node: AstNode): boolean => {
-	const type = child(node, 'typeAnnotation')
-	return type?.type === 'TSTypeReference' && identifierName(child(type, 'typeName')) === 'const'
-}
-
 const CAPABILITIES = new Set(['Ref', 'Within'])
+const TYPE_COMBINATIONS = new Set(['TSUnionType', 'TSIntersectionType'])
+
+/** `string`, or a union that has `string` as a branch: either way any dimension or action fits. */
+const admitsAnyString = (type: AstNode): boolean => {
+	if (type.type === 'TSStringKeyword') return true
+	if (type.type === 'TSParenthesizedType') {
+		const inner = child(type, 'typeAnnotation')
+		return inner !== undefined && admitsAnyString(inner)
+	}
+	return TYPE_COMBINATIONS.has(type.type) && children(type, 'types').some((branch) => branch !== null && admitsAnyString(branch))
+}
 
 const referencedName = (typeName: AstNode | undefined): string | undefined =>
 	typeName?.type === 'TSQualifiedName' ? identifierName(child(typeName, 'right')) : identifierName(typeName)
@@ -28,7 +33,7 @@ export const checkTypeNode = (node: AstNode, report: Report): void => {
 			if (name === undefined || !CAPABILITIES.has(name)) return
 			const typeArguments = child(node, 'typeArguments')
 			const parameters = typeArguments === undefined ? [] : children(typeArguments, 'params')
-			if (parameters.some((parameter) => parameter?.type === 'TSStringKeyword')) {
+			if (parameters.some((parameter) => parameter !== null && admitsAnyString(parameter))) {
 				report(
 					node,
 					'capability-widening',

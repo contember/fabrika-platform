@@ -33,7 +33,7 @@ export const Note = z.strictObject({ id: z.uuid(), title: z.string().min(1).max(
 export const CreateNote = z.strictObject({ workspaceId: z.uuid(), title: z.string().min(1) })
 `
 
-export const CLEAN_TABLES = `import { defineTables } from '@fabrika/app/contract'
+export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db'
 import type { contract } from '../../fabrika.contract'
 import type { DB } from './schema.generated'
 

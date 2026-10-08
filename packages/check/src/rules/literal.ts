@@ -1,162 +1,280 @@
-import { type AstNode, child, children, identifierName, type ParsedModule, staticKey, stringField, stringLiteral } from '../ast'
+import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey, staticString, stringField } from '../ast'
 import { type Finding, type Report, reporter } from '../finding'
-import { isRelativeSpecifier, joinRelative, resolutionCandidates } from '../layout'
+import type { Binding, ModuleGraph } from '../graph'
+import { isRelativeSpecifier } from '../layout'
 
-/** The only imported names a literal module may call: the builders the platform reads statically. */
-const CALL_ROOTS: Readonly<Record<string, readonly string[]>> = {
-	'zod/v4': ['z', '*'],
-	'@fabrika/app/contract': ['defineContract', 'defineTables'],
+/** What a call root builds; `surface` is the parameter of a builder callback (`c`, `l`). */
+type BuilderKind = 'zod' | 'contract' | 'tables' | 'surface'
+
+/** The only imported names a literal module may use: the builders the platform reads without executing them. */
+const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
+	'zod/v4': { z: 'zod', '*': 'zod' },
+	'@fabrika/app/contract': { defineContract: 'contract' },
+	'@fabrika/db': { defineTables: 'tables' },
 }
 
-/** Zod methods whose result cannot be serialized, or that accept keys the schema does not declare. */
-const UNSERIALIZABLE_SCHEMA_METHODS = new Set([
+const SURFACE_BUILDERS = new Set(['rpc', 'query', 'mutation', 'link', 'spa', 'health', 'form', 'webhook', 'files', 'cron', 'export'])
+/** The schema subset the static contract reader (B1) understands; `packages/check/CLAUDE.md` lists it. */
+const ZOD_FACTORIES = new Set([
+	'strictObject',
+	'string',
+	'number',
+	'int',
+	'boolean',
+	'null',
+	'literal',
+	'enum',
+	'array',
+	'tuple',
+	'union',
+	'discriminatedUnion',
+	'record',
+	'optional',
+	'nullable',
+	'uuid',
+	'email',
+	'url',
+])
+const ZOD_ISO_FORMATS = new Set(['date', 'datetime', 'time', 'duration'])
+const ZOD_METHODS = new Set([
+	'min',
+	'max',
+	'length',
+	'nonempty',
+	'email',
+	'uuid',
+	'url',
+	'startsWith',
+	'endsWith',
+	'includes',
+	'int',
+	'positive',
+	'negative',
+	'nonnegative',
+	'nonpositive',
+	'gt',
+	'gte',
+	'lt',
+	'lte',
+	'multipleOf',
+	'regex',
+	'optional',
+	'nullable',
+	'nullish',
+	'default',
+	'describe',
+	'array',
+	'or',
+	'extend',
+	'pick',
+	'omit',
+	'partial',
+])
+/** Named apart because an agent reaches for them first: each runs application code or admits undeclared keys. */
+const ZOD_UNSERIALIZABLE = new Set([
 	'transform',
 	'refine',
 	'superRefine',
 	'preprocess',
+	'overwrite',
+	'check',
+	'pipe',
+	'catch',
+	'custom',
+	'lazy',
+	'function',
+	'instanceof',
+	'codec',
 	'passthrough',
 	'loose',
 	'looseObject',
 	'catchall',
-	'catch',
-	'pipe',
-	'custom',
 ])
 
-const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* calls, and const imports of such values'
+const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'
+const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUDE.md): strict objects, no transforms, refinements or pipes'
+const ALLOWED_CALLBACK = 'a function only as the builder callback of defineContract(…, (c) => ({ … })) or of a link: procedures: (l) => ({ … })'
+const ALLOWED_IMPORT =
+	'z from zod/v4, defineContract from @fabrika/app/contract, defineTables from @fabrika/db, or a literal const of the application'
 
-interface Imported {
-	readonly specifier: string
-	readonly imported: string
+type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | { readonly kind: 'call'; readonly node: AstNode }
+
+/** `z.string().min(1)` → root `z`, links `.string` `()` `.min` `(1)`. */
+const decompose = (node: AstNode): { readonly root: AstNode; readonly links: readonly Link[] } => {
+	const links: Link[] = []
+	let current = node
+	for (;;) {
+		const inner = child(current, current.type === 'CallExpression' ? 'callee' : 'object')
+		if (inner === undefined || (current.type !== 'CallExpression' && current.type !== 'MemberExpression')) break
+		links.unshift(
+			current.type === 'CallExpression' ? { kind: 'call', node: current } : { kind: 'member', name: staticKey(current, 'property'), node: current },
+		)
+		current = inner
+	}
+	return { root: current, links }
 }
 
-interface PendingReference {
-	readonly name: string
+interface Problem {
 	readonly node: AstNode
+	readonly message: string
+	readonly allowed: string
+}
+
+const memberProblem = (link: Link | undefined, allowed: ReadonlySet<string>, where: string, fallback: AstNode): Problem | undefined => {
+	if (link?.kind !== 'member') return { node: link?.node ?? fallback, message: `${where} must name a builder`, allowed: ALLOWED_SCHEMA }
+	const name = link.name
+	if (name === undefined) return { node: link.node, message: 'computed builder name', allowed: ALLOWED_SCHEMA }
+	if (name === 'object') {
+		return { node: link.node, message: 'z.object() strips undeclared keys instead of refusing them', allowed: 'z.strictObject({ … })' }
+	}
+	if (ZOD_UNSERIALIZABLE.has(name)) return { node: link.node, message: `'.${name}()' makes the schema unserializable`, allowed: ALLOWED_SCHEMA }
+	if (!allowed.has(name)) return { node: link.node, message: `'${name}' is not in the supported schema subset`, allowed: ALLOWED_SCHEMA }
+	return undefined
+}
+
+const calledProblem = (link: Link | undefined, previous: Link): Problem | undefined =>
+	link?.kind === 'call' ? undefined : { node: previous.node, message: 'a schema builder that is not called', allowed: ALLOWED_SCHEMA }
+
+const zodChainProblem = (root: AstNode, links: readonly Link[]): Problem | undefined => {
+	const first = links[0]
+	let next = 2
+	if (first?.kind === 'member' && first.name === 'iso') {
+		const format = links[1]
+		const problem = memberProblem(format, ZOD_ISO_FORMATS, 'z.iso', first.node)
+		if (problem !== undefined || format === undefined) return problem
+		next = 3
+		const called = calledProblem(links[2], format)
+		if (called !== undefined) return called
+	} else {
+		const problem = memberProblem(first, ZOD_FACTORIES, 'z', root)
+		if (problem !== undefined || first === undefined) return problem
+		const called = calledProblem(links[1], first)
+		if (called !== undefined) return called
+	}
+	for (let index = next; index < links.length; index += 2) {
+		const method = links[index]
+		const problem = memberProblem(method, ZOD_METHODS, 'a schema method', root)
+		if (problem !== undefined || method === undefined) return problem
+		const called = calledProblem(links[index + 1], method)
+		if (called !== undefined) return called
+	}
+	return undefined
+}
+
+const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]): Problem | undefined => {
+	const calls = links.filter((link) => link.kind === 'call').length
+	switch (kind) {
+		case 'zod':
+			return zodChainProblem(root, links)
+		case 'surface': {
+			const [method, call] = links
+			const name = method?.kind === 'member' ? method.name : undefined
+			if (name === undefined || !SURFACE_BUILDERS.has(name) || call?.kind !== 'call' || links.length !== 2) {
+				return { node: method?.node ?? root, message: 'not a call of a contract builder', allowed: `one of c.${[...SURFACE_BUILDERS].join(', c.')}(…)` }
+			}
+			return undefined
+		}
+		case 'contract':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'defineContract used other than as one call', allowed: 'defineContract(vocabulary, (c) => ({ … }))' }
+		case 'tables':
+			return calls === links.length && (calls === 1 || calls === 2)
+				? undefined
+				: { node: root, message: 'defineTables used other than as its call', allowed: 'defineTables<DB, typeof contract>()({ … })' }
+	}
+}
+
+interface ConstInfo {
+	readonly node: AstNode
+	/** The initializer itself has no finding. */
+	readonly clean: boolean
+	/** Top-level names the initializer refers to: consts of this module and imports. */
+	readonly dependencies: readonly string[]
 }
 
 interface LiteralSummary {
-	readonly file: string
-	readonly imports: ReadonlyMap<string, Imported>
-	/** Top-level consts whose initializer is a literal, which other literal modules may import. */
-	readonly literalConsts: ReadonlySet<string>
-	/** Imported identifiers used as values, resolved once every module of the graph is read. */
-	readonly pendingReferences: readonly PendingReference[]
+	readonly module: ParsedModule
+	readonly consts: ReadonlyMap<string, ConstInfo>
 	readonly report: Report
 }
 
-const importedName = (specifier: AstNode): string => {
-	if (specifier.type === 'ImportNamespaceSpecifier') return '*'
-	if (specifier.type === 'ImportDefaultSpecifier') return 'default'
-	const imported = child(specifier, 'imported')
-	return identifierName(imported) ?? stringLiteral(imported) ?? ''
-}
-
-/** The statement a top-level `export` wraps, or the statement itself. */
-const declarationOf = (statement: AstNode): AstNode => {
-	if (statement.type !== 'ExportNamedDeclaration') return statement
-	return child(statement, 'declaration') ?? statement
-}
-
-const constNames = (program: AstNode): { readonly consts: ReadonlySet<string>; readonly others: ReadonlySet<string> } => {
-	const consts = new Set<string>()
-	const others = new Set<string>()
-	for (const statement of children(program, 'body')) {
-		if (statement === null) continue
-		const declaration = declarationOf(statement)
-		if (declaration.type !== 'VariableDeclaration') continue
-		for (const declarator of children(declaration, 'declarations')) {
-			const name = declarator ? identifierName(child(declarator, 'id')) : undefined
-			if (name !== undefined) (stringField(declaration, 'kind') === 'const' ? consts : others).add(name)
-		}
-	}
-	return { consts, others }
-}
-
-const readModule = (module: ParsedModule, findings: Finding[]): LiteralSummary => {
+const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[]): LiteralSummary => {
 	const report = reporter(module.file, findings)
-	const imports = new Map<string, Imported>()
-	const callRoots = new Set<string>()
-	const literalConsts = new Set<string>()
-	const pendingReferences: PendingReference[] = []
-	const { consts, others } = constNames(module.program)
+	const index = graph.index(module)
+	const builders = new Map<string, BuilderKind>()
+	for (const binding of index.imports.values()) {
+		const kind = BUILDER_IMPORTS[binding.specifier]?.[binding.imported]
+		if (kind !== undefined) builders.set(binding.local, kind)
+	}
+	const consts = new Map<string, ConstInfo>()
 	let reported = 0
 	const fail = (node: AstNode, message: string, allowed: string = ALLOWED_VALUE) => {
 		reported++
 		report(node, 'literal', message, allowed)
 	}
 
-	const checkIdentifier = (node: AstNode, scope: ReadonlySet<string>): void => {
+	type Scope = ReadonlyMap<string, BuilderKind>
+
+	const checkIdentifier = (node: AstNode, scope: Scope, dependencies: string[]): void => {
 		const name = identifierName(node) ?? ''
-		if (scope.has(name) || callRoots.has(name)) return fail(node, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
-		if (consts.has(name)) return
-		if (imports.has(name)) {
-			pendingReferences.push({ name, node })
+		if (scope.has(name) || builders.has(name)) return fail(node, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
+		if (index.consts.has(name) || index.imports.has(name)) {
+			dependencies.push(name)
 			return
 		}
-		if (others.has(name)) return fail(node, `'${name}' is not a const`, 'a top-level const in this file, or a named import of one')
+		if (index.others.has(name)) return fail(node, `'${name}' is not a const`, 'a top-level const in this file, or a named import of one')
 		fail(node, `unknown identifier '${name}'`, 'a top-level const in this file, or a named import of one')
 	}
 
-	/** The identifier a call chain starts from (`z.string().min(1)` → `z`); reports an unserializable method on the way. */
-	const callChainRoot = (callee: AstNode): AstNode | undefined => {
-		let current: AstNode | undefined = callee
-		while (current !== undefined) {
-			if (current.type === 'Identifier') return current
-			if (current.type === 'CallExpression') {
-				current = child(current, 'callee')
-				continue
-			}
-			if (current.type !== 'MemberExpression' || current['computed'] === true) return undefined
-			const method = staticKey(current, 'property')
-			if (method !== undefined && UNSERIALIZABLE_SCHEMA_METHODS.has(method)) {
-				fail(current, `'.${method}()' makes the schema unserializable`, 'a serializable schema: strict objects, no transforms, refinements or pipes')
-				return undefined
-			}
-			current = child(current, 'object')
+	const checkBuilderCallback = (node: AstNode, scope: Scope, dependencies: string[]): void => {
+		const parameters = children(node, 'params')
+		const parameter = parameters.length === 1 ? identifierName(parameters[0] ?? undefined) : undefined
+		const body = child(node, 'body')
+		if (node.type !== 'ArrowFunctionExpression') {
+			return fail(node, 'the builder callback is not written here', 'an inline arrow function: (c) => ({ … })')
 		}
-		return undefined
+		if (parameter === undefined || body === undefined || body.type === 'BlockStatement' || node['async'] === true) {
+			return fail(node, 'a builder callback of another shape', 'one parameter and an expression body: (c) => ({ … })')
+		}
+		checkExpression(body, new Map([...scope, [parameter, 'surface']]), dependencies)
 	}
 
-	const checkCallArguments = (call: AstNode, root: AstNode, scope: ReadonlySet<string>): void => {
-		let current: AstNode | undefined = call
-		while (current !== undefined && current !== root) {
-			if (current.type === 'CallExpression') {
-				if (current['optional'] === true) fail(current, 'optional call', 'a plain call')
-				for (const argument of children(current, 'arguments')) {
-					if (argument === null) continue
-					if (argument.type === 'SpreadElement') fail(argument, 'spread', 'the arguments written out')
-					else checkExpression(argument, scope)
-				}
-				current = child(current, 'callee')
-			} else current = child(current, 'object')
-		}
+	/** `callback` and `link-options` are the documented builder-callback positions; `pattern` is the argument of `.regex()`. */
+	const checkArgument = (argument: AstNode, scope: Scope, dependencies: string[], role: 'callback' | 'link-options' | 'pattern' | 'value'): void => {
+		if (argument.type === 'SpreadElement') return fail(argument, 'spread', 'the arguments written out')
+		if (role === 'callback') return checkBuilderCallback(argument, scope, dependencies)
+		if (role === 'link-options' && argument.type === 'ObjectExpression') return checkObject(argument, scope, dependencies, 'procedures')
+		if (role === 'pattern' && argument.type === 'Literal' && argument['regex'] !== undefined) return
+		checkExpression(argument, scope, dependencies)
 	}
 
-	const checkCall = (node: AstNode, scope: ReadonlySet<string>): void => {
-		const before = reported
-		const callee = child(node, 'callee')
-		const root = callee === undefined ? undefined : callChainRoot(callee)
-		if (reported > before) return
-		const rootName = identifierName(root) ?? ''
-		if (root === undefined || !(callRoots.has(rootName) || scope.has(rootName))) {
+	const checkCall = (node: AstNode, scope: Scope, dependencies: string[]): void => {
+		const { root, links } = decompose(node)
+		const rootName = identifierName(root)
+		const kind = rootName === undefined ? undefined : (scope.get(rootName) ?? builders.get(rootName))
+		if (kind === undefined) {
 			return fail(node, 'call of a function that is not c.*, z.* or define*', 'the value the function returns, written as a literal')
 		}
-		checkCallArguments(node, root, scope)
+		const problem = shapeProblem(kind, root, links)
+		if (problem !== undefined) return fail(problem.node, problem.message, problem.allowed)
+		const builder = links[0]?.kind === 'member' ? links[0].name : undefined
+		links.forEach((link, index) => {
+			if (link.kind !== 'call') return
+			if (link.node['optional'] === true) fail(link.node, 'optional call', 'a plain call')
+			const previous = links[index - 1]
+			const method = previous?.kind === 'member' ? previous.name : undefined
+			children(link.node, 'arguments').forEach((argument, position) => {
+				if (argument === null) return
+				if (kind === 'contract' && position === 1) checkArgument(argument, scope, dependencies, 'callback')
+				else if (kind === 'surface' && builder === 'link' && position === 1) checkArgument(argument, scope, dependencies, 'link-options')
+				else if (kind === 'zod' && method === 'regex' && position === 0) checkArgument(argument, scope, dependencies, 'pattern')
+				else checkArgument(argument, scope, dependencies, 'value')
+			})
+		})
 	}
 
-	const checkArrow = (node: AstNode, scope: ReadonlySet<string>): void => {
-		const parameters = children(node, 'params')
-		const parameter = parameters[0]
-		const body = child(node, 'body')
-		const parameterName = parameters.length === 1 && parameter ? identifierName(parameter) : undefined
-		if (parameterName === undefined || body === undefined || body.type === 'BlockStatement' || node['async'] === true) {
-			return fail(node, 'function', 'a builder callback with one parameter and an expression body: (c) => ({ … })')
-		}
-		checkExpression(body, new Set([...scope, parameterName]))
-	}
-
-	const checkObject = (node: AstNode, scope: ReadonlySet<string>): void => {
+	const checkObject = (node: AstNode, scope: Scope, dependencies: string[], callbackKey?: string): void => {
 		for (const property of children(node, 'properties')) {
 			if (property === null) continue
 			if (property.type === 'SpreadElement') {
@@ -172,16 +290,16 @@ const readModule = (module: ParsedModule, findings: Finding[]): LiteralSummary =
 				continue
 			}
 			const value = child(property, 'value')
-			if (value !== undefined) checkExpression(value, scope)
+			if (value === undefined) continue
+			if (callbackKey !== undefined && staticKey(property, 'key') === callbackKey) checkBuilderCallback(value, scope, dependencies)
+			else checkExpression(value, scope, dependencies)
 		}
 	}
 
-	const checkExpression = (node: AstNode, scope: ReadonlySet<string>): void => {
+	const checkExpression = (node: AstNode, scope: Scope, dependencies: string[]): void => {
 		switch (node.type) {
 			case 'Literal':
-				if (node['regex'] !== undefined) {
-					return fail(node, 'regular expression literal', 'a z.string() format check such as .uuid(), .email(), .min() or .max()')
-				}
+				if (node['regex'] !== undefined) return fail(node, 'regular expression literal outside .regex()', 'z.string().regex(/…/)')
 				if (node['bigint'] !== undefined) return fail(node, 'bigint literal', 'a number or a string')
 				return
 			case 'TemplateLiteral':
@@ -195,32 +313,31 @@ const readModule = (module: ParsedModule, findings: Finding[]): LiteralSummary =
 			case 'ParenthesizedExpression':
 			case 'TSSatisfiesExpression': {
 				const inner = child(node, 'expression')
-				if (inner !== undefined) checkExpression(inner, scope)
+				if (inner !== undefined) checkExpression(inner, scope, dependencies)
 				return
 			}
 			case 'TSAsExpression': {
 				const inner = child(node, 'expression')
-				const type = child(node, 'typeAnnotation')
-				const isConst = type?.type === 'TSTypeReference' && identifierName(child(type, 'typeName')) === 'const'
-				if (!isConst) return fail(node, 'type assertion `as T`', '`as const` or `satisfies T`')
-				if (inner !== undefined) checkExpression(inner, scope)
+				if (!isConstAssertion(node)) return fail(node, 'type assertion `as T`', '`as const` or `satisfies T`')
+				if (inner !== undefined) checkExpression(inner, scope, dependencies)
 				return
 			}
 			case 'ArrayExpression':
 				for (const element of children(node, 'elements')) {
 					if (element === null) fail(node, 'array hole', 'every element written out')
 					else if (element.type === 'SpreadElement') fail(element, 'spread', 'the elements written out')
-					else checkExpression(element, scope)
+					else checkExpression(element, scope, dependencies)
 				}
 				return
 			case 'ObjectExpression':
-				return checkObject(node, scope)
+				return checkObject(node, scope, dependencies)
 			case 'Identifier':
-				return checkIdentifier(node, scope)
+				return checkIdentifier(node, scope, dependencies)
 			case 'ArrowFunctionExpression':
-				return checkArrow(node, scope)
+			case 'FunctionExpression':
+				return fail(node, 'function', ALLOWED_CALLBACK)
 			case 'CallExpression':
-				return checkCall(node, scope)
+				return checkCall(node, scope, dependencies)
 			case 'BinaryExpression':
 			case 'LogicalExpression':
 				return fail(node, `operator '${String(node['operator'])}'`, 'the resulting value written as a literal')
@@ -229,110 +346,124 @@ const readModule = (module: ParsedModule, findings: Finding[]): LiteralSummary =
 		}
 	}
 
-	const checkImport = (statement: AstNode): void => {
-		const specifier = stringLiteral(child(statement, 'source')) ?? ''
-		const specifiers = children(statement, 'specifiers').filter((item): item is AstNode => item !== null)
-		if (specifiers.length === 0) return fail(statement, `side-effect import of '${specifier}'`, 'named imports of literal consts')
-		if (stringField(statement, 'importKind') === 'type') return
-		for (const item of specifiers) {
-			if (stringField(item, 'importKind') === 'type') continue
-			const local = identifierName(child(item, 'local'))
-			if (local === undefined) continue
-			const imported = importedName(item)
-			imports.set(local, { specifier, imported })
-			if (CALL_ROOTS[specifier]?.includes(imported)) callRoots.add(local)
-		}
-	}
-
-	const checkConstDeclaration = (declaration: AstNode): void => {
-		for (const declarator of children(declaration, 'declarations')) {
-			if (declarator === null) continue
-			const name = identifierName(child(declarator, 'id'))
-			const init = child(declarator, 'init')
-			if (name === undefined || init === undefined) {
-				fail(declarator, 'destructuring or a missing initializer', 'const <name> = <literal>')
-				continue
-			}
-			const before = reported
-			checkExpression(init, new Set())
-			if (reported === before) literalConsts.add(name)
-		}
+	const checkInitializer = (name: string, node: AstNode, init: AstNode): void => {
+		const before = reported
+		const dependencies: string[] = []
+		checkExpression(init, new Map(), dependencies)
+		consts.set(name, { node, clean: reported === before, dependencies })
 	}
 
 	for (const statement of children(module.program, 'body')) {
 		if (statement === null) continue
 		if (statement.type === 'ImportDeclaration') {
-			checkImport(statement)
+			if (children(statement, 'specifiers').length === 0) {
+				fail(statement, `side-effect import of '${staticString(child(statement, 'source')) ?? ''}'`, 'named imports of literal consts')
+			}
 			continue
 		}
-		const declaration = declarationOf(statement)
+		const declaration = statement.type === 'ExportNamedDeclaration' ? (child(statement, 'declaration') ?? statement) : statement
 		if (declaration.type === 'TSTypeAliasDeclaration' || declaration.type === 'TSInterfaceDeclaration') continue
 		if (declaration.type === 'ExportNamedDeclaration') {
-			if (child(declaration, 'source') !== undefined) fail(declaration, 're-export', 'import the const, then export it')
+			if (child(declaration, 'source') !== undefined) {
+				fail(declaration, 're-export', 'import the const, then export it')
+				continue
+			}
+			for (const item of children(declaration, 'specifiers')) {
+				const local = item ? identifierName(child(item, 'local')) : undefined
+				if (item !== null && local !== undefined && !index.consts.has(local) && !index.imports.has(local)) {
+					fail(item, `exports '${local}', which is not a const of this module`, 'export a top-level const')
+				}
+			}
 			continue
 		}
 		if (declaration.type === 'ExportDefaultDeclaration') {
 			const exported = child(declaration, 'declaration')
-			if (exported !== undefined) checkExpression(exported, new Set())
+			if (exported !== undefined) checkInitializer('default', declaration, exported)
 			continue
 		}
 		if (declaration.type === 'VariableDeclaration') {
 			const kind = stringField(declaration, 'kind') ?? ''
-			if (kind === 'const') checkConstDeclaration(declaration)
-			else fail(declaration, `'${kind}' declaration`, 'a top-level const')
+			if (kind !== 'const') {
+				fail(declaration, `'${kind}' declaration`, 'a top-level const')
+				continue
+			}
+			for (const declarator of children(declaration, 'declarations')) {
+				if (declarator === null) continue
+				const name = identifierName(child(declarator, 'id'))
+				const init = child(declarator, 'init')
+				if (name === undefined || init === undefined) fail(declarator, 'destructuring or a missing initializer', 'const <name> = <literal>')
+				else checkInitializer(name, declarator, init)
+			}
 			continue
 		}
 		fail(statement, `top-level ${declaration.type}`, 'only imports, types and const declarations of literals; move code out of the contract graph')
 	}
-	return { file: module.file, imports, literalConsts, pendingReferences, report }
-}
-
-const resolveModule = (from: string, specifier: string, modules: ReadonlyMap<string, ParsedModule>): string | undefined => {
-	const base = joinRelative(from, specifier)
-	return base === undefined ? undefined : resolutionCandidates(base).find((candidate) => modules.has(candidate))
+	return { module, consts, report }
 }
 
 /**
  * The contract, its schema modules and the table policies are literals (D5), so that the platform can read them from a
  * commit without executing them. `entries` are the graph's roots; relative value imports pull further modules in.
  */
-export const checkLiteralGraph = (entries: readonly string[], modules: ReadonlyMap<string, ParsedModule>): Finding[] => {
+export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph): Finding[] => {
 	const findings: Finding[] = []
 	const summaries = new Map<string, LiteralSummary>()
-	const queue = entries.filter((entry) => modules.has(entry))
-	while (queue.length > 0) {
-		const file = queue.shift()
-		const module = file === undefined ? undefined : modules.get(file)
-		if (module === undefined || summaries.has(module.file)) continue
-		const summary = readModule(module, findings)
-		summaries.set(module.file, summary)
-		for (const { specifier } of summary.imports.values()) {
-			if (!isRelativeSpecifier(specifier)) continue
-			const target = resolveModule(module.file, specifier, modules)
+	const queue = entries.map((entry) => graph.module(entry)).filter((module) => module !== undefined)
+	for (let module = queue.shift(); module !== undefined; module = queue.shift()) {
+		if (summaries.has(module.file)) continue
+		summaries.set(module.file, readModule(module, graph, findings))
+		for (const binding of graph.index(module).imports.values()) {
+			const target = graph.resolve(module.file, binding.specifier)
 			if (target !== undefined) queue.push(target)
 		}
 	}
+
+	const states = new Map<string, 'visiting' | boolean>()
+	const cycles = new Set<string>()
+	/** Whether a binding is a literal all the way down; a const defined through itself is reported at the const re-entered. */
+	const isLiteral = (binding: Binding): boolean => {
+		if (binding.kind === 'package') return BUILDER_IMPORTS[binding.specifier]?.[binding.imported] !== undefined
+		if (binding.kind !== 'const' && binding.kind !== 'default') return false
+		const name = binding.kind === 'const' ? binding.name : 'default'
+		const summary = summaries.get(binding.module.file)
+		const info = summary?.consts.get(name)
+		if (summary === undefined || info === undefined || !info.clean) return false
+		const key = `${binding.module.file}#${name}`
+		const state = states.get(key)
+		if (state === 'visiting') {
+			if (!cycles.has(key)) {
+				summary.report(info.node, 'literal', `'${name}' is defined through itself`, 'a const whose value is written out as a literal')
+			}
+			cycles.add(key)
+			return false
+		}
+		if (state !== undefined) return state
+		states.set(key, 'visiting')
+		const literal = info.dependencies.every((dependency) => isLiteral(graph.binding(binding.module, dependency)))
+		states.set(key, literal)
+		return literal
+	}
+
 	for (const summary of summaries.values()) {
-		for (const { name, node } of summary.pendingReferences) {
-			const imported = summary.imports.get(name)
-			if (imported === undefined) continue
+		for (const name of summary.consts.keys()) {
+			isLiteral(name === 'default' ? graph.exported(summary.module, 'default') : graph.binding(summary.module, name))
+		}
+		for (const imported of graph.index(summary.module).imports.values()) {
 			if (!isRelativeSpecifier(imported.specifier)) {
-				const isBuilder = CALL_ROOTS[imported.specifier] !== undefined
-				summary.report(
-					node,
-					'literal',
-					isBuilder ? `'${name}' used as a value` : `value imported from the package '${imported.specifier}'`,
-					isBuilder ? `${name}.<builder>(…) calls only` : 'a const from a relative module of the application',
-				)
+				if (BUILDER_IMPORTS[imported.specifier]?.[imported.imported] === undefined) {
+					summary.report(imported.node, 'literal', `value import of '${imported.imported}' from the package '${imported.specifier}'`, ALLOWED_IMPORT)
+				}
 				continue
 			}
-			const target = resolveModule(summary.file, imported.specifier, modules)
-			const targetSummary = target === undefined ? undefined : summaries.get(target)
-			if (targetSummary === undefined) {
-				summary.report(node, 'literal', `unresolved module '${imported.specifier}'`, 'a relative import of a module in the application')
-			} else if (!targetSummary.literalConsts.has(imported.imported)) {
+			if (imported.imported === '*') {
+				summary.report(imported.node, 'literal', `namespace import of '${imported.specifier}'`, 'named imports of literal consts')
+				continue
+			}
+			const binding = graph.binding(summary.module, imported.local)
+			if (binding.kind === 'unresolved') summary.report(imported.node, 'literal', binding.reason, 'a named import of a const the module exports')
+			else if (!isLiteral(binding)) {
 				summary.report(
-					node,
+					imported.node,
 					'literal',
 					`'${imported.imported}' from '${imported.specifier}' is not a literal const`,
 					'an import of a const whose value is a literal',

@@ -1,23 +1,28 @@
 import { z } from 'zod/v4'
-import { type AstNode, child, children, type ParsedModule, staticKey, stringLiteral, walk } from '../ast'
+import { child, children, type ParsedModule, staticKey, walk } from '../ast'
 import type { Finding } from '../finding'
+import { type ModuleGraph, unwrapValue } from '../graph'
 
 export interface ContractJob {
 	readonly name: string
+	/** `undefined` when the contract's schedule is not a static string. */
 	readonly schedule: string | undefined
 }
 
-/** Every `<name>: c.cron('<schedule>', { … })` in the contract. */
-export const contractJobs = (contract: ParsedModule): readonly ContractJob[] => {
+/** Every `<name>: c.cron('<schedule>', { … })` in the contract, its schedule resolved through literal consts. */
+export const contractJobs = (contract: ParsedModule, graph: ModuleGraph): readonly ContractJob[] => {
 	const jobs: ContractJob[] = []
-	walk(contract.program, (node) => {
-		if (node.type !== 'Property') return
-		const value = child(node, 'value')
-		const callee = value?.type === 'CallExpression' ? child(value, 'callee') : undefined
-		if (value === undefined || callee?.type !== 'MemberExpression' || staticKey(callee, 'property') !== 'cron') return
-		const name = staticKey(node, 'key')
-		const first: AstNode | null | undefined = children(value, 'arguments')[0]
-		if (name !== undefined) jobs.push({ name, schedule: stringLiteral(first ?? undefined) })
+	walk(contract.program, (node, ancestors) => {
+		const callee = node.type === 'CallExpression' ? child(node, 'callee') : undefined
+		if (callee?.type !== 'MemberExpression' || staticKey(callee, 'property') !== 'cron') return
+		const property = [...ancestors].reverse().find((ancestor) => {
+			const value = ancestor.type === 'Property' ? child(ancestor, 'value') : undefined
+			return value !== undefined && unwrapValue(value) === node
+		})
+		const name = property === undefined ? undefined : staticKey(property, 'key')
+		const first = children(node, 'arguments')[0]
+		if (name === undefined) return
+		jobs.push({ name, schedule: first ? graph.resolveString({ module: contract, node: first }) : undefined })
 	})
 	return jobs
 }
@@ -96,11 +101,13 @@ export const checkCrontab = (file: string, text: string, jobs: readonly Contract
 			}
 			if (scheduled.has(job.name)) finding(line, `job '${job.name}' has a second crontab entry`, 'one crontab entry per job')
 			scheduled.add(job.name)
-			if (entry.timing !== job.schedule) {
+			if (job.schedule === undefined) {
+				finding(line, `the contract's schedule of job '${job.name}' is not a static string`, `c.cron('<cron expression>', { … }) in fabrika.contract.ts`)
+			} else if (entry.timing !== job.schedule) {
 				finding(
 					line,
-					`crontab timing '${entry.timing ?? ''}' of job '${job.name}' differs from the contract's '${job.schedule ?? ''}'`,
-					`timing: '${job.schedule ?? ''}'`,
+					`crontab timing '${entry.timing ?? ''}' of job '${job.name}' differs from the contract's '${job.schedule}'`,
+					`timing: '${job.schedule}'`,
 				)
 			}
 			if (entry.allContainers !== false) {

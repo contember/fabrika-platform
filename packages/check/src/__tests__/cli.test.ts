@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { CLEAN_APPLICATION } from './helpers'
@@ -51,6 +51,19 @@ describe('fabrika-check', () => {
 		const result = await run(root)
 
 		expect(result).toEqual({ code: 0, stdout: '', stderr: 'fabrika-check: 0 findings\n' })
+	})
+
+	test('reports a symbolic link instead of following it', async () => {
+		const outside = await application({ 'serve.ts': 'Bun.serve({ fetch: () => new Response() })\n' })
+		const root = await application({ ...CLEAN_APPLICATION, 'src/main.ts': "import './linked'\n" })
+		await symlink(join(outside, 'serve.ts'), join(root, 'src', 'linked.ts'))
+
+		const result = await run(root)
+
+		expect(result.code).toBe(1)
+		expect(result.stdout).toBe(
+			'src/linked.ts:1:1 unchecked-import a symbolic link, which the checker does not follow (allowed form: a regular file or directory inside the application)\n',
+		)
 	})
 
 	test('refuses an unknown argument with exit 2', async () => {

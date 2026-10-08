@@ -53,18 +53,50 @@ export const stringField = (node: AstNode, key: string): string | undefined => {
 /** The name of an `Identifier`, or `undefined` for any other node. */
 export const identifierName = (node: AstNode | undefined): string | undefined => (node?.type === 'Identifier' ? stringField(node, 'name') : undefined)
 
-/** The value of a string `Literal`, or `undefined` for any other node. */
-export const stringLiteral = (node: AstNode | undefined): string | undefined => {
-	if (node?.type !== 'Literal') return undefined
-	const value = node['value']
-	return typeof value === 'string' ? value : undefined
+/** The text of a node whose value is a fixed string: a string `Literal`, or a template with no `${…}`. */
+export const staticString = (node: AstNode | undefined): string | undefined => {
+	if (node?.type === 'Literal') {
+		const value = node['value']
+		return typeof value === 'string' ? value : undefined
+	}
+	if (node?.type !== 'TemplateLiteral' || children(node, 'expressions').length > 0) return undefined
+	const quasi = children(node, 'quasis')[0]
+	return quasi ? templateText(quasi).cooked : undefined
 }
 
-/** A property or member key read statically: `a.b`, `a['b']`, `{ b: … }`, `{ 'b': … }`. */
+/** A `TemplateElement`'s source text and its decoded value (`undefined` for an invalid escape in a tagged template). */
+export const templateText = (element: AstNode): { readonly raw: string; readonly cooked: string | undefined } => {
+	const value = element['value']
+	if (!isRecord(value)) return { raw: '', cooked: undefined }
+	const raw = typeof value['raw'] === 'string' ? value['raw'] : ''
+	return { raw, cooked: typeof value['cooked'] === 'string' ? value['cooked'] : undefined }
+}
+
+/** A property or member key read statically: `a.b`, `a['b']`, ``a[`b`]``, `{ b: … }`, `{ 'b': … }`. */
 export const staticKey = (node: AstNode, keyField: 'property' | 'key'): string | undefined => {
 	const key = child(node, keyField)
-	if (node['computed'] === true) return stringLiteral(key)
-	return identifierName(key) ?? stringLiteral(key)
+	if (node['computed'] === true) return staticString(key)
+	return identifierName(key) ?? staticString(key)
+}
+
+/** The static property names at the end of a member chain, whatever its root: `load().db.sql.raw` → `['db', 'sql', 'raw']`. */
+export const memberSuffix = (node: AstNode): readonly string[] => {
+	const names: string[] = []
+	let current = unwrap(node)
+	while (current.type === 'MemberExpression') {
+		const name = staticKey(current, 'property')
+		const object = child(current, 'object')
+		if (name === undefined || object === undefined) break
+		names.unshift(name)
+		current = unwrap(object)
+	}
+	return names
+}
+
+/** `as const` and `<const>x` fix a literal's type; they assert nothing. */
+export const isConstAssertion = (node: AstNode): boolean => {
+	const type = child(node, 'typeAnnotation')
+	return type?.type === 'TSTypeReference' && identifierName(child(type, 'typeName')) === 'const'
 }
 
 /** Strips the wrappers that do not change which value an expression denotes. */
@@ -138,11 +170,11 @@ export const positionOf = (node: AstNode): Position => {
 	return { line: 1, column: 1 }
 }
 
-/** Visits every node below `root`, depth first, with the chain of its ancestors (nearest last). */
-export const walk = (root: AstNode, visit: (node: AstNode, ancestors: readonly AstNode[]) => void): void => {
+/** Visits every node below `root`, depth first, with the chain of its ancestors (nearest last); `'skip'` prunes a subtree. */
+export const walk = (root: AstNode, visit: (node: AstNode, ancestors: readonly AstNode[]) => 'skip' | undefined | void): void => {
 	const ancestors: AstNode[] = []
 	const enter = (node: AstNode): void => {
-		visit(node, ancestors)
+		if (visit(node, ancestors) === 'skip') return
 		ancestors.push(node)
 		for (const [key, value] of Object.entries(node)) {
 			if (NON_CHILD_KEYS.has(key)) continue
