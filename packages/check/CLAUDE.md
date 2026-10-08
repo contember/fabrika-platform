@@ -127,5 +127,5 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 - `cross-app-fetch` refuses every absolute URL with a static prefix: statically, another application's origin and a
   third party's look the same.
 - A setup in `zerops.yaml` without a `run` section is not checked for jobs; every other setup carries them all.
-- Not here yet: squawk rules and destructive-migration markers (A9), deletion of a generated test (A11), timers as
+- Not here yet: squawk rules and destructive-migration markers (deferred, not in v1), deletion of a generated test (A11), timers as
   job substitutes (A15), store functions that take bare ids (A8b).

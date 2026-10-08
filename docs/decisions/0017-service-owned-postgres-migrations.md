@@ -126,6 +126,18 @@ carries three additions that service plans do not:
   behind its lock; 60 s bounds a backfill or a non-concurrent index build,
   which holds its lock for as long as it runs.
 
+**The runner owns each migration's transaction and settings**, for service
+and application plans alike. Before any SQL runs, it refuses a file with a
+top-level `BEGIN`, `START`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `SAVEPOINT`,
+`RELEASE`, `PREPARE TRANSACTION`, `SET`, `RESET`, `DISCARD`, `LISTEN`,
+`NOTIFY`, `LOCK`, `VACUUM` or `CALL`, named by file and line; comments,
+strings, quoted identifiers and dollar-quoted bodies are skipped. After the
+file runs, a check in the same transaction fails it unless the transaction is
+still the one the runner opened and, for an application, `lock_timeout`,
+`statement_timeout` and `search_path` still have the runner's values. That
+also catches `set_config()`. Without this, a `ROLLBACK` in a file recorded a
+ledger row for nothing, and a `COMMIT` separated a file's effects from its row.
+
 The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
 plus one, so applications that share one database do not serialize each other.
 Migration file names are `YYYYMMDDHHMMSS_slug.sql` in `db/migrations/`; the

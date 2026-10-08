@@ -48,6 +48,11 @@ Read this before moving a service onto this driver.
   orphans every deployed ledger or lets two containers migrate at once; the tests pin each one. Only an
   application plan (`plan.application`) records checksums, sets `lock_timeout`/`statement_timeout` and
   may name a schema-qualified ledger; service ledgers keep `(bundle, name, applied_at)`.
+- **The runner owns each migration's transaction and settings.** `migration-sql.ts` refuses a file with
+  a top-level transaction-control or setting statement before any SQL runs (`validateBundle`, every
+  plan); `guardCheck` then fails the transaction when the file ended it or loosened `lock_timeout`,
+  `statement_timeout` or `search_path` (`set_config()` included). Keep both: the tokenizer cannot see
+  procedural calls, and the guard cannot undo a `COMMIT`.
 - **Checksums are verified before anything is applied.** An applied file that changed fails the run with
   nothing applied; a ledger row with no file (a rollback) is tolerated.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**

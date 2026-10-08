@@ -94,5 +94,7 @@ Not built yet: binding a capability to its request (the framework's `CapabilityA
   `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
   them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the
-  fixture together. `fabrika db codegen --verify` compares text, so an application's formatter must
+  fixture together. Interface names are `<Pascal>Table`, with a `T` prefix when the name would not
+  start with a letter; a collision, and the table names `__proto__`, `constructor` and `prototype`, are
+  refused. `fabrika db codegen --verify` compares text, so an application's formatter must
   skip the generated file (the output is already dprint-stable here).
