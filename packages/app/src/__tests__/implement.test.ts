@@ -2,9 +2,9 @@
 // and missing; caller kinds; admission; capabilities bound to their request; output projection; the header policy.
 
 import { HttpError } from '@fabrika/app'
-import { defineContract } from '@fabrika/app/contract'
+import { compileContract, defineContract } from '@fabrika/app/contract'
 import { boot, implement, type Ref, requestCapabilities } from '@fabrika/app/implement'
-import { ENDPOINT_HEADER } from '@fabrika/auth-core'
+import { ENDPOINT_HEADER, requirementDigest } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
@@ -524,6 +524,8 @@ describe('the endpoint the proxy applied', () => {
 	const direct = boot(implementation, { environment: environment(frameworkEnvFor(implementation)), iam: keySource, assets: echoAssets })
 	const UNAVAILABLE = { error: { type: 'unavailable', message: 'Service unavailable' } }
 	const meHeader = endpointHeaderFor(implementation, 'POST', '/api/me') ?? ''
+	const meRow = compileContract(implementation.contract, implementation.database?.tables ?? {}).endpoints.find((row) => row.id === 'api.me')
+	const delegatedMe = meRow === undefined ? '' : requirementDigest({ ...meRow, delegation: 'members' })
 	const listHeader = endpointHeaderFor(implementation, 'POST', '/api/notes.list') ?? ''
 	const withEndpoint = (endpoint: string | null) => ({
 		'Sec-Fetch-Site': 'same-origin',
@@ -541,6 +543,7 @@ describe('the endpoint the proxy applied', () => {
 		['a malformed header', 'api.me'],
 		['another endpoint: the two selections disagree', listHeader],
 		['other rules: the proxy applied a different version of the endpoint', `api.me@sha256:${'0'.repeat(64)}`],
+		['the same rules with a delegation grant this version does not spend', `api.me@${delegatedMe}`],
 	])('%s is a 503 before the token is read', async (_name, endpoint) => {
 		const logged = await capturingLog(async () => {
 			const sent = await send(direct, '/api/me', { token: await token('user', [grant('notes.read')]), body: {}, headers: withEndpoint(endpoint) })

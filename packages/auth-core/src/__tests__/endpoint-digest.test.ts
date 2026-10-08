@@ -1,9 +1,20 @@
 import { describe, expect, test } from 'bun:test'
 import type { CredentialedEndpoint, EndpointRow } from '../contract'
-import { contractDigest, formatEndpointHeader, isDigest, parseEndpointHeader, requirementDigest } from '../endpoint-digest'
+import {
+	contractDigest,
+	type EndpointDelegation,
+	endpointDelegation,
+	endpointDigest,
+	formatEndpointHeader,
+	isDigest,
+	parseEndpointHeader,
+	requirementDigest,
+} from '../endpoint-digest'
 import { notesArtifact } from './fixtures/notes-artifact'
 
-const row: CredentialedEndpoint = {
+type Rules = EndpointRow & { readonly delegation: EndpointDelegation | null }
+
+const row: CredentialedEndpoint & { readonly delegation: EndpointDelegation | null } = {
 	id: 'api.notes.remove',
 	source: { kind: 'mount', name: 'api' },
 	kind: 'mutation',
@@ -14,6 +25,7 @@ const row: CredentialedEndpoint = {
 	admission: { contentTypes: ['application/json', 'text/plain'], maxBytes: 1024 },
 	input: null,
 	output: null,
+	delegation: null,
 }
 
 describe('requirementDigest', () => {
@@ -22,7 +34,7 @@ describe('requirementDigest', () => {
 		expect(requirementDigest({ ...row })).toBe(requirementDigest(row))
 	})
 
-	test.each<[string, EndpointRow]>([
+	test.each<[string, Rules]>([
 		['the kind', { ...row, kind: 'query' }],
 		['the method', { ...row, method: 'GET' }],
 		['the path', { ...row, path: '/api/notes.delete' }],
@@ -40,12 +52,14 @@ describe('requirementDigest', () => {
 		['the body limit', { ...row, admission: { contentTypes: ['application/json', 'text/plain'], maxBytes: null } }],
 		['the admission removed', { ...row, admission: null }],
 		['the row made anonymous', { ...row, kind: 'health', callers: [], requirement: null }],
+		['only the delegation, to members', { ...row, delegation: 'members' }],
+		['only the delegation, to creates', { ...row, delegation: 'creates' }],
 	])('changes when %s changes', (_name, changed) => {
 		expect(requirementDigest(changed)).not.toBe(requirementDigest(row))
 	})
 
 	test('ignores caller and content-type order, schemas, the source and the id', () => {
-		const reordered: CredentialedEndpoint = {
+		const reordered: Rules = {
 			...row,
 			id: 'other',
 			source: { kind: 'export', name: 'x' },
@@ -55,6 +69,28 @@ describe('requirementDigest', () => {
 			output: { type: 'null' },
 		}
 		expect(requirementDigest(reordered)).toBe(requirementDigest(row))
+	})
+})
+
+describe('endpointDelegation and endpointDigest', () => {
+	const invite: EndpointRow = {
+		...row,
+		id: 'api.workspaces.invite',
+		requirement: { kind: 'action', action: 'notes.admin', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
+	}
+	const create = notesArtifact.endpoints.find((endpoint) => endpoint.id === 'api.workspaces.create')
+
+	test('creates for a creating endpoint, members for the dimension members.manage action, none otherwise', () => {
+		expect(create === undefined ? 'missing' : endpointDelegation(notesArtifact, create)).toBe('creates')
+		expect(endpointDelegation(notesArtifact, invite)).toBe('members')
+		expect(endpointDelegation(notesArtifact, row)).toBeNull()
+		expect(endpointDelegation(notesArtifact, { ...invite, requirement: { kind: 'member' } })).toBeNull()
+	})
+
+	test('a delegation-only change of the contract changes the endpoint digest', () => {
+		const unmanaged = { ...notesArtifact, dimensions: { ...notesArtifact.dimensions, workspace: { in: null, creator: 'owner', members: null } } }
+		expect(endpointDigest(unmanaged, invite)).not.toBe(endpointDigest(notesArtifact, invite))
+		expect(endpointDigest(notesArtifact, invite)).toBe(requirementDigest({ ...invite, delegation: 'members' }))
 	})
 })
 

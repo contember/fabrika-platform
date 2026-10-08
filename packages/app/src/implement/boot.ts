@@ -7,12 +7,12 @@ import {
 	type ContractArtifact,
 	contractDigest,
 	type CredentialedEndpoint,
+	endpointDigest,
 	type EndpointRow,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	type Jwks,
 	parseAppEnvironmentId,
-	requirementDigest,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
@@ -271,7 +271,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	return new ContractRuntime({
 		table: compileEndpointTable(artifact),
 		endpoints,
-		digests: new Map(artifact.endpoints.map((row) => [row.id, requirementDigest(row)])),
+		digests: new Map(artifact.endpoints.map((row) => [row.id, endpointDigest(artifact, row)])),
 		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: framework.issuer }),
 		audience: framework.iamAppId,
 		policy: headerPolicy(artifact.csp, framework.operationsOrigin),

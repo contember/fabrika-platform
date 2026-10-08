@@ -280,6 +280,10 @@ describe('contract apps — the endpoint table', () => {
 		['gates beside the table', { ...app, gates: { rules: [] } }],
 		['OAuth resources on a contract app', { ...app, oauthResources: [] }],
 		['an unknown caller kind', { ...app, endpoints: [{ ...first, callers: ['job'] }, ...rest] }],
+		['a delegation its digest does not cover', {
+			...app,
+			endpoints: app.endpoints.map((row) => row.id === 'api.me' ? { ...row, delegation: 'members' } : row),
+		}],
 	])('refuses %s', (_name, candidate) => {
 		expect(parseProxyManifest({ apps: [candidate] })).toBeNull()
 	})

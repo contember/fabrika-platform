@@ -16,6 +16,7 @@ import {
 	compileEndpointTable,
 	contractDigest,
 	ENDPOINT_HEADER,
+	endpointDigest,
 	FABRIKA_CONTRACT_DIGEST,
 	formatEndpointHeader,
 	type Jwks,
@@ -23,7 +24,6 @@ import {
 	planEndpoint,
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
-	requirementDigest,
 } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 
@@ -56,8 +56,9 @@ export function frameworkEnvFor(app: ContractImplementation): Record<string, str
  * rules it applied. `null` where the proxy selects nothing.
  */
 export function endpointHeaderFor(app: ContractImplementation, method: string, path: string): string | null {
-	const plan = planEndpoint(compileEndpointTable(artifactOf(app)), method, path)
-	return plan.outcome === 'endpoint' ? formatEndpointHeader(plan.endpoint.id, requirementDigest(plan.endpoint)) : null
+	const artifact = artifactOf(app)
+	const plan = planEndpoint(compileEndpointTable(artifact), method, path)
+	return plan.outcome === 'endpoint' ? formatEndpointHeader(plan.endpoint.id, endpointDigest(artifact, plan.endpoint)) : null
 }
 
 /** What `captureEnvironment` would return for `variables`, without scrubbing this test process's environment. */

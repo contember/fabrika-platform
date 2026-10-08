@@ -223,14 +223,15 @@ export function endpointRow(
 	fields: Omit<CredentialedRow, 'digest' | 'delegation'>,
 	delegation: CredentialedRow['delegation'] = null,
 ): ProxyEndpointRow {
-	return { ...fields, delegation, digest: requirementDigest(fields) }
+	const rules = { ...fields, delegation }
+	return { ...rules, digest: requirementDigest(rules) }
 }
 
 /** An anonymous manifest row (health, form, webhook, link shell) with its true digest. */
 export function anonymousRow(fields: Omit<AnonymousRow, 'digest' | 'delegation' | 'callers' | 'requirement'>): ProxyEndpointRow {
 	const callers: [] = []
-	const rules = { ...fields, callers, requirement: null }
-	return { ...rules, delegation: null, digest: requirementDigest(rules) }
+	const rules = { ...fields, callers, requirement: null, delegation: null }
+	return { ...rules, digest: requirementDigest(rules) }
 }
 
 export function contractAppWith(

@@ -7,6 +7,8 @@ import {
 	contractDigest,
 	type CredentialedEndpoint,
 	type CredentialLocation,
+	type EndpointDelegation,
+	endpointDelegation,
 	type EndpointRow,
 	EndpointTableError,
 	type GateRule,
@@ -57,14 +59,8 @@ export function isContractProxyApp(app: ProxyApp): app is ContractProxyApp {
 	return 'endpoints' in app
 }
 
-/**
- * What a membership or scope-creating endpoint spends at IAM, through the single-use grant the proxy obtains for each
- * request (ADR-0022 rule 6). `null` for every other endpoint.
- */
-export type EndpointDelegation = 'members' | 'creates'
-
 interface ProxyEndpointExtras {
-	/** `requirementDigest` of the row's rules; the proxy sends it as `X-Fabrika-Endpoint: <id>@<digest>`. */
+	/** `requirementDigest` of the row's rules and delegation; the proxy sends it as `X-Fabrika-Endpoint: <id>@<digest>`. */
 	digest: string
 	delegation: EndpointDelegation | null
 }
@@ -232,23 +228,23 @@ export const proxyAppSchema = z.union([gateProxyAppSchema, contractProxyAppSchem
 export function contractProxyTable(artifact: ContractArtifact): Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot'> {
 	return {
 		endpoints: artifact.endpoints.map((row): ProxyEndpointRow => {
-			const rules = { id: row.id, method: row.method, path: row.path, admission: row.admission, digest: requirementDigest(row) }
+			const rules = { id: row.id, method: row.method, path: row.path, admission: row.admission }
 			if (row.requirement === null) {
-				return { ...rules, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
+				const anonymous = { ...rules, kind: row.kind, callers: row.callers, requirement: null, delegation: null }
+				return { ...anonymous, digest: requirementDigest(anonymous) }
 			}
-			return { ...rules, kind: row.kind, callers: row.callers, requirement: row.requirement, delegation: delegationOf(artifact, row) }
+			const credentialed = {
+				...rules,
+				kind: row.kind,
+				callers: row.callers,
+				requirement: row.requirement,
+				delegation: endpointDelegation(artifact, row),
+			}
+			return { ...credentialed, digest: requirementDigest(credentialed) }
 		}),
 		reservedPrefixes: [...artifact.reservedPrefixes],
 		snapshot: contractDigest(artifact),
 	}
-}
-
-/** `creates` for an endpoint that creates a value; `members` for one whose action is its dimension's `members.manage`. */
-function delegationOf(artifact: ContractArtifact, row: CredentialedEndpoint): EndpointDelegation | null {
-	if (row.requirement.kind !== 'action') return null
-	const { action, access } = row.requirement
-	if (access.form === 'creates') return 'creates'
-	return artifact.dimensions[access.dimension]?.members?.manage === action ? 'members' : null
 }
 
 /** The first host two apps (or one app twice) claim, or null. A host belongs to exactly one app. */

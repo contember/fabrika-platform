@@ -9,6 +9,7 @@ import {
 	type AppScopeDef,
 	type ContractArtifact,
 	type DimensionArtifact,
+	endpointDelegation,
 	type EndpointMethod,
 	type EndpointRow,
 	type GateRule,
@@ -122,18 +123,11 @@ function linkDef(mount: LinkMountArtifact): AppLinkMountDef {
 	return { dimension: mount.dimension, grants: [...mount.grants], issuedBy: mount.issuedBy, maxDays: mount.maxDays }
 }
 
-/**
- * An endpoint spends membership authority when it creates a value of a dimension, or when its action is the
- * `members.manage` action of the dimension its access form names. IAM issues a delegation grant only for these.
- */
+/** The grant IAM issues for an endpoint that spends membership authority; `endpointDelegation` decides which do. */
 function delegationOf(artifact: ContractArtifact, row: EndpointRow): AppDelegationDef | null {
-	if (row.requirement?.kind !== 'action') {
+	const purpose = endpointDelegation(artifact, row)
+	if (purpose === null || row.requirement?.kind !== 'action') {
 		return null
 	}
-	const { action, access } = row.requirement
-	if (access.form === 'creates') {
-		return { action, dimension: access.dimension, purpose: 'creates' }
-	}
-	const managed = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
-	return managed?.manage === action ? { action, dimension: access.dimension, purpose: 'members' } : null
+	return { action: row.requirement.action, dimension: row.requirement.access.dimension, purpose }
 }

@@ -133,8 +133,9 @@ bun test               # app-environment · canonical-path · contract-canonical
   Scopes stay flat here: the framework resolves a containment chain, and each link is checked as a
   flat scope.
 - **An endpoint digest covers exactly what the proxy applies.** `requirementDigest` hashes the canonical JSON of
-  the row's kind, method, path, callers, requirement and admission; callers and content types are sorted, and the
-  id, source and schemas are not part of it. The proxy sends `<id>@<digest>` and the application recomputes it, so a
+  the row's kind, method, path, callers, requirement, admission and delegation; callers and content types are
+  sorted, and the id, source and schemas are not part of it. The delegation is derived from the artifact by
+  `endpointDelegation` alone — the proxy table, the IAM schema's `delegations` and `endpointDigest` all call it. The proxy sends `<id>@<digest>` and the application recomputes it, so a
   new rule the proxy enforces must join the digest in the same change, or the two can disagree unnoticed.
   `contractDigest` is the digest of `canonicalArtifactJson`. Both are synchronous on purpose (`sha256.ts`): the
   manifest parser and `boot` check them, and neither can await WebCrypto.

@@ -8,8 +8,17 @@ import { sha256Hex } from './sha256'
 /** The variable that carries the digest of the contract a deploy was approved with; the application compares its own. */
 export const FABRIKA_CONTRACT_DIGEST = 'FABRIKA_CONTRACT_DIGEST'
 
-/** The fields of an endpoint row the proxy applies. Its digest covers exactly these. */
-export type EndpointRules = Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'>
+/**
+ * What a membership or scope-creating endpoint spends at IAM through a single-use delegation grant (ADR-0022 rule 6):
+ * `creates` for an endpoint that creates a value, `members` for one whose action is the `members.manage` action of the
+ * dimension its access form names.
+ */
+export type EndpointDelegation = 'members' | 'creates'
+
+/** The fields of an endpoint row the proxy applies, with its delegation. Its digest covers exactly these. */
+export type EndpointRules = Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'> & {
+	readonly delegation: EndpointDelegation | null
+}
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
@@ -18,8 +27,27 @@ export function isDigest(value: string): boolean {
 	return DIGEST_PATTERN.test(value)
 }
 
+/** The one derivation of an endpoint's delegation: the proxy table, the IAM schema and the digest all read it. */
+export function endpointDelegation(artifact: Pick<ContractArtifact, 'dimensions'>, row: EndpointRow): EndpointDelegation | null {
+	if (row.requirement?.kind !== 'action') {
+		return null
+	}
+	const { action, access } = row.requirement
+	if (access.form === 'creates') {
+		return 'creates'
+	}
+	const managed = Object.hasOwn(artifact.dimensions, access.dimension) ? artifact.dimensions[access.dimension]?.members : null
+	return managed?.manage === action ? 'members' : null
+}
+
+/** The digest of an artifact's endpoint row, its delegation derived from the artifact. */
+export function endpointDigest(artifact: Pick<ContractArtifact, 'dimensions'>, row: EndpointRow): string {
+	return requirementDigest({ ...row, delegation: endpointDelegation(artifact, row) })
+}
+
 /**
- * The digest of what the proxy applies to an endpoint: its kind, method, path, callers, requirement and admission.
+ * The digest of what the proxy applies to an endpoint: its kind, method, path, callers, requirement, admission and
+ * delegation.
  * Caller and content-type order carry no meaning, so they do not change it; input and output schemas are not part of
  * it, because the proxy does not apply them.
  */
@@ -32,6 +60,7 @@ export function requirementDigest(rules: EndpointRules): string {
 		callers,
 		requirement: rules.requirement,
 		admission: rules.admission === null ? null : canonicalAdmission(rules.admission),
+		delegation: rules.delegation,
 	}))
 }
 
