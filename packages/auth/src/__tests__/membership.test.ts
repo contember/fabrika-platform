@@ -93,6 +93,20 @@ describe('HttpIamRpc — the membership methods', () => {
 		})
 	})
 
+	test('a revoke is acknowledged only by an ok envelope', async () => {
+		const base = { app: 'a', credential: 't', requestId: 'r' }
+		for (const body of [{}, { revoked: true }, { ok: 'true' }]) {
+			await expect(http(body).rpc.revokeMember({ ...base, delegation: 'g', scope, member: { principalId: 'p' } })).rejects.toBeInstanceOf(
+				IamTransportError,
+			)
+			await expect(http(body).rpc.revokeLink({ ...base, id: 'c' })).rejects.toBeInstanceOf(IamTransportError)
+		}
+		await expect(http({ grant: 'g', expiresAt: 1 }).rpc.requestDelegation({ ...base, endpoint: 'e' })).rejects.toBeInstanceOf(IamTransportError)
+		await expect(http({ ok: true, key: 'px_k', id: 'c' }).rpc.issueLink({ ...base, mount: 'm', chain: [scope], days: 1 })).rejects.toBeInstanceOf(
+			IamTransportError,
+		)
+	})
+
 	test('every success decodes, and a body that breaks the contract throws', async () => {
 		const base = { app: 'a', credential: 't', requestId: 'r' }
 		expect(await http({ ok: true, grant: 'g', expiresAt: 1 }).rpc.requestDelegation({ ...base, endpoint: 'e' })).toEqual({

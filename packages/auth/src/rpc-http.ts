@@ -106,13 +106,16 @@ const principalsSuccessSchema = z.object({
 })
 const failureSchema = z.object({ ok: z.literal(false), reason: z.string().catch('') })
 const scopeSchema = z.object({ type: z.string(), value: z.string() })
-const delegationSuccessSchema = z.object({ grant: z.string().min(1), expiresAt: z.number().finite() })
-const createScopeSuccessSchema = z.object({ scope: scopeSchema, role: z.string() })
+// Every membership success is a `{ ok: true, … }` envelope; a body without one is not an answer.
+const okEnvelope = { ok: z.literal(true) }
+const delegationSuccessSchema = z.object({ ...okEnvelope, grant: z.string().min(1), expiresAt: z.number().finite() })
+const createScopeSuccessSchema = z.object({ ...okEnvelope, scope: scopeSchema, role: z.string() })
 const assignSuccessSchema = z.union([
-	z.object({ assigned: z.object({ principalId: z.string(), role: z.string() }) }),
-	z.object({ invited: z.object({ invitationId: z.string(), role: z.string(), expiresAt: z.number().finite() }) }),
+	z.object({ ...okEnvelope, assigned: z.object({ principalId: z.string(), role: z.string() }) }),
+	z.object({ ...okEnvelope, invited: z.object({ invitationId: z.string(), role: z.string(), expiresAt: z.number().finite() }) }),
 ])
 const listMembersSuccessSchema = z.object({
+	...okEnvelope,
 	members: z.array(z.object({
 		principalId: z.string(),
 		label: z.string().nullable(),
@@ -122,7 +125,8 @@ const listMembersSuccessSchema = z.object({
 	})),
 	invitations: z.array(z.object({ id: z.string(), email: z.string(), role: z.string(), expiresAt: z.number().finite() })),
 })
-const issueLinkSuccessSchema = z.object({ key: z.string().min(1), id: z.string(), expiresAt: z.number().finite() })
+const issueLinkSuccessSchema = z.object({ ...okEnvelope, key: z.string().min(1), id: z.string(), expiresAt: z.number().finite() })
+const revokedSuccessSchema = z.object(okEnvelope)
 const membershipMessageSchema = z.object({ message: z.string().catch('') })
 
 /** Default per-call timeout. A hung IAM must fail the request, not hold a connection open forever. */
@@ -254,35 +258,37 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 
 	async requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
 		const body = await this.call('requestDelegation', input)
-		return readMembershipFailure(body) ?? { ok: true, ...decode(delegationSuccessSchema, body, 'requestDelegation') }
+		return readMembershipFailure(body) ?? decode(delegationSuccessSchema, body, 'requestDelegation')
 	}
 
 	async createScope(input: CreateScopeInput): Promise<CreateScopeResult> {
 		const body = await this.call('createScope', input)
-		return readMembershipFailure(body) ?? { ok: true, ...decode(createScopeSuccessSchema, body, 'createScope') }
+		return readMembershipFailure(body) ?? decode(createScopeSuccessSchema, body, 'createScope')
 	}
 
 	async assignMember(input: AssignMemberInput): Promise<AssignMemberResult> {
 		const body = await this.call('assignMember', input)
-		return readMembershipFailure(body) ?? { ok: true, ...decode(assignSuccessSchema, body, 'assignMember') }
+		return readMembershipFailure(body) ?? decode(assignSuccessSchema, body, 'assignMember')
 	}
 
 	async revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult> {
-		return readMembershipFailure(await this.call('revokeMember', input)) ?? { ok: true }
+		const body = await this.call('revokeMember', input)
+		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeMember')
 	}
 
 	async listMembers(input: ListMembersInput): Promise<ListMembersResult> {
 		const body = await this.call('listMembers', input)
-		return readMembershipFailure(body) ?? { ok: true, ...decode(listMembersSuccessSchema, body, 'listMembers') }
+		return readMembershipFailure(body) ?? decode(listMembersSuccessSchema, body, 'listMembers')
 	}
 
 	async issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {
 		const body = await this.call('issueLink', input)
-		return readMembershipFailure(body) ?? { ok: true, ...decode(issueLinkSuccessSchema, body, 'issueLink') }
+		return readMembershipFailure(body) ?? decode(issueLinkSuccessSchema, body, 'issueLink')
 	}
 
 	async revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
-		return readMembershipFailure(await this.call('revokeLink', input)) ?? { ok: true }
+		const body = await this.call('revokeLink', input)
+		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeLink')
 	}
 
 	async getJwks(): Promise<Jwks> {
