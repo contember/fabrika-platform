@@ -46,7 +46,7 @@ Settled on 2026-10-08. Each row says which part it belongs to, what v1 does and 
 | D1  | B    | Proxy and app switch     | **Per-endpoint requirement digests.** The proxy sends `X-Fabrika-Endpoint: <id>@<digest>`; the application answers 503 for an endpoint whose digest differs from its own. The publish order stays as today: proxy, application, IAM.                                                    | During a switch, changed endpoints answer 503 and new ones 404.                                       |
 | D2  | A, B | Database and migrations  | **The cheap namespace is one trust boundary.** Applications in it share the namespace Postgres. Migrations run through `fabrika db migrate` in `run.initCommands`. An application that must be isolated goes to an exclusive namespace (ADR-0014).                                      | Isolation between applications in a cheap namespace; separate migration and runtime credentials; RLS. |
 | D3  | B    | Build                    | **One build, fixed order.** The authored SPA commands run first; then the generated commands install, check and build the server. No authored command runs after the checks.                                                                                                            | Protection against deliberate sabotage of the toolchain by an authored SPA command.                   |
-| D4  | A    | Schema library           | **Zod 4** (`zod/v4`, already in the pinned dependency), restricted to a serializable subset in contracts. Validation inside handlers stays library-neutral.                                                                                                                             | Other validators in contracts.                                                                        |
+| D4  | A    | Schema library           | **Zod 4** (`zod/v4`, already in the pinned dependency), restricted to a serializable subset in contracts; a peer dependency of `@fabrika/app`. Validation inside handlers stays library-neutral.                                                                                        | Other validators in contracts.                                                                        |
 | D5  | A, B | Contract source          | **The contract is a literal, and Control parses it statically.** The contract, its schema modules and `src/db/tables.ts` contain literals, the known `c.*` and `z.*` calls and `const` imports of such values. Part A's checker enforces the rule; part B's Control reads the source.   | Computed values in the contract.                                                                      |
 | D6  | B    | Provider exposure        | **Refused, with no approval path:** public or raw-policy buckets, subdomain access, routes, `workers_dev`, preview URLs, bindings to another application. Only CSP extensions are approvable. Control reads back `subdomainAccess`; buckets must be created by the platform as private. | Detecting a bucket policy changed outside Fabrika (Zerops has no API to read it back).                |
 | D7  | A, B | Gates                    | **Applications use contracts only.** In part A the contract generates the application's gates; in part B the proxy reads endpoint tables. Gates (including MCP authoring's `oauth` gates) remain for the installation's own services, selected by Control's metadata.                   | Nothing; there are no applications to keep.                                                           |
@@ -218,7 +218,8 @@ platform already consumes; the application runtime enforces the rest in-process.
 
 **A1 — Contract model and matcher in `@fabrika/auth-core` (M)**
 
-- `ContractArtifact`: a zod schema and types for dimensions with containment and membership actions, actions, roles
+- `ContractArtifact`: types only, because `auth-core` stays dependency-free. Its zod schema lives where the artifact
+  is parsed: `@fabrika/app/contract` (build) and `proxy-core/manifest` (proxy), as gate rules do today. The types cover dimensions with containment and membership actions, actions, roles
   (exact actions, `member` scope, `assignableBy`, creator), mounts with callers, endpoint rows
   `{ id, kind, method, path, callers, requirement }`, files, jobs, webhooks, link mounts, exports, imports, CSP
   extensions, table policies.
@@ -332,7 +333,8 @@ platform already consumes; the application runtime enforces the rest in-process.
 
 - `ctx.members` (only for endpoints whose action is the dimension's `members.manage`) and `creates`.
 - `c.link`: the share SPA with the fragment bootstrap, link procedures, the chain re-check per request,
-  `ctx.links.issue`. Operations redacts URL fragments, `Authorization` headers and `px_` patterns.
+  `ctx.links.issue`. Operations redacts URL fragments, `Authorization` headers and `px_` patterns. ADR-0022's "no
+  issuing or redeeming method" is reworded: IAM issues every key; the SDK only requests one.
 - `c.health` and `c.form` (an inbox table, a body limit, a per-form rate limit).
 - `c.webhook` for GitHub: bindings in a framework table, a generated secret, signature, account id and delivery
   deduplication; a `Ref` for the bound scope only.
