@@ -191,29 +191,36 @@ const migrateScript = (appId: string): readonly string[] => [
 	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db migrate`,
 ]
 
-// The server starts only after the migrations it expects are applied, so a failed migration fails the readiness check
-// even if a failed `initCommands` did not stop the activation (an unverified platform fact).
-const startScript = (database: boolean): readonly string[] => [
+// The server starts only after the migrations it expects are applied and the committed schema types match the migrated
+// schema, so either failure fails the readiness check, whether or not a failed `initCommands` stops the activation (an
+// unverified platform fact). The build has no database, so this is where the types are verified.
+const startScript = (appId: string, database: boolean): readonly string[] => [
 	'#!/bin/sh',
 	'set -eu',
 	`cd ${RUNTIME_ROOT}`,
-	...(database ? [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`] : []),
+	...(database ? [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`, `FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`] : []),
 	'exec bun fabrika/entry.generated.ts',
 ]
 
-/** The generated build commands, in order; the authored SPA commands run before all of them. */
+const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
+
+/**
+ * The generated build commands, in order; the authored SPA commands run before all of them. The application's tests
+ * run first: they are authored code, so everything after them is reinstalled, regenerated or checked again.
+ */
 export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
 	if (!LOCKED_APP_ID_PATTERN.test(execution.appId)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
 	const database = execution.databaseUrl !== null
 	return [
-		'bun install --frozen-lockfile --ignore-scripts',
-		`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check ${SOURCE_ROOT}`,
+		INSTALL,
+		'bun test --pass-with-no-tests',
+		`rm -rf node_modules && ${INSTALL}`,
 		`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
+		`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check ${SOURCE_ROOT}`,
 		writeFileCommand(PLATFORM_TSCONFIG, [PLATFORM_TSCONFIG_CONTENTS]),
 		`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${SOURCE_ROOT}/${PLATFORM_TSCONFIG}`,
-		'bun test --pass-with-no-tests',
 		...(database ? [writeFileCommand(MIGRATE_SCRIPT, migrateScript(execution.appId))] : []),
-		writeFileCommand(START_SCRIPT, startScript(database)),
+		writeFileCommand(START_SCRIPT, startScript(execution.appId, database)),
 	]
 }
 

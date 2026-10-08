@@ -76,13 +76,14 @@ describe('the generated execution descriptor of a contract application', () => {
 				buildCommands: [
 					'bun run build:spa',
 					'bun install --frozen-lockfile --ignore-scripts',
-					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
+					'bun test --pass-with-no-tests',
+					'rm -rf node_modules && bun install --frozen-lockfile --ignore-scripts',
 					`bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"`,
+					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
-					'bun test --pass-with-no-tests',
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
-					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'sh /var/www/fabrika/migrate.generated.sh' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
+					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'sh /var/www/fabrika/migrate.generated.sh' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
 				deployFiles: ['./'],
 				cache: ['node_modules'],
@@ -115,7 +116,19 @@ describe('the generated execution descriptor of a contract application', () => {
 	test('the server starts only after the migration it expects ran, so a failed migration fails the readiness check', async () => {
 		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
 		const start = Array.isArray(commands) ? commands.find((command) => String(command).includes('start.generated.sh')) : undefined
-		expect(String(start)).toMatch(/'set -eu' 'cd \/var\/www' 'sh \/var\/www\/fabrika\/migrate\.generated\.sh' 'exec bun /)
+		expect(String(start)).toMatch(
+			/'set -eu' 'cd \/var\/www' 'sh \/var\/www\/fabrika\/migrate\.generated\.sh' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'exec bun /,
+		)
+	})
+
+	test('the authored tests run before the reinstall, the regenerated entrypoint and every check', async () => {
+		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
+		if (!Array.isArray(commands)) throw new Error('expected build commands')
+		const position = (needle: string): number => commands.findIndex((command) => String(command).includes(needle))
+		expect(position('bun test')).toBeLessThan(position('rm -rf node_modules'))
+		expect(position('rm -rf node_modules')).toBeLessThan(position('writeGeneratedEntry'))
+		expect(position('writeGeneratedEntry')).toBeLessThan(position('fabrika-check'))
+		expect(position('fabrika-check')).toBeLessThan(position(' tsc '))
 	})
 
 	test('an application without a database runs no migration', async () => {
