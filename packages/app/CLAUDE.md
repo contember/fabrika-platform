@@ -153,7 +153,9 @@ src/
   path also admits what the other method can select through it (`selectableRows`).
   Never hand-write gates for a contract application, and never emit a rule for a
   path without an endpoint. `platform.test.ts` checks every fixture contract against
-  `planEndpoint` on the auth-core probe paths.
+  `planEndpoint` on the auth-core probe paths. `schemaFromContract` emits every
+  field of A12's `AppSchema`, and its output must parse unchanged with
+  `@fabrika/auth`'s `appSchemaSchema`, which resolves every name it carries.
 - Still to come: the typed client (A5).
 - Later (A12, A13): membership, scopes and share links are requests to IAM through
   `@fabrika/auth`. The framework writes no grant and mints no credential.

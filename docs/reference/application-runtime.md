@@ -123,9 +123,13 @@ and `schema`.
   gates are coarser than the table: an absent key falls through to a broader path's
   rules, and an unknown procedure under an RPC prefix is admitted with the SPA's kind.
   The framework refuses both (caller kind 403, unknown endpoint 404).
-- `schemaFromContract(artifact)` emits the dimensions as scopes, the actions, the roles
-  with the scope a membership role is granted in, and `contract: true`, which makes IAM
-  refuse every wildcard written for the application.
+- `schemaFromContract(artifact)` emits the dimensions as scopes (with `in`, `creator` and
+  `members`), the actions, the roles (a membership role with its scope and `assignableBy`),
+  the link mounts by name, the delegations, and `contract: true`, which makes IAM refuse
+  every wildcard written for the application. A delegation is an endpoint that spends
+  membership authority: a `creates` endpoint, or one whose action is the `members.manage`
+  action of the dimension its access form names. `links` and `delegations` are always
+  present, so a reconcile drops a mount or an endpoint the contract no longer declares.
 
 ## Serving a contract
 

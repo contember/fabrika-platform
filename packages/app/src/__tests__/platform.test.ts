@@ -18,6 +18,7 @@ import { NOTE_TABLE } from './fixtures/implement/stores'
 import { contract as notesContract } from './fixtures/notes-app/fabrika.contract'
 
 const Empty = z.strictObject({})
+const ById = z.strictObject({ id: z.uuid() })
 
 /** Both caller kinds on one mount, no SPA: a path outside the mounts is undeclared. */
 const mixedContract = defineContract({
@@ -164,10 +165,41 @@ describe('the generated gates against the endpoint table, on every probe path', 
 	})
 })
 
+/** A members endpoint, one whose action manages another dimension's members, and a `creates` endpoint. */
+const membersContract = defineContract({
+	app: 'teams',
+	dimensions: {
+		workspace: { creator: 'owner', members: { manage: 'workspace.admin', list: 'workspace.read' } },
+		note: { in: 'workspace' },
+	},
+	actions: {
+		'workspace.admin': 'Manage the workspace and its members',
+		'workspace.read': 'See the workspace',
+		'workspace.create': 'Start a workspace',
+	},
+	roles: {
+		owner: { grants: ['workspace.admin', 'workspace.read'], member: { scope: 'workspace', assignableBy: ['owner'] } },
+		viewer: { grants: ['workspace.read'], member: { scope: 'workspace', assignableBy: [] } },
+		starter: { grants: ['workspace.create'] },
+	},
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+		members: { invite: c.mutation({ input: ById, output: Empty, access: { action: 'workspace.admin', on: 'workspace', from: 'id' } }) },
+		notes: { purge: c.mutation({ input: ById, output: Empty, access: { action: 'workspace.admin', on: 'note', from: 'id' } }) },
+		workspaces: { create: c.mutation({ input: Empty, output: ById, access: { action: 'workspace.create', creates: 'workspace' } }) },
+	}),
+}))
+
+const members = compileContract(membersContract, {})
+
 describe('schemaFromContract', () => {
-	test('the notes contract: dimensions as scopes, actions, roles with their membership scope, and the contract flag', () => {
+	test('the notes contract: scopes with their membership metadata, actions, roles, link mounts and delegations', () => {
 		expect(schemaFromContract(notes)).toEqual({
-			scopes: [{ type: 'file:attachments' }, { type: 'note' }, { type: 'workspace' }],
+			scopes: [
+				{ type: 'file:attachments', in: 'note' },
+				{ type: 'note', in: 'workspace' },
+				{ type: 'workspace', creator: 'owner', members: { manage: 'notes.admin', list: 'notes.read' } },
+			],
 			actions: [
 				{ action: 'contacts.read', description: 'Read contact messages' },
 				{ action: 'notes.admin', description: 'Manage the workspace and its members' },
@@ -178,21 +210,40 @@ describe('schemaFromContract', () => {
 				{ action: 'workspaces.create', description: 'Start a workspace' },
 			],
 			roles: {
-				editor: { name: 'editor', permissions: ['notes.read', 'notes.share', 'notes.write'], member: { scope: 'workspace' } },
+				editor: {
+					name: 'editor',
+					permissions: ['notes.read', 'notes.share', 'notes.write'],
+					member: { scope: 'workspace', assignableBy: ['owner'] },
+				},
 				owner: {
 					name: 'owner',
 					permissions: ['notes.admin', 'notes.delete', 'notes.read', 'notes.share', 'notes.write'],
-					member: { scope: 'workspace' },
+					member: { scope: 'workspace', assignableBy: ['owner'] },
 				},
 				starter: { name: 'starter', permissions: ['workspaces.create'] },
 				support: { name: 'support', permissions: ['contacts.read'] },
 			},
 			contract: true,
+			links: { shared: { dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 } },
+			delegations: {
+				'api.workspaces.create': { action: 'workspaces.create', dimension: 'workspace', purpose: 'creates' },
+			},
 		})
 	})
 
-	for (const [name, artifact] of FIXTURES) {
-		test(`${name}: the vocabulary IAM's reconcile parses, unchanged`, () => {
+	test("a delegation is an endpoint that creates a value or holds its dimension's members.manage action", () => {
+		expect(schemaFromContract(members).delegations).toEqual({
+			'api.members.invite': { action: 'workspace.admin', dimension: 'workspace', purpose: 'members' },
+			'api.workspaces.create': { action: 'workspace.create', dimension: 'workspace', purpose: 'creates' },
+		})
+	})
+
+	test('a contract without link mounts or delegations says so, so IAM drops what an earlier schema had', () => {
+		expect(schemaFromContract(implemented)).toMatchObject({ links: {}, delegations: {} })
+	})
+
+	for (const [name, artifact] of [...FIXTURES, ['the members contract', members] as const]) {
+		test(`${name}: the auth SDK's parser accepts it unchanged, every name resolving`, () => {
 			const schema = schemaFromContract(artifact)
 			expect(appSchemaSchema.parse(schema)).toEqual(schema)
 		})

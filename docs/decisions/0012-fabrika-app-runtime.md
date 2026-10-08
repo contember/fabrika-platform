@@ -115,8 +115,9 @@ proxy and IAM already consume:
   `public`, after every other rule of the path. A gate knows no method, so a path also admits the
   kinds of the rows that the other method can select through it. A path with no endpoint has no
   rule, so the proxy denies it.
-- **`schemaFromContract(contract)`** produces the `AppSchema` (actions and roles) that the deploy
-  reconciles into IAM today.
+- **`schemaFromContract(contract)`** produces the `AppSchema` that the deploy reconciles into IAM:
+  scopes with their membership metadata, actions, roles, link mounts, and the endpoints that spend
+  membership authority (`creates`, and the dimension's `members.manage`) as delegations.
 
 Both providers take these from `fabrika.config.ts`. The application never writes either by hand.
 
