@@ -1,6 +1,6 @@
 // Who called: the caller kind a verified token presents, and the principal a handler sees for it.
 
-import type { AccessTokenClaims, Caller } from '@fabrika/auth-core'
+import { type AccessTokenClaims, type Caller, callerOf } from '@fabrika/auth-core'
 
 /** A person: the IAM session, or a `px_` key bound to a user principal. */
 export interface UserPrincipal {
@@ -42,21 +42,18 @@ export interface Presented {
 	readonly principal: Principal
 }
 
-/**
- * The caller kind of a verified application token. A token bound to a principal is `human` or `machine` by its
- * principal type; an anonymous one is a share link. No token kind is an application's connector key yet, so no
- * request is an `app:<id>` caller. An OAuth resource token is no caller of an application at all.
- */
+/** The caller a verified application token presents, by `callerOf` (the proxy reads the same), and its principal. */
 export function presentedBy(claims: AccessTokenClaims): Presented | null {
-	if (claims.oauth !== undefined) {
-		return null
-	}
-	switch (claims.ptype) {
-		case 'user':
-			return { caller: 'human', principal: { kind: 'user', id: claims.sub, label: claims.label ?? claims.sub } }
-		case 'service':
-			return { caller: 'machine', principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
-		case undefined:
-			return { caller: 'link', principal: { kind: 'link', credentialId: claims.sub } }
+	const caller = callerOf(claims)
+	switch (caller) {
+		case 'human':
+			return { caller, principal: { kind: 'user', id: claims.sub, label: claims.label ?? claims.sub } }
+		case 'machine':
+			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
+		case 'link':
+			return { caller, principal: { kind: 'link', credentialId: claims.sub } }
+		default:
+			// No token kind is an application's connector key yet, so no request is an `app:<id>` caller.
+			return null
 	}
 }

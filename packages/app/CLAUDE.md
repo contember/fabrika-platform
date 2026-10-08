@@ -193,9 +193,11 @@ src/
   `health` endpoint may arrive without it, because the platform's liveness probe dials
   the application directly. Tests reach the runtime through the harness's `bootApp`,
   which adds the header the way the proxy does.
-- **Caller kinds** come from the token (`presentedBy`): `ptype: 'user'` is `human`,
-  `ptype: 'service'` is `machine`, an anonymous token (a share link) is `link`. No
-  token is an `app:<id>` caller yet, and an OAuth resource token is no caller.
+- **Caller kinds** come from the token through `@fabrika/auth-core`'s `callerOf`, the
+  mapping the proxy applies too (`presentedBy` only adds the principal): `ptype:
+  'user'` is `human`, `ptype: 'service'` is `machine`, an anonymous token (a share
+  link) is `link`. No token is an `app:<id>` caller yet, and an OAuth resource token
+  is no caller. Never map a token to a caller kind anywhere else.
 - **Admission** treats a request without an `Authorization` header as a session
   request: when it is not a `GET` it needs `Sec-Fetch-Site: same-origin`. A
   cross-site page cannot add that header without a preflight, and the application
