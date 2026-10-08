@@ -23,6 +23,7 @@ Usage:
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
   fabrika control <key|apps|namespaces|register|deploy|runs> [options]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
+  fabrika db <new|migrate|codegen> [options]
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
@@ -30,6 +31,9 @@ An explicit --provider is required only when no app config is available.
 \`app register\` compiles the manifest in memory, exactly as \`app build\` would, and sends the request
 \`control register --manifest=<path>\` sends for it. It writes no file, CREATES only, and reads the
 control credential from FABRIKA_CONTROL_KEY alone; a changed manifest is \`control apps environments put\`.
+
+\`fabrika db\` manages an application's Postgres schema: migration files, applying them (the template's
+\`run.initCommands\`), and the generated types. Run \`fabrika db --help\` for its surface.
 
 \`fabrika control\` is the operator's non-browser client for the control plane (ADR-0033). It is
 provider-neutral, loads no installation package, and speaks the same typed API the console does. Run
@@ -218,6 +222,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		console.info(NAMESPACE_USAGE)
 		return
 	}
+	if (parsed.help && parsed.area === 'db') {
+		const { DB_USAGE } = await import('./db.js')
+		console.info(DB_USAGE)
+		return
+	}
 	if (parsed.help && parsed.area === 'builder') {
 		console.info(BUILDER_USAGE)
 		return
@@ -240,6 +249,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	}
 	if (parsed.area === 'control') {
 		await runControlCli(parsed.command, parsed.rest, parsed.provider)
+		return
+	}
+	if (parsed.area === 'db') {
+		const { runDbCli } = await import('./db.js')
+		await runDbCli(parsed.command, parsed.rest)
 		return
 	}
 	if (parsed.area === 'builder') {

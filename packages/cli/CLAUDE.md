@@ -1,7 +1,7 @@
 # @fabrika/cli
 
 The single public `fabrika` executable. It parses the top-level `platform`,
-`app`, `namespace`, and `control` command areas, resolves one provider where a
+`app`, `namespace`, `control`, `builder`, and `db` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
 contains no provider implementation. The one exception is `src/namespace.ts`:
 `fabrika namespace` is a Control RPC client over the Zerops namespace planner,
@@ -47,6 +47,23 @@ label the envelope a registration carries.
   message has `FABRIKA_CONTROL_KEY`'s value cut out before it is reported.
 - **Do not add source-connection verbs.** Creating a GitHub App connection needs a
   human principal (ADR-0029); the console owns it.
+
+## The `db` area
+
+`src/db.ts` serves an application's Postgres schema, run from the application root
+([ADR-0017](../../docs/decisions/0017-service-owned-postgres-migrations.md)). It resolves
+no provider. The runner is `@fabrika/platform-node`'s application wrapper and the
+renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
+
+- `db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`, the name the
+  checker's `migration-name` rule accepts, and never overwrites.
+- `db migrate` is the template's `run.initCommands` entry. It validates the files before
+  it connects, over ONE connection (the advisory lock is session state).
+- `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema;
+  `--verify` writes nothing and fails when the file differs.
+- `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
+  An error reaches the output only as the runner's own message or a server-reported
+  Postgres error; any other driver error is replaced, because it may quote the URL.
 
 ## Provider selection
 

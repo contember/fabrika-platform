@@ -36,9 +36,12 @@
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
-		"@fabrika/provider-zerops": "workspace:*"
+		"@fabrika/provider-zerops": "workspace:*",
+		"@fabrika/db": "workspace:*",
+		"@fabrika/platform-node": "workspace:*"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "latest",
+		"@fabrika/check": "workspace:*"
 	}
 }
