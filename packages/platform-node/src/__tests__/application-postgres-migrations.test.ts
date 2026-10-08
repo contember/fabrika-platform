@@ -1,0 +1,278 @@
+import { SQL } from 'bun'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+	applicationDatabaseSchema,
+	applicationMigrationLockKey,
+	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
+	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
+	definePostgresApplicationMigrations,
+} from '../application-postgres-migrations.js'
+import {
+	applyPostgresMigrations,
+	definePostgresMigrationPlan,
+	migrationChecksum,
+	type PostgresMigration,
+	PostgresMigrationError,
+} from '../postgres-migrations.js'
+import { PostgresDatabase } from '../sql-postgres.js'
+import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
+
+const migration = (name: string, sql: string): PostgresMigration => ({ name, sql })
+
+describe('application migration identity', () => {
+	test('derives the schema from the application id', () => {
+		expect(applicationDatabaseSchema('notes')).toBe('app_notes')
+		expect(applicationDatabaseSchema('my-app')).toBe('app_my_app')
+		for (const appId of ['', 'Notes', 'my_app', '-notes', 'notes;drop', 'a'.repeat(60)]) {
+			expect(() => applicationDatabaseSchema(appId)).toThrow(PostgresMigrationError)
+		}
+		expect(applicationDatabaseSchema('a'.repeat(59))).toHaveLength(63)
+	})
+
+	test('derives a stable lock key per application from fabrika-db:<appId>', () => {
+		// Migration identity: changing the derivation lets an old and a new container migrate at once.
+		expect(applicationMigrationLockKey('notes')).toBe(79_287_579_160_455)
+		expect(applicationMigrationLockKey('notes')).not.toBe(applicationMigrationLockKey('tasks'))
+		for (const appId of ['notes', 'tasks', 'my-app']) {
+			const key = applicationMigrationLockKey(appId)
+			expect(Number.isSafeInteger(key) && key >= 1).toBe(true)
+		}
+	})
+
+	test('composes one app bundle, a ledger in the application schema and the default timeouts', () => {
+		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
+		const plan = migrations.plan([migration('20261008120000_init.sql', 'SELECT 1')])
+		expect(migrations.schema).toBe('app_notes')
+		expect(plan).toEqual({
+			ledgerTable: 'app_notes.fabrika_migrations',
+			lockKey: applicationMigrationLockKey('notes'),
+			bundles: [{ name: 'app', migrations: [migration('20261008120000_init.sql', 'SELECT 1')] }],
+			application: {
+				schema: 'app_notes',
+				lockTimeoutMs: DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
+				statementTimeoutMs: DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
+			},
+		})
+	})
+
+	test('refuses a file the checker would refuse and a missing directory', () => {
+		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/nonexistent/db/migrations' })
+		for (const name of ['0001_init.sql', '20261008120000_Init.sql', '20261008120000-init.sql', '20261008120000_.sql']) {
+			expect(() => migrations.plan([migration(name, 'SELECT 1')])).toThrow('is not named YYYYMMDDHHMMSS_slug.sql')
+		}
+		expect(() => migrations.read()).toThrow('No migrations directory at /nonexistent/db/migrations')
+	})
+
+	test('a qualified ledger exists only for an application, and only in its own schema', () => {
+		const bundles = [{ name: 'app', migrations: [migration('20261008120000_init.sql', 'SELECT 1')] }]
+		const application = { schema: 'app_notes', lockTimeoutMs: 1, statementTimeoutMs: 1 }
+		expect(() => definePostgresMigrationPlan({ ledgerTable: 'app_notes.fabrika_migrations', lockKey: 1, bundles })).toThrow(
+			'Invalid migration ledger table',
+		)
+		expect(() => definePostgresMigrationPlan({ ledgerTable: 'app_tasks.fabrika_migrations', lockKey: 1, bundles, application })).toThrow(
+			'is not in app_notes',
+		)
+		expect(() =>
+			definePostgresMigrationPlan({
+				ledgerTable: 'app_notes.fabrika_migrations',
+				lockKey: 1,
+				bundles,
+				application: { ...application, lockTimeoutMs: 0 },
+			})
+		).toThrow('lock timeout must be a positive number')
+		expect(() =>
+			definePostgresMigrationPlan({
+				ledgerTable: 'app_notes.fabrika_migrations',
+				lockKey: 1,
+				bundles,
+				application: { ...application, statementTimeoutMs: 1.5 },
+			})
+		).toThrow('statement timeout must be a positive number')
+	})
+
+	test('reads the migrations directory in file-name order', () => {
+		const directory = mkdtempSync(join(tmpdir(), 'fabrika-app-migrations-'))
+		try {
+			writeFileSync(join(directory, '20261009120000_second.sql'), 'SELECT 2')
+			writeFileSync(join(directory, '20261008120000_first.sql'), 'SELECT 1')
+			const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory })
+			expect(migrations.read().map((item) => item.name)).toEqual(['20261008120000_first.sql', '20261009120000_second.sql'])
+		} finally {
+			rmSync(directory, { recursive: true, force: true })
+		}
+	})
+})
+
+if (!hasPostgres) console.warn(`application-postgres-migrations.test.ts ${skipReason}`)
+
+const openDatabases: PostgresDatabase[] = []
+const schemas: string[] = []
+
+afterAll(async () => {
+	for (const db of openDatabases) await db.close()
+	if (postgresUrl === null) return
+	const cleanup = PostgresDatabase.connect(postgresUrl)
+	for (const schema of schemas) await cleanup.prepare(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).run()
+	await cleanup.close()
+})
+
+function requireUrl(): string {
+	if (postgresUrl === null) throw new Error('FABRIKA_TEST_POSTGRES_URL is not set')
+	return postgresUrl
+}
+
+/** A fresh application id per test, so every test gets its own schema, ledger and lock. */
+function application(options: { lockTimeoutMs?: number; statementTimeoutMs?: number } = {}) {
+	const appId = `t${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+	const migrations = definePostgresApplicationMigrations({ appId, directory: '/unused', ...options })
+	schemas.push(migrations.schema)
+	const db = PostgresDatabase.connect(requireUrl(), { max: 1 })
+	openDatabases.push(db)
+	return { appId, migrations, db }
+}
+
+async function failureOf(work: Promise<unknown>): Promise<PostgresMigrationError> {
+	try {
+		await work
+	} catch (error) {
+		if (error instanceof PostgresMigrationError) return error
+		throw error
+	}
+	throw new Error('the migration run did not fail')
+}
+
+const sqlStateOf = (error: PostgresMigrationError): string | undefined => error.cause instanceof SQL.PostgresError ? error.cause.errno : undefined
+
+describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
+	test('applies into the application schema and records a checksum per file', async () => {
+		const { migrations, db } = application()
+		const files = [
+			migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)'),
+			migration('20261009120000_title.sql', 'ALTER TABLE notes ADD COLUMN title TEXT'),
+		]
+		expect(await migrations.apply(db, files)).toEqual(['app/20261008120000_init.sql', 'app/20261009120000_title.sql'])
+		expect(await migrations.apply(db, files)).toEqual([])
+
+		const relation = await db.prepare(`SELECT to_regclass('${migrations.schema}.notes') AS relation`).first<{ relation: string | null }>()
+		expect(relation?.relation).toBe(`${migrations.schema}.notes`)
+		const { results } = await db
+			.prepare(`SELECT bundle, name, checksum FROM ${migrations.schema}.fabrika_migrations ORDER BY name`)
+			.all<{ bundle: string; name: string; checksum: string }>()
+		expect(results).toEqual(files.map((file) => ({ bundle: 'app', name: file.name, checksum: migrationChecksum(file.sql) })))
+	})
+
+	test('a changed applied migration fails the run before anything else is applied', async () => {
+		const { migrations, db } = application()
+		await migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)')])
+
+		const failure = await failureOf(
+			migrations.apply(db, [
+				migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT)'),
+				migration('20261009120000_tags.sql', 'CREATE TABLE tags (id TEXT PRIMARY KEY)'),
+			]),
+		)
+		expect(failure.message).toBe(
+			'Postgres migration app/20261008120000_init.sql changed after it was applied; an applied migration is immutable, so write the change as a new migration',
+		)
+		const tags = await db.prepare(`SELECT to_regclass('${migrations.schema}.tags') AS relation`).first<{ relation: string | null }>()
+		expect(tags?.relation).toBeNull()
+	})
+
+	test('tolerates a database ahead of the code after a rollback', async () => {
+		const { migrations, db } = application()
+		await migrations.apply(db, [
+			migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)'),
+			migration('20261009120000_tags.sql', 'CREATE TABLE tags (id TEXT PRIMARY KEY)'),
+		])
+		expect(await migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)')])).toEqual([])
+	})
+
+	test('a blocked ALTER fails within the lock timeout and leaves no trace', async () => {
+		const { migrations, db } = application({ lockTimeoutMs: 200 })
+		await migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)')])
+
+		const live = new SQL({ url: requireUrl(), max: 1 })
+		let release = (): void => {}
+		const released = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		let locked = (): void => {}
+		const holding = new Promise<void>((resolve) => {
+			locked = resolve
+		})
+		// The live version's open transaction holds ACCESS SHARE, which the ALTER's ACCESS EXCLUSIVE waits behind.
+		const reader = live.begin(async (tx) => {
+			await tx.unsafe(`SELECT * FROM ${migrations.schema}.notes`)
+			locked()
+			await released
+		})
+		try {
+			await holding
+			const started = performance.now()
+			const failure = await failureOf(
+				migrations.apply(db, [
+					migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)'),
+					migration('20261009120000_title.sql', 'ALTER TABLE notes ADD COLUMN title TEXT'),
+				]),
+			)
+			expect(performance.now() - started).toBeLessThan(3_000)
+			expect(failure.message).toBe('Postgres migration app/20261009120000_title.sql failed')
+			expect(sqlStateOf(failure)).toBe('55P03')
+		} finally {
+			release()
+			await reader
+			await live.close()
+		}
+		const { results } = await db.prepare(`SELECT name FROM ${migrations.schema}.fabrika_migrations`).all<{ name: string }>()
+		expect(results).toEqual([{ name: '20261008120000_init.sql' }])
+	})
+
+	test('a long statement fails within the statement timeout', async () => {
+		const { migrations, db } = application({ statementTimeoutMs: 200 })
+		const started = performance.now()
+		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_slow.sql', 'SELECT pg_sleep(10)')]))
+		expect(performance.now() - started).toBeLessThan(3_000)
+		expect(sqlStateOf(failure)).toBe('57014')
+	})
+
+	test('applications in one database do not serialize each other', async () => {
+		const first = application()
+		const second = application()
+		const holder = new SQL({ url: requireUrl(), max: 1 })
+		try {
+			await holder.unsafe(`SELECT pg_advisory_lock(${applicationMigrationLockKey(first.appId)})`)
+			expect(await second.migrations.apply(second.db, [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)')]))
+				.toEqual(['app/20261008120000_init.sql'])
+			await holder.unsafe(`SELECT pg_advisory_unlock(${applicationMigrationLockKey(first.appId)})`)
+		} finally {
+			await holder.close()
+		}
+	})
+
+	test('a service ledger keeps its shape and records no checksum', async () => {
+		const schema = `service_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+		schemas.push(schema)
+		const admin = PostgresDatabase.connect(requireUrl(), { max: 1 })
+		await admin.prepare(`CREATE SCHEMA ${schema}`).run()
+		await admin.close()
+		const db = PostgresDatabase.connect(requireUrl(), { connection: { search_path: schema }, max: 1 })
+		openDatabases.push(db)
+		await applyPostgresMigrations(
+			db,
+			definePostgresMigrationPlan({
+				ledgerTable: 'service_schema_migrations',
+				lockKey: 8_301_100,
+				bundles: [{ name: 'service', migrations: [migration('0001_init.sql', 'SELECT 1')] }],
+			}),
+		)
+		const { results } = await db
+			.prepare(
+				`SELECT column_name FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = 'service_schema_migrations' ORDER BY ordinal_position`,
+			)
+			.all<{ column_name: string }>()
+		expect(results.map((row) => row.column_name)).toEqual(['bundle', 'name', 'applied_at'])
+	})
+})

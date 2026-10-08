@@ -18,6 +18,17 @@
 // Migrations for what this package owns (the jobs table, the Postgres lock table) live in
 // `migrations/` — DDL is per-dialect even when the statement over it is portable.
 
+export {
+	APPLICATION_MIGRATION_BUNDLE,
+	APPLICATION_MIGRATION_LEDGER,
+	applicationDatabaseSchema,
+	applicationMigrationLockKey,
+	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
+	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
+	definePostgresApplicationMigrations,
+	type PostgresApplicationMigrations,
+	type PostgresApplicationMigrationsConfig,
+} from './application-postgres-migrations'
 export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asset-server-fs'
 export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
 export {
@@ -32,9 +43,12 @@ export { rewritePlaceholders, type RewrittenSql } from './placeholders'
 export {
 	applyPostgresMigrations,
 	definePostgresMigrationPlan,
+	migrationChecksum,
 	platformNodePostgresMigrationBundle,
+	type PostgresApplicationMigrationSettings,
 	type PostgresMigration,
 	type PostgresMigrationBundle,
+	PostgresMigrationError,
 	postgresMigrationFilenames,
 	postgresMigrationIdentity,
 	type PostgresMigrationPlan,

@@ -1,10 +1,12 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const IDENTIFIER = /^[a-z][a-z0-9_]*$/
 const BUNDLE_NAME = /^[a-z][a-z0-9-]*$/
 const MIGRATION_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.sql$/
+const CHECKSUM = /^[0-9a-f]{64}$/
 const PLATFORM_MIGRATIONS_DIR = join(import.meta.dir, '..', 'migrations')
 
 export interface PostgresMigration {
@@ -18,11 +20,26 @@ export interface PostgresMigrationBundle {
 }
 
 export interface PostgresMigrationPlan {
-	/** Service-scoped ledger table, such as `iam_schema_migrations`. */
+	/** Service-scoped ledger table, such as `iam_schema_migrations`; an application's is qualified by its schema. */
 	ledgerTable: string
 	/** Service-specific session advisory lock. Keep this stable across runner upgrades. */
 	lockKey: number
 	bundles: readonly PostgresMigrationBundle[]
+	/** Present only in an application's plan (ADR-0017): its schema, a checksum per migration, and timeouts. */
+	application?: PostgresApplicationMigrationSettings
+}
+
+export interface PostgresApplicationMigrationSettings {
+	/** Created when absent. Each migration runs with it as its only `search_path`. */
+	schema: string
+	/** `lock_timeout` of each migration, so a blocked `ALTER` fails the deploy instead of stalling the live version. */
+	lockTimeoutMs: number
+	statementTimeoutMs: number
+}
+
+/** A refusal or failure of the runner itself. Its message names no credential; a driver error is its `cause`. */
+export class PostgresMigrationError extends Error {
+	override readonly name = 'PostgresMigrationError'
 }
 
 export interface ReadPostgresMigrationBundleOptions {
@@ -34,6 +51,7 @@ export interface ReadPostgresMigrationBundleOptions {
 interface LedgerRow {
 	bundle: string
 	name: string
+	checksum?: string | null
 }
 
 /** Read one ordered migration bundle from disk. An explicit file list fails closed when a file is absent. */
@@ -72,7 +90,7 @@ export function platformNodePostgresMigrationBundle(files?: readonly string[]): 
 
 /** Validate a complete plan at composition time, before any SQL is executed. */
 export function definePostgresMigrationPlan(plan: PostgresMigrationPlan): PostgresMigrationPlan {
-	validateIdentifier(plan.ledgerTable, 'migration ledger table')
+	validateLedgerTable(plan)
 	if (!Number.isSafeInteger(plan.lockKey) || plan.lockKey < 1) {
 		throw new Error('Postgres migration lock key must be a positive safe integer')
 	}
@@ -130,19 +148,23 @@ export async function applyPostgresMigrations(
 	let migrationError: unknown
 	const fresh: string[] = []
 	try {
-		await ensureLedger(db, plan.ledgerTable)
-		const applied = await appliedIdentities(db, plan.ledgerTable)
+		await ensureLedger(db, plan)
+		const applied = await appliedChecksums(db, plan)
+		if (plan.application !== undefined) verifyChecksums(plan.bundles, applied)
 		for (const bundle of plan.bundles) {
 			for (const migration of bundle.migrations) {
 				const identity = postgresMigrationIdentity(bundle.name, migration.name)
 				if (applied.has(identity)) continue
-				await db.batch([
-					db.prepare(migration.sql),
-					db
-						.prepare(`INSERT INTO ${plan.ledgerTable} (bundle, name, applied_at) VALUES (?, ?, ?)`)
-						.bind(bundle.name, migration.name, (options.now ?? unixNow)()),
-				])
-				applied.add(identity)
+				try {
+					await db.batch([
+						...applicationSettings(db, plan.application),
+						db.prepare(migration.sql),
+						ledgerInsert(db, plan, bundle.name, migration, (options.now ?? unixNow)()),
+					])
+				} catch (error) {
+					throw new PostgresMigrationError(`Postgres migration ${identity} failed`, { cause: error })
+				}
+				applied.set(identity, undefined)
 				fresh.push(identity)
 			}
 		}
@@ -185,6 +207,25 @@ function validateIdentifier(value: string, label: string): void {
 	if (!IDENTIFIER.test(value)) throw new Error(`Invalid ${label}: ${value}`)
 }
 
+/** Only an application's ledger is schema-qualified, and only by the application's own schema. */
+function validateLedgerTable(plan: PostgresMigrationPlan): void {
+	const { application } = plan
+	if (application === undefined) {
+		validateIdentifier(plan.ledgerTable, 'migration ledger table')
+		return
+	}
+	validateIdentifier(application.schema, 'application schema')
+	const prefix = `${application.schema}.`
+	if (!plan.ledgerTable.startsWith(prefix)) throw new Error(`Invalid migration ledger table: ${plan.ledgerTable} is not in ${application.schema}`)
+	validateIdentifier(plan.ledgerTable.slice(prefix.length), 'migration ledger table')
+	validateTimeout(application.lockTimeoutMs, 'lock timeout')
+	validateTimeout(application.statementTimeoutMs, 'statement timeout')
+}
+
+function validateTimeout(value: number, label: string): void {
+	if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Postgres migration ${label} must be a positive number of milliseconds`)
+}
+
 function validateBundleName(value: string): void {
 	if (!BUNDLE_NAME.test(value)) throw new Error(`Invalid Postgres migration bundle name: ${value}`)
 }
@@ -193,18 +234,86 @@ function validateMigrationName(value: string): void {
 	if (!MIGRATION_NAME.test(value)) throw new Error(`Invalid Postgres migration filename: ${value}`)
 }
 
-async function ensureLedger(db: SqlDatabase, ledgerTable: string): Promise<void> {
-	await db.prepare(`CREATE TABLE IF NOT EXISTS ${ledgerTable} (
+/** The service ledgers keep their original shape; an application's ledger also records each file's checksum. */
+async function ensureLedger(db: SqlDatabase, plan: PostgresMigrationPlan): Promise<void> {
+	if (plan.application === undefined) {
+		await db.prepare(`CREATE TABLE IF NOT EXISTS ${plan.ledgerTable} (
 		bundle TEXT NOT NULL,
 		name TEXT NOT NULL,
 		applied_at INTEGER NOT NULL,
 		PRIMARY KEY (bundle, name)
 	)`).run()
+		return
+	}
+	await db.prepare(`CREATE SCHEMA IF NOT EXISTS ${plan.application.schema}`).run()
+	await db.prepare(`CREATE TABLE IF NOT EXISTS ${plan.ledgerTable} (
+		bundle TEXT NOT NULL,
+		name TEXT NOT NULL,
+		checksum TEXT NOT NULL,
+		applied_at INTEGER NOT NULL,
+		PRIMARY KEY (bundle, name)
+	)`).run()
 }
 
-async function appliedIdentities(db: SqlDatabase, ledgerTable: string): Promise<Set<string>> {
-	const { results } = await db.prepare(`SELECT bundle, name FROM ${ledgerTable}`).all<LedgerRow>()
-	return new Set(results.map((row) => postgresMigrationIdentity(row.bundle, row.name)))
+/** Applied identities, each with its recorded checksum; `undefined` for a service ledger, which records none. */
+async function appliedChecksums(db: SqlDatabase, plan: PostgresMigrationPlan): Promise<Map<string, string | undefined>> {
+	const columns = plan.application === undefined ? 'bundle, name' : 'bundle, name, checksum'
+	const { results } = await db.prepare(`SELECT ${columns} FROM ${plan.ledgerTable}`).all<LedgerRow>()
+	const applied = new Map<string, string | undefined>()
+	for (const row of results) {
+		const identity = postgresMigrationIdentity(row.bundle, row.name)
+		if (plan.application === undefined) {
+			applied.set(identity, undefined)
+			continue
+		}
+		if (typeof row.checksum !== 'string' || !CHECKSUM.test(row.checksum)) {
+			throw new PostgresMigrationError(`Postgres migration ledger row ${identity} has no valid checksum`)
+		}
+		applied.set(identity, row.checksum)
+	}
+	return applied
+}
+
+/**
+ * Every applied file must be byte-for-byte the file that ran. Checked before anything is applied, so an edited
+ * migration fails the run without a partial apply. A ledger row without a file is the database being ahead of the
+ * code after a rollback, which is tolerated.
+ */
+function verifyChecksums(bundles: readonly PostgresMigrationBundle[], applied: ReadonlyMap<string, string | undefined>): void {
+	for (const bundle of bundles) {
+		for (const migration of bundle.migrations) {
+			const identity = postgresMigrationIdentity(bundle.name, migration.name)
+			const recorded = applied.get(identity)
+			if (recorded !== undefined && recorded !== migrationChecksum(migration.sql)) {
+				throw new PostgresMigrationError(
+					`Postgres migration ${identity} changed after it was applied; an applied migration is immutable, so write the change as a new migration`,
+				)
+			}
+		}
+	}
+}
+
+/** SHA-256 of the file's text, hex. */
+export function migrationChecksum(sql: string): string {
+	return createHash('sha256').update(sql, 'utf8').digest('hex')
+}
+
+function applicationSettings(db: SqlDatabase, application: PostgresApplicationMigrationSettings | undefined): SqlStatement[] {
+	if (application === undefined) return []
+	return [
+		db.prepare(`SET LOCAL search_path TO ${application.schema}`),
+		db.prepare(`SET LOCAL lock_timeout = ${application.lockTimeoutMs}`),
+		db.prepare(`SET LOCAL statement_timeout = ${application.statementTimeoutMs}`),
+	]
+}
+
+function ledgerInsert(db: SqlDatabase, plan: PostgresMigrationPlan, bundle: string, migration: PostgresMigration, appliedAt: number): SqlStatement {
+	if (plan.application === undefined) {
+		return db.prepare(`INSERT INTO ${plan.ledgerTable} (bundle, name, applied_at) VALUES (?, ?, ?)`).bind(bundle, migration.name, appliedAt)
+	}
+	return db
+		.prepare(`INSERT INTO ${plan.ledgerTable} (bundle, name, checksum, applied_at) VALUES (?, ?, ?, ?)`)
+		.bind(bundle, migration.name, migrationChecksum(migration.sql), appliedAt)
 }
 
 function unixNow(): number {
