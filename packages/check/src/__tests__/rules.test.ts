@@ -516,3 +516,42 @@ describe('the crontab follows the contract', () => {
 		expect(locations(await check({ 'zerops.yaml': 'zerops: [\n' }), 'crontab')).toEqual(['zerops.yaml:1:1'])
 	})
 })
+
+describe('bunfig.toml is read as Bun reads it', () => {
+	const bunfig = async (text: string): Promise<string[]> =>
+		(await check({ ...CLEAN_APPLICATION, 'bunfig.toml': text })).filter((finding) => finding.file === 'bunfig.toml').map((finding) =>
+			`${finding.line} ${finding.message}`
+		)
+
+	test('a runtime preload is refused under every spelling of its key', async () => {
+		for (const key of ['preload', '"preload"', "'preload'", '"pre\\u006coad"']) {
+			expect(await bunfig(`smol = true\n${key} = ["./dist/preload.js"]\n`)).toEqual([
+				'2 a runtime preload can register a plugin that redirects any import, trusted packages included',
+			])
+		}
+	})
+
+	test('a test preload into a skipped or generated path is refused, one into checked source is not', async () => {
+		const refused = 'a test preload outside the checked application files runs unchecked in the platform build'
+		for (const target of ['./dist/after-checks.js', './fabrika/entry.generated.ts', './node_modules/x/index.js', '../outside.ts', 'some-package']) {
+			expect(await bunfig(`[test]\npreload = ["${target}"]\n`)).toEqual([`2 ${refused}`])
+		}
+		expect(await bunfig(`test.preload = "./dist/after-checks.js"\n`)).toEqual([`1 ${refused}`])
+		expect(await bunfig('[test]\npreload = ["./src/test-setup.ts"]\n')).toEqual([])
+	})
+
+	test('a file outside the TOML subset is refused rather than guessed at', async () => {
+		expect(await bunfig('preload = """\n./dist/preload.js\n"""\n')).toEqual([
+			'1 bunfig.toml line 1 is outside the TOML the platform reads (a multi-line string)',
+		])
+		expect(await bunfig('[install]\nregistry = { url = "https://registry.example.test" }\n')).toEqual([
+			'2 bunfig.toml line 2 is outside the TOML the platform reads (an inline table)',
+		])
+	})
+
+	test('a quoted registry key is another registry', async () => {
+		expect(await bunfig('[install]\n"registry" = "https://registry.example.test"\n')).toEqual([
+			'2 another registry can serve a package the platform trusts by name',
+		])
+	})
+})

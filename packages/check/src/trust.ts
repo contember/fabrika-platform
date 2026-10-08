@@ -4,7 +4,8 @@
 
 import type { Finding } from './finding'
 import { parseJsonc } from './jsonc'
-import { isRelativeSpecifier, joinRelative } from './layout'
+import { isIgnoredSegment, isRelativeSpecifier, isSourceFile, joinRelative } from './layout'
+import { isKey, parseToml } from './toml'
 
 /** Packages whose exports the reader trusts by name, and the packages they rely on. */
 export const isTrustedSpecifier = (specifier: string): boolean =>
@@ -140,19 +141,49 @@ function checkTsconfig(path: string, text: string, files: ReadonlyMap<string, st
 	}
 }
 
-/** Bun's runtime `preload` runs before the application and can register a plugin that resolves any import. */
+/** A test preload must be a checked application file: a skipped or generated one runs unchecked during the build. */
+const isCheckedTestPreload = (target: string): boolean => {
+	if (!target.startsWith('./')) return false
+	const segments = target.slice(2).split('/')
+	return segments[0] !== 'fabrika' && segments.every((segment) => segment !== '' && segment !== '..' && !isIgnoredSegment(segment))
+		&& isSourceFile(target)
+}
+
+/**
+ * Bun's runtime `preload` runs before the application and can register a plugin that resolves any import; read with
+ * Bun's own key decoding, so `"preload"` is `preload`. A test preload runs during the platform build.
+ */
 function checkBunfig(text: string, report: (needle: string, message: string, allowed: string) => void): void {
-	let section: string | null = null
-	for (const line of text.split('\n')) {
-		const header = /^\s*\[\s*([^\]]+?)\s*\]/.exec(line)
-		if (header !== null) {
-			section = header[1] ?? null
-		} else if (section === null && /^\s*preload\s*=/.test(line)) {
+	const lines = text.split('\n')
+	const at = (line: number): string => lines[line - 1]?.trim() ?? ''
+	const document = parseToml(text)
+	if (!document.ok) {
+		report(
+			at(document.line),
+			`bunfig.toml line ${document.line} is outside the TOML the platform reads (${document.message})`,
+			'single-line keys and values: strings, numbers, booleans and arrays of them',
+		)
+		return
+	}
+	for (const entry of document.entries) {
+		if (isKey(entry, 'preload')) {
 			report(
-				line.trim(),
+				at(entry.line),
 				'a runtime preload can register a plugin that redirects any import, trusted packages included',
 				'no top-level preload in bunfig.toml',
 			)
+		}
+		if (isKey(entry, 'test', 'preload')) {
+			const targets = entry.value.kind === 'array' ? entry.value.items : [entry.value]
+			for (const target of targets) {
+				if (target.kind !== 'string' || !isCheckedTestPreload(target.value)) {
+					report(
+						at(entry.line),
+						'a test preload outside the checked application files runs unchecked in the platform build',
+						"'./<path>' of a source file the checker reads, outside fabrika/, dist/, node_modules/ and dot directories",
+					)
+				}
+			}
 		}
 	}
 }

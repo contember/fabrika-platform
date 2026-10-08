@@ -44,6 +44,7 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `resolution.ts`     | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
 | `trust.ts`          | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
 | `jsonc.ts`          | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
+| `toml.ts`           | The TOML subset `bunfig.toml` is read in, keys decoded as Bun decodes them; anything else is refused.  |
 | `limits.ts`         | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
 | `finding.ts`        | The rule ids, the `Finding` shape and its one-line format.                                             |
 | `rules/literal.ts`  | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
@@ -160,7 +161,10 @@ can make such an import load something else:
   that can match `@fabrika/*`, `zod`, `zod/*` or `bun`, wildcards included (`*`, `@fab*`);
 - `baseUrl`, under which Bun resolves a bare `zod/v4` to an application file before `node_modules`;
 - an `extends` of a package or of a file outside the application, and a `tsconfig.json` that does not parse;
-- a top-level `preload` in `bunfig.toml`, whose plugin can resolve any import (`[test] preload` is allowed).
+- a top-level `preload` in `bunfig.toml` under any key spelling (`"preload"` is `preload`), whose plugin can resolve
+  any import; a `[test] preload` that is not a checked source file (`./…` outside `fabrika/`, `dist/`,
+  `node_modules/` and dot directories), because the platform build runs it; and a `bunfig.toml` outside the
+  TOML subset `toml.ts` reads.
 
 Mappings for other specifiers stay; the contract graph imports only relative modules and the trusted packages anyway.
 Not covered: the installed packages themselves (a `dependencies` spec, `overrides`, a registry scope), which the
@@ -213,7 +217,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   `buildArtifact`) does every check and default. A change to the kit's builders (`BUILDER_FIELDS`, a new option) is
   a change to `reader/surface.ts`; `differential.test.ts` fails when they drift.
 - **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
-  `finding.ts`, `trust.ts`, `jsonc.ts`, `limits.ts` and `rules/literal.ts` import no `node:*`, `bun` or file API. A Worker bundle of the reader measured
+  `finding.ts`, `trust.ts`, `jsonc.ts`, `toml.ts`, `limits.ts` and `rules/literal.ts` import no `node:*`, `bun` or file API. A Worker bundle of the reader measured
   638 KiB, 153 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes
   contract in workerd.
 - **Read nothing outside the checked set.** `node_modules`, `dist` and dot-directories are skipped, and symbolic

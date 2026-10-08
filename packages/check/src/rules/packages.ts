@@ -6,6 +6,7 @@
 import { type AstNode, child, staticString } from '../ast'
 import type { Finding, Report } from '../finding'
 import { parseJsonc } from '../jsonc'
+import { isKey, parseToml } from '../toml'
 import { BUNFIG_FILE, isTrustedSpecifier } from '../trust'
 
 export const LOCKFILE = 'bun.lock'
@@ -115,16 +116,12 @@ function checkLockfile(text: string, finding: Finder): void {
 
 /** Another registry serves its own build of a trusted package under the same name and version. */
 function checkRegistryConfiguration(path: string, text: string, finding: Finder): void {
-	let section: string | null = null
-	for (const line of text.split('\n')) {
-		const header = /^\s*\[\s*([^\]]+?)\s*\]/.exec(line)
-		if (header !== null) {
-			section = header[1] ?? null
-			if (section?.startsWith('install.scopes') === true) {
-				finding(path, line.trim(), 'a scoped registry can serve a package the platform trusts by name', 'the default npm registry')
-			}
-		} else if (section === 'install' && /^\s*(?:registry|scopes)\s*=/.test(line)) {
-			finding(path, line.trim(), 'another registry can serve a package the platform trusts by name', 'the default npm registry')
+	const document = parseToml(text)
+	if (!document.ok) return
+	const lines = text.split('\n')
+	for (const entry of document.entries) {
+		if (isKey(entry, 'install', 'registry') || (entry.key[0] === 'install' && entry.key[1] === 'scopes')) {
+			finding(path, lines[entry.line - 1]?.trim() ?? '', 'another registry can serve a package the platform trusts by name', 'the default npm registry')
 		}
 	}
 }
