@@ -46,9 +46,10 @@ this one import.
   able to name a resource, run a command, or publish a directory. Only `platformResources: 'allow'` skips it.
 - **An application Worker is reachable only through its proxy's `APP` binding (ADR-0048).**
   `assertUnexposedApplication` (`src/plan.ts`) refuses a non-empty `routes`, and any `workers_dev` or
-  `preview_urls` other than `false` — Cloudflare turns both URLs on by default. A root that binds `APP` is
-  the proxy and keeps its route; a root that binds nothing IS the application. `platformResources: 'allow'`
-  skips it (IAM routes its own Worker). Repository code holds the account token, so on Cloudflare this is a
+  `preview_urls` other than `false` — Cloudflare turns both URLs on by default. Only the root that
+  `createCloudflareProxyWorker` builds is exempt: `CLOUDFLARE_PROXY_WORKER_MAIN`, from this package's own
+  `src` (the runner's copy or a checkout's `node_modules` copy), binding `APP`. Every other Worker, the root
+  included, is an application Worker. `platformResources: 'allow'` skips it (IAM routes its own Worker). Repository code holds the account token, so on Cloudflare this is a
   strong default, not a boundary (backlog 86).
 - **`assets` is ALLOWED but BOUNDED** (`assertBoundedAssets`). Its `directory` is resolved against the
   generated `wrangler.jsonc`'s own directory and uploaded publicly, and wrangler's walk ignores only

@@ -372,8 +372,9 @@ Cloudflare app resources are composed as a public proxy Worker with a private
 application Worker child. The child has no routes and explicitly disables
 `workers.dev` and preview URLs; `assertAuthoredGraph` refuses an application
 Worker that sets `routes`, or leaves `workers_dev` or `preview_urls` other than
-`false` (ADR-0048). A config with no proxy root is itself the application Worker
-and is refused the same way, so it cannot be public. The provider preserves the generated Wrangler config for every
+`false` (ADR-0048). Only the proxy Worker that `createCloudflareProxyWorker`
+builds is exempt, recognised by its entrypoint and package directory; every other
+Worker in the config, the root included, is an application Worker. The provider preserves the generated Wrangler config for every
 Worker in that graph, deploys each config, and targets application migrations,
 managed variables, and secrets at the child Worker. The proxy embeds only its
 manifest and service bindings; application secrets stay on the child.

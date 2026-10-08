@@ -13,7 +13,7 @@ import type {
 	CommandSpec,
 	ProvisionInput,
 } from '..'
-import { createCloudflareDeployer, defaultCloudflareCollaborators, defineApp } from '..'
+import { createCloudflareDeployer, createCloudflareProxyWorker, defaultCloudflareCollaborators, defineApp } from '..'
 import type { RunnerOutcomeFile } from '../runner-protocol'
 
 interface Recorded {
@@ -37,9 +37,12 @@ const PRIVATE: { readonly workers_dev: false; readonly preview_urls: false } = {
 
 const appWorker = (): Worker => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
 
+/** Where a checkout's own `bun install` puts this package, so its proxy Worker points here. */
+const INSTALLED_PROXY_DIR = '/repo/node_modules/@fabrika/provider-cloudflare/src'
+
 /** The proxy root owns the public route; the application Worker is reached only through `APP`. */
 const proxyRouting = (app: Worker, routes: Worker['options']['routes']): Worker =>
-	new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts', routes })
+	new Worker({ dir: INSTALLED_PROXY_DIR, name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: './proxy-worker.ts', routes })
 
 /** A checkout is plain JavaScript: its options object carries whatever raw wrangler keys it likes. */
 const withRawOptions = (worker: Worker, raw: Record<string, unknown>): Worker => {
@@ -195,7 +198,13 @@ describe('Cloudflare provider', () => {
 
 	test('targets platform-managed values at the private application Worker', async () => {
 		const app = new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
-		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
+		const proxy = new Worker({
+			dir: INSTALLED_PROXY_DIR,
+			name: 'demo-proxy',
+			compatibility_flags: [],
+			bindings: { APP: app },
+			main: './proxy-worker.ts',
+		})
 		const authored = config({ resources: () => proxy })
 		const dsn = 'https://operations-public-key@errors.test/1'
 		await deploy(rec, authored, { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
@@ -212,7 +221,13 @@ describe('Cloudflare provider', () => {
 			bindings: { DB: new D1Database({ name: 'main', migrationsDir: './migrations' }) },
 			main: 'src/index.ts',
 		})
-		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
+		const proxy = new Worker({
+			dir: INSTALLED_PROXY_DIR,
+			name: 'demo-proxy',
+			compatibility_flags: [],
+			bindings: { APP: app },
+			main: './proxy-worker.ts',
+		})
 		const authored = config({ resources: () => proxy, pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] } })
 		const result = await deploy(rec, authored, { secrets: { API_KEY: 'secret-value' } })
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'migrate:APP.DB', 'deploy-worker', 'sync-secrets'])
@@ -455,6 +470,43 @@ describe('Cloudflare provider', () => {
 		await expect(deploy(rec, unrouted)).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
+	test('refuses a public root that binds a private APP child unless it is the provider proxy', async () => {
+		const ownRoute = [{ pattern: 'stage.example.com', custom_domain: true }]
+		const publicRoot = (dir: string, main: string): Worker =>
+			new Worker({
+				dir,
+				name: 'demo-root',
+				main,
+				compatibility_flags: [],
+				workers_dev: true,
+				preview_urls: true,
+				routes: ownRoute,
+				bindings: { APP: appWorker() },
+			})
+		const impostors: ReadonlyArray<readonly [string, string]> = [
+			['.', 'src/app.ts'],
+			['.', './proxy-worker.ts'],
+			[INSTALLED_PROXY_DIR, 'src/app.ts'],
+			['/repo/vendor/provider-cloudflare/src', './proxy-worker.ts'],
+		]
+		for (const [dir, main] of impostors) {
+			await expect(deploy(rec, config({ resources: () => publicRoot(dir, main) }))).rejects.toThrow(
+				'application Worker `demo-root` declares `routes`; only its proxy Worker is routed',
+			)
+		}
+		expect(rec.provisions).toHaveLength(0)
+
+		const providerProxy = createCloudflareProxyWorker({
+			name: 'demo-proxy',
+			app: appWorker(),
+			appId: 'demo',
+			appHost: 'stage.example.com',
+			domain: 'stage.example.com',
+			gates: { rules: [{ path: '/*', kind: 'public' }] },
+		})
+		await expect(deploy(rec, config({ resources: () => providerProxy }))).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
 	test('leaves a platform component its own route and URLs under the platform policy', async () => {
 		const component = config({
 			resources: () =>
@@ -557,11 +609,17 @@ describe('Cloudflare provider', () => {
 
 	test('bounds the raw keys of every Worker in the graph, the proxy included', async () => {
 		const app = withRawOptions(appWorker(), { services: [{ binding: 'CTRL', service: 'stage-vozka' }] })
-		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
+		const proxy = new Worker({
+			dir: INSTALLED_PROXY_DIR,
+			name: 'demo-proxy',
+			compatibility_flags: [],
+			bindings: { APP: app },
+			main: './proxy-worker.ts',
+		})
 		await expect(deploy(rec, config({ resources: () => proxy }))).rejects.toThrow('Worker `demo` sets `services`, which an app may not configure')
 
 		const rawProxy = withRawOptions(
-			new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: appWorker() }, main: 'proxy-worker.ts' }),
+			new Worker({ dir: INSTALLED_PROXY_DIR, name: 'demo-proxy', compatibility_flags: [], bindings: { APP: appWorker() }, main: './proxy-worker.ts' }),
 			{ build: { command: 'cat /proc/self/environ' } },
 		)
 		await expect(deploy(rec, config({ resources: () => rawProxy }))).rejects.toThrow('Worker `demo-proxy` sets `build`, which an app may not configure')

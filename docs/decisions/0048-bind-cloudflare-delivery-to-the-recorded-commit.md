@@ -72,8 +72,8 @@ binding is the authenticated hop ([ADR-0022](0022-the-proxy-is-the-only-enforcem
 extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
 
 The code does none of this yet (part B, work units B6 and B8), except the refusals of `routes`,
-`preview_urls` and `workers_dev`, which `assertAuthoredGraph` applies to every application Worker. A
-config with no proxy root is itself the application Worker.
+`preview_urls` and `workers_dev`, which `assertAuthoredGraph` applies to every Worker of an application
+config except the proxy Worker the provider builds, recognised by its entrypoint and package directory.
 
 ### On Cloudflare these are a strong default, not a security boundary
 

@@ -21,6 +21,10 @@ export interface CloudflareProxyWorkerOptions {
 	readonly iamUrl?: string
 }
 
+/** Where `createCloudflareProxyWorker` points its Worker; `assertAuthoredGraph` recognises the proxy by it. */
+export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
+export const CLOUDFLARE_PROXY_WORKER_MAIN = './proxy-worker.ts'
+
 /**
  * Build the Cloudflare side of the accepted proxy topology: the public Worker owns the route and
  * binds the private application Worker. IAM remains a global service binding.
@@ -51,9 +55,9 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 	const domain = options.domain?.trim()
 
 	return new Worker({
-		dir: import.meta.dir,
+		dir: CLOUDFLARE_PROXY_WORKER_DIR,
 		name: options.name,
-		main: './proxy-worker.ts',
+		main: CLOUDFLARE_PROXY_WORKER_MAIN,
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
 		routes: domain === undefined || domain === '' ? [] : [{ pattern: domain, custom_domain: true }],

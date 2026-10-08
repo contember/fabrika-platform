@@ -1,6 +1,7 @@
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { Container, D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
+import { CLOUDFLARE_PROXY_WORKER_DIR, CLOUDFLARE_PROXY_WORKER_MAIN } from './proxy'
 
 export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
 
@@ -107,12 +108,21 @@ const applicationChain = (root: Worker): ReadonlySet<Worker> => {
 	return chain
 }
 
+/** A checkout's `bun install` puts its own copy of this package under `node_modules`, flat or in Bun's store. */
+const INSTALLED_PROXY_WORKER_DIR = /(^|\/)node_modules\/@fabrika\/provider-cloudflare\/src\/?$/
+
 /**
- * The Workers that run the app's own code. A root that binds `APP` is the proxy and owns the public route;
- * a root that binds nothing is itself the application, so it may not be public either.
+ * Only the Worker `createCloudflareProxyWorker` builds — this package's entrypoint, from this package's
+ * directory, bound to an `APP` — may own a public route. Any other root runs the app's own code.
  */
+const isProviderProxyWorker = (worker: Worker): boolean =>
+	worker.options.main === CLOUDFLARE_PROXY_WORKER_MAIN
+	&& (worker.options.dir === CLOUDFLARE_PROXY_WORKER_DIR || INSTALLED_PROXY_WORKER_DIR.test(worker.options.dir))
+	&& worker.options.bindings?.['APP'] instanceof Worker
+
+/** The Workers that run the app's own code: the whole chain, except a root that is the provider's proxy. */
 const applicationWorkers = (root: Worker, chain: ReadonlySet<Worker>): ReadonlySet<Worker> =>
-	root.options.bindings?.['APP'] instanceof Worker ? new Set([...chain].filter((worker) => worker !== root)) : chain
+	isProviderProxyWorker(root) ? new Set([...chain].filter((worker) => worker !== root)) : chain
 
 /**
  * An application Worker is reachable only through its proxy's service binding (ADR-0048), so nothing may
