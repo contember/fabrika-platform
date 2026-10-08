@@ -2,7 +2,7 @@
 id: 0017
 title: Make Postgres migrations service-owned and bundle-qualified
 status: accepted
-date: 2026-07-30
+date: 2026-10-08
 ---
 
 # 0017 — Make Postgres migrations service-owned and bundle-qualified
@@ -26,6 +26,14 @@ Local development creates separate `iam` and `control` databases, and the
 Postgres tests isolate services in separate schemas, so neither exposes the
 collision. The migration model therefore has to express ownership directly
 rather than depend on accidental database isolation.
+
+Applications on the contract framework ([ADR-0012](0012-fabrika-app-runtime.md))
+also keep their tables in Postgres. In a cheap namespace several applications
+share one database ([ADR-0014](0014-provider-owned-deployment-namespaces.md)).
+Their migrations run from the application's own container, because Control
+cannot reach a namespace's Postgres. An agent writes these migrations, and an
+agent may also edit a migration that already ran. The runner today has no
+checksum and no timeouts, and it rejects a schema-qualified ledger.
 
 ## Decision
 
@@ -93,6 +101,33 @@ Cloudflare D1 migrations are applied by `wrangler d1 migrations apply` from
 each service's `migrations/` directory, and D1 keeps its own ledger. The same
 squash rule applies to them.
 
+### Application migrations
+
+The same runner applies an application's migrations, with three additions:
+
+- **The ledger lives in the application's schema.** The runner accepts a
+  schema-qualified ledger for this purpose.
+- **Each applied migration has a checksum.** The runner records it and fails
+  when an applied file has changed.
+- **Each migration runs under `lock_timeout` and `statement_timeout`.** A
+  blocked `ALTER` fails within the timeout instead of holding the deploy.
+
+The advisory lock key derives from `fabrika-db:<appId>`, so applications that
+share one database do not serialize each other.
+
+`fabrika db migrate` runs the migrations. It is the generated
+`run.initCommands` entry of the application's execution descriptor
+([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), and it
+uses the application's runtime credential. The checker verifies migration file
+names, because an agent over MCP cannot run `fabrika db new`.
+
+The pre-1.0 squash rule does not cover application migrations. An application
+migration that has run is immutable; a change is a new file. Every new or changed
+migration file is a widening in the approval diff
+([ADR-0050](0050-approved-access.md)).
+
+The code does none of this yet (part A, work unit A9; part B, work unit B7).
+
 ## Consequences
 
 - IAM and Control can safely use one Zerops database and schema despite
@@ -111,6 +146,13 @@ squash rule applies to them.
   who squashes must prove schema equality on both dialects.
 - IAM and Control still share a database failure and capacity domain. This ADR
   fixes migration ownership, not storage isolation.
+- An application's edited migration fails its next deploy instead of silently
+  diverging from the schema it describes.
+- A migration that waits on a lock fails the deploy within the timeout. The
+  application author must retry or split it.
+- Migrations and the runtime share one credential, so the running application
+  holds the same schema rights as its migrations. Separate migration and runtime
+  credentials come with per-application Postgres roles.
 
 ## Alternatives considered
 
@@ -141,6 +183,17 @@ likely. Bundle composition keeps the generic DDL with the implementation that
 consumes it. Control's single restatement exists only because both services
 create the table in one shared schema on the light tier, and a test pins the
 two declarations to each other.
+
+### Run application migrations from Control
+
+Control cannot reach a namespace's Postgres, because Zerops projects share no
+private network. The application container can.
+
+### Let applications squash or edit applied migrations
+
+An agent edits whatever refuses it. Without a checksum, an edited migration
+that already ran would leave the live schema different from the files, and the
+approval diff would see a change that never runs.
 
 ### Adopt the old filename-only ledger
 
