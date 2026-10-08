@@ -52,9 +52,9 @@ import {
 	SERVICE_MANAGED_KEYS,
 } from './managed-env'
 import {
+	approvedSchemaOf,
 	type FabrikaImportDocument,
 	type FabrikaManifest,
-	approvedSchemaOf,
 	lockedExecutionFor,
 	manifestServiceHostnames,
 	verifyZeropsArtifactSourceDescriptor,

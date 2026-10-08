@@ -4,10 +4,10 @@
 // coordinates; anything denied, foreign or no longer authorable is a 404, like the run use cases.
 
 import type { AuthContext } from '@fabrika/auth'
+import { CONTRACT_FILE } from '@fabrika/check/contract'
 import type { RunDto, RunLogLine } from '@fabrika/control-contract'
 import { uuidv7 } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
-import { CONTRACT_FILE } from '@fabrika/check/contract'
 import { ACTIONS } from '../actions'
 import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'

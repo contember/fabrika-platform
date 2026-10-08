@@ -819,7 +819,9 @@ export async function settleRunCancellation(
 	invocation: RunInvocation,
 ): Promise<'succeeded' | 'failed' | null> {
 	const cancelling = await invocation.read()
-	if (cancelling === null || cancelling.cancel_requested_at === null || !['pending', 'running', 'awaiting_approval'].includes(cancelling.status)) return null
+	if (cancelling === null || cancelling.cancel_requested_at === null || !['pending', 'running', 'awaiting_approval'].includes(cancelling.status)) {
+		return null
+	}
 	let outcome: 'succeeded' | 'failed' = 'failed'
 	if (cancelling.external_run_id !== null) {
 		if (deps.provider.cancel === undefined) return null

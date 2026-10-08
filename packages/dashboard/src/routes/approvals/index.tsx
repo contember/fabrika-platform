@@ -20,7 +20,9 @@ export default createPage()
 			<Table
 				colSpan={6}
 				isEmpty={data.approvals.length === 0}
-				empty={<EmptyState icon="shield" title="Nothing waits for approval" body="A deploy that only narrows access, or changes code only, never waits." />}
+				empty={
+					<EmptyState icon="shield" title="Nothing waits for approval" body="A deploy that only narrows access, or changes code only, never waits." />
+				}
 				head={
 					<tr>
 						<th>Status</th>
@@ -49,9 +51,7 @@ export default createPage()
 							<code>{shortSha(approval.run.commitSha)}</code>
 						</td>
 						<td>
-							{approval.changes.filter((change) => change.widens).length} widening, {approval.changes.filter((change) => !change.widens).length}
-							{' '}
-							narrowing
+							{approval.changes.filter((change) => change.widens).length} widening, {approval.changes.filter((change) => !change.widens).length} narrowing
 						</td>
 						<td className="muted small" title={fmtDate(approval.run.startedAt ?? approval.run.createdAt)}>
 							{fmtAgo(approval.run.startedAt ?? approval.run.createdAt)}

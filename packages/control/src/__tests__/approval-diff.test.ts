@@ -7,7 +7,6 @@ import { classifyAccess, pathsOverlap } from '../approval/diff'
 import { type AccessSnapshot, EMPTY_SNAPSHOT, type MigrationEntry } from '../approval/snapshot'
 import { BASE, edited } from './helpers/contracts'
 
-
 const NOTES_TABLE: TablePolicyArtifact = {
 	scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
 	actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
