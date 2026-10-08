@@ -74,14 +74,26 @@ extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
 The code does none of this yet (part B, work units B6 and B8). The refusals of `routes`, `preview_urls`
 and `workers_dev` are part 0, work unit P0.4.
 
+### On Cloudflare these are a strong default, not a security boundary
+
+Repository code holds `CLOUDFLARE_API_TOKEN` until the runner separates repository execution from the
+account credential ([backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md)).
+Code that holds the account token can change the deployed proxy Worker, the application Worker and its
+exposure directly, past `approvedSnapshot` and past the provider's refusals. On Cloudflare, therefore,
+the platform-built proxy Worker and the exposure refusals are not a security boundary against
+repository-controlled code. They are a strong default.
+
 ## Consequences
 
 - A moved branch cannot change an already selected deployment or mislabel its release and source maps.
 - A force-pushed or removed commit is a pre-install failure; the source host need not keep old commits.
 - An outdated runner may ignore the expected SHA. Rolling the runner forward first is the only guard;
   a deploy order mistake is an operator error, not something Control detects.
-- An agent cannot change the proxy's endpoint table or the IAM schema of a Cloudflare application by
-  editing its config or its build. A widening goes through the approval of ADR-0050.
+- An agent that edits only the contract cannot change the proxy's endpoint table or the IAM schema of a
+  Cloudflare application without the approval of ADR-0050. Repository code that uses the account token
+  can, until backlog 86 lands.
+- Applications that an agent writes for an inexperienced person should run on Zerops until backlog 86
+  lands.
 - The Cloudflare build checks are weaker than on Zerops
   ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)): repository code runs next to
   the account token, so a skipped checker is not detected.
