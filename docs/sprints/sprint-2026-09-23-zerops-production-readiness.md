@@ -52,7 +52,7 @@ Use the existing supported topology where possible; do not introduce a new insta
 
 ### WU1 — Durable managed-environment activation (L; backlog 37)
 
-**Moved.** The [simplification sprint](sprint-2026-10-07-simplify-delivery-and-providers.md)
+**Moved.** The [simplification sprint](../archive/sprint-2026-10-07-simplify-delivery-and-providers.md)
 replaces this unit's version-bound protocol with its decisions D3–D5: only the release identity is
 bound to an application version, recovery polls or deletes the recorded version, and one renewed
 holder-checked lease covers runs and namespace-proxy attempts. That sprint's WU3.2 and WU3.3 deliver

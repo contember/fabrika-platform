@@ -6,6 +6,61 @@ On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
 > <ids deleted/rescoped>. Deferred: <honest notes>.
 -->
 
+> **OUTCOME — shipped 2026-10-08.** The delivery path, provider seam and package layout are cut down
+> with the feature set intact, including multiple private GitHub connections. The ADR set was
+> consolidated to 31 living ADRs, with no superseded entries. Other changes:
+>
+> - `@fabrika/engine` is deleted. Each provider runs its own steps through `runSteps`.
+> - Zerops binds only `FABRIKA_RELEASE` to a version, and recovery polls or deletes.
+> - Runs, the catalog sync and namespaces share one 90 s lease.
+> - Shared Control code no longer names a provider.
+> - The `source` service is merged into Control, with App keys in the vault.
+> - Each cloud is one public `provider-<cloud>` package with `/installation` (plus `/runner` on
+>   Cloudflare), next to its private deployables and the private `platform-artifacts`.
+>
+> Production TypeScript went from 103,386 to 98,159 lines (−5.2k), and tests from 91,152 to
+> 85,120 (−6.0k), measured against `6090968`.
+>
+> Commit map:
+>
+> | Units     | Commits                                                          |
+> | --------- | ---------------------------------------------------------------- |
+> | Phase 0   | `39f8212`, `4536a7e`, `c65939e`                                  |
+> | Phase 1   | `c68a2bb`, `92d8346`, `07a336f`                                  |
+> | WU2.1–2.5 | `8a182c7`, `3294db9`, `bf85154`, `dd3205f`, `dd7235a`, `b2935a1` |
+> | WU3.1     | `c488534`                                                        |
+> | WU3.2     | `15964c0`                                                        |
+> | WU3.3     | `6f89f2c`, `9c1e7f8`                                             |
+> | WU3.4     | `56b3e6d`                                                        |
+> | WU4.1     | `9d02105`, `1600b85`                                             |
+> | WU5.1     | `f5b4a1a`, `3358902`                                             |
+> | WU5.2     | `dba0f53`                                                        |
+> | WU5.3     | `e7065bf`                                                        |
+> | WU6.1     | `e5002fd`                                                        |
+>
+> Verification at `e5002fd`:
+>
+> - typecheck;
+> - `bun run test` with Postgres: 4146 + 317 pass, 0 fail;
+> - lint and `format:check`;
+> - `local:reset && local:smoke` exit 0;
+> - `test:browser`: 10 pass;
+> - `release:validate`, `release:pack` and `release:smoke` (23 public packages);
+> - `gen:check`.
+>
+> Not run: the S3 suites (`FABRIKA_TEST_S3_*`), the live Zerops platform-facts suite (no
+> credentials), a Docker build of the runner image, and real `platform deploy` runs on either cloud.
+>
+> Backlog: 37 and 88 consumed; 84 trimmed.
+>
+> Deferred:
+>
+> - WU1.4: the webhook egress patch was lost.
+> - WU3.5: run-log append.
+> - Backlog 81: a local keyed deploy.
+> - The overlap between `fabrika namespace` and `fabrika control namespaces` (owner decision).
+> - Deprecating `@fabrika/engine` on npm (owner action).
+
 # Sprint — Simplify delivery and provider packaging (2026-10-07)
 
 **Goal.** Cut the delivery path, the provider seam and the package layout down to what a small fleet
@@ -250,3 +305,5 @@ All others are kept and only have their cross-references fixed.
 - Phase 4 → `9d02105` (Control streams GitHub sources in-process; App keys in the vault; local stack without a source container) and `1600b85` (source service, package and wire protocol deleted; −9.8k lines). Gates: full suite with Postgres, `gen:check`, `release:validate`, `local:reset && local:smoke` exit 0.
 - Found in WU4.1a: Bun's compression streams ignore backpressure, so the old source service buffered a whole repository in memory; `pullThrough` (control/src/source/streams.ts) fixes it.
 - Decisions in phase 4: a leftover `source` service is only warned about; Control no longer receives `FABRIKA_ZEROPS_PROJECT_ID` (nothing reads it); an app whose connection binding dangles after the D2 migration must be deleted and re-registered.
+- Phase 5 → `f5b4a1a` and `3358902` (WU5.1: `control/src/zerops/` and the private `platform-artifacts` codegen package, with a packed-import scan in `release:validate`), `dba0f53` (WU5.2: runner and installation contracts become subpaths), `e7065bf` (WU5.3: `installation-<cloud>` becomes `provider-<cloud>/installation`). WU5.2 is mechanical, so no separate reviewer ran; its gates passed. WU5.3 adds `installation-init`, `github-app` and `iam-contract` to the runner image's workspace install; nothing new loads at runtime.
+- Phase 6 → `e5002fd`: reference docs, ADR package tables (0011 now lists the real subpaths), backlog paths, and READMEs. `zerops-platform.md` is 61 lines shorter and keeps every measured fact. Full verification is in the OUTCOME block.

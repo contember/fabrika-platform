@@ -34,7 +34,7 @@ For local application development connected to an installation, see [Local build
 
 [Zerops production readiness](sprints/sprint-2026-09-23-zerops-production-readiness.md) prepares the next release for a small internal fleet: deployment/configuration identity, immutable installation revisions, descriptor validation, safe egress, automatic source maps and real authentication/recovery witnesses. The sprint is approved and starts with platform probes and contract design; production deployment is separate.
 
-[Simplify delivery and provider packaging](sprints/sprint-2026-10-07-simplify-delivery-and-providers.md) is active. It rewrote the decision record in place on 2026-10-07 (see [`decisions/README.md`](decisions/README.md)) and now cuts the delivery machinery, removes provider names from shared Control code, merges `source` into Control and collapses each cloud into one public package plus its private deployables.
+[Simplify delivery and provider packaging](archive/sprint-2026-10-07-simplify-delivery-and-providers.md) completed on 2026-10-08. It made the ADRs living and consolidated them to 31, deleted the engine, bound Zerops deploys only to the release, put runs, the catalog and namespaces on one 90 s lease, merged `source` into Control with App keys in the vault, and folded each cloud into one public `provider-<cloud>` package. Production TypeScript shrank by 5.2k lines and tests by 6.0k. S3, live Zerops, and real cloud deploys were not verified.
 
 [Connect the local builder to an installed platform](archive/sprint-2026-09-21-local-builder-platform-flow.md) completed on 2026-09-23: human consent, local Zerops development and repeated Control deployment, with in-process cross-plane verification and documented browser/recovery limits.
 
