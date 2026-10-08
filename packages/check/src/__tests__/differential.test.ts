@@ -2,8 +2,8 @@
 // compiled from the evaluated module, gives the same artifact and the same canonical bytes. The fixtures the runtime
 // cannot evaluate — type errors and non-literals — the reader refuses.
 
-import { type AnyContract, compileContract, ContractError } from '@fabrika/app/contract'
-import { canonicalArtifactJson, type TablePolicyArtifact } from '@fabrika/auth-core'
+import { compileContract, ContractError } from '@fabrika/app/contract'
+import { canonicalArtifactJson, type ContractArtifact, type TablePolicyArtifact } from '@fabrika/auth-core'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -11,6 +11,8 @@ import { z } from 'zod/v4'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
+import { contract as scopedContract } from '../../../app/src/__tests__/fixtures/scoped-notes/fabrika.contract'
+import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scoped-notes/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource } from '../contract'
 import { contract as cleanContract } from './fixtures/clean-app/fabrika.contract'
@@ -53,24 +55,41 @@ const READER_FORMS_TABLES: Readonly<Record<string, TablePolicyArtifact>> = {
 interface Fixture {
 	readonly name: string
 	readonly root: string
-	readonly evaluated: AnyContract
-	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
+	/** `compileContract` over the evaluated modules. */
+	readonly evaluated: () => ContractArtifact
+	/** The artifact form of the policies, for a fixture without `src/db/tables.ts`; otherwise the reader reads that file. */
+	readonly tables?: Readonly<Record<string, TablePolicyArtifact>>
 }
 
 const fixtures: readonly Fixture[] = [
-	{ name: '@fabrika/app notes-app', root: join(APP_TESTS, 'fixtures', 'notes-app'), evaluated: notesContract, tables: notesArtifact.tables },
-	{ name: '@fabrika/check clean-app', root: join(import.meta.dir, 'fixtures', 'clean-app'), evaluated: cleanContract, tables: {} },
+	{
+		name: '@fabrika/app notes-app',
+		root: join(APP_TESTS, 'fixtures', 'notes-app'),
+		evaluated: () => compileContract(notesContract, notesArtifact.tables),
+		tables: notesArtifact.tables,
+	},
+	{
+		name: '@fabrika/check clean-app',
+		root: join(import.meta.dir, 'fixtures', 'clean-app'),
+		evaluated: () => compileContract(cleanContract, {}),
+		tables: {},
+	},
 	{
 		name: '@fabrika/check reader-forms',
 		root: join(import.meta.dir, 'fixtures', 'reader-forms'),
-		evaluated: readerFormsContract,
+		evaluated: () => compileContract(readerFormsContract, READER_FORMS_TABLES),
 		tables: READER_FORMS_TABLES,
 	},
 	{
 		name: '@fabrika/app implement',
 		root: join(APP_TESTS, 'fixtures', 'implement'),
-		evaluated: implementContract,
+		evaluated: () => compileContract(implementContract, { notes: NOTE_TABLE }),
 		tables: { notes: NOTE_TABLE },
+	},
+	{
+		name: '@fabrika/app scoped-notes (src/db/tables.ts read from source)',
+		root: join(APP_TESTS, 'fixtures', 'scoped-notes'),
+		evaluated: () => compileContract(scopedContract, scopedTables),
 	},
 ]
 
@@ -78,7 +97,7 @@ describe('the static reader and the evaluated contract agree', () => {
 	for (const fixture of fixtures) {
 		test(`${fixture.name}: the same artifact and the same canonical serialization`, () => {
 			const read = readContractSource(readTree(fixture.root), fixture.tables)
-			const evaluated = compileContract(fixture.evaluated, fixture.tables)
+			const evaluated = fixture.evaluated()
 
 			expect(read).toEqual(evaluated)
 			expect(canonicalArtifactJson(read)).toBe(canonicalArtifactJson(evaluated))

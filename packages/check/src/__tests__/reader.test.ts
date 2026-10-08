@@ -3,7 +3,7 @@
 import { compileContract, ContractError, defineContract } from '@fabrika/app/contract'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
-import { CONTRACT_LIMITS, ContractSourceError, readContract, readContractSource } from '../contract'
+import { CONTRACT_LIMITS, ContractSourceError, readContract, readContractSource, readTablesSource } from '../contract'
 import { check } from './helpers'
 
 const BASE = `import { defineContract } from '@fabrika/app/contract'
@@ -311,11 +311,93 @@ describe('the resource budget', () => {
 	test('source over the byte limit, and syntax nested deeper than the limit', () => {
 		const padding = `// ${'x'.repeat(CONTRACT_LIMITS.sourceBytes)}\n`
 		expect(refusal(application(BASE, padding + SCHEMAS))).toEqual([
-			`src/schemas.ts:1:1 contract the contract and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
+			`src/schemas.ts:1:1 contract fabrika.contract.ts and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`,
 		])
 		const deep = `export const Deep = ${'['.repeat(CONTRACT_LIMITS.astDepth)}${']'.repeat(CONTRACT_LIMITS.astDepth)}\n`
 		expect(refusal(application(BASE, SCHEMAS + deep))).toEqual([
 			`src/schemas.ts:1:1 contract the syntax nests deeper than ${CONTRACT_LIMITS.astDepth} levels`,
 		])
+	})
+})
+
+describe('the reader reads src/db/tables.ts into the policies @fabrika/db parses', () => {
+	const SCHEMA_GENERATED = `import type { ColumnList } from '@fabrika/db'
+
+export interface DB {
+	notes: { id: string; workspace_id: string; title: string }
+}
+
+export const columns = { 'notes': ['id', 'workspace_id', 'title'] } as const satisfies ColumnList<DB>
+`
+	const TABLES = `import { defineTables } from '@fabrika/db'
+import { columns, type DB } from './schema.generated'
+
+export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
+	notes: {
+		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		actions: { read: 'notes.read', insert: 'notes.write' },
+		insert: ['title'],
+	},
+})
+`
+	const withTables = (tables: string, schema = SCHEMA_GENERATED): ReadonlyMap<string, string> =>
+		new Map([...application(BASE), ['src/db/tables.ts', tables], ['src/db/schema.generated.ts', schema]])
+
+	const tableRefusal = (files: ReadonlyMap<string, string>): string[] => {
+		try {
+			readTablesSource(files)
+		} catch (error) {
+			if (error instanceof ContractSourceError) {
+				return error.findings.map((finding) => `${finding.file}:${finding.line}:${finding.column} ${finding.rule} ${finding.message}`)
+			}
+			throw error
+		}
+		return []
+	}
+
+	test('the policies of the module land in the artifact, and no tables.ts means no policies', () => {
+		const artifact = readContractSource(withTables(TABLES))
+		expect(artifact.tables).toEqual({
+			notes: {
+				scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
+				actions: { read: 'notes.read', insert: 'notes.write', update: null, delete: null },
+				insert: ['title'],
+				update: [],
+				version: null,
+				createdBy: null,
+				columns: {},
+			},
+		})
+		expect(readTablesSource(application(BASE))).toEqual({})
+	})
+
+	test('a policy the runtime refuses is refused from source, at the defineTables call', () => {
+		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", "insrt: ['title'],")))).toEqual([
+			'src/db/tables.ts:4:23 contract notes: the policy: insrt is not a field here (allowed: scope, actions, insert, update, version, createdBy, columns)',
+		])
+		expect(tableRefusal(withTables(TABLES.replace("column: 'workspace_id'", "column: 'workspace'")))).toEqual([
+			'src/db/tables.ts:4:23 contract notes: scope.in.column names workspace, which is not a column (columns: id, workspace_id, title)',
+		])
+		expect(tableRefusal(withTables(TABLES, SCHEMA_GENERATED.replace("'title']", "'title'], 'audit': ['id']")))).toEqual([
+			'src/db/tables.ts:4:23 contract audit: every table needs a policy in tables.ts',
+		])
+	})
+
+	test('a tables module of another shape, a non-literal and a schema in a policy', () => {
+		expect(tableRefusal(withTables(TABLES.replace('export const tables', 'export const policies')))).toEqual([
+			"src/db/tables.ts:1:1 contract src/db/tables.ts exports no const 'tables'",
+		])
+		expect(tableRefusal(withTables(TABLES.replace('(columns)({', '(columns, columns)({')))).toEqual([
+			"src/db/tables.ts:4:23 contract 'tables' is not one call of defineTables with the column list, then the policies",
+		])
+		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", 'insert: [`${"title"}`],'))).map((line) => line.split(' ')[1])).toEqual([
+			'literal',
+		])
+		const schema = TABLES.replace(
+			"import { columns, type DB } from './schema.generated'",
+			"import { columns, type DB } from './schema.generated'\nimport { z } from 'zod/v4'",
+		)
+			.replace("insert: ['title'],", 'insert: [z.string()],')
+		expect(tableRefusal(withTables(schema))).toEqual(['src/db/tables.ts:9:12 contract a schema in a table policy'])
 	})
 })

@@ -47,6 +47,11 @@ export class ValueReader {
 		this.#problems = problems
 	}
 
+	/** The value of one expression outside any builder callback, or `null` after recording why there is none. */
+	value(located: Located): LiteralValue | null {
+		return this.#read(located, new Map(), null)
+	}
+
 	/** The value `name` is exported as from `module`, or `null` after recording why there is none. */
 	exported(module: ParsedModule, name: string, at: AstNode): LiteralValue | null {
 		const binding = this.#graph.exported(module, name)

@@ -21,35 +21,39 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 - Bin: `fabrika-check [<root>]` prints one line per finding,
   `file:line:col rule-id message (allowed form: …)`, then a count on stderr. Exit 0 clean, 1 with findings, 2 on a
   usage or read error.
-- Reader: `@fabrika/check/contract` exports `readContractSource(files, tables) → ContractArtifact` and
-  `readContract(files) → AnyContract`. `files` holds `fabrika.contract.ts`, the modules it imports (path → text) and
-  every `package.json`, `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those
-  of each directory of a contract module. For an import without an extension, `files` holds every candidate that
+- Reader: `@fabrika/check/contract` exports `readContractSource(files, tables?) → ContractArtifact`,
+  `readContract(files) → AnyContract` and `readTablesSource(files) → TablePolicies`. `files` holds
+  `fabrika.contract.ts`, `src/db/tables.ts`, the modules they import (path → text) and every `package.json`,
+  `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those of each directory of
+  such a module. For an import without an extension, `files` holds every candidate that
   exists, so the reader sees two of them. The reader cannot tell a missing file from an absent one, so the caller
   (Control, B6) supplies them all; nothing else is read. It throws `ContractSourceError` (findings with file, line, column and allowed form) for a form
   it refuses, and `ContractError` with the problems `compileContract` reports for a contract that does not compile.
-  Until `@fabrika/db` exposes its table policies as data (A8b), `tables` is the artifact form of each policy, as
-  `compileContract` takes it, and `src/db/tables.ts` is not read.
+  `readTablesSource` reads `src/db/tables.ts` and the modules it imports (the generated `src/db/schema.generated.ts`)
+  under the same literal rule, and parses the two arguments of `defineTables` with `@fabrika/db/tables`' `readTables`,
+  the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
+  `files` means no policies. `readContractSource` uses it unless `tables` (the artifact form) is given.
 
-| Module              | What it owns                                                                                          |
-| ------------------- | ----------------------------------------------------------------------------------------------------- |
-| `check.ts`          | `checkApplication`, the disk reader, and the order the rules run in.                                  |
-| `ast.ts`            | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.     |
-| `graph.ts`          | The one static resolver: what a name denotes through consts, imports and exports, without executing.  |
-| `layout.ts`         | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.    |
-| `references.ts`     | Every way a module names another, and which names a direct load takes.                                |
-| `resolution.ts`     | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.       |
-| `trust.ts`          | Configuration that could redirect a package trusted by name; checker and reader both refuse it.       |
-| `jsonc.ts`          | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.            |
-| `limits.ts`         | `CONTRACT_LIMITS`, the reader's resource budget.                                                      |
-| `finding.ts`        | The rule ids, the `Finding` shape and its one-line format.                                            |
-| `rules/literal.ts`  | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.  |
-| `rules/contract.ts` | What the reader refuses, run by the checker once the literal rule passes.                             |
-| `rules/*.ts`        | One file per rule group.                                                                              |
-| `contract.ts`       | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.         |
-| `reader/value.ts`   | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                |
-| `reader/schema.ts`  | Each `z` factory and method applied to real zod, with its arguments and options checked.              |
-| `reader/surface.ts` | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does. |
+| Module              | What it owns                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `check.ts`          | `checkApplication`, the disk reader, and the order the rules run in.                                   |
+| `ast.ts`            | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.      |
+| `graph.ts`          | The one static resolver: what a name denotes through consts, imports and exports, without executing.   |
+| `layout.ts`         | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.     |
+| `references.ts`     | Every way a module names another, and which names a direct load takes.                                 |
+| `resolution.ts`     | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
+| `trust.ts`          | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
+| `jsonc.ts`          | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
+| `limits.ts`         | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
+| `finding.ts`        | The rule ids, the `Finding` shape and its one-line format.                                             |
+| `rules/literal.ts`  | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
+| `rules/contract.ts` | What the reader refuses, run by the checker once the literal rule passes.                              |
+| `rules/*.ts`        | One file per rule group.                                                                               |
+| `contract.ts`       | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.          |
+| `reader/value.ts`   | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                 |
+| `reader/schema.ts`  | Each `z` factory and method applied to real zod, with its arguments and options checked.               |
+| `reader/surface.ts` | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.  |
+| `reader/tables.ts`  | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`. |
 
 Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id; `direct-forms.test.ts` holds the
 directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
@@ -217,6 +221,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   third party's look the same.
 - A setup in `zerops.yaml` without a `run` section is not checked for jobs; every other setup carries them all.
 - The checker runs the reader without table policies, so `buildArtifact`'s checks (unknown actions, paths, table
-  links) run only where the tables are known: in Control and `compileContract`. A8b reads `src/db/tables.ts`.
+  links) run only where the tables are known: in Control and `compileContract`. The reader reads `src/db/tables.ts`
+  (`readTablesSource`); the checker does not compile the contract against it yet.
 - Not here yet: squawk rules and destructive-migration markers (deferred, not in v1), deletion of a generated test (A11), timers as
-  job substitutes (A15), store functions that take bare ids (A8b).
+  job substitutes (A15), store functions that take bare ids.

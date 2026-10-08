@@ -3,6 +3,8 @@ export const CONTRACT_FILE = 'fabrika.contract.ts'
 /** The named export of the contract module that holds `defineContract(…)`. */
 export const CONTRACT_EXPORT = 'contract'
 export const TABLES_FILE = 'src/db/tables.ts'
+/** The named export of the tables module that holds `defineTables(…)(…)`. */
+export const TABLES_EXPORT = 'tables'
 export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
 export const MIGRATIONS_DIR = 'db/migrations/'
 export const ZEROPS_FILES = ['zerops.yaml', 'zerops.yml'] as const

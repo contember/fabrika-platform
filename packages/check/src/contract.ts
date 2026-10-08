@@ -4,13 +4,15 @@
 
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
+import type { TablePolicies } from '@fabrika/db/tables'
 import { child, children, nodeDepth, type ParsedModule, parseModule, staticString, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
-import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative } from './layout'
+import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_FILE } from './layout'
 import { CONTRACT_LIMITS } from './limits'
 import { ReaderProblems } from './reader/problems'
 import { readContractValue } from './reader/surface'
+import { readTablesValue } from './reader/tables'
 import { ValueReader } from './reader/value'
 import { checkLiteralGraph } from './rules/literal'
 import { checkTrustedResolution } from './trust'
@@ -32,15 +34,47 @@ export class ContractSourceError extends Error {
 
 /**
  * The contract artifact of an application, read from the text of its files (path relative to the application root →
- * text): `fabrika.contract.ts`, every module it imports and the configuration that applies to them (`readContract`).
- * Until `@fabrika/db`
- * exposes its table policies as data (A8b), `tables` is the artifact form of each policy, as `compileContract` takes it.
+ * text): `fabrika.contract.ts`, every module it imports and the configuration that applies to them (`readContract`),
+ * and `src/db/tables.ts` with the modules it imports (`readTablesSource`). `tables`, when given, replaces what
+ * `src/db/tables.ts` declares with the artifact form of each policy.
  *
  * Throws `ContractSourceError` for a form the reader refuses, and `ContractError` with the same problems
  * `compileContract` reports for a contract that does not compile.
  */
-export function readContractSource(files: ReadonlyMap<string, string>, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
-	return compileContract(readContract(files), tables)
+export function readContractSource(files: ReadonlyMap<string, string>, tables?: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
+	const contract = readContract(files)
+	return compileContract(contract, tables ?? readTablesSource(files))
+}
+
+/**
+ * The table policies of `src/db/tables.ts`, read from source and parsed by `@fabrika/db`'s own policy parse; none when
+ * `files` has no such file. `files` carries its imports (the generated `src/db/schema.generated.ts`) and the
+ * configuration `readContract` names. Throws `ContractSourceError`.
+ */
+export function readTablesSource(files: ReadonlyMap<string, string>): TablePolicies {
+	if (!files.has(TABLES_FILE)) {
+		return {}
+	}
+	const trust = checkTrustedResolution(files)
+	if (trust.length > 0) {
+		throw new ContractSourceError(trust)
+	}
+	const parsed = parseSourceGraph(files, TABLES_FILE)
+	if (!parsed.ok) {
+		throw new ContractSourceError(parsed.findings)
+	}
+	const literal = checkLiteralGraph([TABLES_FILE], parsed.graph)
+	const module = parsed.graph.module(TABLES_FILE)
+	const budget = module === undefined ? [] : sourceBudget(contractModules(parsed.graph, module), TABLES_FILE)
+	if (literal.length > 0 || budget.length > 0) {
+		throw new ContractSourceError([...literal, ...budget])
+	}
+	const problems = new ReaderProblems()
+	const tables = readTablesValue(parsed.graph, problems)
+	if (tables === null || problems.findings.length > 0) {
+		throw new ContractSourceError(problems.findings)
+	}
+	return tables
 }
 
 /**
@@ -54,7 +88,7 @@ export function readContract(files: ReadonlyMap<string, string>): AnyContract {
 	if (trust.length > 0) {
 		throw new ContractSourceError(trust)
 	}
-	const parsed = parseContractGraph(files)
+	const parsed = parseSourceGraph(files, CONTRACT_FILE)
 	if (!parsed.ok) {
 		throw new ContractSourceError(parsed.findings)
 	}
@@ -106,12 +140,12 @@ function contractModules(graph: ModuleGraph, entry: ParsedModule): ParsedModule[
 	return [...reached.values()]
 }
 
-/** The source and syntax-depth limits of `CONTRACT_LIMITS` over the contract's modules. */
-function sourceBudget(modules: readonly ParsedModule[]): Finding[] {
+/** The source and syntax-depth limits of `CONTRACT_LIMITS` over the modules of one entry (the contract or the tables). */
+function sourceBudget(modules: readonly ParsedModule[], entry = CONTRACT_FILE): Finding[] {
 	const findings: Finding[] = []
 	const bytes = modules.reduce((total, module) => total + module.bytes, 0)
 	if (bytes > CONTRACT_LIMITS.sourceBytes) {
-		findings.push(overBudget(CONTRACT_FILE, `the contract and its modules are ${bytes} bytes, over ${CONTRACT_LIMITS.sourceBytes}`))
+		findings.push(overBudget(entry, `${entry} and its modules are ${bytes} bytes, over ${CONTRACT_LIMITS.sourceBytes}`))
 	}
 	for (const module of modules) {
 		if (nodeDepth(module.program) > CONTRACT_LIMITS.astDepth) {
@@ -128,18 +162,19 @@ function overBudget(file: string, message: string): Finding {
 type ParsedGraph = { readonly ok: true; readonly graph: ModuleGraph } | { readonly ok: false; readonly findings: readonly Finding[] }
 
 /**
- * Parses `fabrika.contract.ts` and the modules its imports reach among `files`, and nothing else. Every candidate of an
- * import is parsed, so that `rules/literal.ts` sees an ambiguous or directory import; the size limit holds before a
- * module is parsed and the depth limit right after, before any recursive rule walks it.
+ * Parses `entry` (`fabrika.contract.ts` or `src/db/tables.ts`) and the modules its imports reach among `files`, and
+ * nothing else. Every candidate of an import is parsed, so that `rules/literal.ts` sees an ambiguous or directory
+ * import; the size limit holds before a module is parsed and the depth limit right after, before any recursive rule
+ * walks it.
  */
-function parseContractGraph(files: ReadonlyMap<string, string>): ParsedGraph {
+function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): ParsedGraph {
 	const modules = new Map<string, ParsedModule>()
 	const findings: Finding[] = []
-	if (!files.has(CONTRACT_FILE)) {
-		return { ok: false, findings: [missingFile(CONTRACT_FILE)] }
+	if (!files.has(entry)) {
+		return { ok: false, findings: [missingFile(entry)] }
 	}
 	let bytes = 0
-	const queue = [CONTRACT_FILE]
+	const queue = [entry]
 	for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
 		const text = files.get(path)
 		if (modules.has(path) || text === undefined || !isSourceFile(path)) {
@@ -147,7 +182,7 @@ function parseContractGraph(files: ReadonlyMap<string, string>): ParsedGraph {
 		}
 		bytes += utf8Bytes(text)
 		if (bytes > CONTRACT_LIMITS.sourceBytes) {
-			return { ok: false, findings: [overBudget(path, `the contract and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`)] }
+			return { ok: false, findings: [overBudget(path, `${entry} and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`)] }
 		}
 		const parsed = parseModule(path, text)
 		if (!parsed.ok) {
