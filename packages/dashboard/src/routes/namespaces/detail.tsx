@@ -10,6 +10,7 @@ import {
 	canUpdateNamespace,
 	isNamespaceSettling,
 	namespaceFailure,
+	namespaceUpdateSeed,
 	parseNamespaceTarget,
 	retainedNamespaceResources,
 	scheduleNamespacePoll,
@@ -189,8 +190,8 @@ export default createPage()
 						{editedTarget === null
 							? (
 								<div className="toolbar">
-									<button type="button" onClick={() => setEditedTarget(JSON.stringify(namespace.target, null, 2))}>
-										Change target
+									<button type="button" onClick={() => setEditedTarget(JSON.stringify(namespaceUpdateSeed(namespace), null, 2))}>
+										{namespace.unconfirmedTarget === undefined ? 'Change target' : 'Finish the unconfirmed update'}
 									</button>
 									<span className="hint">
 										Only what the provider changes in place is accepted — on Zerops, the PostgreSQL profile. A payload may name only what changes.

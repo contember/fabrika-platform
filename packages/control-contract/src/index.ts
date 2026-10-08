@@ -220,6 +220,11 @@ export interface DeploymentNamespaceDto {
 	 */
 	lastError: string | null
 	lastErrorCode: string | null
+	/**
+	 * Present only while a `namespaces.update` is unconfirmed (`lastErrorCode` `namespaceUpdateUnconfirmed`):
+	 * the target that update was moving to. Retrying `namespaces.update` with it finishes the update.
+	 */
+	unconfirmedTarget?: ProviderEnvelopeDto
 	createdAt: number
 }
 
@@ -259,7 +264,8 @@ export interface AdoptDeploymentNamespaceRequest {
 /**
  * A namespace's new provider target. Its payload may name only what changes; the provider merges it over
  * the stored one. Only what the provider can change in place is accepted — on Zerops the PostgreSQL
- * profile — and anything else is refused with 409 naming `namespaces.remove` + `namespaces.create`.
+ * profile. A field the target does not have is a 400; any other change is a 409 that names the supported
+ * path, a new namespace under a new id.
  */
 export interface UpdateDeploymentNamespaceRequest {
 	target: ProviderEnvelopeDto

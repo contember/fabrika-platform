@@ -26,6 +26,14 @@ export function canUpdateNamespace(namespace: DeploymentNamespaceDto): boolean {
 }
 
 /**
+ * What the target editor starts from: the target an unconfirmed update was moving to, so applying it
+ * unchanged finishes that update — even in a session that never saw the request — else the stored target.
+ */
+export function namespaceUpdateSeed(namespace: DeploymentNamespaceDto): ProviderEnvelopeDto {
+	return namespace.unconfirmedTarget ?? namespace.target
+}
+
+/**
  * Hints only where the class actually tells an operator what to do. Anything else gets no hint rather
  * than an invented one: the message control stored is the provider's, and it is usually more specific.
  */
@@ -34,7 +42,7 @@ const NAMESPACE_FAILURE_HINTS: Readonly<Record<string, string>> = {
 	serviceStackIsNotHttp: 'The proxy has no deployed HTTP port yet. Reconcile once its first deploy has finished.',
 	internal: 'The provider reported no class for this failure. The control plane log holds the full, redacted cause.',
 	[NAMESPACE_UPDATE_UNCONFIRMED]:
-		'The live change may or may not have applied. Change the target again to the same value; the retry converges either way.',
+		'The live change may or may not have applied. Apply the planned target again — the editor starts from it — and the retry converges either way.',
 }
 
 /**

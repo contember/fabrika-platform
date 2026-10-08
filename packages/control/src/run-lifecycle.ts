@@ -20,7 +20,7 @@ import {
 	type ProviderSourceBinding,
 	type ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { republishUnderLease } from './api/namespaces'
+import { republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import {
 	type AppEnvRow,
@@ -28,6 +28,7 @@ import {
 	type ControlRegistryRepository,
 	type ControlRepositories,
 	type DeploymentNamespaceRow,
+	isUnconfirmedNamespaceUpdate,
 	type OperationsCatalogRepository,
 	parseProviderJson,
 	type RunRepository,
@@ -198,6 +199,9 @@ export const providerEnvironment = async (
 		}
 		if (stored.exclusive_app_id !== null && stored.exclusive_app_id !== row.app_id) {
 			throw new Error(`deployment namespace "${stored.id}" is exclusive to another app`)
+		}
+		if (options.requireReadyNamespace === true && isUnconfirmedNamespaceUpdate(stored)) {
+			throw new Error(unconfirmedUpdateRefusal(stored.id))
 		}
 		if (options.requireReadyNamespace === true && stored.state !== 'ready') {
 			throw new Error(`deployment namespace "${stored.id}" is not ready`)

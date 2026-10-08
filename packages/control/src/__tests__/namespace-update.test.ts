@@ -11,11 +11,12 @@ import {
 	type ZeropsService,
 	type ZeropsServiceEnv,
 } from '@fabrika/provider-zerops'
-import { describe, expect, test } from 'bun:test'
-import { type NamespaceJobResult, runNamespaceJob } from '../api/namespaces'
+import { describe, expect, spyOn, test } from 'bun:test'
+import { type NamespaceJobResult, republishNamespace, runNamespaceJob } from '../api/namespaces'
 import type { DeploymentNamespaceRow } from '../db'
-import { acquireLease, namespaceLeaseKey } from '../lease'
-import type { ControlJobMessage } from '../run-lifecycle'
+import { acquireLease, LEASE_TTL_MS, namespaceLeaseKey } from '../lease'
+import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
+import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
@@ -72,7 +73,7 @@ function fakeZerops(): FakeZerops {
 			if (typeof hostname !== 'string' || typeof type !== 'string') throw new Error('import service needs hostname and type')
 			if (services.some((service) => service.projectId === projectId && service.name === hostname)) continue
 			services.push({
-				id: `${hostname}-service`,
+				id: `${hostname}-${projectId}`,
 				name: hostname,
 				projectId,
 				base: type,
@@ -96,9 +97,10 @@ function fakeZerops(): FakeZerops {
 			const description = objectField(project, 'description')
 			if (typeof name !== 'string' || typeof description !== 'string') throw new Error('import project needs a name and description')
 			const mode = objectField(project, 'corePackage') === 'SERIOUS' ? 'SERIOUS' : 'LIGHT'
-			projects.push({ id: 'project-1', name, description, mode, status: 'ACTIVE' })
-			importDocument('project-1', yaml)
-			return { projectId: 'project-1', services: [] }
+			const id = `project-${projects.length + 1}`
+			projects.push({ id, name, description, mode, status: 'ACTIVE' })
+			importDocument(id, yaml)
+			return { projectId: id, services: [] }
 		},
 		importServices: async ({ projectId, yaml }) => {
 			calls.push('importServices')
@@ -118,6 +120,7 @@ function fakeZerops(): FakeZerops {
 			env.set(serviceId, [...variables, { id: `${serviceId}:${key}`, key, content: value }])
 		},
 		createAppVersion: async ({ serviceId }) => {
+			calls.push(`createAppVersion:${serviceId}`)
 			const version: ZeropsAppVersion = {
 				id: `version-${versions.length + 1}`,
 				status: 'UPLOADING',
@@ -252,6 +255,7 @@ interface NamespaceBody {
 	target: ProviderEnvelope
 	lastError: string | null
 	lastErrorCode: string | null
+	unconfirmedTarget?: ProviderEnvelope
 }
 
 async function readNamespace(response: Response): Promise<NamespaceBody> {
@@ -286,8 +290,8 @@ const toProduction = { postgres: { type: 'postgresql:single@18', profile: 'oltp-
 const updateRequest = (payload: JsonValue = toProduction) =>
 	rpcRequest('namespaces.update', { namespaceId: 'apps-prod', namespace: { target: { provider: 'zerops', version: 1, payload } } })
 
-const livePostgres = (zerops: FakeZerops): ZeropsService => {
-	const found = zerops.services.find((service) => service.name === 'postgres')
+const livePostgres = (zerops: FakeZerops, projectId = 'project-1'): ZeropsService => {
+	const found = zerops.services.find((service) => service.name === 'postgres' && service.projectId === projectId)
 	if (found === undefined) throw new Error('missing postgres service')
 	return found
 }
@@ -313,7 +317,7 @@ describe('namespaces.update against the Zerops namespace capability', () => {
 		const body = await readNamespace(updated)
 		expect(body.state).toBe('ready')
 		expect(body.target).toEqual({ ...ready.target, payload: { ...payloadOf(ready.target), ...toProduction } })
-		expect(autoscalingCalls(zerops)).toEqual(['configureAutoscaling:postgres-service:oltp-production'])
+		expect(autoscalingCalls(zerops)).toEqual(['configureAutoscaling:postgres-project-1:oltp-production'])
 		expect(livePostgres(zerops).autoscalingProfileId).toBe('oltp-production')
 		expect(payloadOf(JSON.parse((await storedRow(harness)).provider_target_json))['postgres']).toEqual(toProduction.postgres)
 		expect(harness.audits.at(-1)).toEqual(expect.objectContaining({
@@ -337,7 +341,8 @@ describe('namespaces.update against the Zerops namespace capability', () => {
 		expect(refused.status).toBe(409)
 		const message = await errorOf(refused)
 		expect(message).toContain('from postgresql:single@18 to postgresql:ha@18')
-		expect(message).toContain('namespaces.remove, then namespaces.create')
+		expect(message).toContain('namespaces.remove keeps the provider project and its database')
+		expect(message).toContain('namespaces.create under a new id with the new target')
 		expect(autoscalingCalls(zerops)).toEqual([])
 		expect(await storedRow(harness)).toEqual(before)
 	})
@@ -367,18 +372,17 @@ describe('namespaces.update against the Zerops namespace capability', () => {
 
 		const reconcile = await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'apps-prod' }), harness.deps)
 		expect(reconcile.status).toBe(409)
-		expect(await errorOf(reconcile)).toContain('retry namespaces.update with the same target')
+		expect(await errorOf(reconcile)).toContain('retry namespaces.update with the planned target in unconfirmedTarget')
 		const second = await rpcResult(updateRequest({ postgres: { type: 'postgresql:single@18', profile: 'oltp-staging' } }), harness.deps)
 		expect(second.status).toBe(409)
 		expect(await errorOf(second)).toContain('being changed by another operation')
 		const removal = await rpcResult(rpcRequest('namespaces.remove', { namespaceId: 'apps-prod' }), harness.deps)
 		expect(removal.status).toBe(409)
-		expect(await errorOf(removal)).toContain('has an update in flight or unconfirmed')
+		expect(await errorOf(removal)).toContain('has an unconfirmed update')
 		// A reconcile or removal that read the row BEFORE the mark reaches these statements anyway; the SQL
 		// guards refuse the marked row on their own.
 		const marker = (await storedRow(harness)).last_error
 		expect(marker).toContain('namespaceUpdateUnconfirmed')
-		expect(await harness.deps.repositories.registry.requeueDeploymentNamespace('apps-prod')).toBeNull()
 		expect(await harness.deps.repositories.registry.deleteDeploymentNamespaceWithResourceClaims('apps-prod')).toBeNull()
 		expect((await storedRow(harness)).last_error).toBe(marker)
 
@@ -398,20 +402,26 @@ describe('namespaces.update against the Zerops namespace capability', () => {
 		const failed = await rpcResult(updateRequest(), harness.deps)
 
 		expect(failed.status).toBe(502)
-		expect(await errorOf(failed)).toContain('retry namespaces.update with the same target')
+		expect(await errorOf(failed)).toContain('retry namespaces.update with the planned target in unconfirmedTarget')
 		expect(livePostgres(zerops).autoscalingProfileId).toBe('oltp-production')
 		const marked = await readNamespace(await rpcResult(rpcRequest('namespaces.get', { namespaceId: 'apps-prod' }), harness.deps))
 		expect(marked.state).toBe('failed')
 		expect(marked.lastErrorCode).toBe('namespaceUpdateUnconfirmed')
-		// The stored target is NOT moved on an unconfirmed outcome.
+		// The stored target is NOT moved on an unconfirmed outcome; the planned one is kept beside it.
 		expect(marked.target).toEqual(ready.target)
+		expect(payloadOf(marked.unconfirmedTarget ?? ready.target)['postgres']).toEqual(toProduction.postgres)
 		expect((await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'apps-prod' }), harness.deps)).status).toBe(409)
 		expect((await rpcResult(rpcRequest('namespaces.remove', { namespaceId: 'apps-prod' }), harness.deps)).status).toBe(409)
 
-		const retried = await rpcResult(updateRequest(), harness.deps)
+		// A client that never saw the first request finishes it from what the namespace reports.
+		const retried = await rpcResult(
+			rpcRequest('namespaces.update', { namespaceId: 'apps-prod', namespace: { target: marked.unconfirmedTarget } }),
+			harness.deps,
+		)
 
 		expect(retried.status).toBe(200)
 		const body = await readNamespace(retried)
+		expect(body.unconfirmedTarget).toBeUndefined()
 		expect(body.state).toBe('ready')
 		expect(body.lastError).toBeNull()
 		expect(payloadOf(body.target)['postgres']).toEqual(toProduction.postgres)
@@ -540,10 +550,9 @@ describe('namespaces.update core guards', () => {
 					createdAt: marked.created_at,
 					fence: { holder: 'nobody', nowMs: Date.now() },
 					from: { state: marked.state, lastError: marked.last_error },
-					to: { state: 'ready', providerTargetJson: JSON.stringify(harborTarget('stale')), lastError: null },
+					to: { state: 'ready', providerTargetJson: JSON.stringify(harborTarget('stale')), lastError: null, updateTargetJson: null },
 				}),
 			).toBeNull()
-			expect(await registry.requeueDeploymentNamespace('apps-prod')).toBeNull()
 			expect(await registry.deleteDeploymentNamespaceWithResourceClaims('apps-prod')).toBeNull()
 			return input.next
 		}))
@@ -552,10 +561,11 @@ describe('namespaces.update core guards', () => {
 		const refused = await rpcResult(request(), harness.deps)
 
 		expect(refused.status).toBe(409)
-		expect(await errorOf(refused)).toContain('retry namespaces.update with the same target')
+		expect(await errorOf(refused)).toContain('retry namespaces.update with the planned target')
 		const row = await storedRow(harness)
 		expect(row.state).toBe('failed')
 		expect(row.last_error).toStartWith('namespaceUpdateUnconfirmed: ')
+		expect(JSON.parse(row.update_target_json ?? 'null')).toEqual(harborTarget('large'))
 		expect(JSON.parse(row.provider_target_json)).toEqual(harborTarget('small'))
 	})
 
@@ -568,6 +578,209 @@ describe('namespaces.update core guards', () => {
 
 		expect(failed.status).toBe(502)
 		expect(await errorOf(failed)).not.toContain('ghp_secretvalue')
+		expect(await storedRow(harness)).toEqual(before)
+	})
+})
+
+describe('a namespace whose update is unconfirmed', () => {
+	const republishDeps = (harness: Harness) => ({
+		repositories: harness.deps.repositories,
+		provider: harness.deps.provider,
+		lock: makeFakeLock(harness.deps.repositories),
+		queue: harness.deps.queue,
+	})
+
+	const proxyBuilds = (zerops: FakeZerops): number => zerops.calls.filter((call) => call.startsWith('createAppVersion')).length
+
+	const getNamespace = async (harness: Harness): Promise<NamespaceBody> =>
+		readNamespace(await rpcResult(rpcRequest('namespaces.get', { namespaceId: 'apps-prod' }), harness.deps))
+
+	const retryWith = (target: ProviderEnvelope | undefined) => rpcRequest('namespaces.update', { namespaceId: 'apps-prod', namespace: { target } })
+
+	test('a proxy repair requested during a held update is replayed as a reconcile once the update completes', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		await createDefaultNamespace(harness)
+		const buildsBefore = proxyBuilds(zerops)
+		const hold = Promise.withResolvers<void>()
+		zerops.faults.hold = hold.promise
+
+		const inFlight = rpcResult(updateRequest(), harness.deps)
+		while (autoscalingCalls(zerops).length === 0) await Bun.sleep(1)
+		// What `namespaceProxyChanged` runs after a domain or artifact change persisted.
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow('busy')
+		expect((await storedRow(harness)).repair_requested).toBe(1)
+		hold.resolve()
+
+		const finished = await inFlight
+		expect(finished.status).toBe(200)
+		expect((await readNamespace(finished)).state).toBe('pending')
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }, { namespaceId: 'apps-prod', status: 'skipped' }])
+		expect(proxyBuilds(zerops)).toBe(buildsBefore + 1)
+		expect(await storedRow(harness)).toMatchObject({ state: 'ready', repair_requested: 0, update_target_json: null })
+	})
+
+	test('a republish is refused naming the retry, and runs once the retry completes', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		await createDefaultNamespace(harness)
+		zerops.faults.processLost = true
+		expect((await rpcResult(updateRequest(), harness.deps)).status).toBe(502)
+		const marked = await storedRow(harness)
+		const buildsBefore = proxyBuilds(zerops)
+
+		await expect(republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'started' })).rejects.toThrow(
+			'has an unconfirmed update — retry namespaces.update with the planned target in unconfirmedTarget',
+		)
+		expect(await storedRow(harness)).toEqual({ ...marked, repair_requested: 1 })
+		expect(proxyBuilds(zerops)).toBe(buildsBefore)
+
+		const retried = await rpcResult(retryWith((await getNamespace(harness)).unconfirmedTarget), harness.deps)
+
+		expect(retried.status).toBe(200)
+		expect((await readNamespace(retried)).state).toBe('pending')
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+		expect(proxyBuilds(zerops)).toBe(buildsBefore + 1)
+	})
+
+	test('a deploy is refused naming the retry, before the provider deploys', async () => {
+		const zerops = fakeZerops()
+		let deployed = false
+		const provider: ControlProvider = {
+			...zeropsProvider(zerops),
+			deploy: () => {
+				deployed = true
+				return Promise.resolve({ state: 'succeeded' })
+			},
+		}
+		const harness = makeHarness(provider)
+		await createDefaultNamespace(harness)
+		zerops.faults.processLost = true
+		expect((await rpcResult(updateRequest(), harness.deps)).status).toBe(502)
+		const registry = harness.deps.repositories.registry
+		const opaque = JSON.stringify({ provider: 'zerops', version: 1, payload: {} })
+		await registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
+		await registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'prod',
+			namespaceId: 'apps-prod',
+			provider: 'zerops',
+			providerTargetJson: opaque,
+			providerArtifactJson: opaque,
+		})
+		await harness.deps.repositories.runs.createRun({ id: 'run-notes', appId: 'notes', env: 'prod', ref: 'main', trigger: 'manual' })
+		const logged = spyOn(console, 'error')
+
+		try {
+			const result = await executeDeploy(
+				{ ...republishDeps(harness), secrets: new VaultSecretResolver({}), logs: { put: () => Promise.resolve() } },
+				{ runId: 'run-notes' },
+			)
+
+			expect(result).toEqual({ runId: 'run-notes', status: 'failed' })
+			expect(deployed).toBe(false)
+			expect(logged.mock.calls.map((call) => call.join(' ')).join('\n')).toContain(
+				'deployment namespace apps-prod has an unconfirmed update — retry namespaces.update with the planned target in unconfirmedTarget',
+			)
+		} finally {
+			logged.mockRestore()
+		}
+	})
+
+	test('a crash after the platform accepted the change is finished by a fresh client from unconfirmedTarget', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		const ready = await createDefaultNamespace(harness)
+		const row = await storedRow(harness)
+		const planned: ProviderEnvelope = { ...ready.target, payload: { ...payloadOf(ready.target), ...toProduction } }
+		// The update's own claim, then the platform applied the PUT, then the process died holding the lease.
+		const locks = makeFakeLock(harness.deps.repositories)
+		expect(await locks.acquire(namespaceLeaseKey('apps-prod'), 'crashed', LEASE_TTL_MS)).toBe(true)
+		const claimed = await harness.deps.repositories.registry.transitionDeploymentNamespace({
+			id: 'apps-prod',
+			createdAt: row.created_at,
+			fence: { holder: 'crashed', nowMs: Date.now() },
+			from: { state: 'ready', lastError: null },
+			to: {
+				state: 'failed',
+				providerTargetJson: row.provider_target_json,
+				lastError: 'namespaceUpdateUnconfirmed: an update started and is not confirmed',
+				updateTargetJson: JSON.stringify(planned),
+			},
+		})
+		expect(claimed).not.toBeNull()
+		livePostgres(zerops).autoscalingProfileId = 'oltp-production'
+		await locks.release(namespaceLeaseKey('apps-prod'), 'crashed')
+
+		const seen = await getNamespace(harness)
+		expect(seen.unconfirmedTarget).toEqual(planned)
+		const finished = await rpcResult(retryWith(seen.unconfirmedTarget), harness.deps)
+
+		expect(finished.status).toBe(200)
+		expect(await readNamespace(finished)).toMatchObject({ state: 'ready', target: planned, lastError: null })
+		expect(autoscalingCalls(zerops)).toEqual([])
+	})
+
+	test('a retry with the previous target moves the live service back instead of reading it as drift', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		const ready = await createDefaultNamespace(harness)
+		zerops.faults.processLost = true
+		expect((await rpcResult(updateRequest(), harness.deps)).status).toBe(502)
+		expect(livePostgres(zerops).autoscalingProfileId).toBe('oltp-production')
+
+		const abandoned = await rpcResult(retryWith(ready.target), harness.deps)
+
+		expect(abandoned.status).toBe(200)
+		expect(await readNamespace(abandoned)).toMatchObject({ state: 'ready', target: ready.target })
+		expect(livePostgres(zerops).autoscalingProfileId).toBe('oltp-hobby')
+	})
+})
+
+describe('a PostgreSQL type change', () => {
+	const planHa = (harness: Harness, id: string) =>
+		rpcResult(
+			rpcRequest('namespaces.plan', { id, env: 'prod', preset: 'cheap', options: { postgres: { type: 'postgresql:ha@18', profile: 'oltp-staging' } } }),
+			harness.deps,
+		)
+
+	test('goes through a new namespace id, because recreating the removed id adopts the retained database', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		await createDefaultNamespace(harness)
+
+		const plannedHa: { namespace: { id: string; env: string; target: ProviderEnvelope } } = await (await planHa(harness, 'apps-prod-ha')).json()
+		expect((await rpcResult(rpcRequest('namespaces.create', plannedHa.namespace), harness.deps)).status).toBe(200)
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod-ha', status: 'ready' }])
+		expect(livePostgres(zerops, 'project-2')).toMatchObject({ base: 'postgresql:ha@18', autoscalingProfileId: 'oltp-staging' })
+
+		// The advertised refusal is right not to offer remove-then-create under the same id.
+		expect((await rpcResult(rpcRequest('namespaces.remove', { namespaceId: 'apps-prod' }), harness.deps)).status).toBe(200)
+		const sameId: { namespace: { id: string; env: string; target: ProviderEnvelope } } = await (await planHa(harness, 'apps-prod')).json()
+		expect((await rpcResult(rpcRequest('namespaces.create', sameId.namespace), harness.deps)).status).toBe(200)
+		expect(await harness.drain()).toEqual([{ namespaceId: 'apps-prod', status: 'failed' }])
+		expect((await storedRow(harness)).last_error).toContain('uses postgresql:single@18, expected postgresql:ha@18')
+	})
+})
+
+describe('an update payload is checked strictly', () => {
+	test('refuses a misspelt or unsupported field before any provider effect', async () => {
+		const zerops = fakeZerops()
+		const harness = makeHarness(zeropsProvider(zerops))
+		await createDefaultNamespace(harness)
+		const before = await storedRow(harness)
+
+		const misspelt = await rpcResult(updateRequest({ corePakage: 'SERIOUS' }), harness.deps)
+		const nested = await rpcResult(
+			updateRequest({ postgres: { type: 'postgresql:single@18', profile: 'oltp-production', maxContainers: 3 } }),
+			harness.deps,
+		)
+
+		expect(misspelt.status).toBe(400)
+		expect(await errorOf(misspelt)).toContain('field corePakage is not a namespace target field')
+		expect(nested.status).toBe(400)
+		expect(await errorOf(nested)).toContain('field postgres.maxContainers is not a namespace target field')
+		expect(autoscalingCalls(zerops)).toEqual([])
 		expect(await storedRow(harness)).toEqual(before)
 	})
 })

@@ -59,7 +59,10 @@ short outage rather than a rolling one. It is taken because a second container i
 floor on every namespace, and most namespaces hold one small app.
 
 An application that genuinely needs HA must say so when the namespace is created. The PostgreSQL type
-is fixed at creation: moving to HA is `namespaces.remove` followed by `namespaces.create`. The profile
+is fixed at creation: moving to HA means a new namespace under a new id, with the application
+environments and their data moved to it by hand — removal keeps the provider project and its database
+([ADR-0034](0034-the-control-plane-creates-the-projects-it-owns.md)), and recreating the same id adopts
+them again. The profile
 is not fixed — `namespaces.update` moves a live namespace to another profile in place
 ([deployment namespaces](../reference/deployment-namespaces.md#operator-interfaces)), so a floor chosen
 too low or too high is cheap to correct. Existing namespaces are not resized by deploying this; their

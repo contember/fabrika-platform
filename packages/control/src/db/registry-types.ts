@@ -43,6 +43,10 @@ export interface DeploymentNamespaceRow {
 	state: DeploymentNamespaceState
 	last_error: string | null
 	created_at: number
+	/** The target an unconfirmed `namespaces.update` was moving to; non-NULL exactly while the row is marked. */
+	update_target_json: string | null
+	/** 1 when a proxy repair was requested while the row was marked; the update's clearing write replays it. */
+	repair_requested: number
 }
 
 export interface NamespaceResourceClaimRow {

@@ -137,6 +137,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		expect(results).toEqual([
 			{ bundle: 'control', name: '0001_init.sql' },
 			{ bundle: 'control', name: '0002_authoring_workspaces.sql' },
+			{ bundle: 'control', name: '0003_namespace_update.sql' },
 		])
 	})
 

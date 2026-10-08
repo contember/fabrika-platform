@@ -5,6 +5,7 @@ import {
 	compatibleNamespaces,
 	namespaceAssignmentRequest,
 	namespaceFailure,
+	namespaceUpdateSeed,
 	parseNamespaceTarget,
 	retainedNamespaceResources,
 	scheduleNamespacePoll,
@@ -210,5 +211,16 @@ describe('canUpdateNamespace', () => {
 		expect(canUpdateNamespace(namespace({ state: 'failed', lastError: 'retry', lastErrorCode: 'namespaceUpdateUnconfirmed' }))).toBe(true)
 		expect(canUpdateNamespace(namespace({ state: 'failed', lastError: 'denied', lastErrorCode: 'insufficientPermissions' }))).toBe(false)
 		expect(canUpdateNamespace(namespace({ state: 'provisioning' }))).toBe(false)
+	})
+})
+
+describe('namespaceUpdateSeed', () => {
+	test('starts the editor from the target an unconfirmed update planned, else from the stored one', () => {
+		const planned = { provider: 'zerops', version: 1, payload: { postgres: { type: 'postgresql:single@18', profile: 'oltp-production' } } }
+
+		expect(namespaceUpdateSeed(namespace({ state: 'ready' }))).toEqual(envelope)
+		expect(namespaceUpdateSeed(namespace({ state: 'failed', lastErrorCode: 'namespaceUpdateUnconfirmed', unconfirmedTarget: planned }))).toEqual(
+			planned,
+		)
 	})
 })

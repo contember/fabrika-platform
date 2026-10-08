@@ -107,6 +107,9 @@ function toNamespaceDto(row: DeploymentNamespaceRow): DeploymentNamespaceDto {
 		target: parseStoredEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
 		state: row.state,
 		...decodeNamespaceError(row.last_error),
+		...(row.update_target_json === null
+			? {}
+			: { unconfirmedTarget: parseStoredEnvelope(row.update_target_json, `unconfirmed update target for namespace ${row.id}`) }),
 		createdAt: row.created_at,
 	}
 }
@@ -491,7 +494,13 @@ export async function republishUnderLease(
 	const row = await deps.repositories.registry.getDeploymentNamespace(namespaceId)
 	lease.assertHeld()
 	if (row === null) throw new Error(`deployment namespace ${namespaceId} not found`)
-	if (row.provider !== deps.provider.id || row.state === 'failed') throw new Error(`Namespace ${namespaceId} is not ready`)
+	if (row.provider !== deps.provider.id) throw new Error(`Namespace ${namespaceId} is not ready`)
+	if (isUnconfirmedNamespaceUpdate(row)) {
+		// Rebuilding now would write `provisioning` over the mark; the update's clearing write replays this.
+		await deps.repositories.registry.requeueDeploymentNamespace(namespaceId)
+		throw new Error(`${unconfirmedUpdateRefusal(namespaceId)}; the proxy republishes once it completes`)
+	}
+	if (row.state === 'failed') throw new Error(`Namespace ${namespaceId} is not ready`)
 	let current = toProviderNamespace(row)
 	const members = await namespaceMembers(deps.repositories, row.id)
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
@@ -678,8 +687,10 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 	const queued = await c.repositories.registry.requeueDeploymentNamespace(row.id)
 	const current = queued ?? await c.repositories.registry.getDeploymentNamespace(row.id)
 	if (current === null) fail(404, 'deployment namespace not found')
-	// An update marked the row after the read above; the requeue's own guard left it alone.
-	if (queued === null) refuseUnconfirmedUpdate(current)
+	// An update marked the row after the read above: the requeue recorded the request for that update to replay.
+	if (isUnconfirmedNamespaceUpdate(current)) {
+		fail(409, `${unconfirmedUpdateRefusal(row.id)}; the reconcile is recorded and runs once the update completes`)
+	}
 	await enqueueNamespaceJob(c, current, 'reconcile')
 	await auditMutation(c, 'namespace.reconcile', current)
 	if (republishFailed) {
@@ -688,10 +699,15 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 	return toNamespaceDetail(c, current)
 }
 
-const RETRY_UPDATE_ADVICE = 'retry namespaces.update with the same target'
+const RETRY_UPDATE_ADVICE = 'retry namespaces.update with the planned target in unconfirmedTarget'
+
+/** Why a marked namespace refuses a deploy, a republish, a reconcile or a removal, and the one way out. */
+export function unconfirmedUpdateRefusal(namespaceId: string): string {
+	return `deployment namespace ${namespaceId} has an unconfirmed update — ${RETRY_UPDATE_ADVICE}`
+}
 
 function refuseUnconfirmedUpdate(row: DeploymentNamespaceRow): void {
-	if (isUnconfirmedNamespaceUpdate(row)) fail(409, `deployment namespace ${row.id}: its last update is not confirmed — ${RETRY_UPDATE_ADVICE}`)
+	if (isUnconfirmedNamespaceUpdate(row)) fail(409, unconfirmedUpdateRefusal(row.id))
 }
 
 /** A ready namespace, or one an earlier update left unconfirmed, which only a retried update clears. */
@@ -704,6 +720,14 @@ function rowMovedUnderUpdate(id: string): never {
 	console.error(`namespace update for ${id}: the row changed under the update's lease`)
 	fail(409, `deployment namespace ${id} changed while its update was running — read it, then ${RETRY_UPDATE_ADVICE}`)
 }
+
+/**
+ * Removal keeps the provider's project and database (ADR-0034), and creating the same id again adopts
+ * them by their ownership marker, so a fixed field changes only under a new id.
+ */
+const IMMUTABLE_CHANGE_PATH = 'namespaces.remove keeps the provider project and its database, and namespaces.create under the same id '
+	+ 'reuses them, so the supported path is a new namespace: namespaces.create under a new id with the new target, move each '
+	+ 'application environment and its data to it, then namespaces.remove this one'
 
 function planNamespaceUpdate(
 	c: NamespaceUseCaseContext,
@@ -718,7 +742,7 @@ function planNamespaceUpdate(
 		const typed = asProviderNamespaceError(cause)
 		if (typed?.code === PROVIDER_NAMESPACE_IMMUTABLE) {
 			const reason = redactNamespaceErrorText(typed.message) || 'the requested change cannot be applied in place'
-			fail(409, `${reason} — the supported path is namespaces.remove, then namespaces.create with the new target`)
+			fail(409, `${reason}. ${IMMUTABLE_CHANGE_PATH}`)
 		}
 		fail(400, cause instanceof Error ? redactNamespaceErrorText(cause.message) : 'invalid namespace target')
 	}
@@ -781,7 +805,7 @@ async function updateUnderLease(
 	}
 	const transition = (
 		from: DeploymentNamespaceRow,
-		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null },
+		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null; updateTargetJson: string | null },
 	): Promise<DeploymentNamespaceRow | null> =>
 		registry.transitionDeploymentNamespace({
 			id: before.id,
@@ -790,17 +814,29 @@ async function updateUnderLease(
 			from: { state: from.state, lastError: from.last_error },
 			to,
 		})
+	const plannedTargetJson = JSON.stringify(plan.namespace.target)
+	// The planned target goes down WITH the mark, so a client that never saw this request can still finish it.
 	const claimed = await transition(before, {
 		state: 'failed',
 		providerTargetJson: before.provider_target_json,
 		lastError: encodeNamespaceError(PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED, `an update started and is not confirmed — ${RETRY_UPDATE_ADVICE}`),
+		updateTargetJson: plannedTargetJson,
 	})
 	if (claimed === null) fail(409, `deployment namespace ${before.id} changed while it was being updated; read it and retry`)
 
 	const current = toProviderNamespace(before)
 	let updated: ProviderDeploymentNamespace
 	try {
-		updated = await updates.apply({ namespace: current, next: plan.namespace, signal: AbortSignal.any([lease.signal, c.signal]) })
+		updated = await updates.apply({
+			namespace: current,
+			next: plan.namespace,
+			...(before.update_target_json === null
+				? {}
+				: {
+					unconfirmed: { ...current, target: parseStoredEnvelope(before.update_target_json, `unconfirmed update target for namespace ${before.id}`) },
+				}),
+			signal: AbortSignal.any([lease.signal, c.signal]),
+		})
 	} catch (cause) {
 		const failure = namespaceFailure(cause, 'update')
 		console.error(`namespace update failed for ${before.id}: ${failure.code}: ${failure.log}`)
@@ -811,20 +847,38 @@ async function updateUnderLease(
 				state: 'failed',
 				providerTargetJson: claimed.provider_target_json,
 				lastError: encodeNamespaceError(failure.code, message),
+				updateTargetJson: plannedTargetJson,
 			})
 			if (marked === null) rowMovedUnderUpdate(before.id)
 			fail(502, `deployment namespace ${before.id}: ${message}`)
 		}
-		const restored = await transition(claimed, { state: before.state, providerTargetJson: before.provider_target_json, lastError: before.last_error })
+		const restored = await transition(claimed, {
+			state: before.state,
+			providerTargetJson: before.provider_target_json,
+			lastError: before.last_error,
+			updateTargetJson: before.update_target_json,
+		})
 		if (restored === null) rowMovedUnderUpdate(before.id)
+		await replayRequestedRepair(c, restored)
 		fail(502, `deployment namespace ${before.id} update failed: ${failure.code}: ${failure.message}`)
 	}
 	// The live change is made; a result for other coordinates leaves the mark in place.
 	if (!sameCoordinates(updated, current, c.provider.id)) fail(502, `provider returned a namespace for different coordinates — ${RETRY_UPDATE_ADVICE}`)
-	const stored = await transition(claimed, { state: 'ready', providerTargetJson: JSON.stringify(updated.target), lastError: null })
+	const stored = await transition(claimed, {
+		state: 'ready',
+		providerTargetJson: JSON.stringify(updated.target),
+		lastError: null,
+		updateTargetJson: null,
+	})
 	if (stored === null) rowMovedUnderUpdate(before.id)
+	await replayRequestedRepair(c, stored)
 	await auditMutation(c, 'namespace.update', stored, plan.change === null ? {} : { ...plan.change })
 	return toNamespaceDetail(c, stored)
+}
+
+/** A clearing write that found a repair requested under the mark left the row `pending`; queue that repair. */
+async function replayRequestedRepair(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): Promise<void> {
+	if (row.state === 'pending') await enqueueNamespaceJob(c, row, 'reconcile')
 }
 
 /**
@@ -859,7 +913,7 @@ async function refuseNamespaceRemoval(c: NamespaceUseCaseContext, row: Deploymen
 	if (row === null) fail(404, 'deployment namespace not found')
 	if (row.state === 'provisioning') fail(409, 'deployment namespace provisioning is in progress')
 	if (isUnconfirmedNamespaceUpdate(row)) {
-		fail(409, `deployment namespace ${row.id} has an update in flight or unconfirmed — ${RETRY_UPDATE_ADVICE} before removing it`)
+		fail(409, `${unconfirmedUpdateRefusal(row.id)} before removing it`)
 	}
 	const environments = await c.repositories.registry.listAppEnvsByNamespace(row.id)
 	if (environments.length > 0) {

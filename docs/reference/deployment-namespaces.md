@@ -247,24 +247,51 @@ All namespace RPC procedures at `/api/rpc` require the global `namespace.manage`
 
 Update is synchronous and accepts only what the provider can change in place. Its
 payload may name only what changes; the provider merges it over the stored
-target. On Zerops that is the PostgreSQL profile: the provider moves the live
-service through `PUT /service-stack/{id}/autoscaling`, because a re-import ignores
-a changed profile, and confirms the new profile by reading the service back,
-within about 90 s. Any other change — the PostgreSQL type included — is refused
-with 409 naming the supported path: `namespaces.remove`, then `namespaces.create`.
-A provider without an update capability refuses every update by name.
+target and refuses a field the target does not have — a misspelt `corePakage`
+or a `postgres.maxContainers` — with 400 before any provider call. On Zerops the
+one field that changes in place is the PostgreSQL profile: the provider moves
+the live service through `PUT /service-stack/{id}/autoscaling`, because a
+re-import ignores a changed profile, and confirms the new profile by reading the
+service back, within about 90 s. A provider without an update capability
+refuses every update by name.
 
-Under the namespace lease, the row is first marked `failed` with the code
-`namespaceUpdateUnconfirmed`. While the lease is held, a second update answers
-409, and reconcile and removal answer 409 while the mark stands. Success stores
-the new target and `ready` in one fenced write; a definite failure restores the
-row as it was. An outcome the provider cannot confirm — the platform accepted the
-change and the read-back did not settle, or the request was cut off — leaves the
-mark in place. Reconcile and removal refuse a marked row in their SQL as well as
-in the request, so the only way out is to retry `namespaces.update` with the same
-target, which converges whether or not the live change applied. A marked
-namespace is `failed`, so deploys into it and proxy republishes are refused like
-for any failed namespace until the retry succeeds.
+Any other change — the PostgreSQL type included — is refused with 409. Removing
+the namespace and creating the same id again does not help: removal keeps the
+provider project and its database
+([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)),
+and creation finds that project by its ownership marker, adopts the existing
+PostgreSQL service and fails on its type. The supported path is a new namespace:
+`namespaces.create` under a new id with the new target, move each application
+environment and its data to it by hand, then `namespaces.remove` the old one.
+
+Under the namespace lease, the row is first marked: state `failed`, the code
+`namespaceUpdateUnconfirmed`, and the planned target, which `namespaces.get`
+returns as `unconfirmedTarget`. While the lease is held, a second update answers
+409. Success stores the new target and `ready` in one fenced write; a definite
+failure restores the row as it was. An outcome the provider cannot confirm — the
+platform accepted the change and the read-back did not settle, the request was
+cut off, or Control stopped — leaves the mark in place. The way out is to retry
+`namespaces.update`: with `unconfirmedTarget` it finishes the update, and with
+the previous target it moves the service back. A live service on either the
+stored or the planned profile is read as the change in progress, so the retry
+converges whether or not the live change applied. The console's editor starts
+from `unconfirmedTarget`.
+
+While the mark stands, the namespace refuses every operation that would write
+its row, each with an error that names the retry:
+
+- Reconcile and removal answer 409, in their SQL as well as in the request.
+- A deploy into the namespace fails before the provider deploys.
+- A proxy republish is refused. A republish writes the row `provisioning` and
+  then `ready`, which would erase the mark and with it the only record that the
+  live service may disagree with the stored target. Refusing is the simpler of
+  the two safe options; the other, keeping the mark through every proxy
+  checkpoint, is not built.
+
+A repair requested meanwhile is not lost. A republish or reconcile that meets
+the mark records the request on the row (`repair_requested`), and the write that
+clears the mark lands `pending` instead of `ready` and queues a `reconcile` job,
+which rebuilds the proxy from the current members.
 
 Removal is the narrow case only. It is refused while any application environment
 is registered in the namespace, naming the applications, and while a worker is

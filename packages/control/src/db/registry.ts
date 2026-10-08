@@ -1,5 +1,5 @@
 import { type DeployLocks, type SqlDatabase, SqlDeployLocks, type SqlStatement } from '@fabrika/platform'
-import { PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED, type ProviderSourceBinding } from '@fabrika/provider-contract'
+import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type LeaseFence, namespaceLeaseKey } from '../lease'
 import {
 	type AppEnvInput,
@@ -19,16 +19,11 @@ import {
 import { firstRow } from './returning'
 
 /**
- * The marker an in-flight or unconfirmed `namespaces.update` leaves on a row: state `failed` and a
- * `last_error` coded `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED` (`<code>: <message>`).
+ * The mark an in-flight or unconfirmed `namespaces.update` leaves on a row: the target it was moving to.
+ * The update writes it together with state `failed` and a `namespaceUpdateUnconfirmed` error.
  */
-const UNCONFIRMED_UPDATE_PREFIX = `${PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED}: `
-
-/** The same rule in SQL, so a statement cannot touch a marked row its caller read before the mark. The code holds no LIKE wildcard. */
-const NOT_UNCONFIRMED_UPDATE = `NOT (state = 'failed' AND COALESCE(last_error, '') LIKE '${UNCONFIRMED_UPDATE_PREFIX}%')`
-
-export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, 'state' | 'last_error'>): boolean {
-	return row.state === 'failed' && row.last_error?.startsWith(UNCONFIRMED_UPDATE_PREFIX) === true
+export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, 'update_target_json'>): boolean {
+	return row.update_target_json !== null
 }
 
 /** Portable registry persistence; a composition root may replace this complete capability. */
@@ -303,26 +298,33 @@ export class ControlRegistryRepository {
 	/**
 	 * Move one namespace from exactly the `state` and `last_error` its lease holder read, in one fenced
 	 * write. NULL = the row moved meanwhile, or the lease is gone; the caller must not assume it landed.
-	 * `COALESCE` compares a NULL `last_error` the same way on SQLite and Postgres.
+	 * `COALESCE` compares a NULL `last_error` the same way on SQLite and Postgres. A move to `ready` clears
+	 * the mark, and lands `pending` instead when a repair was requested meanwhile: the caller queues it.
 	 */
 	async transitionDeploymentNamespace(input: {
 		id: string
 		createdAt: number
 		fence: LeaseFence
 		from: { state: DeploymentNamespaceState; lastError: string | null }
-		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null }
+		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null; updateTargetJson: string | null }
 	}): Promise<DeploymentNamespaceRow | null> {
+		const clearing = input.to.state === 'ready' ? 1 : 0
 		const results = await this.d1.batch<DeploymentNamespaceRow>([
 			this.namespaceLeaseLockStatement(input.id, input.fence),
 			this.d1.prepare(`UPDATE deployment_namespaces
-				SET state = ?, provider_target_json = ?, last_error = ?
+				SET state = CASE WHEN ? = 1 AND repair_requested = 1 THEN 'pending' ELSE ? END,
+					provider_target_json = ?, last_error = ?, update_target_json = ?,
+					repair_requested = CASE WHEN ? = 1 THEN 0 ELSE repair_requested END
 				WHERE id = ? AND created_at = ? AND state = ? AND COALESCE(last_error, '') = ?
 					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
+					clearing,
 					input.to.state,
 					input.to.providerTargetJson,
 					input.to.lastError,
+					input.to.updateTargetJson,
+					clearing,
 					input.id,
 					input.createdAt,
 					input.from.state,
@@ -339,14 +341,17 @@ export class ControlRegistryRepository {
 	 * Queue a namespace for another provider mutation. It never writes `provider_target_json`, so a request
 	 * that arrives while a job is in flight cannot roll back a checkpoint the worker has just written; the
 	 * job keeps the `pending` state (only a claim moves it) and the queued job runs after it. A row an
-	 * update marked is never matched: re-applying its stored target would fight the live change it does
-	 * not describe yet. NULL = already pending, or marked.
+	 * update marked keeps its state — re-applying its stored target would fight the live change it does
+	 * not describe yet — and records the request instead, which the update's clearing write replays. The
+	 * caller tells the two apart with `isUnconfirmedNamespaceUpdate`. NULL = already pending.
 	 */
 	async requeueDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
 		return this.d1
 			.prepare(`UPDATE deployment_namespaces
-				SET state = 'pending', last_error = NULL
-				WHERE id = ? AND state IN ('ready', 'failed', 'provisioning') AND ${NOT_UNCONFIRMED_UPDATE} RETURNING *`)
+				SET state = CASE WHEN update_target_json IS NULL THEN 'pending' ELSE state END,
+					last_error = CASE WHEN update_target_json IS NULL THEN NULL ELSE last_error END,
+					repair_requested = CASE WHEN update_target_json IS NULL THEN repair_requested ELSE 1 END
+				WHERE id = ? AND state IN ('ready', 'failed', 'provisioning') RETURNING *`)
 			.bind(id)
 			.first<DeploymentNamespaceRow>()
 	}
@@ -360,7 +365,7 @@ export class ControlRegistryRepository {
 	 * an update marked is kept: the only way out of that state is the update's retry.
 	 */
 	async deleteDeploymentNamespaceWithResourceClaims(id: string): Promise<DeploymentNamespaceRow | null> {
-		const removable = `state <> 'provisioning' AND ${NOT_UNCONFIRMED_UPDATE} AND NOT EXISTS (SELECT 1 FROM app_envs WHERE namespace_id = ?)`
+		const removable = `state <> 'provisioning' AND update_target_json IS NULL AND NOT EXISTS (SELECT 1 FROM app_envs WHERE namespace_id = ?)`
 		const results = await this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>([
 			this.d1
 				.prepare(`DELETE FROM namespace_resource_claims

@@ -281,16 +281,19 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next app, carrying its old
   secrets.
 - **`namespaces.update` runs in the request, not behind the queue** (backlog 79). The provider PLANS the
-  merged target first (pure; `PROVIDER_NAMESPACE_IMMUTABLE` → 409 naming `namespaces.remove` +
-  `namespaces.create`). Then, under the `namespace:<id>` lease (`registry.namespaceLocks()`, the same
-  `deploy_locks` table the fenced writes check), the row is MARKED `failed` / `namespaceUpdateUnconfirmed`
-  before the provider APPLIES, so a crash never leaves a stored target that silently disagrees with the live
-  service. Every write is `transitionDeploymentNamespace`: fenced and compare-and-set on `state` +
-  `last_error`. Success → new target + `ready`; a definite failure → the row restored;
-  `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED` → the mark stays and only a retried update (which must converge)
-  clears it. The row states have a CHECK constraint, which is why the mark reuses `failed` plus a code
-  rather than a new state. `requeueDeploymentNamespace` and the removal statement refuse a marked row IN
-  SQL (`NOT_UNCONFIRMED_UPDATE`), because their callers do not hold the lease.
+  merged target first (pure; an unknown field → 400; `PROVIDER_NAMESPACE_IMMUTABLE` → 409 naming a new
+  namespace id, because removal keeps the provider project and recreating the id adopts it). Then, under the
+  `namespace:<id>` lease (`registry.namespaceLocks()`, the same `deploy_locks` table the fenced writes check),
+  the row is MARKED before the provider APPLIES: `failed`, `namespaceUpdateUnconfirmed`, and the planned
+  target in `update_target_json` (the mark itself; `isUnconfirmedNamespaceUpdate`). Every write is
+  `transitionDeploymentNamespace`: fenced and compare-and-set on `state` + `last_error`. Success → new target
+  - `ready`; a definite failure → the row restored; unconfirmed → the mark stays, and only a retried update
+    clears it. The row states have a CHECK constraint, which is why the mark reuses `failed` rather than a new
+    state. Removal refuses a marked row IN SQL; `requeueDeploymentNamespace` keeps its state and sets
+    `repair_requested` instead, and the clearing write lands `pending` and queues the reconcile, so a proxy
+    repair asked for during an update is replayed, never dropped. A marked namespace REFUSES deploys
+    (`providerEnvironment`) and republishes (`republishUnderLease`), naming the retry: a republish writes
+    `provisioning` → `ready` and would erase the mark. This replaces the old sprint's "usable while marked".
 - **Removal is the narrow case only** (backlog 73). `namespaces.remove` frees a namespace with no
   registered app environment that no worker is settling; it deletes the row and its resource claims in ONE
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which
