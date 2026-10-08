@@ -221,7 +221,9 @@ Re-check every other `file:line` in a unit when it starts.
     - the pre-vault connection migration tests (`postgres-schema.test.ts:692-812`).
 - **Scope.**
   - Delete the dead pieces.
-  - Route all four call sites through `origin-guard`'s rule, the strictest one. The IAM gateway's
+  - Route all four call sites through `origin-guard`'s rule, the strictest one.
+  - The IAM gateway treats only POST/PATCH/DELETE as state-changing (`control/src/iam-admin.ts:7`), so
+    `PUT …/schema` skips the check; the shared rule uses a safe-method allowlist (GET/HEAD/OPTIONS). The IAM gateway's
     cookie-to-bearer swap stays explicit.
 - **Acceptance.** Origin tests cover `Sec-Fetch-Site`, a `null` Origin and the Referer fallback for each
   gateway. The full suite is green.
@@ -402,3 +404,6 @@ whenever the package set changes.
 - WU0.1: `uuidv7` leaves `auth-core` (it stays dependency-free); `iam` and `proxy-core` import it from `@fabrika/platform`.
 - WU1.5 found the unused `proxyBuildFromGit` / `FABRIKA_PROXY_SOURCE` beside ADR-0045's `proxySource` pin (`provider-zerops/src/installation/topology/topology.ts:140,416`, `namespace/{types,codec}.ts`); added as WU2.4.
 - Items handed out of this repo by WU1.5: the oblaka DO-migration-history bug (old 11), deprecating `@trasa/core` (old 26), retiring standalone Poplach (old 34), restricting npm token publishing on `@fabrika/*` (old 25, owner task).
+- WU1.4 review: removing `apps.clearReturnOrigins` (no caller) leaves no API to clear a return-origin registry; `setReturnOrigins` refuses an empty set. Accepted.
+- Wave 0–1 → `05bc9d2` (WU0.1), `def37c9` (WU1.2), `9b9aa3e` (WU1.3), `e4397c3` (WU1.1), `3386ed9` (WU1.4), `d966520` (WU1.5). Gates: typecheck, `bun run test` with Postgres 4094 + 317 + 180 pass / 0 fail, `gen:check`, `local:reset && local:smoke`, `test:browser` 10 pass.
+- WU1.1: on an installation whose provider manages secrets, `apps.secrets.put` hands the value to the provider; the secrets list shows a ref only for vault rows (the provider contract cannot recognise its own refs). ADR-0004 retitled.
