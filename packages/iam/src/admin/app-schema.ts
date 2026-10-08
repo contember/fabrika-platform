@@ -108,6 +108,22 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				+ 'Rename the declared role or delete the policy; a deploy never overwrites one.',
 		)
 	}
+	// A role newly declared a membership role would turn its existing global grants into global
+	// membership grants. Resolution ignores such a grant anyway; refusing names the grants to fix.
+	const outside: string[] = []
+	for (const [roleKey, def] of Object.entries(schema.roles)) {
+		if (def.member === undefined) continue
+		for (const grant of await c.services.repositories.grants.listRoleGrantsOutsideScope(app, roleKey, def.member.scope)) {
+			outside.push(`${grant.id} (role '${roleKey}')`)
+		}
+	}
+	if (outside.length > 0) {
+		return error(
+			409,
+			`the app declares a membership role whose existing grants are not in a value of its scope: ${outside.join(', ')}. `
+				+ 'Delete or re-scope those grants first.',
+		)
+	}
 	await c.services.repositories.appSchema.reconcileAppSchema({
 		app,
 		scopes: schema.scopes.map((s) => ({ scopeType: s.type, label: s.label ?? null })),

@@ -179,6 +179,17 @@ export class AppSchemaRepository {
 		if (input.contract === true) {
 			statements.push(this.db.prepare('INSERT INTO contract_apps (app, created_at) VALUES (?, ?)').bind(app, unixNow()))
 		}
+		for (const role of input.roles) {
+			if (role.memberScope == null) continue
+			// The caller refuses an incompatible grant with a 409 first; this NOT NULL violation rolls the
+			// batch back if one was written in between, so the declaration never lands over it.
+			statements.push(
+				this.db
+					.prepare(`INSERT INTO contract_apps (app, created_at) SELECT ?, NULL WHERE EXISTS (
+						SELECT 1 FROM grants WHERE app = ? AND role_key = ? AND (scope_type IS NULL OR scope_type <> ?))`)
+					.bind(`${app}#incompatible-membership-grant`, app, role.roleKey, role.memberScope),
+			)
+		}
 
 		for (const scope of input.scopes) {
 			statements.push(

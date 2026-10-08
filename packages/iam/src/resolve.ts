@@ -63,6 +63,10 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 			// Dangling role key — resolves to zero permissions (fail-closed).
 			return
 		}
+		if (role.member !== undefined && scope?.type !== role.member.scope) {
+			// A membership role outside a value of its own dimension (a grant older than the declaration).
+			return
+		}
 		for (const permission of role.permissions) {
 			add(permission, scope, source)
 		}
@@ -224,6 +228,7 @@ function toRoleDef(row: RoleRow): RoleDef {
 		name: row.name,
 		...(row.description !== null ? { description: row.description } : {}),
 		permissions: parseStoredPermissions(row.permissions),
+		...(row.member_scope !== null ? { member: { scope: row.member_scope } } : {}),
 	}
 }
 

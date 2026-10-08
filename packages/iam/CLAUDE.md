@@ -164,7 +164,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   role, the built-in `admin` included — provisioned keys and device approvals. The device exchange
   writes its grant by raw SQL (`repositories/device.ts`), so the approval is where it is checked. A
   role declared with `member.scope` (`roles.member_scope`) is granted only in a value of that scope
-  dimension, never globally, in every app. A cross-app grant is not checked: it reaches no application.
+  dimension, never globally — in EVERY app, contract or not. A cross-app grant is not checked: it
+  reaches no application. Declaring a role a membership role while it has a grant outside its
+  dimension is a 409 naming the grants, and a guard statement in the reconcile batch rolls it back if
+  one was written after the check. Resolution is the third lock: such a grant contributes nothing.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
   `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.
 - **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, `src/tokens.ts`).** The proxy

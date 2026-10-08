@@ -127,6 +127,34 @@ describe('the schema of a contract application', () => {
 	})
 })
 
+describe('declaring a membership role over existing grants', () => {
+	test('is refused, naming the global grant that would become a global membership grant', async () => {
+		const admin = await withContractApp()
+		const created = await rpc(admin, 'grants.create', { principalId: admin.grantee, app: NOTES, roleKey: 'reader' })
+		expect(created.status).toBe(200)
+		const roles = { ...CONTRACT_SCHEMA.roles, reader: { name: 'Reader', permissions: ['note.read'], member: { scope: 'workspace' } } }
+		const response = await putSchema(admin, NOTES, { ...CONTRACT_SCHEMA, roles })
+		expect(response.status).toBe(409)
+		const [grant] = await admin.h.repositories.grants.listGrants(admin.grantee)
+		expect(await response.text()).toContain(`${grant?.id} (role 'reader')`)
+		expect((await admin.h.repositories.appSchema.getRole(NOTES, 'reader'))?.member_scope).toBeNull()
+	})
+
+	test('the reconcile batch itself refuses when such a grant exists, so a grant written after the check cannot slip under it', async () => {
+		const admin = await withContractApp()
+		expect((await rpc(admin, 'grants.create', { principalId: admin.grantee, app: NOTES, roleKey: 'reader' })).status).toBe(200)
+		await expect(admin.h.repositories.appSchema.reconcileAppSchema({
+			app: NOTES,
+			scopes: [{ scopeType: 'workspace' }],
+			actions: [{ action: 'note.read' }],
+			roles: [{ roleKey: 'reader', name: 'Reader', permissions: ['note.read'], memberScope: 'workspace' }],
+			contract: true,
+		})).rejects.toThrow()
+		expect((await admin.h.repositories.appSchema.getRole(NOTES, 'reader'))?.member_scope).toBeNull()
+		expect(await admin.h.repositories.appSchema.listActionCatalog(NOTES)).toEqual(['members.manage', 'note.read', 'note.write'])
+	})
+})
+
 describe('grants at a contract application', () => {
 	test.each([
 		['an inline wildcard', { permissions: ['note.*'] }, 'not the wildcard: note.*'],

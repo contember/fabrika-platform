@@ -433,6 +433,21 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.appSchema.isContractApp('notes@prod')).toBe(false)
 	})
 
+	test('app vocabulary: a membership declaration over a global grant of that role rolls the batch back', async () => {
+		await reset()
+		const vocabulary = { app: 'notes@prod', scopes: [{ scopeType: 'workspace' }], actions: [{ action: 'note.read' }] }
+		await db.appSchema.reconcileAppSchema({ ...vocabulary, roles: [{ roleKey: 'reader', name: 'Reader', permissions: ['note.read'] }] })
+		const user = await db.principals.createUser('sub-member', 'member@x.cz')
+		await db.grants.createGrant({ principalId: user.id, roleKey: 'reader', app: 'notes@prod' })
+		await expect(db.appSchema.reconcileAppSchema({
+			...vocabulary,
+			roles: [{ roleKey: 'reader', name: 'Reader', permissions: ['note.read'], memberScope: 'workspace' }],
+			contract: true,
+		})).rejects.toThrow()
+		expect((await db.appSchema.getRole('notes@prod', 'reader'))?.member_scope).toBeNull()
+		expect(await db.appSchema.isContractApp('notes@prod')).toBe(false)
+	})
+
 	test('app vocabulary: reconcile is atomic, prunes app-origin rows and preserves custom ones', async () => {
 		await reset()
 		await db.appSchema.upsertRole({ app: 'opice', roleKey: 'bespoke', name: 'Bespoke', permissions: ['report.export'], origin: 'custom' })

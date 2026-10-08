@@ -183,3 +183,17 @@ describe('computePermissions — dedup', () => {
 		expect(computePermissions(base, roles)).toEqual([])
 	})
 })
+
+describe('computePermissions — membership roles', () => {
+	const memberRoles = makeRoleSource({ owner: { name: 'Owner', permissions: ['project.read'], member: { scope: 'team' } } })
+
+	test('a grant in a value of its own dimension resolves', () => {
+		const entries = computePermissions({ ...base, grants: [roleGrant('owner', TEAM('acme'))] }, memberRoles)
+		expect(entries).toEqual([{ action: 'project.read', scope: TEAM('acme'), source: 'grant' }])
+	})
+
+	test('a global grant, or one in another dimension, contributes nothing (fail-closed)', () => {
+		expect(computePermissions({ ...base, grants: [roleGrant('owner', null)] }, memberRoles)).toEqual([])
+		expect(computePermissions({ ...base, grants: [roleGrant('owner', { type: 'workspace', value: 'w' })] }, memberRoles)).toEqual([])
+	})
+})

@@ -60,6 +60,17 @@ export class GrantRepository {
 		return results
 	}
 
+	/** Grants of `roleKey` at `app` that are not in a value of `scopeType` — global ones included. */
+	async listRoleGrantsOutsideScope(app: string, roleKey: string, scopeType: string): Promise<GrantRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT * FROM grants
+				WHERE app = ? AND role_key = ? AND (scope_type IS NULL OR scope_type <> ?)
+				ORDER BY id`)
+			.bind(app, roleKey, scopeType)
+			.all<GrantRow>()
+		return results
+	}
+
 	/** All grants for a principal (admin view, incl. expired). */
 	async listGrants(principalId: string): Promise<GrantRow[]> {
 		const { results } = await this.db
