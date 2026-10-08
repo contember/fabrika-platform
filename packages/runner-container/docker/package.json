@@ -6,6 +6,7 @@
 		"packages/app",
 		"packages/auth-core",
 		"packages/jwks",
+		"packages/db",
 		"packages/auth",
 		"packages/provider-contract",
 		"packages/proxy-core",
