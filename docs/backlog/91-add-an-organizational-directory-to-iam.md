@@ -78,6 +78,6 @@ Acceptance:
 - `packages/iam/src/resolve.ts`
 - `packages/iam/src/tokens.ts`
 - `packages/iam/src/admin/`
-- `packages/iam-ui/src/`
+- `packages/dashboard/src/access/` and `src/routes/access/`
 
 <!-- Origin: design discussion on extending Access into an IdM-like organizational directory. -->

@@ -72,7 +72,7 @@ on disk. The rewrite keeps regular files only and refuses symlinks, `.gitmodules
 and trees above 50,000 entries or 512 MiB. Public platform uploads explicitly
 enable validated relative symlinks and check Git tree metadata to reject
 submodules even without their marker. Control never executes repository code.
-The code lives in `packages/control/src/source/`.
+The code lives in `packages/control/src/github/source/`.
 
 Private repositories are read through operator-owned GitHub Apps — one App per
 GitHub organization, created and verified from the authenticated console
@@ -93,11 +93,9 @@ App at all.
 | `@fabrika/app`                 | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
 | `@fabrika/iam`                 | The IAM service itself: human authentication, identity, keys, policies, and audit.             |
 | `@fabrika/iam-contract`        | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                    |
-| `@fabrika/iam-ui`              | Access feature routes embedded in the unified console.                                         |
 | `@fabrika/email`               | Portable outbound email contract and fetch-based provider adapters.                            |
 | `@fabrika/operations-contract` | Runtime-neutral ingest, catalog, release, access, operator DTOs, and typed RPC contract.       |
 | `@fabrika/operations`          | Error ingest, grouping, triage, releases, source maps, health, and runtime compositions.       |
-| `@fabrika/operations-ui`       | Operations feature routes and views embedded in the unified console.                           |
 | `@fabrika/provider-contract`   | Control-provider contract, shared `runSteps`, envelopes; `/installation` command contract.     |
 | `@fabrika/provider-cloudflare` | Cloudflare authoring, deploy, control adapter; `/runner` job contract; `/installation`.        |
 | `@fabrika/provider-zerops`     | Zerops authoring, manifest compiler, API client, deploy, control adapter; `/installation`.     |
@@ -125,10 +123,10 @@ The narrow contract packages keep wire types away from runtime entrypoints:
 
 - `@fabrika/control` and `@fabrika/dashboard` share RPC DTOs through
   `@fabrika/control-contract`; its `RunLogLine` also crosses the runner boundary.
-- `@fabrika/iam` and `@fabrika/iam-ui` share admin REST DTOs through
+- `@fabrika/iam` and `@fabrika/dashboard` share admin REST DTOs through
   `@fabrika/iam-contract`. The `IamRpc` and policy domain stay in
   `@fabrika/auth-core`.
-- `@fabrika/operations`, `@fabrika/operations-ui`, and control's transport-only
+- `@fabrika/operations`, `@fabrika/dashboard`, and control's transport-only
   gateway share DTOs through `@fabrika/operations-contract`.
 - the Zerops provider and control composition produce
   manifests through `@fabrika/proxy-core/manifest`; `@fabrika/proxy-core` parses and
@@ -143,10 +141,9 @@ The narrow contract packages keep wire types away from runtime entrypoints:
 ## Operator console
 
 Control serves one Fabrika console with Delivery, Access, and Operations
-navigation. Delivery uses `ControlRpcContract` at `/api/rpc`. Access routes come
-from `@fabrika/iam-ui` and use `IamAdminRpcContract` at `/iam/admin/rpc` on the
-same control origin. Operations routes come from `@fabrika/operations-ui` and
-use `OperationsRpcContract` at `/operations/api/rpc`. Control transports the
+navigation. Delivery uses `ControlRpcContract` at `/api/rpc`. Access routes
+use `IamAdminRpcContract` at `/iam/admin/rpc` on the same control origin.
+Operations routes use `OperationsRpcContract` at `/operations/api/rpc`. Control transports the
 latter two requests to the corresponding private service. IAM and Operations
 retain authentication, authorization, domain-data, and audit ownership.
 Cross-origin mutations are rejected at both gateways. The IAM gateway drops the

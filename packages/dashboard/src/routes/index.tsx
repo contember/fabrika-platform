@@ -1,6 +1,6 @@
 import { createPage, Link } from '@buzola/router'
 // "Live" for a share link (revoked beats expired) is one rule; it lives with the access plane that owns it.
-import { shareLinkState } from '@fabrika/iam-ui/format'
+import { shareLinkState } from '../access/lib/format'
 import { Icon } from '../components/Icon'
 import { Chip, namespaceLamp, RunStatus, Status, StatusLamp } from '../components/Status'
 import { EmptyState } from '../components/Table'

@@ -38,7 +38,7 @@ export function fmtAgo(seconds: number | null | undefined, nowMs: number = Date.
 	if (seconds === null || seconds === undefined) return '—'
 	const elapsed = Math.max(0, Math.floor(nowMs / 1000) - seconds)
 	if (elapsed < 45) return 'just now'
-	if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
+	if (elapsed < 3600) return `${Math.max(1, Math.floor(elapsed / 60))}m ago`
 	if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`
 	if (elapsed < 604_800) return `${Math.floor(elapsed / 86_400)}d ago`
 	return new Date(seconds * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })

@@ -1,7 +1,7 @@
 # @fabrika/iam-contract
 
 Runtime-neutral request and response DTOs for the IAM administration API. Both `@fabrika/iam` and
-browser-side `@fabrika/iam-ui` consume this package.
+browser-side the console (`@fabrika/dashboard`) consume this package.
 
 `IamAdminRpcContract` is the WHOLE administration API — one transport, so nothing here has to be
 kept in step with a second one. What is left of `/admin/*` REST is machine provisioning (a deploy's

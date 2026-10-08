@@ -20,6 +20,6 @@ Acceptance requires typed configuration and operator UI, migration coverage for 
 
 ## Touch points
 
-`packages/operations-contract`, `packages/operations`, `packages/operations-ui`, `packages/email`, Cloudflare and Bun composition configuration, Operations migrations.
+`packages/operations-contract`, `packages/operations`, `packages/dashboard` (Operations views), `packages/email`, Cloudflare and Bun composition configuration, Operations migrations.
 
 <!-- Origin: ../archive/sprint-2026-07-31-operations-functional-parity.md -->

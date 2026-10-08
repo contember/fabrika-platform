@@ -62,7 +62,7 @@ packages/
   daemon-kit annotations canvas-kernel  # Reusable daemon, annotation, and interactive canvas foundations
   builder                         # Guided specification and agent-assisted application builder
   auth-core auth jwks app         # authz kernel · app-facing IAM SDK (verify only) · the shared token verifier · application runtime
-  iam iam-contract iam-ui         # Access plane: login, token minting, /admin API, admin SPA
+  iam iam-contract                # Access plane: login, token minting, /admin API
   operations operations-{contract,ui}  # Operations plane: ingest, grouping, triage, console views
   control control-contract        # Delivery control plane — Worker AND long-running Bun process
   dashboard                       # the unified console SPA (all three planes)
@@ -146,8 +146,8 @@ contract note (`*-contract`), the substantial ones are:
   the private codegen behind the Zerops installation's generated files · `packages/cli/` — command
   routing and provider inference.
 - `packages/proxy-core/` — the enforcement decision, public and runtime-neutral · `packages/proxy/` —
-  its Caddy deployment, private because it is an artifact · `packages/operations/` + `packages/operations-ui/` —
-  the Operations kernel and console views · `packages/dashboard/` — the SPA.
+  its Caddy deployment, private because it is an artifact · `packages/operations/` —
+  the Operations kernel · `packages/dashboard/` — the console SPA for all three planes.
 - `packages/runner-container/` + `packages/runner-cloudflare/` — the deploy container and its Worker ·
   `packages/local-stack/` — the Docker dev stack behind every `local:*` command.
 

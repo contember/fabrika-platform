@@ -11,7 +11,7 @@
  * tabular figures, so columns of machine data line up the way they do on a real panel.
  *
  * Tokens are named after the world (floor / plate / recess / rule / engrave / lamp). This stylesheet
- * is the only design system in the console: `@fabrika/iam-ui` ships component styles written in these
+ * is the only design system in the console: `access/styles.css` adds component styles written in these
  * tokens and declares no base rules of its own.
  *
  * Theming uses `light-dark()`: `color-scheme` follows the OS unless `<html data-theme>` pins it.
@@ -173,7 +173,7 @@ h3 {
 	letter-spacing: -0.006em;
 }
 
-/* h4 IS the engraved label plate — iam-ui and the run/namespace detail pages lean on it. */
+/* h4 IS the engraved label plate — the access pages and the run/namespace detail pages lean on it. */
 h4,
 .plate-label {
 	margin: 0 0 var(--s-1);
@@ -1054,7 +1054,7 @@ a.feed-row:hover {
 	font-weight: 400;
 }
 
-/* A label wrapping a single control reads as a row. iam-ui's pickers declare the same shape, so name
+/* A label wrapping a single control reads as a row. The access pickers declare the same shape, so name
    them here or the radios stack under their own text. */
 .form label.checkbox,
 label.checkbox,
@@ -1069,7 +1069,7 @@ label.radio,
 	font-weight: 400;
 }
 
-/* iam-ui's fieldset pickers: the same recessed, hairline-bounded treatment as our controls. */
+/* The access fieldset pickers: the same recessed, hairline-bounded treatment as our controls. */
 .scope-picker,
 .grant-mode,
 .action-picker {
@@ -1990,16 +1990,6 @@ td.empty:hover {
 	color: var(--ink-3);
 }
 
-.ops-unavailable-mark {
-	display: grid;
-	place-items: center;
-	width: 2.25rem;
-	height: 2.25rem;
-	border: 1px solid var(--rule);
-	border-radius: 50%;
-	color: var(--ink-4);
-	font-family: var(--font-mono);
-}
 
 .ops-level {
 	display: inline-flex;

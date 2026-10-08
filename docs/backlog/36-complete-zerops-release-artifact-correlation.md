@@ -40,7 +40,7 @@ Delivery/Operations correlation UI below is not; it can ship separately.
 
 - `packages/provider-zerops/` and Zerops build integration
 - `packages/control/` and `packages/dashboard/`
-- `packages/operations/` and `packages/operations-ui/`
+- `packages/operations/` and `packages/dashboard/src/operations/`
 - release/source-map integration fixtures
 
 <!-- Origin: Operations plane foundation WU5 and consumed backlog 31. -->

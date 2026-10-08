@@ -1,6 +1,6 @@
 import { Outlet } from '@buzola/router'
-import { RouteError } from '@fabrika/iam-ui/route-error'
-import { useMe } from '@fabrika/iam-ui/use-me'
+import { useMe } from '../../access/lib/useMe'
+import { RouteError } from '../../components/RouteError'
 
 export default function AccessLayout() {
 	const me = useMe()

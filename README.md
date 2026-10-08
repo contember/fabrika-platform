@@ -32,8 +32,7 @@ Bun monorepo (`packages/*`). Each installation statically selects one provider b
 
 **Auth** — `@fabrika/auth-core` (the pure kernel: policy matching, token shape, the IAM contract) ·
 `@fabrika/auth` (the app-facing SDK) · `@fabrika/iam` (the IAM service) ·
-`@fabrika/iam-contract` (runtime-neutral admin API DTOs) · `@fabrika/iam-ui` (Access feature routes
-embedded in the Fabrika console).
+`@fabrika/iam-contract` (runtime-neutral admin API DTOs).
 
 **Application runtime** — `@fabrika/app` (Fetch-based HTTP routing, middleware, typed RPC, structural
 errors, object-level authorization, a typed browser client, and Worker/Bun lifecycle adapters).
@@ -47,8 +46,7 @@ agent-assisted implementation loop exposed through `fabrika builder …` by `@fa
 
 **Operations** — `@fabrika/operations-contract` (browser/runtime-safe
 protocols) · `@fabrika/operations` (portable ingest, persistence, triage,
-release, source-map, alert, and health service) · `@fabrika/operations-ui`
-(Operations feature routes embedded in the Fabrika console).
+release, source-map, alert, and health service).
 
 **Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces, versioned
 JSON envelopes for persisted data, and the shared step loop) · `@fabrika/control` (registry,

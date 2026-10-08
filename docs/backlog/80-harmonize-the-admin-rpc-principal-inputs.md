@@ -26,14 +26,14 @@ and again while building the command that replaced that hand sequence.
 (`packages/installation-init/src/admin.ts`) sends `principalId` to `grants.create` and `id` to
 `principals.get` and `passwords.issueEnrollment`, with a comment saying why. That was the deliberate
 choice for the command — a contract change would have meant a migration for the console in the same
-work — but it fixes the surface for exactly one caller. The console, `iam-ui` and any future
+work — but it fixes the surface for exactly one caller. The console and any future
 operator tooling each meet the difference on their own.
 
 ## Approach / acceptance
 
 Pick ONE spelling for "the principal this call is about" across `IamAdminRpcContract`, change the
 inputs that disagree, and move every caller in the same change: `packages/iam/src/admin/rpc.ts`'s zod
-schemas, `packages/iam/src/admin/handlers.ts`, `packages/iam-ui/`, `packages/dashboard/` and
+schemas, `packages/iam/src/admin/handlers.ts`, `packages/dashboard/` and
 `packages/installation-init/src/admin.ts` — whose hiding comment then comes out. It is a breaking
 change to a published contract, so it needs a version note rather than a quiet edit.
 
@@ -43,6 +43,6 @@ contract rather than per procedure, and the first-administrator command sends on
 ## Touch points
 
 `packages/iam-contract/src/index.ts`, `packages/iam/src/admin/{rpc,handlers}.ts`,
-`packages/iam-ui/`, `packages/dashboard/`, `packages/installation-init/src/admin.ts`.
+`packages/dashboard/`, `packages/installation-init/src/admin.ts`.
 
 <!-- Origin: sprint-2026-08-21-cheap-rebuild-from-scratch, WU3 — the decision to hide the difference in the command. -->

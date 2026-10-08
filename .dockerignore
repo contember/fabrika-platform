@@ -9,7 +9,6 @@
 **/wrangler.jsonc
 **/worker-configuration.d.ts
 packages/dashboard
-packages/iam-ui
 .dev.vars
 .env
 *.log
