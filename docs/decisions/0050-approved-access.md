@@ -66,13 +66,18 @@ reconciles IAM:
 A run publishes with `UPDATE … WHERE generation = ?`, inside the existing namespace lease. A concurrent
 publication therefore loses.
 
+A run that loses the compare-and-swap is classified again against the new active snapshot. This holds
+while the run waits and after it is approved. An approval is valid only for the baseline digest it
+recorded. When the new diff still widens, the run needs a new approval.
+
 **Invariant: a pending change is published nowhere.** No path publishes a proxy table or reconciles IAM
 from anything other than `approvedSnapshot(app, env)`.
 
 ### 3. Classification is a conservative diff
 
 Control compares the normalized access data of the candidate snapshot with the environment's active
-snapshot. The comparison covers:
+snapshot. An environment with no published run has the empty snapshot as its baseline. The comparison
+covers:
 
 - endpoint callers, access forms and output fields;
 - containment, roles and their actions, membership rules;
@@ -93,8 +98,9 @@ The diff is a pure function. It produces plain-language lines for the approver, 
 
 ### 4. Only production is protected by default
 
-Each environment has a `protected` flag. `prod` is protected by default; every other environment is
-not. An IAM administrator changes the flag, and the change is audited.
+Each environment has a `protected` flag, a column of Control's `app_envs`. `prod` is protected by
+default; every other environment is not. Changing the flag requires `access.approve` from a human user
+principal, the same rule as approving (section 5). Control's audit log records every change.
 
 On an unprotected environment (staging, an MCP authoring target) a change applies at once. When the
 same commit is deployed to a protected environment, Control classifies it again against that
@@ -132,6 +138,10 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
   reads the plain-language lines and approves.
 - A removal and a code-only change deploy without a prompt. Staging and MCP authoring targets never
   wait.
+- The first deploy to a protected environment always waits: against the empty snapshot, every item is
+  an addition.
+- An agent cannot unprotect an environment to avoid the prompt: the flag change needs the same human
+  approval.
 - Every path that touches published access goes through one function and one compare-and-swap. A new
   write path must use `approvedSnapshot(app, env)`; a path that reads the provider artifact for access
   data is a bug.
