@@ -23,6 +23,9 @@ check, or replace `@fabrika/*` packages. An agent that is refused at runtime loo
 ([ADR-0012](0012-fabrika-app-runtime.md)) hold only when the platform, not the repository, decides
 what runs.
 
+The import document can also expose an application past the proxy: a public bucket, subdomain access,
+a mount or a CDN. The compiler copies these fields unchecked today.
+
 ## Decision
 
 Use the maintained `yaml` v2 parser to validate an explicit descriptor subset at the manifest boundary.
@@ -44,7 +47,9 @@ Zerops. Independent Go-reader witnesses verify emitted values in addition to Typ
 ### The platform owns the `run` section and the server build
 
 The provider renders the execution descriptor from the run's snapshot, through the existing release
-overlay. Of the build, the authored descriptor supplies only the SPA commands.
+overlay. Of `build`, the authored descriptor keeps only `base`, `os` and the SPA's `buildCommands`.
+Every other `build` key is generated or refused; work unit B7 lists the exact keys from the Zerops
+schema.
 
 **`run`** is generated:
 
@@ -58,8 +63,8 @@ overlay. Of the build, the authored descriptor supplies only the SPA commands.
   ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)). A service variable would not do: it
   changes across restarts and rollbacks.
 
-The compiler refuses authored `run` keys, `build.addToRunPrepare`, `build.deploy` and
-`deploy.temporaryShutdown`.
+The compiler refuses authored `run` keys, `build.addToRunPrepare`, `build.deployFiles` and
+`deploy.temporaryShutdown`. The platform generates `deployFiles`.
 
 **`build`** is one build in a fixed order:
 
@@ -81,7 +86,26 @@ Two platform facts this design needs are not verified yet: whether exec readines
 deploy, and whether a failed `initCommands` stops activation. Each gets a row in the
 [platform facts](../reference/zerops-platform.md) before the generated `run` section ships.
 
-The code does not render `run` or `build` yet (part B, work unit B7).
+### Exposure is refused, with no approval path
+
+The compiler refuses these fields on application services:
+
+- a storage policy that is not private, and a raw storage policy;
+- `enableSubdomainAccess`;
+- `buildFromGit`;
+- an inline `zeropsYaml`;
+- `mount`;
+- `enableCdn`.
+
+A bucket is accepted only when the platform created it as private and it carries that provenance.
+Before activation, Control reads back `subdomainAccess` from Zerops. A failed check blocks activation
+and raises an Operations alert.
+
+Only CSP extensions in the contract are approvable, through the approval diff of
+[ADR-0050](0050-approved-access.md). No other exposure has an approval path.
+
+The code does not render `run` or `build`, read back `subdomainAccess` or check bucket provenance yet
+(part B, work unit B7). The compiler refusals are part 0, work unit P0.4.
 
 ## Consequences
 
@@ -101,6 +125,8 @@ execution document carries the generated `run` and `build`.
   isolation tests.
 - The authored descriptor loses freedom: no custom start command, no custom `run` section, no package
   overrides of `@fabrika/*`.
+- An application is reachable only through the namespace proxy. A bucket policy changed outside
+  Fabrika is not detected, because Zerops has no API to read a policy back.
 
 ## Alternatives considered
 
@@ -114,5 +140,7 @@ execution document carries the generated `run` and `build`.
   proved.
 - **A separate build for the SPA.** Deferred: it removes the toolchain-sabotage gap, but v1 keeps one
   build.
+- **An approval path for exposure.** Rejected: a public bucket or a subdomain bypasses the proxy, so
+  no contract could describe what it exposes. Only CSP extensions are approvable.
 - **`FABRIKA_CONTRACT_DIGEST` as a service variable.** Rejected: a service variable is mutable across
   restarts and rollbacks, so older code could start with a newer digest.
