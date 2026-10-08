@@ -32,8 +32,10 @@ export function defineStores(runtime: DataLayerRuntime) {
 		withComments: (within: Within<'workspace', 'notes.read'>, ids: readonly string[]) =>
 			t.select(within, (q) => q.columns(['id', 'title']).where('id', 'in', ids).join('note_comments', (c) => c.columns(['id', 'body'])).orderBy('id')),
 		get: (note: Ref<'note', 'notes.read'>) => t.get(note),
-		create: (workspace: Ref<'workspace', 'notes.write'>, values: { title: string; body: string | null; word_count?: number }) =>
-			t.insert(workspace, values),
+		create: (
+			workspace: Ref<'workspace', 'notes.write'>,
+			values: { title: string; body: string | null; word_count?: number; internal?: string | null },
+		) => t.insert(workspace, values),
 		update: (note: Ref<'note', 'notes.write'>, values: { title?: string; body?: string | null }, expect: number) =>
 			t.update(note, values, { expectVersion: expect }),
 		remove: (note: Ref<'note', 'notes.delete'>) => t.remove(note),
