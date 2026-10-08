@@ -183,13 +183,13 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   and is projected unchanged to Operations. `apps.environments.put` omission preserves the stored
   value; explicit `null` clears it. Never derive it from a provider hostname.
 - **The same column is also what IAM trusts as a return origin (ADR-0022).**
-  `projectedReturnOrigins` (`src/return-origins.ts`) collects it from EVERY
-  environment of the app and hands the set to the provider on `deploy` and on
-  `reconcile`; the deploy's existing IAM touchpoint (`reconcileSchema`) writes it.
-  App-wide, not per-environment, because IAM's registry is keyed by app id — sending
-  only the deploying environment's origin would un-register the others and a `stage`
-  deploy would break `prod`'s sign-in. No origin anywhere → the field is ABSENT, not
-  empty: fabrika leaves an app it has no address for unregistered rather than guessing,
+  `projectedReturnOrigins` (`src/return-origins.ts`) reads it from the DEPLOYING
+  environment only and hands it to the provider on `deploy` and on `reconcile`; the
+  deploy's existing IAM touchpoint (`reconcileSchema`) writes it under the IAM
+  application id `<app>@<env>` (ADR-0022 rule 6). Never collect another environment's
+  origin: registered under `notes@prod`, a `stage` host would be handed production
+  sessions. No origin → the field is ABSENT, not
+  empty: fabrika leaves an environment it has no address for unregistered rather than guessing,
   and an empty set would read as "clear the registry". Nothing else here calls IAM's
   admin surface per deploy; do not add a second lifecycle for this.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves

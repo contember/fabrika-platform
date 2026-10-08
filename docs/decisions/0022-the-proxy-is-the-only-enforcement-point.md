@@ -298,7 +298,8 @@ registry of its own.
   operations, so a handler on another endpoint cannot spend the caller's authority. The proxy obtains
   a fresh grant for every such request, also when the token cache is warm.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
-  every write path, and refuses a global grant of a role declared with `member.scope`.
+  every write path. In every application, contract or not, IAM refuses a global grant of a role
+  declared with `member.scope`, and such a grant resolves to no permission.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
   limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
   into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
