@@ -1,13 +1,11 @@
 import { notesGates } from '@fabrika/example-zerops-app/gates'
+import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-// A relative import, because the module it names is dev-time only and therefore outside
-// `@fabrika/installation-zerops`'s published surface — see its header for why it cannot be exported.
-import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '../../installation-zerops/zerops/proxy-manifest'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
 
@@ -179,7 +177,7 @@ export async function prepareLocalSourceConfiguration(directory: string = STATE_
 
 /**
  * The local platform proxy fronts the same three apps a real installation does, generated from the same
- * declaration — `platformProxyManifestTemplate()` in `@fabrika/installation-zerops` — so this
+ * declaration — `platformProxyManifestTemplate()` in `@fabrika/platform-artifacts` — so this
  * composition can no longer be a second definition of the same document. Only what is genuinely local
  * is supplied here: the hostnames, the scheme, and IAM's port.
  *

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
+import ts from 'typescript'
 import { z } from 'zod'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -309,6 +310,65 @@ const includesDist = (manifest: Record<string, unknown>): boolean => {
 	return Array.isArray(files) && files.some((file) => typeof file === 'string' && file.split('/').includes('dist'))
 }
 
+/** The staging copy's filter: what `pack` leaves out of a tarball regardless of `files`. */
+const stagesPath = (path: string, includeDist: boolean): boolean => {
+	const parts = path.split('/')
+	return !parts.includes('node_modules') && (includeDist || !parts.includes('dist')) && !parts.includes('__tests__')
+		&& !/\.(?:test|spec)\.[^.]+$/.test(path)
+}
+
+const filesSchema = z.array(z.string()).optional()
+const SCRIPT_FILE = /\.[cm]?[jt]sx?$/
+
+/** Package-relative paths a tarball would carry, read off `files` the way npm applies it. */
+const packedFiles = async (item: PackageInfo): Promise<readonly string[]> => {
+	const entries = filesSchema.parse(item.manifest['files'], { path: [item.name, 'files'] }) ?? ['**']
+	const toPattern = async (entry: string): Promise<string> => {
+		const path = entry.replace(/^\.\//, '')
+		if (/[*?[{]/.test(path)) return path
+		const isDirectory = await stat(join(item.directory, path)).then((found) => found.isDirectory(), () => false)
+		return isDirectory ? `${path}/**` : path
+	}
+	const includes = await Promise.all(entries.filter((entry) => !entry.startsWith('!')).map(toPattern))
+	const excludes = (await Promise.all(entries.filter((entry) => entry.startsWith('!')).map((entry) => toPattern(entry.slice(1)))))
+		.map((pattern) => new Bun.Glob(pattern))
+	const includeDist = includesDist(item.manifest)
+	const found = new Set<string>()
+	for (const pattern of includes) {
+		for await (const path of new Bun.Glob(pattern).scan({ cwd: item.directory, onlyFiles: true })) {
+			if (stagesPath(path, includeDist) && !excludes.some((exclude) => exclude.match(path))) found.add(path)
+		}
+	}
+	return [...found].sort()
+}
+
+/**
+ * Every import a public package ships — type-only ones included, because a consumer's typecheck resolves
+ * them too — must name a declared public dependency or stay inside the package.
+ */
+export const assertPackedImports = async (item: PackageInfo, publicNames: ReadonlySet<string>): Promise<void> => {
+	const declared = new Set([...dependencyMap(item, 'dependencies').keys(), ...dependencyMap(item, 'peerDependencies').keys()])
+	const violations: string[] = []
+	for (const file of await packedFiles(item)) {
+		if (!SCRIPT_FILE.test(file)) continue
+		const path = join(item.directory, file)
+		for (const { fileName: specifier } of ts.preProcessFile(await readFile(path, 'utf8'), true, true).importedFiles) {
+			if (specifier.startsWith('.')) {
+				if (relative(item.directory, resolve(dirname(path), specifier)).startsWith('..')) {
+					violations.push(`${file} imports ${specifier}, which is outside the package`)
+				}
+				continue
+			}
+			if (!specifier.startsWith('@fabrika/')) continue
+			const dependency = specifier.split('/').slice(0, 2).join('/')
+			if (dependency === item.name) continue
+			if (!declared.has(dependency)) violations.push(`${file} imports ${specifier}, which is not a declared dependency`)
+			else if (!publicNames.has(dependency)) violations.push(`${file} imports ${specifier}, which is a private package`)
+		}
+	}
+	if (violations.length > 0) throw new Error(`${item.name}: packed files import what a consumer cannot resolve:\n  ${violations.join('\n  ')}`)
+}
+
 export const collectExportTargets = (value: unknown, source: string, targets: Set<string>): void => {
 	visitExportTargets(exportTargetSchema.parse(value, { path: [source] }), source, targets)
 }
@@ -405,11 +465,7 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 			const includeDist = includesDist(item.manifest)
 			await cp(item.directory, stagingDirectory, {
 				recursive: true,
-				filter: (source) => {
-					const parts = source.split('/')
-					return !parts.includes('node_modules') && (includeDist || !parts.includes('dist')) && !parts.includes('__tests__')
-						&& !/\.(?:test|spec)\.[^.]+$/.test(source)
-				},
+				filter: (source) => stagesPath(source, includeDist),
 			})
 			await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, options.version, publicNames), null, '\t')}\n`)
 			const filename = tarballFilename(item.name, options.version)
@@ -439,6 +495,17 @@ const readReleaseManifest = async (options: Options): Promise<ReleaseManifest> =
 	return { tag, version, packages }
 }
 
+/** Loads every main entry, so a shipped file that imports an unpublished package fails the smoke. */
+export const entryImportSmoke = (packageNames: readonly string[]): string =>
+	[
+		`for (const name of ${JSON.stringify(packageNames)}) {`,
+		'\tawait import(name).catch((error) => {',
+		'\t\tthrow new Error(`${name}: main entry does not load from its tarball`, { cause: error })',
+		'\t})',
+		'}',
+		'',
+	].join('\n')
+
 const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, expectedVersion: string, label: string): Promise<void> => {
 	const consumer = await mkdtemp(join(tmpdir(), 'fabrika-consumer-'))
 	try {
@@ -449,6 +516,7 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await writeFile(
 			join(consumer, 'smoke.ts'),
 			[
+				entryImportSmoke(Object.keys(dependencies)),
 				"const modules = await Promise.all([import('@fabrika/annotations'), import('@fabrika/app'), import('@fabrika/builder'), import('@fabrika/canvas-kernel'), import('@fabrika/daemon-kit'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-zerops')])",
 				"if (modules.some((module) => Object.keys(module).length === 0)) throw new Error('A public entry point has no exports')",
 				"const builder = await import('@fabrika/builder')",
@@ -818,6 +886,10 @@ const main = async (): Promise<void> => {
 	const options = await parseOptions(Bun.argv.slice(2))
 	const packages = await readPackages()
 	const { publicPackages, order } = packageGraph(packages)
+	if (options.command === 'validate' || options.command === 'pack') {
+		const publicNames = new Set(publicPackages.map((item) => item.name))
+		for (const item of publicPackages) await assertPackedImports(item, publicNames)
+	}
 	console.info(`validated ${publicPackages.length} public packages for ${options.tag}`)
 	if (options.command === 'validate') {
 		for (const item of order) console.info(item.name)

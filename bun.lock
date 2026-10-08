@@ -356,13 +356,7 @@
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@fabrika/control": "workspace:*",
-        "@fabrika/example-zerops-app": "workspace:*",
-        "@fabrika/iam": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
-        "@fabrika/operations": "workspace:*",
-        "@fabrika/operations-contract": "workspace:*",
-        "@fabrika/proxy": "workspace:*",
         "@types/bun": "latest",
       },
     },
@@ -384,9 +378,9 @@
         "@fabrika/control": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/example-zerops-app": "workspace:*",
-        "@fabrika/installation-zerops": "workspace:*",
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
+        "@fabrika/platform-artifacts": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
@@ -448,6 +442,25 @@
       "name": "@fabrika/platform",
       "version": "0.0.4",
       "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/platform-artifacts": {
+      "name": "@fabrika/platform-artifacts",
+      "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
+        "@fabrika/control": "workspace:*",
+        "@fabrika/installation-init": "workspace:*",
+        "@fabrika/installation-zerops": "workspace:*",
+        "@fabrika/operations": "workspace:*",
+        "@fabrika/operations-contract": "workspace:*",
+        "@fabrika/provider-zerops": "workspace:*",
+        "@fabrika/proxy-contract": "workspace:*",
+      },
+      "devDependencies": {
+        "@fabrika/example-zerops-app": "workspace:*",
+        "@fabrika/iam": "workspace:*",
+        "@fabrika/proxy": "workspace:*",
         "@types/bun": "latest",
       },
     },
@@ -800,6 +813,8 @@
     "@fabrika/operations-ui": ["@fabrika/operations-ui@workspace:packages/operations-ui"],
 
     "@fabrika/platform": ["@fabrika/platform@workspace:packages/platform"],
+
+    "@fabrika/platform-artifacts": ["@fabrika/platform-artifacts@workspace:packages/platform-artifacts"],
 
     "@fabrika/platform-node": ["@fabrika/platform-node@workspace:packages/platform-node"],
 
@@ -1287,6 +1302,8 @@
 
     "@fabrika/platform/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
+    "@fabrika/platform-artifacts/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
+
     "@fabrika/platform-node/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@fabrika/provider-cloudflare/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
@@ -1370,6 +1387,8 @@
     "@fabrika/operations-ui/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/operations/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
+
+    "@fabrika/platform-artifacts/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/platform-node/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 

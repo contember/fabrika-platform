@@ -53,7 +53,7 @@ can sign in to, and the README's description of how many steps that took is accu
 
 ## Touch points
 
-`packages/installation-zerops/zerops/generated/`, `packages/cli/`, `README.md`,
+`packages/platform-artifacts/generated/`, `packages/cli/`, `README.md`,
 `docs/reference/zerops-platform.md`.
 
 <!-- Origin: ADR-0025. -->

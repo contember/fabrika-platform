@@ -38,7 +38,7 @@ jobs:
         run: bun run typecheck
 
       - name: Check generated Zerops artifacts
-        run: bun run --filter @fabrika/installation-zerops gen:check
+        run: bun run --filter @fabrika/platform-artifacts gen:check
 
   test:
     name: Test with PostgreSQL and S3

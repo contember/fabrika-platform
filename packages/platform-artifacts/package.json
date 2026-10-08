@@ -1,0 +1,32 @@
+{
+	"name": "@fabrika/platform-artifacts",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./proxy-manifest": "./src/proxy-manifest.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"gen": "bun src/render.ts",
+		"gen:check": "bun src/render.ts --check",
+		"gen:schemas": "bun schemas/refresh.ts",
+		"check:schemas": "bun schemas/check.ts"
+	},
+	"dependencies": {
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/control": "workspace:*",
+		"@fabrika/installation-init": "workspace:*",
+		"@fabrika/installation-zerops": "workspace:*",
+		"@fabrika/operations": "workspace:*",
+		"@fabrika/operations-contract": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*",
+		"@fabrika/proxy-contract": "workspace:*"
+	},
+	"devDependencies": {
+		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/iam": "workspace:*",
+		"@fabrika/proxy": "workspace:*",
+		"@types/bun": "latest"
+	}
+}

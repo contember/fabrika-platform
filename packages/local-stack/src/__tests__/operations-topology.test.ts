@@ -1,7 +1,7 @@
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
+import { PLATFORM_CONSOLE_APP_ID, PLATFORM_IAM_APP_ID } from '@fabrika/platform-artifacts/proxy-manifest'
 import { applicableGates, compileGates } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
-import { PLATFORM_CONSOLE_APP_ID, PLATFORM_IAM_APP_ID } from '../../../installation-zerops/zerops/proxy-manifest'
 import { localPlatformProxyManifest } from '../prepare'
 
 /** The first matching rule decides when its credential is present, so this is the effective verdict. */

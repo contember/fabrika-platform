@@ -20,7 +20,7 @@ passed a public example repository URL ending in `@main`, and Zerops accepted an
 proves the `@main` form is accepted, but not that Zerops pins a non-default tag or commit: `main` is
 also the repository's default branch. The remaining installation caller still passes a bare URL —
 `FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'`
-(`packages/installation-zerops/zerops/topology.ts:141`).
+(`packages/installation-zerops/src/topology/topology.ts`).
 
 Two consequences, one of them drift in a decision:
 
@@ -62,7 +62,7 @@ namespace proxy.
 
 ## Touch points
 
-`packages/provider-zerops/src/api.ts`, `packages/installation-zerops/zerops/topology.ts`,
+`packages/provider-zerops/src/api.ts`, `packages/installation-zerops/src/topology/topology.ts`,
 `packages/installation-zerops/src/templates/README.md`, `docs/reference/zerops-platform.md`,
 a new `docs/decisions/`.
 

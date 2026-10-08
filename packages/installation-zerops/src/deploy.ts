@@ -48,9 +48,9 @@ import {
 	type ZeropsService,
 } from '@fabrika/provider-zerops'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
-import { PLATFORM_CONSOLE_APP_SCHEMA } from '../zerops/generated/platform-console-schema'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import type { PlatformDeployInput } from './deploy-options'
+import { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
 import { derivePlatformHosts, platformOrigin, type PlatformPlacement, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { PRIVATE_IAM_UPSTREAM } from './install-environment'
 import {
@@ -71,12 +71,12 @@ import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manif
  *
  * It is no longer the order they are deployed in — that is `PLATFORM_CONCURRENT_DEPLOY` followed by
  * `PLATFORM_SEQUENTIAL_DEPLOY`, and the two stages concatenate back to this list (pinned by
- * `zerops/__tests__/deploy-order.test.ts`). What this list still decides is which services must exist
+ * `deploy-order.test.ts` in `@fabrika/platform-artifacts`). What this list still decides is which services must exist
  * and which environment is written, both of which happen for ALL FOUR before any of them is deployed.
  *
  * Each name is a service hostname in the topology AND the `zerops.yaml` setup name the pipeline
  * selects — the platform's own "setup name defaults to the hostname" rule.
- * `zerops/__tests__/deploy-order.test.ts` pins both against the declarations that own them.
+ * `deploy-order.test.ts` in `@fabrika/platform-artifacts` pins both against the declarations that own them.
  */
 export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'proxy', 'control'] as const
 
@@ -93,7 +93,7 @@ export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
  *
  * What is NOT arbitrary stays: every environment write happens before any of these starts, the proxy
  * is deployed after both, and control after the proxy (ADR-0022 — the enforcement point ahead of
- * the service whose gates just widened). `zerops/__tests__/deploy-order.test.ts` and
+ * the service whose gates just widened). `deploy-order.test.ts` in `@fabrika/platform-artifacts` and
  * `__tests__/deploy.test.ts` fail if that sequence changes.
  */
 export const PLATFORM_CONCURRENT_DEPLOY = ['iam', 'operations'] as const

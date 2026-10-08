@@ -9,10 +9,10 @@
 
 import { type ZeropsApi, ZeropsApiError, type ZeropsProjectStatus } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { compileTopology, platformTopology } from '../../zerops/topology'
 import { type InstallCollaborators, runInstall } from '../install'
 import { CREATE_PROJECT_FLAG, parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { recordingInitLog } from '../log'
+import { compileTopology, platformTopology } from '../topology/topology'
 import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 

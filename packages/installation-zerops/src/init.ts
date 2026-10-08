@@ -40,7 +40,7 @@ import {
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
 import { createZeropsApi, type ZeropsApi, type ZeropsService } from '@fabrika/provider-zerops'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
 import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import type { InitLog } from './log'
 import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'

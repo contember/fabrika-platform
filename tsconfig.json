@@ -27,6 +27,7 @@
 		{ "path": "./packages/installation-contract" },
 		{ "path": "./packages/installation-cloudflare" },
 		{ "path": "./packages/installation-zerops" },
+		{ "path": "./packages/platform-artifacts" },
 		{ "path": "./packages/cli" },
 		{ "path": "./packages/dashboard" },
 		{ "path": "./packages/runner-contract" },

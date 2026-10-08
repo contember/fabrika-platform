@@ -387,7 +387,7 @@ The six are `deploy.readinessCheck.{failureTimeout,retryPeriod}` and
 `run.healthCheck.{failureTimeout,disconnectTimeout,recoveryTimeout,execPeriod}`.
 The installation's static schemas declare these fields as strings; generated-artifact tests enforce
 the observed `[10s, 1h]` interval. The separately invoked
-`packages/installation-zerops/zerops/schemas/check.ts` compares both pinned upstream documents
+`packages/platform-artifacts/schemas/check.ts` compares both pinned upstream documents
 without modifying them and distinguishes drift from unavailable responses.
 `provider-zerops/src/types.ts` retains the matching `ZeropsDuration` type.
 
@@ -1098,9 +1098,9 @@ Two ordering rules, both of which cost something if ignored:
 
 **The platform installation's proxy manifest is generated in two halves.** The installation-independent
 half — which apps exist, their ids, their private upstreams, the public listener each answers on and
-their gates — is declared in `packages/installation-zerops/zerops/proxy-manifest.ts` and rendered into
-the committed `zerops/generated/platform-proxy-manifest.ts` by `bun run --filter
-@fabrika/installation-zerops gen`; CI's `gen:check` fails when it drifts from `CONTROL_PROXY_GATES` or
+their gates — is declared in `packages/platform-artifacts/src/proxy-manifest.ts` and rendered into
+the committed `packages/installation-zerops/src/generated/platform-proxy-manifest.ts` by `bun run --filter
+@fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `CONTROL_PROXY_GATES` or
 `OPERATIONS_PROXY_GATES`. The hosts and the browser-facing scheme belong to one installation and are
 bound at deploy time by `resolvePlatformProxyManifest` (`packages/installation-zerops/src/proxy-manifest.ts`).
 `localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local

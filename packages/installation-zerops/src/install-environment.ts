@@ -10,7 +10,7 @@ import type { InstallationSecrets } from './secrets'
 export const PRIVATE_IAM_UPSTREAM = 'iam:3000'
 const PRIVATE_IAM_URL = `http://${PRIVATE_IAM_UPSTREAM}`
 
-/** The canonical fabrika PostgreSQL DSN on Zerops — see `zerops/setups.ts` for why both suffixes exist. */
+/** The canonical fabrika PostgreSQL DSN on Zerops — see `src/topology/setups.ts` for why both suffixes exist. */
 const POSTGRES_URL = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
 
 /** The light tier's one object-storage service, as the platform's own `${service_variable}` references. */
@@ -25,7 +25,7 @@ const STORAGE = {
  * The four variables pass 1 writes on the proxy, and nothing else.
  *
  * The manifest is EMPTY on purpose: it is the only legal document that can be written before the hosts
- * exist, and the build bakes whatever is here (`zerops/setups.ts`). `FABRIKA_IAM_ISSUER` is the private
+ * exist, and the build bakes whatever is here (`src/topology/setups.ts`). `FABRIKA_IAM_ISSUER` is the private
  * address rather than the public issuer for the same reason — the public one is not known yet — and
  * `deployPlatform` corrects it in pass 2, before the manifest it belongs to is applied.
  */

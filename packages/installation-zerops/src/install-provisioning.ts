@@ -1,8 +1,8 @@
 import { waitForProcess, type ZeropsImportResult, type ZeropsService, type ZeropsServiceStatus } from '@fabrika/provider-zerops'
-import { type CompiledDocument, type CompiledTopology, compileTopology, platformTopology } from '../zerops/topology'
 import { PLATFORM_DEPLOY_ORDER, type PlatformDeployService, readServiceEnv, type ResolvedService } from './deploy'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
 import { GENERATED_SECRET_KEYS } from './install-environment'
+import { type CompiledDocument, type CompiledTopology, compileTopology, platformTopology } from './topology/topology'
 
 /** The one topology this command installs, so the project document and the services document cannot drift. */
 export const lightTopology = (environment: string): CompiledTopology =>
@@ -13,7 +13,7 @@ export const lightTopology = (environment: string): CompiledTopology =>
  * is rendered from.
  *
  * Not read off disk: `gen:check` already proves
- * `zerops/generated/platform-light.services.provision.zerops-import.yaml` is this exact text, and a
+ * `packages/platform-artifacts/generated/platform-light.services.provision.zerops-import.yaml` is this exact text, and a
  * value needs no filesystem in a published package.
  */
 export const provisioningDocument = (environment: string): CompiledDocument => {

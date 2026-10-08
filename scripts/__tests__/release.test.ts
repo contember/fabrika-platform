@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+	assertPackedImports,
 	assertStandaloneCheckout,
 	awaitRegistryTag,
+	entryImportSmoke,
+	packageInfo,
 	parseOptions,
 	REGISTRY_BACKOFF_MS,
 	REGISTRY_DEADLINE_MS,
@@ -246,5 +252,97 @@ describe('pinning an example checkout to a released version', () => {
 
 	test('refuses to diff a rewrite that added or removed a line, because the caller cannot produce one', () => {
 		expect(() => unifiedDiff('package.json', 'a\nb\n', 'a\nb\nc\n')).toThrow('the pin rewrite changed the line count')
+	})
+})
+
+describe('the tarball smoke loads every public main entry', () => {
+	const installPackage = async (consumer: string, name: string, source: string): Promise<void> => {
+		const directory = join(consumer, 'node_modules', ...name.split('/'))
+		await mkdir(directory, { recursive: true })
+		await writeFile(join(directory, 'package.json'), JSON.stringify({ name, type: 'module', exports: { '.': './index.ts' } }))
+		await writeFile(join(directory, 'index.ts'), source)
+	}
+
+	const runSmoke = async (packageNames: readonly string[], packages: Readonly<Record<string, string>>) => {
+		const consumer = await mkdtemp(join(tmpdir(), 'fabrika-entry-smoke-'))
+		try {
+			for (const [name, source] of Object.entries(packages)) await installPackage(consumer, name, source)
+			await writeFile(join(consumer, 'smoke.ts'), entryImportSmoke(packageNames))
+			const child = Bun.spawn(['bun', 'run', 'smoke.ts'], { cwd: consumer, stdout: 'pipe', stderr: 'pipe' })
+			const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+			return { exitCode, stderr }
+		} finally {
+			await rm(consumer, { recursive: true, force: true })
+		}
+	}
+
+	test('passes when every entry resolves, including a type-only one', async () => {
+		const result = await runSmoke(['@fabrika/one', '@fabrika/types-only'], {
+			'@fabrika/one': 'export const one = 1\n',
+			'@fabrika/types-only': 'export type Only = string\n',
+		})
+		expect(result.exitCode).toBe(0)
+	})
+
+	test('fails and names the package whose shipped file imports an unpublished one', async () => {
+		const result = await runSmoke(['@fabrika/one', '@fabrika/leaky'], {
+			'@fabrika/one': 'export const one = 1\n',
+			'@fabrika/leaky': "export { secret } from '@fabrika/private-only'\n",
+		})
+		expect(result.exitCode).not.toBe(0)
+		expect(result.stderr).toContain('@fabrika/leaky: main entry does not load from its tarball')
+	})
+})
+
+describe('packed files import only what a consumer can resolve', () => {
+	const PUBLIC = new Set(['@fabrika/leaky', '@fabrika/declared'])
+
+	const fixture = async (files: Readonly<Record<string, string>>) => {
+		const directory = await mkdtemp(join(tmpdir(), 'fabrika-packed-imports-'))
+		const manifest = {
+			name: '@fabrika/leaky',
+			version: '1.0.0',
+			publishConfig: { access: 'public' },
+			files: ['src', '!src/**/__tests__/**'],
+			exports: { '.': './src/index.ts' },
+			dependencies: { '@fabrika/declared': 'workspace:*', '@fabrika/private': 'workspace:*' },
+		}
+		await writeFile(join(directory, 'package.json'), JSON.stringify(manifest))
+		for (const [path, source] of Object.entries(files)) {
+			await mkdir(join(directory, path, '..'), { recursive: true })
+			await writeFile(join(directory, path), source)
+		}
+		return { directory, item: packageInfo(JSON.stringify(manifest), directory) }
+	}
+
+	const check = async (files: Readonly<Record<string, string>>): Promise<unknown> => {
+		const { directory, item } = await fixture(files)
+		try {
+			return await assertPackedImports(item, PUBLIC).then(() => undefined, (error: unknown) => error)
+		} finally {
+			await rm(directory, { recursive: true, force: true })
+		}
+	}
+
+	test('accepts declared public dependencies, self-imports and imports inside the package', async () => {
+		const error = await check({
+			'src/index.ts': "export { a } from './nested/a'\nimport type { D } from '@fabrika/declared/sub'\nimport '@fabrika/leaky/other'\n",
+			'src/nested/a.ts': "export const a = 1\nimport '../index'\n",
+			'src/__tests__/excluded.test.ts': "import '@fabrika/control'\n",
+			'outside.ts': "import '@fabrika/control'\n",
+		})
+		expect(error).toBeUndefined()
+	})
+
+	test('names the file and specifier of every leak, type-only ones included', async () => {
+		const error = await check({
+			'src/index.ts': "import type { Gates } from '@fabrika/control/gates'\n",
+			'src/nested/a.ts': "import { b } from '../../../elsewhere/src/b'\nimport { p } from '@fabrika/private'\n",
+		})
+		expect(error).toBeInstanceOf(Error)
+		const message = error instanceof Error ? error.message : ''
+		expect(message).toContain('src/index.ts imports @fabrika/control/gates, which is not a declared dependency')
+		expect(message).toContain('src/nested/a.ts imports ../../../elsewhere/src/b, which is outside the package')
+		expect(message).toContain('src/nested/a.ts imports @fabrika/private, which is a private package')
 	})
 })

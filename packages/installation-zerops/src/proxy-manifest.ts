@@ -12,7 +12,7 @@
 //
 //   template   which apps exist, their ids, the private service each is dialed at, the public listener
 //              each answers on, and their gates. True of every installation, so it is GENERATED into
-//              `zerops/generated/` and reviewed in a diff.
+//              `src/generated/` and reviewed in a diff.
 //   placement  the hostnames and the browser-facing scheme. `proxy-292c-8080.prg1.zerops.app` names one
 //              account's project, and a production installation binds custom domains instead, so
 //              whoever is deploying supplies these.

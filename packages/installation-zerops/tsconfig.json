@@ -4,5 +4,5 @@
 		"noEmit": true,
 		"types": ["@types/bun"]
 	},
-	"include": ["src/**/*", "zerops/**/*"]
+	"include": ["src/**/*"]
 }

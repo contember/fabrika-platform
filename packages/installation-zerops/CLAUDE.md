@@ -46,14 +46,13 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
 - `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
 - `src/proxy-manifest.ts` — the proxy manifest TEMPLATE type and `resolvePlatformProxyManifest`.
-- `zerops/setups.ts` — typed IAM, Operations, proxy, and control setup definitions.
-- `zerops/topology.ts` — project and service topology.
-- `zerops/proxy-manifest.ts` — the three fronted apps and their gates. **Dev-time only.**
-- `zerops/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control`. **Dev-time only.**
-- `zerops/render.ts` — generated artifact writer and `--check` verifier.
-- `zerops/generated/` — committed installation artifacts.
-- `zerops/installation-schemas.ts` — static supported installation schemas.
-- `zerops/schemas/` — pinned upstream documents, manual refresh and read-only drift check (`bun run check:schemas`).
+- `src/topology/setups.ts` — typed IAM, Operations, proxy, and control setup definitions.
+- `src/topology/topology.ts` — project and service topology. `src/topology/invariants.ts` — its extra checks.
+- `src/topology/artifacts.ts` — every generated installation artifact, as values (what `plan` validates).
+- `src/topology/installation-schemas.ts` + `validate.ts` — static supported installation schemas.
+- `src/generated/` — the proxy manifest template and the console schema, as DATA. Generated; never hand-edit.
+- The codegen, the committed import YAMLs and the pinned upstream schemas live in the private
+  [`@fabrika/platform-artifacts`](../platform-artifacts/CLAUDE.md) (`gen`, `gen:check`, `check:schemas`).
 
 ## Invariants
 
@@ -174,21 +173,19 @@ and is deliberate — someone reading only one path will guess wrong about the o
   one afterwards, and omitting it silently buys `oltp-production` on HA.
 - Every setup declares both `run.healthCheck` (liveness) and
   `deploy.readinessCheck` (the deploy gate), with every duration written as a
-  quoted Go duration inside `[10s, 1h]`. `zerops/installation-schemas.ts` declares the six
+  quoted Go duration inside `[10s, 1h]`. `src/topology/installation-schemas.ts` declares the six
   probe-duration fields as strings; generated-artifact tests enforce the interval.
-  Run `bun run check:schemas` to report upstream drift without changing pinned documents.
+  Run `bun run --filter @fabrika/platform-artifacts check:schemas` to report upstream drift without
+  changing pinned documents.
 - A PostgreSQL URL is always
   `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
   port, because `postgresql:ha@18` offers TLS on no other, and it keeps the
   session state the migration lock needs.
-- **`zerops/proxy-manifest.ts`, `zerops/console-schema.ts` and `zerops/render.ts` are EXCLUDED from the
-  published `files`, and that is load-bearing.** All three import `@fabrika/control` — a PRIVATE package
-  — through a devDependency, so shipping any of them would put an unresolvable import in the tarball.
-  What ships instead is `src/proxy-manifest.ts` (types + resolver) plus
-  `zerops/generated/platform-proxy-manifest.ts` (the gate sets) and
-  `zerops/generated/platform-console-schema.ts` (the console's vocabulary), both as DATA. `src/deploy.ts`
-  reads the generated pair and never reaches a generator; if you add a file here that imports a
-  devDependency, exclude it in the same change.
+- **Nothing in this package imports a private package, not even as a devDependency.** The generators
+  import `@fabrika/control`, so they live in the private `@fabrika/platform-artifacts`. What ships is
+  `src/proxy-manifest.ts` (types + resolver) plus `src/generated/platform-proxy-manifest.ts` (the gate
+  sets) and `src/generated/platform-console-schema.ts` (the console's vocabulary), both as DATA.
+  `release:smoke` imports this package from its tarball, so a private import fails the release.
 - **The proxy manifest is split into a committed template and a deploy-time placement.** The template
   is installation-independent (ids, upstreams, listener ports, gates) and `gen:check` proves it still
   matches the gate modules. Hosts and scheme are one installation's, so they are arguments. A

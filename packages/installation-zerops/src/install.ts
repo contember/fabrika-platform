@@ -12,7 +12,6 @@ import {
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep, type ZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import {
 	deployPlatformService,
 	deployPreparedPlatform,
@@ -23,6 +22,7 @@ import {
 	readServiceEnv,
 	type ResolvedService,
 } from './deploy'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
 import { derivePlatformHosts, type PlatformHosts, platformOrigin, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { checkedEnvironmentName } from './init'
 import { assertRunning, type InstallCollaborators, type InstallPrompts } from './install-collaborators'

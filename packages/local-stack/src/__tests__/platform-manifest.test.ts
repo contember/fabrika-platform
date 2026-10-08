@@ -8,8 +8,8 @@
  * port is identical on both sides, so a gate change cannot reach one and miss the other.
  */
 
+import { PLATFORM_PROXY_APPS, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
 import { describe, expect, test } from 'bun:test'
-import { PLATFORM_PROXY_APPS, platformProxyManifestTemplate } from '../../../installation-zerops/zerops/proxy-manifest'
 import { localApps } from '../app-registration'
 import { localPlatformProxyManifest } from '../prepare'
 

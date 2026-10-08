@@ -17,7 +17,7 @@ The name did not even buy headroom. On Zerops a profile chooses the FLOOR and th
 preset, not the cap: every PostgreSQL profile shares the same 8-core / 48 GB / 250 GB ceiling and the
 same vertical autoscaler, measured against a live account and recorded in
 [`../reference/zerops-platform.md`](../reference/zerops-platform.md) and in the comment on `oltp-hobby`
-in `packages/installation-zerops/zerops/topology.ts`. What `oltp-production` buys is a floor of two
+in `packages/installation-zerops/src/topology/topology.ts`. What `oltp-production` buys is a floor of two
 DEDICATED cores and 4 GB per container, and HA runs three containers — so a namespace named `prod` and
 running one small application held six dedicated cores and 12 GB at rest, and could grow no further
 than the cheapest profile could.

@@ -1,12 +1,12 @@
 # GENERATED FILE — DO NOT EDIT BY HAND.
 #
-# Source: packages/installation-zerops/zerops/setups.ts  (which is where the per-field commentary lives)
-# Regenerate: bun run --filter @fabrika/installation-zerops gen
+# Source: packages/installation-zerops/src/topology/setups.ts  (which is where the per-field commentary lives)
+# Regenerate: bun run --filter @fabrika/platform-artifacts gen
 #
 # Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's four deployable services share
 # ONE file with four named setups. A service selects its setup by name; the name defaults to the
 # service hostname, which is why `iam`, `operations`, `proxy` and `control` below are also hostnames in
-# packages/installation-zerops/zerops/generated/*.zerops-import.yaml.
+# packages/platform-artifacts/generated/*.zerops-import.yaml.
 #
 # NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE — including no `${x_y}` reference to a
 # DATA service, because which data services exist differs between the standard and light tiers.

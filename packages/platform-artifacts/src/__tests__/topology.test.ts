@@ -1,0 +1,516 @@
+// What the two generated topologies are asserted to be.
+//
+// Read the boundary carefully, because it is the whole value of this file: these tests prove the
+// documents are WELL-FORMED against the supported installation contract and that every invariant the ADRs
+// require holds in them. They prove NOTHING about whether the platform accepts them, whether the
+// services boot, or whether anything is reachable. Nobody has run this against a real account.
+
+import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE } from '@fabrika/example-zerops-app'
+import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
+import {
+	compileFabrikaManifest,
+	compileImport,
+	createZeropsArtifactSourceDescriptor,
+	renderYaml,
+	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
+	type ZeropsImportDocument,
+} from '@fabrika/provider-zerops'
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { type Artifact, generatedArtifacts } from '../../../installation-zerops/src/topology/artifacts'
+import { assertCorePackageIsExplicit, assertOnlyPublicService, assertZeropsHostnames } from '../../../installation-zerops/src/topology/invariants'
+import {
+	appsTopology,
+	type CompiledDocument,
+	type CompiledTopology,
+	compileTopology,
+	fabrikaTopologies,
+	platformTopology,
+	PROXY_HOSTNAME,
+} from '../../../installation-zerops/src/topology/topology'
+import { validateYaml } from '../../../installation-zerops/src/topology/validate'
+import { REPO_ROOT } from '../render'
+
+const compiled = fabrikaTopologies().map((topology) => compileTopology(topology, 'prod'))
+
+const documents = (): Array<{ label: string; document: ZeropsImportDocument; publicService: string }> =>
+	compiled.flatMap((entry) => [
+		{ label: `${entry.topology.id} (provision)`, document: entry.provision.document, publicService: entry.topology.publicService },
+		{ label: `${entry.topology.id} (steady)`, document: entry.steady.document, publicService: entry.topology.publicService },
+	])
+
+const platform = compiled.find((entry) => entry.topology.id === 'platform')
+const light = compiled.find((entry) => entry.topology.id === 'platform-light')
+const apps = compiled.find((entry) => entry.topology.id === 'apps-prod')
+
+const importArtifacts = (): Artifact[] => generatedArtifacts().filter((artifact) => artifact.path.endsWith('.zerops-import.yaml'))
+const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
+// The cheap tier consumes the namespace's postgres, so its descriptor must not reference the full tier's own database.
+const SHARED_POSTGRES_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(
+	readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.shared-postgres.yaml'), 'utf8'),
+)
+
+describe('every generated import document validates against the supported installation schema', () => {
+	for (const artifact of importArtifacts()) {
+		test(`${artifact.path} — zero errors`, () => {
+			expect(validateYaml('import', artifact.content)).toEqual([])
+		})
+	}
+
+	test('all eight documents exist — provisioning and steady state, plus the light tier services-only pair', () => {
+		expect(importArtifacts().map((artifact) => artifact.path)).toEqual([
+			'packages/platform-artifacts/generated/platform.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform-light.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform-light.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform-light.services.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform-light.services.zerops-import.yaml',
+			'packages/platform-artifacts/generated/apps-prod.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/apps-prod.zerops-import.yaml',
+		])
+	})
+
+	test('every document names the endpoint that actually accepts it — a `project:` block is project-import only', () => {
+		for (const artifact of importArtifacts()) {
+			const createsProject = /^project:/m.test(artifact.content)
+			expect(`${artifact.path}: ${artifact.content.includes('Apply with: POST /client/{clientId}/project/import') ? 'create' : 'services'}`)
+				.toBe(`${artifact.path}: ${createsProject ? 'create' : 'services'}`)
+		}
+	})
+})
+
+describe('the topology is the one ADR-0006 describes', () => {
+	test('platform: control, Operations, IAM, proxy, and isolated data services — in one project of their own', () => {
+		expect(platform?.steady.document.services.map((service) => service.hostname)).toEqual([
+			'db',
+			'storage',
+			'operationsdb',
+			'operationsstorage',
+			'iam',
+			'operations',
+			'control',
+			'proxy',
+		])
+		expect(platform?.steady.document.project?.name).toBe('platform')
+	})
+
+	test('apps-prod is a SEPARATE project holding only the proxy — apps arrive as their own imports', () => {
+		expect(apps?.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
+		expect(apps?.steady.document.project?.name).toBe('apps-prod')
+	})
+
+	test('corePackage is stated explicitly on all three — it cannot be downgraded, so a default is a decision nobody made', () => {
+		expect(platform?.steady.document.project?.corePackage).toBe('SERIOUS')
+		expect(light?.steady.document.project?.corePackage).toBe('LIGHT')
+		expect(apps?.steady.document.project?.corePackage).toBe('SERIOUS')
+		const noCorePackage: ZeropsImportDocument = { project: { name: 'p', envIsolation: 'service' }, services: [] }
+		expect(() => assertCorePackageIsExplicit(noCorePackage)).toThrow('must state its corePackage')
+	})
+
+	test('Postgres availability is encoded in the TYPE, and the deprecated `mode` appears nowhere', () => {
+		const db = platform?.steady.document.services.find((service) => service.hostname === 'db')
+		expect(db?.type).toBe('postgresql:ha@18')
+		expect(db?.mode).toBeUndefined()
+		expect(platform?.steady.yaml).not.toContain('mode:')
+	})
+
+	test("object storage is private and un-CDN'd — a run log can quote a build environment", () => {
+		const storage = platform?.steady.document.services.find((service) => service.hostname === 'storage')
+		expect(storage?.objectStoragePolicy).toBe('private')
+		expect(storage?.enableCdn).toBe(false)
+		const operationsStorage = platform?.steady.document.services.find((service) => service.hostname === 'operationsstorage')
+		expect(operationsStorage?.objectStoragePolicy).toBe('private')
+		expect(operationsStorage?.enableCdn).toBe(false)
+	})
+
+	test('the light tier is the same six roles on ONE database and ONE bucket', () => {
+		expect(light?.steady.document.services.map((service) => service.hostname)).toEqual([
+			'db',
+			'storage',
+			'iam',
+			'operations',
+			'control',
+			'proxy',
+		])
+		// The point of the tier: no `operationsdb`, no `operationsstorage`. Which schema and which key
+		// prefix each service uses is per-installation configuration, not a second data service.
+		expect(light?.steady.document.services.some((service) => service.hostname.startsWith('operations') && service.hostname !== 'operations'))
+			.toBe(false)
+	})
+
+	test('the light tier trades availability, not isolation: single Postgres, one container, still private', () => {
+		const services = new Map(light?.steady.document.services.map((service) => [service.hostname, service]))
+		expect(services.get('db')?.type).toBe('postgresql:single@18')
+		expect(services.get('db')?.mode).toBeUndefined()
+		expect(services.get('storage')?.objectStoragePolicy).toBe('private')
+		expect(services.get('storage')?.enableCdn).toBe(false)
+		for (const hostname of ['iam', 'operations', 'control', 'proxy']) {
+			expect(services.get(hostname)?.minContainers).toBe(1)
+		}
+		// Everything but the proxy stays off the internet, exactly as on the standard tier.
+		for (const hostname of ['iam', 'operations', 'control']) {
+			expect(services.get(hostname)?.enableSubdomainAccess).toBe(false)
+		}
+	})
+
+	test('Operations has an isolated HA database and no public route of its own', () => {
+		const operationsDb = platform?.steady.document.services.find((service) => service.hostname === 'operationsdb')
+		const operations = platform?.steady.document.services.find((service) => service.hostname === 'operations')
+		expect(operationsDb?.type).toBe('postgresql:ha@18')
+		expect(operations?.enableSubdomainAccess).toBe(false)
+	})
+
+	test('the database and the object store are created FIRST (priority is descending)', () => {
+		const byHostname = new Map(platform?.steady.document.services.map((service) => [service.hostname, service.priority ?? 0]))
+		expect(byHostname.get('db')).toBe(100)
+		expect(byHostname.get('storage')).toBe(100)
+		expect(byHostname.get('operationsdb')).toBe(100)
+		expect(byHostname.get('operationsstorage')).toBe(100)
+		expect(byHostname.get('iam')).toBeGreaterThan(byHostname.get('operations') ?? 0)
+		expect(byHostname.get('operations')).toBeGreaterThan(byHostname.get('proxy') ?? 0)
+		expect(byHostname.get('proxy')).toBeGreaterThan(byHostname.get('control') ?? 0)
+		expect(byHostname.get('proxy')).toBeLessThan(byHostname.get('iam') ?? 0)
+	})
+})
+
+describe('ADR-0004 — isolation and the absence of secrets, on the FINISHED documents', () => {
+	for (const { label, document } of documents()) {
+		test(`${label}: envIsolation is \`service\` at the project level and on every service`, () => {
+			expect(document.project?.envIsolation).toBe('service')
+			expect(document.services.map((service) => service.envIsolation)).toEqual(document.services.map(() => 'service'))
+		})
+
+		test(`${label}: no project-level env variables — they reach every service in the project`, () => {
+			expect(document.project?.envVariables).toBeUndefined()
+		})
+
+		test(`${label}: no secret values travel in the document`, () => {
+			expect(document.services.every((service) => service.envSecrets === undefined && service.dotEnvSecrets === undefined)).toBe(true)
+		})
+
+		test(`${label}: EVERY service carries \`override: true\`, managed ones included`, () => {
+			// Not an ADR-0004 invariant but the same shape of one, and it belongs on the finished document
+			// for the same reason. Live-verified: without it the platform answers
+			// `400 serviceStackNameUnavailable` on the first hostname that already exists — and it answers
+			// it for a managed `postgresql` service too, which is exactly the case upstream says the field
+			// does not apply to. One omission makes the whole document un-re-appliable, not just that
+			// service. What it does NOT do is update anything; see `compileService`.
+			expect(document.services.every((service) => service.override === true)).toBe(true)
+		})
+	}
+
+	test('the YAML text itself never contains an isolation setting other than `service`', () => {
+		for (const artifact of importArtifacts()) {
+			expect(artifact.content).not.toContain('envIsolation: none')
+			expect(artifact.content).toContain('envIsolation: service')
+		}
+	})
+})
+
+describe('ADR-0022 — the proxy is the only publicly routed service', () => {
+	for (const { label, document, publicService } of documents()) {
+		test(`${label}: only the declared public service may be routed, and every runtime service states its answer`, () => {
+			// The generalization the light tier forces: `platform` and `apps-prod` publish through a custom
+			// domain and so route NOTHING from the import, while `platform-light` is a single-project
+			// installation with no second project to put a domain in front of and takes the subdomain. The
+			// invariant was never "nothing is public" — it is ADR-0022's "only the proxy", which is what
+			// `publicService` names and what `assertOnlyPublicService` enforces.
+			const routed = document.services.filter((service) => service.enableSubdomainAccess === true).map((service) => service.hostname)
+			expect(routed.every((hostname) => hostname === publicService)).toBe(true)
+			expect(() => assertOnlyPublicService(document, publicService)).not.toThrow()
+			// The runtime services state their answer rather than relying on the platform default, so
+			// enabling it is a visible diff and the re-applied import corrects a GUI change.
+			for (const hostname of ['iam', 'control', 'proxy']) {
+				const service = document.services.find((entry) => entry.hostname === hostname)
+				if (service !== undefined) {
+					expect(service.enableSubdomainAccess).toBe(hostname === publicService ? routed.includes(hostname) : false)
+				}
+			}
+		})
+	}
+
+	test('the standard platform routes nothing from the import — its domain is bound out of band', () => {
+		expect(platform?.steady.document.services.filter((service) => service.enableSubdomainAccess === true)).toEqual([])
+	})
+
+	test('the light platform routes the proxy and nothing else', () => {
+		expect(light?.steady.document.services.filter((service) => service.enableSubdomainAccess === true).map((service) => service.hostname))
+			.toEqual([PROXY_HOSTNAME])
+	})
+
+	test('the `zerops-subdomain` variant enables it on the PROXY and on nothing else', () => {
+		const document = compileImport({ target: platformTopology({ env: 'dev', publicAccess: 'zerops-subdomain' }).target, ctx: { env: 'dev' } })
+		expect(document.services.filter((service) => service.enableSubdomainAccess === true).map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
+		expect(() => assertOnlyPublicService(document, PROXY_HOSTNAME)).not.toThrow()
+	})
+
+	test('and the check BITES: a document that opens up the IAM service is rejected', () => {
+		const document: ZeropsImportDocument = {
+			services: [
+				{ hostname: 'proxy', type: 'alpine@3.21', envIsolation: 'service', override: true, enableSubdomainAccess: true },
+				{ hostname: 'iam', type: 'alpine/bun@1.3', envIsolation: 'service', override: true, enableSubdomainAccess: true },
+			],
+		}
+		expect(() => assertOnlyPublicService(document, 'proxy')).toThrow('service `iam` enables public subdomain access')
+	})
+
+	test('naming a public service that is not in the document is an error, not a silent pass', () => {
+		expect(() => assertOnlyPublicService({ services: [{ hostname: 'api', type: 'alpine/bun@1.3', envIsolation: 'service' }] }, 'proxy')).toThrow(
+			'declares no such service',
+		)
+	})
+})
+
+describe("hostnames — the rule that lives only in the schema's prose", () => {
+	test('every generated hostname is legal', () => {
+		for (const { document } of documents()) {
+			expect(() => assertZeropsHostnames(document)).not.toThrow()
+		}
+	})
+
+	test('a hyphen is illegal, and nothing in the published schema would have caught it', () => {
+		const document: ZeropsImportDocument = { services: [{ hostname: 'run-logs', type: 'object-storage', envIsolation: 'service' }] }
+		// The schema is perfectly happy with it — there is no `pattern` keyword anywhere in the document.
+		expect(validateYaml('import', 'services:\n  - hostname: run-logs\n    type: object-storage\n')).toEqual([])
+		expect(() => assertZeropsHostnames(document)).toThrow('is illegal')
+	})
+
+	test('26 characters is illegal', () => {
+		expect(() => assertZeropsHostnames({ services: [{ hostname: 'a'.repeat(26), type: 'alpine/bun@1.3', envIsolation: 'service' }] })).toThrow(
+			'is illegal',
+		)
+	})
+})
+
+describe('no managed service is sized by a default', () => {
+	// Omitting `profile` is not neutral. Read back off live services: a `postgresql:ha@18` created with
+	// no profile gets `oltp-production` — two DEDICATED cores and 4 GB per container, three containers —
+	// and a `postgresql:single@18` gets `oltp-staging`. `override: true` will not correct either
+	// afterwards, so the only chance to choose is the document that creates the service.
+	const MANAGED = /^postgresql:/
+
+	for (const { label, document } of documents()) {
+		test(`${label}: every PostgreSQL service names its autoscaling profile`, () => {
+			for (const service of document.services.filter((service) => MANAGED.test(service.type))) {
+				expect(`${service.hostname}: ${String(service.profile)}`).not.toContain('undefined')
+			}
+		})
+	}
+
+	test('and there are managed services to have checked — `apps-prod` genuinely owns none', () => {
+		const managed = documents().flatMap(({ document }) => document.services.filter((service) => MANAGED.test(service.type)))
+		expect(managed.length).toBeGreaterThan(0)
+	})
+
+	test('the two platform databases are sized differently, on purpose', () => {
+		const profiles = new Map(platform?.steady.document.services.map((service) => [service.hostname, service.profile]))
+		// Identity and control-plane state: dedicated CPU, because auth latency is felt by every request.
+		expect(profiles.get('db')).toBe('oltp-production')
+		// Error history: same HA redundancy and the same ceiling, one shared core and 1 GB at the floor.
+		expect(profiles.get('operationsdb')).toBe('oltp-staging')
+	})
+
+	test('the example app gives EVERY environment the cheapest preset its type has, `prod` included', () => {
+		const profileIn = (env: string): string | undefined =>
+			notesConfig.target.services({ env }).find((service) => service.hostname === NOTES_DATABASE_SERVICE)?.profile
+		// An example is where people copy their defaults from, so it must not teach that naming an
+		// environment `prod` is how you buy a bigger database. A profile picks the FLOOR and the tuning
+		// preset — every one shares the same 8-core / 48 GB ceiling — so the cheapest preset costs no
+		// headroom, only a smaller idle bill.
+		expect(profileIn('stage')).toBe('oltp-hobby')
+		expect(profileIn('prod')).toBe('oltp-hobby')
+	})
+})
+
+describe('provisioning vs steady state', () => {
+	test('re-applying the STEADY form is the safe one; re-applying the provisioning form is not', () => {
+		// Live-verified, and the distinction is the whole reason two forms exist. Re-applying the steady
+		// document at services that already exist is a complete no-op — no process, no `lastUpdate` move.
+		// Re-applying the provisioning document at a service that already carries code starts a
+		// `stack.deploy` and activates a new EMPTY app version; the running code becomes a `BACKUP`.
+		for (const entry of compiled) {
+			expect(entry.steady.yaml).not.toContain('startWithoutCode')
+			expect(entry.provision.yaml).toContain('startWithoutCode: true')
+		}
+	})
+
+	test('the provisioning form starts EVERY service without code, so secrets can be written before any build', () => {
+		for (const entry of compiled) {
+			expect(entry.provision.document.services.map((service) => service.startWithoutCode)).toEqual(entry.provision.document.services.map(() => true))
+		}
+	})
+
+	test('the steady-state form does not — `startWithoutCode` belongs to provisioning, not to deploying', () => {
+		for (const entry of compiled) {
+			expect(entry.steady.yaml).not.toContain('startWithoutCode')
+		}
+	})
+
+	test('the two forms differ ONLY in that flag', () => {
+		for (const entry of compiled) {
+			expect(entry.provision.yaml.replaceAll('\n    startWithoutCode: true', '')).toBe(entry.steady.yaml)
+		}
+	})
+})
+
+describe('the light tier also compiles services-only, for a project the operator created by hand', () => {
+	// `POST /client/{clientId}/project/import` is the only endpoint a `project:` block is valid at, and it
+	// CREATES a project — Zerops permits duplicate project names, so applying one at an installation that
+	// already exists yields a second project rather than an error. A bootstrap imports into the operator's
+	// project through `POST /project/{projectId}/service-stack/import`, which takes no such block.
+	const servicesForm = (entry: CompiledTopology | undefined, form: 'servicesProvision' | 'servicesSteady'): CompiledDocument => {
+		const compiledForm = entry?.[form]
+		if (compiledForm === undefined) {
+			throw new Error(`the light topology compiled no \`${form}\` document`)
+		}
+		return compiledForm
+	}
+
+	const servicesProvision = servicesForm(light, 'servicesProvision')
+	const servicesSteady = servicesForm(light, 'servicesSteady')
+	const pairs = [
+		{ label: 'platform-light (services, provision)', form: servicesProvision, paired: light?.provision },
+		{ label: 'platform-light (services, steady)', form: servicesSteady, paired: light?.steady },
+	]
+
+	for (const { label, form, paired } of pairs) {
+		test(`${label}: carries no \`project:\` key, in the document or in the rendered text`, () => {
+			expect(form.document.project).toBeUndefined()
+			expect(form.yaml).not.toMatch(/^project:/m)
+		})
+
+		test(`${label}: EVERY service still carries \`envIsolation: service\` — which is why the block can go`, () => {
+			// ADR-0004's protection survives the missing block because the per-service value overrides the
+			// project's, and the compiler writes it from a constant on every entry it builds. Without this the
+			// document would be relying on an isolation setting nothing here can set or read back.
+			expect(form.document.services.length).toBeGreaterThan(0)
+			expect(form.document.services.map((service) => service.envIsolation)).toEqual(form.document.services.map(() => 'service'))
+			expect(form.yaml).not.toContain('envIsolation: none')
+		})
+
+		test(`${label}: declares exactly what the project-creating form declares`, () => {
+			// One `services` function behind both targets. A failure here means the bootstrap would provision
+			// something other than what the committed topology describes.
+			expect(form.document.services).toEqual(paired?.document.services ?? [])
+			// Same text, minus the leading block — the only difference between the two documents.
+			expect(paired?.yaml.endsWith(form.yaml)).toBe(true)
+		})
+	}
+
+	test('the services-only provisioning form starts EVERY service without code, so secrets precede any build', () => {
+		expect(servicesProvision.document.services.map((service) => service.startWithoutCode)).toEqual(
+			servicesProvision.document.services.map(() => true),
+		)
+		expect(servicesProvision.yaml).toContain('startWithoutCode: true')
+	})
+
+	test('and the services-only steady form does not — re-applying THAT at a service carrying code blanks it', () => {
+		expect(servicesSteady.document.services.every((service) => service.startWithoutCode === undefined)).toBe(true)
+		expect(servicesSteady.yaml).not.toContain('startWithoutCode')
+	})
+
+	test('both are committed, and the committed text has no `project:` line either', () => {
+		const committed = importArtifacts().filter((artifact) => artifact.path.includes('.services'))
+		expect(committed.map((artifact) => artifact.path)).toEqual([
+			'packages/platform-artifacts/generated/platform-light.services.provision.zerops-import.yaml',
+			'packages/platform-artifacts/generated/platform-light.services.zerops-import.yaml',
+		])
+		for (const artifact of committed) {
+			expect(artifact.content).not.toMatch(/^project:/m)
+			expect(artifact.content).toContain('Apply with: POST /project/{projectId}/service-stack/import')
+		}
+	})
+
+	test('only the light tier declares one — the standard tier spans two projects fabrika creates itself', () => {
+		expect(compiled.filter((entry) => entry.servicesProvision !== undefined).map((entry) => entry.topology.id)).toEqual(['platform-light'])
+	})
+})
+
+describe('a per-environment apps project is one call away', () => {
+	test('staging gets its own project, its own name and its own corePackage', () => {
+		const staging = appsTopology({ env: 'stage', corePackage: 'LIGHT' })
+		const { document } = compileTopology(staging, 'stage').steady
+		expect(staging.id).toBe('apps-stage')
+		expect(document.project?.name).toBe('apps-stage')
+		expect(document.project?.corePackage).toBe('LIGHT')
+		// The point of ADR-0006: this is a DIFFERENT project, so nothing in it can reach production's db.
+		expect(document.project?.name).not.toBe(apps?.steady.document.project?.name)
+	})
+})
+
+describe('cheap, mid, and full namespace fixtures', () => {
+	test('cheap owns one shared Postgres service and the app imports only its runtime', () => {
+		const namespace = compileTopology(
+			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'cheap', projectName: 'cheap-prod' }),
+			'prod',
+		)
+		const app = compileFabrikaManifest(cheapNotesConfig, 'prod', SHARED_POSTGRES_DESCRIPTOR)
+
+		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
+		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_SERVICE])
+		expect(app.target.namespaceResources).toEqual([{
+			resourceKey: 'service:postgres',
+			hostname: 'postgres',
+			connectionString: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
+		}])
+		expect(validateYaml('import', renderYaml(app.target.importDocument))).toEqual([])
+	})
+
+	test('cheap uses single-node Postgres outside production unless policy overrides it', () => {
+		const namespace = compileTopology(
+			appsTopology({ env: 'stage', corePackage: 'LIGHT', preset: 'cheap', projectName: 'cheap-stage' }),
+			'stage',
+		)
+		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')
+	})
+
+	test('mid owns only the proxy while the app imports its prefixed database and runtime', () => {
+		const namespace = compileTopology(
+			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'mid' }),
+			'prod',
+		)
+		const app = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
+
+		expect(namespace.topology.namespacePreset).toBe('mid')
+		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+		expect(app.target.namespaceResources).toBeUndefined()
+	})
+
+	test('full uses the same app-owned services but reserves the namespace for that app', () => {
+		const namespace = compileTopology(
+			appsTopology({
+				env: 'prod',
+				corePackage: 'SERIOUS',
+				preset: 'full',
+				projectName: 'notes-prod',
+				exclusiveAppId: notesConfig.id,
+			}),
+			'prod',
+		)
+		const app = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
+
+		expect(namespace.topology.namespacePreset).toBe('full')
+		expect(namespace.topology.exclusiveAppId).toBe(notesConfig.id)
+		expect(namespace.steady.document.project?.name).toBe('notes-prod')
+		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+	})
+
+	test('exclusive ownership is accepted only by the full preset', () => {
+		expect(() => appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'full' })).toThrow('requires exclusiveAppId')
+		expect(() => appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'mid', exclusiveAppId: notesConfig.id })).toThrow(
+			'cannot reserve an exclusive app',
+		)
+	})
+})
+
+describe('the committed artifacts are what the declarations produce', () => {
+	for (const artifact of generatedArtifacts()) {
+		test(`${artifact.path} is up to date`, () => {
+			expect(readFileSync(resolve(REPO_ROOT, artifact.path), 'utf8')).toBe(artifact.content)
+		})
+	}
+})

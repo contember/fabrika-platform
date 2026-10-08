@@ -11,12 +11,7 @@
 	},
 	"files": [
 		"src",
-		"!src/**/__tests__/**",
-		"zerops",
-		"!zerops/**/__tests__/**",
-		"!zerops/proxy-manifest.ts",
-		"!zerops/console-schema.ts",
-		"!zerops/render.ts"
+		"!src/**/__tests__/**"
 	],
 	"exports": {
 		".": {
@@ -28,11 +23,7 @@
 	"type": "module",
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "bun test",
-		"gen": "bun zerops/render.ts",
-		"gen:check": "bun zerops/render.ts --check",
-		"gen:schemas": "bun zerops/schemas/refresh.ts",
-		"check:schemas": "bun zerops/schemas/check.ts"
+		"test": "bun test"
 	},
 	"dependencies": {
 		"zod": "^3.25.76",
@@ -45,13 +36,7 @@
 		"@fabrika/proxy-contract": "workspace:*"
 	},
 	"devDependencies": {
-		"@fabrika/control": "workspace:*",
-		"@fabrika/example-zerops-app": "workspace:*",
-		"@fabrika/iam": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
-		"@fabrika/operations": "workspace:*",
-		"@fabrika/operations-contract": "workspace:*",
-		"@fabrika/proxy": "workspace:*",
 		"@types/bun": "latest"
 	}
 }

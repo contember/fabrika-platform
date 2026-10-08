@@ -28,8 +28,8 @@ bun run test:browser  # the opice suites in tests/browser/
 
 - **The composition is secure by default and runs the REAL enforcement path.** `localPlatformProxyManifest`
   is a CALLER of the installation's own generator, not a second copy of it: it hands
-  `resolvePlatformProxyManifest` (`@fabrika/installation-zerops`, imported by relative path because the
-  generator is dev-time only) the local hosts, the local scheme and IAM's local port, and gets the same
+  `resolvePlatformProxyManifest` (`@fabrika/platform-artifacts/proxy-manifest`, the private
+  dev-time generator package) the local hosts, the local scheme and IAM's local port, and gets the same
   three apps a deployed installation is fronted by, with the same gates. Everything else — which apps
   exist, their ids, `CONTROL_PROXY_GATES`, `OPERATIONS_PROXY_GATES` — comes from that one declaration,
   so a gate change cannot reach a deployed proxy and miss this one, or the reverse.
