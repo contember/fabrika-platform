@@ -16,18 +16,18 @@
  * service that owns identity.
  */
 
-import { type IamRpc, isOAuthResourceUri, PROXY_TOKEN_HEADER, type TokenAudienceProfile } from '@fabrika/auth-core'
+import { isOAuthResourceUri, PROXY_TOKEN_HEADER, type TokenAudienceProfile } from '@fabrika/auth-core'
 import { buildAuthContext, IamClient } from './client'
 import { readRequestId } from './request'
-import type { AuthContext, ListPrincipalsFailure, PrincipalList } from './types'
+import type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalList } from './types'
 import { TokenVerifier } from './verify'
 
 // ── Public config surfaces ──────────────────────────────────────────────────────
 
 /** The env `createIam` reads. An app's Worker `Env` satisfies it structurally (extra fields are fine). */
 export interface IamEnv {
-	/** The IAM service binding. Typed as the `IamRpc` contract — never the IAM Worker. */
-	IAM?: IamRpc
+	/** The IAM service binding, or `HttpIamRpc` off Cloudflare. Typed by the contract — never the IAM Worker. */
+	IAM?: IamBinding
 	/** IAM origin — the token `iss` this SDK verifies against. Canonicalized once in `createIam`. */
 	FABRIKA_IAM_ISSUER?: string
 	/** Fallback app id when `opts.appId` is omitted. */
@@ -93,7 +93,7 @@ export function anonymousContext(): AuthContext {
 /** Internal construction config — `createIam` assembles this; apps never build it directly. */
 interface IamConfig {
 	management: IamClient
-	binding: IamRpc
+	binding: IamBinding
 	verifier: TokenVerifier
 	appId: string
 	tokenAudience: TokenAudienceProfile
@@ -106,7 +106,7 @@ interface IamConfig {
  */
 export class Iam {
 	private readonly management: IamClient
-	private readonly binding: IamRpc
+	private readonly binding: IamBinding
 	private readonly verifier: TokenVerifier
 	private readonly appId: string
 	private readonly tokenAudience: TokenAudienceProfile

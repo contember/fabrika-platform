@@ -33,13 +33,13 @@ export { reconcileSchema, ReconcileSchemaError } from './provision'
 // The one schema for an app's declared vocabulary; every reader of an `AppSchema` parses with it.
 export { appSchemaSchema } from './app-schema'
 export type { ReconcileSchemaOptions } from './provision'
-export type { AuthContext, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
+export type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
 
 // The header the proxy injects its verified token on. Re-exported so an app never spells it out.
 export { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 
 // Re-export from core so apps need only depend on the SDK: DomainEvent (one event shape),
-// IamRpc (the binding contract — apps type their `env.IAM` as IamRpc without importing core),
+// IamRpc (the whole binding contract; an app types its `env.IAM` as the narrower `IamBinding`),
 // Scope (the `{ type, value }` coordinate apps pass to `can()`), the AppSchema vocabulary types
 // apps DECLARE in `fabrika.schema.ts` for `reconcileSchema()`, and the per-path gate types
 // (`AppGates` & co.) apps DECLARE for the PROXY manifest — never for in-process enforcement.

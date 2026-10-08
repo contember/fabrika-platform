@@ -1,8 +1,10 @@
 # @fabrika/auth
 
 The app-facing IAM SDK — what an application uses instead of hand-rolling auth. It depends only on
-`@fabrika/auth-core`: the binding is typed as the `IamRpc` CONTRACT, so the SDK never imports the IAM
-service. Assumes the root CLAUDE.md.
+`@fabrika/auth-core`: the binding is typed as `IamBinding`, the `getJwks`/`listPrincipals`/`audit` part
+of the `IamRpc` CONTRACT, so the SDK never imports the IAM service. That is what a Cloudflare
+application's binding to IAM's `PropustkaApplication` entrypoint serves; widen it only together with
+that entrypoint. Assumes the root CLAUDE.md.
 
 **This package does not enforce anything.** [ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)
 makes `@fabrika/proxy` the only enforcement point, and the duplicate in-process path is gone. There is

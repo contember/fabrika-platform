@@ -1,7 +1,7 @@
-import type { AccessTokenClaims, DomainEvent, IamRpc, OAuthTokenClaims, PermissionEntry, Scope } from '@fabrika/auth-core'
+import type { AccessTokenClaims, DomainEvent, OAuthTokenClaims, PermissionEntry, Scope } from '@fabrika/auth-core'
 import { permits, scopedValues } from '@fabrika/auth-core'
 import { readCredentials } from './request'
-import type { AuthContext, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
+import type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
 
 // ── AuthContext (real) ─────────────────────────────────────────────────────────
 
@@ -15,7 +15,7 @@ class RealAuthContext implements AuthContext {
 	readonly ok = true
 
 	constructor(
-		private readonly binding: IamRpc,
+		private readonly binding: IamBinding,
 		/** The verified token this context was built from — IAM reads the audit event's app from it. */
 		private readonly token: string,
 		private readonly permissions: PermissionEntry[],
@@ -63,7 +63,7 @@ class RealAuthContext implements AuthContext {
  * so `can()` / `scopedTo()` / `audit()` behave identically. A token with no `ptype` is anonymous
  * (`principal: null`).
  */
-export function buildAuthContext(binding: IamRpc, token: string, claims: AccessTokenClaims, requestId: string): AuthContext {
+export function buildAuthContext(binding: IamBinding, token: string, claims: AccessTokenClaims, requestId: string): AuthContext {
 	const principal: PrincipalIdentity | null = claims.ptype === undefined
 		? null
 		: { id: claims.sub, type: claims.ptype, label: claims.label ?? claims.sub }
@@ -81,7 +81,7 @@ export function buildAuthContext(binding: IamRpc, token: string, claims: AccessT
  */
 export class IamClient {
 	constructor(
-		private readonly binding: IamRpc,
+		private readonly binding: IamBinding,
 		private readonly appId: string,
 	) {}
 

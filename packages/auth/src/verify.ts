@@ -14,15 +14,16 @@
  * built there is per-request while the binding lives for the isolate/process.
  */
 
-import type { IamRpc, TokenAudienceProfile } from '@fabrika/auth-core'
+import type { TokenAudienceProfile } from '@fabrika/auth-core'
 import { createJwksCache, type JwksCache, TokenVerifier as JwksVerifier, type VerifyResult } from '@fabrika/jwks'
+import type { IamBinding } from './types'
 
 export type { VerifyResult }
 
 /** Key set + cooldown cached per binding, so they survive the per-request SDK objects built over them. */
-const jwksCache = new WeakMap<IamRpc, JwksCache>()
+const jwksCache = new WeakMap<IamBinding, JwksCache>()
 
-function cacheFor(binding: IamRpc): JwksCache {
+function cacheFor(binding: IamBinding): JwksCache {
 	let cache = jwksCache.get(binding)
 	if (cache === undefined) {
 		cache = createJwksCache()
@@ -39,7 +40,7 @@ export class TokenVerifier {
 	private readonly inner: JwksVerifier
 
 	constructor(
-		binding: IamRpc,
+		binding: IamBinding,
 		issuer: string,
 		private readonly audience: string | TokenAudienceProfile,
 		now: () => number = () => Math.floor(Date.now() / 1000),

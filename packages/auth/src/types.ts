@@ -1,4 +1,10 @@
-import type { DomainEvent, OAuthTokenClaims, PrincipalListItem, PrincipalType, Scope } from '@fabrika/auth-core'
+import type { DomainEvent, IamRpc, OAuthTokenClaims, PrincipalListItem, PrincipalType, Scope } from '@fabrika/auth-core'
+
+/**
+ * The `IamRpc` members the SDK calls. A Cloudflare application's `IAM` binding is IAM's
+ * `PropustkaApplication` entrypoint, which serves these and has no `issueKey` or `revokeKey`.
+ */
+export type IamBinding = Pick<IamRpc, 'getJwks' | 'listPrincipals' | 'audit'>
 
 /**
  * The resolved caller's identity — who Access says you are, as the IAM Worker recorded

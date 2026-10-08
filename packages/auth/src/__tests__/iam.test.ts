@@ -9,6 +9,7 @@ import {
 import { describe, expect, test } from 'bun:test'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import { anonymousContext, type AuthResult, createIam, type IamEnv } from '../iam'
+import type { IamBinding } from '../types'
 import { IamRpcStub } from './stub'
 
 const ISSUER = 'https://propustka.test'
@@ -90,6 +91,22 @@ describe('createIam', () => {
 
 	test('throws when no IAM URL is resolvable', () => {
 		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_APP_ID: APP })).toThrow(/FABRIKA_IAM_ISSUER is missing/)
+	})
+
+	// A Cloudflare app's binding is IAM's `PropustkaApplication` entrypoint, which has no `issueKey`.
+	test('works over a binding that serves only getJwks, listPrincipals and audit', async () => {
+		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] }, jwks: JWKS })
+		const narrow: IamBinding = {
+			getJwks: () => stub.getJwks(),
+			listPrincipals: (input) => stub.listPrincipals(input),
+			audit: (event) => stub.audit(event),
+		}
+		const iam = createIam({ IAM: narrow, FABRIKA_IAM_ISSUER: ISSUER, FABRIKA_APP_ID: APP })
+
+		const result = await iam.authenticate(proxied(await sign({ perms: [] })))
+		expect(result.ok).toBe(true)
+		if (result.ok) await result.context.audit({ action: 'example.view', resourceType: 'example', resourceId: 'demo' })
+		expect(stub.auditCalls).toHaveLength(1)
 	})
 })
 
