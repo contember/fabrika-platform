@@ -2,7 +2,7 @@
 id: 0042
 title: Connect local builders through human consent
 status: accepted
-date: 2026-09-21
+date: 2026-10-08
 ---
 
 # 0042 — Connect local builders through human consent
@@ -12,6 +12,8 @@ date: 2026-09-21
 The builder owns local design artifacts, coding-agent guidance and a local review dashboard. An installed platform owns application identity, environments and deployment. Moving between them currently requires manual registration and separate operator commands.
 
 Hosting coding agents would add workspace and agent-runtime operation before the application flow is proven. The current requirement is local coding with a continuous path into an administrator-prepared Zerops installation.
+
+A local coding agent holds the builder key and edits every file of the project. It can widen the application's access surface as easily as it changes code ([ADR-0050](0050-approved-access.md)).
 
 Existing IAM credentials can delegate app-scoped Control permissions to a separate service principal. They cannot be obtained by an unauthenticated local builder through the console's administrative API: that API requires IAM administration. A Control-only bootstrap override is also not authority that IAM can delegate. Application creation requires global `app.manage`, while subsequent application operations support app-scoped authority.
 
@@ -27,7 +29,11 @@ We will keep the builder and coding agent local. The installed console will auth
 6. **Control owns deployment selection.** A typed, immutable, non-secret connection receipt records the application and initial environment selection. IAM receives no deployment manifest or provider placement payload. The scoped builder retrieves the receipt from the configured Control origin. A receipt records intent; it reserves no namespace resources or domain.
 7. **The local daemon owns custody and deployment operations.** Store the key in a private user-level file outside project roots. Project metadata holds only non-secret coordinates. Admit local HTTP and WebSocket requests by authority and browser origin before dispatch. CLI and UI communicate with the daemon over HTTP; the daemon calls the existing Control RPC.
 8. **Application code compiles locally in a separate process.** Do not pass the platform credential to the compiler, coding agent or browser. Use the provider compiler and existing Control environment/deploy operations. Compilation is not a claim to sandbox arbitrary code against other files owned by the local user.
-9. **Deploy an explicit remotely available commit.** The builder does not commit or push application code. Repeat updates preserve current environment placement and never silently turn an application-create conflict into replacement. The existing executor does not snapshot registry configuration; this feature does not claim immutable manifest identity across concurrent registry changes.
+9. **Deploy an explicit remotely available commit.** The builder does not commit or push application code. Repeat updates preserve current environment placement and never silently turn an application-create conflict into replacement. The run snapshots the access data it reads from that commit (ADR-0050). Other registry configuration is not snapshotted; this feature does not claim immutable manifest identity across concurrent registry changes.
+10. **Uploads carry no gates and no IAM schema.** The builder's manifest describes resources only. Control reads the access surface from the deployed commit ([ADR-0005](0005-compile-app-config-to-static-manifest.md)).
+11. **The builder key cannot approve.** It is a service principal, and only a human user principal with `access.approve` approves an access change (ADR-0050). Consent never delegates `access.approve`.
+
+The code does not do items 10 and 11 yet (part B, work unit B6).
 
 **Invariant: browser consent never yields a human session, human access token, or platform administration secret to the local builder.** Only the daemon redeems its proof for the app-scoped machine key.
 
@@ -39,6 +45,8 @@ Application creation and subsequent changes share one identity without remote co
 
 There is a new credential-establishment protocol and durable state on both IAM and Control. Both database implementations must implement the same lifecycle. Lost-response recovery is explicit because IAM cannot retrieve a stored plaintext key. Consent and revocation need ordinary-user surfaces distinct from IAM administration.
 
+A widening that the local agent deploys to a protected environment waits for a human in the dashboard. The builder can deploy it and report that it waits, but it cannot complete it.
+
 Approvers need actual IAM-resolved Control grants. A human admitted only by Control's bootstrap override cannot delegate them. Namespace selection initially uses the human's existing namespace-management permission; the daemon never receives it.
 
 Local user-level file permissions protect credentials from unrelated users, not arbitrary code running as the same operating-system user. The local application compiler is therefore isolated from credential-bearing process state, not advertised as a security sandbox.
@@ -49,4 +57,6 @@ Local user-level file permissions protect credentials from unrelated users, not 
 - **Manually transfer an operator key.** Smaller implementation, but it interrupts the intended flow and encourages broad credentials on developer machines. The user selected automatic browser pairing.
 - **Give the daemon global creation and namespace authority.** Reuses existing global actions but unnecessarily broadens the machine identity. Human console creation followed by app-scoped delegation fits the existing authorization model.
 - **Reuse the browser session handoff.** That protocol establishes host-bound browser sessions at the proxy. Giving its output to a daemon would violate the established custody boundary.
+- **Let the builder key approve the changes it deploys.** Rejected: the local agent holds the key, so it could approve its own widening.
+- **Keep gates and the IAM schema in the uploaded manifest.** Rejected: the local build that writes the manifest is code the agent edits, so the platform would enforce the application's self-report.
 - **Carry deployment metadata inside IAM's authorization object.** Couples identity to Control's provider placement. A typed Control receipt keeps ownership explicit without a generic opaque metadata channel.
