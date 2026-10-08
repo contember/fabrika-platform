@@ -239,7 +239,7 @@ const iam: ZeropsYamlSetupSpec = {
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_RPC_KEY` (authenticates this process to IAM's RPC surface — the
  * same value IAM holds), `FABRIKA_CONTROL_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
- * `GITHUB_WEBHOOK_SECRET`, `CLOUDFLARE_API_TOKEN`,
+ * `CLOUDFLARE_API_TOKEN`,
  * `FABRIKA_IAM_PROVISIONING_KEY`, `FABRIKA_ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
  * `FABRIKA_IAM_PROXY_KEY`), `OPERATIONS_SYNC_KEY` (the same catalog credential Operations receives),
  * and — when this control plane deploys to Zerops — `FABRIKA_ZEROPS_ACCESS_TOKEN`. Give it a Zerops

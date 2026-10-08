@@ -95,6 +95,7 @@ const PIN: ZeropsNamespaceProxySource = {
 	commitSha: 'a'.repeat(40),
 	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n'),
 }
+const pinnedPayload = { proxySource: { repository: { ...PIN.repository }, commitSha: PIN.commitSha, descriptor: { ...PIN.descriptor } } }
 const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
 	path: 'zerops.yaml',
 	contents: 'zerops:\n  - setup: test\n',
@@ -347,7 +348,6 @@ const options = (state: FakeState): ZeropsNamespaceOptions => ({
 		},
 	},
 	clientId: 'client-1',
-	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 	iamUrl: 'https://iam.example.test',
 	iamKey: 'proxy-key-that-must-never-be-persisted',
 	api: makeApi(state),
@@ -355,7 +355,7 @@ const options = (state: FakeState): ZeropsNamespaceOptions => ({
 })
 
 const namespace = (
-	target: ZeropsNamespaceTarget,
+	target: Omit<ZeropsNamespaceTarget, 'proxySource'> & Partial<Pick<ZeropsNamespaceTarget, 'proxySource'>>,
 	overrides: Partial<ProviderDeploymentNamespace> = {},
 ): ProviderDeploymentNamespace => ({
 	id: 'apps-prod',
@@ -408,17 +408,8 @@ describe('immutable namespace proxy sources', () => {
 		expect(zeropsNamespaceTargetCodec.decode(planned.namespace.target.payload).proxySource).toEqual(other)
 	})
 
-	test('legacy records remain inspectable and cannot mutate or inherit a default', async () => {
-		const state = freshState()
-		const capabilities = createZeropsNamespaceCapabilities(options(state))
-		const legacy = namespace({ proxySource: undefined, proxyBuildFromGit: 'https://github.com/example/platform@old' })
-		expect(zeropsNamespaceTargetCodec.decode(capabilities.normalize(legacy).target.payload).proxySource).toBeUndefined()
-		expect(capabilities.operator?.present(legacy).facts).toContainEqual({ label: 'Proxy source', value: 'Unpinned (mutations blocked)' })
-		for (const operation of ['provision', 'reconcile']) {
-			if (operation !== 'provision' && operation !== 'reconcile') throw new Error('invalid operation')
-			await expect(run(capabilities, legacy, [], operation)).rejects.toThrow('unpinned')
-		}
-		expect(state.calls).toEqual([])
+	test('a stored target without a proxy source does not decode', () => {
+		expect(() => zeropsNamespaceTargetCodec.decode({ projectName: 'apps-prod', managed: true })).toThrow('proxySource')
 	})
 
 	test('rejects malformed pins, byte digest mismatch and legacy checkpoints before writes', async () => {
@@ -446,9 +437,10 @@ describe('immutable namespace proxy sources', () => {
 			phase: 'build_triggered',
 			source: { repository: { ...PIN.repository }, commitSha: PIN.commitSha },
 		}
-		expect(() => zeropsNamespaceTargetCodec.decode({ proxyBuild: phased })).toThrow('proxyBuild')
-		expect(() => zeropsNamespaceTargetCodec.decode({ proxyBuild: { appVersionId: 'v', triggered: true, phase: 'build_triggered' } })).toThrow()
-		expect(zeropsNamespaceTargetCodec.decode({ proxyBuild: { appVersionId: 'v', triggered: false } }).proxyBuild).toEqual({
+		expect(() => zeropsNamespaceTargetCodec.decode({ ...pinnedPayload, proxyBuild: phased })).toThrow('proxyBuild')
+		expect(() => zeropsNamespaceTargetCodec.decode({ ...pinnedPayload, proxyBuild: { appVersionId: 'v', triggered: true, phase: 'build_triggered' } }))
+			.toThrow()
+		expect(zeropsNamespaceTargetCodec.decode({ ...pinnedPayload, proxyBuild: { appVersionId: 'v', triggered: false } }).proxyBuild).toEqual({
 			appVersionId: 'v',
 			triggered: false,
 		})
@@ -863,9 +855,7 @@ describe('namespace deployed source evidence and settlement', () => {
 
 describe('Zerops namespace policy and topology', () => {
 	test('exposes provider-owned cheap, mid, and full operator plans', () => {
-		const operator = createZeropsNamespaceOperator({
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
-		})
+		const operator = createZeropsNamespaceOperator({ proxySource: PIN })
 		expect(operator.presets.map((preset) => [preset.id, preset.requiresExclusiveApp])).toEqual([
 			['cheap', false],
 			['mid', false],
@@ -889,22 +879,22 @@ describe('Zerops namespace policy and topology', () => {
 
 	test('resolves cheap, mid, and full presets without putting the presets in the neutral contract', () => {
 		const cheap = zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'cheap',
 			env: 'prod',
 			projectName: 'cheap-prod',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 		const mid = zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'mid',
 			env: 'stage',
 			projectName: 'apps-stage',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 		const full = zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'full',
 			env: 'prod',
 			projectName: 'billing-prod',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 
 		// Sized, never defaulted: a service with no `profile` silently gets its type's default —
@@ -921,10 +911,10 @@ describe('Zerops namespace policy and topology', () => {
 
 	test('compiles proxy plus one namespace-owned PostgreSQL service for cheap', () => {
 		const target = zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'cheap',
 			env: 'prod',
 			projectName: 'cheap-prod',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 		const topology = compileZeropsNamespaceTopology(namespace(target, { id: 'cheap-prod' }), target)
 
@@ -937,10 +927,10 @@ describe('Zerops namespace policy and topology', () => {
 		expect(topology.servicesProvisionYaml).not.toContain('project:')
 
 		const stageTarget = zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'cheap',
 			env: 'stage',
 			projectName: 'cheap-stage',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 		expect(stageTarget.postgres).toEqual({ type: 'postgresql:single@18', profile: 'oltp-hobby' })
 	})
@@ -948,11 +938,13 @@ describe('Zerops namespace policy and topology', () => {
 	test('rejects unsupported PostgreSQL type/profile combinations at the codec boundary', () => {
 		expect(() =>
 			zeropsNamespaceTargetCodec.decode({
+				...pinnedPayload,
 				postgres: { type: 'postgresql:single@18', profile: 'oltp-enterprise' },
 			})
 		).toThrow('profile is not supported')
 		expect(() =>
 			zeropsNamespaceTargetCodec.decode({
+				...pinnedPayload,
 				postgres: { type: 'postgresql:ha@17' },
 			})
 		).toThrow('type must be')
@@ -1007,10 +999,10 @@ describe('Zerops namespace lifecycle', () => {
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 		const checkpoints: ProviderDeploymentNamespace[] = []
 		const target = zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'cheap',
 			env: 'prod',
 			projectName: 'cheap-prod',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 
 		const result = await run(capabilities, namespace(target, { id: 'cheap-prod' }), checkpoints)
@@ -1041,10 +1033,10 @@ describe('Zerops namespace lifecycle', () => {
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 		const firstCheckpoints: ProviderDeploymentNamespace[] = []
 		const initial = namespace(zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'mid',
 			env: 'prod',
 			projectName: 'apps-prod',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		}))
 
 		await expect(run(capabilities, initial, firstCheckpoints)).rejects.toThrow('response lost')
@@ -1061,10 +1053,10 @@ describe('Zerops namespace lifecycle', () => {
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 		const checkpoints: ProviderDeploymentNamespace[] = []
 		const initial = namespace(zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'mid',
 			env: 'prod',
 			projectName: 'apps-prod',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		}))
 
 		const result = await run(capabilities, initial, checkpoints)
@@ -1083,7 +1075,6 @@ describe('Zerops namespace lifecycle', () => {
 			projectName: 'apps-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: true,
 		})
 
@@ -1101,7 +1092,6 @@ describe('Zerops namespace lifecycle', () => {
 			projectName: 'external-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: false,
 		})
 
@@ -1119,7 +1109,6 @@ describe('Zerops namespace lifecycle', () => {
 			projectName: 'external-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: false,
 		})
 
@@ -1138,11 +1127,11 @@ describe('Zerops namespace lifecycle', () => {
 
 	test('rejects cheap adoption with missing or incompatible namespace PostgreSQL', async () => {
 		const target: ZeropsNamespaceTarget = {
+			proxySource: PIN,
 			projectId,
 			projectName: 'cheap-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: false,
 			postgres: { type: 'postgresql:ha@18' },
 		}
@@ -1180,7 +1169,6 @@ describe('Zerops namespace lifecycle', () => {
 			projectName: 'billing-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: false,
 		}, { id: 'billing-prod', exclusiveAppId: 'billing' })
 
@@ -1215,7 +1203,6 @@ describe('Zerops namespace lifecycle', () => {
 			projectName: 'apps-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: true,
 			proxyServiceId: proxyId,
 			proxyConfigured: true,
@@ -1268,11 +1255,11 @@ describe('Zerops namespace lifecycle', () => {
 	const subdomainNamespace = (): ProviderDeploymentNamespace =>
 		namespace(
 			zeropsNamespacePreset({
+				proxySource: PIN,
 				preset: 'mid',
 				env: 'prod',
 				projectName: 'apps-prod',
 				publicAccess: 'zerops-subdomain',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			}),
 		)
 
@@ -1313,7 +1300,6 @@ describe('Zerops namespace lifecycle', () => {
 				projectName: 'apps-prod',
 				corePackage: 'SERIOUS',
 				publicAccess,
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 				managed: true,
 				proxyServiceId: proxyId,
 				proxyConfigured: true,
@@ -1337,13 +1323,13 @@ describe('Zerops namespace lifecycle', () => {
 // plane redacts them — instead of being thrown away.
 describe('Zerops namespace presentation', () => {
 	test('marks the project as a live resource and names its id once it exists', () => {
-		const operator = createZeropsNamespaceOperator({ proxyBuildFromGit: 'https://github.com/contember/fabrika-platform' })
+		const operator = createZeropsNamespaceOperator({ proxySource: PIN })
 		const target: ZeropsNamespaceTarget = {
+			proxySource: PIN,
 			projectId,
 			projectName: 'apps-prod',
 			corePackage: 'SERIOUS',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: true,
 		}
 
@@ -1353,7 +1339,7 @@ describe('Zerops namespace presentation', () => {
 	})
 
 	test('marks nothing while the project is still a plan', () => {
-		const operator = createZeropsNamespaceOperator({ proxyBuildFromGit: 'https://github.com/contember/fabrika-platform' })
+		const operator = createZeropsNamespaceOperator({ proxySource: PIN })
 
 		const planned = operator.plan({ id: 'apps-prod', env: 'prod', preset: 'mid' })
 
@@ -1363,16 +1349,15 @@ describe('Zerops namespace presentation', () => {
 
 	// The hosts an operator has to name as `--domain`. Before this they were read by hand off the proxy
 	// service's `zeropsSubdomain` variable, which is exactly what provisioning now records for them.
-	const operator = (): ProviderNamespaceOperator =>
-		createZeropsNamespaceOperator({ proxyBuildFromGit: 'https://github.com/contember/fabrika-platform' })
+	const operator = (): ProviderNamespaceOperator => createZeropsNamespaceOperator({ proxySource: PIN })
 
 	const subdomainPlacement = (): ProviderDeploymentNamespace =>
 		namespace(zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'mid',
 			env: 'prod',
 			projectName: 'apps-prod',
 			publicAccess: 'zerops-subdomain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		}))
 
 	const publishSubdomains = (state: FakeState, content: string): void => {
@@ -1431,10 +1416,10 @@ describe('Zerops namespace presentation', () => {
 
 	test('lists no host before the placement is ready, and none at all on a custom-domain placement', () => {
 		const recorded: ZeropsNamespaceTarget = {
+			proxySource: PIN,
 			projectId,
 			projectName: 'apps-prod',
 			corePackage: 'LIGHT',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: true,
 			proxyServiceId: proxyId,
 			proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }],
@@ -1445,12 +1430,13 @@ describe('Zerops namespace presentation', () => {
 	})
 
 	test('carries the recorded hosts through the target codec', () => {
-		const encoded = zeropsNamespaceTargetCodec.encode({ proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }] })
+		const encoded = zeropsNamespaceTargetCodec.encode({ proxySource: PIN, proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }] })
 
 		expect(zeropsNamespaceTargetCodec.decode(encoded).proxyHosts).toEqual([{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }])
-		expect(() => zeropsNamespaceTargetCodec.decode({ proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: '8080' }] })).toThrow(
-			'port must be a positive integer',
-		)
+		expect(() => zeropsNamespaceTargetCodec.decode({ ...pinnedPayload, proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: '8080' }] }))
+			.toThrow(
+				'port must be a positive integer',
+			)
 	})
 })
 
@@ -1475,11 +1461,11 @@ describe('Zerops proxy-target registration', () => {
 				...(domain === undefined ? {} : { domain }),
 				namespace: namespace(
 					zeropsNamespacePreset({
+						proxySource: PIN,
 						preset: 'full',
 						env: 'prod',
 						projectName: 'apps-prod',
 						publicAccess: 'zerops-subdomain',
-						proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 					}),
 					{ exclusiveAppId: 'notes' },
 				),
@@ -1530,11 +1516,11 @@ describe('Zerops namespace failure classes', () => {
 
 	const provisionNamespace = (publicAccess: 'custom-domain' | 'zerops-subdomain' = 'custom-domain'): ProviderDeploymentNamespace =>
 		namespace(zeropsNamespacePreset({
+			proxySource: PIN,
 			preset: 'mid',
 			env: 'prod',
 			projectName: 'apps-prod',
 			publicAccess,
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		}))
 
 	test('keeps the platform code and the platform message apart on a denied project import', async () => {
@@ -1646,7 +1632,6 @@ describe('Zerops namespace failure classes', () => {
 				projectName: 'apps-prod',
 				corePackage: 'SERIOUS',
 				publicAccess: 'custom-domain',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 				managed: true,
 			}),
 			[],

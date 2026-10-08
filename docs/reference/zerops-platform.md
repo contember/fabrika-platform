@@ -120,9 +120,8 @@ go through the GitHub/GitLab integration instead
 ([GitHub integration](https://docs.zerops.io/references/github-integration)).
 
 Fabrika persists the proxy's public repository, exact commit and verified descriptor in the namespace
-target, then uploads that source to an explicitly reserved version (ADR-0045). Legacy targets carrying
-only `proxyBuildFromGit` remain readable but are unpinned and cannot start a proxy mutation. No commit
-is inferred from the legacy URL, and an installation-default change does not replace a namespace pin.
+target, then uploads that source to an explicitly reserved version (ADR-0045). A target without that
+pin does not decode, and an installation-default change does not replace a namespace pin.
 
 ## Zerops has its own CI
 

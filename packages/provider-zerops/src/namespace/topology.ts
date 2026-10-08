@@ -4,6 +4,7 @@ import type { ZeropsServiceSpec, ZeropsSourceTarget } from '../types'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
 import { decodeZeropsNamespaceProxySource } from './proxy-source'
 import type {
+	ZeropsNamespacePolicy,
 	ZeropsNamespacePostgres,
 	ZeropsNamespacePresetInput,
 	ZeropsNamespacePublicAccess,
@@ -33,8 +34,8 @@ export const PROXY_TYPE = 'alpine@3.21'
  */
 const defaultPostgres = (): ZeropsNamespacePostgres => ({ type: 'postgresql:single@18', profile: 'oltp-hobby' })
 
-export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): ZeropsNamespaceTarget => ({
-	...(input.proxySource === undefined ? {} : { proxySource: decodeZeropsNamespaceProxySource(input.proxySource) }),
+/** A preset's project and service policy, without the proxy source pin (ADR-0045). */
+export const zeropsNamespacePolicy = (input: Omit<ZeropsNamespacePresetInput, 'proxySource'>): ZeropsNamespacePolicy => ({
 	projectName: input.projectName,
 	// `LIGHT` on every environment. An APP namespace is not the platform project — the argument for
 	// `SERIOUS` in the platform installation topology is that the platform repairs the apps project, which no app
@@ -44,6 +45,11 @@ export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): Zerops
 	managed: true,
 	ready: false,
 	...(input.preset === 'cheap' ? { postgres: input.postgres ?? defaultPostgres() } : {}),
+})
+
+export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): ZeropsNamespaceTarget => ({
+	proxySource: decodeZeropsNamespaceProxySource(input.proxySource),
+	...zeropsNamespacePolicy(input),
 })
 
 export const projectMarker = (namespace: ProviderDeploymentNamespace): string => `Managed by Fabrika namespace ${namespace.id} (${namespace.env}).`
@@ -77,7 +83,7 @@ const postgresService = (postgres: ZeropsNamespacePostgres): ZeropsServiceSpec =
 /** Compile the one project and its namespace-owned services without depending on private deploy code. */
 export const compileZeropsNamespaceTopology = (
 	namespace: ProviderDeploymentNamespace,
-	target: ZeropsNamespaceTarget,
+	target: ZeropsNamespacePolicy,
 ): ZeropsNamespaceTopology => {
 	const projectName = target.projectName
 	const corePackage = target.corePackage

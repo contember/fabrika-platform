@@ -48,13 +48,12 @@
 import {
 	compileImportYaml,
 	compileProvisioningYaml,
-	compileZeropsNamespaceTopology,
 	type ZeropsImportDocument,
 	type ZeropsNamespacePostgres,
-	zeropsNamespacePreset,
 	type ZeropsServiceSpec,
 	type ZeropsSourceTarget,
 } from '../../index'
+import { compileZeropsNamespaceTopology, zeropsNamespacePolicy } from '../../namespace/topology'
 import { assertTopologyInvariants } from './invariants'
 
 /**
@@ -136,8 +135,6 @@ export interface ProjectTopology {
 
 /** The proxy's hostname, in every project. Also the `zerops.yaml` setup name it builds from. */
 export const PROXY_HOSTNAME = 'proxy'
-/** Public source used when the namespace lifecycle builds a newly provisioned proxy. */
-export const FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'
 
 /**
  * A runtime service, with the field that must never be left to a default written explicitly.
@@ -407,13 +404,12 @@ export const appsTopology = (options: AppsTopologyOptions): ProjectTopology => {
 	if (preset !== 'full' && options.exclusiveAppId !== undefined) {
 		throw new Error(`A ${preset} Zerops namespace cannot reserve an exclusive app`)
 	}
-	const namespaceTarget = zeropsNamespacePreset({
+	const namespacePolicy = zeropsNamespacePolicy({
 		preset,
 		env: options.env,
 		projectName: id,
 		corePackage: options.corePackage,
 		publicAccess: options.publicAccess ?? 'custom-domain',
-		proxyBuildFromGit: FABRIKA_PROXY_SOURCE,
 		...(options.postgres === undefined ? {} : { postgres: options.postgres }),
 	})
 	const namespace = compileZeropsNamespaceTopology({
@@ -421,7 +417,7 @@ export const appsTopology = (options: AppsTopologyOptions): ProjectTopology => {
 		env: options.env,
 		...(options.exclusiveAppId === undefined ? {} : { exclusiveAppId: options.exclusiveAppId }),
 		target: { provider: 'zerops', version: 1, payload: {} },
-	}, namespaceTarget)
+	}, namespacePolicy)
 	return {
 		id,
 		publicService: PROXY_HOSTNAME,

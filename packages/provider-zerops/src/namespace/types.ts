@@ -44,13 +44,12 @@ export type ZeropsNamespacePostgres =
  * absent are resolved by `normalize()` before a mutation starts.
  */
 export interface ZeropsNamespaceTarget {
-	readonly proxySource?: ZeropsNamespaceProxySource
+	readonly proxySource: ZeropsNamespaceProxySource
 	readonly proxyBuild?: ZeropsNamespaceProxyBuild
 	readonly proxyDeployment?: ZeropsNamespaceProxyDeployment
 	readonly projectName?: string
 	readonly corePackage?: ZeropsProjectMode
 	readonly publicAccess?: ZeropsNamespacePublicAccess
-	readonly proxyBuildFromGit?: string
 	readonly postgres?: ZeropsNamespacePostgres
 	readonly managed?: boolean
 	readonly projectId?: string
@@ -64,20 +63,20 @@ export interface ZeropsNamespaceTarget {
 	readonly ready?: boolean
 }
 
+export type ZeropsNamespacePolicy = Omit<ZeropsNamespaceTarget, 'proxySource'>
+
 export interface NormalizedZeropsNamespaceTarget extends ZeropsNamespaceTarget {
 	readonly projectName: string
 	readonly corePackage: ZeropsProjectMode
 	readonly publicAccess: ZeropsNamespacePublicAccess
-	readonly proxyBuildFromGit: string
 	readonly managed: boolean
 	readonly ready: boolean
 }
 
 export interface ZeropsNamespaceOptions {
-	readonly proxySource?: ZeropsNamespaceProxySource
+	readonly proxySource: ZeropsNamespaceProxySource
 	readonly source?: ZeropsSourcePort
 	readonly clientId: string
-	readonly proxyBuildFromGit?: string
 	/** Public IAM origin reachable from an app project. */
 	readonly iamUrl: string
 	/** Same credential IAM receives as `FABRIKA_IAM_PROXY_KEY`. */
@@ -94,19 +93,17 @@ export interface ZeropsNamespaceTopology {
 }
 
 export interface ZeropsNamespacePresetInput {
-	readonly proxySource?: ZeropsNamespaceProxySource
+	readonly proxySource: ZeropsNamespaceProxySource
 	readonly preset: 'cheap' | 'mid' | 'full'
 	readonly env: string
 	readonly projectName: string
 	readonly corePackage?: ZeropsProjectMode
 	readonly publicAccess?: ZeropsNamespacePublicAccess
-	readonly proxyBuildFromGit?: string
 	readonly postgres?: ZeropsNamespacePostgres
 }
 
 export interface ZeropsNamespaceOperatorOptions {
-	readonly proxySource?: ZeropsNamespaceProxySource
-	readonly proxyBuildFromGit?: string
+	readonly proxySource: ZeropsNamespaceProxySource
 }
 
 export interface ZeropsNamespacePlanOptions {

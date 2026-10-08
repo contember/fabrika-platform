@@ -28,16 +28,12 @@ const EXPECTED = {
 }
 
 describe('the Zerops namespace process configuration', () => {
-	test('refuses malformed JSON without exposing its value and never falls back to the Git variable', () => {
+	test('refuses malformed JSON without exposing its value and requires the variable', () => {
 		const env = { ...namespaceEnvironment(), FABRIKA_ZEROPS_PROXY_SOURCE_JSON: 'credential-that-must-not-leak' }
 		expect(() => zeropsNamespaceProcessConfig(env)).toThrow('must contain a valid immutable proxy source')
-		expect(() =>
-			zeropsNamespaceProcessConfig({
-				...env,
-				FABRIKA_ZEROPS_PROXY_SOURCE_JSON: undefined,
-				FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/example/platform',
-			})
-		).toThrow('FABRIKA_ZEROPS_PROXY_SOURCE_JSON is required')
+		expect(() => zeropsNamespaceProcessConfig({ ...env, FABRIKA_ZEROPS_PROXY_SOURCE_JSON: undefined })).toThrow(
+			'FABRIKA_ZEROPS_PROXY_SOURCE_JSON is required',
+		)
 	})
 	test('boots with no source service, and administers GitHub connections in process', async () => {
 		const runtime = createRuntime({

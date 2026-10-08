@@ -348,7 +348,6 @@ const runNamespaceMutation = async (
 	const suppliedTarget = decodeEnvelope(input.namespace.target)
 	let namespace = normalizedNamespace(input.namespace, options)
 	let target = normalizeTarget(namespace, options)
-	if (target.proxySource === undefined) throw new Error('Zerops namespace proxy source is unpinned; explicit migration is required')
 	if (target.proxyBaselineSequence !== undefined || target.proxyAppVersionId !== undefined) {
 		throw new Error('Legacy proxy operational checkpoints require explicit migration')
 	}
@@ -478,9 +477,6 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 		republish: (input) => republishNamespace(input, options),
-		operator: createZeropsNamespaceOperator({
-			proxyBuildFromGit: options.proxyBuildFromGit,
-			...(options.proxySource === undefined ? {} : { proxySource: options.proxySource }),
-		}),
+		operator: createZeropsNamespaceOperator({ proxySource: options.proxySource }),
 	}
 }

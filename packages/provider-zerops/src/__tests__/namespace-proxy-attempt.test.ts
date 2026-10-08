@@ -305,7 +305,6 @@ test('resolution failure, an invalid descriptor digest and an unpinned target ca
 		...f.input(),
 		target: { ...f.target(), proxySource: { ...pin, descriptor: { ...pin.descriptor, sha256: '0'.repeat(64) } } },
 	})).rejects.toThrow()
-	await expect(republishProxy({ ...f.input(), target: { ...f.target(), proxySource: undefined } })).rejects.toThrow('unpinned')
 	expect(effects(f.calls)).toEqual([])
 })
 
@@ -313,6 +312,7 @@ test('the republish capability refuses a namespace with no proxy or one that is 
 	const calls: string[] = []
 	const capabilities = createZeropsNamespaceCapabilities({
 		clientId: 'client',
+		proxySource: pin,
 		iamUrl: 'https://iam.example.test',
 		iamKey: 'not-logged',
 		api: {

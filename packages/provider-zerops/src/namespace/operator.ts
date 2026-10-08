@@ -88,9 +88,8 @@ const namespacePresentation = (
 		facts: [
 			{
 				label: 'Proxy source',
-				value: target.proxySource === undefined
-					? 'Unpinned (mutations blocked)'
-					: `${target.proxySource.repository.owner}/${target.proxySource.repository.name}@${target.proxySource.commitSha} (zerops.yaml sha256:${target.proxySource.descriptor.sha256})`,
+				value:
+					`${target.proxySource.repository.owner}/${target.proxySource.repository.name}@${target.proxySource.commitSha} (zerops.yaml sha256:${target.proxySource.descriptor.sha256})`,
 			},
 			project,
 			{ label: 'Environment', value: namespace.env },
@@ -132,8 +131,7 @@ export const createZeropsNamespaceOperator = (
 				preset: input.preset,
 				env: input.env,
 				projectName: planOptions.projectName ?? input.id,
-				proxyBuildFromGit: options.proxyBuildFromGit,
-				...(options.proxySource === undefined ? {} : { proxySource: options.proxySource }),
+				proxySource: options.proxySource,
 				...(planOptions.corePackage === undefined ? {} : { corePackage: planOptions.corePackage }),
 				...(planOptions.publicAccess === undefined ? {} : { publicAccess: planOptions.publicAccess }),
 				...(planOptions.postgres === undefined ? {} : { postgres: planOptions.postgres }),

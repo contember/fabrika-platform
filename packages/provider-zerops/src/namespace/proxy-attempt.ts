@@ -65,7 +65,6 @@ const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string
 export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<ZeropsNamespaceTarget> {
 	const pin = input.target.proxySource
 	const serviceId = input.target.proxyServiceId
-	if (pin === undefined) throw new Error('Zerops namespace proxy source is unpinned; explicit migration is required')
 	if (serviceId === undefined) throw new Error('Zerops namespace has no proxy service id')
 	await verifyZeropsNamespaceProxySource(pin)
 	const manifest = encodeProxyManifestJson(input.manifest)

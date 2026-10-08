@@ -45,9 +45,6 @@ describe('exact installation source', () => {
 			expect(() => parse([], {})).toThrow('--source-dir')
 			expect(() => parse(['--source-dir=.', '--from-git=https://example.com'], {})).toThrow('Mutable installation Git sources are refused')
 			expect(() => parse(['--source-dir=.'], { FABRIKA_ZEROPS_BUILD_FROM_GIT: '' })).toThrow('unset FABRIKA_ZEROPS_BUILD_FROM_GIT')
-			expect(() => parse(['--source-dir=.'], { FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://example.com/legacy' })).toThrow(
-				'Unset FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT',
-			)
 		})
 	}
 
@@ -261,7 +258,6 @@ describe('exact installation source', () => {
 		const decoded = decodeZeropsNamespaceProxySource(JSON.parse(raw))
 		expect(decoded).toEqual(fakeNamespaceProxySource())
 		await verifyZeropsNamespaceProxySource(decoded)
-		expect(zerops.env('control').has('FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT')).toBe(false)
 	})
 })
 

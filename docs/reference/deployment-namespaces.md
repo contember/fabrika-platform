@@ -132,7 +132,7 @@ envelope uses Zerops namespace codec version 1 and stores both policy and durabl
 progress:
 
 - project name, core package, and public-access mode;
-- the proxy's public `buildFromGit` source;
+- the proxy's pinned source: public repository, exact commit, and verified `zerops.yaml` descriptor (ADR-0045);
 - optional namespace-owned PostgreSQL type and profile;
 - managed/adopted ownership and the Zerops project id;
 - resolved proxy and PostgreSQL service ids;
@@ -226,10 +226,9 @@ the provider's synchronous claims hook — before any provider mutation, so noth
 is created. Previously such a registration succeeded and its first deploy failed
 at proxy composition.
 
-The proxy `buildFromGit` URL is persisted in the namespace target and reused for
-proxy pipeline triggers. Public Zerops documentation does not establish that
-this source is an immutable content pin; operators must treat the configured URL
-as the source identity rather than a publicly verified immutable revision.
+The proxy source pin is persisted in the namespace target when the namespace is
+planned and every proxy build uploads exactly that source (ADR-0045). A target
+without a pin does not decode.
 
 ## Operator interfaces
 

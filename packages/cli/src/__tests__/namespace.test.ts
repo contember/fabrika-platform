@@ -180,39 +180,6 @@ describe('fabrika namespace commands', () => {
 		}
 	})
 
-	test('rejects legacy source inputs with actionable errors that omit their values', async () => {
-		for (const command of ['plan', 'create', 'adopt', 'reconcile']) {
-			for (const legacy of ['flag', 'environment']) {
-				const calls: Call[] = []
-				const output: string[] = []
-				const args = parseZeropsCliArgs([
-					'namespace',
-					command,
-					'--id=apps-prod',
-					'--env=prod',
-					'--preset=cheap',
-					...(legacy === 'flag' ? ['--proxy-build-from-git=secret-legacy-url'] : []),
-				])
-				let failure: unknown
-				try {
-					await runZeropsNamespaceCommand(args, {
-						source: { ...source(), ...(legacy === 'environment' ? { FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'secret-legacy-url' } : {}) },
-						fetch: recorder(calls),
-						write: (value) => output.push(value),
-					})
-				} catch (error) {
-					failure = error
-				}
-				expect(failure).toBeInstanceOf(Error)
-				if (!(failure instanceof Error)) throw new Error('Expected legacy source rejection')
-				expect(failure.message).toContain('FABRIKA_ZEROPS_PROXY_SOURCE_JSON')
-				expect(failure.message).not.toContain('secret-legacy-url')
-				expect(calls).toEqual([])
-				expect(output).toEqual([])
-			}
-		}
-	})
-
 	test('reconciles the persisted target without selecting a local source', async () => {
 		for (const serialized of [undefined, 'invalid unused JSON']) {
 			const calls: Call[] = []

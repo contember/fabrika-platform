@@ -87,7 +87,6 @@ const readyNamespace = (): ProviderDeploymentNamespace => ({
 			proxySource: PROXY_SOURCE,
 			projectId: 'project-1',
 			proxyServiceId: 'proxy-service-1',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			ready: true,
 		}),
 	},
@@ -265,7 +264,7 @@ describe('Zerops ControlProvider registration', () => {
 			const control = createTestControlProvider({
 				accessToken: 'zt-secret',
 				api: makeApi(recorded),
-				namespaces: { clientId: 'client-1', iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
+				namespaces: { clientId: 'client-1', proxySource: PROXY_SOURCE, iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
 			})
 			const invalidEnvironment = environment({
 				artifact: {
@@ -387,7 +386,7 @@ describe('Zerops ControlProvider registration', () => {
 			api: makeApi(recorded),
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -398,7 +397,7 @@ describe('Zerops ControlProvider registration', () => {
 			target: {
 				provider: 'zerops',
 				version: zeropsNamespaceTargetCodec.version,
-				payload: {},
+				payload: zeropsNamespaceTargetCodec.encode({ proxySource: PROXY_SOURCE }),
 			},
 		}
 		if (withNamespaces.namespaces === undefined) {
@@ -421,7 +420,7 @@ describe('Zerops ControlProvider registration', () => {
 			api: { ...api, findService: async () => null },
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -469,7 +468,7 @@ describe('Zerops ControlProvider registration', () => {
 			},
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -534,7 +533,7 @@ describe('Zerops ControlProvider registration', () => {
 				},
 				namespaces: {
 					clientId: 'client-1',
-					proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+					proxySource: PROXY_SOURCE,
 					iamUrl: 'https://iam.example.test',
 					iamKey: 'proxy-key',
 				},
@@ -611,7 +610,7 @@ describe('Zerops ControlProvider registration', () => {
 			},
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -630,7 +629,7 @@ describe('Zerops ControlProvider registration', () => {
 			api: makeApi(recorded),
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -671,7 +670,7 @@ describe('Zerops ControlProvider registration', () => {
 			api: { ...api, findService: async ({ hostname }) => hostname === 'notes' ? { id: 'service-1', name: hostname } : null },
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -702,7 +701,7 @@ describe('Zerops ControlProvider registration', () => {
 			api: makeApi(recorded),
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -715,10 +714,10 @@ describe('Zerops ControlProvider registration', () => {
 				provider: 'zerops',
 				version: zeropsNamespaceTargetCodec.version,
 				payload: zeropsNamespaceTargetCodec.encode(zeropsNamespacePreset({
+					proxySource: PROXY_SOURCE,
 					preset: 'cheap',
 					env: 'prod',
 					projectName: 'apps-prod',
-					proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 				})),
 			},
 		})
@@ -756,7 +755,7 @@ describe('Zerops ControlProvider registration', () => {
 			api: makeApi(recorded),
 			namespaces: {
 				clientId: 'client-1',
-				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				proxySource: PROXY_SOURCE,
 				iamUrl: 'https://iam.example.test',
 				iamKey: 'proxy-key',
 			},
@@ -769,10 +768,10 @@ describe('Zerops ControlProvider registration', () => {
 				provider: 'zerops',
 				version: zeropsNamespaceTargetCodec.version,
 				payload: zeropsNamespaceTargetCodec.encode(zeropsNamespacePreset({
+					proxySource: PROXY_SOURCE,
 					preset: 'mid',
 					env: 'prod',
 					projectName: 'apps-prod',
-					proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 				})),
 			},
 		})
@@ -1387,7 +1386,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 							projectId: 'project-1',
 							proxySource: PROXY_SOURCE,
 							proxyServiceId: 'proxy-service-1',
-							proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 							postgres: { type: 'postgresql:ha@18' },
 							postgresServiceId: 'postgres-service-1',
 							ready: true,
@@ -1461,9 +1459,9 @@ describe('Zerops ControlProvider lifecycle', () => {
 						provider: 'zerops',
 						version: zeropsNamespaceTargetCodec.version,
 						payload: zeropsNamespaceTargetCodec.encode({
+							proxySource: PROXY_SOURCE,
 							projectId: 'project-1',
 							proxyServiceId: 'proxy-service-1',
-							proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 							ready: false,
 						}),
 					},

@@ -38,8 +38,7 @@ Options:
 Mutating namespace commands read the Bearer credential from FABRIKA_CONTROL_TOKEN.
 Plan/create/adopt require FABRIKA_ZEROPS_PROXY_SOURCE_JSON:
   {"repository":{"owner":"...","name":"..."},"commitSha":"...","descriptor":{"path":"zerops.yaml","contents":"...","sha256":"..."}}
-Reconcile uses the persisted namespace source. Legacy sources are not automatically pinned.
---proxy-build-from-git and FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT are no longer supported.
+Reconcile uses the persisted namespace source.
 `
 
 export interface ZeropsNamespaceCommandDependencies {
@@ -175,11 +174,6 @@ export const runZeropsNamespaceCommand = async (
 	deps: ZeropsNamespaceCommandDependencies,
 ): Promise<void> => {
 	const subcommand = required(args.subcommand, 'namespace command')
-	if (args.proxyBuildFromGit !== undefined || deps.source['FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT'] !== undefined) {
-		throw new Error(
-			'--proxy-build-from-git and FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT are no longer supported; remove them and use FABRIKA_ZEROPS_PROXY_SOURCE_JSON for plan/create/adopt. Reconcile uses the persisted source; legacy sources are not automatically pinned.',
-		)
-	}
 	if (subcommand === 'plan') {
 		deps.write(outputJson(await namespacePlan(args, deps.source)))
 		return

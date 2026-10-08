@@ -78,8 +78,7 @@ export interface ZeropsControlProviderOptions {
 	readonly sleep?: Sleeper
 	readonly namespaces?: {
 		readonly clientId: string
-		readonly proxySource?: ZeropsNamespaceProxySource
-		readonly proxyBuildFromGit?: string
+		readonly proxySource: ZeropsNamespaceProxySource
 		readonly iamUrl: string
 		readonly iamKey: string
 	}

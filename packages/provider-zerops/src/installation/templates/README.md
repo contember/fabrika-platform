@@ -56,10 +56,7 @@ They reject `--from-git` and `FABRIKA_ZEROPS_BUILD_FROM_GIT`; remove those setti
 Install and deploy write `FABRIKA_ZEROPS_PROXY_SOURCE_JSON` on Control as the default for new
 namespace planning: the public `contember/fabrika-platform` repository, this snapshot's exact commit,
 and its verified descriptor. Existing namespace pins are retained when that default changes.
-Legacy unpinned namespace rows require an explicit future pin migration and are not changed.
-Remove `FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT` from the invoking environment; mutable namespace source
-configuration is refused. Namespace source resolution verifies public commit availability before its
-effects. Preparing a local snapshot does not publish its commit to GitHub.
+Namespace source resolution verifies public commit availability before its effects. Preparing a local snapshot does not publish its commit to GitHub.
 
 ## The `{{INSTALLATION}}` GitHub Environment
 

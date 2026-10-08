@@ -46,12 +46,11 @@ export const postgresSchema = z.discriminatedUnion('type', [
 
 const namespaceTargetSchema = z.object({
 	proxyDeployment: proxyDeploymentSchema.optional(),
-	proxySource: namespaceProxySourceSchema.optional(),
+	proxySource: namespaceProxySourceSchema,
 	proxyBuild: proxyBuildSchema.optional(),
 	projectName: z.string().min(1).optional(),
 	corePackage: z.enum(['LIGHT', 'SERIOUS']).optional(),
 	publicAccess: z.enum(['custom-domain', 'zerops-subdomain']).optional(),
-	proxyBuildFromGit: z.string().min(1).optional(),
 	postgres: postgresSchema.optional(),
 	managed: z.boolean().optional(),
 	projectId: z.string().min(1).optional(),
@@ -83,7 +82,7 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 					...(target.proxyDeployment.manifestSha256 === undefined ? {} : { manifestSha256: target.proxyDeployment.manifestSha256 }),
 				},
 			}),
-		...(target.proxySource === undefined ? {} : { proxySource: encodeSource(target.proxySource) }),
+		proxySource: encodeSource(target.proxySource),
 		...(target.proxyBuild === undefined ? {} : {
 			proxyBuild: {
 				appVersionId: target.proxyBuild.appVersionId,
@@ -94,7 +93,6 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 		...(target.projectName !== undefined ? { projectName: target.projectName } : {}),
 		...(target.corePackage !== undefined ? { corePackage: target.corePackage } : {}),
 		...(target.publicAccess !== undefined ? { publicAccess: target.publicAccess } : {}),
-		...(target.proxyBuildFromGit !== undefined && target.proxyBuildFromGit !== '' ? { proxyBuildFromGit: target.proxyBuildFromGit } : {}),
 		...(target.postgres !== undefined
 			? { postgres: { type: target.postgres.type, ...(target.postgres.profile !== undefined ? { profile: target.postgres.profile } : {}) } }
 			: {}),
@@ -147,13 +145,11 @@ export const normalizeTarget = (
 		throw new Error('Zerops namespace id and env must be non-empty')
 	}
 	const decoded = decodeEnvelope(namespace.target)
-	const proxyBuildFromGit = decoded.proxyBuildFromGit ?? ''
 	return {
 		...decoded,
 		projectName: decoded.projectName ?? namespace.id,
 		corePackage: decoded.corePackage ?? 'LIGHT',
 		publicAccess: decoded.publicAccess ?? 'custom-domain',
-		proxyBuildFromGit,
 		managed: decoded.managed ?? decoded.projectId === undefined,
 		ready: decoded.ready ?? false,
 	}
