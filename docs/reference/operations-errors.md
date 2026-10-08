@@ -32,11 +32,9 @@ Webhook is the supported notification channel. Portable email delivery is tracke
 
 ## Telemetry health
 
-Error silence is not evidence of a stalled pipeline. Processed counts include applied occurrences, and the last processing timestamp comes from `applied_at`, not event reception time.
+Telemetry health has one rule per source: more than zero archived dead events means `failed`, otherwise `healthy`. Error silence is not evidence of a stalled pipeline, so quiet sources stay `healthy`. A source with no telemetry observation yet shows `unavailable`. Active HTTP checks remain independent of telemetry health.
 
-Missing measurements produce `unavailable` unless an available measurement proves a failure. Dead letters, excessive reject rates, queue backlog and queue age retain their diagnoses. Active HTTP checks remain independent of these telemetry observations.
-
-Unavailable observations remain visible in current state and bounded history. They produce no failure or recovery alert and do not erase the last conclusive alert state held in durable telemetry transitions. Returning measurements therefore cannot repeat an unchanged failure or hide a real subsequent recovery. Becoming fully measured and healthy without a prior conclusive failure produces no recovery alert.
+Dead events are never deleted, so a failed source does not recover. The first `failed` observation produces one `unhealthy_telemetry` alert; later observations produce none. Current state and bounded history are kept per source.
 
 ## Runtime evidence
 

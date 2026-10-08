@@ -8,7 +8,6 @@ import {
 	MAX_HEALTH_TIMEOUT_MS,
 	runHttpHealthCheck,
 	type TelemetryHealthAdapter,
-	type TelemetryThresholds,
 } from './health.js'
 
 const DEFAULT_HTTP_BATCH_SIZE = 25
@@ -16,21 +15,12 @@ const DEFAULT_HTTP_CONCURRENCY = 5
 const LEASE_OVERHEAD_MS = 30_000
 const DEFAULT_ERROR_RETRY_MS = 30_000
 
-const DEFAULT_TELEMETRY_THRESHOLDS: TelemetryThresholds = {
-	maxDlq: 0,
-	maxRejectRate: 0.2,
-	minRejectVolume: 20,
-	maxQueueBacklog: 1_000,
-	maxQueueAgeMs: 5 * 60_000,
-}
-
 type HealthStore = Pick<
 	HealthRepository,
 	| 'claimDueChecks'
 	| 'completeLease'
 	| 'enqueueTransitionAlerts'
 	| 'getCurrent'
-	| 'getLastConclusiveTelemetryAlertState'
 	| 'getTelemetryState'
 	| 'listEnabledSourceIds'
 	| 'recordHttpObservation'
@@ -51,7 +41,6 @@ export interface OperationsHealthExecutionOptions {
 	errorRetryMs?: number
 	historyLimit?: number
 	telemetry?: TelemetryHealthAdapter
-	telemetryThresholds?: TelemetryThresholds
 	logger?: OperationsHealthLogger
 }
 
@@ -77,7 +66,6 @@ export class OperationsHealthExecution {
 	private readonly httpConcurrency: number
 	private readonly leaseMs: number
 	private readonly errorRetryMs: number
-	private readonly telemetryThresholds: TelemetryThresholds
 	private readonly logger: OperationsHealthLogger
 
 	constructor(
@@ -95,7 +83,6 @@ export class OperationsHealthExecution {
 			throw new RangeError(`health lease must be at least ${minimumLeaseMs}ms for the configured batch and concurrency`)
 		}
 		this.errorRetryMs = positiveInteger(options.errorRetryMs ?? DEFAULT_ERROR_RETRY_MS, 'health retry')
-		this.telemetryThresholds = options.telemetryThresholds ?? DEFAULT_TELEMETRY_THRESHOLDS
 		this.logger = options.logger ?? silentLogger
 	}
 
@@ -212,9 +199,8 @@ export class OperationsHealthExecution {
 			if (signal?.aborted) break
 			try {
 				const observation = await adapter.observe({ sourceId, ...(signal === undefined ? {} : { signal }) })
-				const evaluated = evaluateTelemetryHealth(observation, this.telemetryThresholds)
-				const latest = await this.store.getTelemetryState(sourceId)
-				const prior = latest === 'stale' || latest === 'unavailable' ? await this.store.getLastConclusiveTelemetryAlertState(sourceId) : latest
+				const evaluated = evaluateTelemetryHealth(observation)
+				const prior = await this.store.getTelemetryState(sourceId)
 				const transition = decideTelemetryTransition(sourceId, prior, evaluated, this.id(observation.observedAt))
 				await this.store.recordTelemetryObservation({
 					id: this.id(observation.observedAt),

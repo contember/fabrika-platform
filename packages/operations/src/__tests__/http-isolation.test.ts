@@ -13,6 +13,7 @@ import {
 } from '@fabrika/operations-contract/releases'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { z } from 'zod'
 import { createOperationsIam } from '../auth.js'
 import { SqliteHealthRepository } from '../health-repository.js'
 import { createOperationsFetchHandler } from '../http.js'
@@ -51,6 +52,21 @@ const handler = (harness = createHarness(), iam = operationsIam()) => {
 		health: new SqliteHealthRepository(harness.db),
 		iam,
 	})
+}
+
+const validationErrorSchema = z.object({
+	error: z.object({
+		type: z.literal('validation'),
+		message: z.string(),
+		issues: z.array(z.object({ path: z.array(z.union([z.string(), z.number()])), message: z.string() })),
+	}),
+})
+
+/** The dotted path of every rejected field, in the order the schema reports them. */
+async function validationPaths(response: Response): Promise<string[]> {
+	expect(response.status).toBe(400)
+	const { error } = validationErrorSchema.parse(await response.json())
+	return error.issues.map((issue) => issue.path.join('.'))
 }
 
 function rpcRequest(host: string, method: string, input: unknown, token?: string): Request {
@@ -364,60 +380,52 @@ describe('Operations public/private HTTP isolation', () => {
 	})
 
 	test('RPC validation uses the common error envelope and does not reach a use-case', async () => {
-		const invalidCalls: Array<[string, unknown, string]> = [
-			['source', { sourceId: '' }, 'sourceId must be a non-empty string'],
-			['mutateIssue', { issueId: 'issue-a', mutation: { kind: 'assign', principalId: '' } }, 'principalId must be a non-empty string'],
-			[
-				'mutateIssue',
-				{ issueId: 'issue-a', mutation: { kind: 'resolve_in_release', releaseId: '' } },
-				'releaseId must be a non-empty string',
-			],
+		const invalidCalls: Array<[string, unknown, string[]]> = [
+			['source', { sourceId: '' }, ['sourceId']],
+			['mutateIssue', { issueId: 'issue-a', mutation: { kind: 'assign', principalId: '' } }, ['mutation.principalId']],
+			['mutateIssue', { issueId: 'issue-a', mutation: { kind: 'resolve_in_release', releaseId: '' } }, ['mutation.releaseId']],
 		]
-		for (const [method, input, message] of invalidCalls) {
-			const response = await handler()(rpcRequest('operations.internal', method, input, VIEWER_TOKEN))
-			expect(response.status).toBe(400)
-			const body: unknown = await response.json()
-			expect(body).toMatchObject({ error: { type: 'validation', message } })
+		for (const [method, input, paths] of invalidCalls) {
+			expect(await validationPaths(await handler()(rpcRequest('operations.internal', method, input, VIEWER_TOKEN)))).toEqual(paths)
 		}
 	})
 
-	test('static RPC schemas retain first-error precedence across malformed fields', async () => {
-		const cases: Array<[string, unknown, string]> = [
-			['source', [], 'input must be an object'],
-			['issues', { sourceId: null, query: 1, status: 'invalid' }, 'sourceId must be a string'],
-			['issues', { query: 1, cursor: false, status: 'invalid' }, 'query must be a string'],
-			['issues', { cursor: false, status: 'invalid' }, 'cursor must be a string'],
-			['issues', { status: 'invalid', level: 'invalid' }, 'invalid issue status'],
-			['issues', { level: 'invalid', window: 'invalid' }, 'invalid issue level'],
-			['issues', { window: 'invalid', assignee: 'invalid' }, 'invalid issue window'],
-			['issues', { assignee: 'invalid', sort: 'invalid' }, 'invalid issue assignee'],
-			['issues', { sort: 'invalid', limit: 0 }, 'invalid issue sort'],
-			['issueOccurrences', { issueId: '', cursor: false, limit: 0 }, 'cursor must be a string'],
-			['issueOccurrences', { issueId: '', limit: 0 }, 'limit must be between 1 and 100'],
-			['releases', { sourceId: null, cursor: false, limit: 0 }, 'sourceId must be a string'],
-			['mutateIssue', { issueId: '', mutation: null }, 'issueId must be a non-empty string'],
-			['mutateIssue', { issueId: 'issue-a', mutation: null }, 'input must be an object'],
-			['createHealthCheck', { sourceId: '', input: null }, 'sourceId must be a non-empty string'],
-			['updateSpikeAlert', { sourceId: '', input: null }, 'input must be an object'],
-			['updateSpikeAlert', { sourceId: '', input: {} }, 'sourceId must be a non-empty string'],
-			['updateAlertRule', { sourceId: '', kind: 'invalid', input: null }, 'input must be an object'],
-			['updateAlertRule', { sourceId: 'source-a', kind: 'invalid', input: {} }, 'invalid alert kind'],
-			['createAlertChannel', { sourceId: '', input: {} }, 'sourceId must be a non-empty string'],
-			['createAlertChannel', { sourceId: 'source-a', input: { type: 'webhook', scope: 'invalid', target: 4 } }, 'target is required'],
-			['updateAlertChannel', { sourceId: 'source-a', channelId: '', input: {} }, 'channelId must be a non-empty string'],
-			[
-				'updateAlertChannel',
-				{ sourceId: 'source-a', channelId: 'channel-a', input: { type: 'webhook', scope: 'invalid', target: null } },
-				'target must be a string',
-			],
-			['updateAlertChannel', { sourceId: 'source-a', channelId: 'channel-a', input: { type: 'webhook', scope: 'invalid' } }, 'invalid alert kind'],
+	test('static RPC schemas report every malformed field', async () => {
+		const cases: Array<[string, unknown, string[]]> = [
+			['source', [], ['']],
+			['issues', { sourceId: null, query: 1, status: 'invalid' }, ['sourceId', 'query', 'status']],
+			['issues', { cursor: false, status: 'invalid', level: 'invalid' }, ['cursor', 'status', 'level']],
+			['issues', { window: 'invalid', assignee: 'invalid', sort: 'invalid', limit: 0 }, ['window', 'assignee', 'sort', 'limit']],
+			['issueOccurrences', { issueId: '', cursor: false, limit: 0 }, ['issueId', 'cursor', 'limit']],
+			['issueOccurrences', { issueId: '', limit: 0 }, ['issueId', 'limit']],
+			['releases', { sourceId: null, cursor: false, limit: 0 }, ['sourceId', 'cursor', 'limit']],
+			['mutateIssue', { issueId: '', mutation: null }, ['issueId', 'mutation']],
+			['mutateIssue', { issueId: 'issue-a', mutation: null }, ['mutation']],
+			['createHealthCheck', { sourceId: '', input: null }, ['sourceId', 'input']],
+			['updateSpikeAlert', { sourceId: '', input: null }, ['sourceId', 'input']],
+			['updateSpikeAlert', { sourceId: '', input: {} }, ['sourceId', 'input.threshold', 'input.enabled']],
+			['updateAlertRule', { sourceId: '', kind: 'invalid', input: null }, ['sourceId', 'kind', 'input']],
+			['updateAlertRule', { sourceId: 'source-a', kind: 'invalid', input: {} }, ['kind', 'input.enabled']],
+			['createAlertChannel', { sourceId: '', input: {} }, ['sourceId', 'input.scope', 'input.type', 'input.target', 'input.enabled']],
+			['createAlertChannel', { sourceId: 'source-a', input: { type: 'webhook', scope: 'invalid', target: 4 } }, [
+				'input.scope',
+				'input.target',
+				'input.enabled',
+			]],
+			['updateAlertChannel', { sourceId: 'source-a', channelId: '', input: {} }, ['channelId', 'input.scope', 'input.type', 'input.enabled']],
+			['updateAlertChannel', { sourceId: 'source-a', channelId: 'channel-a', input: { type: 'webhook', scope: 'invalid', target: null } }, [
+				'input.scope',
+				'input.target',
+				'input.enabled',
+			]],
+			['updateAlertChannel', { sourceId: 'source-a', channelId: 'channel-a', input: { type: 'webhook', scope: 'invalid' } }, [
+				'input.scope',
+				'input.enabled',
+			]],
 		]
 		const fetch = handler()
-		for (const [method, input, message] of cases) {
-			const response = await fetch(rpcRequest('operations.internal', method, input, VIEWER_TOKEN))
-			expect(response.status).toBe(400)
-			const body: unknown = await response.json()
-			expect(body).toEqual({ error: { type: 'validation', message, issues: [{ message }] } })
+		for (const [method, input, paths] of cases) {
+			expect(await validationPaths(await fetch(rpcRequest('operations.internal', method, input, VIEWER_TOKEN)))).toEqual(paths)
 		}
 	})
 
@@ -449,19 +457,19 @@ describe('Operations public/private HTTP isolation', () => {
 		const issueId = recorded.issue.id
 		if (issueId === null) throw new Error('expected an issue id')
 		const fetch = handler(harness)
-		const cases: Array<{ method: string; input: unknown; message: string }> = []
+		const cases: Array<{ method: string; input: unknown; paths: string[] }> = []
 		const mutations: Array<[unknown, string]> = [
-			[{ kind: 'status', status: 'closed' }, 'invalid issue status'],
-			[{ kind: 'comment', text: '' }, 'text must be a non-empty string'],
-			[{ kind: 'assign' }, 'principalId must be a non-empty string'],
-			[{ kind: 'snooze_until', until: 0 }, 'until must be a positive integer'],
-			[{ kind: 'snooze_count', additional: 1.5 }, 'additional must be a positive integer'],
-			[{ kind: 'resolve_in_release' }, 'releaseId must be a non-empty string'],
-			[{ kind: 'merge', targetIssueId: null }, 'targetIssueId must be a non-empty string'],
-			[{ kind: 'unknown' }, 'invalid issue mutation'],
+			[{ kind: 'status', status: 'closed' }, 'status'],
+			[{ kind: 'comment', text: '' }, 'text'],
+			[{ kind: 'assign' }, 'principalId'],
+			[{ kind: 'snooze_until', until: 0 }, 'until'],
+			[{ kind: 'snooze_count', additional: 1.5 }, 'additional'],
+			[{ kind: 'resolve_in_release' }, 'releaseId'],
+			[{ kind: 'merge', targetIssueId: null }, 'targetIssueId'],
+			[{ kind: 'unknown' }, 'kind'],
 		]
-		for (const [body, message] of mutations) {
-			cases.push({ method: 'mutateIssue', input: { issueId, mutation: body }, message })
+		for (const [body, field] of mutations) {
+			cases.push({ method: 'mutateIssue', input: { issueId, mutation: body }, paths: [`mutation.${field}`] })
 		}
 		const health = {
 			path: '/health',
@@ -473,52 +481,49 @@ describe('Operations public/private HTTP isolation', () => {
 			recoveryThreshold: 2,
 			staleAfterMs: 180_000,
 		}
-		const healthFailures: Array<[string, unknown, string]> = [
-			['path', '', 'path must be a non-empty string'],
-			['enabled', 1, 'enabled must be a boolean'],
-			['intervalMs', '60000', 'intervalMs must be a positive integer'],
-			['timeoutMs', -1, 'timeoutMs must be a positive integer'],
-			['expectedStatus', 0, 'expectedStatus must be a positive integer'],
-			['failureThreshold', 1.5, 'failureThreshold must be a positive integer'],
-			['recoveryThreshold', null, 'recoveryThreshold must be a positive integer'],
-			['staleAfterMs', Number.MAX_SAFE_INTEGER + 1, 'staleAfterMs must be a positive integer'],
+		const healthFailures: Array<[string, unknown]> = [
+			['path', ''],
+			['enabled', 1],
+			['intervalMs', '60000'],
+			['timeoutMs', -1],
+			['expectedStatus', 0],
+			['failureThreshold', 1.5],
+			['recoveryThreshold', null],
+			['staleAfterMs', Number.MAX_SAFE_INTEGER + 1],
 		]
-		for (const [field, value, message] of healthFailures) {
+		for (const [field, value] of healthFailures) {
 			const body = { ...health, [field]: value }
 			cases.push({
 				method: 'createHealthCheck',
 				input: { sourceId: 'source-a', input: body },
-				message,
+				paths: [`input.${field}`],
 			})
 		}
-		const settings: Array<[string, unknown, string]> = [
-			['updateSpikeAlert', { threshold: 0, enabled: 'wrong' }, 'threshold must be a positive integer'],
-			['updateSpikeAlert', { threshold: 5, enabled: null }, 'enabled must be a boolean'],
-			['updateAlertRule', { enabled: 1 }, 'enabled must be a boolean'],
-			['createAlertChannel', { scope: 'new_issue', type: 'email' }, 'type must be webhook'],
-			['createAlertChannel', { scope: 'new_issue', type: 'webhook', enabled: true }, 'target is required'],
+		const settings: Array<[string, unknown, string[]]> = [
+			['updateSpikeAlert', { threshold: 0, enabled: 'wrong' }, ['input.threshold', 'input.enabled']],
+			['updateSpikeAlert', { threshold: 5, enabled: null }, ['input.enabled']],
+			['updateAlertRule', { enabled: 1 }, ['input.enabled']],
+			['createAlertChannel', { scope: 'new_issue', type: 'email' }, ['input.type', 'input.target', 'input.enabled']],
+			['createAlertChannel', { scope: 'new_issue', type: 'webhook', enabled: true }, ['input.target']],
 		]
-		for (const [method, body, message] of settings) {
+		for (const [method, body, paths] of settings) {
 			cases.push({
 				method,
 				input: { sourceId: 'source-a', kind: 'new_issue', input: body },
-				message,
+				paths,
 			})
 		}
 		for (
-			const [body, message] of [
-				[{ issueIds: 'wrong', status: 'wrong' }, 'issueIds must be an array'],
-				[{ issueIds: [issueId, ''], status: 'wrong' }, 'issueId must be a non-empty string'],
-				[{ issueIds: [issueId], status: 'wrong' }, 'invalid issue status'],
-			] satisfies Array<[unknown, string]>
+			const [body, paths] of [
+				[{ issueIds: 'wrong', status: 'wrong' }, ['issueIds', 'status']],
+				[{ issueIds: [issueId, ''], status: 'wrong' }, ['issueIds.1', 'status']],
+				[{ issueIds: [issueId], status: 'wrong' }, ['status']],
+			] satisfies Array<[unknown, string[]]>
 		) {
-			cases.push({ method: 'bulkIssueStatus', input: body, message })
+			cases.push({ method: 'bulkIssueStatus', input: body, paths })
 		}
 		for (const entry of cases) {
-			const rpc = await fetch(rpcRequest('operations.internal', entry.method, entry.input, OPERATOR_TOKEN))
-			expect(rpc.status).toBe(400)
-			const rpcBody: unknown = await rpc.json()
-			expect(rpcBody).toEqual({ error: { type: 'validation', message: entry.message, issues: [{ message: entry.message }] } })
+			expect(await validationPaths(await fetch(rpcRequest('operations.internal', entry.method, entry.input, OPERATOR_TOKEN)))).toEqual(entry.paths)
 		}
 		expect((await harness.repositories.issues.get('source-a', 'failure'))?.status).toBe('open')
 		expect(await new SqliteHealthRepository(harness.db).listChecks('source-a')).toEqual([])
@@ -527,24 +532,20 @@ describe('Operations public/private HTTP isolation', () => {
 		expect(await harness.repositories.alerts.listChannels('source-a')).toEqual([])
 	})
 
-	test('channel validation preserves RPC order and messages', async () => {
+	test('channel validation reports the rejected channel fields', async () => {
 		const harness = createHarness()
 		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
 		const fetch = handler(harness)
-		const cases: Array<[unknown, string]> = [
-			[{}, 'type must be webhook'],
-			[{ scope: 'wrong', type: 'webhook', target: 'https://hooks.example.test', enabled: true }, 'invalid alert kind'],
-			[
-				{ scope: 'new_issue', type: 'webhook', target: 'http://localhost', enabled: 1 },
-				'enabled must be a boolean',
-			],
+		const cases: Array<[unknown, string[]]> = [
+			[{}, ['input.scope', 'input.type', 'input.target', 'input.enabled']],
+			[{ scope: 'wrong', type: 'webhook', target: 'https://hooks.example.test', enabled: true }, ['input.scope']],
+			[{ scope: 'new_issue', type: 'webhook', target: 'http://localhost', enabled: 1 }, ['input.enabled']],
 		]
-		for (const [body, rpcMessage] of cases) {
+		for (const [body, paths] of cases) {
 			const rpc = await fetch(rpcRequest('operations.internal', 'createAlertChannel', { sourceId: 'source-a', input: body }, OPERATOR_TOKEN))
-			expect(rpc.status).toBe(400)
-			const rpcBody: unknown = await rpc.json()
-			expect(rpcBody).toEqual({ error: { type: 'validation', message: rpcMessage, issues: [{ message: rpcMessage }] } })
+			expect(await validationPaths(rpc)).toEqual(paths)
 		}
+		expect(await harness.repositories.alerts.listChannels('source-a')).toEqual([])
 	})
 
 	test('RPC validates before object authorization', async () => {
@@ -573,20 +574,19 @@ describe('Operations public/private HTTP isolation', () => {
 		})
 		const fetch = handler(harness, iam)
 		for (const sourceId of ['source-a', 'missing']) {
-			const cases: Array<[string, unknown, string]> = [
-				['mutateIssue', { issueId: sourceId === 'missing' ? 'missing' : recorded.issue.id, mutation: {} }, 'invalid issue mutation'],
-				['createHealthCheck', { sourceId, input: {} }, 'path must be a non-empty string'],
-				['updateHealthCheck', { sourceId, checkId: 'check-a', input: {} }, 'path must be a non-empty string'],
-				['updateSpikeAlert', { sourceId, input: {} }, 'threshold must be a positive integer'],
-				['updateAlertRule', { sourceId, kind: 'new_issue', input: {} }, 'enabled must be a boolean'],
-				['createAlertChannel', { sourceId, input: {} }, 'type must be webhook'],
-				['updateAlertChannel', { sourceId, channelId: 'channel-a', input: {} }, 'type must be webhook'],
+			const healthCheckFields = ['path', 'enabled', 'intervalMs', 'timeoutMs', 'expectedStatus', 'failureThreshold', 'recoveryThreshold', 'staleAfterMs']
+				.map((field) => `input.${field}`)
+			const cases: Array<[string, unknown, string[]]> = [
+				['mutateIssue', { issueId: sourceId === 'missing' ? 'missing' : recorded.issue.id, mutation: {} }, ['mutation.kind']],
+				['createHealthCheck', { sourceId, input: {} }, healthCheckFields],
+				['updateHealthCheck', { sourceId, checkId: 'check-a', input: {} }, healthCheckFields],
+				['updateSpikeAlert', { sourceId, input: {} }, ['input.threshold', 'input.enabled']],
+				['updateAlertRule', { sourceId, kind: 'new_issue', input: {} }, ['input.enabled']],
+				['createAlertChannel', { sourceId, input: {} }, ['input.scope', 'input.type', 'input.target', 'input.enabled']],
+				['updateAlertChannel', { sourceId, channelId: 'channel-a', input: {} }, ['input.scope', 'input.type', 'input.enabled']],
 			]
-			for (const [method, input, message] of cases) {
-				const response = await fetch(rpcRequest('operations.internal', method, input, VIEWER_TOKEN))
-				expect(response.status).toBe(400)
-				const body: unknown = await response.json()
-				expect(body).toMatchObject({ error: { type: 'validation', message } })
+			for (const [method, input, paths] of cases) {
+				expect(await validationPaths(await fetch(rpcRequest('operations.internal', method, input, VIEWER_TOKEN)))).toEqual(paths)
 			}
 		}
 		const malformed = await fetch(

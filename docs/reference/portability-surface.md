@@ -34,14 +34,9 @@ Operations uses the same ports for a different workload:
 | Periodic checks and notifications | Worker `scheduled` handler                 | Zerops cron invoking the Bun one-shot                                         |
 | Exact occurrence counts           | SQL occurrence index                       | SQL occurrence index                                                          |
 
-Processed and dead-event facts come from durable Operations stores. Per-source
-provider queue depth and reject counters are currently explicit `unavailable`
-telemetry values in both compositions; the health contract does not fabricate
-zeros when those facts cannot be obtained.
-Processing facts use applied occurrences and their `applied_at` timestamps.
-Missing measurements keep aggregate telemetry health unavailable unless known
-failures take precedence; error silence is not a liveness test. Unavailable
-observations preserve durable failure/recovery alert provenance.
+Telemetry health counts archived dead events in the durable Operations store, the
+same query in both compositions: more than zero dead events means `failed`,
+otherwise `healthy`. Error silence is not a liveness test.
 
 The Bun queue consumers claim raw deliveries and decode each message separately.
 Invalid JSON or message shapes retry with the existing backoff and are

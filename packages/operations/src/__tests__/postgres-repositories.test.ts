@@ -1,7 +1,6 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { PostgresHealthRepository } from '../health-repository.js'
 import { createOperationsIngestQueue } from '../node/consumer.js'
 import { applyMigrations, applyQualifiedMigrations, migrationResultMessage, postgresMigrations } from '../node/migrate.js'
 import { credentialVerifier } from '../pipeline.js'
@@ -53,41 +52,6 @@ function occurrence(eventId: string, receivedAt: number): RecordOccurrenceInput 
 }
 
 describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => {
-	test('recovers conclusive telemetry alert provenance by source, check, time, and stable tie-break', async () => {
-		for (const id of ['health-source', 'health-other', 'health-empty']) {
-			await repositories.sources.upsert({ id, appId: id, environment: 'production', displayName: id, enabled: true })
-		}
-		const health = new PostgresHealthRepository(db, () => 10_000)
-		await health.upsertCheck({
-			id: 'health-http',
-			sourceId: 'health-source',
-			path: '/health',
-			enabled: true,
-			intervalMs: 60_000,
-			staleAfterMs: 180_000,
-		})
-		await db.prepare(`INSERT INTO current_telemetry_health (source_id, state, observed_at, payload, transition_id)
-			VALUES ('health-source', 'unavailable', 10000, '{}', NULL), ('health-empty', 'unavailable', 10000, '{}', NULL)`).run()
-		await db.prepare(`INSERT INTO health_transitions (id, source_id, check_id, kind, from_state, to_state, occurred_at)
-			VALUES
-				('health-tie-a', 'health-source', NULL, 'unhealthy_telemetry', 'healthy', 'failed', 3000),
-				('health-tie-z', 'health-source', NULL, 'recovery', 'failed', 'healthy', 3000),
-				('health-delayed', 'health-source', NULL, 'unhealthy_telemetry', 'healthy', 'degraded', 2000),
-				('health-legacy-stale', 'health-source', NULL, 'unhealthy_telemetry', 'healthy', 'stale', 4000),
-				('health-legacy-unavailable', 'health-source', NULL, 'unhealthy_telemetry', 'stale', 'unavailable', 5000),
-				('health-http-failed', 'health-source', 'health-http', 'failed_check', 'healthy', 'failed', 6000),
-				('health-other-failed', 'health-other', NULL, 'unhealthy_telemetry', 'healthy', 'failed', 7000),
-				('health-future', 'health-source', NULL, 'unhealthy_telemetry', 'healthy', 'failed', 20000)`).run()
-		expect(await health.getLastConclusiveTelemetryAlertState('health-source')).toBe('healthy')
-		expect(await health.getLastConclusiveTelemetryAlertState('health-empty')).toBeNull()
-		expect(await health.getTelemetryState('health-source')).toBe('unavailable')
-		await db.prepare("UPDATE current_telemetry_health SET observed_at = 25000 WHERE source_id = 'health-source'").run()
-		expect(await health.getLastConclusiveTelemetryAlertState('health-source')).toBe('failed')
-		const count = await db.prepare("SELECT COUNT(*) AS count FROM health_transitions WHERE source_id IN ('health-source', 'health-other')")
-			.first<{ count: number | string }>()
-		expect(Number(count?.count)).toBe(8)
-	})
-
 	test('reports the platform jobs migration during an adopted legacy upgrade', async () => {
 		if (postgresUrl === null) throw new Error('FABRIKA_TEST_POSTGRES_URL is not set')
 		const legacySchema = `operations_legacy_${crypto.randomUUID().replaceAll('-', '')}`

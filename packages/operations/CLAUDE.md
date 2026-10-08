@@ -76,9 +76,6 @@ is a latest-observed summary: `observedAt` updates `run_id`, state, finish time,
 and artifact state as one tuple, and delayed older projections cannot roll it
 back.
 
-`import/poplach-source-inventory.ts` pins and accounts for the Poplach source
-import at commit `8e0c79d662c187fe41eacd0fee9fe77fde668f1f`.
-
 The Bun migration wrapper uses `definePostgresServiceMigrations` and composes the
 `platform-node` job-queue bundle before the Operations service bundle. Bundle names and filenames are durable migration
 identity under ADR-0017; do not rename them. Real Postgres and S3 tests require

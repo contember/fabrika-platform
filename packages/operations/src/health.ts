@@ -199,32 +199,16 @@ export function visibleHealthState(current: CurrentHttpHealth | null, now: numbe
 	return current.state
 }
 
-export type TelemetryValue<T> =
-	| { available: true; value: T }
-	| { available: false; reason: string }
+const MAX_DEAD_LETTERS = 0
 
 export interface TelemetryHealthObservation {
 	observedAt: number
-	processed: TelemetryValue<{ count: number; lastProcessedAt: number | null }>
-	dlq: TelemetryValue<{ count: number }>
-	rejects: TelemetryValue<{ accepted: number; rejected: number }>
-	queue: TelemetryValue<{ backlog: number; oldestAgeMs: number | null }>
-}
-
-export interface TelemetryThresholds {
-	/** Legacy option; error silence does not diagnose pipeline health. */
-	freshnessMs?: number
-	maxDlq: number
-	maxRejectRate: number
-	minRejectVolume: number
-	maxQueueBacklog: number
-	maxQueueAgeMs: number
+	deadLetters: number
 }
 
 export interface EvaluatedTelemetryHealth {
-	state: HealthState
+	state: 'healthy' | 'failed'
 	observedAt: number
-	reasons: string[]
 	observation: TelemetryHealthObservation
 }
 
@@ -232,51 +216,19 @@ export interface TelemetryHealthAdapter {
 	observe(input: { sourceId: string; signal?: AbortSignal }): Promise<TelemetryHealthObservation>
 }
 
-export function unavailableTelemetryValue<T>(reason: string): TelemetryValue<T> {
-	return { available: false, reason }
+export function evaluateTelemetryHealth(observation: TelemetryHealthObservation): EvaluatedTelemetryHealth {
+	const state = observation.deadLetters > MAX_DEAD_LETTERS ? 'failed' : 'healthy'
+	return { state, observedAt: observation.observedAt, observation }
 }
 
-export function evaluateTelemetryHealth(
-	observation: TelemetryHealthObservation,
-	thresholds: TelemetryThresholds,
-): EvaluatedTelemetryHealth {
-	const reasons: string[] = []
-	if (observation.dlq.available && observation.dlq.value.count > thresholds.maxDlq) reasons.push('dead_letters')
-	if (observation.rejects.available) {
-		const volume = observation.rejects.value.accepted + observation.rejects.value.rejected
-		if (volume >= thresholds.minRejectVolume && observation.rejects.value.rejected / volume > thresholds.maxRejectRate) {
-			reasons.push('reject_rate')
-		}
-	}
-	if (observation.queue.available) {
-		if (observation.queue.value.backlog > thresholds.maxQueueBacklog) reasons.push('queue_backlog')
-		const oldest = observation.queue.value.oldestAgeMs
-		if (oldest !== null && oldest > thresholds.maxQueueAgeMs) reasons.push('queue_age')
-	}
-
-	const measurementsAvailable = [observation.processed, observation.dlq, observation.rejects, observation.queue].every((metric) => metric.available)
-	const state: HealthState = reasons.includes('dead_letters')
-		? 'failed'
-		: reasons.length > 0
-		? 'degraded'
-		: measurementsAvailable
-		? 'healthy'
-		: 'unavailable'
-	if (state === 'unavailable') reasons.push('adapter_unavailable')
-	return { state, observedAt: observation.observedAt, reasons, observation }
-}
-
+/** Dead events are never deleted, so a failed telemetry state cannot recover and needs no recovery alert. */
 export function decideTelemetryTransition(
 	sourceId: string,
 	prior: HealthState | null,
 	current: EvaluatedTelemetryHealth,
 	transitionId: string,
 ): HealthTransition | null {
-	if (prior === current.state || current.state === 'unavailable') return null
-	if (current.state === 'healthy') {
-		if (prior !== 'failed' && prior !== 'degraded') return null
-		return { id: transitionId, sourceId, checkId: null, kind: 'recovery', from: prior, to: current.state, at: current.observedAt }
-	}
+	if (current.state === 'healthy' || prior === 'failed') return null
 	return {
 		id: transitionId,
 		sourceId,
@@ -290,12 +242,6 @@ export function decideTelemetryTransition(
 
 export function healthAlertDedupKey(transition: HealthTransition, channelId: string): string {
 	return `health:${transition.id}:${transition.kind}:${channelId}`
-}
-
-export const EMAIL_DELIVERY_SUPPORT = {
-	supported: false,
-	reason: 'No runtime-neutral email transport is approved for both Cloudflare and Bun compositions.',
-	evidence: 'docs/sprints/sprint-2026-07-30-operations-plane.md and import/poplach-source-inventory.ts',
 }
 
 function positiveInteger(value: number, label: string): number {

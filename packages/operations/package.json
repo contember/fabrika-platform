@@ -1,21 +1,13 @@
 {
 	"name": "@fabrika/operations",
 	"version": "0.0.4",
+	"private": true,
 	"type": "module",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/contember/fabrika-platform.git",
 		"directory": "packages/operations"
 	},
-	"publishConfig": {
-		"access": "public"
-	},
-	"files": [
-		"src",
-		"migrations",
-		"migrations-postgres",
-		"!src/**/__tests__/**"
-	],
 	"exports": {
 		".": {
 			"bun": "./src/index.ts",

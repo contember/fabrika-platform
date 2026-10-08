@@ -8,7 +8,7 @@ import { OperationsHealthExecution } from '../health-service.js'
 import type { OperationsHttpEnv } from '../http.js'
 import { OperationsMaintenance, WebhookNotificationSender } from '../maintenance.js'
 import { createPostgresOperationsRepositories } from '../repositories.js'
-import { bunPipelineTelemetry, StoredOperationsTelemetryAdapter } from '../telemetry.js'
+import { StoredOperationsTelemetryAdapter } from '../telemetry.js'
 import { createOperationsIngestQueue, PostgresOperationsConsumer } from './consumer.js'
 
 export interface OperationsRuntime {
@@ -51,7 +51,7 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 			log: (message) => console.warn(message),
 		}),
 		health: new OperationsHealthExecution(healthRepository, {
-			telemetry: new StoredOperationsTelemetryAdapter(db, bunPipelineTelemetry()),
+			telemetry: new StoredOperationsTelemetryAdapter(db),
 			logger: { warn: (message, fields) => console.warn(message, fields) },
 		}),
 		maintenance: new OperationsMaintenance(repositories.alerts, new WebhookNotificationSender(), {
