@@ -114,6 +114,7 @@ export async function integrationFixture() {
 		const gateway = new HttpIamGateway({ origin: issuer, key: proxyKey })
 		const authorizer = new Authorizer({ issuer, iam: gateway, cache: null })
 		const resolved: ResolvedApp = {
+			kind: 'gates',
 			app: { id: 'vozka', hosts: ['localhost'], upstream: 'control', scheme: 'http', gates: CONTROL_PROXY_GATES },
 			gates: compileGates(CONTROL_PROXY_GATES),
 		}
@@ -127,6 +128,7 @@ export async function integrationFixture() {
 				const decision = await authorizer.authorize(resolved, {
 					method: request.method,
 					url: new URL(request.url),
+					rawPath: new URL(request.url).pathname,
 					headers,
 					requestId: crypto.randomUUID(),
 				})

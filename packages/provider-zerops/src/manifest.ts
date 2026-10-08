@@ -1,7 +1,7 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import type { AppSchema } from '@fabrika/auth-core'
+import { type AppSchema, isDigest } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
-import { normalizeGateRule, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
+import { normalizeGateRule, proxyEndpointRowSchema, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
@@ -99,7 +99,18 @@ const nonEmptyStringsSchema = z.array(z.string().min(1))
 const manifestGateSchema = proxyGateRuleFieldsSchema
 	.refine((rule) => rule.kind !== 'service' || rule.credential !== null)
 	.transform(normalizeGateRule)
-const manifestProxySchema = z.object({ upstream: z.string().min(1), gates: z.object({ rules: z.array(manifestGateSchema) }) })
+// Gates or an endpoint table, never both: a dropped table would leave gates nobody approved in force.
+const manifestProxySchema = z.union([
+	z.object({ upstream: z.string().min(1), gates: z.object({ rules: z.array(manifestGateSchema) }), endpoints: z.undefined() })
+		.transform(({ endpoints: _endpoints, ...proxy }) => proxy),
+	z.object({
+		upstream: z.string().min(1),
+		endpoints: z.array(proxyEndpointRowSchema),
+		reservedPrefixes: z.array(z.string()),
+		snapshot: z.string().refine(isDigest),
+		gates: z.undefined(),
+	}).transform(({ gates: _gates, ...proxy }) => proxy),
+]) satisfies z.ZodType<ZeropsProxySpec, z.ZodTypeDef, unknown>
 const namespaceResourcesSchema = z.array(z.object({
 	resourceKey: z.literal('service:postgres'),
 	hostname: z.literal('postgres'),

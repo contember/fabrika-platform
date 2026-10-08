@@ -470,7 +470,7 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 	test("the proxy's own strict parser accepts it, with rule ORDER preserved (order IS the precedence)", () => {
 		const parsed = parseProxyManifestJson(encodeProxyManifestJson(manifest))
 		expect(parsed).not.toBeNull()
-		expect(parsed?.apps[0]?.gates.rules).toEqual(notesGates.rules)
+		expect(parsed?.apps[0]).toMatchObject({ gates: { rules: notesGates.rules } })
 		expect(parsed?.apps[0]?.upstream).toBe(`${NOTES_SERVICE}:3000`)
 	})
 
@@ -497,7 +497,7 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		// The client address and its aliases join them so an upstream's abuse limit keys on what this
 		// hop observed and never on what the caller claimed.
 		expect(serialized).toContain(
-			`"delete":["${PROXY_TOKEN_HEADER}","X-Request-Id","X-Fabrika-Client-Ip","X-Forwarded-For","CF-Connecting-IP"]`,
+			`"delete":["${PROXY_TOKEN_HEADER}","X-Request-Id","X-Fabrika-Endpoint","X-Fabrika-Delegation","X-Fabrika-Client-Ip","X-Forwarded-For","CF-Connecting-IP"]`,
 		)
 		expect(serialized).toContain('"set":{"X-Fabrika-Client-Ip":["{http.request.client_ip}"]}')
 		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.

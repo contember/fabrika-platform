@@ -81,6 +81,11 @@ export interface ProxyManifest {
 	apps: ProxyApp[]
 }
 
+/** A manifest of installation services only, such as the platform proxy's. */
+export interface GateProxyManifest {
+	apps: GateProxyApp[]
+}
+
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
 /** Literal LDH hostnames only: Caddy reads wildcard labels and placeholders as routing patterns. */
@@ -179,7 +184,8 @@ const endpointRuleFields = {
 	admission: admissionSchema.nullable(),
 	digest: z.string().refine(isDigest),
 }
-const proxyEndpointRowSchema = z.union([
+/** One row of a contract app's endpoint table; it refuses a digest that does not describe the row's rules. */
+export const proxyEndpointRowSchema = z.union([
 	z.object({
 		...endpointRuleFields,
 		kind: z.enum(['query', 'mutation', 'spa', 'upload', 'download']),

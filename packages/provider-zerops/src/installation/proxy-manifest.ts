@@ -22,7 +22,13 @@
 // generated artifact, so the published deploy path never depends on a package it cannot resolve.
 
 import type { AppGates, GateRule } from '@fabrika/auth-core'
-import { type OAuthProtectedResource, parseProxyManifest, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import {
+	type GateProxyApp,
+	type GateProxyManifest,
+	isContractProxyApp,
+	type OAuthProtectedResource,
+	parseProxyManifest,
+} from '@fabrika/proxy-core/manifest'
 
 /** The platform services an installation's proxy fronts. Each name is a service hostname in the topology. */
 export type PlatformProxyService = 'iam' | 'control' | 'operations'
@@ -136,11 +142,11 @@ export const platformOAuthResourceUris = (
 
 /** The gate rule goes FIRST, so the app's own catch-all rules cannot claim the path before it. */
 const withOAuthResource = (
-	app: ProxyApp,
+	app: GateProxyApp,
 	template: PlatformOAuthResourceTemplate,
 	composition: PlatformProxyComposition,
 	authorizationServer: string,
-): ProxyApp => {
+): GateProxyApp => {
 	const { resource, resourceMetadata } = platformOAuthResourceUris(composition, app.hosts, template)
 	const rule: GateRule = { path: template.path, kind: 'oauth', resource, scopes: [...template.scopes] }
 	const registered: OAuthProtectedResource = {
@@ -161,10 +167,10 @@ const withOAuthResource = (
 export const resolvePlatformProxyManifest = (
 	template: PlatformProxyManifestTemplate,
 	composition: PlatformProxyComposition,
-): ProxyManifest => {
-	const apps = template.apps.map((app): ProxyApp => {
+): GateProxyManifest => {
+	const apps = template.apps.map((app): GateProxyApp => {
 		const placement = composition.placement[app.service]
-		const resolved: ProxyApp = {
+		const resolved: GateProxyApp = {
 			id: app.id,
 			hosts: [...placement.hosts],
 			upstream: placement.upstream ?? app.upstream,
@@ -176,8 +182,10 @@ export const resolvePlatformProxyManifest = (
 			: withOAuthResource(resolved, app.oauthResource, composition, composition.authorizationServer)
 	})
 	const manifest = parseProxyManifest({ apps })
-	if (manifest === null) {
+	// Every platform service is protected by gates, so the parsed manifest holds gate apps only.
+	const gateApps = manifest?.apps.flatMap((app) => isContractProxyApp(app) ? [] : [app]) ?? []
+	if (manifest === null || gateApps.length !== manifest.apps.length) {
 		throw new Error('the resolved platform proxy manifest is not one the proxy would accept')
 	}
-	return manifest
+	return { apps: gateApps }
 }

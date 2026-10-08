@@ -5,7 +5,7 @@ import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fa
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import type { ProxyManifest } from '@fabrika/proxy-core/manifest'
+import type { GateProxyManifest, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -210,7 +210,7 @@ const localComposition = (mcpClients: readonly McpClient[] | undefined): Platfor
 	...(mcpClients === undefined ? {} : { authorizationServer: IAM_ISSUER }),
 })
 
-export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): ProxyManifest =>
+export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): GateProxyManifest =>
 	resolvePlatformProxyManifest(platformProxyManifestTemplate(), localComposition(mcpClients))
 
 /**

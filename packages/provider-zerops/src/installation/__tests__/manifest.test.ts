@@ -4,13 +4,13 @@
 // `notesapi:3000` beside the three platform apps, because on the light tier an application shares the
 // project and therefore the proxy's ONE manifest. Writing the platform template alone would delete it.
 
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
+import type { GateProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from '../manifest'
 
 const gates = { rules: [{ path: '/*', kind: 'public' } as const] }
 
-const consoleApp: ProxyApp = {
+const consoleApp: GateProxyApp = {
 	id: 'vozka',
 	hosts: ['proxy-292c-8082.prg1.zerops.app'],
 	upstream: 'control:3000',
@@ -26,7 +26,7 @@ const platform: ProxyManifest = {
 	],
 }
 
-const notes: ProxyApp = { id: 'notes', hosts: ['proxy-292c-8084.prg1.zerops.app'], upstream: 'notesapi:3000', gates, scheme: 'https' }
+const notes: GateProxyApp = { id: 'notes', hosts: ['proxy-292c-8084.prg1.zerops.app'], upstream: 'notesapi:3000', gates, scheme: 'https' }
 
 describe('merging', () => {
 	test('carries every application entry the platform does not own', () => {
@@ -39,10 +39,10 @@ describe('merging', () => {
 	test('replaces a platform app rather than duplicating it, and its gates win', () => {
 		// The drift backlog 58 exists for: the live console entry gated everything `public` while
 		// `CONTROL_PROXY_GATES` had said otherwise for two days.
-		const stale: ProxyApp = { ...consoleApp, gates }
+		const stale: GateProxyApp = { ...consoleApp, gates }
 		const merged = mergePlatformProxyManifest(platform, { apps: [stale, notes] })
 		expect(merged.manifest.apps.filter((app) => app.id === 'vozka')).toHaveLength(1)
-		expect(merged.manifest.apps.find((app) => app.id === 'vozka')?.gates).toEqual(consoleApp.gates)
+		expect(merged.manifest.apps.find((app) => app.id === 'vozka')).toMatchObject({ gates: consoleApp.gates })
 	})
 
 	test('supersedes a live entry standing on a platform host, and reports which one', () => {
