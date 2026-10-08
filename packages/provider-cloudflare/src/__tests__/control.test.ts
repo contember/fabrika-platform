@@ -548,6 +548,26 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
+	test("sends every Cloudflare deployment of Control's registry with the job", async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			installationApps: async () => [{ app: 'api', env: 'production' }, { app: 'notes', env: 'prod' }],
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		await provider.deploy(deployInput())
+		expect(jobs.map((job) => job.installationApps)).toEqual([['api@production', 'notes@prod']])
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+	})
+
 	test('rejects another provider before registration is stored', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
@@ -596,6 +616,10 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: 'https://api.example.com' }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [42] }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [''] }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: ['notes@prod', 'api@production'] }).success).toBe(true)
+		for (const id of ['notes', 'notes@prod@eu', '@prod', 'notes@', 'notes @prod']) {
+			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, installationApps: [id] }).success).toBe(false)
+		}
 		for (const ref of ['main', COMMIT_SHA.toUpperCase(), `${COMMIT_SHA}\n`, COMMIT_SHA.slice(1)]) {
 			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, ref }).success).toBe(false)
 		}

@@ -9,7 +9,7 @@
 // The runner is not a core port: it is consumed only while composing the Cloudflare provider below.
 
 import type { IamRpc } from '@fabrika/auth'
-import { readEnvironmentName } from '@fabrika/auth-core'
+import { type AppEnvironment, readEnvironmentName } from '@fabrika/auth-core'
 import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import {
@@ -22,7 +22,7 @@ import {
 import type { ControlProvider, ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type RelayResult, type RunnerStatus, runnerStatusSchema, type VozkaRunner } from '@fabrika/runner-cloudflare'
 import { z } from 'zod'
-import { createControlRepositories } from './db'
+import { type ControlRepositories, createControlRepositories } from './db'
 import type { Env } from './env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from './github/connections/credentials'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
@@ -253,6 +253,12 @@ function canonicalRepository(repoUrl: string): SourceRepository {
 	return { owner, name }
 }
 
+/** Every Cloudflare deployment in the registry. A deploy refuses the names of every other application among them (ADR-0048). */
+export async function cloudflareDeployments(repositories: Pick<ControlRepositories, 'registry'>): Promise<AppEnvironment[]> {
+	const rows = await repositories.registry.listAppEnvsByProvider('cloudflare')
+	return rows.map((row) => ({ app: row.app_id, env: row.env }))
+}
+
 /** Compose the only provider available in the Cloudflare installation. */
 export function cloudflareControlProvider(bindings: WorkerBindings, env: Env, seams: CloudflareSourceSeams = {}): ControlProvider {
 	const source = cloudflareGitHubSource(env, seams)
@@ -261,6 +267,7 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env, se
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
 		...cloudflareIamControlOptions(env),
 		runnerKey: env.FABRIKA_RUNNER_KEY ?? '',
+		installationApps: () => cloudflareDeployments(env.REPOSITORIES),
 		resolveSource: source.resolveSource,
 		prepareClone: async (selected, signal, sourceBinding) => {
 			const clone = await source.prepareClone(selected, signal, sourceBinding)

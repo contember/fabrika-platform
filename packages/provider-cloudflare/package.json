@@ -44,6 +44,7 @@
 		"zod": "^3.25.76",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/check": "workspace:*",
 		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",

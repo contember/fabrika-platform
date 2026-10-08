@@ -65,15 +65,20 @@ The provider refuses these on application Workers:
 - any `preview_urls` other than `false`, because Cloudflare enables preview URLs by default;
 - any `workers_dev` other than `false`;
 - a binding to another application's resources: a binding whose name belongs to another application of
-  the installation, checked against Control's registry.
+  the installation, checked against Control's registry. A remote name `<env>-<name>` belongs to the
+  registered deployment whose `<env>-<app>` is its longest prefix (exact, or followed by `-`).
 
 An application Worker is therefore reachable only through its proxy Worker's service binding, and that
 binding is the authenticated hop ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). Only CSP
 extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
 
-The code does none of this yet (part B, work units B6 and B8), except the refusals of `routes`,
-`preview_urls` and `workers_dev`, which `assertAuthoredGraph` applies to every Worker of an application
-config except the proxy Worker the provider builds, recognised by its entrypoint and package directory.
+What is built (work unit B8): the deployer builds a contract application's proxy Worker from the
+contract's endpoint table and writes the contract digest into the application Worker; a config that returns
+its own proxy is refused; the exposure refusals above apply to every application Worker; Control sends its
+registry of Cloudflare deployments with each job. Until work unit B6 sends the run's snapshot, the deployer
+reads the contract from the checkout with the same static reader, so a contract application is one whose
+checkout has `fabrika.contract.ts`; an application without one keeps the gate proxy its config builds. IAM
+still receives the schema from the runner's outcome until B6.
 
 ### On Cloudflare these are a strong default, not a security boundary
 

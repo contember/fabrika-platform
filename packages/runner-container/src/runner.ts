@@ -9,6 +9,7 @@ import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_ARTIFACT_HEADERS } from '@fabrika/operations-contract/releases'
 import {
 	type CloudflareRunnerJob,
+	INSTALLATION_APPS_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
 	type RunnerIamReconcile,
 	type RunnerOutcomeFile,
@@ -467,8 +468,10 @@ export class Runner {
 		for (const [name, value] of Object.entries(this.job.managedEnvironment ?? {})) {
 			env[name] = value
 		}
-		// Last, so no job-supplied name can redirect where the executor reports its outcome.
+		// Last, so no job-supplied name can redirect where the executor reports its outcome or drop the registry it checks.
 		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
+		if (this.job.installationApps === undefined) delete env[INSTALLATION_APPS_ENV]
+		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
 		return env
 	}
 

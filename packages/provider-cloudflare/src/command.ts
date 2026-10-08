@@ -1,6 +1,9 @@
+import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
 import { type CloudflareDeployResult, createCloudflareDeployer } from './provider'
+import { INSTALLATION_APPS_ENV } from './runner-protocol'
 
 const requiredEnvironmentValue = (name: string): string => {
 	const value = environmentValue(name)
@@ -42,6 +45,29 @@ export const parseReturnOrigins = (raw: string | undefined): readonly string[] |
 	return origins.length === 0 ? undefined : origins
 }
 
+const installationAppsSchema = z.array(z.string())
+
+/**
+ * Decode `FABRIKA_INSTALLATION_APPS`, the Cloudflare deployments Control registered, as the runner writes it.
+ * Undefined when absent; anything malformed fails the deploy rather than dropping the refusal it feeds.
+ */
+export const parseInstallationApps = (raw: string | undefined): readonly AppEnvironment[] | undefined => {
+	if (raw === undefined || raw === '') return undefined
+	let decoded: unknown
+	try {
+		decoded = JSON.parse(raw)
+	} catch {
+		throw new Error(`${INSTALLATION_APPS_ENV} is not a JSON array`)
+	}
+	const ids = installationAppsSchema.safeParse(decoded)
+	if (!ids.success) throw new Error(`${INSTALLATION_APPS_ENV} is not a JSON array of strings`)
+	return ids.data.map((id) => {
+		const deployment = parseAppEnvironmentId(id)
+		if (deployment === null) throw new Error(`${INSTALLATION_APPS_ENV} holds \`${id.slice(0, 80)}\`, which is not \`<app>@<env>\``)
+		return deployment
+	})
+}
+
 export interface LoadedCloudflareCommandConfig {
 	readonly config: CloudflareAppConfig
 	readonly absolutePath: string
@@ -75,11 +101,13 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	})
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
+	const installationApps = parseInstallationApps(environmentValue(INSTALLATION_APPS_ENV))
 	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
 		...(domain === undefined ? {} : { domain }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
+		...(installationApps === undefined ? {} : { installationApps }),
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),

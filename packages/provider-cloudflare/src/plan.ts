@@ -1,3 +1,4 @@
+import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { FABRIKA_PROXY_MANIFEST_JSON, isContractProxyApp, isProxyHost, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { Container, D1Database, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
@@ -109,16 +110,55 @@ const platformRemoteName = (remote: string): string | null => {
 	return null
 }
 
+/** The deployment being deployed, and every Cloudflare deployment of the installation in Control's registry. */
+export interface ApplicationNames {
+	readonly self: AppEnvironment
+	readonly installation: readonly AppEnvironment[]
+}
+
+/**
+ * The other application whose names `remote` falls under, or null. oblaka adopts `${env}-${name}`, and an application's
+ * names are `${env}-${app}` and `${env}-${app}-…`. The longest prefix decides, so `notes-admin` keeps its own names
+ * from `notes`; a prefix that two applications share is refused.
+ */
+const foreignApplication = (remote: string, { self, installation }: ApplicationNames): AppEnvironment | null => {
+	let longest = 0
+	let owner: AppEnvironment | null = null
+	for (const deployment of [self, ...installation]) {
+		const prefix = `${deployment.env}-${deployment.app}`
+		if (remote !== prefix && !remote.startsWith(`${prefix}-`)) continue
+		if (prefix.length > longest) {
+			longest = prefix.length
+			owner = deployment
+		} else if (prefix.length === longest && deployment.app !== self.app) {
+			owner = deployment
+		}
+	}
+	return owner === null || owner.app === self.app ? null : owner
+}
+
+/** `subject` reads as the start of the refusal: "Worker `demo` binds service" or "D1 database `db` becomes". */
+const assertOwnName = (subject: string, remote: string, names: ApplicationNames): void => {
+	const owner = foreignApplication(remote, names)
+	if (owner !== null) {
+		throw new Error(
+			`cloudflare: ${subject} \`${remote}\`, a name of application \`${owner.app}\` (environment \`${owner.env}\`); an application binds only its own resources`,
+		)
+	}
+}
+
 /**
  * Check the `services` a Worker's wrangler config CARRIES, not the object that wrote them: a custom
  * `Bindable`, or a `ServiceReference` subclass, can emit any entry. The one platform service an
  * application may bind is IAM, and only at `IAM_APPLICATION_ENTRYPOINT`; the default export issues keys.
+ * Another application's Worker is never bound.
  */
-export const assertApplicationServices = (worker: string, services: unknown, env: string): void => {
+export const assertApplicationServices = (worker: string, services: unknown, names: ApplicationNames): void => {
 	if (services === undefined) return
 	if (!Array.isArray(services)) {
 		throw new Error(`cloudflare: Worker \`${worker}\` emits unreadable \`services\`, which cannot be checked against the Fabrika platform services`)
 	}
+	const env = names.self.env
 	const iam = env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`
 	for (const entry of services) {
 		const service: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'service') : undefined
@@ -139,6 +179,7 @@ export const assertApplicationServices = (worker: string, services: unknown, env
 		if (platform !== null) {
 			throw new Error(`cloudflare: Worker \`${worker}\` binds service \`${service}\`, which is the Fabrika platform resource \`${platform}\``)
 		}
+		assertOwnName(`Worker \`${worker}\` binds service`, service, names)
 	}
 }
 
@@ -285,8 +326,10 @@ export interface AuthoredGraphLimits {
 	readonly platformResources: 'refuse' | 'allow'
 	/** The IAM application id `<app>@<env>` of the deployment, the only audience its proxy may mint for. */
 	readonly iamAppId: string
-	/** A contract application (its schema says `contract: true`) is served behind its endpoint table, never gates. */
+	/** A contract application is served behind its endpoint table, never gates. */
 	readonly contract: boolean
+	/** Every Cloudflare deployment of the installation in Control's registry; their names are refused. Empty outside a run. */
+	readonly installation: readonly AppEnvironment[]
 }
 
 /**
@@ -312,6 +355,15 @@ const assertProxyAudience = (proxy: Worker, { iamAppId, contract }: AuthoredGrap
 	}
 }
 
+/** The names this deployment owns: `iamAppId` is `<app>@<env>`, the deployment itself. */
+export const applicationNames = (limits: Pick<AuthoredGraphLimits, 'env' | 'iamAppId' | 'installation'>): ApplicationNames => {
+	const self = parseAppEnvironmentId(limits.iamAppId)
+	if (self === null || self.env !== limits.env) {
+		throw new Error(`cloudflare: \`${limits.iamAppId}\` is not the application id of environment \`${limits.env}\``)
+	}
+	return { self, installation: limits.installation }
+}
+
 /**
  * Refuse an authored graph before any Cloudflare call: the config comes from the checkout and the
  * deploy holds an account-wide token, so the names and routes it may claim are bounded here (ADR-0014).
@@ -320,13 +372,16 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 	const deployable = applicationChain(root)
 	const applications = applicationWorkers(root, deployable)
 	const refuse = limits.platformResources === 'refuse'
+	const names = applicationNames(limits)
 	const assertAdoptable = (kind: string, name: string): void => {
-		const adoption = refuse ? platformAdoption(limits.env, name) : null
+		if (!refuse) return
+		const adoption = platformAdoption(limits.env, name)
 		if (adoption !== null) {
 			throw new Error(
 				`cloudflare: ${kind} \`${name}\` becomes \`${adoption.adopted}\` on Cloudflare, which would take over the Fabrika platform resource \`${adoption.platform}\``,
 			)
 		}
+		assertOwnName(`${kind} \`${name}\` becomes`, `${limits.env}-${name}`, names)
 	}
 	const visit = (worker: Worker): void => {
 		for (const key of refuse ? Object.keys(worker.options) : []) {
@@ -368,7 +423,7 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 			}
 		}
 		if (refuse) {
-			assertApplicationServices(worker.options.name, emittedBindingConfig(worker, limits.env).services, limits.env)
+			assertApplicationServices(worker.options.name, emittedBindingConfig(worker, limits.env).services, names)
 		}
 	}
 	assertAdoptable('Worker', root.options.name)

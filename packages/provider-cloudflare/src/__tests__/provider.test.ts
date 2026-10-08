@@ -1,4 +1,5 @@
-import { contractProxyTable, encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import { contractProxyTable, encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
@@ -90,10 +91,15 @@ const makeCollaborators = (
 	checkoutDir = '/repo/app',
 	runCommand?: CommandRunner,
 	generatedServices?: GeneratedService[],
+	checkoutContract: ContractArtifact | null = null,
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
 		expect(configPath).toBe('fabrika.config.ts')
 		return { config: appConfig, cwd: checkoutDir }
+	},
+	readContract: async (root) => {
+		expect(root).toBe(checkoutDir)
+		return checkoutContract
 	},
 	runCommand: async (spec) => {
 		rec.commands.push(spec)
@@ -142,12 +148,25 @@ const deploy = (
 		readonly env?: string
 		readonly checkoutDir?: string
 		readonly generatedServices?: GeneratedService[]
+		/** What `fabrika.contract.ts` in the checkout reads as; none by default. */
+		readonly checkoutContract?: ContractArtifact
+		/** The run's approved snapshot, which Control sends once B6 lands. */
+		readonly contract?: ContractArtifact
+		readonly installationApps?: readonly AppEnvironment[]
 	} = {},
 ) =>
 	createCloudflareDeployer({
 		accountId: 'acc-1',
 		apiToken: 'tok-1',
-		collaborators: makeCollaborators(rec, appConfig, options.commandResult, options.checkoutDir, options.runCommand, options.generatedServices),
+		collaborators: makeCollaborators(
+			rec,
+			appConfig,
+			options.commandResult,
+			options.checkoutDir,
+			options.runCommand,
+			options.generatedServices,
+			options.checkoutContract,
+		),
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
 	})({
 		appId: options.appId ?? 'demo',
@@ -160,6 +179,8 @@ const deploy = (
 		secrets: options.secrets ?? {},
 		vars: {},
 		managedEnvironment: options.managedEnvironment ?? {},
+		...(options.contract === undefined ? {} : { contract: options.contract }),
+		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		log: (line) => {
@@ -768,29 +789,6 @@ describe('Cloudflare provider', () => {
 		await expect(deploy(rec, config({ resources: () => proxyRouting(appWorker(), route) }))).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
-	test('refuses a contract application behind gates and deploys it behind its endpoint table', async () => {
-		const route = [{ pattern: 'stage.example.com', custom_domain: true }]
-		const schema = { scopes: [], actions: [], roles: {}, contract: true }
-		await expect(deploy(rec, config({ schema, resources: () => proxyRouting(appWorker(), route) }))).rejects.toThrow(
-			'protects a contract application with gates',
-		)
-		expect(rec.provisions).toHaveLength(0)
-		const table = proxyRoutingWith(
-			appWorker(),
-			route,
-			encodeProxyManifestJson({
-				apps: [{
-					id: 'demo@stage',
-					hosts: ['stage.example.com'],
-					upstream: 'APP',
-					scheme: 'https',
-					...contractProxyTable(notesArtifact),
-				}],
-			}),
-		)
-		await expect(deploy(rec, config({ schema, resources: () => table }))).resolves.toMatchObject({ status: 'succeeded' })
-	})
-
 	test('keeps the Worker options an application config legitimately sets', async () => {
 		const app = new Worker({
 			dir: '.',
@@ -942,5 +940,216 @@ describe('Cloudflare provider', () => {
 				}),
 		})
 		await expect(deploy(rec, authored, { env: 'prod-eu', domain: 'notes.example.com' })).resolves.toMatchObject({ status: 'succeeded' })
+	})
+})
+
+const CONTRACT_SCHEMA = { scopes: [], actions: [], roles: {}, contract: true }
+
+/** The Worker the deploy provisioned, and the application Worker behind its `APP` binding. */
+const provisioned = (): { readonly root: Worker; readonly app: Worker } => {
+	const root = rec.provisions[0]?.definition
+	if (!(root instanceof Worker)) throw new Error('nothing was provisioned')
+	const app = root.options.bindings?.['APP']
+	if (!(app instanceof Worker)) throw new Error('the provisioned root binds no application Worker')
+	return { root, app }
+}
+
+describe('a contract application on Cloudflare (ADR-0048)', () => {
+	test('the platform builds the proxy Worker from the contract around the application Worker the config returns', async () => {
+		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), {
+			checkoutContract: notesArtifact,
+			managedEnvironment: { FABRIKA_IAM_ISSUER: 'https://iam.example.test' },
+		})
+		expect(result.status).toBe('succeeded')
+		const { root, app } = provisioned()
+		expect(root.options).toMatchObject({
+			name: 'demo-proxy',
+			main: './proxy-worker.ts',
+			routes: [{ pattern: 'stage.example.com', custom_domain: true }],
+		})
+		// The proxy code is the platform's own copy, never the one a checkout installs into its `node_modules`.
+		expect(root.options.dir).not.toContain('node_modules')
+		expect(root.options.vars?.['FABRIKA_IAM_ISSUER']).toBe('https://iam.example.test')
+		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toEqual([
+			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
+		])
+		expect(app.options.name).toBe('demo')
+		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+	})
+
+	test('a config that builds its own proxy Worker is refused, with gates or with the endpoint table', async () => {
+		const route = [{ pattern: 'stage.example.com', custom_domain: true }]
+		const ownTable = proxyRoutingWith(
+			appWorker(),
+			route,
+			encodeProxyManifestJson({
+				apps: [{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) }],
+			}),
+		)
+		for (const authored of [proxyRouting(appWorker(), route), ownTable]) {
+			await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA, resources: () => authored }), { checkoutContract: notesArtifact })).rejects.toThrow(
+				'`resources` returns the proxy Worker `demo-proxy`; a contract application returns its application Worker',
+			)
+		}
+		const named = config({
+			schema: CONTRACT_SCHEMA,
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo-proxy', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(deploy(rec, named, { checkoutContract: notesArtifact })).rejects.toThrow('takes the name of the proxy Worker the platform builds')
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('the application Worker behind the platform proxy is still refused a route, workers.dev or preview URLs', async () => {
+		const exposed = config({
+			schema: CONTRACT_SCHEMA,
+			resources: () => new Worker({ dir: '.', workers_dev: false, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(deploy(rec, exposed, { checkoutContract: notesArtifact })).rejects.toThrow('application Worker `demo` leaves `preview_urls` on')
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('the lock-down follows the contract: an IAM schema that disagrees with it is refused', async () => {
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }))).rejects.toThrow(
+			'the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`',
+		)
+		const loose = { scopes: [], actions: [], roles: {} }
+		for (const schema of [loose, undefined]) {
+			await expect(deploy(rec, config(schema === undefined ? {} : { schema }), { checkoutContract: notesArtifact })).rejects.toThrow(
+				'this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)`',
+			)
+		}
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('the contract digest is the platform’s: an authored one is refused, a different one sent with the run too', async () => {
+		const authored = config({
+			schema: CONTRACT_SCHEMA,
+			resources: () =>
+				new Worker({
+					dir: '.',
+					...PRIVATE,
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: {},
+					main: 'src/index.ts',
+					vars: { FABRIKA_CONTRACT_DIGEST: 'x' },
+				}),
+		})
+		await expect(deploy(rec, authored, { checkoutContract: notesArtifact })).rejects.toThrow(
+			'application variable `FABRIKA_CONTRACT_DIGEST` is managed by Fabrika',
+		)
+		await expect(
+			deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: notesArtifact, managedEnvironment: { FABRIKA_CONTRACT_DIGEST: 'other' } }),
+		).rejects.toThrow('FABRIKA_CONTRACT_DIGEST is `other`, but the contract this deployment serves has digest')
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test("the run's snapshot, when Control sends one, is the contract the proxy serves", async () => {
+		const unreadable: CloudflareCollaborators = {
+			...makeCollaborators(rec, config({ schema: CONTRACT_SCHEMA })),
+			readContract: () => Promise.reject(new Error('the checkout is not read when the run carries its snapshot')),
+		}
+		const result = await createCloudflareDeployer({ accountId: 'acc-1', apiToken: 'tok-1', collaborators: unreadable })({
+			appId: 'demo',
+			env: 'stage',
+			domain: 'stage.example.com',
+			cwd: '/repo',
+			configPath: 'fabrika.config.ts',
+			secrets: {},
+			vars: {},
+			managedEnvironment: {},
+			contract: notesArtifact,
+			dryRun: true,
+			signal: new AbortController().signal,
+			log: () => {},
+		})
+		expect(result.status).toBe('succeeded')
+		expect(provisioned().app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+	})
+
+	test('an application without a contract keeps the proxy its config builds', async () => {
+		const route = [{ pattern: 'stage.example.com', custom_domain: true }]
+		await expect(deploy(rec, config({ resources: () => proxyRouting(appWorker(), route) }))).resolves.toMatchObject({ status: 'succeeded' })
+		expect(provisioned().root.options.dir).toBe(INSTALLED_PROXY_DIR)
+	})
+})
+
+describe("another application's names (ADR-0048)", () => {
+	const installationApps: readonly AppEnvironment[] = [
+		{ app: 'demo', env: 'prod' },
+		{ app: 'otherapp', env: 'prod' },
+		{ app: 'otherapp', env: 'stage' },
+		{ app: 'notes', env: 'prod' },
+	]
+	const binding = (bindings: Worker['options']['bindings'], name = 'demo'): CloudflareAppConfig =>
+		config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name, compatibility_flags: [], bindings, main: 'src/index.ts' }) })
+
+	test('a binding to `prod-otherapp` is refused, as a service or as a resource of another kind', async () => {
+		await expect(deploy(rec, binding({ OTHER: new ServiceReference('otherapp') }), { env: 'prod', installationApps })).rejects.toThrow(
+			'service binding to `otherapp` becomes `prod-otherapp`, a name of application `otherapp` (environment `prod`); an application binds only its own resources',
+		)
+		const resources: ReadonlyArray<readonly [string, Worker['options']['bindings']]> = [
+			['D1 database `otherapp-db`', { DB: new D1Database({ name: 'otherapp-db' }) }],
+			['KV namespace `otherapp-cache`', { CACHE: new KVNamespace({ name: 'otherapp-cache' }) }],
+			['R2 bucket `otherapp-files`', { FILES: new R2Bucket({ name: 'otherapp-files' }) }],
+			['queue `otherapp-jobs`', { JOBS: new Queue({ name: 'otherapp-jobs' }) }],
+		]
+		for (const [described, bindings] of resources) {
+			await expect(deploy(rec, binding(bindings), { env: 'prod', installationApps })).rejects.toThrow(`${described} becomes \`prod-otherapp-`)
+		}
+		await expect(deploy(rec, binding({}, 'otherapp-worker'), { env: 'stage', installationApps })).rejects.toThrow(
+			'Worker `otherapp-worker` becomes `stage-otherapp-worker`, a name of application `otherapp` (environment `stage`)',
+		)
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('an environment name cannot split another application’s prefix', async () => {
+		await expect(deploy(rec, binding({}, 'worker'), { env: 'prod-otherapp', installationApps })).rejects.toThrow(
+			'Worker `worker` becomes `prod-otherapp-worker`, a name of application `otherapp`',
+		)
+	})
+
+	test('the service bindings a Worker emits are checked against the registry too, before each wrangler deploy', async () => {
+		class InnocentReference extends ServiceReference {
+			override configureBinding(args: Parameters<ServiceReference['configureBinding']>[0]) {
+				return { ...args.config, services: [{ binding: args.binding, service: `${args.env}-otherapp` }] }
+			}
+		}
+		await expect(deploy(rec, binding({ HELPER: new InnocentReference('demo-helper') }), { env: 'prod', installationApps })).rejects.toThrow(
+			'Worker `demo` binds service `prod-otherapp`, a name of application `otherapp`',
+		)
+		const result = await deploy(rec, binding({}), {
+			env: 'prod',
+			installationApps,
+			generatedServices: [{ binding: 'OTHER', service: 'prod-otherapp' }],
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toContain('binds service `prod-otherapp`, a name of application `otherapp`')
+		expect(rec.commands.some((command) => command.command === 'wrangler' && command.args[0] === 'deploy')).toBe(false)
+	})
+
+	test('an application keeps its own names, including those under a shorter application id', async () => {
+		const own = binding({ DB: new D1Database({ name: 'demo-db' }), OTHER_ENV: new ServiceReference('demo') })
+		await expect(deploy(rec, own, { env: 'prod', installationApps })).resolves.toMatchObject({ status: 'succeeded' })
+		const admin = config({
+			id: 'notes-admin',
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'notes-admin', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(deploy(rec, admin, { appId: 'notes-admin', env: 'prod', installationApps })).resolves.toMatchObject({ status: 'succeeded' })
+		// …and `notes` cannot take `notes-admin`'s.
+		const registry = [...installationApps, { app: 'notes-admin', env: 'prod' }]
+		const notes = config({
+			id: 'notes',
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'notes-admin-api', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(deploy(rec, notes, { appId: 'notes', env: 'prod', installationApps: registry })).rejects.toThrow(
+			'a name of application `notes-admin` (environment `prod`)',
+		)
+	})
+
+	test('a platform component is not bound by the registry', async () => {
+		await expect(deploy(rec, binding({ OTHER: new ServiceReference('otherapp') }), { env: 'prod', installationApps, platformResources: 'allow' }))
+			.resolves.toMatchObject({ status: 'succeeded' })
 	})
 })

@@ -1,12 +1,12 @@
 /**
- * A contract application behind the Cloudflare proxy Worker that `fabrika.config.ts` builds with the contract's
- * endpoint table: each request goes through the proxy's per-endpoint decision into `boot`'s real pipeline, with
- * no harness adding the endpoint header on the way.
+ * A contract application behind the proxy Worker the Cloudflare deployer builds from the contract's endpoint table
+ * (ADR-0048): each request goes through the proxy's per-endpoint decision into `boot`'s real pipeline, with no harness
+ * adding the endpoint header on the way.
  */
 
 import { compileContract } from '@fabrika/app/contract'
 import { boot } from '@fabrika/app/implement'
-import type { MintFromKeyResult, MintTokenResult, PermissionEntry } from '@fabrika/auth-core'
+import { type AppEnvironment, type MintFromKeyResult, type MintTokenResult, parseAppEnvironmentId, type PermissionEntry } from '@fabrika/auth-core'
 import { silentLogger } from '@fabrika/proxy-core'
 import { contractProxyTable, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -26,16 +26,22 @@ import {
 } from '../../../app/src/__tests__/fixtures/implement/harness'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { FakeIam } from '../../../proxy-core/src/__tests__/helpers'
+import { createCloudflareDeployer, defineApp } from '..'
 import { createCloudflareProxyWorker } from '../proxy'
 import { createCloudflareProxyHandler } from '../proxy-worker'
 
 const HOST = 'notes.example.com'
 const artifact = compileContract(contract, { notes: NOTE_TABLE })
 const table = contractProxyTable(artifact)
+const deploymentOf = (id: string): AppEnvironment => {
+	const parsed = parseAppEnvironmentId(id)
+	if (parsed === null) throw new Error(`${id} is not <app>@<env>`)
+	return parsed
+}
+const deployment = deploymentOf(APP_ID)
 
-const proxyWorker = createCloudflareProxyWorker({
-	name: 'notes-proxy',
-	app: new Worker({
+const appWorker = (): Worker =>
+	new Worker({
 		dir: '.',
 		name: 'notes-app',
 		main: './src/index.ts',
@@ -44,12 +50,44 @@ const proxyWorker = createCloudflareProxyWorker({
 		workers_dev: false,
 		preview_urls: false,
 		routes: [],
-	}),
-	appId: APP_ID,
-	appHost: HOST,
-	endpoints: table,
-	iamUrl: ISSUER,
-})
+	})
+
+/** The root Worker the deployer hands oblaka for the contract application whose config returns only `notes-app`. */
+async function deployedProxy(): Promise<Worker> {
+	const provisioned: Worker[] = []
+	const config = defineApp({ id: deployment.app, schema: { scopes: [], actions: [], roles: {}, contract: true }, resources: appWorker })
+	const result = await createCloudflareDeployer({
+		accountId: 'account',
+		apiToken: 'token',
+		collaborators: {
+			loadConfig: async () => ({ config, cwd: '/checkout' }),
+			readContract: async () => artifact,
+			runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+			provision: async (input) => {
+				if (input.definition instanceof Worker) provisioned.push(input.definition)
+				return { wranglerConfigs: [], wranglerConfig: {} }
+			},
+			writeOutcome: async () => {},
+		},
+	})({
+		appId: deployment.app,
+		env: deployment.env,
+		domain: HOST,
+		cwd: '/checkout',
+		configPath: 'fabrika.config.ts',
+		secrets: {},
+		vars: {},
+		managedEnvironment: { FABRIKA_IAM_ISSUER: ISSUER },
+		dryRun: true,
+		signal: new AbortController().signal,
+		log: () => {},
+	})
+	const [root] = provisioned
+	if (result.status !== 'succeeded' || root === undefined) throw new Error('the contract application did not deploy')
+	return root
+}
+
+const proxyWorker = await deployedProxy()
 
 function bakedManifest(): string {
 	const encoded = proxyWorker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
@@ -109,16 +147,7 @@ describe('a contract application behind its endpoint table on Cloudflare', () =>
 	})
 
 	test('a proxy Worker given both a table and gates is refused', () => {
-		const app = new Worker({
-			dir: '.',
-			name: 'notes-app',
-			main: './src/index.ts',
-			compatibility_flags: [],
-			bindings: {},
-			workers_dev: false,
-			routes: [],
-		})
-		const both = { name: 'notes-proxy', app, appId: APP_ID, appHost: HOST, endpoints: table, gates: { rules: [] }, iamUrl: ISSUER }
+		const both = { name: 'notes-proxy', app: appWorker(), appId: APP_ID, appHost: HOST, endpoints: table, gates: { rules: [] }, iamUrl: ISSUER }
 		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [both])).toThrow('endpoint table or gates, never both')
 	})
 

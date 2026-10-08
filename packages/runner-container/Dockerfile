@@ -44,6 +44,7 @@ WORKDIR /opt/fabrika
 COPY packages/runner-container/docker/package.json ./package.json
 COPY packages/app ./packages/app
 COPY packages/auth-core ./packages/auth-core
+COPY packages/check ./packages/check
 COPY packages/jwks ./packages/jwks
 COPY packages/db ./packages/db
 COPY packages/auth ./packages/auth

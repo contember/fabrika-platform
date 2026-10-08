@@ -9,6 +9,7 @@ export {
 	type CommandResult,
 	type CommandRunner,
 	type CommandSpec,
+	type ContractReader,
 	defaultCloudflareCollaborators,
 	type LoadedCloudflareConfig,
 	type OblakaProvisioner,

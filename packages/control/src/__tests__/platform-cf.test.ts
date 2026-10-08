@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import {
 	cancelRunOnRunner,
 	cloudflareControlProvider,
+	cloudflareDeployments,
 	cloudflareGitHubSource,
 	cloudflareIamControlOptions,
 	type CloudflareRunnerService,
@@ -117,6 +118,31 @@ function workerBindings(harness: ReturnType<typeof createHarness>): WorkerBindin
 		CLOUDFLARE_API_TOKEN: 'token',
 	}
 }
+
+describe("the Cloudflare composition's registry", () => {
+	test('lists every Cloudflare deployment, and no deployment of another provider', async () => {
+		const harness = createHarness()
+		try {
+			const registry = harness.repositories.registry
+			const deployments = [['api', 'production', 'cloudflare'], ['api', 'stage', 'cloudflare'], ['notes', 'prod', 'cloudflare'], [
+				'shop',
+				'prod',
+				'zerops',
+			]]
+			for (const [appId = '', env = '', provider = ''] of deployments) {
+				if ((await registry.getApp(appId)) === null) await registry.createApp({ id: appId, repoUrl: `github.com/example/${appId}` })
+				await registry.upsertAppEnv({ appId, env, namespaceId: null, provider, providerTargetJson: '{}', providerArtifactJson: '{}' })
+			}
+			expect(await cloudflareDeployments(harness.repositories)).toEqual([
+				{ app: 'api', env: 'production' },
+				{ app: 'api', env: 'stage' },
+				{ app: 'notes', env: 'prod' },
+			])
+		} finally {
+			harness.sqlite.close()
+		}
+	})
+})
 
 describe('the Cloudflare source composition', () => {
 	test('resolves the recorded commit or requested ref anonymously; a missing runner binding refuses acceptance', async () => {

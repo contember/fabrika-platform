@@ -5,6 +5,7 @@
 	"workspaces": [
 		"packages/app",
 		"packages/auth-core",
+		"packages/check",
 		"packages/jwks",
 		"packages/db",
 		"packages/auth",

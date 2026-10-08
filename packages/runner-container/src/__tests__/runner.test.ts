@@ -460,6 +460,22 @@ describe('Runner pipeline', () => {
 		expect(argvAll).not.toContain('fabrika/app/stage/default/commit')
 	})
 
+	test("Control's registry reaches the executor as JSON, and no job-supplied name replaces or plants it", async () => {
+		const rec: RecordedSpawn[] = []
+		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
+		const executorEnv = async (job: CloudflareRunnerJob) => {
+			rec.length = 0
+			await new Runner(job, makeEnv(spawn)).run()
+			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+		}
+
+		const sent = await executorEnv(baseJob({ installationApps: ['app@stage', 'notes@prod'], secrets: { FABRIKA_INSTALLATION_APPS: '[]' } }))
+		expect(sent?.['FABRIKA_INSTALLATION_APPS']).toBe('["app@stage","notes@prod"]')
+
+		const absent = await executorEnv(baseJob({ vars: { FABRIKA_INSTALLATION_APPS: '[]' } }))
+		expect(absent).not.toHaveProperty('FABRIKA_INSTALLATION_APPS')
+	})
+
 	test('credential, secret, var and managed environment values are redacted from log lines', async () => {
 		const spawn = makeSpawner([], (spec, handlers) => {
 			if (spec.command === 'fabrika-cloudflare-executor') {

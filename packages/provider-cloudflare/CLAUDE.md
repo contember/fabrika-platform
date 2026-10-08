@@ -59,7 +59,7 @@ this one import.
   `assertUnexposedApplication` (`src/plan.ts`) refuses a non-empty `routes`, and any `workers_dev` or
   `preview_urls` other than `false` — Cloudflare turns both URLs on by default. Only the root that
   `createCloudflareProxyWorker` builds is exempt: `CLOUDFLARE_PROXY_WORKER_MAIN`, from this package's own
-  `src` (the runner's copy or a checkout's `node_modules` copy), binding `APP`. Every other Worker, the root
+  `src` (the runner's copy; for an application without a contract also a checkout's `node_modules` copy), binding `APP`. Every other Worker, the root
   included, is an application Worker. `platformResources: 'allow'` skips it (IAM routes its own Worker). Repository code holds the account token, so on Cloudflare this is a
   strong default, not a boundary (backlog 86).
 - **`assets` is ALLOWED but BOUNDED** (`assertBoundedAssets`). Its `directory` is resolved against the
@@ -86,10 +86,22 @@ this one import.
   order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
-- **A contract application's proxy carries its endpoint table, never gates.** `createCloudflareProxyWorker`
-  takes `endpoints: contractProxyTable(artifact)` for a contract application and `gates` for an
-  installation service, never both; `assertAuthoredGraph` refuses a proxy with gates when the app's
-  schema says `contract: true`. Its `IAM` binding is also the delegation issuer the proxy asks for grants.
+- **A contract application's proxy Worker is the platform's (ADR-0048).** The application is a contract
+  application when the run carries its snapshot (`CloudflareDeployRun.contract`, B6's seam) or, until
+  then, when the config's directory holds `fabrika.contract.ts`, read by `@fabrika/check/contract`'s static
+  reader (`readContract` collaborator) — never evaluated. The deployer wraps the Worker `resources` returns in
+  `createCloudflareProxyWorker({ endpoints: contractProxyTable(artifact) })`, named `<app>-proxy`, from this
+  package's own copy, and writes `FABRIKA_CONTRACT_DIGEST` into the application Worker. A config that returns
+  a Worker binding `APP` (its own proxy) is refused, and so is an IAM schema whose `contract: true` disagrees
+  with the contract. An application without a contract keeps the proxy its config builds, with gates.
+  `createCloudflareProxyWorker` takes `endpoints` or `gates`, never both; `assertAuthoredGraph` refuses a
+  proxy with gates for a contract application. Its `IAM` binding is also the delegation issuer the proxy asks for grants.
+- **Another application's names are refused** (ADR-0048). Control sends `<app>@<env>` of every Cloudflare
+  deployment in its registry (`CloudflareRunnerJob.installationApps` → `FABRIKA_INSTALLATION_APPS` →
+  `CloudflareDeployRun.installationApps`). A remote name belongs to the deployment with the longest
+  `${env}-${app}` prefix (exact, or followed by `-`); one that belongs to another application is refused
+  wherever the platform-name bound applies — declared resources, `ServiceReference` targets and emitted
+  `services`, in both passes. It is a naming rule, not an ownership record (backlog 86).
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.

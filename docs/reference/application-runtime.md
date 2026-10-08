@@ -113,11 +113,13 @@ what `defineTables` returned, or the artifact form of each policy; `@fabrika/db/
 (browser-safe) converts one into the other. Schemas are the zod 4 subset that
 `@fabrika/check` accepts.
 
-The artifact compiles to what the proxy and IAM consume, and `fabrika.config.ts` hands both
-to its provider: the Zerops `target.proxy` (`{ upstream, ...contractProxyTable(artifact) }`)
-and `schema`, or the Cloudflare `createCloudflareProxyWorker({ endpoints:
-contractProxyTable(artifact) })` and `schema`. A contract application generates no gates;
-both providers refuse one whose proxy carries gates.
+The artifact compiles to what the proxy and IAM consume. On Zerops, `fabrika.config.ts`
+hands both to its provider: `target.proxy` (`{ upstream, ...contractProxyTable(artifact) }`)
+and `schema`. On Cloudflare the config returns only the application Worker and `schema`; the
+deployer reads `fabrika.contract.ts` from the checkout with `@fabrika/check/contract` and
+builds the proxy Worker from `contractProxyTable(artifact)` itself (ADR-0048), refusing a
+config that builds its own. A contract application generates no gates; both providers refuse
+one whose proxy carries gates.
 
 - `contractProxyTable(artifact)` (`@fabrika/proxy-core/manifest`) emits every endpoint row's
   rules — kind, method, path, callers, requirement, admission — with its delegation and

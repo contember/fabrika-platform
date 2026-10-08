@@ -17,6 +17,9 @@ export interface RunnerOutcomeFile {
 
 export const RUNNER_OUTCOME_FILE_ENV = 'FABRIKA_RUNNER_OUTCOME_FILE'
 
+/** The executor's copy of `CloudflareRunnerJob.installationApps`: a JSON array of `<app>@<env>`. */
+export const INSTALLATION_APPS_ENV = 'FABRIKA_INSTALLATION_APPS'
+
 /** The terminal and in-progress status polled from the container, and persisted by the runner Worker once terminal. */
 export const runnerStatusSchema = z.object({
 	runId: z.string(),

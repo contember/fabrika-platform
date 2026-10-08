@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
-import { parseReturnOrigins } from '../command'
+import { parseInstallationApps, parseReturnOrigins } from '../command'
 
 describe('parseCloudflareArgs', () => {
 	test('parses a provider deploy', () => {
@@ -63,5 +63,19 @@ describe('parseReturnOrigins', () => {
 		expect(parseReturnOrigins(undefined)).toBeUndefined()
 		expect(parseReturnOrigins('')).toBeUndefined()
 		expect(parseReturnOrigins(' , ')).toBeUndefined()
+	})
+})
+
+describe('parseInstallationApps', () => {
+	test('decodes the registry the runner writes, one deployment per `<app>@<env>`', () => {
+		expect(parseInstallationApps('["notes@prod","crm@stage"]')).toEqual([{ app: 'notes', env: 'prod' }, { app: 'crm', env: 'stage' }])
+		expect(parseInstallationApps('[]')).toEqual([])
+		expect(parseInstallationApps(undefined)).toBeUndefined()
+	})
+
+	test('anything malformed fails the deploy rather than dropping the refusal it feeds', () => {
+		expect(() => parseInstallationApps('notes@prod')).toThrow('FABRIKA_INSTALLATION_APPS is not a JSON array')
+		expect(() => parseInstallationApps('{"notes":"prod"}')).toThrow('is not a JSON array of strings')
+		expect(() => parseInstallationApps('["notes"]')).toThrow('holds `notes`, which is not `<app>@<env>`')
 	})
 })

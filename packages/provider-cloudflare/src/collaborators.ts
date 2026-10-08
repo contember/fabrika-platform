@@ -1,6 +1,9 @@
+import type { ContractArtifact } from '@fabrika/auth-core'
+import { CONTRACT_FILE, readApplicationTree } from '@fabrika/check'
+import { readContractSource } from '@fabrika/check/contract'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
-import { writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { lstat, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { type Definition, deploy as oblakaDeploy, type DeployResult as OblakaDeployResult } from 'oblaka-iac'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
 import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from './runner-protocol'
@@ -46,8 +49,12 @@ export interface LoadedCloudflareConfig {
 
 export type CloudflareConfigLoader = (cwd: string, configPath: string) => Promise<LoadedCloudflareConfig>
 
+/** The contract an application root declares, or null when it has no `fabrika.contract.ts`. */
+export type ContractReader = (root: string) => Promise<ContractArtifact | null>
+
 export interface CloudflareCollaborators {
 	readonly loadConfig: CloudflareConfigLoader
+	readonly readContract: ContractReader
 	readonly runCommand: CommandRunner
 	readonly provision: OblakaProvisioner
 	readonly writeOutcome: OutcomeWriter
@@ -65,6 +72,25 @@ export const loadCloudflareConfig = async (cwd: string, configPath: string): Pro
 const defaultLoadConfig: CloudflareConfigLoader = async (cwd, configPath) => {
 	const loaded = await loadCloudflareConfig(cwd, configPath)
 	return { config: loaded.config, cwd: loaded.cwd }
+}
+
+const isMissingFile = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT'
+
+/**
+ * Read the contract from the checkout's text with the static reader Control runs at the commit (ADR-0005): nothing
+ * is executed. A `fabrika.contract.ts` that is not a regular file is refused, so a link cannot hide the contract.
+ */
+const defaultReadContract: ContractReader = async (root) => {
+	const entry = await lstat(join(root, CONTRACT_FILE)).catch((error: unknown) => {
+		if (isMissingFile(error)) return null
+		throw error
+	})
+	if (entry === null) return null
+	if (!entry.isFile()) {
+		throw new Error(`cloudflare: \`${CONTRACT_FILE}\` is not a regular file`)
+	}
+	const tree = await readApplicationTree(root)
+	return readContractSource(tree.files)
 }
 
 const childEnvironment = (spec: CommandSpec): Record<string, string | undefined> => {
@@ -123,6 +149,7 @@ const defaultWriteOutcome: OutcomeWriter = async (outcome) => {
 
 export const defaultCloudflareCollaborators: CloudflareCollaborators = {
 	loadConfig: defaultLoadConfig,
+	readContract: defaultReadContract,
 	runCommand: defaultRunCommand,
 	provision: defaultProvision,
 	writeOutcome: defaultWriteOutcome,

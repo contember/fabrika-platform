@@ -1,5 +1,5 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { appEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -59,6 +59,8 @@ export interface CloudflareRunnerJob {
 	readonly domain?: string
 	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0022). */
 	readonly returnOrigins?: readonly string[]
+	/** `<app>@<env>` of every Cloudflare deployment in Control's registry; the deploy refuses another application's names. */
+	readonly installationApps?: readonly string[]
 	readonly dryRun?: boolean
 	/**
 	 * Shared secret the runner verifies before it touches D1 or the container; the binding alone proves
@@ -130,6 +132,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	stateNamespace: z.string().min(1).optional(),
 	domain: z.string().refine((value) => isProxyHost(value.toLowerCase())).optional(),
 	returnOrigins: z.array(z.string().min(1)).optional(),
+	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
 	dryRun: z.boolean().optional(),
 	secrets: stringRecordSchema.optional(),
 	vars: stringRecordSchema.optional(),
@@ -161,6 +164,8 @@ export interface CloudflareControlOptions {
 	readonly propustkaUrl?: string
 	readonly propustkaProvisioningKey?: string
 	readonly runnerKey: string
+	/** Every Cloudflare deployment in Control's registry, sent with each job so another application's names are refused. */
+	installationApps?(signal: AbortSignal): Promise<readonly AppEnvironment[]>
 	/** Overridable for tests; production reconciles over HTTPS with the control plane's own admin key. */
 	readonly reconcileSchema?: SchemaReconciler
 	resolveSource(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
@@ -239,6 +244,12 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
 	}
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
+	const listInstallationApps = options.installationApps
+	const installationApps = listInstallationApps === undefined
+		? undefined
+		: (await awaitWithSignal(input.signal, () => listInstallationApps(input.signal))).map((deployment) =>
+			appEnvironmentId(deployment.app, deployment.env)
+		)
 	const managedEnvironment: Record<string, string> = {}
 	for (const [name, value] of Object.entries(input.managedEnvironment)) {
 		if (value !== null) managedEnvironment[name] = value
@@ -258,6 +269,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(storedTarget.stateNamespace === undefined ? {} : { stateNamespace: storedTarget.stateNamespace }),
 		...(input.environment.domain === undefined ? {} : { domain: input.environment.domain }),
 		...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+		...(installationApps === undefined ? {} : { installationApps }),
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),

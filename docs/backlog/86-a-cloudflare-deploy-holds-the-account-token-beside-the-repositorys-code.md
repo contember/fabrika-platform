@@ -40,8 +40,10 @@ What is still open:
   itself; the graph checks bound what the config _declares_, not what it _does_.
 - The token is account-wide. A Cloudflare API token can be limited to an account and to zones, not
   to one Worker or one D1 database, so token scoping alone cannot express a per-app boundary.
-- A non-platform name that belongs to another app is still adoptable. The refusal is a platform
-  denylist, not an ownership record: `${env}-otherapp-db` provisions fine from app `thisapp`.
+- A non-platform name that belongs to another app is refused only by a naming rule: Control sends its
+  registry of Cloudflare deployments, and a remote name under another app's `${env}-${app}` prefix is
+  refused (ADR-0048). An app whose resources are not named under its own id is not protected by it;
+  it is still not an ownership record.
 - The bound is a name rule, not an account fact. The suffix rule refuses a legitimate app name that
   ends in a platform name (`crm-operations`), because without the platform's own env the two are
   indistinguishable; an ownership record makes the rule exact and lifts that refusal.

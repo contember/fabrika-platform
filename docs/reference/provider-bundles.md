@@ -375,7 +375,14 @@ application Worker child. The child has no routes and explicitly disables
 Worker that sets `routes`, or leaves `workers_dev` or `preview_urls` other than
 `false` (ADR-0048). Only the proxy Worker that `createCloudflareProxyWorker`
 builds is exempt, recognised by its entrypoint and package directory; every other
-Worker in the config, the root included, is an application Worker. Every Worker in
+Worker in the config, the root included, is an application Worker. For a contract
+application (`fabrika.contract.ts` in the checkout, read statically) the config
+returns only the application Worker: the deployer builds the proxy Worker
+`<app>-proxy` from the contract's endpoint table and writes `FABRIKA_CONTRACT_DIGEST`
+into the application Worker, and a config that returns a proxy of its own is
+refused. A name that belongs to another application of the installation — the
+deployment in Control's registry whose `<env>-<app>` is the longest prefix of the
+remote name — is refused for every resource and service binding. Every Worker in
 the graph, the proxy included, binds IAM at its `PropustkaApplication` entrypoint
 (`iamServiceReference()`); a binding to IAM's default entrypoint, which also issues
 keys and approves devices, is refused. The check reads the `services` each Worker's
