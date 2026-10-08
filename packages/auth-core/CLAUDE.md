@@ -9,19 +9,20 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # gates.test.ts · permissions.test.ts · token.test.ts
+bun test               # canonical-path.test.ts · gates.test.ts · permissions.test.ts · token.test.ts
 ```
 
-| Module           | What it owns                                                                                  |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| `gates.ts`       | The canonical gate path matcher — `compileGates` / `applicableGates`.                         |
-| `permissions.ts` | `matchAction` and `permits` — the authorization decision itself.                              |
-| `token.ts`       | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.          |
-| `rpc.ts`         | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                            |
-| `types.ts`       | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                |
-| `wire.ts`        | The proxy→app header names: the verified token, the client address, and what to strip.        |
-| `environment.ts` | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under. |
-| `json.ts`        | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                 |
+| Module              | What it owns                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `canonical-path.ts` | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers. |
+| `gates.ts`          | The canonical gate path matcher — `compileGates` / `applicableGates`.                              |
+| `permissions.ts`    | `matchAction` and `permits` — the authorization decision itself.                                   |
+| `token.ts`          | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.               |
+| `rpc.ts`            | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                 |
+| `types.ts`          | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                     |
+| `wire.ts`           | The proxy→app header names: the verified token, the client address, and what to strip.             |
+| `environment.ts`    | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.      |
+| `json.ts`           | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                      |
 
 ## Invariants
 
@@ -54,6 +55,12 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts
   ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)). A second
   evaluator anywhere gates a slightly different set of requests than the app declared, silently, in
   the permissive direction.
+- **A non-canonical path never reaches a matcher.** `isCanonicalPath` refuses an empty segment, `.`
+  or `..` (also encoded), an encoded `/` or `\` and a literal `\`. The proxy and the application
+  router both run it on the RAW path — before `new URL()`, which resolves dot segments — and answer
+  400. A trailing `/` is allowed and matched literally by every matcher (Sentry's
+  `/api/<id>/envelope/` needs it); a router that dropped it would serve `/a` for a `/a/` that a gate
+  `/a/*` admitted. Widening the rule, or normalizing a path anywhere, breaks that agreement.
 - **`applicableGates` returns every match in declaration order; it does not decide.** Precedence,
   fall-through, and terminality belong to the caller (`@fabrika/proxy`). Keep the matcher a pure
   filter so the authorization truth table lives in one place with one test suite.

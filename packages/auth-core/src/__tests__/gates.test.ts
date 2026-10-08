@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { isCanonicalPath } from '../canonical-path'
 import { applicableGates, compileGates } from '../gates'
 import type { AppGates } from '../types'
 
@@ -17,9 +18,18 @@ describe('gate path contract from ADR-0022', () => {
 		expect(matchingPaths(gates, '/api/a/b/items')).toEqual(['/api/*/items'])
 	})
 
-	test('matching preserves repeated slashes', () => {
-		const gates: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '//*', kind: 'human' }] }
-		expect(matchingPaths(gates, '//public/health')).toEqual(['//*'])
+	test('a repeated slash is refused before matching, so the raw matcher never decides it', () => {
+		const gates: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
+		expect(isCanonicalPath('//public/health')).toBe(false)
+		expect(matchingPaths(gates, '/public/health')).toEqual(['/public/*', '/*'])
+	})
+
+	test('a trailing slash is matched literally', () => {
+		const gates: AppGates = { rules: [{ path: '/admin', kind: 'public' }, { path: '/foo/*', kind: 'human' }] }
+		expect(matchingPaths(gates, '/admin/')).toEqual([])
+		// The glob admits `/foo/`, so the router must not serve the `/foo` route for it.
+		expect(matchingPaths(gates, '/foo/')).toEqual(['/foo/*'])
+		expect(matchingPaths(gates, '/foo')).toEqual([])
 	})
 
 	test('matching rules remain in declaration order', () => {
