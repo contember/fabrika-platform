@@ -25,6 +25,7 @@ export const RULE_IDS = [
 	'dynamic-code',
 	'migration-name',
 	'crontab',
+	'package-replacement',
 	'skipped-test',
 	'test-without-assertion',
 	'generated-test-hash',

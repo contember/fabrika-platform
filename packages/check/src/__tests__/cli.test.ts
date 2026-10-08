@@ -28,6 +28,22 @@ afterEach(async () => {
 })
 
 describe('fabrika-check', () => {
+	test('reads the root .npmrc and bun.lock from disk, and still no other dot entry', async () => {
+		const root = await application({
+			...CLEAN_APPLICATION,
+			'.npmrc': '@fabrika:registry=https://registry.example.test\n',
+			'bun.lock': '{\n  "packages": {\n    "dep/@fabrika/app": ["@fabrika/app@file:../app", {}],\n  },\n}\n',
+			'.hidden/config.ts': 'export const url = process.env.DATABASE_URL\n',
+		})
+
+		const result = await run(root)
+
+		expect(result.stdout.split('\n').filter((line) => line !== '').map((line) => line.split(' ').slice(0, 2).join(' '))).toEqual([
+			'.npmrc:1:1 package-replacement',
+			'bun.lock:3:5 package-replacement',
+		])
+	})
+
 	test('prints one actionable line per finding and exits 1', async () => {
 		const root = await application({ ...CLEAN_APPLICATION, 'src/config.ts': 'export const url = process.env.DATABASE_URL\n' })
 

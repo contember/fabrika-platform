@@ -23,6 +23,8 @@ export const isJsonFile = (path: string): boolean => path.endsWith('.json')
 
 /** Whether the checker reads this file at all. */
 export const isCheckedFile = (path: string): boolean => {
+	// The registry configuration and the lockfile decide what a trusted package name installs.
+	if (path === '.npmrc' || path === 'bun.lock') return true
 	if (path.split('/').some(isIgnoredSegment)) return false
 	return isSourceFile(path) || isJsonFile(path) || path.startsWith(MIGRATIONS_DIR) || ZEROPS_FILES.some((name) => name === path)
 		|| path === 'bunfig.toml'

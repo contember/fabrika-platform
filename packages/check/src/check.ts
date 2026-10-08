@@ -23,6 +23,7 @@ import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
 import { checkMigrationNames } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
+import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode } from './rules/runtime'
 import { checkGeneratedTest, checkTestNode } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
@@ -49,7 +50,7 @@ export const readApplicationTree = async (root: string): Promise<ApplicationTree
 		const entries = await readdir(join(root, relativeDirectory), { withFileTypes: true })
 		for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
 			const path = relativeDirectory === '' ? entry.name : `${relativeDirectory}/${entry.name}`
-			if (isIgnoredSegment(entry.name)) continue
+			if (isIgnoredSegment(entry.name) && !isCheckedFile(path)) continue
 			if (entry.isSymbolicLink()) links.push(path)
 			else if (entry.isDirectory()) await visit(path)
 			else if (entry.isFile() && isCheckedFile(path)) files.set(path, await readFile(join(root, path), 'utf8'))
@@ -73,6 +74,7 @@ const checkSourceModule = async (
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
 		checkTypeNode(node, report)
+		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, report)
 	})
 	checkComments(module.comments, report)
@@ -88,6 +90,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
 	findings.push(...checkTrustedResolution(tree.files))
+	findings.push(...checkPackageReplacement(tree.files))
 
 	for (const link of tree.links) {
 		findings.push({
