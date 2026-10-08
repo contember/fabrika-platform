@@ -8,7 +8,13 @@ import { type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { type AppliedOperationsIngestConfig, OperationsCatalogRepository, type OperationsCatalogSyncState } from '../db'
 import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
-import { projectOperationsCatalogChange, replayOperationsCatalog } from '../operations-catalog'
+import {
+	closeCatalogProjection,
+	projectOperationsCatalogChange,
+	releaseHeldCatalogLeases,
+	reopenCatalogProjection,
+	replayOperationsCatalog,
+} from '../operations-catalog'
 import { createHarness, type Harness } from './helpers/harness'
 import { providerEnvironment } from './helpers/provider'
 
@@ -18,12 +24,14 @@ const ORIGIN = 'https://errors.example.test'
 /** A fake Operations that answers a full, correct reconcile — and can be paused mid-request. */
 class CatalogService {
 	gate: (() => Promise<void>) | null = null
+	calls = 0
 	omitSource: string | null = null
 	private revision = 0
 	private snapshotHash = ''
 	readonly accepted: string[][] = []
 
 	async fetch(request: Request): Promise<Response> {
+		this.calls++
 		const payload: unknown = await request.json()
 		if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new Error('bad test catalog payload')
 		const revision = Reflect.get(payload, 'revision')
@@ -174,6 +182,73 @@ describe('Operations catalog projection window (backlog 84)', () => {
 		advance(2)
 		expect((await replayOperationsCatalog(deps)).outcome).toBe('applied')
 		expect(await activeDsn(harness, 'app-b')).not.toBeNull()
+	})
+
+	test('shutdown: a closing process lets a healthy flush finish and release, and takes no new lease', async () => {
+		const { harness, deps, locks, service } = fixture()
+		await register(harness, 'app-a')
+		let resume = (): void => {}
+		service.gate = () =>
+			new Promise<void>((resolve) => {
+				resume = resolve
+			})
+		try {
+			const flush = projectOperationsCatalogChange(deps)
+			while (service.calls === 0) await Bun.sleep(1)
+			closeCatalogProjection()
+			resume()
+			expect(await flush).toEqual({ outcome: 'applied', revision: 1 })
+			expect(await activeDsn(harness, 'app-a')).not.toBeNull()
+
+			await register(harness, 'app-b')
+			expect(await projectOperationsCatalogChange(deps)).toEqual({ outcome: 'coalesced', revision: 2 })
+			expect(service.calls).toBe(1)
+			// The healthy flush released its own lease, and the closing process took no new one.
+			expect(await locks.acquire(CATALOG_LEASE_KEY, 'next-process', LEASE_TTL_MS)).toBe(true)
+		} finally {
+			resume()
+			reopenCatalogProjection()
+		}
+	})
+
+	test('shutdown: a flush still running is interrupted and its lease released without waiting out the TTL', async () => {
+		const { harness, deps, locks, service } = fixture()
+		await register(harness, 'app-a')
+		let resume = (): void => {}
+		service.gate = () =>
+			new Promise<void>((resolve) => {
+				resume = resolve
+			})
+		const warnings: string[] = []
+		const originalWarn = console.warn
+		console.warn = (...values) => warnings.push(values.map(String).join(' '))
+		let interrupted: Awaited<ReturnType<typeof projectOperationsCatalogChange>>
+		try {
+			const flush = projectOperationsCatalogChange(deps)
+			while (service.calls === 0) await Bun.sleep(1)
+			closeCatalogProjection()
+			// The flush is inside its request and holds the lease: nobody else may take it.
+			expect(await locks.acquire(CATALOG_LEASE_KEY, 'other-process', LEASE_TTL_MS)).toBe(false)
+
+			await releaseHeldCatalogLeases()
+			expect(await locks.acquire(CATALOG_LEASE_KEY, 'other-process', LEASE_TTL_MS)).toBe(true)
+			await locks.release(CATALOG_LEASE_KEY, 'other-process')
+			// The transport ignores the abort; the answer that arrives later is not written.
+			resume()
+			interrupted = await flush
+		} finally {
+			console.warn = originalWarn
+			resume()
+			reopenCatalogProjection()
+		}
+		expect(interrupted).toEqual({ outcome: 'failed', revision: 1 })
+		expect(warnings).toEqual(['operations catalog sync interrupted by shutdown', 'operations catalog sync: failed revision 1'])
+		expect(await activeDsn(harness, 'app-a')).toBeNull()
+
+		// No clock advance: the replacing process takes the lease at once. Operations accepted the
+		// abandoned request after all, so the replay's own pass is what records the configuration.
+		expect(await replayOperationsCatalog(deps)).toEqual({ outcome: 'unchanged', revision: 1 })
+		expect(await activeDsn(harness, 'app-a')).not.toBeNull()
 	})
 
 	test('candidate 1: a change coalesced against a LIVE flush is delivered by the holder itself', async () => {

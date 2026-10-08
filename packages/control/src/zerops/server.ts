@@ -22,6 +22,7 @@ import { controlApp } from '../app'
 import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
 import type { SourceConnectionPort } from '../github/connections/port'
+import { closeCatalogProjection, releaseHeldCatalogLeases } from '../operations-catalog'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { locks, operationsReleaseDeps, repositories } from '../services'
@@ -61,6 +62,8 @@ function createControlBunHandler(env: Env, provider: Runtime['provider'], source
 }
 
 const CONTROL_JOB_VISIBILITY_TIMEOUT_MS = 30 * 60 * 1000
+// The Zerops SIGTERM-to-SIGKILL grace is unrecorded; 10 s outlasts a normal flush and likely fits inside it.
+const CATALOG_SHUTDOWN_GRACE_MS = 10_000
 
 /**
  * Build the in-process control consumer — the replacement for the Worker's `queue()` handler.
@@ -145,9 +148,6 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 			+ `vault=${state(runtime.env.FABRIKA_CONTROL_VAULT_KEY !== undefined)}, provider=${runtime.provider.id})`,
 	)
 
-	// SIGTERM is what the platform sends on redeploy/scale-down. Stop accepting, let in-flight requests
-	// finish, then stop the consumer — `stop()` waits for the pass in flight, so a shutdown never
-	// orphans a job it has already made invisible — and only then close the pool.
 	let stopping = false
 	const stop = (signal: string): void => {
 		if (stopping) {
@@ -155,10 +155,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 		}
 		stopping = true
 		console.info(`vozka shutting down (${signal})`)
-		void server.stop(false)
-			.then(() => appHandler.drain())
-			.then(() => consumer.stop())
-			.then(() => runtime.shutdown())
+		void stopControlServer({ server, requests: appHandler, consumer, runtime })
 			.then(() => process.exit(0))
 			.catch((err: unknown) => {
 				console.error('shutdown failed:', err instanceof Error ? err.message : 'unknown error')
@@ -171,6 +168,33 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 	process.on('SIGINT', () => {
 		stop('SIGINT')
 	})
+}
+
+export interface StoppingControlServer {
+	server: { stop(closeActiveConnections: boolean): Promise<void> }
+	requests: Pick<BunHandler, 'drain'>
+	consumer: Pick<PostgresJobConsumer<ControlJobMessage>, 'stop'>
+	runtime: { readonly env: Pick<Env, 'WAIT_UNTIL'>; shutdown(): Promise<void> }
+}
+
+/**
+ * The SIGTERM sequence (redeploy/scale-down). Stop accepting, let in-flight requests finish, then stop
+ * the consumer — `stop()` waits for the pass in flight, so a shutdown never orphans a job it has already
+ * made invisible — and only then close the pool. The catalog takes no new lease meanwhile, and a flush
+ * still running after the grace is interrupted and its lease released, so a kill leaves nothing to wait out.
+ */
+export async function stopControlServer(parts: StoppingControlServer, catalogGraceMs = CATALOG_SHUTDOWN_GRACE_MS): Promise<void> {
+	closeCatalogProjection()
+	// A background task, so the pool closes only after the release it makes.
+	const catalogGrace = setTimeout(() => parts.runtime.env.WAIT_UNTIL(releaseHeldCatalogLeases()), catalogGraceMs)
+	try {
+		await parts.server.stop(false)
+		await parts.requests.drain()
+		await parts.consumer.stop()
+		await parts.runtime.shutdown()
+	} finally {
+		clearTimeout(catalogGrace)
+	}
 }
 
 if (import.meta.main) {

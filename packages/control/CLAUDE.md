@@ -228,7 +228,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   unfenced run update — it records a request, and the holder reads it at step boundaries
   (`RunInvocation.boundary()`, and providers through `events.boundary()`), never by polling the row. The
   Operations catalog sync holds the same lease (`CATALOG_LEASE_KEY`); terminal release repair holds none,
-  because its revision predicate already makes an overlapping replay a no-op.
+  because its revision predicate already makes an overlapping replay a no-op. On SIGTERM the Bun process
+  takes no new catalog lease and, after a 10 s grace, interrupts a flush still running and releases its
+  lease (`stopControlServer`), so the process a rolling deploy replaces leaves no lease to wait out.
   Preserve unresolved running rows after lease release: they exclude later deployments until recovery
   settles external work — the next deploy of the environment settles one inline under its own lease
   (`settleUnfinishedRun`, the same body as the cron's reconcile) and defers only while it stays unsettled.

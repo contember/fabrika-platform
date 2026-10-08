@@ -12,7 +12,10 @@ release are delivered by that holder, and a deploy that finds no active ingest c
 run-log line naming the catalog state it saw. A lease left behind by a dead flush holder now blocks for
 at most one lease TTL (90 s): the sync holds the shared lease primitive of ADR-0044, and the
 reproduction in `packages/control/src/__tests__/operations-catalog-window.test.ts` ("a lock left behind
-by a dead holder drops every change until one lease TTL") witnesses it. What remains are the smaller
+by a dead holder drops every change until one lease TTL") witnesses it. On SIGTERM the Zerops Control
+process takes no new catalog lease and, after a 10 s grace, interrupts and releases the one it holds,
+so the process a rolling deploy replaces no longer leaves a lease behind
+(`packages/control/src/__tests__/zerops-server-shutdown.test.ts`). What remains are the smaller
 findings of the same reproduction, none changed yet. Effort S.
 
 ## Problem

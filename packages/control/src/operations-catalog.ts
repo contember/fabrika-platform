@@ -19,12 +19,40 @@ const MIN_SYNC_KEY_LENGTH = 32
 const MAX_COALESCED_PASSES = 20
 /** Guarded flushes after a release, for a change that coalesced against this holder's own handoff. */
 const MAX_HANDOFF_PASSES = 2
+/** A release that hangs must not hold up the rest of a shutdown. */
+const SHUTDOWN_RELEASE_TIMEOUT_MS = 5_000
 
 export type OperationsCatalogSyncOutcome = 'disabled' | 'applied' | 'unchanged' | 'coalesced' | 'failed'
 
 export interface OperationsCatalogSyncSummary {
 	outcome: OperationsCatalogSyncOutcome
 	revision: number | null
+}
+
+/** Catalog leases this process holds right now, so a shutdown can hand them back instead of leaving them to expire. */
+const heldLeases = new Set<Lease>()
+let closing = false
+
+/** A closing process takes no new catalog lease; a pending revision is left to the replay or the next process. */
+export function closeCatalogProjection(): void {
+	closing = true
+}
+
+/** Undo `closeCatalogProjection`, for a test process that keeps using this module after a shutdown. */
+export function reopenCatalogProjection(): void {
+	closing = false
+}
+
+/**
+ * Interrupt every flush this process still runs and release its lease. The process a rolling deploy
+ * replaces is the usual dead holder (backlog 84); an interrupted flush leaves its revision pending.
+ */
+export async function releaseHeldCatalogLeases(): Promise<void> {
+	const leases = [...heldLeases]
+	heldLeases.clear()
+	if (leases.length === 0) return
+	console.warn('operations catalog sync interrupted by shutdown')
+	await Promise.all(leases.map((lease) => releaseCatalogLeaseWithin(lease, SHUTDOWN_RELEASE_TIMEOUT_MS)))
 }
 
 export interface OperationsCatalogSyncDeps {
@@ -101,16 +129,38 @@ async function flushUnderLock(
 	syncKey: string,
 	operationsOrigin: string,
 ): Promise<OperationsCatalogSyncSummary | null> {
+	if (closing) return null
 	const lease = await acquireLease(deps.locks, CATALOG_LEASE_KEY)
 	if (lease === null) return null
+	heldLeases.add(lease)
 	try {
 		return await flushCatalog(deps.catalog, lease, service, syncKey, operationsOrigin)
 	} finally {
-		try {
-			await lease.release()
-		} catch {
-			console.warn('operations catalog lock release failed')
-		}
+		// A shutdown that already took the lease out of the set releases it itself.
+		if (heldLeases.delete(lease)) await releaseCatalogLease(lease)
+	}
+}
+
+async function releaseCatalogLeaseWithin(lease: Lease, timeoutMs: number): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const timedOut = new Promise<void>((resolve) => {
+		timer = setTimeout(() => {
+			console.warn('operations catalog lock release timed out')
+			resolve()
+		}, timeoutMs)
+	})
+	try {
+		await Promise.race([releaseCatalogLease(lease), timedOut])
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
+async function releaseCatalogLease(lease: Lease): Promise<void> {
+	try {
+		await lease.release()
+	} catch {
+		console.warn('operations catalog lock release failed')
 	}
 }
 
