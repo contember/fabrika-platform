@@ -87,7 +87,7 @@ App at all.
 
 | Package                        | What it is                                                                                     |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `@fabrika/auth-core`           | The authz kernel every auth component shares: policy model, gate matcher, token and RPC wire.  |
+| `@fabrika/auth-core`           | Shared authz kernel: policy model, contract artifact, gate and endpoint matchers, token, RPC.  |
 | `@fabrika/auth`                | The published app-facing SDK. Verifies the proxy-injected token; enforces nothing.             |
 | `@fabrika/jwks`                | The one JWKS-backed token verifier the SDK and the proxy both wrap (ADR-0040).                 |
 | `@fabrika/app`                 | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |

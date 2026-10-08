@@ -9,14 +9,17 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # canonical-path.test.ts · gates.test.ts · permissions.test.ts · token.test.ts
+bun test               # canonical-path · endpoints · gates · permissions · requirement · token (src/__tests__/)
 ```
 
 | Module              | What it owns                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------- |
 | `canonical-path.ts` | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers. |
+| `contract.ts`       | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.  |
+| `endpoints.ts`      | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                |
 | `gates.ts`          | The canonical gate path matcher — `compileGates` / `applicableGates`.                              |
 | `permissions.ts`    | `matchAction` and `permits` — the authorization decision itself.                                   |
+| `requirement.ts`    | `satisfies` — an endpoint requirement checked against a token's permissions.                       |
 | `token.ts`          | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.               |
 | `rpc.ts`            | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                 |
 | `types.ts`          | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                     |
@@ -71,14 +74,25 @@ bun test               # canonical-path.test.ts · gates.test.ts · permissions.
   satisfied only by entries with `scope === null`; a concrete scope is satisfied by a global entry
   or by one matching the same `(type, value)` pair. `can()` in the SDK is this function; do not
   reimplement it with "close enough" behaviour.
-- **The contract matcher is a router, not a gate evaluator.** The target (A-M1; not built yet):
-  `planEndpoint` selects the endpoint of a contract's table after a canonical-path check, for the
-  framework's dispatch. It evaluates no gate rule. The proxy evaluates the gates generated from the
-  same table with `compileGates` / `applicableGates`, and the two must agree on every path, which a
-  property test checks.
-- **The requirement check is authorization.** The target (A-M1): `satisfies(requirement, perms)` —
-  `member` is any permission of the application; an action form is that action in some scope,
-  including global. It builds on `permits` semantics; it never becomes a gate and never replaces one.
+- **The contract artifact is types only, and each reader parses it.** `ContractArtifact` is plain
+  JSON; its zod schemas live where it is read (`@fabrika/app/contract` for the build,
+  `proxy-core/manifest` for the proxy), as gate rules are parsed today. Every optional field is
+  normalized to `null`, `[]` or `{}`, because two producers — `compileContract` over the evaluated
+  module and the static reader over source — must emit the same artifact. Keep new fields that way.
+- **The contract matcher is a router, not a gate evaluator.** `planEndpoint` refuses a non-canonical
+  raw path, then selects the most specific endpoint of the request's method: per segment, left to
+  right, a literal beats a parameter and a parameter beats a terminal `*`. Under a reserved prefix
+  only the endpoints declared under it compete, so an unknown procedure never reaches the SPA. There
+  is no fall-through, and parameters come back raw. It evaluates no gate rule. Segments match like
+  the gate glob: raw, case-sensitive, a trailing `/` literal, a non-root `*` only after its slash.
+  Until the proxy reads endpoint tables, it evaluates the gates generated from the same table with
+  `compileGates` / `applicableGates`, and the two must agree on every path, which a property test checks.
+- **`planEndpoint` takes only a `compileEndpointTable` result.** Compiling runs `assertNoAmbiguity`
+  — an invalid path or reserved prefix, a duplicate id, or two endpoints of one method and one path
+  shape — so a request never meets a tie. Compile once where the table is loaded; never bypass it.
+- **The requirement check is authorization.** `satisfies(requirement, perms)` — `member` is any
+  permission of the application; an action form is that action in some scope, including global,
+  through `permits` over each entry's own scope. It never becomes a gate and never replaces one.
   Scopes stay flat here: the framework resolves a containment chain, and each link is checked as a
   flat scope.
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
