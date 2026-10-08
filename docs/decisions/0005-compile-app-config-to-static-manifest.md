@@ -96,7 +96,7 @@ build. Control does not call it yet (part B, work unit B6).
   build log, so each refusal is one short, actionable line.
 - The reader must run in Control on Bun and in a Worker within its size budget.
   It parses with `@babel/parser` (chosen in work unit A7); a Worker bundle of the
-  reader is about 150 KiB gzip.
+  reader is about 153 KiB gzip.
 
 ## Alternatives considered
 
