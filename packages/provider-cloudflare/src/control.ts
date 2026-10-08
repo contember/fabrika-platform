@@ -15,7 +15,7 @@ import type {
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
 import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
-import { isProxyHost } from '@fabrika/proxy-contract'
+import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
 import { type RunnerIamReconcile, runnerIamReconcileSchema } from './runner-protocol'

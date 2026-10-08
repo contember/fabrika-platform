@@ -1,5 +1,5 @@
 import { decodeEnvelope, type ProviderNamespaceMember } from '@fabrika/provider-contract'
-import type { ProxyManifest } from '@fabrika/proxy-contract'
+import type { ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
 
 /** Compile every public member of one deployment namespace into its strict proxy manifest. */

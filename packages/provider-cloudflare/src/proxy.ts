@@ -1,5 +1,5 @@
 import type { AppGates } from '@fabrika/auth'
-import { encodeProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { ServiceReference, Worker } from 'oblaka-iac'
 
 export interface CloudflareProxyWorkerOptions {

@@ -19,6 +19,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./manifest": {
+			"bun": "./src/manifest.ts",
+			"types": "./src/manifest.ts",
+			"default": "./src/manifest.ts"
 		}
 	},
 	"scripts": {
@@ -29,7 +34,6 @@
 		"zod": "^3.25.76",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/jwks": "workspace:*",
-		"@fabrika/proxy-contract": "workspace:*",
 		"jose": "^5.9.0",
 		"@fabrika/platform": "workspace:*"
 	},

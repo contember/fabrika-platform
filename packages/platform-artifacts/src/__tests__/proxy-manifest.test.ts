@@ -17,7 +17,7 @@ import {
 	PROXY_HEALTH_PORT,
 	PROXY_PUBLIC_PORTS,
 } from '@fabrika/provider-zerops/installation/topology'
-import { encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'

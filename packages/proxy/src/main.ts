@@ -7,8 +7,8 @@
  * Caddy is the only thing that may dial it.
  */
 
-import { parseProxyManifest } from '@fabrika/proxy-contract'
 import { consoleLogger, createVerifyService, HttpIamGateway, MemoryTokenCache } from '@fabrika/proxy-core'
+import { parseProxyManifest } from '@fabrika/proxy-core/manifest'
 import { readProxyEnv } from './env'
 
 const env = readProxyEnv(Bun.env)

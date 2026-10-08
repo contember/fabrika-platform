@@ -30,7 +30,7 @@ import {
 } from '@fabrika/provider-zerops'
 import { assertOnlyPublicService, assertZeropsHostnames, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'

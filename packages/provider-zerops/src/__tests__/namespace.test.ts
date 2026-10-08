@@ -5,7 +5,7 @@ import {
 	type ProviderNamespaceOperator,
 	type ProviderRegistration,
 } from '@fabrika/provider-contract'
-import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
+import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import { describe, expect, spyOn, test } from 'bun:test'
 import {
 	createZeropsApi,

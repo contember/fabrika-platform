@@ -25,7 +25,6 @@
 	"dependencies": {
 		"zod": "^3.25.76",
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/proxy-contract": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {

@@ -36,7 +36,7 @@
 
 import { readEnvironmentName } from '@fabrika/auth-core'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
-import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import {
 	prepareZeropsDescriptor,
 	type Sleeper,

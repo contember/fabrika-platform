@@ -72,7 +72,7 @@ packages/
   platform-artifacts              # private Zerops installation codegen: zerops.yaml, import YAMLs, schemas
   runner-{container,cloudflare}               # the Cloudflare out-of-band deploy executor
   github-app                      # the shared GitHub App client
-  proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
+  proxy-core proxy                # the auth enforcement decision and its `/manifest` wire contract · its Caddy deployment
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
 examples/app examples/zerops-app  # a worked app per provider
 tests/browser                     # opice end-to-end suites against the local stack

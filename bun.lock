@@ -186,7 +186,7 @@
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
         "@fabrika/runner-cloudflare": "workspace:*",
         "zod": "^3.25.76",
       },
@@ -346,7 +346,6 @@
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
         "zod": "^3.25.76",
       },
@@ -415,7 +414,7 @@
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
       },
       "devDependencies": {
         "@fabrika/example-zerops-app": "workspace:*",
@@ -442,7 +441,6 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
         "oblaka-iac": "^0.0.18",
         "zod": "^3.25.76",
@@ -471,7 +469,7 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
         "yaml": "^2.9.1",
         "zod": "^3.25.76",
       },
@@ -485,19 +483,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-      },
-    },
-    "packages/proxy-contract": {
-      "name": "@fabrika/proxy-contract",
-      "version": "0.0.4",
-      "dependencies": {
-        "@fabrika/auth-core": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -511,7 +497,6 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/jwks": "workspace:*",
         "@fabrika/platform": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
         "jose": "^5.9.0",
         "zod": "^3.25.76",
       },
@@ -769,8 +754,6 @@
     "@fabrika/provider-zerops": ["@fabrika/provider-zerops@workspace:packages/provider-zerops"],
 
     "@fabrika/proxy": ["@fabrika/proxy@workspace:packages/proxy"],
-
-    "@fabrika/proxy-contract": ["@fabrika/proxy-contract@workspace:packages/proxy-contract"],
 
     "@fabrika/proxy-core": ["@fabrika/proxy-core@workspace:packages/proxy-core"],
 
@@ -1252,8 +1235,6 @@
 
     "@fabrika/proxy/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
-    "@fabrika/proxy-contract/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
     "@fabrika/proxy-core/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@fabrika/runner-cloudflare/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
@@ -1331,8 +1312,6 @@
     "@fabrika/provider-contract/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/provider-zerops/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "@fabrika/proxy-contract/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/proxy-core/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 

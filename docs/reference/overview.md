@@ -114,8 +114,7 @@ App at all.
 | `@fabrika/runner-container`    | Plain-Bun process and container image that execute Cloudflare runner jobs.                     |
 | `@fabrika/runner-cloudflare`   | Out-of-band Cloudflare Worker that hosts and relays the deploy container.                      |
 | `@fabrika/github-app`          | Published GitHub App client: manifest builder and exchange, installation tokens, webhooks.     |
-| `@fabrika/proxy-contract`      | Proxy manifest wire types, encoder, and fail-closed parser.                                    |
-| `@fabrika/proxy-core`          | The runtime-neutral enforcement decision both proxy deployments run.                           |
+| `@fabrika/proxy-core`          | The runtime-neutral enforcement decision; `/manifest` is the wire contract and strict parser.  |
 | `@fabrika/proxy`               | The Caddy deployment of that decision: generated config, Bun process, and binary.              |
 | `@fabrika/local-stack`         | The Docker development stack behind every `local:*` command.                                   |
 
@@ -133,8 +132,8 @@ The narrow contract packages keep wire types away from runtime entrypoints:
 - `@fabrika/operations`, `@fabrika/operations-ui`, and control's transport-only
   gateway share DTOs through `@fabrika/operations-contract`.
 - the Zerops provider and control composition produce
-  `@fabrika/proxy-contract` manifests; `@fabrika/proxy-core` parses and evaluates
-  them, and `@fabrika/proxy` is the Caddy deployment that runs it.
+  manifests through `@fabrika/proxy-core/manifest`; `@fabrika/proxy-core` parses and
+  evaluates them, and `@fabrika/proxy` is the Caddy deployment that runs it.
 - `@fabrika/runner-cloudflare` and `@fabrika/runner-container` communicate
   through `@fabrika/provider-cloudflare/runner`, which also holds the runner job
   semantics.

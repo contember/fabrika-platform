@@ -89,7 +89,7 @@
 // resolves nested references (a `RUNTIME_` lift of a variable that is itself `${db_connectionString}`
 // arrives fully resolved). Only the proxy needs this, and it declares it explicitly below.
 
-import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
+import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import type { ZeropsHealthCheckSpec, ZeropsReadinessCheckSpec, ZeropsYamlSetupSpec, ZeropsYamlSpec } from '../../index'
 
 // ── Readiness and liveness: two mechanisms, two questions ──────────────────────────────────────────

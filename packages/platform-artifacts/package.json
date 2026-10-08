@@ -20,7 +20,7 @@
 		"@fabrika/operations": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
-		"@fabrika/proxy-contract": "workspace:*"
+		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@fabrika/example-zerops-app": "workspace:*",

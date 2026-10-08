@@ -13,7 +13,7 @@
  * the real client. It is EMPTY by default on purpose — see `CaddyBuildOptions.trustedProxies`.
  */
 
-import { parseProxyManifest } from '@fabrika/proxy-contract'
+import { parseProxyManifest } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { buildCaddyConfig, type CaddyBuildOptions } from './caddy'
 

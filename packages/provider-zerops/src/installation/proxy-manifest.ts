@@ -22,7 +22,7 @@
 // generated artifact, so the published deploy path never depends on a package it cannot resolve.
 
 import type { AppGates } from '@fabrika/auth-core'
-import { parseProxyManifest, type ProxyManifest } from '@fabrika/proxy-contract'
+import { parseProxyManifest, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /** The platform services an installation's proxy fronts. Each name is a service hostname in the topology. */
 export type PlatformProxyService = 'iam' | 'control' | 'operations'

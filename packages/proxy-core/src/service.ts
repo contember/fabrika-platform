@@ -23,7 +23,6 @@
 
 import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, SESSION_COOKIE } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
-import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'
 import {
@@ -41,6 +40,7 @@ import { compileGates } from './gates'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
 import type { IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
+import type { ProxyManifest } from './manifest'
 
 export interface VerifyServiceConfig {
 	manifest: ProxyManifest

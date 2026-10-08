@@ -8,7 +8,6 @@
 		"packages/jwks",
 		"packages/auth",
 		"packages/provider-contract",
-		"packages/proxy-contract",
 		"packages/proxy-core",
 		"packages/github-app",
 		"packages/iam-contract",

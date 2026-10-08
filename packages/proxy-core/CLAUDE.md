@@ -8,7 +8,7 @@ and mint or refuse. Nothing reaches an app until its gates pass
 There are two enforcement points and they run the same code from here: the Bun service answering
 Caddy's `forward_auth` subrequest on Zerops (`@fabrika/proxy`), and the Cloudflare proxy Worker
 calling it in-process (`@fabrika/provider-cloudflare`). The manifest wire contract and its strict
-parser are `@fabrika/proxy-contract`; the gate matcher and the token claims are `@fabrika/auth-core`;
+parser are `src/manifest.ts`, exported as `@fabrika/proxy-core/manifest`; the gate matcher and the token claims are `@fabrika/auth-core`;
 the JWKS token verifier is `@fabrika/jwks`, the same class `@fabrika/auth` wraps.
 
 **The behavioural invariants live in [`../proxy/CLAUDE.md`](../proxy/CLAUDE.md)** — deny semantics,
@@ -30,6 +30,15 @@ bun test   # deny-matrix.test.ts is the authorization truth table — keep it ex
   `@fabrika/provider-cloudflare` is published and needs the decision — it must never need the Caddy
   deployment. Anything added here becomes public API; the release gate (`bun run release:validate`)
   enforces the direction and the public inventory in `scripts/release.ts` is deliberate.
+- **`@fabrika/proxy-core/manifest` imports only zod and `@fabrika/auth-core` types.** Producers
+  (providers, control, local-stack) import it without the decision, so never import `jose`, the
+  verifier, or anything else from `src/` into `src/manifest.ts`. Malformed input never becomes a
+  partially accepted manifest.
+- **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname
+  (labels 1–63 chars, ≤ 253 total), and `proxyAppSchema` rejects the whole manifest when a host fails
+  it. The manifest is the authority on hosts (ADR-0022), and Caddy's `host` matcher reads `*` as a
+  wildcard label: on Zerops one proxy fronts every app in a namespace, so an accepted pattern captures
+  the sibling apps' hostnames. Never relax it to accommodate a producer; fix the producer.
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
   condition. A request matching no gate rule is denied.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read the

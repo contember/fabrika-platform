@@ -1,4 +1,4 @@
-import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import type { ZeropsNamespaceProxySource } from '../index'
 import type { PlatformDeployService, ResolvedService } from './deploy'
 import { type PlatformHosts, platformOrigin } from './hosts'

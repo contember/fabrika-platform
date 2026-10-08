@@ -1,4 +1,4 @@
-import { isProxyHost } from '@fabrika/proxy-contract'
+import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { Container, D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 

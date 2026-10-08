@@ -70,7 +70,7 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts
 
 ## Notes
 
-- `json.ts` mirrors readers that also exist in `@fabrika/iam` and `@fabrika/proxy-contract`. That
+- `json.ts` mirrors readers that also exist in `@fabrika/iam` and `@fabrika/proxy-core/manifest`. That
   duplication is deliberate — the alternative is a runtime dependency, which the first invariant
   forbids.
 - Several comments in `token.ts` and `rpc.ts` still say "propustka" and describe the pre-merge

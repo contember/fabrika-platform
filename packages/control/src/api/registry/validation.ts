@@ -1,7 +1,7 @@
 import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
-import { isProxyHost } from '@fabrika/proxy-contract'
+import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../../public-origin'
 import { fail } from '../domain'
 

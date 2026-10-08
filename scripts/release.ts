@@ -31,7 +31,6 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/provider-cloudflare',
 	'@fabrika/provider-contract',
 	'@fabrika/provider-zerops',
-	'@fabrika/proxy-contract',
 	'@fabrika/proxy-core',
 ]
 const TAG_PATTERN =

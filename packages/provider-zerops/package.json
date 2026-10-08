@@ -47,7 +47,7 @@
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
-		"@fabrika/proxy-contract": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*",
 		"yaml": "^2.9.1"
 	},
 	"devDependencies": {

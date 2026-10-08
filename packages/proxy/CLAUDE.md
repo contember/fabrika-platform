@@ -9,7 +9,7 @@ service, plus the Bun process that serves it. Nothing reaches an app until its g
 and shared verbatim with the Cloudflare proxy Worker. This package is an ARTIFACT rather than an API
 and stays `private: true`: `bun run build` compiles `src/main.ts` into a static musl binary with
 `caddy.json` beside it. The manifest wire contract and its strict parser live in
-`@fabrika/proxy-contract`; the gate matcher and its compiled form live in `@fabrika/auth-core`.
+`@fabrika/proxy-core/manifest`; the gate matcher and its compiled form live in `@fabrika/auth-core`.
 
 Most of the invariants below are properties of the DECISION and therefore hold in `proxy-core`; they
 are documented here because this is where the enforcement point is described end to end. What is

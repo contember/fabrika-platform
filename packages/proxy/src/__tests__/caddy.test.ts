@@ -10,8 +10,8 @@
  */
 
 import type { AppGates } from '@fabrika/auth-core'
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, UNTRUSTED_FORWARD_HEADERS } from '@fabrika/proxy-core'
+import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import {
 	buildCaddyConfig,

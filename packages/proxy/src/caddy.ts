@@ -34,7 +34,6 @@
 
 import type { GateRule } from '@fabrika/auth-core'
 import { API_KEY_PREFIX, AUTH_CODE_PARAM, FABRIKA_COOKIE_PREFIX, SESSION_COOKIE } from '@fabrika/auth-core'
-import { isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-contract'
 import {
 	APP_QUERY_PARAM,
 	CLIENT_ADDRESS_HEADER,
@@ -46,6 +45,7 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
+import { isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before

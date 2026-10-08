@@ -1,5 +1,5 @@
 import type { ProviderDeploymentNamespace, ProviderRegistration } from '@fabrika/provider-contract'
-import { isProxyHost } from '@fabrika/proxy-contract'
+import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { assertFabrikaManifestCoordinates, manifestServiceHostnames, zeropsArtifactCodec } from '../manifest'
 import { zeropsSharedServicePrefix } from '../service-names'
 import { decodeEnvelope } from './codec'

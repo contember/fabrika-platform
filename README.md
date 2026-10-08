@@ -63,8 +63,8 @@ static manifest compiler, API client, deploy implementation, and control adapter
 **Installation and console** — `@fabrika/provider-contract/installation` (open platform CLI contract) ·
 `@fabrika/provider-cloudflare/installation` and `@fabrika/provider-zerops/installation` (provider-specific
 installation plans) · `@fabrika/cli` (the single public `fabrika` command) · `@fabrika/dashboard` (the unified
-Delivery, Access, and Operations console) · `@fabrika/proxy-contract` (the manifest wire contract)
-and `@fabrika/proxy-core` (the auth enforcement decision, shared by both proxies).
+Delivery, Access, and Operations console) · `@fabrika/proxy-core` (the auth enforcement decision, shared
+by both proxies; `/manifest` is the manifest wire contract).
 
 **Cloudflare runner** — `@fabrika/provider-cloudflare/runner` (Worker↔container transport) ·
 `@fabrika/runner-container` (plain-Bun deploy process and image) · `@fabrika/runner-cloudflare`

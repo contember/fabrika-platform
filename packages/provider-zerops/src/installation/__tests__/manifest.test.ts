@@ -4,7 +4,7 @@
 // `notesapi:3000` beside the three platform apps, because on the light tier an application shares the
 // project and therefore the proxy's ONE manifest. Writing the platform template alone would delete it.
 
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
+import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from '../manifest'
 

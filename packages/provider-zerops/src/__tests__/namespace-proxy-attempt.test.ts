@@ -1,5 +1,5 @@
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
-import { FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-contract'
+import { FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { expect, test } from 'bun:test'
 import { createZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
 import { createZeropsArtifactSourceDescriptor } from '../manifest'

@@ -28,7 +28,7 @@
 // to some other app. A genuinely misplaced application therefore goes dark and is reported, instead of
 // quietly being served by the console.
 
-import { findDuplicateProxyHost, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
+import { findDuplicateProxyHost, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /** The composed document plus what happened to every live entry that was not the platform's. */
 export interface MergedProxyManifest {

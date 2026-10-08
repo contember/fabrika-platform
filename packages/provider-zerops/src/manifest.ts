@@ -1,7 +1,7 @@
 import { appSchemaSchema } from '@fabrika/auth'
 import type { AppSchema } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
-import { normalizeGateRule, proxyGateRuleFieldsSchema } from '@fabrika/proxy-contract'
+import { normalizeGateRule, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'

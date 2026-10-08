@@ -17,7 +17,7 @@
 import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
-import { parseProxyManifestJson } from '@fabrika/proxy-contract'
+import { parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { buildControlWorker } from '../../control/fabrika.config'
 import { buildOperationsProxy } from '../../operations/fabrika.config'

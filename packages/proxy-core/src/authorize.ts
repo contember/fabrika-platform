@@ -17,12 +17,12 @@
  */
 
 import { API_KEY_PREFIX, AUTH_CODE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
-import type { ProxyApp } from '@fabrika/proxy-contract'
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
 import { applicableGates, type CompiledGate, readCookie, readServiceCredential } from './gates'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type IamGateway, IamUnavailableError } from './iam'
+import type { ProxyApp } from './manifest'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */

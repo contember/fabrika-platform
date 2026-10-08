@@ -13,7 +13,6 @@
 		{ "path": "./packages/canvas-kernel" },
 		{ "path": "./packages/github-app" },
 		{ "path": "./packages/app" },
-		{ "path": "./packages/proxy-contract" },
 		{ "path": "./packages/proxy" },
 		{ "path": "./packages/iam-contract" },
 		{ "path": "./packages/iam" },

@@ -34,7 +34,6 @@
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/proxy": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
-		"@fabrika/proxy-contract": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/platform-node": "workspace:*"
