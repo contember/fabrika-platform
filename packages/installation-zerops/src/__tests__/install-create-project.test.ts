@@ -125,8 +125,8 @@ describe('the order', () => {
 
 		expect(fixture.zerops.projectImports).toHaveLength(1)
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('project-import:'))).toEqual(['project-import:client-1'])
-		// The id control is told to deploy into is the CREATED one, not one that arrived on a flag.
-		expect(fixture.zerops.env('control').get('FABRIKA_ZEROPS_PROJECT_ID')).toBe(PROJECT.projectId)
+		// The services land in the CREATED project, not one that arrived on a flag.
+		expect(fixture.zerops.calls).toContain(`import:${PROJECT.projectId}`)
 		expect(fixture.zerops.calls).toContain('deploy:control')
 	})
 })

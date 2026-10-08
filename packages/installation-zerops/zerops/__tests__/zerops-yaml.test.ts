@@ -40,16 +40,15 @@ describe('the live files are valid against the supported installation contract',
 })
 
 describe('one root file, several named setups — the merged-file decision, checked', () => {
-	test('the root file declares exactly the five fabrika services that carry code', () => {
-		expect(setupNames('zerops.yaml')).toEqual(['iam', 'operations', 'source', 'proxy', 'control'])
+	test('the root file declares exactly the four fabrika services that carry code', () => {
+		expect(setupNames('zerops.yaml')).toEqual(['iam', 'operations', 'proxy', 'control'])
 	})
 
-	test('source is private, relies on the Bun runtime git, and control reaches it only over the project network', () => {
+	test('control streams sources itself: no source service and no transport to one', () => {
 		const yaml = read('zerops.yaml')
 		expect(yaml).not.toContain('apk add --no-cache git')
-		expect(yaml).toContain('FABRIKA_ZEROPS_SOURCE_URL: "http://source:3000"')
-		expect(yaml).toContain('bun packages/source-zerops/src/server.ts')
-		expect(yaml).not.toContain('FABRIKA_SOURCE_ZEROPS_ACCESS_TOKEN')
+		expect(yaml).not.toContain('FABRIKA_ZEROPS_SOURCE_URL')
+		expect(yaml).not.toContain('source-zerops')
 	})
 
 	test('the root file emits only canonical fabrika environment names', () => {

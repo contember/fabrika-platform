@@ -8,7 +8,7 @@ operators install from.
 
 ## This pipeline UPDATES an installation. It does not create one.
 
-Running it against a project that has no `iam`, `operations`, `source`, `proxy` and `control` service fails and
+Running it against a project that has no `iam`, `operations`, `proxy` and `control` service fails and
 changes nothing. The first bring-up is `fabrika platform install --provider=zerops --source-dir=.`, run once from the
 operator's machine: it imports the Zerops topology without code, generates and writes every secret each
 service holds, and deploys, so the proxy has HTTP ports and therefore a public address.
@@ -24,7 +24,7 @@ The whole ordered sequence lives inside `fabrika platform deploy --provider=zero
 ```
 resolve the project and its services
   → write every service's environment (the composed proxy manifest, the environment name, the origins)
-  → deploy iam + operations + source together, then proxy → control, waiting for each
+  → deploy iam + operations together, then proxy → control, waiting for each
   → ensure the public entry point
   → reconcile the console's app schema with IAM
 ```
@@ -65,12 +65,10 @@ effects. Preparing a local snapshot does not publish its commit to GitHub.
 
 Written by `fabrika platform init --provider=zerops {{INSTALLATION}}`, not by hand.
 
-The same init leaves source in anonymous public-repository mode. Configure an organization-owned GitHub
-App later in the authenticated Control console at **Settings → Source**. The private key stays on the
-platform's `source` service and the webhook secret stays in Control's encrypted vault; neither is copied
-into this repository or Environment. If an older installation already has a complete GitHub App
-credential set, init preserves it and directs the operator to adopt it in Control. Partial, invalid, or
-mismatched state is refused. Init never reads or writes a local GitHub credential recovery file.
+Public repositories deploy without a GitHub App. Configure an organization-owned GitHub App in the
+authenticated Control console at **Settings → Source**. Its private key and webhook secret stay in
+Control's encrypted vault; neither is copied into this repository or Environment. Init never reads or
+writes a GitHub App credential or a local credential recovery file.
 If an older init left such a file, adopt a complete remote credential set in Control and delete the
 file only after the UI reports connected. If the remote state is empty or partial and the file is the
 only complete copy, use the last compatible CLI release to finish remote persistence first.
@@ -88,7 +86,7 @@ installation already holds.
 
 | Variable                           | Required | What it is                                                                                         |
 | ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the five platform runtime services.                                     |
+| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the four platform runtime services.                                     |
 | `FABRIKA_PLATFORM_ENVIRONMENT`     | yes      | The name this installation calls itself; written to every service as `ENVIRONMENT`. Never `local`. |
 | `FABRIKA_PLATFORM_SCHEME`          | yes      | `https` for anything reachable from a browser.                                                     |
 | `FABRIKA_PLATFORM_IAM_HOST`        | no       | Where IAM answers publicly.                                                                        |

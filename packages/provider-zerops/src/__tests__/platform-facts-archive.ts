@@ -1,6 +1,6 @@
 // The two archives the unpacker probe uploads, and the smallest tar writer that can tell them apart.
 //
-// WHY NOT `@fabrika/source-zerops`'s writer: that one REWRITES a `git archive` stream and refuses anything
+// WHY NOT Control's source archive writer (`@fabrika/control/source`): that one REWRITES a `git archive` stream and refuses anything
 // whose pax global header does not name the commit it was told about, so driving it from a test means
 // writing a tar first anyway. It is also a private package, and this one is public. What is under test here
 // is the PLATFORM's unpacker, not our rewriter — the point of the probe is that an archive of regular files

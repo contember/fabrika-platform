@@ -19,7 +19,6 @@ afterEach(() => {
 
 const control = 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID=existing-key\n'
 	+ 'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY=existing-secret=with-padding\n'
-	+ 'FABRIKA_ZEROPS_SOURCE_RPC_KEY=existing-source-key\n'
 
 const operations = 'FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID=existing-key\n'
 	+ 'FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY=existing-secret=with-padding\n'
@@ -30,7 +29,6 @@ async function seedExistingState(): Promise<void> {
 	}
 	await Bun.write(resolve(directory, 'control.env'), control)
 	await Bun.write(resolve(directory, 'operations.env'), operations)
-	await Bun.write(resolve(directory, 'source.env'), 'FABRIKA_SOURCE_RPC_KEY=existing-source-key\n')
 }
 
 async function snapshotEnvironment(): Promise<Record<string, string>> {

@@ -3,7 +3,7 @@ import type { PlatformUploadFetch } from '../platform-upload'
 
 const interpolation = '${x_y} ${RUNTIME_FABRIKA_PROXY_MANIFEST_JSON} ${FABRIKA_PROXY_MANIFEST_JSON} $plain'
 const contents = 'zerops:\n'
-	+ ['iam', 'operations', 'source', 'proxy', 'control'].map((setup) =>
+	+ ['iam', 'operations', 'proxy', 'control'].map((setup) =>
 		`  - setup: ${setup}\n` + (setup === 'proxy' ? `    build:\n      envVariables:\n        PROBE: ${JSON.stringify(interpolation)}\n` : '')
 	).join('')
 

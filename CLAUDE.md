@@ -71,7 +71,7 @@ packages/
   installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
   installation-init               # the operator-side `init` mechanics both installations share
   runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
-  source-zerops github-app        # the Zerops `source` platform service · the shared GitHub App client
+  github-app                      # the shared GitHub App client
   proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
 examples/app examples/zerops-app  # a worked app per provider

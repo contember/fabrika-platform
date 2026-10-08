@@ -1,25 +1,24 @@
-// `fabrika platform init --provider=zerops <installation>` — configure source and maintain the operator's
-// sidecar repository for an installation that ALREADY EXISTS.
+// `fabrika platform init --provider=zerops <installation>` — maintain the operator's sidecar repository
+// for an installation that ALREADY EXISTS.
 //
 // ── What this does, and the one thing it does not ─────────────────────────────────────────────────
 //
-// It creates the private source service when an older installation lacks it, reconciles its direct
-// Zerops configuration, creates `<owner>/fabrika-zerops-<installation>`, pushes the pipeline that calls
+// It reads the installation's `control` and `proxy` configuration, creates
+// `<owner>/fabrika-zerops-<installation>`, pushes the pipeline that calls
 // `fabrika platform deploy --provider=zerops`, writes the GitHub Environment that pipeline reads, and
 // triggers it. It does NOT create the installation: `platform install` owns the first bring-up.
 //
 // ── It does the whole job, and confirms before every step that leaves this disk ───────────────────
 //
-// Reading the project, configuring source, creating or pushing the repository, writing the Environment,
-// and triggering the workflow each ask first. Full automation, never silent. Declining stops the outward steps and prints what to run
-// instead; `init` is idempotent, so the answer to a declined step is to run it again.
+// Reading the project, reading its services, creating or pushing the repository, writing the Environment,
+// and triggering the workflow each ask first. Full automation, never silent. Declining a write stops the outward steps and prints
+// what to run instead; `init` is idempotent, so the answer to a declined step is to run it again. Declining the read of
+// `control` and `proxy` only leaves the console and IAM origins out of what init prints.
 //
 // ── Credentials ───────────────────────────────────────────────────────────────────────────────────
 //
 // Two deployment credentials, and this command generates neither. Both already belong to the
-// installation. Source configuration is separate: a source RPC key is generated only when neither
-// source nor control has one; a valid key on one side repairs the absent side. That RPC key is written
-// directly to Zerops, never GitHub or disk. GitHub App setup belongs to the authenticated Control UI.
+// installation. It writes nothing to Zerops. GitHub App setup belongs to the authenticated Control UI.
 
 import {
 	action as consoleAction,
@@ -40,19 +39,8 @@ import {
 	url,
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
-import {
-	compileProvisioningYaml,
-	createZeropsApi,
-	defaultSleep,
-	type Sleeper,
-	waitForProcess,
-	ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX,
-	type ZeropsApi,
-	type ZeropsService,
-} from '@fabrika/provider-zerops'
-import { randomBytes } from 'node:crypto'
+import { createZeropsApi, type ZeropsApi, type ZeropsService } from '@fabrika/provider-zerops'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
-import { sourceServiceSpec } from '../zerops/topology'
 import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import type { InitLog } from './log'
 import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
@@ -79,7 +67,7 @@ export interface InitEffects {
 	triggerWorkflow(repo: string): Promise<void>
 	/** Read one Zerops project's name — the cheapest proof that the token and the project id agree. */
 	describeProject(input: { projectId: string; accessToken: string; apiBaseUrl?: string }): Promise<string>
-	configureSource(input: ConfigureSourceInput): Promise<ConfigureSourceResult>
+	inspectPlatform(input: InspectPlatformInput): Promise<PlatformInspection>
 }
 
 export interface InitCollaborators {
@@ -158,21 +146,14 @@ interface Collected {
 	readonly provisioningKey: string
 }
 
-export interface ConfigureSourceInput {
+export interface InspectPlatformInput {
 	readonly projectId: string
-	readonly environment: string
 	readonly accessToken: string
 	readonly apiBaseUrl?: string
 }
 
-export interface ConfigureSourceResult {
-	readonly created: boolean
-	readonly reusedRpcKey: boolean
-	readonly writtenKeys: readonly string[]
-	readonly sourceServiceId: string
-	readonly controlServiceId: string
-	readonly proxyServiceId: string
-	readonly sourceEnv: ReadonlyMap<string, string>
+/** What `init` reads off the live installation to print origins it can verify. Values are never logged. */
+export interface PlatformInspection {
 	readonly controlEnv: ReadonlyMap<string, string>
 	readonly proxyEnv: ReadonlyMap<string, string>
 	readonly proxyPublished: boolean
@@ -247,125 +228,26 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 	}
 }
 
-const rpcKeyValid = (value: string | undefined): value is string => value !== undefined && value.length >= 32 && value.length <= 4096
-
-const generateSourceRpcKey = (): string => {
-	for (;;) {
-		const value = randomBytes(32).toString('base64url')
-		if (!value.startsWith('-') && !value.startsWith('_')) return value
-	}
-}
-
 const oneService = (services: readonly ZeropsService[], name: string): ZeropsService | undefined => {
 	const matches = services.filter((service) => service.name === name)
 	if (matches.length > 1) throw new Error(`Zerops project has ${matches.length} services named \`${name}\``)
 	return matches[0]
 }
 
-const sourceProvisioningImport = (environment: string): string =>
-	compileProvisioningYaml({ target: { platform: 'zerops', services: () => [sourceServiceSpec()] }, ctx: { env: environment } }).yaml
-
-/** Add/configure the private source service without persisting any credential outside Zerops. */
-export const configureSourceService = async (
-	input: Omit<ConfigureSourceInput, 'accessToken' | 'apiBaseUrl'>,
-	api: ZeropsApi,
-	sleep: Sleeper,
-	signal: AbortSignal,
-): Promise<ConfigureSourceResult> => {
-	let services = await api.listProjectServices({ projectId: input.projectId, signal })
-	for (const name of ['iam', 'operations', 'proxy', 'control']) {
-		const service = oneService(services, name)
-		if (service === undefined || service.id === '') throw new Error(`Zerops project ${input.projectId} has no \`${name}\` service`)
-	}
-	let source = oneService(services, 'source')
-	let created = false
-	if (source?.status === 'NEW') {
-		throw new Error('Zerops is still creating `source`; run init again after its import process finishes')
-	}
-	if (source === undefined) {
-		const result = await api.importServices({ projectId: input.projectId, yaml: sourceProvisioningImport(input.environment), signal })
-		const imported = result.services.find((service) => service.name === 'source')
-		if (imported === undefined || imported.processes.length === 0) throw new Error('the source import returned no source process')
-		for (const process of imported.processes) {
-			await waitForProcess({ api, processId: process.id, sleep, signal, label: 'the source import' })
-		}
-		services = await api.listProjectServices({ projectId: input.projectId, signal })
-		source = oneService(services, 'source')
-		if (source === undefined || source.id === '') throw new Error('Zerops created no `source` service after its import completed')
-		created = true
-	}
+/** Read `control` and `proxy` without writing anything. */
+export const inspectPlatform = async (projectId: string, api: ZeropsApi, signal: AbortSignal): Promise<PlatformInspection> => {
+	const services = await api.listProjectServices({ projectId, signal })
 	const control = oneService(services, 'control')
-	if (control === undefined || control.id === '') throw new Error(`Zerops project ${input.projectId} has no \`control\` service`)
+	if (control === undefined || control.id === '') throw new Error(`Zerops project ${projectId} has no \`control\` service`)
 	const proxy = oneService(services, 'proxy')
-	if (proxy === undefined || proxy.id === '') throw new Error(`Zerops project ${input.projectId} has no \`proxy\` service`)
-	const sourceEnv = new Map((await api.listServiceEnv({ serviceId: source.id, signal })).map((item) => [item.key, item.content]))
-	const controlEnv = new Map((await api.listServiceEnv({ serviceId: control.id, signal })).map((item) => [item.key, item.content]))
-	const proxyEnv = new Map((await api.listServiceEnv({ serviceId: proxy.id, signal })).map((item) => [item.key, item.content]))
-	const sourceRpcKey = sourceEnv.get('FABRIKA_SOURCE_RPC_KEY')
-	const controlRpcKey = controlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')
-	let rpcKey: string
-	let reusedRpcKey = false
-	if (sourceRpcKey === undefined && controlRpcKey === undefined) {
-		rpcKey = generateSourceRpcKey()
-	} else if (rpcKeyValid(sourceRpcKey) && controlRpcKey === undefined) {
-		rpcKey = sourceRpcKey
-		reusedRpcKey = true
-	} else if (sourceRpcKey === undefined && rpcKeyValid(controlRpcKey)) {
-		rpcKey = controlRpcKey
-		reusedRpcKey = true
-	} else {
-		if (!rpcKeyValid(sourceRpcKey) || !rpcKeyValid(controlRpcKey) || sourceRpcKey !== controlRpcKey) {
-			throw new Error('source and control do not hold one matching valid source RPC key; refusing to rotate either side')
-		}
-		rpcKey = sourceRpcKey
-		reusedRpcKey = true
-	}
-	const desired: Array<{ serviceId: string; service: string; key: string; value: string; live: Map<string, string> }> = [
-		{ serviceId: source.id, service: 'source', key: 'FABRIKA_SOURCE_RPC_KEY', value: rpcKey, live: sourceEnv },
-		{ serviceId: control.id, service: 'control', key: 'FABRIKA_ZEROPS_SOURCE_RPC_KEY', value: rpcKey, live: controlEnv },
-		{ serviceId: control.id, service: 'control', key: 'FABRIKA_ZEROPS_PROJECT_ID', value: input.projectId, live: controlEnv },
-	]
-	const writtenKeys: string[] = []
-	for (const item of desired) {
-		if (item.live.get(item.key) === item.value) continue
-		try {
-			await api.createServiceEnv({ serviceId: item.serviceId, key: item.key, value: item.value, signal })
-		} catch {
-			const reread = new Map((await api.listServiceEnv({ serviceId: item.serviceId, signal })).map((value) => [value.key, value.content]))
-			if (reread.get(item.key) !== item.value) throw new Error('source RPC configuration conflicts with a live Zerops value')
-		}
-		writtenKeys.push(`${item.service}.${item.key}`)
-	}
-	const finalSourceEnv = new Map((await api.listServiceEnv({ serviceId: source.id, signal })).map((item) => [item.key, item.content]))
-	const finalControlEnv = new Map((await api.listServiceEnv({ serviceId: control.id, signal })).map((item) => [item.key, item.content]))
-	if (finalSourceEnv.get('FABRIKA_SOURCE_RPC_KEY') !== rpcKey || finalControlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY') !== rpcKey) {
-		throw new Error('source and control did not retain one matching source RPC key')
-	}
-	if (finalControlEnv.get('FABRIKA_ZEROPS_PROJECT_ID') !== input.projectId) {
-		throw new Error('control did not retain the exact Zerops platform project id')
-	}
+	if (proxy === undefined || proxy.id === '') throw new Error(`Zerops project ${projectId} has no \`proxy\` service`)
+	const readEnv = async (serviceId: string): Promise<Map<string, string>> =>
+		new Map((await api.listServiceEnv({ serviceId, signal })).map((item) => [item.key, item.content]))
 	return {
-		created,
-		reusedRpcKey,
-		writtenKeys,
-		sourceServiceId: source.id,
-		controlServiceId: control.id,
-		proxyServiceId: proxy.id,
-		sourceEnv: finalSourceEnv,
-		controlEnv: finalControlEnv,
-		proxyEnv,
+		controlEnv: await readEnv(control.id),
+		proxyEnv: await readEnv(proxy.id),
 		proxyPublished: proxy.subdomainAccess === true,
 	}
-}
-
-export type ExistingGitHubCredentialState = 'anonymous' | 'connected'
-
-/** Classify only remote source state. The CLI never materializes, reads, or writes a credential. */
-export const classifyExistingGitHubCredentials = (sourceEnv: ReadonlyMap<string, string>): ExistingGitHubCredentialState => {
-	for (const name of sourceEnv.keys()) {
-		if (name.startsWith(ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX)) return 'connected'
-	}
-	return 'anonymous'
 }
 
 const strictHttpsOrigin = (hostValue: string): string | undefined => {
@@ -394,8 +276,8 @@ const strictHttpsOrigin = (hostValue: string): string | undefined => {
  * rather than re-deriving one — and refuses it when the operator named a different IAM host, because
  * a printed origin an operator then pastes into `FABRIKA_IAM_RPC_URL` must be the one that answers.
  */
-export const platformIamOrigin = (placement: Placement, source: ConfigureSourceResult): string | undefined => {
-	const issuer = source.controlEnv.get('FABRIKA_IAM_ISSUER')
+export const platformIamOrigin = (placement: Placement, platform: PlatformInspection): string | undefined => {
+	const issuer = platform.controlEnv.get('FABRIKA_IAM_ISSUER')
 	if (issuer === undefined) return undefined
 	let hostname: string
 	try {
@@ -413,8 +295,8 @@ export const platformIamOrigin = (placement: Placement, source: ConfigureSourceR
 }
 
 /** Return a verified live console URL, or no URL when init would have to guess. */
-export const sourceConnectionSettingsUrl = (placement: Placement, source: ConfigureSourceResult): string | undefined => {
-	const liveHost = source.controlEnv.get('FABRIKA_CONTROL_DOMAIN')
+export const sourceConnectionSettingsUrl = (placement: Placement, platform: PlatformInspection): string | undefined => {
+	const liveHost = platform.controlEnv.get('FABRIKA_CONTROL_DOMAIN')
 	if (liveHost === undefined) return undefined
 	const origin = strictHttpsOrigin(liveHost)
 	if (origin === undefined) return undefined
@@ -423,8 +305,8 @@ export const sourceConnectionSettingsUrl = (placement: Placement, source: Config
 		if (placement.hosts.control.toLowerCase() !== host) return undefined
 		return `${origin}/settings/source`
 	}
-	if (!source.proxyPublished) return undefined
-	const subdomains = source.proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE)
+	if (!platform.proxyPublished) return undefined
+	const subdomains = platform.proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE)
 	if (subdomains === undefined || subdomains.trim() === '') return undefined
 	try {
 		const listeners = PLATFORM_PROXY_MANIFEST_TEMPLATE.apps.map((app) => ({ service: app.service, port: app.port }))
@@ -480,6 +362,26 @@ const verifyProject = async (collected: Collected, { log, prompts, effects }: In
 }
 
 /**
+ * Read the live `control` and `proxy` configuration, so the origins init prints are ones the installation records.
+ *
+ * Declining is not fatal: init then prints no origin rather than one it would have to guess.
+ */
+const readPlatform = async (collected: Collected, { log, prompts, effects }: InitCollaborators): Promise<PlatformInspection | undefined> => {
+	log.step('Read the installation')
+	if (!(await prompts.confirm(`Read \`control\` and \`proxy\` in Zerops project ${collected.projectId} for the console and IAM origins?`, true))) {
+		log.info('Skipped. No console or IAM origin will be printed.')
+		return undefined
+	}
+	return effects.inspectPlatform({
+		projectId: collected.projectId,
+		accessToken: collected.accessToken,
+		...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+	}).catch(() => {
+		throw new Error('the `control` and `proxy` services could not be read; no credential value is shown. Inspect them in Zerops, then run init again')
+	})
+}
+
+/**
  * Create or refresh the sidecar repository — the first step that leaves this disk.
  *
  * Returns the local checkout, or `undefined` when the operator declined, which stops every later
@@ -530,38 +432,11 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 
 	const collected = await collect(args, collaborators)
 	await verifyProject(collected, collaborators)
-	log.step('Configure the private source service')
-	log.info('This repairs only source transport and project binding. GitHub App setup belongs to the authenticated Control UI.')
-	if (!(await prompts.confirm(`Create or configure \`source\` in Zerops project ${collected.projectId}?`, true))) {
-		log.action('OPERATOR ACTION — source was not changed; run init again to continue', [
-			`fabrika platform init --provider=zerops ${args.installation} --repo=${collected.repo}`,
-		])
-		return
-	}
-	const source = await effects.configureSource({
-		projectId: collected.projectId,
-		environment: collected.environmentName,
-		accessToken: collected.accessToken,
-		...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
-	}).catch(() => {
-		throw new Error('source configuration did not complete; no credential value is shown. Inspect source and control in Zerops, then run init again')
-	})
-	log.ok(source.created ? 'source created and configured' : 'source configuration reconciled')
-	log.info(
-		source.reusedRpcKey ? 'reused the matching source RPC key already held by source and control' : 'generated one source RPC key inside this run',
-	)
-	if (source.writtenKeys.length > 0) log.ok(`Zerops variables written: ${source.writtenKeys.join(', ')}`)
-	const credentialState = classifyExistingGitHubCredentials(source.sourceEnv)
-	const settingsUrl = sourceConnectionSettingsUrl(collected.placement, source)
-	if (credentialState === 'connected') {
-		log.info('source already holds at least one connected GitHub App credential. Public repositories keep working without one.')
-	} else {
-		log.info('source remains in anonymous public-repository mode. Connect private GitHub source later in Control.')
-	}
+	const platform = await readPlatform(collected, collaborators)
+	const settingsUrl = platform === undefined ? undefined : sourceConnectionSettingsUrl(collected.placement, platform)
+	log.info('Public repositories deploy without a GitHub App. Connect private GitHub source in Control.')
 	log.action(
-		credentialState === 'connected'
-			? 'OPERATOR ACTION — connect another GitHub source in Control'
-			: 'OPERATOR ACTION — connect GitHub source in Control',
+		'OPERATOR ACTION — connect GitHub source in Control',
 		settingsUrl === undefined
 			? ['Deploy the platform, then open Settings → Source in the authenticated Control console. No unverified URL was guessed.']
 			: [url(settingsUrl)],
@@ -603,7 +478,7 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 	log.info("Who may administer the installation is IAM's to say: this repository holds no admission list to close later.")
 	// The origin comes off the live control service, never from what was typed here: an operator who
 	// pastes a guessed hostname into FABRIKA_IAM_RPC_URL gets "Unable to connect" and no explanation.
-	const iamOrigin = platformIamOrigin(collected.placement, source)
+	const iamOrigin = platform === undefined ? undefined : platformIamOrigin(collected.placement, platform)
 	log.action(
 		MACHINE_KEY_NEXT_STEP_TITLE,
 		machineKeyNextStepLines({ sidecarEnvironment: args.installation, ...(iamOrigin === undefined ? {} : { iamOrigin }) }),
@@ -638,9 +513,9 @@ export const consoleInitCollaborators = (): InitCollaborators => ({
 			}
 			return project.name
 		},
-		configureSource: async (input) => {
+		inspectPlatform: async (input) => {
 			const api = createZeropsApi({ token: input.accessToken, ...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }) })
-			return configureSourceService(input, api, defaultSleep, new AbortController().signal)
+			return inspectPlatform(input.projectId, api, new AbortController().signal)
 		},
 	},
 })

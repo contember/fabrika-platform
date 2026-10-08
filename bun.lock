@@ -393,7 +393,6 @@
         "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
-        "@fabrika/source-zerops": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -580,18 +579,6 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/control-contract": "workspace:*",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-      },
-    },
-    "packages/source-zerops": {
-      "name": "@fabrika/source-zerops",
-      "version": "0.0.4",
-      "dependencies": {
-        "@fabrika/github-app": "workspace:*",
-        "@fabrika/provider-zerops": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -833,8 +820,6 @@
     "@fabrika/runner-container": ["@fabrika/runner-container@workspace:packages/runner-container"],
 
     "@fabrika/runner-contract": ["@fabrika/runner-contract@workspace:packages/runner-contract"],
-
-    "@fabrika/source-zerops": ["@fabrika/source-zerops@workspace:packages/source-zerops"],
 
     "@fontsource-variable/ibm-plex-sans": ["@fontsource-variable/ibm-plex-sans@5.3.0", "", {}, "sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ=="],
 
@@ -1322,8 +1307,6 @@
 
     "@fabrika/runner-contract/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
-    "@fabrika/source-zerops/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
     "@opice/harness/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.3", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.3", "tslib": "^2.4.0" }, "bundled": true }, "sha512-zLpS5asjEb7lq8jYLq37N6XKaE41DIexlY1rF/z4/tIl3wo13Sqm28fRyfIsKZD+NZ8mM5RoKkpW/rBcuoSZSg=="],
@@ -1409,7 +1392,5 @@
     "@fabrika/runner-container/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/runner-contract/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "@fabrika/source-zerops/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
   }
 }

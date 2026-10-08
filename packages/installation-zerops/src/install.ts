@@ -125,7 +125,7 @@ const installPreparedPlatform = async (
 	log.step("Generate this installation's secrets")
 	const secrets = generateInstallationSecrets()
 	log.ok(
-		'IAM signing keys (1 × ES256), the IAM RPC key, the source RPC key, the proxy key, the provisioning key, the Operations sync key and the vault key',
+		'IAM signing keys (1 × ES256), the IAM RPC key, the proxy key, the provisioning key, the Operations sync key and the vault key',
 	)
 	log.info('None of them is written to disk. Only the provisioning key is printed, once, at the end.')
 
@@ -156,7 +156,6 @@ const installPreparedPlatform = async (
 
 	log.step('Write every remaining variable')
 	const desired = installationServiceEnv({
-		projectId: project.id,
 		environment,
 		scheme: input.scheme,
 		hosts,
@@ -230,7 +229,7 @@ const installPreparedPlatform = async (
  * How this command's confirmations are answered — and the refusal when nothing can answer them.
  *
  * The confirmations are the only thing standing between a stray invocation and an installation: this
- * command generates seven credentials, mints a Zerops token on the account and deploys. Every one of
+ * command generates six credentials, mints a Zerops token on the account and deploys. Every one of
  * them defaults to yes, so a pipe carrying blank lines answers all six of them with nobody reading
  * what they agree to. So a run with no terminal is refused unless the operator asked for it by name.
  */

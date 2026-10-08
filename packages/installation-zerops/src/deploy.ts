@@ -9,7 +9,7 @@
 //   • **The order carries a security property.** Since ADR-0022 the application enforces nothing, so
 //     deploying control at a new version while the previous, more permissive manifest is still in
 //     front of it leaves `/api/*` open for the length of the deploy. The sequence is therefore
-//     (IAM + Operations + source) → **proxy** → control: the three that order nothing against each
+//     (IAM + Operations) → **proxy** → control: the two that order nothing against each
 //     other built at once, with the enforcement point ahead of the service whose gates just widened.
 //     `__tests__/deploy.test.ts` pins it.
 //
@@ -67,37 +67,36 @@ import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-uplo
 import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
- * The five services this command touches, in the order it RESOLVES and WRITES them.
+ * The four services this command touches, in the order it RESOLVES and WRITES them.
  *
  * It is no longer the order they are deployed in — that is `PLATFORM_CONCURRENT_DEPLOY` followed by
  * `PLATFORM_SEQUENTIAL_DEPLOY`, and the two stages concatenate back to this list (pinned by
  * `zerops/__tests__/deploy-order.test.ts`). What this list still decides is which services must exist
- * and which environment is written, both of which happen for ALL FIVE before any of them is deployed.
+ * and which environment is written, both of which happen for ALL FOUR before any of them is deployed.
  *
  * Each name is a service hostname in the topology AND the `zerops.yaml` setup name the pipeline
  * selects — the platform's own "setup name defaults to the hostname" rule.
  * `zerops/__tests__/deploy-order.test.ts` pins both against the declarations that own them.
  */
-export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'source', 'proxy', 'control'] as const
+export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'proxy', 'control'] as const
 
 export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
 
 /**
- * The three services built AT ONCE, because nothing orders them against each other.
+ * The two services built AT ONCE, because nothing orders them against each other.
  *
- * None of the three calls a sibling at boot: IAM holds no sibling origin at all, Operations only
- * CONSTRUCTS its IAM client (the first request is the first call), and source imports a key with no
- * network. Each readiness gate hits the service's own `/healthz`, and no deploy-written variable of one
- * is read by another's BUILD — the only build-time read on the whole path is the proxy reading its own
- * manifest. So the order among them was arbitrary, and paying for it sequentially cost about 3 min 45 s
+ * Neither calls a sibling at boot: IAM holds no sibling origin at all, and Operations only
+ * CONSTRUCTS its IAM client (the first request is the first call). Each readiness gate hits the
+ * service's own `/healthz`, and no deploy-written variable of one is read by another's BUILD — the
+ * only build-time read on the whole path is the proxy reading its own manifest. So the order among them was arbitrary, and paying for it sequentially cost about 3 min 45 s
  * of the ~9 min 35 s a warm five-service roll took (two measured runs, 2026-08-21).
  *
  * What is NOT arbitrary stays: every environment write happens before any of these starts, the proxy
- * is deployed after all three, and control after the proxy (ADR-0022 — the enforcement point ahead of
+ * is deployed after both, and control after the proxy (ADR-0022 — the enforcement point ahead of
  * the service whose gates just widened). `zerops/__tests__/deploy-order.test.ts` and
  * `__tests__/deploy.test.ts` fail if that sequence changes.
  */
-export const PLATFORM_CONCURRENT_DEPLOY = ['iam', 'operations', 'source'] as const
+export const PLATFORM_CONCURRENT_DEPLOY = ['iam', 'operations'] as const
 
 /** What is deployed after the concurrent stage, one at a time and in this order. */
 export const PLATFORM_SEQUENTIAL_DEPLOY = ['proxy', 'control'] as const
@@ -187,6 +186,9 @@ const resolveProject = async (
 	return { id: project.id, name: project.name }
 }
 
+/** The private source service of an earlier layout; Control now streams sources itself (ADR-0029). */
+const LEFTOVER_SOURCE_SERVICE = 'source'
+
 /**
  * Find every platform service by hostname in one listing.
  *
@@ -197,9 +199,12 @@ const resolveProject = async (
  */
 const resolveServices = async (
 	projectId: string,
-	{ api, signal }: PlatformDeployCollaborators,
+	{ api, log, signal }: PlatformDeployCollaborators,
 ): Promise<Map<PlatformDeployService, ResolvedService>> => {
 	const services = await api.listProjectServices({ projectId, signal })
+	if (services.some((service: ZeropsService) => service.name === LEFTOVER_SOURCE_SERVICE)) {
+		log.warn('a `source` service from an earlier layout is present and unused; it may still hold GitHub App keys; delete it or reinstall')
+	}
 	const resolved = new Map<PlatformDeployService, ResolvedService>()
 	const missing: string[] = []
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
@@ -298,7 +303,6 @@ const desiredServiceEnv = (
 				['FABRIKA_OPERATIONS_PUBLIC_HOST', placement.hosts.operations],
 			]),
 		],
-		['source', new Map()],
 		[
 			'proxy',
 			new Map([
@@ -457,12 +461,12 @@ export const deployPlatformService = async (
 /**
  * Build `PLATFORM_CONCURRENT_DEPLOY` at once, and let every one of them finish before failing.
  *
- * `allSettled` rather than `all`: a rejection from `all` would leave the other two builds running with
- * nobody polling them, so the command would exit while the platform was still writing app versions —
+ * `allSettled` rather than `all`: a rejection from `all` would leave the other build running with
+ * nobody polling it, so the command would exit while the platform was still writing app versions —
  * and the second rejection would be unhandled. Here every build is followed to a terminal status.
  *
  * EVERY failure is logged and the first is thrown, where "first" is this list's order and not the order
- * they failed in — three builds that started together have no meaningful chronology, and a command that
+ * they failed in — builds that started together have no meaningful chronology, and a command that
  * reported only one of two broken services would send the operator back for a second run to find the
  * other. `deployPlatformService` names the service in each message.
  */

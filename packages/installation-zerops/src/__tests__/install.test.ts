@@ -110,7 +110,6 @@ describe('the sequence', () => {
 			// Pass 2, handed to `deployPlatform`: the order is a security property (ADR-0027).
 			'deploy:iam',
 			'deploy:operations',
-			'deploy:source',
 			'deploy:proxy',
 			'deploy:control',
 			'subdomain:proxy',
@@ -125,7 +124,7 @@ describe('the sequence', () => {
 
 		await fixture.run()
 
-		expect(fixture.zerops.importedProcesses).toHaveLength(12)
+		expect(fixture.zerops.importedProcesses).toHaveLength(10)
 		for (const processId of fixture.zerops.importedProcesses) {
 			expect(fixture.zerops.timeline).toContain(`process:${processId}`)
 		}
@@ -266,10 +265,7 @@ describe('the generated secrets', () => {
 			expect(key.slice(3)).toMatch(/^[A-Za-z0-9_-]{43}$/)
 			expect(key.length).toBeGreaterThanOrEqual(32)
 		}
-		for (const key of [secrets.operationsSyncKey, secrets.sourceRpcKey]) {
-			expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/)
-			expect(key.length).toBeGreaterThanOrEqual(32)
-		}
+		expect(secrets.operationsSyncKey).toMatch(/^[A-Za-z0-9_-]{43}$/)
 		// base64, NOT base64url: the vault imports these bytes as an AES key.
 		expect(secrets.vaultKey).toMatch(/^[A-Za-z0-9+/]{43}=$/)
 		expect(Buffer.from(secrets.vaultKey, 'base64')).toHaveLength(32)
@@ -285,7 +281,6 @@ describe('the generated secrets', () => {
 					secrets.proxyKey.slice(3),
 					secrets.provisioningKey.slice(3),
 					secrets.operationsSyncKey,
-					secrets.sourceRpcKey,
 				]
 			) {
 				expect(value.startsWith('-') || value.startsWith('_')).toBe(false)
@@ -309,7 +304,6 @@ describe('what reaches which service', () => {
 		const iam = fixture.zerops.env('iam')
 		const operations = fixture.zerops.env('operations')
 		const control = fixture.zerops.env('control')
-		const source = fixture.zerops.env('source')
 		const proxy = fixture.zerops.env('proxy')
 
 		// The RPC key: IAM serves it, control and Operations present it.
@@ -323,12 +317,10 @@ describe('what reaches which service', () => {
 		expect(control.get('FABRIKA_IAM_PROVISIONING_KEY')).toBe(iam.get('FABRIKA_IAM_PROVISIONING_KEY'))
 		// The catalog key: control projects with it, Operations checks it.
 		expect(control.get('OPERATIONS_SYNC_KEY')).toBe(operations.get('OPERATIONS_SYNC_KEY'))
-		expect(control.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(source.get('FABRIKA_SOURCE_RPC_KEY'))
 		// And the two that belong to exactly one service.
 		expect(iam.get('FABRIKA_IAM_SIGNING_KEYS')).toBeDefined()
 		expect(control.get('FABRIKA_CONTROL_VAULT_KEY')).toBeDefined()
 		expect(operations.has('FABRIKA_CONTROL_VAULT_KEY')).toBe(false)
-		expect(source.has('FABRIKA_ZEROPS_ACCESS_TOKEN')).toBe(false)
 	})
 
 	test('the platform references, the derived origins and the switches password-only needs', async () => {
@@ -354,7 +346,7 @@ describe('what reaches which service', () => {
 		// Password only, by decision — and IAM's own defaults are the other way round.
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_OIDC_ENABLED')).toBe('false')
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_PASSWORD_ENABLED')).toBe('true')
-		for (const hostname of PLATFORM_DEPLOY_ORDER.filter((hostname) => hostname !== 'source')) {
+		for (const hostname of PLATFORM_DEPLOY_ORDER) {
 			expect(fixture.zerops.env(hostname).get('ENVIRONMENT')).toBe('stage')
 		}
 	})
@@ -384,7 +376,6 @@ describe('what reaches which service', () => {
 	test('`GENERATED_SECRET_KEYS` names exactly the keys whose value is generated', () => {
 		const secrets = generateInstallationSecrets()
 		const matrix = installationServiceEnv({
-			projectId: PROJECT.projectId,
 			environment: 'stage',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
@@ -404,7 +395,6 @@ describe('what reaches which service', () => {
 
 	test('the region API base reaches control only when the installation names one', () => {
 		const withRegion = installationServiceEnv({
-			projectId: PROJECT.projectId,
 			environment: 'stage',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
@@ -417,9 +407,8 @@ describe('what reaches which service', () => {
 		expect(withRegion.get('control')?.get('FABRIKA_ZEROPS_API_BASE_URL')).toBe('https://api.app-brn1.zerops.io/api/rest/public')
 	})
 
-	test('fresh installs are anonymous while project identity reaches control', () => {
+	test('fresh installs are anonymous and hold no source transport', () => {
 		const matrix = installationServiceEnv({
-			projectId: PROJECT.projectId,
 			environment: 'stage',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
@@ -428,11 +417,9 @@ describe('what reaches which service', () => {
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
 		})
-		expect(matrix.get('source')?.has('GITHUB_APP_CREDENTIALS')).toBe(false)
-		expect(matrix.get('source')?.has('GITHUB_APP_ID')).toBe(false)
-		expect(matrix.get('source')?.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
-		expect(matrix.get('source')?.has('GITHUB_WEBHOOK_SECRET')).toBe(false)
-		expect(matrix.get('control')?.get('FABRIKA_ZEROPS_PROJECT_ID')).toBe(PROJECT.projectId)
+		expect([...matrix.keys()].sort()).toEqual(['control', 'iam', 'operations', 'proxy'])
+		expect(matrix.get('control')?.has('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(false)
+		expect(matrix.get('control')?.has('FABRIKA_ZEROPS_PROJECT_ID')).toBe(false)
 		expect(matrix.get('proxy')?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')).toBe(
 			JSON.stringify({ issuer: `https://${IAM_HOST}`, upstream: 'iam:3000' }),
 		)
@@ -611,7 +598,7 @@ describe('every outward step is confirmed', () => {
 	})
 
 	test('declining after pass one reports unsupported partial bootstrap and refuses to reroll on retry', async () => {
-		const fixture = harness({ confirms: { 'Write 45 variables across 5 services?': false } })
+		const fixture = harness({ confirms: { 'Write 42 variables across 4 services?': false } })
 		await expect(fixture.run()).rejects.toThrow('Neither `platform deploy` nor `platform init` completes a partial bootstrap')
 		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
 		expect(key).toBeDefined()
@@ -690,7 +677,6 @@ describe('every outward step is confirmed', () => {
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual([
 			'deploy:iam',
 			'deploy:operations',
-			'deploy:source',
 			'deploy:proxy',
 			'deploy:control',
 		])
@@ -705,10 +691,10 @@ describe('every outward step is confirmed', () => {
 
 		expect(fixture.asked).toHaveLength(6)
 		expect(fixture.asked[0]).toContain('Read Zerops project proj-1')
-		expect(fixture.asked[1]).toContain('Import 7 services')
+		expect(fixture.asked[1]).toContain('Import 6 services')
 		expect(fixture.asked[2]).toContain('Mint an integration token')
 		expect(fixture.asked[3]).toContain(`build commit ${'a'.repeat(40)}`)
-		expect(fixture.asked[4]).toContain('variables across 5 services')
+		expect(fixture.asked[4]).toContain('variables across 4 services')
 		expect(fixture.asked[5]).toContain('Deploy the installation now')
 	})
 
@@ -723,7 +709,7 @@ describe('every outward step is confirmed', () => {
 
 	test('declining the import creates nothing', async () => {
 		const fixture = harness({
-			confirms: { 'Import 7 services (db, storage, iam, operations, source, control, proxy) into project proj-1?': false },
+			confirms: { 'Import 6 services (db, storage, iam, operations, control, proxy) into project proj-1?': false },
 		})
 
 		await expect(fixture.run()).rejects.toThrow('nothing has been created')

@@ -8,7 +8,7 @@ name: platform
 #
 # ONE step, deliberately. On Zerops `fabrika platform deploy` owns the whole ordered sequence: resolve
 # the project and its services, write every service's environment (including the composed proxy
-# manifest), deploy iam + operations + source together and then proxy -> control waiting for each,
+# manifest), deploy iam + operations together and then proxy -> control waiting for each,
 # ensure the public entry point, and reconcile the console's app schema. That sequence carries a security
 # property — since ADR-0022 the application enforces nothing, so the enforcement point is deployed BEFORE
 # the service whose gates just widened — and it therefore lives in code with a test rather than in this
@@ -47,9 +47,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # MEASURED (2026-08-21, two warm-cache runs): ~9 min 35 s for five builds one after another. Now that
-    # iam, operations and source build at once the critical path PROJECTS to ~6 min from those same
-    # per-service timings — projected, not yet measured. The command itself polls each build for up to 70
+    # MEASURED (2026-08-21, two warm-cache runs): ~9 min 35 s for five builds one after another, when a
+    # `source` service still existed. With four services and iam + operations built at once the critical
+    # path is shorter still — projected, not yet measured. The command itself polls each build for up to 70
     # minutes (Zerops caps a pipeline at one hour), so this is the outer guard, not the gate.
     timeout-minutes: 90
     # Secrets + variables resolve from this GitHub Environment (created + populated by `fabrika platform init`).

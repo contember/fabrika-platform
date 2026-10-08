@@ -38,7 +38,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
   `src/install-environment.ts` — the environment matrix, secret-key metadata, and writes.
   `src/install-project.ts` — project creation and polling. `src/install-provisioning.ts` — topology and service provisioning.
   `src/install-collaborators.ts` — the injected collaborators and cancellation check.
-  `src/install-options.ts` — its flags. `src/secrets.ts` — the seven values it generates.
+  `src/install-options.ts` — its flags. `src/secrets.ts` — the six values it generates.
 - `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
 - `src/admin.ts` — the first-administrator command. `src/admin-options.ts` — its flags.
 - `src/machine-key.ts` — the "next: mint a machine key" block `admin` and `init` both end with.
@@ -46,7 +46,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
 - `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
 - `src/proxy-manifest.ts` — the proxy manifest TEMPLATE type and `resolvePlatformProxyManifest`.
-- `zerops/setups.ts` — typed IAM, Operations, source, proxy, and control setup definitions.
+- `zerops/setups.ts` — typed IAM, Operations, proxy, and control setup definitions.
 - `zerops/topology.ts` — project and service topology.
 - `zerops/proxy-manifest.ts` — the three fronted apps and their gates. **Dev-time only.**
 - `zerops/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control`. **Dev-time only.**
@@ -69,7 +69,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - Preserve the import-without-code → write service secrets → deploy bring-up
   order. `platform install` is that order, executed.
 - **`platform install` GENERATES credentials, which is why it is a third command
-  and not a flag on either of the other two.** It writes seven generated secrets plus
+  and not a flag on either of the other two.** It writes six generated secrets plus
   a minted Zerops integration token, and prints exactly ONE value — the provisioning
   key, once, at the end, because `platform init` asks the operator for it. IAM and
   Control retain remote copies for operator recovery. That is the only exception to the no-secret-in-a-log rule on
@@ -96,15 +96,19 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - **`install` never restates the deploy order.** Pass 2 is `deployPlatform`, whole;
   pass 1 reuses `deployPlatformService` for the proxy alone. One service is not an
   order.
-- **`platform deploy` builds iam, operations and source AT ONCE, then proxy, then
+- **`platform deploy` builds iam and operations AT ONCE, then proxy, then
   control — and the proxy's position is a SECURITY property, not a dependency.** The
-  three concurrent services order nothing against each other: none calls a sibling at
+  two concurrent services order nothing against each other: neither calls a sibling at
   boot, each readiness gate hits its own `/healthz`, and no variable one's deploy
   writes is read by another's build. Since ADR-0022 the
   application enforces nothing, so control at a new version behind the previous,
   more permissive manifest is an open `/api/*` for the length of the deploy.
   Operations owns separate `operationsdb` and `operationsstorage` services; only
   the proxy may expose its ingest and source-map paths.
+- **There is no `source` service (ADR-0029): Control streams sources and holds the
+  GitHub App keys in its vault.** An installation from an earlier layout may still
+  have one. `platform deploy` ignores it and logs one warning, because it may still
+  hold GitHub App keys; it never deletes it.
 - **`platform deploy` MERGES the proxy manifest, never replaces it.** On the light
   tier an application shares the project and therefore the platform proxy's one
   `FABRIKA_PROXY_MANIFEST_JSON`; the generator emits only the three platform apps,
@@ -115,27 +119,21 @@ and is deliberate — someone reading only one path will guess wrong about the o
   from the environment.** There is no `--token` and no `--admin-key`; an unknown
   flag is an error precisely so one cannot arrive on a command line. Every secret
   an installation holds is placed at bring-up.
-- **`platform init` keeps deployment credentials off disk.** Both GitHub Environment
-  secrets already belong to the installation (the operator's Zerops integration
-  token, and the `px_` provisioning key IAM was seeded with). The source upgrade
-  generates one RPC key only when neither source nor control has one, and writes
-  it directly to those Zerops services. A valid key on only one side repairs the
-  absent side; a matching pair is reused; invalid or mismatched values are refused.
-  It also creates a missing nonsecret Control project binding. Normal init leaves
-  GitHub source anonymous. GitHub App setup is an authenticated Control UI flow.
-  Init only reports a complete legacy or atomic source credential set for Control
-  adoption; it refuses partial, invalid, or mismatched state. It never prompts for,
-  writes, prints, or stores locally a GitHub App private key or webhook secret,
-  and it never accesses an XDG recovery path.
-- **Old XDG recovery files are an explicit compatibility case.** This release never
-  discovers, opens, or deletes them. If remote credentials are complete, the operator
-  adopts them in Control and deletes the old file only after Control reports connected.
-  If remote state is empty or partial and the file is the only complete copy, the
-  operator must use the last compatible CLI release to finish remote persistence.
+- **`platform init` keeps deployment credentials off disk and writes nothing to
+  Zerops.** Both GitHub Environment secrets already belong to the installation (the
+  operator's Zerops integration token, and the `px_` provisioning key IAM was seeded
+  with). It reads `control` and `proxy` (`inspectPlatform`) only to print the console
+  and IAM origins the installation records. GitHub App setup is an authenticated
+  Control UI flow. Init never prompts for, writes, prints, or stores locally a GitHub
+  App private key or webhook secret, and it never accesses an XDG recovery path.
+- **Old XDG recovery files are not adopted.** This release never discovers, opens, or
+  deletes them; since ADR-0029 there is nothing to adopt them into. The operator
+  connects a new source in Control and deletes the old file afterwards.
 - **`init` confirms before every step that leaves the operator's disk**: reading
-  the project, configuring source, creating or pushing the repository, writing
-  the Environment, and triggering the run.
-  Declining stops the outward steps and prints what to run; a re-run is safe.
+  the project, reading its `control` and `proxy` services, creating or pushing the
+  repository, writing the Environment, and triggering the run.
+  Declining a write stops the outward steps and prints what to run; a re-run is safe.
+  Declining the service read only leaves the printed origins out.
 - **Keep the sidecar pin a published TAG**, checked by `assertPinnedTag` and the generated workflow.
   Install and deploy require `--source-dir` for the clean checkout containing the executing installation
   module. Prepare one committed archive before remote writes, share it across both install passes,

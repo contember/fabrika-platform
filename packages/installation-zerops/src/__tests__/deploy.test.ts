@@ -100,15 +100,15 @@ const yieldToTimer = (): Promise<void> => new Promise((settle) => void setTimeou
 /**
  * A fake that makes the concurrent stage's two properties observable from outside.
  *
- * **Started together.** No concurrent build reaches a terminal status until all three have been
+ * **Started together.** No concurrent build reaches a terminal status until all of them have been
  * triggered, so under a sequential loop iam's poll would run out of attempts — the test fails rather
  * than quietly passing on microtask ordering.
  *
  * **Followed to their end.** With `slowPolls`, a build that will FAIL answers on its first poll while
- * the two that will succeed are held at `BUILDING` for several more, each behind a real timer hop.
- * `Promise.allSettled` waits for those and logs both `ACTIVE` lines; `Promise.all` would surface the
- * failure with the other two still building and nobody polling them, which is exactly the
- * abandoned-build case — and their `ACTIVE` lines are then missing when the rejection is asserted.
+ * one that will succeed is held at `BUILDING` for several more, each behind a real timer hop.
+ * `Promise.allSettled` waits for it and logs its `ACTIVE` line; `Promise.all` would surface the
+ * failure with the other still building and nobody polling it, which is exactly the
+ * abandoned-build case — and its `ACTIVE` line is then missing when the rejection is asserted.
  */
 const gatedBuilds = (fixture: Harness, slowPolls = 0): ZeropsApi => {
 	const polls = new Map<string, number>()
@@ -139,27 +139,26 @@ const runWithGatedBuilds = (fixture: Harness, slowPolls = 0): Promise<void> =>
 	})
 
 describe('the order', () => {
-	test('builds iam, operations and source AT ONCE, then proxy, then control', async () => {
-		// None of the three calls a sibling at boot and none reads a variable another's build needs, so the
+	test('builds iam and operations AT ONCE, then proxy, then control', async () => {
+		// Neither calls a sibling at boot and none reads a variable another's build needs, so the
 		// order among them was arbitrary — and paying for it sequentially cost about 3 min 45 s of a
 		// ~9 min 35 s warm roll (two measured runs, 2026-08-21).
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await runWithGatedBuilds(fixture)
 		const deploys = fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))
-		expect([...deploys.slice(0, 3)].sort()).toEqual(['deploy:iam', 'deploy:operations', 'deploy:source'])
-		expect(deploys.slice(3)).toEqual(['deploy:proxy', 'deploy:control'])
-		expect(PLATFORM_CONCURRENT_DEPLOY).toEqual(['iam', 'operations', 'source'])
+		expect([...deploys.slice(0, 2)].sort()).toEqual(['deploy:iam', 'deploy:operations'])
+		expect(deploys.slice(2)).toEqual(['deploy:proxy', 'deploy:control'])
+		expect(PLATFORM_CONCURRENT_DEPLOY).toEqual(['iam', 'operations'])
 		expect(PLATFORM_SEQUENTIAL_DEPLOY).toEqual(['proxy', 'control'])
 	})
 
-	test('a failure among the three names that service, and the other two are still followed to their end', async () => {
+	test('a failure in the concurrent stage names that service, and the other build is still followed to its end', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		fixture.zerops.failDeploy('operations')
-		// operations fails on its first poll; iam and source need several more, each behind a timer hop. An
+		// operations fails on its first poll; iam needs several more, each behind a timer hop. An
 		// abandoned build keeps writing app versions after the command has exited — `allSettled` prevents it.
 		await expect(runWithGatedBuilds(fixture, SLOW_BUILD_POLLS)).rejects.toThrow('`operations` deploy operations-v5 finished as DEPLOY_FAILED')
 		expect(fixture.log.lines).toContain('info: iam: ACTIVE')
-		expect(fixture.log.lines).toContain('info: source: ACTIVE')
 		expect(fixture.zerops.calls).not.toContain('deploy:proxy')
 		expect(fixture.zerops.calls).not.toContain('deploy:control')
 	})
@@ -168,11 +167,33 @@ describe('the order', () => {
 		// `allSettled` collects a second rejection that `all` would drop on the floor: a run that named one
 		// broken service and stayed silent about the other buys the operator a second failed roll.
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+		fixture.zerops.failDeploy('iam')
 		fixture.zerops.failDeploy('operations')
-		fixture.zerops.failDeploy('source')
-		await expect(runWithGatedBuilds(fixture)).rejects.toThrow('`operations` deploy operations-v5 finished as DEPLOY_FAILED')
+		await expect(runWithGatedBuilds(fixture)).rejects.toThrow('`iam` deploy iam-v5 finished as DEPLOY_FAILED')
+		expect(fixture.log.lines).toContain('warn: zerops: the `iam` deploy iam-v5 finished as DEPLOY_FAILED')
 		expect(fixture.log.lines).toContain('warn: zerops: the `operations` deploy operations-v5 finished as DEPLOY_FAILED')
-		expect(fixture.log.lines).toContain('warn: zerops: the `source` deploy source-v5 finished as DEPLOY_FAILED')
+	})
+
+	test('warns once about a leftover `source` service and deploys without touching it', async () => {
+		const zerops = fakeZerops({
+			...PROJECT,
+			services: [
+				...platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } }),
+				{ name: 'source', id: 'svc-source', sequence: 4, env: { GITHUB_APP_CREDENTIALS_V2_LEFTOVER: 'must-not-be-read' } },
+			],
+		})
+		const log = recordingDeployLog()
+		await deployPlatform(input(), {
+			...fakeSourceCollaborators,
+			api: zerops.api,
+			reconcileSchema: async () => {},
+			sleep: async () => {},
+			log,
+			signal: new AbortController().signal,
+		})
+		expect(log.lines.filter((line) => line.startsWith('warn: ') && line.includes('`source` service from an earlier layout'))).toHaveLength(1)
+		expect(zerops.timeline.filter((entry) => entry.split(':')[1] === 'source')).toEqual([])
+		expect(log.lines.join('\n')).not.toContain('must-not-be-read')
 	})
 
 	// Found by running `platform install` on an empty project (2026-08-10): registering the console talks
@@ -283,7 +304,7 @@ describe('fail closed', () => {
 				log: recordingDeployLog(),
 				signal: new AbortController().signal,
 			}),
-		).rejects.toThrow('has no operations, source, proxy, control service')
+		).rejects.toThrow('has no operations, proxy, control service')
 	})
 })
 
@@ -300,7 +321,7 @@ describe('idempotence', () => {
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('subdomain:'))).toEqual([])
 		expect(manifestOf(fixture.zerops)).toBe(afterFirst)
 		// Deploying IS what a re-run does; it is the configuration that must not move.
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toHaveLength(5)
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toHaveLength(4)
 	})
 
 	test('a subdomain someone turned off comes back, and one already on is left alone', async () => {
@@ -398,7 +419,7 @@ describe('the write→deploy race', () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		fixture.zerops.blockTrigger('iam', 99)
 		await expect(fixture.run()).rejects.toThrow('variable synchronisation still running')
-		// Operations and source share iam's stage and are triggered whatever iam does — what a failure
+		// Operations shares iam's stage and are triggered whatever iam does — what a failure
 		// there must still stop is everything the sequence DOES order after it.
 		expect(fixture.zerops.calls).not.toContain('deploy:proxy')
 		expect(fixture.zerops.calls).not.toContain('deploy:control')

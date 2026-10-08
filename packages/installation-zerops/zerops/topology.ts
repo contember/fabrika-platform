@@ -84,8 +84,7 @@ export type PublicAccess = 'custom-domain' | 'zerops-subdomain'
  * enough containers that no single one is a point of failure.
  *
  * `light` is one project, one `postgresql:single@18` and one bucket shared by IAM, Operations, control
- * AND the apps deployed alongside them, at one container per service. The private source service has
- * no data service. This tier exists because the standard
+ * AND the apps deployed alongside them, at one container per service. This tier exists because the standard
  * shape costs ~13 containers before a single application is deployed, which is more platform than a
  * small fleet — or an evaluation — can justify.
  *
@@ -172,10 +171,6 @@ const runtime = (
 	const { public: isPublic, ...rest } = spec
 	return { ...rest, enableSubdomainAccess: isPublic === true }
 }
-
-/** The one service an existing installation may add through a source-only steady import. */
-export const sourceServiceSpec = (): ZeropsServiceSpec =>
-	runtime({ hostname: 'source', type: 'alpine/bun@1.3', priority: 35, minContainers: 1, maxContainers: 2 })
 
 /**
  * The **platform** project: fabrika itself.
@@ -272,11 +267,10 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					minContainers: 1,
 					maxContainers: 3,
 				}),
-				sourceServiceSpec(),
 				runtime({
 					hostname: 'control',
 					type: 'alpine/bun@1.3',
-					// IAM → Operations → source → proxy → control is the code deployment order too:
+					// IAM → Operations → proxy → control is the code deployment order too:
 					// control must never start against a missing private dependency.
 					priority: 20,
 					// Deliberately allowed to be a single container. The control plane is CRASH-SAFE across a
@@ -354,7 +348,6 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 		},
 		runtime({ hostname: 'iam', type: 'alpine/bun@1.3', priority: 50, minContainers: 1, maxContainers: 2 }),
 		runtime({ hostname: 'operations', type: 'alpine/bun@1.3', priority: 40, minContainers: 1, maxContainers: 2 }),
-		sourceServiceSpec(),
 		runtime({ hostname: 'control', type: 'alpine/bun@1.3', priority: 20, minContainers: 1, maxContainers: 2 }),
 		runtime({
 			hostname: PROXY_HOSTNAME,

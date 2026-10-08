@@ -80,7 +80,7 @@ describe('every generated import document validates against the supported instal
 })
 
 describe('the topology is the one ADR-0006 describes', () => {
-	test('platform: control, source, Operations, IAM, proxy, and isolated data services — in one project of their own', () => {
+	test('platform: control, Operations, IAM, proxy, and isolated data services — in one project of their own', () => {
 		expect(platform?.steady.document.services.map((service) => service.hostname)).toEqual([
 			'db',
 			'storage',
@@ -88,7 +88,6 @@ describe('the topology is the one ADR-0006 describes', () => {
 			'operationsstorage',
 			'iam',
 			'operations',
-			'source',
 			'control',
 			'proxy',
 		])
@@ -124,13 +123,12 @@ describe('the topology is the one ADR-0006 describes', () => {
 		expect(operationsStorage?.enableCdn).toBe(false)
 	})
 
-	test('the light tier is the same seven roles on ONE database and ONE bucket', () => {
+	test('the light tier is the same six roles on ONE database and ONE bucket', () => {
 		expect(light?.steady.document.services.map((service) => service.hostname)).toEqual([
 			'db',
 			'storage',
 			'iam',
 			'operations',
-			'source',
 			'control',
 			'proxy',
 		])
@@ -146,11 +144,11 @@ describe('the topology is the one ADR-0006 describes', () => {
 		expect(services.get('db')?.mode).toBeUndefined()
 		expect(services.get('storage')?.objectStoragePolicy).toBe('private')
 		expect(services.get('storage')?.enableCdn).toBe(false)
-		for (const hostname of ['iam', 'operations', 'source', 'control', 'proxy']) {
+		for (const hostname of ['iam', 'operations', 'control', 'proxy']) {
 			expect(services.get(hostname)?.minContainers).toBe(1)
 		}
 		// Everything but the proxy stays off the internet, exactly as on the standard tier.
-		for (const hostname of ['iam', 'operations', 'source', 'control']) {
+		for (const hostname of ['iam', 'operations', 'control']) {
 			expect(services.get(hostname)?.enableSubdomainAccess).toBe(false)
 		}
 	})
@@ -169,8 +167,7 @@ describe('the topology is the one ADR-0006 describes', () => {
 		expect(byHostname.get('operationsdb')).toBe(100)
 		expect(byHostname.get('operationsstorage')).toBe(100)
 		expect(byHostname.get('iam')).toBeGreaterThan(byHostname.get('operations') ?? 0)
-		expect(byHostname.get('operations')).toBeGreaterThan(byHostname.get('source') ?? 0)
-		expect(byHostname.get('source')).toBeGreaterThan(byHostname.get('proxy') ?? 0)
+		expect(byHostname.get('operations')).toBeGreaterThan(byHostname.get('proxy') ?? 0)
 		expect(byHostname.get('proxy')).toBeGreaterThan(byHostname.get('control') ?? 0)
 		expect(byHostname.get('proxy')).toBeLessThan(byHostname.get('iam') ?? 0)
 	})
@@ -223,7 +220,7 @@ describe('ADR-0022 — the proxy is the only publicly routed service', () => {
 			expect(() => assertOnlyPublicService(document, publicService)).not.toThrow()
 			// The runtime services state their answer rather than relying on the platform default, so
 			// enabling it is a visible diff and the re-applied import corrects a GUI change.
-			for (const hostname of ['iam', 'source', 'control', 'proxy']) {
+			for (const hostname of ['iam', 'control', 'proxy']) {
 				const service = document.services.find((entry) => entry.hostname === hostname)
 				if (service !== undefined) {
 					expect(service.enableSubdomainAccess).toBe(hostname === publicService ? routed.includes(hostname) : false)

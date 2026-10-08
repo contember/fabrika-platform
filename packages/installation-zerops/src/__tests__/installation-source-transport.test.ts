@@ -139,7 +139,7 @@ describe('exact installation source', () => {
 			})
 		await run()
 		expect(preparations).toBe(1)
-		expect(commits).toEqual(Array(5).fill(source.commitSha))
+		expect(commits).toEqual(Array(4).fill(source.commitSha))
 		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(1)
 		await run()
 		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(1)
@@ -252,8 +252,8 @@ describe('exact installation source', () => {
 				return fakeSourceCollaborators.uploadFetch(url, init)
 			},
 		})
-		expect([preparations, disposals, readers.size]).toEqual([1, 1, 6])
-		expect(names).toEqual(Array(6).fill('a'.repeat(40)))
+		expect([preparations, disposals, readers.size]).toEqual([1, 1, 5])
+		expect(names).toEqual(Array(5).fill('a'.repeat(40)))
 		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(1)
 		const raw = zerops.env('control').get('FABRIKA_ZEROPS_PROXY_SOURCE_JSON') ?? ''
 		expect(raw).not.toContain('$')

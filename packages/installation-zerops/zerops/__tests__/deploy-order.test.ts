@@ -16,7 +16,7 @@ import { compileTopology, platformTopology, PROXY_HOSTNAME } from '../topology'
 const services = (tier: 'standard' | 'light'): string[] =>
 	compileTopology(platformTopology({ env: 'prod', tier }), 'prod').steady.document.services.map((service) => service.hostname)
 
-describe('the five services a platform deploy touches', () => {
+describe('the four services a platform deploy touches', () => {
 	test('each is a service BOTH tiers create', () => {
 		for (const hostname of PLATFORM_DEPLOY_ORDER) {
 			expect(services('standard')).toContain(hostname)
@@ -29,16 +29,16 @@ describe('the five services a platform deploy touches', () => {
 		expect([...setups].sort()).toEqual([...PLATFORM_DEPLOY_ORDER].sort())
 	})
 
-	test('is exactly the fronted apps, the private source service, and the proxy that fronts them', () => {
+	test('is exactly the fronted apps and the proxy that fronts them', () => {
 		expect(PLATFORM_PROXY_SERVICE).toBe(PROXY_HOSTNAME)
-		expect(new Set(PLATFORM_DEPLOY_ORDER)).toEqual(new Set([...PLATFORM_PROXY_APPS.map((app) => app.service), 'source', PROXY_HOSTNAME]))
+		expect(new Set(PLATFORM_DEPLOY_ORDER)).toEqual(new Set([...PLATFORM_PROXY_APPS.map((app) => app.service), PROXY_HOSTNAME]))
 	})
 
 	test('and the SEQUENCE puts the enforcement point ahead of the service whose gates it carries', () => {
-		// Two stages, and only one of them is ordered. iam, operations and source order NOTHING against
+		// Two stages, and only one of them is ordered. iam and operations order NOTHING against
 		// each other — no boot-time call between them, no readiness gate that leaves the service, and no
 		// variable one's deploy writes that another's build reads — so they build at once.
-		expect(PLATFORM_CONCURRENT_DEPLOY).toEqual(['iam', 'operations', 'source'])
+		expect(PLATFORM_CONCURRENT_DEPLOY).toEqual(['iam', 'operations'])
 		for (const hostname of PLATFORM_CONCURRENT_DEPLOY) {
 			expect(PLATFORM_DEPLOY_ORDER.indexOf(hostname)).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf(PLATFORM_PROXY_SERVICE))
 		}

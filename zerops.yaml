@@ -3,9 +3,9 @@
 # Source: packages/installation-zerops/zerops/setups.ts  (which is where the per-field commentary lives)
 # Regenerate: bun run --filter @fabrika/installation-zerops gen
 #
-# Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's five deployable services share
-# ONE file with five named setups. A service selects its setup by name; the name defaults to the
-# service hostname, which is why `iam`, `operations`, `source`, `proxy` and `control` below are also hostnames in
+# Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's four deployable services share
+# ONE file with four named setups. A service selects its setup by name; the name defaults to the
+# service hostname, which is why `iam`, `operations`, `proxy` and `control` below are also hostnames in
 # packages/installation-zerops/zerops/generated/*.zerops-import.yaml.
 #
 # NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE — including no `${x_y}` reference to a
@@ -100,42 +100,6 @@ zerops:
         PORT: "3000"
         FABRIKA_IAM_RPC_URL: "http://iam:3000"
         FABRIKA_CONTROL_URL: "http://control:3000"
-  - setup: source
-    build:
-      base:
-        - alpine/bun@1.3
-      buildCommands:
-        - "bun install --frozen-lockfile"
-      deployFiles:
-        - package.json
-        - bun.lock
-        - node_modules
-        - packages
-      cache:
-        - node_modules
-    deploy:
-      readinessCheck:
-        httpGet:
-          port: 3000
-          path: "/healthz"
-        retryPeriod: "10s"
-        failureTimeout: "60s"
-    run:
-      base: alpine/bun@1.3
-      start: "bun packages/source-zerops/src/server.ts"
-      ports:
-        - port: 3000
-          httpSupport: true
-      healthCheck:
-        httpGet:
-          port: 3000
-          path: "/healthz"
-        execPeriod: "10s"
-        disconnectTimeout: "30s"
-        recoveryTimeout: "10s"
-        failureTimeout: "120s"
-      envVariables:
-        PORT: "3000"
   - setup: proxy
     build:
       base:
@@ -241,4 +205,3 @@ zerops:
         FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
         FABRIKA_IAM_RPC_URL: "http://iam:3000"
         FABRIKA_OPERATIONS_URL: "http://operations:3000"
-        FABRIKA_ZEROPS_SOURCE_URL: "http://source:3000"

@@ -9,7 +9,8 @@ import type {
 	ZeropsYamlRun,
 	ZeropsYamlSetup,
 } from './schema.generated'
-import type { ZeropsSourcePrivateBindingV2, ZeropsSourceRepository } from './source'
+import type { ZeropsSourceRepository } from './source'
+import type { ZeropsSourcePrivateBinding } from './source/port'
 
 export interface ZeropsResourceContext {
 	env: string
@@ -120,7 +121,7 @@ export interface ZeropsRuntimeSource {
 	repository: ZeropsSourceRepository
 	commitSha: string
 	/** Absent for a public repository. */
-	privateBinding?: ZeropsSourcePrivateBindingV2
+	privateBinding?: ZeropsSourcePrivateBinding
 }
 
 /** The run checkpoint (ADR-0044): the reserved version, and whether its build request may have been sent. */

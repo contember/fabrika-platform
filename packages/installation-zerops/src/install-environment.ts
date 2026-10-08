@@ -39,7 +39,6 @@ export const passOneProxyEnv = (secrets: InstallationSecrets): ReadonlyMap<strin
 
 /** What `installationServiceEnv` needs. Everything in it is settled before the first write. */
 export interface InstallationEnvInput {
-	readonly projectId: string
 	readonly environment: string
 	readonly scheme: 'http' | 'https'
 	readonly hosts: PlatformHosts
@@ -63,7 +62,7 @@ export interface InstallationEnvInput {
  *     ones that file actually reads; the unprefixed ones are the ones it actually reads too.
  *   • No key any service declares in its own `zerops.yaml` appears here — `PORT`,
  *     `FABRIKA_IAM_RPC_URL`, `FABRIKA_OPERATIONS_URL`, `FABRIKA_CONTROL_ASSETS_DIR`,
- *     `FABRIKA_CONTROL_URL`, `FABRIKA_ZEROPS_SOURCE_URL`, `FABRIKA_PROXY_MANIFEST`, `FABRIKA_PROXY_PORT`. The env API refuses those
+ *     `FABRIKA_CONTROL_URL`, `FABRIKA_PROXY_MANIFEST`, `FABRIKA_PROXY_PORT`. The env API refuses those
  *     (`provider-zerops/src/api.ts`), because the conflict cannot be resolved to a record id.
  *
  * The proxy manifest is deliberately absent: pass 1 writes an empty one and `deployPlatform` owns the
@@ -74,7 +73,6 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 	const iamOrigin = platformOrigin(input.scheme, input.hosts.iam)
 	const consoleOrigin = platformOrigin(input.scheme, input.hosts.control)
 	const operationsOrigin = platformOrigin(input.scheme, input.hosts.operations)
-	const source = new Map([['FABRIKA_SOURCE_RPC_KEY', secrets.sourceRpcKey]])
 	const control = new Map([
 		['FABRIKA_CONTROL_DATABASE_URL', POSTGRES_URL],
 		['ENVIRONMENT', input.environment],
@@ -98,8 +96,6 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
 		['FABRIKA_ZEROPS_PROXY_IAM_KEY', secrets.proxyKey],
 		['FABRIKA_ZEROPS_ACCESS_TOKEN', input.zeropsAccessToken],
-		['FABRIKA_ZEROPS_PROJECT_ID', input.projectId],
-		['FABRIKA_ZEROPS_SOURCE_RPC_KEY', secrets.sourceRpcKey],
 	])
 	if (input.apiBaseUrl !== undefined) {
 		// Only when the installation is not on the default region. Control spells it `_API_BASE_URL` while
@@ -140,7 +136,6 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 				['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 			]),
 		],
-		['source', source],
 		['control', control],
 		[
 			'proxy',
@@ -175,10 +170,8 @@ export const GENERATED_SECRET_KEYS: ReadonlyMap<PlatformDeployService, readonly 
 			'FABRIKA_IAM_PROVISIONING_KEY',
 			'FABRIKA_ZEROPS_PROXY_IAM_KEY',
 			'FABRIKA_ZEROPS_ACCESS_TOKEN',
-			'FABRIKA_ZEROPS_SOURCE_RPC_KEY',
 		],
 	],
-	['source', ['FABRIKA_SOURCE_RPC_KEY']],
 	['proxy', ['FABRIKA_IAM_KEY']],
 ])
 

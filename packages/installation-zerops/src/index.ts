@@ -50,11 +50,11 @@ is not consent.
   1. create the project and wait for it to be ACTIVE (\`--create-project\`; its id is printed before
      the wait), or read the one you named — and refuse a core package the tier does not match
   2. import ${PLATFORM_DEPLOY_ORDER.length + 2} services without code, and wait for the import's processes
-  3. generate seven secrets and mint the control plane's Zerops INTEGRATION token
+  3. generate six secrets and mint the control plane's Zerops INTEGRATION token
      (client role NO_ACCESS, ADMIN on this project only — never your personal token)
   4. pass 1: give the proxy an EMPTY manifest and build it, so it publishes one public hostname per
      HTTP port; the three platform hosts are then READ off those, never composed
-  5. write every remaining variable on all five runtime services
+  5. write every remaining variable on all four runtime services
   6. pass 2: hand the whole ordered sequence to \`platform deploy\`
   7. print the provisioning key — the CLI keeps no copy; it is held by iam and control in Zerops
 
@@ -91,26 +91,23 @@ Options (a flag beats the environment variable beside it):
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 
-Configures the installation's private source service, then creates and maintains the operator's SIDECAR REPOSITORY: the GitHub pipeline that calls
+Creates and maintains the operator's SIDECAR REPOSITORY: the GitHub pipeline that calls
 \`platform deploy\`, the tag it is pinned to, and the GitHub Environment holding this installation's
 credentials. ADR-0025 puts that pipeline in a repository the operator owns — fabrika ships the
 generator, never the pipeline, because one public repository cannot hold every account's credentials.
 
 Interactive and laptop-side. It does the whole job and CONFIRMS before every step that leaves the
-operator's disk: reading the project, configuring source, creating or pushing the repository, writing
-the Environment, and triggering the run.
-Declining any of them stops there and prints what to run instead; a re-run is safe.
+operator's disk: reading the project, reading its control and proxy services, creating or pushing the
+repository, writing the Environment, and triggering the run.
+Declining a write stops there and prints what to run instead; a re-run is safe. Declining the read of
+control and proxy only leaves the console and IAM origins out of what init prints.
 
-For an existing installation, init imports only a missing source service with a steady services-only
-document, waits for its exact processes, and writes one shared RPC key to source and control. A matching
-existing key is reused; a mismatch is refused. It also repairs the nonsecret project binding used by
-Control. Normal init leaves source in anonymous public-repository mode. GitHub App creation, activation,
-webhook configuration, and installation verification belong to the authenticated Control UI at
-\`Settings → Source\`. A leftover unkeyed or split GitHub App value is ignored, never adopted: since
-ADR-0029 the only credential source can use is a keyed one, so connect a new source in Control.
-Init never prompts for,
-writes, recovers, or prints GitHub App credentials, and no source credential reaches the sidecar or
-GitHub Environment.
+Init writes nothing to Zerops. It reads control and proxy only to print the console and IAM origins
+the installation records, and prints none it cannot verify. Public repositories deploy without a
+GitHub App. GitHub App creation, webhook configuration, and installation verification belong to the
+authenticated Control UI at \`Settings → Source\`; Control keeps the App keys in its vault (ADR-0029).
+Init never prompts for, writes, recovers, or prints GitHub App credentials, and no source credential
+reaches the sidecar or GitHub Environment.
 
 If an older init left an owner-only local recovery file, this release does not open or delete it. Since
 ADR-0029 there is nothing left to adopt it into: connect a new source in Control and delete the old
@@ -150,7 +147,7 @@ The order is a security property, not just a dependency: the application enforce
 (ADR-0022), so the proxy is deployed BEFORE control, and every environment write happens before any
 deploy. A run that cannot apply the manifest never reaches step 3. ${PLATFORM_CONCURRENT_DEPLOY.join(', ')} order
 NOTHING against each other — none calls a sibling at boot and none reads a variable another's build
-needs — so they build at once; a failure of one is reported with that service named, and the other two
+needs — so they build at once; a failure of one is reported with that service named, and the others
 are still followed to their end.
 
 The proxy manifest is MERGED, never replaced. On a shared project an application's entry lives in the

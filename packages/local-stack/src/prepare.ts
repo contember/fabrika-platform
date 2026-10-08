@@ -10,7 +10,6 @@ import { resolve } from 'node:path'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '../../installation-zerops/zerops/proxy-manifest'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
-import { localSourceCredentialFixture } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
@@ -74,7 +73,6 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	const existingFiles = requiredFiles.filter((file) => existsSync(resolve(directory, file)))
 	if (existingFiles.length === requiredFiles.length) {
 		await ensureObjectStorageSecrets(directory)
-		await ensureSourceSecrets(directory)
 		return
 	}
 	if (existingFiles.length > 0) {
@@ -89,15 +87,9 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	const provisioningKey = `px_${randomSecret()}`
 	const operationsSyncKey = randomSecret()
 	const githubWebhookSecret = randomSecret()
-	const sourceRpcKey = randomSecret()
 	const emulatorToken = randomSecret()
 	const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
-	const { privateKey: githubPrivateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 	const signingKeys = JSON.stringify([privateKey.export({ format: 'jwk' })])
-	const sourceCredentials = await localSourceCredentialFixture(
-		sourceRpcKey,
-		githubPrivateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
-	)
 
 	await Promise.all([
 		writeEnv(directory, 'platform-db.env', { POSTGRES_PASSWORD: platformDatabasePassword }),
@@ -124,12 +116,10 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
 			GITHUB_WEBHOOK_SECRET: githubWebhookSecret,
-			FABRIKA_ZEROPS_SOURCE_RPC_KEY: sourceRpcKey,
 			FABRIKA_CONTROL_VAULT_KEY: randomBase64Key(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: emulatorToken,
 			FABRIKA_ZEROPS_PROXY_IAM_KEY: proxyKey,
 		}),
-		writeEnv(directory, 'source.env', sourceCredentials),
 		writeEnv(directory, 'platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
 		writeEnv(directory, 'apps-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
 		writeEnv(directory, 'notes.env', {
@@ -160,29 +150,6 @@ async function ensureObjectStorageSecrets(directory: string): Promise<void> {
 		}],
 	}
 	await Bun.write(resolve(directory, 'object-storage-identities.json'), `${JSON.stringify(config, null, '\t')}\n`)
-}
-
-/** Add the private source service to an existing local state without rotating its durable credentials. */
-async function ensureSourceSecrets(directory: string): Promise<void> {
-	const control = await readEnv(directory, 'control.env')
-	const source = existsSync(resolve(directory, 'source.env')) ? await readEnv(directory, 'source.env') : null
-	const controlRpcKey = envValue(control, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY')
-	const sourceRpcKey = source === null ? undefined : envValue(source, 'FABRIKA_SOURCE_RPC_KEY')
-	if (controlRpcKey !== undefined && sourceRpcKey !== undefined && controlRpcKey !== sourceRpcKey) {
-		throw new Error('the local source RPC credentials do not match')
-	}
-	const rpcKey = controlRpcKey ?? sourceRpcKey ?? randomSecret()
-	if (source === null) {
-		const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
-		await writeEnv(
-			directory,
-			'source.env',
-			await localSourceCredentialFixture(rpcKey, privateKey.export({ format: 'pem', type: 'pkcs8' }).toString()),
-		)
-	} else if (sourceRpcKey === undefined) {
-		throw new Error('the local source environment has no RPC credential')
-	}
-	if (controlRpcKey === undefined) await writeEnv(directory, 'control.env', { ...control, FABRIKA_ZEROPS_SOURCE_RPC_KEY: rpcKey })
 }
 
 function envValue(values: Record<string, string>, key: string): string | undefined {

@@ -12,7 +12,6 @@
 		{ "path": "./packages/builder" },
 		{ "path": "./packages/canvas-kernel" },
 		{ "path": "./packages/github-app" },
-		{ "path": "./packages/source-zerops" },
 		{ "path": "./packages/app" },
 		{ "path": "./packages/proxy-contract" },
 		{ "path": "./packages/proxy" },
