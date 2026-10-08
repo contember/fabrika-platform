@@ -31,6 +31,11 @@
 			"types": "./src/cloudflare.ts",
 			"default": "./src/cloudflare.ts"
 		},
+		"./contract": {
+			"bun": "./src/contract/index.ts",
+			"types": "./src/contract/index.ts",
+			"default": "./src/contract/index.ts"
+		},
 		"./testing": {
 			"bun": "./src/testing.ts",
 			"types": "./src/testing.ts",
@@ -45,8 +50,13 @@
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*"
 	},
+	"peerDependencies": {
+		"zod": "^3.25.76"
+	},
 	"devDependencies": {
+		"@fabrika/check": "workspace:*",
 		"@types/bun": "latest",
+		"typescript": "^5.9.3",
 		"zod": "^3.25.76"
 	}
 }
