@@ -106,7 +106,8 @@ squash rule applies to them.
 The same runner applies an application's migrations, with three additions:
 
 - **The ledger lives in the application's schema.** The runner accepts a
-  schema-qualified ledger for this purpose.
+  schema-qualified ledger for this purpose. Work unit A9 decides the
+  application's bundle name and ledger table name.
 - **Each applied migration has a checksum.** The runner records it and fails
   when an applied file has changed.
 - **Each migration runs under `lock_timeout` and `statement_timeout`.** A
@@ -121,8 +122,9 @@ share one database do not serialize each other.
 uses the application's runtime credential. The checker verifies migration file
 names, because an agent over MCP cannot run `fabrika db new`.
 
-The pre-1.0 squash rule does not cover application migrations. An application
-migration that has run is immutable; a change is a new file. Every new or changed
+The pre-1.0 squash rule does not cover application ledgers. An application
+migration that has run is immutable: a changed checksum fails the run, and a
+change is a new file. Every new or changed
 migration file is a widening in the approval diff
 ([ADR-0050](0050-approved-access.md)).
 
