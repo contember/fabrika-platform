@@ -1,4 +1,4 @@
-import { type PermissionEntry, type RoleDef } from '@fabrika/auth-core'
+import { type PermissionEntry } from '@fabrika/auth-core'
 
 import {
 	type CursorList,
@@ -12,10 +12,9 @@ import {
 } from '@fabrika/iam-contract'
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
-import { computePermissions } from '../resolve'
-import { makeRoleSource } from '../roles'
+import { resolvePermissionsAt } from '../resolve'
 import { adminAudit, type AdminContext, fail } from './context'
-import { dbRoleToDef, toGrantDtos } from './grant-support'
+import { toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
 
 function toPrincipalListItem(row: PrincipalRow): PrincipalListItem {
@@ -104,17 +103,8 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
  * narrow question rather than an approximate answer to a broad one. Other apps' grants remain visible
  * in the grants list below, which is where a per-app view belongs.
  */
-async function effectivePermissionsForAdmin(c: AdminContext, row: PrincipalRow): Promise<PermissionEntry[]> {
-	const app: string | null = c.app
-	const grants = await c.services.repositories.grants.getActiveGrantsForApp(row.id, app)
-	const isBootstrapAdmin = row.type === 'user' && row.email !== null
-		&& c.services.config.bootstrapAdmins.has(normalizeEmailIdentity(row.email))
-	const appRoles: Record<string, RoleDef> = {}
-	for (const dbRole of await c.services.repositories.appSchema.listRoles(app)) {
-		appRoles[dbRole.role_key] = dbRoleToDef(dbRole)
-	}
-	const roleSource = makeRoleSource(appRoles)
-	return computePermissions({ app, grants, isBootstrapAdmin }, roleSource)
+function effectivePermissionsForAdmin(c: AdminContext, row: PrincipalRow): Promise<PermissionEntry[]> {
+	return resolvePermissionsAt(c.services, row, c.app)
 }
 
 export async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Promise<PrincipalListItem> {

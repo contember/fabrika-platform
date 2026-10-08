@@ -1,4 +1,4 @@
-import { type IssueKeyInput, type PermissionEntry, type RoleDef } from '@fabrika/auth-core'
+import { type IssueKeyInput, type PermissionEntry } from '@fabrika/auth-core'
 
 import {
 	type CursorList,
@@ -9,12 +9,10 @@ import {
 	type ShareLinkListItem,
 } from '@fabrika/iam-contract'
 import { type CredentialGrantRow, type CredentialRow } from '../db'
-import { normalizeEmailIdentity } from '../email-identity'
 import { issueKey } from '../issue'
-import { computePermissions } from '../resolve'
-import { makeRoleSource } from '../roles'
+import { resolvePermissionsAt } from '../resolve'
 import { adminAudit, type AdminContext, fail } from './context'
-import { dbRoleToDef, knownApps } from './grant-support'
+import { knownApps } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
 function toShareLinkListItem(row: CredentialRow, grants: CredentialGrantRow[]): ShareLinkListItem {
@@ -109,14 +107,7 @@ async function effectiveIssuerPermissions(c: AdminContext, app: string): Promise
 		// carries its own resolved permission set, which is global by construction.
 		return c.admin.permissions
 	}
-	const grants = await c.services.repositories.grants.getActiveGrantsForApp(principal.id, app)
-	const isBootstrapAdmin = principal.type === 'user' && principal.email !== null
-		&& c.services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
-	const appRoles: Record<string, RoleDef> = {}
-	for (const dbRole of await c.services.repositories.appSchema.listRoles(app)) {
-		appRoles[dbRole.role_key] = dbRoleToDef(dbRole)
-	}
-	return computePermissions({ app, grants, isBootstrapAdmin }, makeRoleSource(appRoles))
+	return resolvePermissionsAt(c.services, principal, app)
 }
 
 export async function revokeShareLinkUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {

@@ -29,7 +29,7 @@ import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
 import { logError } from '../log'
 import { generateRequestId } from '../request-id'
-import { resolveUserPermissions } from '../resolve'
+import { resolvePermissionsAt } from '../resolve'
 import type { Services } from '../services'
 import { getSigner, verifyAccessToken } from '../signing'
 import { type AdminContext, AdminUseCaseError, getAppSchema, provisionApiKey, putAppSchema, revokeApiKey } from './handlers'
@@ -112,12 +112,7 @@ export async function resolveAdmin(
 		if (principalStatus(principal) === 'disabled') {
 			return { ok: false, status: 403, reason: 'disabled' }
 		}
-		const permissions = await resolveUserPermissions({
-			repositories: services.repositories,
-			principal,
-			bootstrapAdmins: services.config.bootstrapAdmins,
-			app: IAM_APP,
-		})
+		const permissions = await resolvePermissionsAt(services, principal, IAM_APP)
 		return { ok: true, admin: { id: principal.id, type: principal.type, label: principal.label, permissions } }
 	}
 

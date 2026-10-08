@@ -24,7 +24,7 @@ import { clientMetadata } from './oauth-client'
 import type { ManagedOAuthClient, OAuthConfig } from './oauth-config'
 import { pkceChallenge } from './oidc'
 import { unixNow } from './repositories/sql'
-import { resolveUserPermissions } from './resolve'
+import { resolvePermissionsAt } from './resolve'
 import { generateToken, hashToken, timingSafeEqualHex } from './secret'
 import type { Services } from './services'
 import { getSigner, verifyResourceAccessToken } from './signing'
@@ -225,12 +225,7 @@ async function grantAuthority(
 	if (session === null || session.app !== null || session.principal_id !== grant.principal_id || !sessionUsable(session, services.config)) return null
 	const principal = await services.repositories.principals.getPrincipalById(grant.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
-	const live = await resolveUserPermissions({
-		repositories: services.repositories,
-		principal,
-		app: grant.app,
-		bootstrapAdmins: services.config.bootstrapAdmins,
-	})
+	const live = await resolvePermissionsAt(services, principal, grant.app)
 	return { principal, scopes, permissions: narrowPermissions(live, ceiling) }
 }
 

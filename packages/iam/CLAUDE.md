@@ -146,6 +146,18 @@ fails if that stops being true — it is the guard, not documentation of one.
   repository with exact actions, and the CLI passes the operator's list. An expiry or action refusal
   is `not_allowed` over RPC and a 400 naming the problem on the admin share-link path
   (`IssueOutcome.problem`).
+- **AN APPLICATION TOKEN CARRIES ONLY THE GRANTS OF ITS OWN APP ID (ADR-0022 rule 6).** Every
+  permission question goes through `resolvePermissionsAt` (`src/resolve.ts`): a cross-app (`NULL`)
+  grant and the bootstrap `admin` reach a token only when the app is a PLATFORM AUDIENCE
+  (`Config.platformAudiences`: `propustka`, `vozka`, `operations`, plus every `ADMIN_AUDIENCES` entry).
+  An application's id is `<app>@<env>` (`appEnvironmentId`, `@fabrika/auth-core`), so a grant, role or
+  key of `notes@stage` never reaches `notes@prod`. The registry is separate from `ADMIN_AUDIENCES`
+  on purpose: Operations is a platform service, not an admin gateway. Never resolve permissions with a
+  hand-rolled grant query — the admin views and the delegation checks call the same function.
+- **AN APPLICATION ISSUES NO CREDENTIALS.** `issueKey` and `revokeKey` answer `not_allowed` to every
+  caller whose verified app is not a platform audience, the provisioning key included, on the binding
+  and over `/rpc/*` alike (one `createIamRpc` object serves both). `listPrincipals` for an application
+  lists only holders of a grant in that app id, never a cross-app holder.
 - **`revokeKey` ACTS ONLY ON A CREDENTIAL OF THE CALLER'S VERIFIED APP.** Any other credential,
   including a cross-app (`app IS NULL`) one, is `not_found` — the answer for an unknown id — so one
   app can neither end nor probe another app's keys.

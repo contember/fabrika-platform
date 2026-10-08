@@ -227,12 +227,13 @@ export class PrincipalRepository {
 	 * not machine principals. Disabled users ARE returned (the caller decides whether to hide
 	 * them) so their labels still resolve. Ordered by label for a stable picker.
 	 */
-	async getPrincipalsForApp(app: string): Promise<PrincipalRow[]> {
+	async getPrincipalsForApp(app: string, options: { includeCrossApp: boolean }): Promise<PrincipalRow[]> {
+		const appFilter = options.includeCrossApp ? '(g.app IS NULL OR g.app = ?)' : 'g.app = ?'
 		const { results } = await this.db
 			.prepare(`SELECT DISTINCT p.* FROM principals p
 				JOIN grants g ON g.principal_id = p.id
 				WHERE p.type = 'user'
-					AND (g.app IS NULL OR g.app = ?)
+					AND ${appFilter}
 					AND (g.expires_at IS NULL OR g.expires_at > ?)
 				ORDER BY p.label`)
 			.bind(app, unixNow())

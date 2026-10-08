@@ -44,7 +44,8 @@ import { exchangeAuthCode } from './handoff'
 import { issueKey, revokeKey } from './issue'
 import { logError } from './log'
 import { acceptRequestId } from './request-id'
-import { buildServices } from './services'
+import { reachesCrossAppAuthority } from './resolve'
+import { buildServices, type Services } from './services'
 import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
@@ -227,7 +228,10 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				if (res.caller.type === undefined || res.caller.permissions.length === 0) {
 					return { ok: false, reason: 'not_allowed' }
 				}
-				const rows = await services.repositories.principals.getPrincipalsForApp(res.verifiedApp)
+				// An application sees the people holding a grant of its own app id, never a cross-app holder.
+				const rows = await services.repositories.principals.getPrincipalsForApp(res.verifiedApp, {
+					includeCrossApp: reachesCrossAppAuthority(services.config, res.verifiedApp),
+				})
 				const principals: PrincipalListItem[] = rows.map((p) => ({
 					id: p.id,
 					type: p.type,
@@ -251,7 +255,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				if (!res.ok) {
 					return { ok: false, reason: res.reason }
 				}
-				if (res.caller.type === undefined) {
+				if (res.caller.type === undefined || isApplicationCaller(services, res.verifiedApp)) {
 					// An anonymous credential cannot revoke — there is no accountable principal.
 					return { ok: false, reason: 'not_allowed' }
 				}
@@ -300,7 +304,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				if (!res.ok) {
 					return { ok: false, reason: res.reason }
 				}
-				if (res.caller.type === undefined) {
+				if (res.caller.type === undefined || isApplicationCaller(services, res.verifiedApp)) {
 					// An anonymous credential cannot issue — delegation + audit require an accountable principal.
 					return { ok: false, reason: 'not_allowed' }
 				}
@@ -348,6 +352,14 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			}
 		},
 	}
+}
+
+/**
+ * True when the verified app is an application rather than a platform audience. An application issues
+ * no credentials (ADR-0022 rule 5), so its token may not reach `issueKey` or `revokeKey` on any transport.
+ */
+function isApplicationCaller(services: Services, verifiedApp: string): boolean {
+	return !services.config.platformAudiences.has(verifiedApp)
 }
 
 /**

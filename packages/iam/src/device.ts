@@ -29,7 +29,7 @@ import type { Env } from './env'
 import { pkceChallenge } from './oidc'
 import type { DeviceAuthorizationRow, DeviceReceiptRow } from './repositories/device'
 import { unixNow } from './repositories/sql'
-import { resolveUserPermissions } from './resolve'
+import { resolvePermissionsAt } from './resolve'
 import { generateToken, hashToken, timingSafeEqualHex } from './secret'
 import type { Services } from './services'
 import { getSigner, verifyAccessToken } from './signing'
@@ -160,12 +160,7 @@ export async function approveDeviceAuthorization(services: Services, env: Env, r
 	const row = await inspectedRow(services, input)
 	if (!row) return { ok: false, reason: 'invalid_attempt' }
 	if (row.expires_at <= unixNow()) return { ok: false, reason: 'expired' }
-	const permissions = await resolveUserPermissions({
-		repositories: services.repositories,
-		principal,
-		bootstrapAdmins: services.config.bootstrapAdmins,
-		app: row.app,
-	})
+	const permissions = await resolvePermissionsAt(services, principal, row.app)
 	const request = requestFromRow(row)
 	if (!request.permissions.every((action) => permits(permissions, action, input.scope))) return { ok: false, reason: 'not_allowed' }
 	const consent: DeviceAuthorizationConsent = {
@@ -224,12 +219,7 @@ export async function exchangeDeviceAuthorization(services: Services, raw: unkno
 	if (consent.consentId !== input.consentId) return { ok: false, reason: 'consent_mismatch' }
 	const principal = row.approver_id === null ? null : await activeHuman(services, row.approver_id)
 	const permissions = principal
-		? await resolveUserPermissions({
-			repositories: services.repositories,
-			principal,
-			bootstrapAdmins: services.config.bootstrapAdmins,
-			app: row.app,
-		})
+		? await resolvePermissionsAt(services, principal, row.app)
 		: []
 	if (
 		!principal || !services.config.adminAudiences.has(row.app) || !consent.permissions.every((action) => permits(permissions, action, consent.scope))

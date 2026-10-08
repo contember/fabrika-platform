@@ -5,8 +5,11 @@ import { createHarness, type Harness, seedInlineGrant, seedService, seedUser } f
 // deduped enumeration (`getPrincipalsForApp`) — an operator only ever sees the roster of
 // the app it is scoped to. Plus `Db.listPrincipals`, the admin directory + its `q` search.
 
+const CROSS_APP = { includeCrossApp: true }
+const OWN_APP = { includeCrossApp: false }
+
 describe('Db.getPrincipalsForApp', () => {
-	test('returns app + cross-app users, excludes other apps and services, dedups, flags disabled', () => {
+	test('a platform roster returns app + cross-app users, excludes other apps and services, dedups, flags disabled', () => {
 		const h = createHarness()
 
 		const inPoplach = seedUser(h.sqlite, { sub: 'a', email: 'a@poplach.test' })
@@ -28,7 +31,7 @@ describe('Db.getPrincipalsForApp', () => {
 		const service = seedService(h.sqlite, { commonName: 'ci-bot' })
 		seedInlineGrant(h.sqlite, service, ['report.write'], null, 'poplach')
 
-		return h.repositories.principals.getPrincipalsForApp('poplach').then((rows) => {
+		return h.repositories.principals.getPrincipalsForApp('poplach', CROSS_APP).then((rows) => {
 			const ids = rows.map((r) => r.id)
 			expect(new Set(ids)).toEqual(new Set([inPoplach, crossApp, disabled, multiGrant]))
 			expect(ids).not.toContain(inOpice) // other app's user excluded
@@ -38,14 +41,26 @@ describe('Db.getPrincipalsForApp', () => {
 		})
 	})
 
-	test('an app with only the cross-app user still returns it; an unknown app returns just cross-app', async () => {
+	test('a platform roster of an unknown app returns just the cross-app user', async () => {
 		const h = createHarness()
 		const crossApp = seedUser(h.sqlite, { sub: 'b', email: 'b@x.test' })
 		seedInlineGrant(h.sqlite, crossApp, ['*'], null, null)
 		const opiceOnly = seedUser(h.sqlite, { sub: 'c', email: 'c@opice.test' })
 		seedInlineGrant(h.sqlite, opiceOnly, ['project.read'], null, 'opice')
 
-		expect((await h.repositories.principals.getPrincipalsForApp('whatever')).map((r) => r.id)).toEqual([crossApp])
+		expect((await h.repositories.principals.getPrincipalsForApp('whatever', CROSS_APP)).map((r) => r.id)).toEqual([crossApp])
+	})
+
+	test('an application roster holds only the grants of its own app id, never a cross-app holder', async () => {
+		const h = createHarness()
+		const crossApp = seedUser(h.sqlite, { sub: 'b', email: 'b@x.test' })
+		seedInlineGrant(h.sqlite, crossApp, ['*'], null, null)
+		const member = seedUser(h.sqlite, { sub: 'm', email: 'm@notes.test' })
+		seedInlineGrant(h.sqlite, member, ['note.read'], null, 'notes@prod')
+		const staging = seedUser(h.sqlite, { sub: 's', email: 's@notes.test' })
+		seedInlineGrant(h.sqlite, staging, ['note.read'], null, 'notes@stage')
+
+		expect((await h.repositories.principals.getPrincipalsForApp('notes@prod', OWN_APP)).map((r) => r.id)).toEqual([member])
 	})
 
 	test('expired grants do not make a user a member', async () => {
@@ -56,7 +71,7 @@ describe('Db.getPrincipalsForApp', () => {
 			'INSERT INTO grants (id, principal_id, permissions, app, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
 			['g-exp', expired, JSON.stringify(['project.read']), 'poplach', 1, Math.floor(Date.now() / 1000)],
 		)
-		expect(await h.repositories.principals.getPrincipalsForApp('poplach')).toEqual([])
+		expect(await h.repositories.principals.getPrincipalsForApp('poplach', CROSS_APP)).toEqual([])
 	})
 
 	test('the roster is app-scoped — a poplach read never includes an opice-only user', async () => {
@@ -68,7 +83,7 @@ describe('Db.getPrincipalsForApp', () => {
 		const opicePerson = seedUser(h.sqlite, { sub: 'o-sub', email: 'someone@opice.test' })
 		seedInlineGrant(h.sqlite, opicePerson, ['project.read'], null, 'opice')
 
-		const emails = (await h.repositories.principals.getPrincipalsForApp('poplach')).map((r) => r.email)
+		const emails = (await h.repositories.principals.getPrincipalsForApp('poplach', CROSS_APP)).map((r) => r.email)
 		expect(new Set(emails)).toEqual(new Set(['op@poplach.test', 'teammate@poplach.test']))
 		expect(emails).not.toContain('someone@opice.test')
 	})

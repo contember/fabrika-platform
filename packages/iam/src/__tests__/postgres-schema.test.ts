@@ -368,9 +368,16 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 		expect(await db.grants.listGrants(p.id)).toHaveLength(4)
 		expect(await db.grants.getActiveGrants(p.id)).toHaveLength(3) // the expired one drops out
-		expect((await db.grants.getActiveGrantsForApp(p.id, 'opice')).map((g) => g.role_key).sort()).toEqual(['admin', 'auditor', 'editor'])
-		// A null app is fail-safe: only cross-app (NULL) grants match.
-		expect((await db.grants.getActiveGrantsForApp(p.id, null)).map((g) => g.role_key)).toEqual(['admin'])
+		expect((await db.grants.getActiveGrantsForApp(p.id, 'opice', { includeCrossApp: true })).map((g) => g.role_key).sort()).toEqual([
+			'admin',
+			'auditor',
+			'editor',
+		])
+		// Without cross-app grants (every application token), only the app's own grants match.
+		expect((await db.grants.getActiveGrantsForApp(p.id, 'opice', { includeCrossApp: false })).map((g) => g.role_key).sort()).toEqual([
+			'auditor',
+			'editor',
+		])
 		expect((await db.grants.getGrantById(global.id))?.role_key).toBe('admin')
 
 		expect(await db.grants.deleteGrant(global.id)).toBe(true)
@@ -402,8 +409,10 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			expiresAt: now() - 1,
 		})
 
-		const roster = await db.principals.getPrincipalsForApp('opice')
+		const roster = await db.principals.getPrincipalsForApp('opice', { includeCrossApp: true })
 		expect(roster.map((p) => p.email)).toEqual(['alice@x.cz', 'bob@x.cz'])
+		const ownApp = await db.principals.getPrincipalsForApp('opice', { includeCrossApp: false })
+		expect(ownApp.map((p) => p.email)).toEqual(['alice@x.cz'])
 	})
 
 	test('app vocabulary: reconcile is atomic, prunes app-origin rows and preserves custom ones', async () => {

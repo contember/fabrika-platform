@@ -44,15 +44,16 @@ export class GrantRepository {
 	}
 
 	/**
-	 * Active grants that apply to the calling `app` — the authz path. A grant counts
-	 * when its `app` is NULL (cross-app) OR equals the verified calling app. When `app`
-	 * is null (no verified app), only cross-app (NULL) grants match — fail-safe.
+	 * Active grants that apply to the calling `app` — the authz path. A grant counts when its `app`
+	 * equals the verified calling app, and a cross-app (NULL) grant counts only when `includeCrossApp`
+	 * says so: `resolvePermissionsAt` decides that, and it is true for platform audiences only.
 	 */
-	async getActiveGrantsForApp(principalId: string, app: string | null): Promise<GrantRow[]> {
+	async getActiveGrantsForApp(principalId: string, app: string, options: { includeCrossApp: boolean }): Promise<GrantRow[]> {
+		const appFilter = options.includeCrossApp ? '(app = ? OR app IS NULL)' : 'app = ?'
 		const { results } = await this.db
 			.prepare(`SELECT * FROM grants
 				WHERE principal_id = ?
-					AND (app IS NULL OR app = ?)
+					AND ${appFilter}
 					AND (expires_at IS NULL OR expires_at > ?)`)
 			.bind(principalId, app, unixNow())
 			.all<GrantRow>()

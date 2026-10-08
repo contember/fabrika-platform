@@ -1,4 +1,4 @@
-import { MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
+import { MAX_KEY_LIFETIME_SECONDS, type PermissionEntry } from '@fabrika/auth-core'
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { PROVISIONING_ADMIN_ID } from '../auth'
@@ -6,6 +6,7 @@ import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { pkceChallenge, randomToken } from '../oidc'
 import { createIamRpc } from '../rpc'
+import { handleRpcHttp } from '../rpc-http'
 import { buildServices } from '../services'
 import { signAccessToken } from '../tokens'
 import { seedUser } from './helpers/harness'
@@ -252,6 +253,30 @@ function auditRows(db: Database): AuditRow[] {
 	return db.query<AuditRow, []>('SELECT * FROM audit_events').all()
 }
 
+const RPC_KEY = 'index-test-rpc-key-0123456789abcdef'
+
+function rpcRequest(method: string, input: unknown): Request {
+	return new Request(`https://iam.test/rpc/${method}`, {
+		method: 'POST',
+		headers: { authorization: `Bearer ${RPC_KEY}`, 'content-type': 'application/json' },
+		body: JSON.stringify(input),
+	})
+}
+
+/** The access token the proxy would mint for an application, as that application forwards it. */
+async function applicationToken(env: Env, principalId: string, app: string, permissions: PermissionEntry[] = []): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	return signAccessToken(buildServices(env), env, {
+		app,
+		subject: principalId,
+		type: 'user',
+		label: principalId,
+		permissions,
+		issuedAt: now,
+		expiresAt: now + 300,
+	})
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe('Propustka RPC entrypoint (TEST-4)', () => {
@@ -259,7 +284,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	beforeEach(() => {
 		db = freshDb()
-		db.run("INSERT INTO app_actions (app, action, description) VALUES ('reports', 'report.read', NULL)")
+		db.run("INSERT INTO app_actions (app, action, description) VALUES ('operations', 'report.read', NULL)")
 	})
 
 	test('device management on the Worker binding matches the shared RPC implementation', async () => {
@@ -304,7 +329,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
 
-		const result = await worker.mintFromKey({ app: 'reports', key: 'px_does-not-exist', requestId: 'req-mint' })
+		const result = await worker.mintFromKey({ app: 'operations', key: 'px_does-not-exist', requestId: 'req-mint' })
 		expect(result).toEqual({ ok: false, reason: 'invalid_key' })
 
 		await settle(ctx)
@@ -317,7 +342,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(row?.reason).toBe('invalid_key')
 		expect(row?.credential_id).toBeNull()
 		expect(row?.principal_id).toBeNull()
-		expect(row?.app).toBe('reports')
+		expect(row?.app).toBe('operations')
 	})
 
 	test('issueKey happy path (anonymous share link): one iam.credential.create audit row carrying grants, never the plaintext token', async () => {
@@ -328,7 +353,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 		const permissions = [{ action: 'report.read', scope: null }]
 		const result = await worker.issueKey({
-			app: 'reports',
+			app: 'operations',
 			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions,
@@ -367,7 +392,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 		// Issue an anonymous share link under the provisioning admin so the grant is covered.
 		const issued = await worker.issueKey({
-			app: 'reports',
+			app: 'operations',
 			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions: [{ action: 'report.read', scope: null }],
@@ -378,11 +403,11 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		}
 
 		// Before revoke the key mints fine.
-		const before = await worker.mintFromKey({ app: 'reports', key: issued.token, requestId: 'req-mint-before' })
+		const before = await worker.mintFromKey({ app: 'operations', key: issued.token, requestId: 'req-mint-before' })
 		expect(before.ok).toBe(true)
 
 		const revoked = await worker.revokeKey({
-			app: 'reports',
+			app: 'operations',
 			credential: PROVISIONING_KEY,
 			requestId: 'req-revoke',
 			id: issued.id,
@@ -390,12 +415,12 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(revoked).toEqual({ ok: true, revoked: true })
 
 		// Minting from the revoked key now fails with reason 'invalid_key'.
-		const after = await worker.mintFromKey({ app: 'reports', key: issued.token, requestId: 'req-mint-after' })
+		const after = await worker.mintFromKey({ app: 'operations', key: issued.token, requestId: 'req-mint-after' })
 		expect(after).toEqual({ ok: false, reason: 'invalid_key' })
 
 		// A second revoke is idempotent.
 		const again = await worker.revokeKey({
-			app: 'reports',
+			app: 'operations',
 			credential: PROVISIONING_KEY,
 			requestId: 'req-revoke-2',
 			id: issued.id,
@@ -415,7 +440,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
 		const issued = await worker.issueKey({
-			app: 'reports',
+			app: 'operations',
 			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions: [{ action: 'report.read', scope: null }],
@@ -425,9 +450,9 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 			throw new Error('expected issueKey to succeed')
 		}
 
-		const crossApp = await worker.revokeKey({ app: 'billing', credential: PROVISIONING_KEY, requestId: 'req-revoke', id: issued.id })
+		const crossApp = await worker.revokeKey({ app: 'vozka', credential: PROVISIONING_KEY, requestId: 'req-revoke', id: issued.id })
 		expect(crossApp).toEqual({ ok: false, reason: 'not_found' })
-		expect((await worker.mintFromKey({ app: 'reports', key: issued.token, requestId: 'req-mint' })).ok).toBe(true)
+		expect((await worker.mintFromKey({ app: 'operations', key: issued.token, requestId: 'req-mint' })).ok).toBe(true)
 		await settle(ctx)
 		expect(auditRows(db).filter((r) => r.action === 'iam.credential.revoke')).toHaveLength(0)
 	})
@@ -435,7 +460,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 	test('issueKey: a missing catalog action or an unbounded expiry is refused over the binding', async () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
-		const base = { app: 'reports', credential: PROVISIONING_KEY, requestId: 'req-issue' }
+		const base = { app: 'operations', credential: PROVISIONING_KEY, requestId: 'req-issue' }
 		expect(await worker.issueKey({ ...base, permissions: [{ action: 'report.delete' }], expiresAt: inOneHour() })).toEqual({
 			ok: false,
 			reason: 'not_allowed',
@@ -448,11 +473,73 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(auditRows(db)).toHaveLength(0)
 	})
 
+	test('issueKey and revokeKey refuse a caller whose verified app is an application, the provisioning key included', async () => {
+		const ctx = makeCtx()
+		const worker = makeEntrypoint(ctx, makeEnv(db))
+		db.run("INSERT INTO app_actions (app, action, description) VALUES ('notes@prod', 'note.read', NULL)")
+		const issued = await worker.issueKey({
+			app: 'notes@prod',
+			credential: PROVISIONING_KEY,
+			requestId: 'req-issue-app',
+			permissions: [{ action: 'note.read', scope: null }],
+			expiresAt: inOneHour(),
+		})
+		expect(issued).toEqual({ ok: false, reason: 'not_allowed' })
+		const revoked = await worker.revokeKey({ app: 'notes@prod', credential: PROVISIONING_KEY, requestId: 'req-revoke-app', id: 'any' })
+		expect(revoked).toEqual({ ok: false, reason: 'not_allowed' })
+		await settle(ctx)
+		expect(auditRows(db)).toHaveLength(0)
+	})
+
+	test('an application token cannot issue or revoke a key, over the binding or over HTTP', async () => {
+		const ctx = makeCtx()
+		const env = makeEnv(db)
+		const worker = makeEntrypoint(ctx, env)
+		db.run("INSERT INTO app_actions (app, action, description) VALUES ('notes@prod', 'note.read', NULL)")
+		const principalId = seedUser(db, { sub: 'notes-owner', email: 'owner@notes.test' })
+		await env.REPOSITORIES.grants.createGrant({ principalId, app: 'notes@prod', permissions: ['note.read'], grantedBy: principalId })
+		const credential = await applicationToken(env, principalId, 'notes@prod')
+		const issueInput = { app: 'notes@prod', credential, requestId: 'req-app-issue', principalId, expiresAt: inOneHour() }
+		expect(await worker.issueKey(issueInput)).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await worker.revokeKey({ app: 'notes@prod', credential, requestId: 'req-app-revoke', id: 'any' })).toEqual({
+			ok: false,
+			reason: 'not_allowed',
+		})
+
+		const rpc = createIamRpc(env, ctx)
+		const overHttp = await handleRpcHttp(rpcRequest('issueKey', issueInput), rpc, RPC_KEY)
+		const issuedOverHttp: unknown = await overHttp.json()
+		expect(issuedOverHttp).toEqual({ ok: false, reason: 'not_allowed' })
+		const revokeOverHttp = await handleRpcHttp(rpcRequest('revokeKey', { app: 'notes@prod', credential, requestId: 'r', id: 'any' }), rpc, RPC_KEY)
+		const revokedOverHttp: unknown = await revokeOverHttp.json()
+		expect(revokedOverHttp).toEqual({ ok: false, reason: 'not_allowed' })
+		await settle(ctx)
+		expect(auditRows(db)).toHaveLength(0)
+	})
+
+	test('listPrincipals for an application token lists only holders of a grant in that app id', async () => {
+		const ctx = makeCtx()
+		const env = makeEnv(db)
+		const worker = makeEntrypoint(ctx, env)
+		const member = seedUser(db, { sub: 'notes-member', email: 'member@notes.test' })
+		await env.REPOSITORIES.grants.createGrant({ principalId: member, app: 'notes@prod', permissions: ['note.read'], grantedBy: member })
+		const operator = seedUser(db, { sub: 'operator', email: 'operator@platform.test' })
+		await env.REPOSITORIES.grants.createGrant({ principalId: operator, app: null, permissions: ['*'], grantedBy: operator })
+		const staging = seedUser(db, { sub: 'staging-member', email: 'member@stage.test' })
+		await env.REPOSITORIES.grants.createGrant({ principalId: staging, app: 'notes@stage', permissions: ['note.read'], grantedBy: staging })
+
+		const credential = await applicationToken(env, member, 'notes@prod', [{ action: 'note.read', scope: null, source: 'grant' }])
+		const result = await worker.listPrincipals({ app: 'notes@prod', credential, requestId: 'req-app-list' })
+		expect(result.ok).toBe(true)
+		if (!result.ok) throw new Error('expected a roster')
+		expect(result.principals.map((principal) => principal.id)).toEqual([member])
+	})
+
 	test('revokeKey: unknown id → not_found', async () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
 		const result = await worker.revokeKey({
-			app: 'reports',
+			app: 'operations',
 			credential: PROVISIONING_KEY,
 			requestId: 'req-revoke-missing',
 			id: 'does-not-exist',

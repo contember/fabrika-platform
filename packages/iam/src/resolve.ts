@@ -3,6 +3,7 @@ import type { GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import { logWarn } from './log'
 import { makeRoleSource } from './roles'
+import type { Config } from './services'
 import { parseStoredPermissions } from './stored-permissions'
 
 // ── Pure resolution (no I/O) — testable with in-memory rows ───────────────────
@@ -227,36 +228,29 @@ function toRoleDef(row: RoleRow): RoleDef {
 }
 
 /**
- * Fetch a user's explicit grants and compute their permissions (grants ∪ bootstrap). The calling
- * app's roles are loaded once and passed to the pure `computePermissions`. Users authenticate via
- * propustka's own OIDC session — there are no IdP groups in the permission decision.
+ * Whether cross-app grants and the bootstrap `admin` reach a token for `app` (ADR-0022 rule 6). Only a
+ * platform audience gets them: every application receives its token in cleartext, and a token minted for
+ * one application must not carry authority over another, or another environment of itself.
  */
-export async function resolveUserPermissions(args: {
-	repositories: IamRepositories
-	principal: PrincipalRow
-	bootstrapAdmins: ReadonlySet<string>
-	/** Calling app; grants are filtered to it (or NULL = cross-app). */
-	app: string | null
-}): Promise<PermissionEntry[]> {
-	const { repositories, principal, bootstrapAdmins, app } = args
-
-	const grants = await repositories.grants.getActiveGrantsForApp(principal.id, app)
-	const isBootstrapAdmin = principal.email !== null && bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
-
-	const roles = await loadRoleSource(repositories, app)
-	return computePermissions({ app, grants, isBootstrapAdmin }, roles)
+export function reachesCrossAppAuthority(config: Pick<Config, 'platformAudiences'>, app: string): boolean {
+	return config.platformAudiences.has(app)
 }
 
 /**
- * Service principals: explicit grants only — no bootstrap — scoped to the calling app
- * (NULL = cross-app).
+ * A principal's permissions AT ONE APP — the question every mint front, the admin views and the
+ * delegation checks ask. A platform audience sees the principal's cross-app grants and, for a bootstrap
+ * admin, the global `admin`; an application sees only the grants of its own app id. The app's roles are
+ * loaded once and passed to the pure `computePermissions`.
  */
-export async function resolveServicePermissions(
-	repositories: IamRepositories,
+export async function resolvePermissionsAt(
+	services: { readonly repositories: IamRepositories; readonly config: Pick<Config, 'bootstrapAdmins' | 'platformAudiences'> },
 	principal: PrincipalRow,
-	app: string | null,
+	app: string,
 ): Promise<PermissionEntry[]> {
-	const grants = await repositories.grants.getActiveGrantsForApp(principal.id, app)
-	const roles = await loadRoleSource(repositories, app)
-	return computePermissions({ app, grants, isBootstrapAdmin: false }, roles)
+	const crossApp = reachesCrossAppAuthority(services.config, app)
+	const grants = await services.repositories.grants.getActiveGrantsForApp(principal.id, app, { includeCrossApp: crossApp })
+	const isBootstrapAdmin = crossApp && principal.type === 'user' && principal.email !== null
+		&& services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
+	const roles = await loadRoleSource(services.repositories, app)
+	return computePermissions({ app, grants, isBootstrapAdmin }, roles)
 }

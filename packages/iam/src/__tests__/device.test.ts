@@ -21,7 +21,7 @@ import {
 } from '../device'
 import type { Env } from '../env'
 import { pkceChallenge, randomToken } from '../oidc'
-import { resolveServicePermissions } from '../resolve'
+import { resolvePermissionsAt } from '../resolve'
 import { createIamRpc } from '../rpc'
 import { handleRpcHttp } from '../rpc-http'
 import { hashToken } from '../secret'
@@ -125,14 +125,14 @@ describe('device authorization', () => {
 		expect(stored?.issued_by).toBe(principalId)
 		expect(stored?.app).toBe('vozka')
 		expect(stored?.expires_at).toBe(setup.consent.keyExpiresAt)
-		const grants = await h.repositories.grants.getActiveGrantsForApp(first.receipt.principalId, 'vozka')
+		const grants = await h.repositories.grants.getActiveGrantsForApp(first.receipt.principalId, 'vozka', { includeCrossApp: true })
 		expect(grants).toHaveLength(1)
 		expect(grants[0]?.scope_value).toBe(scope.value)
 		const minted = await mintFromKey(services, env, { app: 'other', key: first.token, requestId: 'wrong-audience' })
 		expect(minted.result).toEqual({ ok: false, reason: 'invalid_key' })
 		const service = await h.repositories.principals.getPrincipalById(first.receipt.principalId)
 		if (!service) throw new Error('missing service principal')
-		const effective = await resolveServicePermissions(h.repositories, service, 'vozka')
+		const effective = await resolvePermissionsAt(services, service, 'vozka')
 		// The persisted scope must not become global or cover another application.
 		expect(grants[0]?.scope_type).toBe('app')
 		expect(permits(effective, 'app.manage')).toBe(false)

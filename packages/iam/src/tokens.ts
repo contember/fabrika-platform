@@ -28,7 +28,7 @@ import { sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow } from './db'
 import { principalStatus } from './db'
 import type { Env } from './env'
-import { resolveServicePermissions, resolveUserPermissions } from './resolve'
+import { resolvePermissionsAt } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'
 import { getSigner } from './signing'
@@ -71,12 +71,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	}
 
 	// Resolve permissions for the requesting app. Sessions are a USER credential (OIDC login).
-	const permissions = await resolveUserPermissions({
-		repositories: services.repositories,
-		principal,
-		bootstrapAdmins: services.config.bootstrapAdmins,
-		app: input.app,
-	})
+	const permissions = await resolvePermissionsAt(services, principal, input.app)
 
 	const now = Math.floor(Date.now() / 1000)
 	// Clamped to the session, exactly as `mintFromKey` clamps to the credential's expiry: a token
@@ -187,14 +182,7 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 		return { ok: false, reason: 'disabled' }
 	}
 
-	const resolved = principal.type === 'service'
-		? await resolveServicePermissions(services.repositories, principal, app)
-		: await resolveUserPermissions({
-			repositories: services.repositories,
-			principal,
-			bootstrapAdmins: services.config.bootstrapAdmins,
-			app,
-		})
+	const resolved = await resolvePermissionsAt(services, principal, app)
 
 	// Inline grants on a bound credential are a DOWNSCOPE restriction: keep only what the principal
 	// actually holds (effective = resolve(principal) ∩ inline). No inline → the principal's full set.

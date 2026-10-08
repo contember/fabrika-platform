@@ -39,6 +39,11 @@ export interface Config {
 	 * EMPTY means no JWT may administer at all, which is the fail-closed end of the same registry.
 	 */
 	readonly adminAudiences: ReadonlySet<string>
+	/**
+	 * App ids of the installation's own services. Only a token for one of them carries cross-app grants
+	 * and the bootstrap `admin`; an application token carries the grants of its own app id and nothing else.
+	 */
+	readonly platformAudiences: ReadonlySet<string>
 	readonly environment: string
 	/** Create a real local admin session without contacting an external OIDC provider. */
 	readonly localDevLogin: boolean
@@ -58,6 +63,14 @@ export interface Config {
  * the audience an installation gets when it names none.
  */
 export const DEFAULT_ADMIN_AUDIENCES: ReadonlySet<string> = new Set(['vozka'])
+
+/** IAM itself, the console (Control's app id) and Operations — the services every installation runs. */
+export const DEFAULT_PLATFORM_AUDIENCES: ReadonlySet<string> = new Set(['propustka', 'vozka', 'operations'])
+
+/** An admin audience is a console gateway, so it is a platform service too, whatever it is named. */
+export function platformAudiencesFor(adminAudiences: ReadonlySet<string>): ReadonlySet<string> {
+	return new Set([...DEFAULT_PLATFORM_AUDIENCES, ...adminAudiences])
+}
 
 /** An app id as every fabrika config writes one — the shape an `aud` claim can actually carry. */
 const APP_ID = /^[a-z0-9][a-z0-9-]*$/
@@ -100,6 +113,7 @@ export function buildServices(env: Env): Services {
 		throw new Error('At least one authentication method must be enabled')
 	}
 	const oidc = oidcEnabled ? buildOidc(env) : null
+	const adminAudiences = parseAdminAudiences(env.ADMIN_AUDIENCES)
 	return {
 		repositories: env.REPOSITORIES,
 		oidc,
@@ -111,7 +125,8 @@ export function buildServices(env: Env): Services {
 				emails: parseJsonStringArray(env.HUMAN_EMAILS),
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
-			adminAudiences: parseAdminAudiences(env.ADMIN_AUDIENCES),
+			adminAudiences,
+			platformAudiences: platformAudiencesFor(adminAudiences),
 			environment,
 			localDevLogin: environment === LOCAL_ENVIRONMENT && env.LOCAL_DEV_LOGIN === 'true',
 			authentication: {

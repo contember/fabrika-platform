@@ -9,7 +9,7 @@ import type { OAuthConfig } from '../../oauth-config'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
 import { hashToken } from '../../secret'
-import { type Config, DEFAULT_ADMIN_AUDIENCES, type Services } from '../../services'
+import { type Config, DEFAULT_ADMIN_AUDIENCES, platformAudiencesFor, type Services } from '../../services'
 import { getSigner } from '../../signing'
 import { allMigrations } from './migrations'
 
@@ -173,6 +173,8 @@ export interface MakeServicesOptions {
 	bootstrapAdmins?: ReadonlySet<string>
 	/** App ids whose proxy token may administer (`ADMIN_AUDIENCES`). Defaults to the console gateway. */
 	adminAudiences?: ReadonlySet<string>
+	/** App ids whose tokens carry cross-app grants and the bootstrap admin. Defaults to the production registry. */
+	platformAudiences?: ReadonlySet<string>
 	/** Central human-admission allowlist. Defaults to `{ emailDomains: ['contember.com'], emails: [] }`. */
 	human?: { emailDomains?: readonly string[]; emails?: readonly string[] }
 	/** OIDC client. Defaults to one with injected (offline) discovery metadata; tests override for the callback flow. */
@@ -203,6 +205,7 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 		},
 		bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
 		adminAudiences: options.adminAudiences ?? DEFAULT_ADMIN_AUDIENCES,
+		platformAudiences: options.platformAudiences ?? platformAudiencesFor(options.adminAudiences ?? DEFAULT_ADMIN_AUDIENCES),
 		environment,
 		localDevLogin: environment === 'local' && options.localDevLogin === true,
 		authentication: {
