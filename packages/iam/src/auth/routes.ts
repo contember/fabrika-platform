@@ -3,11 +3,13 @@
  * is intercepted upstream by `src/app.ts` for the proxy. Admin admission belongs to `admin/router.ts`.
  */
 import type { RequestContext } from '../env'
+import { INVITATION_ACCEPT_PATH } from '../membership'
 import { logoutPage } from '../password-pages'
 import { generateRequestId } from '../request-id'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { methodNotAllowed, safeRedirect } from './http'
+import { handleInvitation } from './invitations'
 import { handleLogin } from './login'
 import { handleCallback, handleOidcStart } from './oidc'
 import type { AuthEnv } from './oidc-flight'
@@ -56,6 +58,9 @@ export async function handleAuth(
 	}
 	if (url.pathname === '/auth/password/reset') {
 		return handlePasswordAction(request, services, ctx, 'reset', requestId)
+	}
+	if (url.pathname === INVITATION_ACCEPT_PATH) {
+		return handleInvitation(request, services, ctx, requestId)
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

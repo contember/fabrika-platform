@@ -69,7 +69,7 @@ export function setPasswordPage(input: {
 			message(input.error)
 		}<p>Use ${PASSWORD_MIN_CODE_POINTS}–${PASSWORD_MAX_CODE_POINTS} characters. Long passphrases are welcome.</p>
 		<form method="post" action="${path}">
-			<input id="password-action-token" type="hidden" name="token" value="${escapeHtml(input.token ?? '')}">
+			<input id="action-token" type="hidden" name="token" value="${escapeHtml(input.token ?? '')}">
 			${passwordInput('password', 'New password', 'new-password')}
 			<button type="submit">${title}</button>
 		</form>`,
@@ -100,6 +100,26 @@ export function invalidActionPage(): Response {
 	)
 }
 
+/** The page an invitation link opens. The one-time token rides in the fragment and the script copies it into the form. */
+export function invitationPage(): Response {
+	return htmlPage(
+		'Accept invitation',
+		`<h1>Accept invitation</h1><p>Accept the invitation with the account you are signed in to here. It must use the invited address.</p>
+		<form method="post" action="/auth/invitations/accept">
+			<input id="action-token" type="hidden" name="token" value="">
+			<button type="submit">Accept invitation</button>
+		</form>`,
+	)
+}
+
+/** An outcome of accepting an invitation. `signIn` adds the way back for a browser with no session here. */
+export function invitationOutcomePage(
+	input: { readonly title: string; readonly text: string; readonly status: number; readonly signIn?: string },
+): Response {
+	const signIn = input.signIn === undefined ? '' : `<p><a class="button" href="${escapeHtml(input.signIn)}">Sign in</a></p>`
+	return htmlPage(input.title, `<h1>${escapeHtml(input.title)}</h1><p>${escapeHtml(input.text)}</p>${signIn}`, input.status)
+}
+
 function passwordInput(name: string, label: string, autocomplete: 'current-password' | 'new-password'): string {
 	return `<label>${label}<span class="password"><input id="${name}" name="${name}" type="password" autocomplete="${autocomplete}" required><button type="button" data-show="${name}">Show</button></span></label>`
 }
@@ -120,7 +140,7 @@ export function htmlPage(title: string, content: string, status = 200, formActio
 		escapeHtml(title)
 	}</title>
 	<style nonce="${nonce}">:root{font-family:system-ui,sans-serif;color-scheme:light dark}body{max-width:30rem;margin:4rem auto;padding:1rem}form{display:grid;gap:1rem}label{display:grid;gap:.35rem}input,button,.button{font:inherit;padding:.65rem}.password{display:flex}.password input{flex:1}.error{color:#c33}hr{margin:2rem 0}.button{display:inline-block}</style></head><body><main>${content}</main>
-	<script nonce="${nonce}">var actionToken=document.getElementById('password-action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?'Hide':'Show';} );});</script></body></html>`
+	<script nonce="${nonce}">var actionToken=document.getElementById('action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?'Hide':'Show';} );});</script></body></html>`
 	return new Response(html, {
 		status,
 		headers: {
