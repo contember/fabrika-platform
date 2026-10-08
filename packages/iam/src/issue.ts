@@ -1,43 +1,32 @@
 /**
- * Issuing credentials. Two outputs, one delegation rule:
- *   - `issueKey` — an opaque, stored, revocable `px_` credential (API key / share link). The token's
- *     EFFECTIVE permissions are resolved at use time (`mintFromKey`); this just persists the row.
- *   - `issueJwt` — a stateless passthrough access token, signed here and returned. Audit-only, not
- *     revocable, TTL-bounded.
+ * Issuing credentials: `issueKey` writes an opaque, stored, revocable `px_` credential (API key /
+ * share link). The token's EFFECTIVE permissions are resolved at use time (`mintFromKey`); this just
+ * persists the row.
  *
- * Both are DELEGATED: the issuer (resolved server-side from the forwarded credentials, never
+ * Issuance is DELEGATED: the issuer (resolved server-side from the forwarded credentials, never
  * self-asserted) may only grant what it itself holds — the same `permits` rule `can()` uses. The
  * Worker entrypoint resolves the issuer and writes the audit row; this module is the pure-ish core.
  */
 
 import {
 	API_KEY_PREFIX,
-	DEFAULT_TOKEN_TTL_SECONDS,
-	type IssueJwtInput,
-	type IssueJwtResult,
 	type IssueKeyInput,
 	type IssueKeyResult,
 	type KeyGrant,
-	MAX_PASSTHROUGH_TTL_SECONDS,
 	type PermissionEntry,
 	permits,
 	type RevokeKeyInput,
 	type RevokeKeyResult,
 } from '@fabrika/auth-core'
-import { uuidv7 } from '@fabrika/platform'
 import type { CredentialGrantRow } from './db'
-import type { Env } from './env'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
-import { signAccessToken } from './tokens'
 
 /** The resolved caller (issuer), as `index.ts` resolves it from the forwarded JWT. */
 interface Issuer {
 	id: string
 	permissions: PermissionEntry[]
 }
-
-type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 /**
  * Delegation check (pure): every requested grant must be covered by the issuer's permissions on its
@@ -50,11 +39,6 @@ export function findUncoveredGrant(issuerPermissions: PermissionEntry[], grants:
 		}
 	}
 	return null
-}
-
-/** A requested grant → a `PermissionEntry` (source 'grant'). */
-function grantToEntry(grant: KeyGrant): PermissionEntry {
-	return { action: grant.action, scope: grant.scope ?? null, source: 'grant' }
 }
 
 // ── issueKey ──────────────────────────────────────────────────────────────────
@@ -115,7 +99,7 @@ export async function issueKey(
 		return { result: { ok: false, reason: 'not_allowed' } }
 	}
 	// A self-bound key carries the issuer's LIVE permissions with no inline downscope, so it is a
-	// standing copy of whoever asked for it. When the issuer is itself a 300-second passthrough token
+	// standing copy of whoever asked for it. When the issuer is itself a 300-second access token
 	// that is a permanent credential minted from a temporary one — so this mode must state an expiry
 	// (SEC-7). The standalone mode is exempt: its grants are frozen and delegation-checked.
 	if (input.principalId !== undefined && input.expiresAt === undefined) {
@@ -137,37 +121,6 @@ export async function issueKey(
 		grants: grants.map((g) => ({ action: g.action, scopeType: g.scope?.type ?? null, scopeValue: g.scope?.value ?? null })),
 	})
 	return { result: { ok: true, token, id, principalId: input.principalId }, auditLabel: input.label }
-}
-
-// ── issueJwt ──────────────────────────────────────────────────────────────────
-
-export async function issueJwt(
-	services: Services,
-	env: MintEnv,
-	input: IssueJwtInput,
-	issuer: Issuer,
-): Promise<{ result: IssueJwtResult; auditLabel?: string }> {
-	if (input.permissions.length === 0) {
-		return { result: { ok: false, reason: 'not_allowed' } }
-	}
-	if (findUncoveredGrant(issuer.permissions, input.permissions) !== null) {
-		return { result: { ok: false, reason: 'not_allowed' } }
-	}
-
-	const now = Math.floor(Date.now() / 1000)
-	const ttl = Math.min(input.ttl ?? DEFAULT_TOKEN_TTL_SECONDS, MAX_PASSTHROUGH_TTL_SECONDS)
-	const expiresAt = now + Math.max(1, ttl)
-	// A fresh subject id is the audit reference (there is no DB row); the token is anonymous (no ptype).
-	const id = uuidv7()
-	const token = await signAccessToken(services, env, {
-		app: input.app,
-		subject: id,
-		label: input.label ?? null,
-		permissions: input.permissions.map(grantToEntry),
-		issuedAt: now,
-		expiresAt,
-	})
-	return { result: { ok: true, token, expiresAt, id }, auditLabel: input.label }
 }
 
 // ── revokeKey ───────────────────────────────────────────────────────────────────

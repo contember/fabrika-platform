@@ -6,10 +6,7 @@
  * access token as `PROXY_TOKEN_HEADER`. What is left for an app is small and fixed:
  *   - `authenticate(request)` — read that header and verify it LOCALLY against IAM's published JWKS
  *     (signature, `iss`, `aud`, `exp`), then build an `AuthContext`. The header is never trusted blindly.
- *   - `redeemKey(token)` — redeem a share-link capability OFF the gate path. Those requests arrive
- *     through a `public`/`service` gate and the app redeems the capability itself; there is no proxy
- *     equivalent by design.
- *   - the MANAGEMENT surface (`listPrincipals` / `issueKey` / `issueJwt` / `revokeKey`).
+ *   - `listPrincipals` — the app's people directory.
  *
  * There is NO gate evaluation here, no session→token exchange, and no cookie is ever written.
  *
@@ -19,21 +16,10 @@
  * service that owns identity.
  */
 
-import { API_KEY_PREFIX, type IamRpc, type MintFromKeyResult, PROXY_TOKEN_HEADER, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
+import { type IamRpc, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { buildAuthContext, IamClient } from './client'
 import { readRequestId } from './request'
-import type {
-	AuthContext,
-	IssuedJwt,
-	IssuedKey,
-	IssueFailure,
-	IssueJwtRequest,
-	IssueKeyRequest,
-	ListPrincipalsFailure,
-	PrincipalList,
-	RevokedKey,
-	RevokeFailure,
-} from './types'
+import type { AuthContext, ListPrincipalsFailure, PrincipalList } from './types'
 import { TokenVerifier } from './verify'
 
 // ── Public config surfaces ──────────────────────────────────────────────────────
@@ -68,9 +54,9 @@ export type AuthFailureReason =
 	| 'unavailable'
 
 /**
- * The outcome of `authenticate` / `redeemKey`. A DECIDED NEGATIVE (`invalid_token`,
- * `unknown_principal`) is not the same as "could not consult IAM" (`unavailable`, 503) — the same
- * three-state rule `@fabrika/proxy` implements. Neither method throws for either case.
+ * The outcome of `authenticate`. A DECIDED NEGATIVE (`invalid_token`, `unknown_principal`) is not the
+ * same as "could not consult IAM" (`unavailable`, 503) — the same three-state rule `@fabrika/proxy`
+ * implements. `authenticate` throws for neither case.
  */
 export type AuthResult =
 	| { ok: true; context: AuthContext }
@@ -97,46 +83,6 @@ export function anonymousContext(): AuthContext {
 	}
 }
 
-// ── Small helpers ────────────────────────────────────────────────────────────────
-
-/** Hex SHA-256 — the key-cache index, so no plaintext credential is ever held in memory as a map key. */
-async function digest(value: string): Promise<string> {
-	const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
-	let hex = ''
-	for (const byte of bytes) {
-		hex += byte.toString(16).padStart(2, '0')
-	}
-	return hex
-}
-
-/**
- * Per-binding cache of the access token minted from a `px_` share credential, keyed by the credential's
- * SHA-256 digest and bounded — a share link redeemed on every request would otherwise pin an unbounded
- * number of plaintext credentials for the process lifetime.
- */
-const KEY_CACHE_MAX_ENTRIES = 256
-const keyTokenCache = new WeakMap<IamRpc, Map<string, { token: string; expiresAt: number }>>()
-
-function keyCacheFor(binding: IamRpc): Map<string, { token: string; expiresAt: number }> {
-	let cache = keyTokenCache.get(binding)
-	if (cache === undefined) {
-		cache = new Map()
-		keyTokenCache.set(binding, cache)
-	}
-	return cache
-}
-
-/** Insert with a hard bound, evicting the oldest entry (Map preserves insertion order). */
-function rememberKey(cache: Map<string, { token: string; expiresAt: number }>, key: string, entry: { token: string; expiresAt: number }): void {
-	if (!cache.has(key) && cache.size >= KEY_CACHE_MAX_ENTRIES) {
-		const oldest = cache.keys().next()
-		if (oldest.done !== true) {
-			cache.delete(oldest.value)
-		}
-	}
-	cache.set(key, entry)
-}
-
 // ── Iam ──────────────────────────────────────────────────────────────────────────
 
 /** Internal construction config — `createIam` assembles this; apps never build it directly. */
@@ -149,8 +95,8 @@ interface IamConfig {
 
 /**
  * The request-time IAM surface. Build it with `createIam` (the only intended entry point — the
- * constructor takes an internal config). Bundles the management methods, token verification and
- * share-link redemption, all bound to the env + app id resolved at construction.
+ * constructor takes an internal config). Bundles token verification and `listPrincipals`, both bound
+ * to the env + app id resolved at construction.
  */
 export class Iam {
 	private readonly management: IamClient
@@ -172,18 +118,6 @@ export class Iam {
 		return this.management.listPrincipals(req)
 	}
 
-	issueKey(req: Request, input: IssueKeyRequest): Promise<IssuedKey | IssueFailure> {
-		return this.management.issueKey(req, input)
-	}
-
-	issueJwt(req: Request, input: IssueJwtRequest): Promise<IssuedJwt | IssueFailure> {
-		return this.management.issueJwt(req, input)
-	}
-
-	revokeKey(req: Request, id: string): Promise<RevokedKey | RevokeFailure> {
-		return this.management.revokeKey(req, id)
-	}
-
 	// ── Authentication ────────────────────────────────────────────────────────────
 
 	/**
@@ -197,54 +131,6 @@ export class Iam {
 			return Promise.resolve({ ok: false, reason: 'no_token', status: 401 })
 		}
 		return this.contextFor(token, readRequestId(request))
-	}
-
-	/**
-	 * Redeem an opaque `px_` share credential (or a passthrough JWT) into an `AuthContext` OFF the gate
-	 * path — the seam a capability/share link uses, where the token rides a query param or a cookie
-	 * rather than satisfying a gate. A `px_` key is exchanged once via `mintFromKey` and cached per
-	 * binding; anything else is verified locally with no IAM call. Never throws — map a failure to a 404
-	 * so the surface does not reveal whether the resource exists.
-	 */
-	async redeemKey(token: string): Promise<AuthResult> {
-		const requestId = crypto.randomUUID()
-		if (!token.startsWith(API_KEY_PREFIX)) {
-			// A passthrough JWT — verify locally, no IAM call.
-			return await this.contextFor(token, requestId)
-		}
-
-		const cache = keyCacheFor(this.binding)
-		const index = await digest(token)
-		const now = Math.floor(Date.now() / 1000)
-		const cached = cache.get(index)
-		if (cached !== undefined && cached.expiresAt - now > TOKEN_REFRESH_SKEW_SECONDS) {
-			const result = await this.contextFor(cached.token, requestId)
-			if (result.ok || result.reason === 'unavailable') {
-				// Unverifiable because IAM is down is NOT evidence against the cached token — say so and stop.
-				return result
-			}
-			// A cached token that no longer verifies (rotated key, revoked issuer) is dropped, not trusted.
-			cache.delete(index)
-		}
-
-		let minted: MintFromKeyResult
-		try {
-			minted = await this.binding.mintFromKey({ app: this.appId, key: token, requestId })
-		} catch {
-			// A transport failure is "we could not consult IAM", never a decided negative. Never log the
-			// error object: it can carry the credential or a request URL.
-			return { ok: false, reason: 'unavailable', status: 503 }
-		}
-		if (!minted.ok) {
-			return minted.reason === 'invalid_key'
-				? { ok: false, reason: 'invalid_token', status: 401 }
-				: { ok: false, reason: 'unknown_principal', status: 403 }
-		}
-		const result = await this.contextFor(minted.token, requestId)
-		if (result.ok) {
-			rememberKey(cache, index, { token: minted.token, expiresAt: minted.expiresAt })
-		}
-		return result
 	}
 
 	// ── Internals ─────────────────────────────────────────────────────────────────

@@ -10,10 +10,9 @@
 // The two runtime handles it needs are the `Env` ports and a `RequestContext`; nothing here knows
 // what fills them.
 //
-// SECURITY MODEL (unchanged by the move): the management RPCs (`issueKey`/`issueJwt`/`revokeKey`/
-// `listPrincipals`) resolve the CALLER server-side from a forwarded propustka-native credential
-// (`resolveCaller` — a `px_token` verified against our own signing keys, or a `px_` key), never
-// app-asserted. On a valid `px_token` the credential's `aud` identifies the app and supersedes the
+// SECURITY MODEL (unchanged by the move): the management RPCs (`issueKey`/`revokeKey`/`listPrincipals`)
+// resolve the CALLER server-side from a forwarded propustka-native credential (`resolveCaller` — a
+// `px_token` verified against our own signing keys, or a `px_` key), never app-asserted. On a valid `px_token` the credential's `aud` identifies the app and supersedes the
 // SDK-passed `app` for the audit row. Note what this does NOT cover: `mintToken`, `mintFromKey`,
 // `getJwks` and `audit` authenticate no caller of their own — on Workers the binding's
 // unreachability is what stands in for that, so an HTTP transport MUST supply an equivalent (see
@@ -25,8 +24,6 @@ import type {
 	ExchangeAuthCodeResult,
 	IamHandoffRpc,
 	IamRpc,
-	IssueJwtInput,
-	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -44,7 +41,7 @@ import { resolveCaller } from './auth'
 import { approveDeviceAuthorization, denyDeviceAuthorization, inspectDeviceAuthorization, listOwnDeviceAuthorizations } from './device'
 import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
-import { issueJwt, issueKey, revokeKey } from './issue'
+import { issueKey, revokeKey } from './issue'
 import { logError } from './log'
 import { buildServices } from './services'
 import { getSigner } from './signing'
@@ -213,7 +210,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 					return { ok: false, reason: res.reason }
 				}
 				// Authorize: a real principal-bound MEMBER holding ≥1 permission on the app. An anonymous
-				// credential (a passthrough JWT) and a zero-grant user cannot enumerate the roster.
+				// credential (a share link) and a zero-grant user cannot enumerate the roster.
 				if (res.caller.type === undefined || res.caller.permissions.length === 0) {
 					return { ok: false, reason: 'not_allowed' }
 				}
@@ -322,52 +319,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				return result
 			} catch (err) {
 				logError(`issueKey failed for request '${input.requestId}'`, err)
-				ctx.waitUntil(
-					services.repositories.audit.writeAuthLog({
-						requestId: input.requestId,
-						app: input.app,
-						kind: 'authenticate',
-						principalId: null,
-						decision: 'deny',
-						reason: 'internal_error',
-					}),
-				)
-				return { ok: false, reason: 'unknown_principal' }
-			}
-		},
-
-		async issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
-			try {
-				const res = await resolveCaller(services, env, { app: input.app, credential: input.credential, requestId: input.requestId })
-				if (!res.ok) {
-					return { ok: false, reason: res.reason }
-				}
-				if (res.caller.type === undefined) {
-					return { ok: false, reason: 'not_allowed' }
-				}
-				const issuer = res.caller
-				const app = res.verifiedApp
-				const { result, auditLabel } = await issueJwt(services, env, input, { id: issuer.id, permissions: issuer.permissions })
-
-				if (result.ok) {
-					// iam.passthrough.issue audit — issuer, label, grants, expiry; NEVER the signed token.
-					ctx.waitUntil(
-						services.repositories.audit.writeAuditEvent({
-							requestId: input.requestId,
-							principalId: issuer.id,
-							principalLabel: issuer.label ?? issuer.id,
-							app,
-							action: 'iam.passthrough.issue',
-							resourceType: 'token',
-							resourceId: result.id,
-							metadata: { label: auditLabel ?? null, grants: input.permissions, expiresAt: result.expiresAt },
-						}),
-					)
-				}
-
-				return result
-			} catch (err) {
-				logError(`issueJwt failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,

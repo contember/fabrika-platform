@@ -34,15 +34,6 @@ export const issueKeySchema = z.object({
 	...(label === undefined ? {} : { label }),
 	...(expiresAt === undefined ? {} : { expiresAt }),
 })).catch(rejectRpcInput)
-export const issueJwtSchema = z.object({ label: optionalString, ttl: optionalNumber, ...caller, permissions: z.array(grantSchema) })
-	.transform(({ app, credential, requestId, permissions, label, ttl }) => ({
-		app,
-		credential,
-		requestId,
-		permissions,
-		...(label === undefined ? {} : { label }),
-		...(ttl === undefined ? {} : { ttl }),
-	})).catch(rejectRpcInput)
 export const revokeKeySchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
 export const listPrincipalsSchema = z.object(caller).catch(rejectRpcInput)
 export const auditSchema = z.object({

@@ -80,7 +80,7 @@ export type AdminResolution =
  *     permissions;
  *   - a `px_<key>` machine credential (CI / provisioning) → `resolveCaller`.
  * No bearer is 401. Returns the caller + permissions; `handleAdmin` then enforces `iam.admin`. An ANONYMOUS credential
- * (a passthrough JWT / share link, no principal) is rejected — admin needs an accountable principal.
+ * (a share link, no principal) is rejected — admin needs an accountable principal.
  */
 export async function resolveAdmin(
 	services: Services,

@@ -9,7 +9,7 @@
 //
 // On Workers these methods sit behind a service binding, which is not addressable from outside the
 // account: "who may call this" is answered by the topology, so four of the eight methods authenticate
-// no caller at all. `issueKey`/`issueJwt`/`revokeKey`/`listPrincipals` resolve a caller from a
+// no caller at all. `issueKey`/`revokeKey`/`listPrincipals` resolve a caller from a
 // forwarded credential and are safe on their own — but `audit` would let anyone forge audit rows
 // against any app, and `mintToken`/`mintFromKey` are credential-checking oracles worth rate-limiting
 // even though they fail closed. Over HTTP the topology guarantees nothing, so it has to be replaced,
@@ -50,7 +50,7 @@
 // fresh code buys nothing. Handing the proxy the MANAGEMENT key instead would hand it `audit`, whose
 // surface is unauthenticated by design (fire-and-forget with a self-asserted app), so a compromised
 // proxy could forge audit rows for any app. It could not escalate through
-// `issueKey`/`issueJwt`/`revokeKey`/`listPrincipals` — those resolve a caller from a forwarded
+// `issueKey`/`revokeKey`/`listPrincipals` — those resolve a caller from a forwarded
 // credential and enforce delegation regardless of the transport key — but the audit trail is exactly
 // the thing that must survive a compromise of the edge. One extra env var buys that.
 //
@@ -62,7 +62,6 @@ import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationIn
 import {
 	auditSchema,
 	exchangeAuthCodeSchema,
-	issueJwtSchema,
 	issueKeySchema,
 	listPrincipalsSchema,
 	mintFromKeySchema,
@@ -127,8 +126,6 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: strin
 				return json(await rpc.mintFromKey(mintFromKeySchema.parse(body)))
 			case 'issueKey':
 				return json(await rpc.issueKey(issueKeySchema.parse(body)))
-			case 'issueJwt':
-				return json(await rpc.issueJwt(issueJwtSchema.parse(body)))
 			case 'revokeKey':
 				return json(await rpc.revokeKey(revokeKeySchema.parse(body)))
 			case 'listPrincipals':

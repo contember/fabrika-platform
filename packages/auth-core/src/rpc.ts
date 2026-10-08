@@ -125,13 +125,12 @@ export const HANDOFF_COOKIE_TTL_SECONDS = 10 * 60
  */
 export const AUTH_CODE_TTL_SECONDS = 120
 
-// ── Issuing credentials (issueKey) and passthrough tokens (issueJwt) ──────────────
+// ── Issuing credentials (issueKey) ──────────────────────────────────────────────
 //
-// `issueKey` mints an opaque, stored, revocable `px_` credential; `issueJwt` signs a stateless
-// passthrough access token (audit-only, TTL-bounded, not revocable). Both are DELEGATED: the issuer
-// is resolved server-side from the forwarded credentials and may only grant what it itself holds.
+// `issueKey` mints an opaque, stored, revocable `px_` credential. It is DELEGATED: the issuer is
+// resolved server-side from the forwarded credentials and may only grant what it itself holds.
 
-/** One grant on a `px_` credential / passthrough token — an action pattern + optional scope. */
+/** One grant on a `px_` credential — an action pattern + optional scope. */
 export interface KeyGrant {
 	action: string
 	/** Omitted/null = global (the issuer must hold the action globally). */
@@ -185,23 +184,6 @@ export type IssueKeyResult =
 	| { ok: true; token: string; id: string; principalId?: string }
 	| { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' | 'not_allowed' }
 
-export interface IssueJwtInput {
-	app: string
-	/** The propustka-native credential the ISSUER is resolved from (px_token / px_ key); null = absent. */
-	credential: string | null
-	requestId: string
-	/** Inline grants the passthrough token carries (frozen at issue). */
-	permissions: KeyGrant[]
-	label?: string
-	/** Requested lifetime (seconds); capped by the server. Defaults to the standard token TTL. */
-	ttl?: number
-}
-
-export type IssueJwtResult =
-	/** The signed passthrough token returned ONCE; `id` is its audit reference (no DB row to revoke). */
-	| { ok: true; token: string; expiresAt: number; id: string }
-	| { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' | 'not_allowed' }
-
 /**
  * A resolved caller identity + its frozen permission snapshot. Produced by `accessClaimsToResolved`
  * from a verified access token (`token.ts`); consumed where a principal's resolved perms are needed
@@ -218,11 +200,11 @@ export interface ResolvedPrincipal {
 export interface AuditInput {
 	app: string
 	requestId: string
-	/** NULL for an anonymous-credential event (a share link / passthrough JWT has no principal). */
+	/** NULL for an anonymous-credential event (a share link has no principal). */
 	principalId: string | null
 	/** Snapshot — survives principal deletion (the credential/token label for anonymous events). */
 	principalLabel: string
-	/** Set for an anonymous-credential event — the issuing credential / passthrough-token id. */
+	/** Set for an anonymous-credential event — the issuing credential id. */
 	credentialId?: string
 	action: string
 	resourceType: string
@@ -310,12 +292,6 @@ export interface IamRpc {
 	 * plaintext token ONCE; `id` is the durable handle for revoke.
 	 */
 	issueKey(input: IssueKeyInput): Promise<IssueKeyResult>
-	/**
-	 * Sign a stateless passthrough access token (audit-only, TTL-bounded, NOT revocable). Delegated
-	 * like `issueKey`. The caller carries the returned JWT directly; apps verify it locally with no
-	 * propustka round-trip.
-	 */
-	issueJwt(input: IssueJwtInput): Promise<IssueJwtResult>
 	/**
 	 * The public signing key set. The SDK fetches it ONCE per isolate (cached) over the binding —
 	 * which never traverses the Access edge — then verifies every permission token locally.

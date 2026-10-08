@@ -1,7 +1,7 @@
 import { parseAccessClaims, type PermissionEntry, permits, type Scope } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
-import { issueJwt, issueKey } from '../issue'
+import { issueKey } from '../issue'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
@@ -252,56 +252,5 @@ describe('mintFromKey failures', () => {
 		expect(await services.repositories.credentials.revokeCredential(id)).toBe(true)
 		const { result } = await mintFromKey(services, ENV, { app: 'a', key, requestId: 'r' })
 		expect(result).toEqual({ ok: false, reason: 'invalid_key' })
-	})
-})
-
-describe('issueJwt (passthrough)', () => {
-	test('signs a stateless anonymous token carrying the frozen grants', async () => {
-		const h = createHarness()
-		const services = h.makeServices({ issuer: ISSUER })
-		const issued = await issueJwt(services, ENV, {
-			app: 'opice',
-			credential: null,
-			requestId: 'r',
-			permissions: [{ action: 'event.ingest' }],
-			ttl: 3600,
-			label: 'CI passthrough',
-		}, { id: 'i', permissions: [perm('event.ingest')] })
-		expect(issued.result.ok).toBe(true)
-		if (!issued.result.ok) throw new Error('expected ok')
-		expect(issued.result.token.startsWith('eyJ')).toBe(true)
-
-		const claims = await verify(issued.result.token, 'opice')
-		expect(claims?.ptype).toBeUndefined()
-		expect(permits(claims?.perms ?? [], 'event.ingest')).toBe(true)
-		// No DB row was written — it is audit-only.
-		expect(await services.repositories.credentials.getCredentialById(issued.result.id)).toBeNull()
-	})
-
-	test('caps the requested ttl at the passthrough maximum', async () => {
-		const h = createHarness()
-		const services = h.makeServices({ issuer: ISSUER })
-		const now = Math.floor(Date.now() / 1000)
-		const issued = await issueJwt(services, ENV, {
-			app: 'a',
-			credential: null,
-			requestId: 'r',
-			permissions: [{ action: 'x' }],
-			ttl: 10 * 24 * 60 * 60, // 10 days — well over the 24h cap
-		}, { id: 'i', permissions: [perm('x')] })
-		if (!issued.result.ok) throw new Error('expected ok')
-		expect(issued.result.expiresAt - now).toBeLessThanOrEqual(24 * 60 * 60 + 1)
-	})
-
-	test('delegation applies to passthrough too', async () => {
-		const h = createHarness()
-		const services = h.makeServices({ issuer: ISSUER })
-		const issued = await issueJwt(services, ENV, {
-			app: 'a',
-			credential: null,
-			requestId: 'r',
-			permissions: [{ action: 'secret.read' }],
-		}, { id: 'i', permissions: [perm('public.read')] })
-		expect(issued.result).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 })

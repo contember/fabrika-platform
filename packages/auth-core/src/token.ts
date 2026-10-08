@@ -15,9 +15,9 @@
  * ONE shape, no `kind` discriminator — the optional `ptype` carries the distinction. Every token carries
  * `perms: PermissionEntry[]` (authorized via `permits` — scopes + wildcards) and an OPTIONAL
  * principal (`ptype`): present means the token is bound to a user/service principal; absent means an
- * anonymous credential (a share link / standalone JWT), whose `perms` are narrow scoped entries and
+ * anonymous credential (a share link), whose `perms` are narrow scoped entries and
  * whose audit actor is `label`. `sub` is the subject id either way — a principal id when bound, else
- * the issuing credential/token id.
+ * the issuing credential id.
  *
  * Pure: no jose, no I/O. Signing/verifying (key material) stays in the packages that own it.
  */
@@ -53,11 +53,6 @@ export const TOKEN_ALG = 'ES256'
 /** Default per-app access-token lifetime. Revocation/role changes take effect within this. */
 export const DEFAULT_TOKEN_TTL_SECONDS = 300
 /**
- * Hard cap on a `issueJwt` passthrough token's lifetime. A passthrough JWT is NOT revocable (no
- * stored row), so its TTL is its whole security window — bounded here (24 h) regardless of request.
- */
-export const MAX_PASSTHROUGH_TTL_SECONDS = 24 * 60 * 60
-/**
  * The SDK refreshes an access token this many seconds BEFORE it expires, so a request never rides a
  * token that expires mid-flight. Must be < the token TTL.
  */
@@ -68,14 +63,14 @@ export const TOKEN_REFRESH_SKEW_SECONDS = 30
 /**
  * The propustka access token. `perms` is always present (matched via `permits`); `ptype` is present
  * only when `sub` is a principal. `label` is the audit actor — the principal's label when bound, the
- * credential/jwt label otherwise (or null).
+ * credential label otherwise (or null).
  */
 export interface AccessTokenClaims {
 	/** Issuer — propustka's own origin (e.g. `https://propustka.example.com`). */
 	iss: string
 	/** The app id this token is scoped to. The SDK REJECTS a token whose `aud` is not its app. */
 	aud: string
-	/** Subject id: a principal id when `ptype` is set, else the issuing credential/token id. */
+	/** Subject id: a principal id when `ptype` is set, else the issuing credential id. */
 	sub: string
 	/** Issued-at (unix seconds). */
 	iat: number
@@ -85,7 +80,7 @@ export interface AccessTokenClaims {
 	perms: PermissionEntry[]
 	/** Present only when the token is bound to a principal (`sub` is that principal). */
 	ptype?: PrincipalType
-	/** Audit actor label — the principal's label, or the credential/jwt label, or null (anonymous). */
+	/** Audit actor label — the principal's label, or the credential label, or null (anonymous). */
 	label: string | null
 }
 
@@ -119,9 +114,9 @@ export interface AccessTokenParams {
 	iss: string
 	/** App id this token is for (becomes `aud`). */
 	app: string
-	/** Subject id (becomes `sub`) — a principal id when `type` is given, else a credential/token id. */
+	/** Subject id (becomes `sub`) — a principal id when `type` is given, else a credential id. */
 	subject: string
-	/** Principal type — omit for an anonymous credential (share link / standalone JWT). */
+	/** Principal type — omit for an anonymous credential (share link). */
 	type?: PrincipalType
 	/** Audit actor label, or null for an unlabeled anonymous token. */
 	label: string | null

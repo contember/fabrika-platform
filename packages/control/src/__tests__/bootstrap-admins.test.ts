@@ -74,7 +74,6 @@ const serviceIam: IamRpc = {
 	mintToken: () => Promise.resolve({ ok: false, reason: 'no_session' }),
 	mintFromKey: () => Promise.resolve({ ok: false, reason: 'invalid_key' }),
 	issueKey: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
-	issueJwt: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	getJwks: () =>
 		Promise.resolve({
 			keys: [servicePublicKey],

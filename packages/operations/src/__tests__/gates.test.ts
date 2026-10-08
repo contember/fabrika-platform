@@ -35,7 +35,6 @@ const jwksRpc: IamRpc = {
 	approveDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	denyDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	listOwnDeviceAuthorizations: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
-	issueJwt: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	getJwks: () => Promise.resolve(jwks),
 	listPrincipals: () => Promise.resolve({ ok: true, principals: [] }),
 	audit: () => Promise.resolve(),

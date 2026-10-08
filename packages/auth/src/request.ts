@@ -1,7 +1,6 @@
 // Reading the fabrika-native credential off the incoming Request, to forward to the IAM service's
-// management RPCs (issueKey / issueJwt / revokeKey / listPrincipals). Precedence: the token the PROXY
-// injected (the one it already verified), then an `Authorization: Bearer` (a machine `px_` key or a
-// passthrough JWT). None of this is a security boundary —
+// `listPrincipals` RPC. Precedence: the token the PROXY injected (the one it already verified), then
+// an `Authorization: Bearer` (a machine `px_` key). None of this is a security boundary —
 // IAM re-resolves and re-authorizes the caller server-side from this credential.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
@@ -10,7 +9,7 @@ import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 const RAY_HEADER = 'cf-ray'
 
 export interface ForwardedCredentials {
-	/** The native credential (a `px_` key / passthrough JWT / `px_token`), or null when absent. */
+	/** The native credential (a `px_` key / `px_token`), or null when absent. */
 	credential: string | null
 	/** cf-ray, or a fresh UUID when absent (e.g. local dev). */
 	requestId: string

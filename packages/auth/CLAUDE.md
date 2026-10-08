@@ -10,11 +10,10 @@ no gate evaluation here, no session→token exchange, no login bounce, and no co
 
 `createIam(env, opts)` is the single request-time entry point. It returns an `Iam` carrying:
 
-| Member                                                   | Semantics                                                                                                   |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `authenticate(request)`                                  | Read the proxy-injected `PROXY_TOKEN_HEADER`, verify it LOCALLY against the JWKS, return an `AuthContext`.  |
-| `redeemKey(token)`                                       | Redeem a share-link capability OFF the gate path (`px_` → one `mintFromKey`, cached; a JWT → local verify). |
-| `listPrincipals` / `issueKey` / `issueJwt` / `revokeKey` | The management surface, delegated to `IamClient`.                                                           |
+| Member                  | Semantics                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `authenticate(request)` | Read the proxy-injected `PROXY_TOKEN_HEADER`, verify it LOCALLY against the JWKS, return an `AuthContext`. |
+| `listPrincipals`        | The app's people directory, delegated to `IamClient`.                                                      |
 
 Around it: `anonymousContext()` (what an app sets on a `public`-gated request), `applyScope`,
 `requirePermission`, `UnauthenticatedError` / `ForbiddenError`, `TokenVerifier`, `HttpIamRpc`, and the
@@ -31,7 +30,7 @@ the service that owns identity.
 - **The proxy-injected token is NEVER trusted blindly.** `TokenVerifier` (`src/verify.ts`) checks the
   signature, `iss`, `aud` and `exp` against IAM's published JWKS on every request. A token for another
   app, from another issuer, or past its expiry is refused here even though the proxy already admitted it.
-- **`verify` / `authenticate` / `redeemKey` are THREE-STATE.** A decided negative (`invalid_token`,
+- **`verify` / `authenticate` are THREE-STATE.** A decided negative (`invalid_token`,
   `unknown_principal`) is not the same as "IAM could not be consulted" (`unavailable` → 503). Both
   deny; only the second is an incident. Never collapse the two, and never map a transport failure onto
   a `reason` that claims we checked. Neither method throws for either case.
@@ -41,10 +40,10 @@ the service that owns identity.
   cooldown lives in that same per-binding slot — a per-request verifier would otherwise reset it, and
   the bound would do nothing. An unknown `kid` forces at most ONE refetch per cooldown; a fetch failure
   never falls back to the stale key set.
-- **`redeemKey` is the ONE credential path that survives.** Share links are redeemed off the gate path:
-  those requests hit a `public`/`service` gate and the app redeems the capability itself. There is no
-  proxy equivalent by design. Its per-binding token cache is keyed by a SHA-256 digest (never the
-  plaintext credential) and hard-bounded.
+- **THE SDK ISSUES AND REDEEMS NOTHING.** An app reaches a credential only as the token the proxy
+  injected. A share link is a `px_` key the proxy resolves at a `service` gate, so it arrives as an
+  anonymous token like any other (ADR-0022). `HttpIamRpc` still carries `issueKey` / `revokeKey`
+  because they are `IamRpc` members other callers use, not SDK surface.
 - **THERE IS NO SECOND AUTHENTICATION MODEL HERE, and adding one back is the bug.** The SDK used to
   select a `FakeIamClient` plus synthetic personas from a `DEV` env var, resolved by `?__as=` / a
   cookie / a header, with a default persona holding a global-admin grant — so one misread flag handed

@@ -10,8 +10,8 @@ export { applyScope } from './scope'
 // The typed HTTP errors + the per-resource authorization helper a per-path gate cannot express.
 export { ForbiddenError, requirePermission, UnauthenticatedError } from './errors'
 export type { HttpError } from './errors'
-// Request-time surface: the single `createIam` entry point (verification + share-link redemption +
-// the management methods) and the anonymous context an app sets on a request the proxy admitted
+// Request-time surface: the single `createIam` entry point (verification + `listPrincipals`) and the
+// anonymous context an app sets on a request the proxy admitted
 // through a `public` gate.
 export { anonymousContext, createIam, Iam } from './iam'
 export type { AuthFailure, AuthFailureReason, AuthResult, CreateIamOptions, IamEnv } from './iam'
@@ -33,19 +33,7 @@ export { reconcileSchema, ReconcileSchemaError } from './provision'
 // The one schema for an app's declared vocabulary; every reader of an `AppSchema` parses with it.
 export { appSchemaSchema } from './app-schema'
 export type { ReconcileSchemaOptions } from './provision'
-export type {
-	AuthContext,
-	IssuedJwt,
-	IssuedKey,
-	IssueFailure,
-	IssueJwtRequest,
-	IssueKeyRequest,
-	ListPrincipalsFailure,
-	PrincipalIdentity,
-	PrincipalList,
-	RevokedKey,
-	RevokeFailure,
-} from './types'
+export type { AuthContext, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
 
 // The header the proxy injects its verified token on. Re-exported so an app never spells it out.
 export { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'

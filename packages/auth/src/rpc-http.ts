@@ -49,8 +49,6 @@ import type {
 	IamRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
-	IssueJwtInput,
-	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -80,7 +78,6 @@ const issueKeySuccessSchema = z.object({
 	id: z.string(),
 	principalId: z.string().optional().catch(undefined),
 }).transform(({ principalId, ...result }) => ({ ...result, ...(principalId === undefined ? {} : { principalId }) }))
-const issueJwtSuccessSchema = z.object({ token: z.string(), expiresAt: z.number().finite(), id: z.string() })
 const revokeSuccessSchema = z.object({ revoked: z.boolean() })
 const principalsSuccessSchema = z.object({
 	principals: z.array(z.object({
@@ -191,19 +188,6 @@ export class HttpIamRpc implements IamRpc {
 		return { ok: true, ...result.data }
 	}
 
-	async issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
-		const body = await this.call('issueJwt', input)
-		const failure = readFailure(body)
-		if (failure !== null) {
-			return { ok: false, reason: oneOf(failure, ISSUE_REASONS, 'not_allowed') }
-		}
-		const result = issueJwtSuccessSchema.safeParse(body)
-		if (!result.success) {
-			throw new IamTransportError('issueJwt')
-		}
-		return { ok: true, ...result.data }
-	}
-
 	async revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
 		const body = await this.call('revokeKey', input)
 		const failure = readFailure(body)
@@ -283,7 +267,7 @@ export class HttpIamRpc implements IamRpc {
 	}
 }
 
-/** The five delegation-path failure reasons `issueKey` / `issueJwt` / `listPrincipals` share. */
+/** The five delegation-path failure reasons `issueKey` / `revokeKey` / `listPrincipals` share. */
 const ISSUE_REASONS = ['missing_token', 'invalid_token', 'unknown_principal', 'disabled', 'not_allowed'] as const
 
 /** Distinguishes "the body was not JSON" from a body that decoded to something the readers reject. */

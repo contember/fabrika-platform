@@ -68,15 +68,6 @@ describe('allow — human', () => {
 })
 
 describe('allow — service', () => {
-	test('a passthrough JWT verifies locally with no IAM exchange', async () => {
-		const token = await signToken({}) // anonymous: no ptype
-		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'service' }] })
-		const response = await verify(verifyRequest({ bearer: token }))
-		expect(response.status).toBe(204)
-		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBe(token)
-		expect(iam.mintFromKeyCalls).toBe(0)
-	})
-
 	test('a px_ key is exchanged, then served from cache', async () => {
 		const token = await signUserToken()
 		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'service' }] }, {
@@ -99,15 +90,21 @@ describe('allow — service', () => {
 
 	test('a credential in a declared query location is honoured', async () => {
 		const token = await signToken({})
-		const { verify } = service({ rules: [{ path: '/*', kind: 'service', credential: { in: 'query', name: 'pxt' } }] })
-		const response = await verify(verifyRequest({ path: `/share?pxt=${token}` }))
+		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'service', credential: { in: 'query', name: 'pxt' } }] }, {
+			mintFromKey: { ok: true, token, expiresAt: future() },
+		})
+		const response = await verify(verifyRequest({ path: '/share?pxt=px_share' }))
 		expect(response.status).toBe(204)
+		expect(iam.seenKeys).toEqual(['px_share'])
 	})
 
 	test('a credential in a declared cookie location is honoured', async () => {
 		const token = await signToken({})
-		const { verify } = service({ rules: [{ path: '/*', kind: 'service', credential: { in: 'cookie', name: 'shr' } }] })
-		expect((await verify(verifyRequest({ cookie: `shr=${token}` }))).status).toBe(204)
+		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'service', credential: { in: 'cookie', name: 'shr' } }] }, {
+			mintFromKey: { ok: true, token, expiresAt: future() },
+		})
+		expect((await verify(verifyRequest({ cookie: 'shr=px_share' }))).status).toBe(204)
+		expect(iam.seenKeys).toEqual(['px_share'])
 	})
 })
 

@@ -19,7 +19,6 @@ export const emptyIamBinding: IamRpc = {
 	approveDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	denyDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	listOwnDeviceAuthorizations: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
-	issueJwt: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	getJwks: () => Promise.resolve({ keys: [] }),
 	audit: () => Promise.resolve(),
 	listPrincipals: () => Promise.resolve({ ok: true, principals: [] }),

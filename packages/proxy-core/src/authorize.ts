@@ -3,7 +3,7 @@
  *
  * Same four steps, same order, same fail-closed posture:
  *   1. match the request path against the app's ordered gate rules;
- *   2. resolve the credential the matched rule requires (cookie session, `px_` key, passthrough JWT);
+ *   2. resolve the credential the matched rule requires (cookie session or `px_` key);
  *   3. exchange it with IAM once, cache the result, and thereafter verify LOCALLY against the JWKS;
  *   4. deny unless a rule was satisfied.
  *
@@ -31,7 +31,7 @@ export type DenyReason =
 	| 'no_rule'
 	/** Every matching rule was a `service` rule and no credential was presented. */
 	| 'no_credential'
-	/** A `px_` key or passthrough JWT was presented and is not valid. */
+	/** A service credential was presented and is not a valid `px_` key. */
 	| 'invalid_key'
 	| 'no_session'
 	| 'invalid_session'
@@ -189,19 +189,13 @@ export class Authorizer {
 	}
 
 	/**
-	 * A `service`-rule bearer. A `px_` opaque key is exchanged via `mintFromKey` (cached, so the hot
-	 * path is a local verify); anything else is treated as an already-signed passthrough token and
-	 * verified locally with no IAM call. A present-but-invalid credential fails closed — no fall-through.
+	 * A `service`-rule bearer. Only a `px_` opaque key satisfies it: it is exchanged via `mintFromKey`
+	 * (cached, so the hot path is a local verify). Anything else is refused with no IAM call. A
+	 * present-but-invalid credential fails closed — no fall-through.
 	 */
 	private async authorizeBearer(app: ProxyApp, bearer: string, requestId: string): Promise<Decision> {
 		if (!bearer.startsWith(API_KEY_PREFIX)) {
-			const verified = await this.verifier.verify(bearer, app.id)
-			if (!verified.ok) {
-				return verified.reason === 'unavailable'
-					? { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
-					: { outcome: 'deny', status: 401, reason: 'invalid_key' }
-			}
-			return { outcome: 'allow', gate: 'service', token: bearer, subject: verified.claims.sub }
+			return { outcome: 'deny', status: 401, reason: 'invalid_key' }
 		}
 
 		const key = cacheKey(app.id, 'key', bearer)

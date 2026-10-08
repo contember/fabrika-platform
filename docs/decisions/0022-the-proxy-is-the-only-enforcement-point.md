@@ -88,7 +88,8 @@ in `@fabrika/auth-core`. Array order is precedence. A matching rule with an **ab
 through; with a **present** credential it is terminal. A request that matches no rule is denied.
 
 - `public` — terminal allow, no credential read, no IAM call, no token.
-- `service` — a `px_` credential or a passthrough JWT, as a bearer or at the declared location.
+- `service` — a `px_` credential, as a bearer or at the declared location. A share link is one. Any
+  other credential there is a 401 with no IAM call.
 - `human` — a resolved **user** principal. A valid token is not enough; every tier checks the claim.
 
 **Invariant: every unexpected condition denies.**
@@ -136,7 +137,13 @@ minted for another app out.
 
 An app owns the check a path gate cannot make: `can(action, scope)` over an application-owned object,
 resolved from validated request data. A gate never replaces that check, and the check never replaces a
-gate. A share link is the one credential an app redeems itself, after a `public` or `service` gate.
+gate.
+
+**Invariant: an application issues no credentials.** `@fabrika/auth` has no issuing or redeeming
+method. IAM issues every `px_` credential: share links and API keys from its admin surface, machine
+keys through `fabrika control key issue`, builder credentials through device authorization
+([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)
+or a `px_` credential (`mintFromKey`); there is no free-standing signed token to present.
 
 **Invariant: an application has no local authentication variant.** `createIam` requires the binding
 and the issuer everywhere. The one dev bypass belongs to IAM: a login that requires `ENVIRONMENT=local`

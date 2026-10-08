@@ -2,8 +2,6 @@ import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import type {
 	AuditInput,
 	IamRpc,
-	IssueJwtInput,
-	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -40,7 +38,6 @@ export class IamRpcStub implements IamRpc {
 	readonly mintTokenInputs: MintTokenInput[] = []
 	readonly mintFromKeyInputs: MintFromKeyInput[] = []
 	readonly issueKeyInputs: IssueKeyInput[] = []
-	readonly issueJwtInputs: IssueJwtInput[] = []
 	/** How many times the key set was actually fetched — the JWKS cache's only observable. */
 	jwksCalls = 0
 	/** The served key set. Settable so a test can rotate a key in between two verifications. */
@@ -55,7 +52,6 @@ export class IamRpcStub implements IamRpc {
 			mintToken?: MintTokenResult
 			mintFromKey?: MintFromKeyResult
 			issueKey?: IssueKeyResult
-			issueJwt?: IssueJwtResult
 			jwks?: Jwks
 		} = {},
 	) {
@@ -75,11 +71,6 @@ export class IamRpcStub implements IamRpc {
 	issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
 		this.issueKeyInputs.push(input)
 		return Promise.resolve(this.canned.issueKey ?? { ok: false, reason: 'not_allowed' })
-	}
-
-	issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
-		this.issueJwtInputs.push(input)
-		return Promise.resolve(this.canned.issueJwt ?? { ok: false, reason: 'not_allowed' })
 	}
 
 	getJwks(): Promise<Jwks> {
@@ -109,8 +100,7 @@ export class IamRpcStub implements IamRpc {
 
 /**
  * Build a Request carrying a forwarded native credential + a cf-ray. `proxyToken` sets the header the
- * proxy injects; `bearer` sets an `Authorization: Bearer` header (a machine `px_` key / passthrough
- * JWT). `readCredentials` prefers the proxy token over the bearer.
+ * proxy injects; `bearer` sets an `Authorization: Bearer` header (a machine `px_` key). `readCredentials` prefers the proxy token over the bearer.
  */
 export function makeRequest(opts: {
 	url?: string

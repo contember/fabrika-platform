@@ -240,17 +240,4 @@ describe('successful results decode field by field', () => {
 			],
 		})
 	})
-
-	test('issueJwt requires all three fields; a partial body is a transport fault', async () => {
-		const ok = stub(200, { ok: true, token: 'jwt', expiresAt: 99, id: 'aud-1' })
-		expect(await ok.rpc.issueJwt({ app: 'vozka', credential: null, requestId: 'r', permissions: [] })).toEqual({
-			ok: true,
-			token: 'jwt',
-			expiresAt: 99,
-			id: 'aud-1',
-		})
-
-		const partial = stub(200, { ok: true, token: 'jwt' })
-		await expect(partial.rpc.issueJwt({ app: 'vozka', credential: null, requestId: 'r', permissions: [] })).rejects.toBeInstanceOf(IamTransportError)
-	})
 })

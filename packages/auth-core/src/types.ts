@@ -73,14 +73,14 @@ export interface AppSchema {
 // no IAM reconcile for these: gate rules are deployed verbatim in the proxy manifest, and the proxy
 // decides WHICH credential KIND a path requires. Three kinds mirror the three old edge decisions:
 //   - public  → no credential (the old `bypass`/everyone carve-out)
-//   - service → a machine `px_` key or passthrough JWT (the old `non_identity`/service-token gate)
+//   - service → a machine `px_` key (the old `non_identity`/service-token gate)
 //   - human   → a logged-in human via `px_session`/`px_token` (the old `allow`-by-audience gate)
 // WHO is an admitted human stays centrally owned by propustka (decided at `/auth/callback`, the
 // admission allowlist), exactly as the old central edge audience did — a `human` gate only asserts
 // "a resolved user principal exists". Auth-surface paths (`/auth/*`, `/.well-known/jwks.json`) live
 // on PROPUSTKA's host, not the app's, so apps never declare them.
 
-/** Where a propustka credential (a `px_` key or a passthrough JWT) rides on a request. */
+/** Where a propustka `px_` credential rides on a request. */
 export interface CredentialLocation {
 	/** Transport carrying the credential. */
 	in: 'header' | 'query' | 'cookie'
@@ -93,7 +93,7 @@ export type GateKind =
 	/** Anyone — no credential. Terminal; resolves to an ANONYMOUS AuthContext (`principal: null`). */
 	| { kind: 'public' }
 	/**
-	 * A machine `px_` key or a passthrough JWT — a bearer (default `Authorization: Bearer`) or the
+	 * A machine `px_` key — a bearer (default `Authorization: Bearer`) or the
 	 * declared `credential` location. ABSENT → falls through to the next matching rule; PRESENT but
 	 * invalid → fail closed (no fall-through).
 	 */

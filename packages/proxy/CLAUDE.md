@@ -28,10 +28,12 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
   condition. A request matching no gate rule is denied.
-- **A `human` gate admits only `ptype: 'user'`.** A valid token is not a human: `issueJwt` signs an
-  anonymous token for the app (up to 24 h, not revocable) and `mintFromKey` signs `ptype: 'service'`.
+- **A `human` gate admits only `ptype: 'user'`.** A valid token is not a human: `mintFromKey` signs
+  `ptype: 'service'` for a machine key and no `ptype` for a share link.
   Browser authentication starts from the host-only opaque `__Host-px_session`; the short-lived JWT
-  exists only in the proxy cache and the injected header. Share links are redeemed OFF the gate path.
+  exists only in the proxy cache and the injected header.
+- **A `service` gate admits only a `px_` key.** Any other credential at that location is a 401 with no
+  IAM call; a share link is a `px_` key at the gate's declared location.
 - **A `human` gate miss answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
   the header absent, → the 302 bounce; any other value → **401** with
   `{ error: { type: 'auth', message, loginUrl } }`, the envelope `@fabrika/app`'s browser RPC client

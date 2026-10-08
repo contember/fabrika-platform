@@ -1,4 +1,4 @@
-import { buildAccessClaims, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER, type Scope } from '@fabrika/auth-core'
+import { buildAccessClaims, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import { anonymousContext, createIam, type IamEnv } from '../iam'
@@ -233,14 +233,6 @@ describe('an unreachable IAM is 503, never 401', () => {
 		expect(result).toEqual({ ok: false, reason: 'unavailable', status: 503 })
 	})
 
-	test('a throwing mintFromKey yields unavailable during a share-link redemption', async () => {
-		const stub = new IamRpcStub({ jwks: JWKS })
-		stub.mintFromKey = () => Promise.reject(new Error('connect ECONNREFUSED'))
-		const iam = createIam(iamEnv(stub))
-
-		expect(await iam.redeemKey('px_share')).toEqual({ ok: false, reason: 'unavailable', status: 503 })
-	})
-
 	test('a recovered IAM verifies on the next request (no poisoned cache)', async () => {
 		const stub = new IamRpcStub({ jwks: JWKS })
 		stub.jwksError = new Error('connect ECONNREFUSED')
@@ -250,59 +242,6 @@ describe('an unreachable IAM is 503, never 401', () => {
 		expect((await iam.authenticate(proxied(token))).ok).toBe(false)
 		stub.jwksError = undefined
 		expect((await iam.authenticate(proxied(token))).ok).toBe(true)
-	})
-})
-
-// ── redeemKey — share links, OFF the gate path ───────────────────────────────────
-
-const CAP_PERMS: PermissionEntry[] = [{ action: 'report.read', scope: { type: 'run', value: 'r1' } as Scope, source: 'grant' }]
-
-describe('redeemKey', () => {
-	test('a px_ credential is exchanged via mintFromKey into an anonymous, exact-resource context', async () => {
-		const token = await sign({ anonymous: true, perms: CAP_PERMS })
-		const stub = new IamRpcStub({ jwks: JWKS, mintFromKey: { ok: true, token, expiresAt: now() + 300 } })
-		const result = await createIam(iamEnv(stub)).redeemKey('px_share')
-
-		expect(result.ok).toBe(true)
-		if (!result.ok) throw new Error('expected ok')
-		expect(stub.mintFromKeyInputs[0]?.key).toBe('px_share')
-		expect(result.context.principal).toBeNull()
-		expect(result.context.can('report.read', { type: 'run', value: 'r1' })).toBe(true)
-		expect(result.context.can('report.read', { type: 'run', value: 'r2' })).toBe(false)
-	})
-
-	test('the minted token is cached per binding — a second redemption makes no RPC', async () => {
-		const token = await sign({ anonymous: true, perms: CAP_PERMS })
-		const stub = new IamRpcStub({ jwks: JWKS, mintFromKey: { ok: true, token, expiresAt: now() + 300 } })
-		const iam = createIam(iamEnv(stub))
-
-		expect((await iam.redeemKey('px_share')).ok).toBe(true)
-		expect((await iam.redeemKey('px_share')).ok).toBe(true)
-		expect(stub.mintFromKeyInputs).toHaveLength(1)
-	})
-
-	test('a passthrough JWT verifies locally with NO binding call', async () => {
-		const stub = new IamRpcStub({ jwks: JWKS })
-		const result = await createIam(iamEnv(stub)).redeemKey(await sign({ anonymous: true, perms: CAP_PERMS }))
-
-		expect(result.ok).toBe(true)
-		expect(stub.mintFromKeyInputs).toHaveLength(0)
-	})
-
-	test('an unknown px_ credential → invalid_token 401 (the caller maps it to a 404)', async () => {
-		const stub = new IamRpcStub({ jwks: JWKS }) // mintFromKey defaults to invalid_key
-		expect(await createIam(iamEnv(stub)).redeemKey('px_nope')).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
-	})
-
-	test('a disabled principal → unknown_principal 403', async () => {
-		const stub = new IamRpcStub({ jwks: JWKS, mintFromKey: { ok: false, reason: 'disabled' } })
-		expect(await createIam(iamEnv(stub)).redeemKey('px_dead')).toEqual({ ok: false, reason: 'unknown_principal', status: 403 })
-	})
-
-	test('a garbage passthrough token denies without a binding call', async () => {
-		const stub = new IamRpcStub({ jwks: JWKS })
-		expect((await createIam(iamEnv(stub)).redeemKey('eyJnot.a.jwt')).ok).toBe(false)
-		expect(stub.mintFromKeyInputs).toHaveLength(0)
 	})
 })
 

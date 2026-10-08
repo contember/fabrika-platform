@@ -117,7 +117,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   mismatch is reported as `invalid_key`, never as a distinct reason. Migration `0012`/`0006` is a
   hard cutover: pre-existing share links have no app and must be reissued.
 - **A self-bound key (`issueKey` in `principalId` mode) MUST state an expiry.** It carries the
-  issuer's live permissions with no inline downscope, so without one a 300-second passthrough token
+  issuer's live permissions with no inline downscope, so without one a 300-second access token
   could mint a permanent installation-wide credential from itself.
 - **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** The session cookie is
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.

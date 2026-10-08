@@ -205,8 +205,8 @@ describe('deny — a human gate admits a USER principal, not merely a valid toke
 	})
 
 	test('a non-user token is still a valid SERVICE credential — only the human gate refuses it', async () => {
-		const anonymous = await signToken({})
-		expect((await service(SERVICE, iamWith({}))(verifyRequest({ bearer: anonymous }))).status).toBe(204)
+		const iam = iamWith({ mintFromKey: { ok: true, token: await signToken({}), expiresAt: future() } })
+		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_share' }))).status).toBe(204)
 	})
 })
 
@@ -305,21 +305,19 @@ describe('deny — service gate', () => {
 		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_ghost' }))).status).toBe(403)
 	})
 
-	test('a garbage passthrough JWT → 401 with NO IAM call', async () => {
+	test('a non-px_ bearer → 401 with NO IAM call', async () => {
 		const iam = iamWith({})
 		const response = await service(SERVICE, iam)(verifyRequest({ bearer: 'eyJnot.a.jwt' }))
 		expect(response.status).toBe(401)
-		expect(iam.mintFromKeyCalls).toBe(0)
+		expect(iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
 
-	test('a passthrough JWT signed by an unpublished key → 401', async () => {
-		const forged = await signToken({ key: foreignPrivateKey })
-		expect((await service(SERVICE, iamWith({}))(verifyRequest({ bearer: forged }))).status).toBe(401)
-	})
-
-	test('a passthrough JWT for another app → 401', async () => {
-		const otherApp = await signToken({ audience: 'other-app' })
-		expect((await service(SERVICE, iamWith({}))(verifyRequest({ bearer: otherApp }))).status).toBe(401)
+	test('a validly signed access token as a bearer → 401: only a px_ key satisfies a service gate', async () => {
+		const iam = iamWith({})
+		const response = await service(SERVICE, iam)(verifyRequest({ bearer: await signToken({}) }))
+		expect(response.status).toBe(401)
+		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+		expect(iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
 
 	test('a PRESENT-but-invalid credential does NOT fall through to a later human rule', async () => {
@@ -347,16 +345,9 @@ describe('deny — IAM is unreachable', () => {
 		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_key' }))).status).toBe(503)
 	})
 
-	test('an unfetchable JWKS denies a passthrough JWT that would otherwise verify', async () => {
-		const good = await signToken({})
-		const iam = iamWith({ unreachable: true })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: good }))).status).toBe(503)
-	})
-
 	test('an EMPTY key set denies everything (no keys, no verification)', async () => {
-		const good = await signToken({})
-		const iam = iamWith({ jwks: { keys: [] } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: good }))).status).toBe(401)
+		const iam = iamWith({ jwks: { keys: [] }, mintFromKey: { ok: true, token: await signToken({}), expiresAt: future() } })
+		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_key' }))).status).toBe(401)
 	})
 
 	test('a public gate still passes when IAM is down — it needs no credential', async () => {

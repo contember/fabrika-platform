@@ -9,8 +9,6 @@ import type {
 	IamRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
-	IssueJwtInput,
-	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -134,10 +132,6 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 
 	issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
 		return this.rpc.issueKey(input)
-	}
-
-	issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
-		return this.rpc.issueJwt(input)
 	}
 
 	override fetch(request: Request): Promise<Response> {

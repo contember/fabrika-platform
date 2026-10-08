@@ -12,8 +12,6 @@ import type {
 	ExchangeAuthCodeResult,
 	IamHandoffRpc,
 	IamRpc,
-	IssueJwtInput,
-	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -63,8 +61,6 @@ describe('RPC input normalization', () => {
 		{ method: 'issueKey', body: { service: { label: 'secret', permissions: [1], scope: 1 } }, field: 'service' },
 		{ method: 'issueKey', body: { service: { label: 'secret', permissions: [], scope: 1 } }, field: 'service.scope' },
 		{ method: 'issueKey', body: { permissions: [{ action: 'read', scope: { type: 'team' } }], label: 1 }, field: 'permissions[].scope' },
-		{ method: 'issueJwt', body: { label: 1, permissions: [] }, field: 'label' },
-		{ method: 'issueJwt', body: { permissions: [null] }, field: 'app' },
 		{ method: 'audit', body: { resourceId: 1 }, field: 'resourceId' },
 	])('preserves first-error ordering for $method / $field', async ({ method, body, field }) => {
 		const { rpc, response } = call(method, body)
@@ -128,10 +124,6 @@ function recorder(canned: Canned = {}): Recorder {
 		issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
 			note('issueKey', input)
 			return Promise.resolve({ ok: true, token: 'px_secret', id: 'cred-1' })
-		},
-		issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
-			note('issueJwt', input)
-			return Promise.resolve({ ok: true, token: 'jwt', expiresAt: 7, id: 'tok-1' })
 		},
 		getJwks(): Promise<Jwks> {
 			note('getJwks', undefined)

@@ -57,7 +57,7 @@ export const ROTATED_JWKS: Jwks = await jwksOf(rotated.publicKey, 'k2')
 export interface SignOptions {
 	ttlSeconds?: number
 	subject?: string
-	/** Omit for an ANONYMOUS token (a passthrough JWT / standalone share link). */
+	/** Omit for an ANONYMOUS token (a standalone share link). */
 	type?: 'user' | 'service'
 	audience?: string
 	issuer?: string
