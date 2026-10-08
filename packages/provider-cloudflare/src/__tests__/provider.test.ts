@@ -44,7 +44,7 @@ const PRIVATE: { readonly workers_dev: false; readonly preview_urls: false } = {
 
 const appWorker = (): Worker => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
 
-const bindingIam = (iam: ServiceReference): Worker =>
+const bindingIam = (iam: Bindable): Worker =>
 	new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { IAM: iam }, main: 'src/index.ts' })
 
 /** Where a checkout's own `bun install` puts this package, so its proxy Worker points here. */
@@ -60,12 +60,18 @@ const withRawOptions = (worker: Worker, raw: Record<string, unknown>): Worker =>
 	return worker
 }
 
+type GeneratedService = { binding: string; service: string; entrypoint?: string }
+
+/** Any object oblaka calls `configureBinding` on: a checkout can hand it one of its own. */
+type Bindable = Pick<ServiceReference, 'configureBinding'>
+
 const makeCollaborators = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
 	commandResult: (spec: CommandSpec) => CommandResult = () => ({ exitCode: 0, stdout: '', stderr: '' }),
 	checkoutDir = '/repo/app',
 	runCommand?: CommandRunner,
+	generatedServices?: GeneratedService[],
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
 		expect(configPath).toBe('fabrika.config.ts')
@@ -87,7 +93,11 @@ const makeCollaborators = (
 					{ path: '/repo/proxy/wrangler.jsonc', config: { name: `${input.env}-demo-proxy` }, content: '{}' },
 					{ path: 'wrangler.jsonc', config: { name: `${input.env}-demo` }, content: '{}' },
 				]
-				: [{ path: 'wrangler.jsonc', config: { name: `${input.env}-demo` }, content: '{}' }],
+				: [{
+					path: 'wrangler.jsonc',
+					config: { name: `${input.env}-demo`, ...(generatedServices === undefined ? {} : { services: generatedServices }) },
+					content: '{}',
+				}],
 			wranglerConfig: { name: `${input.env}-demo` },
 		}
 	},
@@ -113,12 +123,13 @@ const deploy = (
 		readonly stateNamespace?: string
 		readonly env?: string
 		readonly checkoutDir?: string
+		readonly generatedServices?: GeneratedService[]
 	} = {},
 ) =>
 	createCloudflareDeployer({
 		accountId: 'acc-1',
 		apiToken: 'tok-1',
-		collaborators: makeCollaborators(rec, appConfig, options.commandResult, options.checkoutDir, options.runCommand),
+		collaborators: makeCollaborators(rec, appConfig, options.commandResult, options.checkoutDir, options.runCommand, options.generatedServices),
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
 	})({
 		appId: options.appId ?? 'demo',
@@ -554,11 +565,11 @@ describe('Cloudflare provider', () => {
 
 	test("refuses IAM's default entrypoint and any entrypoint but the application one", async () => {
 		await expect(deploy(rec, config({ resources: () => bindingIam(new ServiceReference('propustka-worker')) }))).rejects.toThrow(
-			'Worker `demo` binds `propustka-worker` to its default entrypoint; an application binds `PropustkaApplication`',
+			'Worker `demo` binds `stage-propustka-worker` to its default entrypoint; an application binds `PropustkaApplication`',
 		)
 		for (const entrypoint of ['Propustka', '', 'default']) {
 			await expect(deploy(rec, config({ resources: () => bindingIam(new ServiceReference('propustka-worker', entrypoint)) }))).rejects.toThrow(
-				`Worker \`demo\` binds \`propustka-worker\` to entrypoint \`${entrypoint}\``,
+				`Worker \`demo\` binds \`stage-propustka-worker\` to entrypoint \`${entrypoint}\``,
 			)
 		}
 		const proxyToFullIam = new Worker({
@@ -569,9 +580,58 @@ describe('Cloudflare provider', () => {
 			main: './proxy-worker.ts',
 		})
 		await expect(deploy(rec, config({ resources: () => proxyToFullIam }))).rejects.toThrow(
-			'Worker `demo-proxy` binds `propustka-worker` to its default entrypoint',
+			'Worker `demo-proxy` binds `stage-propustka-worker` to its default entrypoint',
 		)
 		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('checks the service bindings a Worker emits, whatever object emits them', async () => {
+		const toFullIam: Bindable = {
+			configureBinding: ({ config, binding, env }) => ({
+				...config,
+				services: [...(config.services ?? []), { binding, service: `${env}-propustka-worker` }],
+			}),
+		}
+		await expect(deploy(rec, config({ resources: () => bindingIam(toFullIam) }))).rejects.toThrow(
+			'Worker `demo` binds `stage-propustka-worker` to its default entrypoint; an application binds `PropustkaApplication`',
+		)
+
+		class InnocentReference extends ServiceReference {
+			override configureBinding(args: Parameters<ServiceReference['configureBinding']>[0]) {
+				return { ...args.config, services: [{ binding: args.binding, service: `${args.env}-vozka-runner` }] }
+			}
+		}
+		await expect(deploy(rec, config({ resources: () => bindingIam(new InnocentReference('demo-helper')) }))).rejects.toThrow(
+			'Worker `demo` binds service `stage-vozka-runner`, which is the Fabrika platform resource `vozka-runner`',
+		)
+
+		const rewritesEarlier: Bindable = {
+			configureBinding: ({ config }) => ({ ...config, services: (config.services ?? []).map(({ entrypoint: _, ...entry }) => entry) }),
+		}
+		const twoBindings = new Worker({
+			dir: '.',
+			...PRIVATE,
+			name: 'demo',
+			compatibility_flags: [],
+			bindings: { IAM: iamServiceReference(), OTHER: rewritesEarlier },
+			main: 'src/index.ts',
+		})
+		await expect(deploy(rec, config({ resources: () => twoBindings }))).rejects.toThrow('binds `stage-propustka-worker` to its default entrypoint')
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('checks the generated wrangler config again before each wrangler deploy', async () => {
+		const result = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
+			generatedServices: [{ binding: 'IAM', service: 'stage-propustka-worker' }],
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toContain('Worker `stage-demo` binds `stage-propustka-worker` to its default entrypoint')
+		expect(rec.commands.some((command) => command.command === 'wrangler' && command.args[0] === 'deploy')).toBe(false)
+
+		const narrow = await deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }), {
+			generatedServices: [{ binding: 'IAM', service: 'stage-propustka-worker', entrypoint: 'PropustkaApplication' }],
+		})
+		expect(narrow.status).toBe('succeeded')
 	})
 
 	// `packages/iam/src/__tests__/index.test.ts` pins the same name as the narrow class IAM exports.

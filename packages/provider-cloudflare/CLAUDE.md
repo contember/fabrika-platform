@@ -41,10 +41,15 @@ this one import.
   The state namespace is the one exception — `KVStateStorage` uses it verbatim, so it is matched exactly.
 - **An app binds IAM only at its `PropustkaApplication` entrypoint** (`iamServiceReference()`,
   `IAM_APPLICATION_ENTRYPOINT` in `src/proxy.ts`), and so does the proxy Worker the provider builds.
-  `assertAuthoredGraph` refuses a `propustka-worker` reference with no entrypoint or another one: IAM's
-  default export also issues and revokes keys and approves devices, which only platform components
-  (`platformResources: 'allow'`) may bind. The entrypoint name is pinned against IAM's exports by
-  `packages/iam/src/__tests__/index.test.ts`.
+  IAM's default export also issues and revokes keys and approves devices, which only platform
+  components (`platformResources: 'allow'`) may bind. `assertApplicationServices` checks the `services`
+  a Worker's config CARRIES, never the binding's class — a checkout's own `Bindable` or a
+  `ServiceReference` subclass emits whatever it likes: an entry naming IAM's remote Worker without
+  `PropustkaApplication`, or naming any other platform service, is refused. It runs twice: in
+  `assertAuthoredGraph` on the bindings folded in oblaka's order (a later binding can rewrite an earlier
+  entry), and in `deploy-worker` on each config oblaka generated, before its `wrangler deploy`, because a
+  stateful binding can emit differently the second time. The entrypoint name is pinned against IAM's
+  exports by `packages/iam/src/__tests__/index.test.ts`.
 - **`Worker.options` is an ALLOWLIST for an app (`APP_WORKER_OPTIONS`), not a denylist.** oblaka spreads
   every option but `dir`/`bindings`/`deleteDurableObjectsOnRemoval` verbatim into the generated wrangler
   config, so a raw `services`, `durable_objects`, `r2_buckets` or `build` key would bind or run what the

@@ -4,7 +4,7 @@ import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
-import { assertAuthoredGraph, buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
+import { assertApplicationServices, assertAuthoredGraph, buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 
 const CANCELLED = 'deploy cancelled'
 
@@ -176,6 +176,10 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			for (const generated of configs) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				await assertAssets(generatedDir)
+				// The config oblaka wrote, not the graph checked before the run: a stateful binding can emit differently twice.
+				if (env.platformResources === 'refuse') {
+					assertApplicationServices(generated.config.name ?? generated.path, generated.config.services, run.env)
+				}
 				if (dryRun) {
 					run.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
 					continue

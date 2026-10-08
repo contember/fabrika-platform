@@ -377,7 +377,9 @@ builds is exempt, recognised by its entrypoint and package directory; every othe
 Worker in the config, the root included, is an application Worker. Every Worker in
 the graph, the proxy included, binds IAM at its `PropustkaApplication` entrypoint
 (`iamServiceReference()`); a binding to IAM's default entrypoint, which also issues
-keys and approves devices, is refused. The provider preserves the generated Wrangler config for every
+keys and approves devices, is refused. The check reads the `services` each Worker's
+config carries, before provisioning and again on each generated config before its
+`wrangler deploy`, so it holds whatever object emitted the binding. The provider preserves the generated Wrangler config for every
 Worker in that graph, deploys each config, and targets application migrations,
 managed variables, and secrets at the child Worker. The proxy embeds only its
 manifest and service bindings; application secrets stay on the child.

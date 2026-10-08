@@ -1,5 +1,5 @@
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
-import { Container, D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
+import { Container, D1Database, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 import { CLOUDFLARE_PROXY_WORKER_DIR, CLOUDFLARE_PROXY_WORKER_MAIN, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE } from './proxy'
 
@@ -80,34 +80,65 @@ const namedResource = (value: unknown): { readonly kind: string; readonly name: 
 	return null
 }
 
-interface ServiceTarget {
-	readonly service: string
-	/** Absent means the target Worker's default export. */
-	readonly entrypoint: string | undefined
-}
-
 /**
  * A `ServiceReference` binds `${env}-${name}` without declaring it, so it never reaches `namedResource`
  * — it is how an app would call the control plane or the runner directly. IAM is the one exception:
  * every app binds `propustka-worker` (`proxy.ts`), the platform's front door, at its narrow entrypoint.
  */
-const serviceReferenceTarget = (value: unknown): ServiceTarget | null => {
+const serviceReferenceTarget = (value: unknown): string | null => {
 	if (!(value instanceof ServiceReference)) return null
-	const service = Reflect.get(value, 'serviceName')
-	const entrypoint = Reflect.get(value, 'entrypoint')
-	return {
-		service: typeof service === 'string' && service !== '' ? service : '(unreadable)',
-		entrypoint: entrypoint === undefined || typeof entrypoint === 'string' ? entrypoint : '(unreadable)',
-	}
+	const target = Reflect.get(value, 'serviceName')
+	return typeof target === 'string' && target !== '' ? target : '(unreadable)'
 }
 
-/** IAM's default export issues keys and approves devices for the platform; an application gets the narrow entrypoint. */
-const assertApplicationIamEntrypoint = (worker: Worker, target: ServiceTarget): void => {
-	if (target.entrypoint !== IAM_APPLICATION_ENTRYPOINT) {
-		const bound = target.entrypoint === undefined ? 'its default entrypoint' : `entrypoint \`${target.entrypoint}\``
-		throw new Error(
-			`cloudflare: Worker \`${worker.options.name}\` binds \`${IAM_SERVICE}\` to ${bound}; an application binds \`${IAM_APPLICATION_ENTRYPOINT}\` (use \`iamServiceReference()\`)`,
-		)
+type WranglerConfig = GeneratedConfig['config']
+
+/** What a Worker's bindings write into its wrangler config, folded in oblaka's order. */
+const emittedBindingConfig = (worker: Worker, env: string): WranglerConfig => {
+	let config: WranglerConfig = {}
+	for (const [binding, value] of Object.entries(worker.options.bindings ?? {})) {
+		config = value.configureBinding({ config, binding, env })
+	}
+	return config
+}
+
+const platformRemoteName = (remote: string): string | null => {
+	for (const platform of PLATFORM_RESOURCE_NAMES) {
+		if (remote === platform || remote.endsWith(`-${platform}`)) return platform
+	}
+	return null
+}
+
+/**
+ * Check the `services` a Worker's wrangler config CARRIES, not the object that wrote them: a custom
+ * `Bindable`, or a `ServiceReference` subclass, can emit any entry. The one platform service an
+ * application may bind is IAM, and only at `IAM_APPLICATION_ENTRYPOINT`; the default export issues keys.
+ */
+export const assertApplicationServices = (worker: string, services: unknown, env: string): void => {
+	if (services === undefined) return
+	if (!Array.isArray(services)) {
+		throw new Error(`cloudflare: Worker \`${worker}\` emits unreadable \`services\`, which cannot be checked against the Fabrika platform services`)
+	}
+	const iam = env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`
+	for (const entry of services) {
+		const service: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'service') : undefined
+		const entrypoint: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'entrypoint') : undefined
+		if (typeof service !== 'string') {
+			throw new Error(`cloudflare: Worker \`${worker}\` emits a service binding with no readable \`service\``)
+		}
+		if (service === iam) {
+			if (entrypoint !== IAM_APPLICATION_ENTRYPOINT) {
+				const bound = entrypoint === undefined ? 'its default entrypoint' : `entrypoint \`${String(entrypoint)}\``
+				throw new Error(
+					`cloudflare: Worker \`${worker}\` binds \`${service}\` to ${bound}; an application binds \`${IAM_APPLICATION_ENTRYPOINT}\` (use \`iamServiceReference()\`)`,
+				)
+			}
+			continue
+		}
+		const platform = platformRemoteName(service)
+		if (platform !== null) {
+			throw new Error(`cloudflare: Worker \`${worker}\` binds service \`${service}\`, which is the Fabrika platform resource \`${platform}\``)
+		}
 	}
 }
 
@@ -239,12 +270,8 @@ interface PlatformAdoption {
  */
 const platformAdoption = (env: string, name: string): PlatformAdoption | null => {
 	const adopted = `${env}-${name}`
-	for (const platform of PLATFORM_RESOURCE_NAMES) {
-		if (adopted === platform || adopted.endsWith(`-${platform}`)) {
-			return { adopted, platform }
-		}
-	}
-	return null
+	const platform = platformRemoteName(adopted)
+	return platform === null ? null : { adopted, platform }
 }
 
 export interface AuthoredGraphLimits {
@@ -299,14 +326,12 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 			if (resource !== null) {
 				assertAdoptable(resource.kind, resource.name)
 			}
-			const target = serviceReferenceTarget(value)
-			if (target !== null && refuse && target.service === IAM_SERVICE) {
-				assertApplicationIamEntrypoint(worker, target)
-			} else if (target !== null && refuse) {
-				if (target.service === '(unreadable)') {
+			const service = serviceReferenceTarget(value)
+			if (service !== null && refuse && service !== IAM_SERVICE) {
+				if (service === '(unreadable)') {
 					throw new Error('cloudflare: service binding to `(unreadable)` cannot be checked against the Fabrika platform services')
 				}
-				assertAdoptable('service binding to', target.service)
+				assertAdoptable('service binding to', service)
 			}
 			if (value instanceof Worker) {
 				if (!deployable.has(value)) {
@@ -314,6 +339,9 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 				}
 				visit(value)
 			}
+		}
+		if (refuse) {
+			assertApplicationServices(worker.options.name, emittedBindingConfig(worker, limits.env).services, limits.env)
 		}
 	}
 	assertAdoptable('Worker', root.options.name)
