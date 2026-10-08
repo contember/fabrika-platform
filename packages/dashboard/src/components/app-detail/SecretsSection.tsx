@@ -14,18 +14,18 @@ export function SecretsSection(
 				<h2>Secrets</h2>
 			</div>
 			<p className="section-note">
-				Secret <strong>references</strong> deployed with this app. The <code>*</code>{' '}
-				layer applies to every env; an env-specific entry overrides it. Values live in the vault — only names and refs are shown.
+				Secrets deployed with this app. The <code>*</code>{' '}
+				layer applies to every env; an env-specific entry overrides it. Values are write-only — only names and where each value is kept are shown.
 			</p>
 			<Table
 				colSpan={4}
 				isEmpty={secrets.length === 0}
-				empty={<EmptyState icon="lock" title="No secrets referenced" body="Add a reference to pull a vault value into every deploy of this app." />}
+				empty={<EmptyState icon="lock" title="No secrets" body="Add a secret to deliver its value to every deploy of this app." />}
 				head={
 					<tr>
 						<th>Name</th>
 						<th>Layer</th>
-						<th className="grow">Value ref</th>
+						<th className="grow">Stored in</th>
 						<th />
 					</tr>
 				}
@@ -40,8 +40,8 @@ export function SecretsSection(
 function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecretDto; onDone: () => void }) {
 	const [confirming, setConfirming] = useState(false)
 	const [settingValue, setSettingValue] = useState(false)
-	/** The value lives in the vault when the ref has the `vault:` prefix; PATCH rotates it in place. */
-	const inVault = secret.valueRef.startsWith('vault:')
+	/** A vault value is rotated in place; anything else is set afresh. */
+	const inVault = secret.storage === 'vault'
 
 	async function remove() {
 		await api.apps.secrets.delete({ appId, name: secret.name, env: secret.env })
@@ -70,7 +70,7 @@ function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecret
 			</td>
 			<td>{secret.env === null ? <span className="muted">* (all envs)</span> : secret.env}</td>
 			<td>
-				<code>{secret.valueRef}</code>
+				<SecretStorage secret={secret} />
 			</td>
 			<td className="row-actions">
 				<button type="button" className="small" onClick={() => setSettingValue(true)}>{inVault ? 'Rotate' : 'Set value'}</button>
@@ -91,6 +91,12 @@ function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecret
 			</td>
 		</tr>
 	)
+}
+
+function SecretStorage({ secret }: { secret: AppSecretDto }) {
+	if (secret.storage === 'vault') return <code>{secret.valueRef}</code>
+	if (secret.storage === 'provider') return <span className="muted">Provider-managed</span>
+	return <span className="error-text small">Stored outside the vault — set it again</span>
 }
 
 /**
@@ -149,16 +155,10 @@ function SetSecretValueRow(
 	)
 }
 
-/** How a freshly-added secret gets its value: as a raw vault value, or as a reference. */
-type AddSecretMode = 'vault' | 'ref'
-
 function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[]; onDone: () => void }) {
 	const [open, setOpen] = useState(false)
-	/** Default to entering a raw value stored in the vault; 'ref' registers a reference instead. */
-	const [mode, setMode] = useState<AddSecretMode>('vault')
 	const [name, setName] = useState('')
 	const [value, setValue] = useState('')
-	const [valueRef, setValueRef] = useState('')
 	/** '' = the all-env (*) layer; otherwise an env name. */
 	const [env, setEnv] = useState('')
 	const [busy, setBusy] = useState(false)
@@ -167,7 +167,6 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 	function reset() {
 		setName('')
 		setValue('')
-		setValueRef('')
 		setEnv('')
 	}
 
@@ -176,15 +175,8 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 		setBusy(true)
 		setError(null)
 		try {
-			const layer = env === '' ? null : env
-			if (mode === 'vault') {
-				// Stores the value encrypted in the vault and creates/upserts the `vault:<id>` row.
-				const body: SetSecretValueRequest = { value, env: layer }
-				await api.vault.set({ appId, name: name.trim(), value: body.value, env: body.env })
-			} else {
-				const body: PutAppSecretRequest = { name: name.trim(), valueRef: valueRef.trim(), env: layer }
-				await api.apps.secrets.put({ appId, secret: body })
-			}
+			const body: PutAppSecretRequest = { name: name.trim(), value, env: env === '' ? null : env }
+			await api.apps.secrets.put({ appId, secret: body })
 			reset()
 			setOpen(false)
 			onDone()
@@ -209,13 +201,6 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 	return (
 		<form className="panel form inline" onSubmit={submit}>
 			<label>
-				Source
-				<select value={mode} onChange={(e) => setMode(e.target.value === 'ref' ? 'ref' : 'vault')}>
-					<option value="vault">Vault value</option>
-					<option value="ref">Reference</option>
-				</select>
-			</label>
-			<label>
 				Name
 				<input required value={name} onChange={(e) => setName(e.target.value)} placeholder="STRIPE_KEY" autoComplete="off" />
 			</label>
@@ -226,20 +211,11 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 					{envs.map((e) => <option key={e.env} value={e.env}>{e.env}</option>)}
 				</select>
 			</label>
-			{mode === 'vault'
-				? (
-					<label>
-						Value
-						<input type="password" required value={value} onChange={(e) => setValue(e.target.value)} placeholder="Secret value" autoComplete="off" />
-						<span className="hint">Stored encrypted in the vault. Never shown again.</span>
-					</label>
-				)
-				: (
-					<label>
-						Value ref
-						<input required value={valueRef} onChange={(e) => setValueRef(e.target.value)} placeholder="env:STRIPE_KEY" autoComplete="off" />
-					</label>
-				)}
+			<label>
+				Value
+				<input type="password" required value={value} onChange={(e) => setValue(e.target.value)} placeholder="Secret value" autoComplete="off" />
+				<span className="hint">Stored encrypted. Never shown again.</span>
+			</label>
 			<div className="form-actions">
 				<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add secret'}</button>
 				<button type="button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>

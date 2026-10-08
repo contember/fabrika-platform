@@ -19,7 +19,7 @@ import {
 import { acquireLease, namespaceLeaseKey } from '../lease'
 import { FakeRepoSource } from '../repo-source'
 import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
 import { fixtureNamespaceWrite, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
@@ -960,7 +960,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
 		const runDeps = {
 			...republishDeps(harness),
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
 		}
 		const release = Promise.withResolvers<void>()
@@ -999,7 +999,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		}
 		const result = await executeDeploy({
 			...republishDeps(harness),
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
 		}, { runId: run })
 
@@ -1011,7 +1011,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 
 	const runDepsOf = (harness: NamespaceHarness) => ({
 		...republishDeps(harness),
-		secrets: new EnvSecretResolver({}),
+		secrets: new VaultSecretResolver({}),
 		logs: { put: () => Promise.resolve() },
 	})
 

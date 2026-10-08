@@ -1,29 +1,16 @@
-import type { AppSecretDto, AppVarDto, ListResponse, OkResponse, PutAppSecretRequest, PutAppVarRequest } from '@fabrika/control-contract'
+import type { ControlProvider } from '@fabrika/provider-contract'
+import type { AppSecretDto, AppVarDto, ListResponse, OkResponse, PutAppVarRequest } from '@fabrika/control-contract'
 import { type AppSecretRow, type AppVarRow } from '../../db'
+import { parseVaultRef } from '../../vault'
 import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { requireApp } from './apps'
 import { type RegistryUseCaseContext } from './context'
-import { assertAppVarValue, assertOwnedValueRef, assertUnmanagedName } from './validation'
+import { assertAppVarValue, assertUnmanagedName } from './validation'
 
 export async function listAppSecretsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppSecretDto>> {
 	await requireApp(c, appId)
-	return { items: (await c.repositories.registry.listAppSecrets(appId)).map(toAppSecretDto) }
-}
-
-export async function putAppSecretUseCase(c: RegistryUseCaseContext, appId: string, input: PutAppSecretRequest): Promise<AppSecretDto> {
-	await requireApp(c, appId)
-	assertUnmanagedName('secret', input.name)
-	assertOwnedValueRef(input.valueRef)
-	const env = input.env ?? null
-	const row = await c.repositories.registry.upsertAppSecret({ appId, env, name: input.name, valueRef: input.valueRef })
-	await c.auth.audit({
-		action: 'app.secret.upsert',
-		resourceType: 'app_secret',
-		resourceId: `${appId}/${env ?? '*'}/${input.name}`,
-		metadata: { name: input.name, env },
-	})
-	return toAppSecretDto(row)
+	return { items: (await c.repositories.registry.listAppSecrets(appId)).map((row) => toAppSecretDto(row, c.provider)) }
 }
 
 export async function deleteAppSecretUseCase(c: RegistryUseCaseContext, appId: string, name: string, env: string | null): Promise<OkResponse> {
@@ -93,8 +80,14 @@ export async function deleteAppVarUseCase(c: RegistryUseCaseContext, appId: stri
 	return { ok: true }
 }
 
-function toAppSecretDto(row: AppSecretRow): AppSecretDto {
-	return { appId: row.app_id, env: row.env, name: row.name, valueRef: row.value_ref, createdAt: row.created_at }
+/**
+ * Never echo a ref control cannot vouch for: a pre-D4 `literal:` row holds the plaintext itself. The
+ * provider-managed case relies on such an installation writing every app secret through the provider.
+ */
+export function toAppSecretDto(row: AppSecretRow, provider: Pick<ControlProvider, 'secrets'>): AppSecretDto {
+	const common = { appId: row.app_id, env: row.env, name: row.name, createdAt: row.created_at }
+	if (parseVaultRef(row.value_ref) !== null) return { ...common, storage: 'vault', valueRef: row.value_ref }
+	return { ...common, storage: provider.secrets === undefined ? 'legacy' : 'provider', valueRef: null }
 }
 
 function toAppVarDto(row: AppVarRow): AppVarDto {

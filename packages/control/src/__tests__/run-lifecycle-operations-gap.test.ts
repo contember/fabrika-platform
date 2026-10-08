@@ -8,7 +8,7 @@ import type { ControlProvider, ProviderDeployInput, ProviderEnvelope } from '@fa
 import { describe, expect, test } from 'bun:test'
 import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
@@ -69,7 +69,7 @@ function deps(db: ControlRepositories, logs: BlobStore, inputs: ProviderDeployIn
 			return Promise.resolve({ state: 'succeeded' })
 		},
 	}
-	return { repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(db), logs }
+	return { repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs }
 }
 
 describe('deploy run log names a missing Operations ingest configuration', () => {
@@ -157,7 +157,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 
 		expect(
 			(await executeDeploy(
-				{ repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(db), logs },
+				{ repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs },
 				{ runId },
 			)).status,
 		).toBe('succeeded')

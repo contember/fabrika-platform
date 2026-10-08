@@ -17,10 +17,20 @@ import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
-import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
+import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
+import { createTestVault } from './helpers/vault'
+
+const vault = await createTestVault()
+const vaultSecrets = new VaultSecretResolver({ vault })
+
+/** Seal a value the way `apps.secrets.put` does and return the ref the registry row stores. */
+const sealAppSecret = (env: string | null, name: string, value: string): Promise<string> => {
+	const purpose = appSecretPurpose('app', env, name)
+	return vault.putSecret(purpose.scope, purpose.label, value)
+}
 
 const envelope = (provider: string, payload: string): ProviderEnvelope => ({
 	provider,
@@ -43,7 +53,6 @@ async function seedRun(
 	db: ControlRepositories,
 	options: {
 		provider?: string
-		secretRef?: string
 		externalId?: string
 		commitSha?: string
 		sourceBinding?: { connectionId: string; installationId: number }
@@ -80,9 +89,9 @@ async function seedRun(
 		appId: 'app',
 		env: null,
 		name: 'API_KEY',
-		valueRef: options.secretRef ?? 'literal:all-env',
+		valueRef: await sealAppSecret(null, 'API_KEY', 'all-env'),
 	})
-	await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod' })
+	await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: await sealAppSecret('prod', 'API_KEY', 'prod') })
 	await db.registry.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env' })
 	await db.registry.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod' })
 	const runId = uuidv7()
@@ -174,7 +183,7 @@ function makeProvider(
 function makeDeps(
 	db: ControlRepositories,
 	provider: ControlProvider,
-	secrets: SecretResolver = new EnvSecretResolver({}),
+	secrets: SecretResolver = vaultSecrets,
 	lock = makeFakeLock(db),
 ): RunDeps {
 	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() } }
@@ -511,7 +520,7 @@ describe('provider-neutral run lifecycle', () => {
 			return { commitSha: 'a'.repeat(40) }
 		}
 		const lock = makeFakeLock(db)
-		const deps = makeDeps(db, provider, new EnvSecretResolver({}), lock)
+		const deps = makeDeps(db, provider, vaultSecrets, lock)
 		deps.operations = { repository: db.operationsReleases }
 
 		const deploying = executeDeploy(deps, { runId })
@@ -551,7 +560,7 @@ describe('provider-neutral run lifecycle', () => {
 			return Promise.resolve({ state: 'settled' })
 		}
 		const lock = makeFakeLock(db)
-		const deps = makeDeps(db, provider, new EnvSecretResolver({}), lock)
+		const deps = makeDeps(db, provider, vaultSecrets, lock)
 		deps.operations = { repository: db.operationsReleases }
 
 		const deploying = executeDeploy(deps, { runId })
@@ -575,7 +584,7 @@ describe('provider-neutral run lifecycle', () => {
 		const message: DeployJobMessage = { runId, dryRun: true }
 
 		const result = await executeDeploy(
-			makeDeps(db, makeProvider(inputs, { state: 'succeeded', exitCode: 0 }), new EnvSecretResolver({}), lock),
+			makeDeps(db, makeProvider(inputs, { state: 'succeeded', exitCode: 0 }), vaultSecrets, lock),
 			message,
 		)
 
@@ -844,7 +853,7 @@ describe('provider-neutral run lifecycle', () => {
 		const { db } = createHarness()
 		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, FABRIKA_OPERATIONS_DSN]) {
 			const runId = await seedRun(db)
-			await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name, valueRef: 'literal:attacker' })
+			await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name, valueRef: await sealAppSecret('prod', name, 'attacker') })
 			const refused: ProviderDeployInput[] = []
 
 			expect(`${name}: ${(await executeDeploy(makeDeps(db, makeProvider(refused, { state: 'succeeded' })), { runId })).status}`)
@@ -1088,7 +1097,7 @@ describe('provider-neutral run lifecycle', () => {
 		const lock = makeFakeLock(db)
 		await lock.acquire('app:prod', 'other-run', 60_000)
 		expect(
-			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' }), new EnvSecretResolver({}), lock), {
+			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' }), vaultSecrets, lock), {
 				runId: pendingId,
 			})).status,
 		).toBe('deferred')
@@ -1099,11 +1108,12 @@ describe('provider-neutral run lifecycle', () => {
 	test('records resolution and provider failures without leaking the exception', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
-		await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'env:MISSING' })
+		// A row from before secrets were vault-only is refused, not migrated (D2).
+		await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:legacy-plaintext' })
 
 		expect(
 			(await executeDeploy(
-				makeDeps(db, makeProvider([], { state: 'succeeded' }), new EnvSecretResolver({})),
+				makeDeps(db, makeProvider([], { state: 'succeeded' }), vaultSecrets),
 				{ runId },
 			)).status,
 		).toBe('failed')
@@ -1141,7 +1151,7 @@ describe('provider-neutral run lifecycle', () => {
 		const deps = makeDeps(
 			db,
 			makeProvider([], { state: 'failed' }, { cancelled, cancelledNamespaces }),
-			new EnvSecretResolver({}),
+			vaultSecrets,
 			lock,
 		)
 

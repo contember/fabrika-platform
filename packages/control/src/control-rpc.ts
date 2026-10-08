@@ -37,7 +37,6 @@ import { providerEnvelopeSchema } from './api/provider-envelope'
 import {
 	APP_VAR_VALUE_MAX_LENGTH,
 	assertAppVarValue,
-	assertOwnedValueRef,
 	createAppUseCase,
 	deleteAppEnvUseCase,
 	deleteAppSecretUseCase,
@@ -49,7 +48,6 @@ import {
 	listAppsUseCase,
 	listAppVarsUseCase,
 	putAppEnvUseCase,
-	putAppSecretUseCase,
 	putAppVarUseCase,
 	registerAppUseCase,
 	type RegistryUseCaseContext,
@@ -64,7 +62,13 @@ import {
 	tailRunLogUseCase,
 	triggerDeployUseCase,
 } from './api/runs'
-import { deleteAppSecretValueUseCase, rotateAppSecretValueUseCase, setAppSecretValueUseCase, type VaultUseCaseContext } from './api/vault'
+import {
+	deleteAppSecretValueUseCase,
+	putAppSecretUseCase,
+	rotateAppSecretValueUseCase,
+	setAppSecretValueUseCase,
+	type VaultUseCaseContext,
+} from './api/vault'
 import type { Env } from './env'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
@@ -133,7 +137,7 @@ const appEnvironmentBody = z.object({
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
 const secretBody = z.object({
 	name: nonEmpty,
-	valueRef: nonEmpty.refine(refuses(assertOwnedValueRef), 'valueRef must not be a vault reference'),
+	value: z.string(),
 	env: nullableString,
 })
 const putSecretInput = z.object({ appId: nonEmpty, secret: secretBody })
@@ -256,7 +260,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 					controlCall(() => listAppSecretsUseCase(registryContext(ctx), input.appId))
 				),
 				put: rpc.procedure.input(putSecretInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => putAppSecretUseCase(registryContext(ctx), input.appId, input.secret))
+					controlCall(() => putAppSecretUseCase(vaultContext(ctx), input.appId, input.secret))
 				),
 				delete: rpc.procedure.input(appNamedValue).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
 					controlCall(() => deleteAppSecretUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))

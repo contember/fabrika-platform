@@ -23,13 +23,6 @@ export function assertUnmanagedName(kind: 'variable' | 'secret', name: string): 
 	}
 }
 
-/** A vault value is created by `vault.set`; a hand-written `vault:` ref would address any row in the vault. */
-export function assertOwnedValueRef(valueRef: string): void {
-	if (valueRef.startsWith('vault:')) {
-		fail(400, 'a vault reference cannot be supplied — set the secret value instead, which creates and owns its vault entry')
-	}
-}
-
 /** Keep a variable value one bounded line: the Zerops import document interpolates it as raw text. */
 export function assertAppVarValue(value: string): void {
 	if (value.length > APP_VAR_VALUE_MAX_LENGTH) {

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createControlRepositories } from '../db'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { runFencingContract } from './helpers/run-fencing'
 
@@ -41,7 +41,7 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 		const deps: RunDeps = {
 			repositories,
 			lock: locks,
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			logs: { put: async () => {} },
 			provider: {
 				id: 'runtime-test',

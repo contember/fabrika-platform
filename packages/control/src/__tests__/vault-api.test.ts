@@ -185,6 +185,35 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		])
 	})
 
+	test('apps.secrets.put on a provider-managed installation hands the value to the provider; an all-env write is 400', async () => {
+		const { deps } = makeDeps(secretManager())
+		const puts: string[] = []
+		deps.provider = {
+			id: 'harbor',
+			normalizeRegistration: (input) => input,
+			deploy: async () => ({ state: 'succeeded' }),
+			secrets: {
+				put: async ({ environment, name, value }) => {
+					puts.push(`${environment.env}:${name}:${value}`)
+					return { valueRef: `harbor:${environment.env}/${name}` }
+				},
+				delete: async () => {},
+			},
+		}
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('harbor'))
+
+		const put = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', value: 'v1', env: 'prod' } }), deps)
+		expect(put.status).toBe(200)
+		expect(await put.json()).toMatchObject({ name: 'API_KEY', env: 'prod', storage: 'provider', valueRef: null })
+		expect(puts).toEqual(['prod:API_KEY:v1'])
+		expect((await deps.repositories.registry.listAppSecrets('app'))[0]?.value_ref).toBe('harbor:prod/API_KEY')
+
+		const allEnv = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'SHARED', value: 'v1', env: null } }), deps)
+		expect(allEnv.status).toBe(400)
+		expect(puts).toHaveLength(1)
+	})
+
 	test('provider-managed storage rejects an all-env secret instead of guessing replication', async () => {
 		const { deps } = makeDeps(secretManager())
 		deps.provider = {
@@ -261,16 +290,20 @@ describe('a vault ref is owned by the app secret that created it', () => {
 		}
 	}
 
-	test('app A cannot point a secret at app B’s vault ref', async () => {
-		const { deps } = makeDeps(secretManager())
+	test('app A cannot point a secret at app B’s vault ref — the ref is sealed as A’s own value', async () => {
+		const { deps, vault } = makeDeps(secretManager())
 		await seedTwoApps(deps)
 		await rpcResult(rpcRequest('vault.set', { appId: 'b', name: 'API_KEY', value: 'b-secret', env: 'prod' }), deps)
 		const victim = (await deps.repositories.registry.listAppSecrets('b'))[0]!.value_ref
 
-		const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'a', secret: { name: 'STOLEN', valueRef: victim } }), deps)
+		const put = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'a', secret: { name: 'STOLEN', value: victim } }), deps)
 
-		expect(refused.status).toBe(400)
-		expect(await deps.repositories.registry.listAppSecrets('a')).toEqual([])
+		expect(put.status).toBe(200)
+		const stolen = (await deps.repositories.registry.listAppSecrets('a'))[0]?.value_ref ?? ''
+		expect(parseVaultRef(stolen)).not.toBeNull()
+		expect(stolen).not.toBe(victim)
+		expect(await (await vault).getSecret(stolen)).toBe(victim)
+		expect(await (await vault).getSecret(victim)).toBe('b-secret')
 	})
 
 	test('a stored ref that names another purpose is refused on rotate, delete, set and resolve', async () => {

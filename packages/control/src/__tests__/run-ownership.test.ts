@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test'
 import { acquireLease, LEASE_RENEW_MS, LEASE_TTL_MS } from '../lease'
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
 import { cancelDeploy, executeDeploy, type RunDeps } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { flush, ManualClock, RecordingLocks } from './helpers/lease'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
@@ -24,7 +24,7 @@ async function fixture() {
 		lock: locks,
 		leaseClock: clock,
 		provider,
-		secrets: new EnvSecretResolver({}),
+		secrets: new VaultSecretResolver({}),
 		logs: { put: async () => {} },
 	}
 	return { ...harness, clock, locks, advance, deps, row }

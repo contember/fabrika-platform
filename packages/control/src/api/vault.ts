@@ -1,5 +1,5 @@
 import type { AuthContext } from '@fabrika/auth'
-import type { OkResponse, SecretValueResponse, SetSecretValueRequest } from '@fabrika/control-contract'
+import type { AppSecretDto, OkResponse, PutAppSecretRequest, SecretValueResponse, SetSecretValueRequest } from '@fabrika/control-contract'
 import {
 	type ControlProvider,
 	type ProviderManagedSecrets,
@@ -7,12 +7,12 @@ import {
 	type ProviderSecretPutInput,
 	type ProviderSecretPutResult,
 } from '@fabrika/provider-contract'
-import type { AppEnvRow, ControlRepositories } from '../db'
+import type { AppEnvRow, AppSecretRow, ControlRepositories } from '../db'
 import { providerEnvironment } from '../run-lifecycle'
 import { appSecretPurpose } from '../secret-resolver'
 import { parseVaultRef, type Vault, type VaultSecretPurpose } from '../vault'
 import { fail } from './domain'
-import { assertUnmanagedName } from './registry'
+import { assertUnmanagedName, toAppSecretDto } from './registry'
 
 export interface VaultUseCaseContext {
 	readonly repositories: ControlRepositories
@@ -27,6 +27,23 @@ export async function setAppSecretValueUseCase(
 	name: string,
 	input: SetSecretValueRequest,
 ): Promise<SecretValueResponse> {
+	const row = await writeAppSecretValue(c, appId, name, input, 'app.secret.set')
+	return { ok: true, valueRef: row.value_ref }
+}
+
+export async function putAppSecretUseCase(c: VaultUseCaseContext, appId: string, input: PutAppSecretRequest): Promise<AppSecretDto> {
+	const row = await writeAppSecretValue(c, appId, input.name, { value: input.value, env: input.env ?? null }, 'app.secret.upsert')
+	return toAppSecretDto(row, c.provider)
+}
+
+/** Seal the value where this installation keeps app secrets and point the registry row at it. */
+async function writeAppSecretValue(
+	c: VaultUseCaseContext,
+	appId: string,
+	name: string,
+	input: SetSecretValueRequest,
+	auditAction: 'app.secret.set' | 'app.secret.upsert',
+): Promise<AppSecretRow> {
 	await requireApp(c, appId)
 	assertUnmanagedName('secret', name)
 	const env = input.env ?? null
@@ -37,9 +54,9 @@ export async function setAppSecretValueUseCase(
 			name,
 			value: input.value,
 		})
-		await c.repositories.registry.upsertAppSecret({ appId, env: target.appEnv.env, name, valueRef })
-		await audit(c, 'app.secret.set', appId, target.appEnv.env, name, valueRef)
-		return { ok: true, valueRef }
+		const row = await c.repositories.registry.upsertAppSecret({ appId, env: target.appEnv.env, name, valueRef })
+		await audit(c, auditAction, appId, target.appEnv.env, name, valueRef)
+		return row
 	}
 	const vault = await requireVault(c)
 	const purpose = appSecretPurpose(appId, env, name)
@@ -48,10 +65,10 @@ export async function setAppSecretValueUseCase(
 	// leaves both the vault and the registry exactly as they were.
 	if (prior !== null && parseVaultRef(prior) !== null) await assertVaultOwnership(vault, prior, purpose)
 	const valueRef = await vault.putSecret(purpose.scope, purpose.label, input.value)
-	await c.repositories.registry.upsertAppSecret({ appId, env, name, valueRef })
+	const row = await c.repositories.registry.upsertAppSecret({ appId, env, name, valueRef })
 	if (prior !== null) await deletePriorVaultEntry(vault, prior)
-	await audit(c, 'app.secret.set', appId, env, name, valueRef)
-	return { ok: true, valueRef }
+	await audit(c, auditAction, appId, env, name, valueRef)
+	return row
 }
 
 /**

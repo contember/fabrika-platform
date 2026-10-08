@@ -7,7 +7,7 @@ import { type ControlRepositories } from '../db'
 import { type CloudflareRunnerService, recoverRunOnRunner, startRunOnRunner } from '../platform-cf'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { fixtureRuns, makeFakeLock } from './helpers/lock'
 
@@ -77,7 +77,7 @@ function cloudflareProvider(runner: CloudflareRunnerService, iamCalls: string[],
 }
 
 function deps(db: ControlRepositories, provider: ControlProvider): RunDeps {
-	return { repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(db), logs: { put: () => Promise.resolve() } }
+	return { repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs: { put: () => Promise.resolve() } }
 }
 
 describe('Cloudflare run outcome through Control', () => {

@@ -11,7 +11,7 @@ import type { ControlProvider, ProviderDeployInput, ProviderEnvelope, ProviderRe
 import { describe, expect, test } from 'bun:test'
 import { replayOperationsReleases } from '../operations-releases'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
@@ -301,7 +301,7 @@ describe('Control release projection', () => {
 		const deps: RunDeps = {
 			repositories: harness.repositories,
 			provider: controlProvider,
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
 			operations: { repository: harness.repositories.operationsReleases },
@@ -327,7 +327,7 @@ describe('Control release projection', () => {
 		const deps: RunDeps = {
 			repositories: harness.repositories,
 			provider: provider(inputs),
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
 			operations,
@@ -371,7 +371,7 @@ describe('Control release projection', () => {
 		const deps: RunDeps = {
 			repositories: harness.repositories,
 			provider: provider(inputs),
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
 			operations: {
@@ -392,7 +392,7 @@ describe('Control release projection', () => {
 			const deps: RunDeps = {
 				repositories: harness.repositories,
 				provider: provider(inputs),
-				secrets: new EnvSecretResolver({}),
+				secrets: new VaultSecretResolver({}),
 				lock: makeFakeLock(harness.repositories),
 				logs: { put: () => Promise.resolve() },
 				operations: {

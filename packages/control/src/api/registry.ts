@@ -4,10 +4,10 @@ export {
 	deleteAppVarUseCase,
 	listAppSecretsUseCase,
 	listAppVarsUseCase,
-	putAppSecretUseCase,
 	putAppVarUseCase,
+	toAppSecretDto,
 } from './registry/configuration'
 export type { RegistryUseCaseContext } from './registry/context'
 export { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase } from './registry/environments'
 export { registerAppUseCase } from './registry/registration'
-export { APP_VAR_VALUE_MAX_LENGTH, assertAppVarValue, assertOwnedValueRef, assertUnmanagedName } from './registry/validation'
+export { APP_VAR_VALUE_MAX_LENGTH, assertAppVarValue, assertUnmanagedName } from './registry/validation'

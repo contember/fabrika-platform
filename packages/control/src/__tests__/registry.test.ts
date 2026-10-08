@@ -17,10 +17,12 @@ import { normalizeRegistration } from '../api/registry/registration'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
+import { parseVaultRef, Vault } from '../vault'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureRuns, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
+import { testVaultKey } from './helpers/vault'
 
 // Registry + onboarding row creation, and run-history reads, driven through the RPC
 // router against the real schema (in-memory sqlite). An allow-all test authenticator lets us focus on
@@ -29,11 +31,13 @@ import { rpcRequest, rpcResult } from './helpers/rpc'
 function makeDeps(
 	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void; repoSource?: RepoEvents } = {},
 ): { deps: ControlRpcDeps; queue: ControlJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
-	const { db, sqlite } = createHarness()
+	const { db, d1, sqlite } = createHarness()
 	const queue: ControlJobMessage[] = []
 	const logStore = new Map<string, string>()
+	const vault = Vault.create(d1, testVaultKey())
 	const deps: ControlRpcDeps = {
 		repositories: db,
+		vault: () => vault,
 		auth: allowAllAuth(),
 		queue: {
 			send(m) {
@@ -551,11 +555,11 @@ describe('onboarding + registry CRUD', () => {
 		)
 		expect(putEnv.status).toBe(200)
 
-		// secret upsert (a vault REFERENCE, not a value)
-		const putSecret = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'env:APP_API_KEY' } }), deps)
+		// secret upsert: the value is sealed and only its vault ref comes back
+		const putSecret = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', value: 'the-api-key' } }), deps)
 		expect(putSecret.status).toBe(200)
 		const secret = (await putSecret.json()) as { valueRef: string }
-		expect(secret.valueRef).toBe('env:APP_API_KEY')
+		expect(parseVaultRef(secret.valueRef)).not.toBeNull()
 
 		// list secrets
 		const listSecrets = await rpcResult(rpcRequest('apps.secrets.list', { appId: 'app' }), deps)
@@ -752,27 +756,56 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 	test('a reserved name is refused on the SECRET surface, exactly as it is on the variable surface', async () => {
 		const { deps } = await seededApp()
 		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
-			const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name, valueRef: 'literal:x' } }), deps)
+			const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name, value: 'x' } }), deps)
 			expect(`${name}: ${refused.status}`).toBe(`${name}: 400`)
 			expect(((await refused.json()) as { error: string }).error).toContain('managed by Fabrika')
 		}
 		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
 	})
 
-	test('a caller-supplied vault: reference is refused — a vault value is created, never pointed at', async () => {
-		const { deps } = await seededApp()
-		const refused = await rpcResult(
-			rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'vault:01a00000-0000-7000-8000-000000000000' } }),
-			deps,
-		)
-		expect(refused.status).toBe(400)
-		expect(((await refused.json()) as { error: string }).error).toContain('vault reference')
-		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	test('a written value is sealed in the vault — the row holds only its ref, even when the value looks like a ref', async () => {
+		const { deps, sqlite } = await seededApp()
+		for (
+			const [name, value] of [['API_KEY', 'sk-live-plaintext'], ['LOOKS_LIKE_REF', 'literal:sk-live-plaintext'], [
+				'VAULT_LIKE',
+				'vault:01a00000-0000-7000-8000-000000000000',
+			]]
+		) {
+			const put = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name, value } }), deps)
+			expect(`${name}: ${put.status}`).toBe(`${name}: 200`)
+			expect(await put.text()).not.toContain('sk-live-plaintext')
+		}
 
-		// Every other scheme is unchanged.
-		expect((await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'literal:x' } }), deps)).status).toBe(
-			200,
-		)
+		const rows = await deps.repositories.registry.listAppSecrets('app')
+		expect(rows).toHaveLength(3)
+		for (const row of rows) expect(parseVaultRef(row.value_ref)).not.toBeNull()
+		expect(rows.some((row) => row.value_ref === 'vault:01a00000-0000-7000-8000-000000000000')).toBe(false)
+		expect(JSON.stringify(sqlite.query('SELECT * FROM app_secrets').all())).not.toContain('sk-live-plaintext')
+		const vault = await deps.vault?.()
+		const stored = rows.find((row) => row.name === 'LOOKS_LIKE_REF')
+		expect(stored === undefined ? undefined : await vault?.getSecret(stored.value_ref)).toBe('literal:sk-live-plaintext')
+	})
+
+	test('a legacy non-vault row is listed as legacy with no ref, so plaintext it may hold is never echoed', async () => {
+		const { deps } = await seededApp()
+		await deps.repositories.registry.upsertAppSecret({ appId: 'app', env: null, name: 'OLD', valueRef: 'literal:sk-live-plaintext' })
+		await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'NEW', value: 'fresh' } }), deps)
+
+		const listed = await rpcResult(rpcRequest('apps.secrets.list', { appId: 'app' }), deps)
+		const body = await listed.text()
+		expect(body).not.toContain('sk-live-plaintext')
+		const items = (JSON.parse(body) as { items: { name: string; storage: string; valueRef: string | null }[] }).items
+		expect(items.find((item) => item.name === 'OLD')).toMatchObject({ storage: 'legacy', valueRef: null })
+		const fresh = items.find((item) => item.name === 'NEW')
+		expect(fresh?.storage).toBe('vault')
+		expect(parseVaultRef(fresh?.valueRef ?? '')).not.toBeNull()
+	})
+
+	test('a raw valueRef input is no longer accepted', async () => {
+		const { deps } = await seededApp()
+		const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'literal:x' } }), deps)
+		expect(refused.status).toBe(400)
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
 	})
 
 	test('a variable value must be one bounded line', async () => {

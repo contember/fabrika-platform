@@ -40,7 +40,7 @@ describe('Delivery RPC client', () => {
 		await client.apps.environments.put({ appId: 'billing', env: 'prod', environment })
 		await client.apps.environments.delete({ appId: 'billing', env: 'prod' })
 		await client.apps.secrets.list({ appId: 'billing' })
-		await client.apps.secrets.put({ appId: 'billing', secret: { name: 'TOKEN', valueRef: 'env:TOKEN', env: null } })
+		await client.apps.secrets.put({ appId: 'billing', secret: { name: 'TOKEN', value: 'write-only', env: null } })
 		await client.apps.secrets.delete({ appId: 'billing', name: 'TOKEN', env: null })
 		await client.apps.variables.list({ appId: 'billing' })
 		await client.apps.variables.put({ appId: 'billing', variable: { name: 'LOG_LEVEL', value: 'info', env: 'prod' } })
@@ -55,7 +55,7 @@ describe('Delivery RPC client', () => {
 			{ method: 'apps.environments.put', input: { appId: 'billing', env: 'prod', environment } },
 			{ method: 'apps.environments.delete', input: { appId: 'billing', env: 'prod' } },
 			{ method: 'apps.secrets.list', input: { appId: 'billing' } },
-			{ method: 'apps.secrets.put', input: { appId: 'billing', secret: { name: 'TOKEN', valueRef: 'env:TOKEN', env: null } } },
+			{ method: 'apps.secrets.put', input: { appId: 'billing', secret: { name: 'TOKEN', value: 'write-only', env: null } } },
 			{ method: 'apps.secrets.delete', input: { appId: 'billing', name: 'TOKEN', env: null } },
 			{ method: 'apps.variables.list', input: { appId: 'billing' } },
 			{ method: 'apps.variables.put', input: { appId: 'billing', variable: { name: 'LOG_LEVEL', value: 'info', env: 'prod' } } },

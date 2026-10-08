@@ -141,12 +141,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `repository.ts`, `transport.ts`, `metadata.ts` are process-only; the shared layer reaches only
   `connections.ts` and `credentials.ts`. Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
-- **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.
-  An unknown / unresolvable ref THROWS — never deploy with an empty credential. The resolver handles ONLY
-  per-app `pipeline.secrets`; platform creds are fabrika's own Worker config (below).
+- **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
+  plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.
+  The resolver knows only `vault:`; any other stored ref — a row from before this rule — THROWS rather than
+  deploy with a wrong or empty credential, and is never migrated. It handles ONLY per-app `pipeline.secrets`;
+  platform creds are fabrika's own Worker config.
 - **A `vault:` ref is OWNED by the app secret that minted it.** The vault is one table shared with every
-  other app and with `scope='platform'` rows, and `app_secrets.value_ref` is the only pointer into it — so a
-  caller-supplied `vault:` ref is refused outright (`assertOwnedValueRef`), and every path that FOLLOWS a
+  other app and with `scope='platform'` rows, and `app_secrets.value_ref` is the only pointer into it — so no
+  API accepts a ref (a value that looks like one is just sealed), and every path that FOLLOWS a
   stored one — resolve, rotate, delete, and the prior-ref delete inside `vault.set` — goes through
   `getSecretForPurpose` with `appSecretPurpose(app, env, name)` (`src/secret-resolver.ts`), the same
   `{scope,label}` the value was sealed under. A mismatch is a 403 that names neither, and changes nothing.

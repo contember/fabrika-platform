@@ -34,7 +34,7 @@ a commit message suffices.
 | ADR                                                                     | Decision                                                                                |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [0003](0003-no-deploy-runner-on-zerops.md)                              | No deploy runner on Zerops — Control drives the platform over HTTP                      |
-| [0004](0004-secrets-live-in-the-platform.md)                            | The platform holds secret values; fabrika holds only references                         |
+| [0004](0004-secrets-live-in-the-platform.md)                            | App secret values live in the target platform, or in the vault where it has none        |
 | [0005](0005-compile-app-config-to-static-manifest.md)                   | Compile app config to a static manifest; the control plane never executes app code      |
 | [0006](0006-zerops-project-topology-is-a-registry-field.md)             | Zerops project topology is a registry field, defaulting to project-per-environment      |
 | [0011](0011-static-provider-bundles.md)                                 | Compose one static provider bundle per installation; the provider owns its deploy       |

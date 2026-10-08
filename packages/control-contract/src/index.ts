@@ -310,17 +310,26 @@ export interface PlanDeploymentNamespaceResponse {
 	readonly presentation: DeploymentNamespacePresentationDto
 }
 
+/**
+ * Where an app secret's value is kept: `vault` (control's vault), `provider` (the provider's own storage),
+ * or `legacy` — a row from before secrets were vault-only, which no deploy resolves until it is set again.
+ */
+export type AppSecretStorage = 'vault' | 'provider' | 'legacy'
+
 export interface AppSecretDto {
 	appId: string
 	env: string | null
 	name: string
-	valueRef: string
+	storage: AppSecretStorage
+	/** The `vault:` ref; null for any other storage, whose stored ref control cannot vouch for. */
+	valueRef: string | null
 	createdAt: number
 }
 
+/** The plaintext is write-only: control seals it and stores only the resulting ref. */
 export interface PutAppSecretRequest {
 	name: string
-	valueRef: string
+	value: string
 	env?: string | null
 }
 

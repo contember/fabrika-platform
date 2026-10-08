@@ -18,7 +18,7 @@ import { bunSpawner } from '../../../runner-container/src/spawn'
 import { type ControlRepositories, type RunTrigger } from '../db'
 import { GitHubAppRepoSource } from '../repo-source'
 import { executeDeploy } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
@@ -239,7 +239,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		const result = await executeDeploy({
 			repositories: db,
 			provider,
-			secrets: new EnvSecretResolver({}),
+			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(db),
 			logs: { put: async () => {} },
 			operations: {

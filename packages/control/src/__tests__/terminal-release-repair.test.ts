@@ -13,7 +13,7 @@ import { LEASE_TTL_MS } from '../lease'
 import { type OperationsReleaseProjectionDeps, replayOperationsReleases } from '../operations-releases'
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
 import { cancelDeploy, executeDeploy } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
@@ -270,7 +270,7 @@ for (const backend of ['sqlite', 'postgres']) {
 					repositories,
 					lock,
 					logs: { put: async () => {} },
-					secrets: new EnvSecretResolver({}),
+					secrets: new VaultSecretResolver({}),
 					operations,
 					provider: {
 						...fakeControlProvider,
@@ -302,7 +302,7 @@ for (const backend of ['sqlite', 'postgres']) {
 					repositories,
 					lock,
 					logs: { put: async () => {} },
-					secrets: new EnvSecretResolver({}),
+					secrets: new VaultSecretResolver({}),
 					provider: fakeControlProvider,
 					operations: { repository: new RejectTerminalProjection(database), now: () => NOW_MS + 10_000 },
 				}, { runId: 'lost-write' })).status,

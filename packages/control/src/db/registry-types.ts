@@ -104,7 +104,10 @@ export interface AppSecretRow {
 	/** NULL = applies to every env of the app; set = that env only (narrower wins). */
 	env: string | null
 	name: string
-	/** Store reference (`vault:`, `secretstore:`, or `zerops:`) — never the plaintext value. */
+	/**
+	 * A `vault:` ref, or the provider's own ref for a provider-managed secret. A row from before secrets were
+	 * vault-only may hold anything, including plaintext, so it is never echoed (`toAppSecretDto`).
+	 */
 	value_ref: string
 	created_at: number
 }
