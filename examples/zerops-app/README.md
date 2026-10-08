@@ -54,10 +54,10 @@ applies per-object checks that a path gate cannot express
 ## The shape of a Zerops deploy
 
 ```
-apply-import → trigger-deploy → await-deploy → reconcile-schema
+apply-import → write-service-env → reserve-version → upload-source → trigger-build → await-version → reconcile-schema
 ```
 
-Four steps, and the differences from Cloudflare's plan are all deliberate
+Seven steps, and the differences from Cloudflare's plan are all deliberate
 ([ADR-0003](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0003-no-deploy-runner-on-zerops.md)):
 
 - **no `build`** — Zerops has its own CI. fabrika triggers it; it does not run it, and there is no
@@ -70,9 +70,8 @@ Four steps, and the differences from Cloudflare's plan are all deliberate
   ([ADR-0004](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0004-secrets-live-in-the-platform.md)), so a deploy-time push would
   silently overwrite a client's GUI edit.
 
-The fabrika-platform test suite drives the neutral deploy executor with the Zerops provider over a
-recording fake. It asserts that exact plan and the exact ordered sequence of API calls a real run would
-make.
+The fabrika-platform test suite drives the Zerops deployer over a recording fake. It asserts that exact
+plan and the exact ordered sequence of API calls a real run would make.
 
 ## Where the secrets go
 
@@ -89,9 +88,10 @@ service, so the service has to exist before its secrets can be set. Bring-up is
 `zerops.yaml` carries `${notesdb_connectionString}`, which is a _reference_ to another service's
 platform-held variable, not a value.
 
-Fabrika also writes `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` as managed
-service-level variables before triggering a deploy. They are intentionally
-absent from the static app manifest and from this repository's `zerops.yaml`.
+Fabrika also manages `FABRIKA_OPERATIONS_DSN`, `FABRIKA_RELEASE` and the other `FABRIKA_*` keys
+it reserves. `write-service-env` writes all but `FABRIKA_RELEASE` as service variables;
+`trigger-build` writes `FABRIKA_RELEASE` into the execution descriptor, so it travels with the version.
+They are intentionally absent from the static app manifest and from this repository's `zerops.yaml`.
 Applications must not declare those reserved names.
 
 The authenticated `/operations-sdk` fixture is the minimal browser adoption

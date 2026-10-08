@@ -74,8 +74,9 @@ structured import document, then deploys it without executing repository code.
 The app-env target envelope version 2 supplies only the Zerops service id. The
 assigned deployment namespace target supplies project and proxy coordinates.
 The same app service id is used for deploys and immediate secret write-through.
-The triggered app-version id is stored in the generic `external_run_id` field so
-startup and cron can reconcile a run after the initiating process disappears.
+The app-version id is stored in the generic `external_run_id` field as soon as
+the version is reserved, so startup and cron can reconcile a run after the
+initiating process disappears.
 
 Placement is part of the open provider contract, not a Zerops branch in shared
 control. A provider may implement namespace normalization, resource claims,
@@ -87,10 +88,10 @@ project and offers `cheap`, `mid`, and `full` isolation presets. See
 
 The Cloudflare provider keeps the executable Oblaka config as its source
 artifact. Its control adapter resolves a checkout and sends the provider-owned
-runner job through `@fabrika/runner-contract` to the separate Cloudflare runner.
-`@fabrika/runner-container` invokes the internal
-`fabrika-cloudflare-executor`; the neutral engine and shared control core do not
-import Oblaka or interpret Cloudflare steps.
+runner job defined in `@fabrika/provider-cloudflare/runner` to the separate
+Cloudflare runner. `@fabrika/runner-container` invokes the internal
+`fabrika-cloudflare-executor`; shared control code does not import Oblaka or
+interpret Cloudflare steps.
 
 ## IAM (`@fabrika/iam`) — port assessment
 

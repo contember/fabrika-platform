@@ -67,9 +67,9 @@ packages/
   control control-contract        # Delivery control plane — Worker AND long-running Bun process
   dashboard                       # the unified console SPA (all three planes)
   platform platform-node          # runtime PORTS · the Postgres/S3/Bun implementation set
-  provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
-  installation-{cloudflare,zerops}            # `fabrika platform init/plan/deploy` per cloud
+  provider-{contract,cloudflare,zerops}       # authoring, deploy, control, and `fabrika platform …` per cloud
   installation-init               # the operator-side `init` mechanics both installations share
+  platform-artifacts              # private Zerops installation codegen: zerops.yaml, import YAMLs, schemas
   runner-{container,cloudflare}               # the Cloudflare out-of-band deploy executor
   github-app                      # the shared GitHub App client
   proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
@@ -83,7 +83,7 @@ Cloudflare configs import `@fabrika/provider-cloudflare`, Zerops configs `@fabri
 There is no shared `@fabrika/config` package and no closed provider union. The public `fabrika` CLI
 infers an app's provider from the object returned by that provider's `defineApp()`; `--provider` is
 needed only when there is no app config. Platform commands load the provider's
-`@fabrika/installation-*` package through the open installation contract.
+`@fabrika/provider-<cloud>/installation` subpath through the open installation contract.
 
 ## Code Conventions
 
@@ -101,7 +101,7 @@ needed only when there is no app config. Platform commands load the provider's
   change and commit the result. Never hand-edit it.
 - **`oblaka-iac` resolves from npm, pinned to `^0.0.18`.** fabrika + oblaka are co-versioned — bump the
   pin deliberately, in every package plus `runner-container/docker/package.json`.
-- **`provider-cloudflare`, `installation-cloudflare`, `control`, and `runner-cloudflare` relax exactly two strict flags**
+- **`provider-cloudflare`, `control`, and `runner-cloudflare` relax exactly two strict flags**
   (`noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`) ONLY to tolerate oblaka's raw-TS
   source. Keep our own code strict; never widen the relaxation and never work around oblaka with a
   cast — ask first.
@@ -141,9 +141,10 @@ contract note (`*-contract`), the substantial ones are:
   for its SQL and migration rules).
 - `packages/platform/` + `packages/platform-node/` — the runtime ports and their Postgres/S3/Bun
   implementations · `packages/provider-cloudflare/` + `packages/provider-zerops/` — the provider bundles.
-- `packages/installation-cloudflare/` + `packages/installation-zerops/` — platform installation, each
-  generating the operator's own sidecar repository over the shared `packages/installation-init/` ·
-  `packages/cli/` — command routing and provider inference.
+- `provider-<cloud>/src/installation/` — platform installation, each generating the operator's own
+  sidecar repository over the shared `packages/installation-init/` · `packages/platform-artifacts/` —
+  the private codegen behind the Zerops installation's generated files · `packages/cli/` — command
+  routing and provider inference.
 - `packages/proxy-core/` — the enforcement decision, public and runtime-neutral · `packages/proxy/` —
   its Caddy deployment, private because it is an artifact · `packages/operations/` + `packages/operations-ui/` —
   the Operations kernel and console views · `packages/dashboard/` — the SPA.

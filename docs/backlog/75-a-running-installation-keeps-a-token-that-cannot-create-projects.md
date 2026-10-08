@@ -12,7 +12,7 @@ blocked-by: []
 
 ## Problem
 
-`platform install` mints with `canCreateProjects` since ADR-0034 (`packages/installation-zerops/src/install.ts`),
+`platform install` mints with `canCreateProjects` since ADR-0034 (`packages/provider-zerops/src/installation/install.ts`),
 but a token minted earlier fails the first `namespaces create` at `POST /client/{id}/project/import` with
 `403 insufficientPermissions` — the wall the first live namespace hit, cleared by a manual
 `zops token integration update`. The repair must re-pass every existing project grant in the same call,
@@ -42,7 +42,7 @@ the asynchronous `failed: insufficientPermissions` into a synchronous refusal of
 
 ## Touch points
 
-`packages/installation-zerops/src/`, `packages/provider-zerops/src/api.ts` (`createIntegrationToken`,
+`packages/provider-zerops/src/installation/`, `packages/provider-zerops/src/api/client.ts` (`createIntegrationToken`,
 and the update call once it is measured live), `packages/cli/src/`.
 
 <!-- Origin: found while provisioning the first live app namespace, 2026-08-18; rescoped by the cheap-rebuild sprint WU7, 2026-08-21. -->

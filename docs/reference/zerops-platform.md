@@ -606,18 +606,18 @@ presigned upload credential.
 A third disposable service (`wu3stateprobe`) tested the pre-trigger recovery boundary. A new app
 version reported `UPLOADING`; after a successful archive PUT it still reported `UPLOADING` even after
 the request had returned. `deleteAppVersion` then returned `{ success: true }` and the version was no
-longer readable. The same delete also removed a second version that had received no upload. Fabrika
-must therefore persist its own upload-complete checkpoint, and it can clean both ambiguous pre-trigger
-states with the exact API available to the project integration token. The service was deleted.
+longer readable. The same delete also removed a second version that had received no upload. The
+version status cannot tell an uploaded version from an empty one, but the project integration token
+can delete either; ADR-0044's delete-before-trigger recovery relies on that. The service was deleted.
 
 ### Fabrika application source transport
 
-Fabrika application deploys no longer use `buildFromGit`. Public and private GitHub repositories share
-one provider lifecycle: source resolves the exact commit and registered root `zerops.yaml` digest;
-control creates and records an application version; source streams the repository tarball for that
-exact commit into the upload; and control calls `build-and-deploy` with the validated, canonically rendered descriptor and
-selected setup. Public `buildFromGit` remains in use for Fabrika-owned installation artifacts such as
-the proxy, not for an application deployment.
+Fabrika application deploys do not use `buildFromGit`. Public and private GitHub repositories share
+one path, run in-process by control (`packages/control/src/source/`, ADR-0029): resolve the exact
+commit and the registered root `zerops.yaml` digest; create and record an application version; stream
+the repository tarball for that commit into the version's upload; call `build-and-deploy` with the
+validated, canonically rendered descriptor and selected setup. Public `buildFromGit` remains in use for
+Fabrika-owned installation artifacts such as the proxy, not for an application deployment.
 
 The registered descriptor retains its original text and SHA-256. Validation accepts one mapping
 document with uniquely named setups and checks decoded keys and values across every setup for foreign
@@ -626,30 +626,17 @@ duplicate keys, non-string keys, ambiguous plain scalars and unsupported raw Uni
 quoted equivalents of ambiguous scalars remain supported. The same canonicalization runs on recovered
 builds. See [ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md).
 
-The installation has a private `source` service on `http://source:3000`. It needs no `git` binary and no
-`run.prepareCommands`, which matters because package installation on a Zerops runtime requires `sudo`.
-Source exposes
-only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
-reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
-`FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. Fresh source services
-start anonymously, so public repositories need no GitHub credential. Every organization-owned private
-App gets a v2 canonical bundle in its own create-only environment slot derived from its connection id.
-The slot name and bundle both bind that id; source validates the binding at startup and keeps immutable
-credential snapshots keyed by connection id. It activates a new SHA-256-bound bundle without restarting
-and routes v2 resolve and upload calls by the exact connection and installation pair. `keyed-v2` is the
-only transport (ADR-0029); there is no fallback and no credential search. A leftover unkeyed
-`GITHUB_APP_CREDENTIALS` bundle or split `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` pair is ignored
-entirely, and a request that names no connection resolves no credential at all. Fabrika sets no total
-connection limit. Request bodies, repository lists, environment responses and Control pages remain
-bounded.
+The transport needs no `git` binary and no `run.prepareCommands`, which matters because package
+installation on a Zerops runtime requires `sudo`. App ids and private keys of every GitHub connection
+live in control's vault; a request that names no connection resolves no credential, and there is no
+credential search.
 
 Each connection has an independent webhook secret encrypted in Control's platform vault. Every Zerops
 App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and secret before
 reading and authenticating the bounded body, then requires the payload installation, repository and
 registered application pair to match it. A Zerops composition REFUSES the generic `/webhooks/github`
-route with 401 — since ADR-0029 it has nothing there to resolve, and it never falls back to a keyed
-connection. Cloudflare keeps that generic route, on its static secret and installation-id path, because
-it has no source connection row at all.
+route with 401 and never falls back to a keyed connection. Cloudflare keeps that generic route, on its
+static secret and installation-id path, because it has no source connection row at all.
 
 Production origins are fixed to `api.github.com` and `codeload.github.com`. There is no operator-facing
 GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected test seams only.
@@ -657,20 +644,19 @@ Resolve reads two bounded REST responses: the commit for the requested ref, then
 through `/contents` with `Accept: application/vnd.github.raw+json`, whose SHA-256 must equal the digest
 registered in the provider artifact.
 
-Archive and upload are one streamed operation. Source requests
+Archive and upload are one streamed operation. Control requests
 [`/repos/{owner}/{repo}/tarball/{sha}`](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-tar)
 with `redirect: 'manual'`, requires the `Location` origin to be exactly `https://codeload.github.com`,
 and fetches that URL without the installation Authorization header — the codeload URL carries its own
 short-lived token in its query and is treated as a credential in transit. The response is piped
 `gunzip → tar rewrite → gzip → PUT`, so no repository byte is staged on disk or buffered whole.
 
-The default application tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
+The application tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
 the pax global header's `comment`, strips the single archive prefix, keeps regular files only and
 rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed mtime. The tarball's own
 directory entries are dropped; instead each parent directory is written once, outermost first, before
 the first file beneath it, because the platform's unpacker creates no directory it was not told about
-(measured 2026-08-21, below; ADR-0029's "drops directory entries" describes the first cut, which failed
-that build). It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
+(measured 2026-08-21, below). It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
 root `.gitmodules`, paths outside the prefix or containing `.`/`..`, duplicate paths, a pax `linkpath`
 record, a pax record over 64 KiB, and a truncated stream. It admits at most 50,000 files and 512 MiB of
 file content, counted incrementally. It hashes the root `zerops.yaml` as it passes: a missing or
@@ -678,9 +664,8 @@ drifted descriptor fails the operation. Because the tarball is `git archive` out
 `export-ignore` and `export-subst` apply. Archives are not byte-deterministic across runs and nothing
 depends on that.
 
-Public v1 uploads may explicitly select `archiveKind: 'platform'`. That mode rejects installation
-credentials; private v2 uploads do not accept the field. Before downloading a platform archive,
-source checks the exact commit's Git tree: the commit and root tree identities must match, the tree
+A public archive may be uploaded as kind `platform`, which takes no credential. Before downloading it,
+control checks the exact commit's Git tree: the commit and root tree identities must match, the tree
 must explicitly be complete, and gitlinks are refused even without `.gitmodules`. Metadata is bounded
 to 7 MiB and 50,000 entries; truncated or malformed trees fail before download or upload.
 
@@ -688,8 +673,8 @@ Platform mode preserves relative symbolic links after validating the full archiv
 refuses escapes, cycles, dangling targets, path-type collisions, entries beneath symlinks in either
 order, and symlink descriptors. Hard links and special entries remain refused. Contents stay streamed;
 bounded path/link metadata supports the final verdict. A PUT response alone is not upload success:
-the archive's validation verdict must succeed too. Omitted `archiveKind` retains strict application
-behavior, including rejection of symbolic links and PAX `linkpath` records.
+the archive's validation verdict must succeed too. The `application` kind keeps the strict behaviour,
+including rejection of symbolic links and PAX `linkpath` records.
 
 **Public platform archive witness, 2026-10-02.** Exact commit
 `9917992ad1a0a462e060064255d9a90a3a2ed968` passed live GitHub tree checks and streamed archive validation:
@@ -697,7 +682,6 @@ behavior, including rejection of symbolic links and PAX `linkpath` records.
 `12ea505cc6fe782871b350d5ac2e58d7bd1b2874ec7ee4da152b814f6a8c68b0`. Native tar inspection preserved
 both `packages/auth-core/AGENTS.md` and `packages/installation-init/AGENTS.md` as relative links to
 `CLAUDE.md`. The production-style gzip/native-fetch pipeline completed against a local HTTP sink.
-This is not a source-service-to-Zerops build witness.
 
 **Live source transport/extraction witness, 2026-10-02.** The production repository/archive,
 gzip and native PUT pipeline uploaded that same pinned commit to reserved version
@@ -715,38 +699,36 @@ not the repository's platform descriptor, so it does not establish full platform
 For local stream witnesses on Bun 1.3.14, consume the archive through a reader and incremental
 `FileSink`. `Bun.write(path, new Response(customStream))` stalled even for a network-free 2 KiB
 stream; an upstream HTTP abort did not unblock that consumer after download had completed.
-The service's native fetch consumer did not exhibit that failure.
+A native fetch consumer did not exhibit that failure. Bun's compression streams also ignore
+backpressure, so the pipe pulls through explicitly (`packages/control/src/source/streams.ts`).
 
-Measured 2026-08-21 on the test installation (`source` at its `0.125 GB` floor, read once a second
-through `GET /service-stack/{id}/container` → `currentHardwareResource`, the allocation vertical
-autoscaling raises when a container needs more): a 250 MB incompressible repository (25 × 10 MB
-random files beside the 62 MB example app) deployed in 3 min 22 s with the tarball stream taking
-about 17 s, and the example app alone in 3 min 08 s — `source` stayed at **one container × 128 MB**
-for both. The memory claim behind the streamed path is a reading now, not an inference.
+Measured 2026-08-21 on the test installation, when the same streamed pipe ran in a separate service at
+its `0.125 GB` floor (read once a second through `GET /service-stack/{id}/container` →
+`currentHardwareResource`, the allocation vertical autoscaling raises when a container needs more): a
+250 MB incompressible repository (25 × 10 MB random files beside the 62 MB example app) deployed in
+3 min 22 s with the tarball stream taking about 17 s, and the example app alone in 3 min 08 s — the
+service stayed at **one container × 128 MB** for both.
 
-The source service accepts only the measured `prg1` upload destination: HTTPS host
+The transport accepts only the measured `prg1` upload destination: HTTPS host
 `proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, empty userinfo, no explicit
 port or fragment, and a non-empty signed query. It refuses redirects. The credential-bearing upload URL
-is present only in the authenticated request and live PUT; neither side persists or logs it.
+exists only in memory for the live PUT; it is never persisted or logged.
 
-Control's outer RPC deadlines are 45 seconds for installation lookup, five minutes for resolve,
-20 minutes for upload and 30 seconds for cancellation. Source expires installation lookup after
-30 seconds, resolve after four minutes and upload after 15 minutes, leaving time for a redacted response
-before the outer deadline. The upload PUT itself is bounded to ten minutes, and that bound covers
-the whole download-rewrite-upload pipe. Caller cancellation is propagated through GitHub REST, the
-tarball download, the rewrite and the upload.
+Resolve is bounded to four minutes and upload to 15 minutes; the PUT itself is bounded to ten minutes,
+and that bound covers the whole download-rewrite-upload pipe
+(`packages/control/src/source/transport.ts`). Caller cancellation is propagated through GitHub REST,
+the tarball download, the rewrite and the upload.
 
-Validation happens while the PUT is in flight, so a rejected repository aborts the upload. Source
-settles the archive verdict before it blames the transport: control receives `archive_rejected`,
+Validation happens while the PUT is in flight, so a rejected repository aborts the upload. The
+transport settles the archive verdict before it blames the network: the run sees `archive_rejected`,
 `descriptor_missing`, `descriptor_mismatch` or `commit_mismatch` rather than `upload_failed`. Every
-such failure is pre-trigger, and control deletes the app version on every pre-trigger failure.
+such failure is pre-trigger, and the provider deletes the app version on every pre-trigger failure.
 
-This transport, topology and upgrade flow are locally implemented and tested. The same example commit
-reached `ACTIVE` through application-version upload while the repository was public and again after it
-became private. A later private push also completed the scoped webhook path end to end: verified event,
-webhook-triggered run, private source resolve and upload, Zerops build, active version and healthy app.
-The inspected application version used source `CLI` and carried no GitHub, GitLab or public-Git source.
-The subsequent browser handoff and Operations exception-ingest witness remains live-only.
+The same example commit reached `ACTIVE` through application-version upload while the repository was
+public and again after it became private. A later private push also completed the scoped webhook path
+end to end: verified event, webhook-triggered run, private source resolve and upload, Zerops build,
+active version and healthy app. The inspected application version used source `CLI` and carried no
+GitHub, GitLab or public-Git source.
 
 ### Verified live (2026-08-18, account `prg1`, projects `fabrika-install-test` + `fabrika-notes-prod`) — provisioning an app namespace
 
@@ -1019,9 +1001,9 @@ the current suite does not observe a real application's process environment over
 
 **Service-API variables are mutable service state, not an atomic release binding.** A failed or
 cancelled build leaves the values in place; a later restart exposes them to the old code. A successful
-deploy or archived-version deploy also boots with the current values. This is the live witness for
-[backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md), not a proof of a
-replacement activation protocol or Control crash recovery.
+deploy or archived-version deploy also boots with the current values. This is why
+[ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md) binds only `FABRIKA_RELEASE`
+to the version and accepts that the other managed keys follow current service state.
 
 ### Verified live (2026-09-23, account `prg1`) — version-selected environment references
 
@@ -1091,18 +1073,18 @@ Two ordering rules, both of which cost something if ignored:
   synchronisation dies on `userDataSyncRunning` and leaves the app version stuck `UPLOADING`, which
   `deployAppVersion` does not recover from.
 - **Deploy the PROXY before the service it fronts, whenever the gate list is widening enforcement.**
-  The order that matters is not the dependency order (IAM → Operations → source → control) but the exposure
+  The order that matters is not the dependency order (IAM → Operations → control) but the exposure
   order: the application no longer enforces anything (ADR-0022), so a control plane at `HEAD` behind a
-  proxy still carrying an older, more permissive manifest is an open API. IAM → Operations → source →
+  proxy still carrying an older, more permissive manifest is an open API. IAM → Operations →
   **proxy** → control keeps the dependency order and never opens that window.
 
 **The platform installation's proxy manifest is generated in two halves.** The installation-independent
 half — which apps exist, their ids, their private upstreams, the public listener each answers on and
 their gates — is declared in `packages/platform-artifacts/src/proxy-manifest.ts` and rendered into
-the committed `packages/installation-zerops/src/generated/platform-proxy-manifest.ts` by `bun run --filter
+the committed `packages/provider-zerops/src/installation/generated/platform-proxy-manifest.ts` by `bun run --filter
 @fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `CONTROL_PROXY_GATES` or
 `OPERATIONS_PROXY_GATES`. The hosts and the browser-facing scheme belong to one installation and are
-bound at deploy time by `resolvePlatformProxyManifest` (`packages/installation-zerops/src/proxy-manifest.ts`).
+bound at deploy time by `resolvePlatformProxyManifest` (`packages/provider-zerops/src/installation/proxy-manifest.ts`).
 `localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local
 hosts, so the two compositions can no longer disagree; `compileNamespaceProxyManifest`
 (`republishProxy` in `packages/provider-zerops/src/namespace/proxy-attempt.ts`) remains separate — it builds an APP namespace's manifest
@@ -1125,18 +1107,18 @@ the canonical descriptor renderer; original descriptor SHA-256 was
 This proves the tested native archive/upload/extraction path, not full installation or upgrade acceptance.
 
 Both ordering rules above, plus the manifest composition, now live in code:
-`packages/installation-zerops/src/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
+`packages/provider-zerops/src/installation/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
 prepare the committed source snapshot, resolve the project and its services, write each service's environment,
-deploy IAM + Operations + source concurrently, then proxy and then Control, ensure the public entry point,
+deploy IAM + Operations concurrently, then proxy and then Control, ensure the public entry point,
 and reconcile the console's schema — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
 the scaffolded workflow keeps the order. The asymmetry is deliberate
 ([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)); its full flag and
-variable surface is the `usage` string in `packages/installation-zerops/src/index.ts`.
+variable surface is the `usage` string in `packages/provider-zerops/src/installation/index.ts`.
 
 Both `platform deploy` and `platform install` require `--source-dir` naming the clean full checkout
 that contains the executing installation module. They refuse `--from-git` and
 `FABRIKA_ZEROPS_BUILD_FROM_GIT`. The source is prepared once from a resolved commit before remote
-mutations; all five setups are checked before writes. Each service reserves its own app version,
+mutations; all four setups are checked before writes. Each service reserves its own app version,
 uploads that snapshot, builds the reserved version and polls its ID. No fallback selects a Git pipeline.
 The first-install proxy pass and subsequent full pass share the same snapshot.
 
@@ -1144,8 +1126,8 @@ Install and deploy also derive Control's `FABRIKA_ZEROPS_PROXY_SOURCE_JSON` defa
 commit and original descriptor, with the canonical public release repository coordinates. The JSON
 environment representation escapes `$` as `\u0024` so Zerops does not interpolate references inside
 the embedded descriptor; JSON decoding restores the exact bytes covered by its digest. Updating this
-default does not modify existing namespace pins. An unpublished local commit cannot be fetched by the
-public source service; namespace source resolution must succeed before its provider mutations.
+default does not modify existing namespace pins. An unpublished local commit cannot be fetched by
+control's anonymous GitHub source; namespace source resolution must succeed before its provider mutations.
 
 An ambiguous build response is observed without another submission or deletion; an unresolved wait
 does not prove that the version failed. Namespace proxy sources are separately persisted and are not
@@ -1175,7 +1157,7 @@ identically while replacing `iam-local` with `iam`.
 
 ### `fabrika platform install --provider=zerops`
 
-The from-scratch bring-up: `packages/installation-zerops/src/install.ts`. The operator either
+The from-scratch bring-up: `packages/provider-zerops/src/installation/install.ts`. The operator either
 creates an EMPTY project (core package `LIGHT`, `envIsolation: service` — a project-level setting
 the platform accepts at creation only and never hands back, so nothing can verify it) and names it
 with `--project-id`, or passes `--create-project` and this command creates it from the same compiled
@@ -1202,9 +1184,7 @@ Its shape is decided by three of the facts above:
   `startWithoutCode: true` document at a service carrying code activates an EMPTY app version and
   demotes the running one to `BACKUP`. A PARTIAL set is refused rather than completed: an import
   applies as one document and cannot skip the services that are already there. A service still reading
-  `NEW` is refused too — see the 08-10 section above. This describes fresh `platform install`; the
-  source-only `platform init` upgrade below uses a dedicated one-service document and does not re-import
-  an existing runtime.
+  `NEW` is refused too — see the 08-10 section above.
 - **Every process the import returns is waited on before anything is read or written**, because a
   service holds no environment at all until it leaves `NEW`.
 - **Generated secrets are written blind.** They are never read back for comparison, so the command
@@ -1212,26 +1192,24 @@ Its shape is decided by three of the facts above:
   those KEYS instead of writing over them. A second bring-up would roll a new vault KEK (unrecoverable)
   and new signing keys (every live token invalid).
 
-It places seven generated values — IAM's ES256 signing keys, the IAM RPC key, the source RPC key, the
-proxy key, the provisioning key, the Operations sync key and the control vault KEK — plus one minted on
-the account: a Zerops INTEGRATION token (`POST /client/{id}/integration-token`, client role
-`NO_ACCESS`, `ADMIN` on this project only), so the installation never holds the personal token the
-operator authenticated with. The source key is written under different names on source and control but
-has one value. Exactly one value is printed: the provisioning key, once, at the end, because it lives
+It places six generated values — IAM's ES256 signing keys, the IAM RPC key, the proxy key, the
+provisioning key, the Operations sync key and the control vault KEK
+(`packages/provider-zerops/src/installation/secrets.ts`) — plus one minted on the account: a Zerops
+INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on this
+project only), so the installation never holds the personal token the operator authenticated with.
+Exactly one value is printed: the provisioning key, once, at the end, because it lives
 nowhere else and `platform init` asks for it.
 
-Fresh install always leaves GitHub source anonymous. It writes the source RPC key and nonsecret
-project binding needed by the later authenticated Control flow, but no App private key or webhook
-secret. Public repositories therefore deploy without another setup step. Source gets neither the
-Zerops integration token nor any GitHub API-base setting.
+Fresh install always leaves GitHub source anonymous: it writes no App private key or webhook secret.
+Public repositories therefore deploy without another setup step.
 
 **Partly unverified against a real account.** The import step's behaviour is measured (08-10 section
 above) and the command is written against it. Everything after it is not: in particular
-`createIntegrationToken`, whose every runtime behaviour is unmeasured (`provider-zerops/src/api.ts`) —
+`createIntegrationToken`, whose every runtime behaviour is unmeasured (`provider-zerops/src/api/client.ts`) —
 whether client `NO_ACCESS` beside a project `ADMIN` grant is even accepted, and what the minted value
 looks like — and the two passes as a whole.
 
-### GitHub source connection in Control and CLI repair
+### GitHub source connection in Control
 
 Normal GitHub App setup runs in the authenticated Control console at **Settings → Source**
 ([ADR-0029](../decisions/0029-github-app-sources.md)). Fresh Zerops installations
@@ -1240,47 +1218,33 @@ one global setup or repair workflow separately. A human principal holding `sourc
 can add another private organization-owned App while stable rows remain. Only one nonterminal workflow
 may exist, and the same organization cannot be connected twice, but Fabrika imposes no total
 connection-count limit. Setup accepts an optional same-owner repository set. Control returns only a
-same-origin continuation path; no private key, webhook secret, source RPC key, manifest code or opaque
-state enters a browser DTO, URL log or error.
+same-origin continuation path; no private key, webhook secret, manifest code or opaque state enters a
+browser DTO, URL log or error.
 
 The continuation submits a least-authority manifest directly to `github.com`. The callback requires
 the same authenticated human principal, exact Control origin and one-use encrypted state. It rejects
 unknown or duplicate query fields, bounds the GitHub response and redirects to a clean
 `/settings/source` URL. Before the browser can observe success, Control stores GitHub's one-time App id
-and private key in its encrypted platform vault. The setup state stores only nonsecret phases, hashes,
-verified identities and vault references. Expiring phase leases turn abandoned work into either a
-terminal pre-credential failure or a repairable durable checkpoint.
+and private key in its encrypted platform vault, in the same transaction as the setup checkpoint. The
+setup state stores only nonsecret phases, hashes, verified identities and vault references.
 
-For every new connection, Control then:
+For every new connection, Control then (`packages/control/src/source-connection/`):
 
-1. creates the exact canonical v2 id-and-private-key bundle in its derived source slot with create-only
-   semantics;
-2. proves the durable SHA-256-bound value and activates it in the running source process;
-3. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
-   `push` event;
-4. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
+1. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
+   `push` event with the vault key;
+2. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
    verifies the returned URL, JSON content type and TLS setting;
-5. deletes the temporary encrypted recovery copy; and
-6. asks the administrator to install the App, then verifies the organization or every requested
+3. asks the administrator to install the App, then verifies the organization or every requested
    repository through App-JWT endpoints before publishing the connection.
 
 GitHub masks the webhook secret, so the structural readback cannot compare that value. Control starts
 using the new vault-backed secret after structural webhook verification, including while installation
-is still pending. The compatibility status endpoint compares the source-reported credential digest and
-strict App identity with durable Control state. The paginated connection list projects stable database
-rows without a source call, so its `connected` label does not prove that the durable credential slot is
-present. Resolve, upload, webhook handling and explicit reconciliation still fail closed on a missing or
-conflicting credential.
+is still pending.
 
-A stable connection can be reconciled from the same page. Reconciliation reads the connection's
-purpose-bound webhook secret from the Control vault and reapplies its exact stored webhook URL,
-content type, TLS setting and secret through the credential-bound source client. If the durable source
-slot contains another active private key for the same exact GitHub App, reconciliation first proves the
-App identity and webhook configuration, then compare-and-set rebinds Control to the source-reported
-digest ([ADR-0029](../decisions/0029-github-app-sources.md)). It never reads or replaces
-the private key, changes the App, webhook secret, connection id or application binding, or adopts a
-credential from another App. This is the repair path for credential-binding and remote webhook drift
-after a completed setup; the generic webhook route is reserved for Cloudflare and refused here.
+A stable connection can be reconciled from the same page. Reconciliation re-verifies the App identity
+with the vault key and reapplies the connection's exact stored webhook URL, content type, TLS setting
+and secret. It never changes the App, webhook secret, connection id or application binding. The
+generic webhook route is reserved for Cloudflare and refused here.
 
 A Zerops private application is registered against the connection whose canonical organization owns
 its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
@@ -1288,33 +1252,22 @@ resolution and scoped webhooks require that exact pair. Changing the repository 
 bound application is refused; re-registration is required. Public Zerops repositories need no pair,
 and Cloudflare's installation-only rows remain valid.
 
-Verified live on 2026-08-20, recovery on `v0.0.21` rebound one stable connection to its durable
-same-App credential and reconfigured its webhook in 0.97 seconds. The next private repository push
-reached that connection's scoped webhook route, passed HMAC verification and created run
+Verified live on 2026-08-20: after a webhook repair, the next private repository push reached that
+connection's scoped webhook route, passed HMAC verification and created run
 `01a01f7c-037b-702e-8ec8-b3f186144b22` for exact commit
 `0d608e0071119c85ac144f78c1ad1509f7a22ab7`. The run succeeded, Zerops version
 `haveZKs7So2jjGl00vhxGQ` reached `ACTIVE`, and the deployed `/healthz` answered `200`.
 
-`platform init` remains the operator-side source upgrade and repair command. It imports only a missing
-`source` service, waits for the returned Zerops processes, reconciles the two-sided RPC key and creates
-the nonsecret Control project binding. Equal valid RPC keys are reused; one valid side repairs an
-absent side; both absent generate one; invalid or mismatched values are refused. Normal init neither
-creates nor receives GitHub App credentials and never opens an XDG recovery file. It reports whether
-the remote source already holds a keyed credential and, since ADR-0029, ignores a leftover unkeyed or
-split value rather than offering to adopt it: a private source is connected only through Control's
-**Settings → Source**.
+`platform init` does not touch GitHub credentials: a private source is connected only through Control's
+**Settings → Source**, and source credentials never enter the sidecar checkout, repository or GitHub
+Environment. A `source` service left by an earlier layout is reported with one warning by
+`platform deploy` and never deleted (`packages/provider-zerops/src/installation/deploy.ts`); it may
+still hold App keys, so delete it by hand.
 
-Older ADR-0029 CLI recovery files are compatibility evidence only. This release does not discover,
-open or delete them. There is nothing left to adopt them into, so an operator holding one connects a
-new source in Control and deletes the file afterwards. Source credentials never enter the sidecar
-checkout, repository or GitHub Environment.
-
-Rollout proceeds source → proxy → Control/dashboard. Rolling source back after a v2 slot exists is
-unsupported; recovery rolls forward because an old source must reject v2 calls. Every Zerops App uses
-its scoped `/webhooks/github/:connectionId` route. One unavoidable orphan window remains after GitHub accepts
-manifest conversion but before the callback durably stores the response; such an App must be deleted
-and recreated. Multi-connection acceptance evidence is tracked in the
-[active multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md).
+One unavoidable orphan window remains after GitHub accepts manifest conversion but before the callback
+durably stores the response; such an App must be deleted and recreated. Multi-connection acceptance
+evidence is tracked in the
+[multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md).
 The single-connection public/private deployment gate is recorded by the archived
 [application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
 
@@ -1346,14 +1299,13 @@ dedupes. Consumed by `ZeropsApi.readBuildLog`.
 
 The Fabrika platform project contains:
 
-- `iam`, `operations`, `source`, `control`, and the only public `proxy` runtime;
+- `iam`, `operations`, `control`, and the only public `proxy` runtime;
 - one shared `db` PostgreSQL service for IAM and control;
 - a separate `operationsdb` PostgreSQL service for Operations;
 - private `storage` for run logs and `operationsstorage` for raw events and
   source maps.
 
-IAM, Operations and source deploy at once, then proxy, then control. Source is private, installs `git`,
-and accepts authenticated source RPC on port 3000; it has no Zerops token. Operations uses
+IAM and Operations deploy at once, then proxy, then control. Operations uses
 `run.initCommands` for service-owned plus `platform-node` queue migrations,
 `run.start` for its HTTP server and Postgres job consumer, and `run.crontab` for
 health and notification maintenance. Its database and object store are separate
@@ -1383,28 +1335,15 @@ The full lifecycle, isolation presets, shared PostgreSQL trust domain, and
 operator interfaces are described in
 [`deployment-namespaces.md`](deployment-namespaces.md).
 
-New application services use the immutable managed-environment protocol (ADR-0044). Fresh registration
-establishes a sensitive ownership marker only after attributable creation and completed import processes.
-Its bootstrap evidence records the initial codeless version; an existing unmarked service is not adopted.
-
-Before a real deploy, the provider admits the currently active owned binding, using an exact
-app/environment-scoped retained checkpoint when the active version is not the bootstrap version.
-Each new version receives a complete six-key map: `FABRIKA_RELEASE`, `FABRIKA_OPERATIONS_DSN`,
-`FABRIKA_IAM_ISSUER`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT` and `FABRIKA_SERVICE_KEY`.
-Non-null values are create-only sensitive service records under `FABRIKA_MENV_` version-specific names.
-The selected execution descriptor references those records; null omits the canonical runtime key.
-Ordinary application-secret rotation remains mutable. The reserved internal prefix is refused on
-application-authored inputs and secret writes.
-
-Checkpoints retain coordinates, original artifact/descriptor identity, explicit absences and confirmed
-record IDs, never values or upload URLs. Interrupted recovery uses that frozen binding rather than
-today's secret catalog. Original descriptor bytes and digest remain unchanged by the execution overlay.
-Backing records remain available for rollback; no garbage collection is performed.
-
-Pre-trigger cleanup requires exact-version deletion and verified absence (ADR-0044). Source abort is
-best effort, not proof of transport termination. Potentially submitted builds remain unresolved until
-external settlement; lease loss does not authorize deletion or cancellation. Dry runs validate the
-complete six-key representation but require neither live admission nor provider calls.
+Each application deploy writes `FABRIKA_RELEASE` as a literal into the selected setup's
+`run.envVariables` of the execution descriptor, so the release travels with the version; the source
+descriptor's bytes and digest are unchanged. The other managed keys (`FABRIKA_OPERATIONS_DSN`,
+`FABRIKA_IAM_ISSUER`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are ordinary
+service variables, overwritten before the build. Application-authored inputs and secret writes may not
+use a managed name. The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
+version and deletes an untriggered one
+([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md),
+`packages/provider-zerops/src/managed-env.ts`).
 
 ## Alpine custom runtime
 

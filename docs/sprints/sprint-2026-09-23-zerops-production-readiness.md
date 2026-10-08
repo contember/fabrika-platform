@@ -22,7 +22,7 @@ Baseline: `4bb81292780b36115e5e6352b53be250de2d7a99`, local `main`, 31 commits a
 - ✔ Zerops mutates those canonical service variables before entering the deploy engine, then passes an empty managed environment to it — `packages/provider-zerops/src/control.ts:513–559`.
 - ✔ Live failed/cancelled-build, restart and rollback observations contradict transactional activation — [platform witness](../reference/zerops-platform.md#verified-live-2026-09-23-account-prg1--service-variables-across-activation-and-rollback).
 - ⚠ Deploy locking is TTL-bounded and holder-checked, without renewal in the SQL implementation — `packages/platform/src/deploy-locks-sql.ts:54–69`. The activation protocol must not assume indefinite exclusion or exclusive reconciliation.
-- ✔ The sidecar checks out its selected tag but supplies an independent build-source URL — `packages/installation-zerops/src/templates/platform.yml:76–81,123–128`.
+- ✔ The sidecar checks out its selected tag but supplies an independent build-source URL — `packages/provider-zerops/src/installation/templates/platform.yml` (the checkout and build-source steps).
 - ✔ Descriptor validation uses Bun YAML parsing, while the provider sends the original descriptor to Zerops — `packages/provider-zerops/src/manifest.ts:251–255`, `packages/provider-zerops/src/provider.ts:505`.
 - ✔ Operations webhook dispatch uses ordinary fetch after target syntax validation — `packages/operations/src/maintenance.ts:114–130`; DNS-pinned egress is not established by this check.
 - ✔ The local Docker composition is running with healthy IAM, Control, Operations, PostgreSQL, SeaweedFS, source and auth services. Browser scenarios use a separate resettable composition — `tests/browser/README.md:28–43`.
@@ -64,7 +64,7 @@ it and rewrite ADR-0044; backlog 37 is consumed. This unit closes when they ship
 - **Verify first.** WU0's non-default tag/SHA observations.
 - **Scope.** Bind every installation service and newly provisioned or republished namespace proxy to the selected immutable source. Specify what happens to existing persisted namespace targets; never silently infer that a new default migrates them.
 - **Acceptance / witness.** Repeated deployment of the same selected release builds identical source despite a different default-branch tip. Upgrade preserves app proxy entries, stored data and credentials.
-- **Touch points.** `packages/installation-zerops/`, revision-specific CLI/provider namespace plumbing and tests, `packages/control/src/node/zerops-proxy.ts`. Provider namespace signatures and shared generated artifacts are frozen in WU0 before concurrent work.
+- **Touch points.** `packages/provider-zerops/src/installation/`, revision-specific CLI/provider namespace plumbing and tests, the Zerops composition root in `packages/control/src/zerops/`. Provider namespace signatures and shared generated artifacts are frozen in WU0 before concurrent work.
 
 ### WU3 — One validated YAML interpretation (M; backlog 90)
 

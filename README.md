@@ -61,8 +61,8 @@ adapter, and the internal `fabrika-cloudflare-executor`) · `@fabrika/provider-z
 static manifest compiler, API client, deploy implementation, and control adapter).
 
 **Installation and console** — `@fabrika/provider-contract/installation` (open platform CLI contract) ·
-`@fabrika/installation-cloudflare` and `@fabrika/installation-zerops` (provider-specific installation
-plans) · `@fabrika/cli` (the single public `fabrika` command) · `@fabrika/dashboard` (the unified
+`@fabrika/provider-cloudflare/installation` and `@fabrika/provider-zerops/installation` (provider-specific
+installation plans) · `@fabrika/cli` (the single public `fabrika` command) · `@fabrika/dashboard` (the unified
 Delivery, Access, and Operations console) · `@fabrika/proxy-contract` (the manifest wire contract)
 and `@fabrika/proxy-core` (the auth enforcement decision, shared by both proxies).
 
@@ -72,7 +72,7 @@ and `@fabrika/proxy-core` (the auth enforcement decision, shared by both proxies
 
 App commands infer the provider from the provider-authored `fabrika.config.ts`; `--provider` is only
 required without that config. Platform commands use the same `fabrika platform ...` surface and
-dispatch through the selected installation package.
+dispatch through the selected provider's `/installation` subpath.
 
 ## Install
 

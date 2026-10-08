@@ -93,6 +93,6 @@ Local Git and package checks verify offline source identity and consumer contrac
 Live GitHub authorization, Cloudflare RPC/image exchange and account rollout
 require separate operator-owned acceptance evidence.
 
-A Zerops installation rolls forward with one command: `fabrika platform upgrade --provider=zerops --to=<tag>` verifies the tag exists on this repository, writes `fabrika.ref` in the sidecar checkout, commits and pushes it, prints the workflow run URL and watches the run to its end. The sidecar builds `iam`, `operations` and `source` concurrently, then `proxy`, then `control`.
+A Zerops installation rolls forward with one command: `fabrika platform upgrade --provider=zerops --to=<tag>` verifies the tag exists on this repository, writes `fabrika.ref` in the sidecar checkout, commits and pushes it, prints the workflow run URL and watches the run to its end. The sidecar builds `iam` and `operations` concurrently, then `proxy`, then `control`.
 
 Scaffold commits skip push CI because the GitHub Environment does not exist yet. `fabrika platform init` writes the account secrets and variables first, then explicitly dispatches the platform workflow.

@@ -15,12 +15,12 @@ otherwise. Effort S to settle, unknown to fix.
 ## Problem
 
 `triggerPipeline`'s `buildFromGit` is documented in our own client as _"a one-time build from that
-PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:326-331`). The application checkpoint
+PUBLIC repository URL"_ (`packages/provider-zerops/src/api/types.ts:321-326`). The application checkpoint
 passed a public example repository URL ending in `@main`, and Zerops accepted and built it live. That
 proves the `@main` form is accepted, but not that Zerops pins a non-default tag or commit: `main` is
 also the repository's default branch. The remaining installation caller still passes a bare URL —
 `FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'`
-(`packages/installation-zerops/src/topology/topology.ts`).
+(`packages/provider-zerops/src/installation/topology/topology.ts`).
 
 Two consequences, one of them drift in a decision:
 
@@ -62,8 +62,8 @@ namespace proxy.
 
 ## Touch points
 
-`packages/provider-zerops/src/api.ts`, `packages/installation-zerops/src/topology/topology.ts`,
-`packages/installation-zerops/src/templates/README.md`, `docs/reference/zerops-platform.md`,
+`packages/provider-zerops/src/api.ts`, `packages/provider-zerops/src/installation/topology/topology.ts`,
+`packages/provider-zerops/src/installation/templates/README.md`, `docs/reference/zerops-platform.md`,
 a new `docs/decisions/`.
 
 <!-- Origin: sprint-2026-08-06-zerops-platform-deploy run log, WU4. -->

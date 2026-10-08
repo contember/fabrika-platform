@@ -11,7 +11,7 @@ so it lives here and `provider-zerops` does not depend on `control-contract`.
 
 `src/control.ts` is the operator's non-browser client for the Delivery control
 plane ([ADR-0033](../../docs/decisions/0033-operate-the-control-plane-from-the-cli.md)).
-It is the ONE area that resolves no provider and loads no installation package,
+It is the ONE area that resolves no provider and loads no installation module,
 because the control API is provider-neutral. `--provider` reaches it only to
 label the envelope a registration carries.
 
@@ -57,8 +57,8 @@ label the envelope a registration carries.
 - Keep `fabrika` as the only public operator executable.
 - Do not add provider-specific public executables.
 - `fabrika-cloudflare-executor` is internal to the runner container.
-- Keep command routing thin. Provider behavior belongs in the provider or
-  installation package.
+- Keep command routing thin. Provider behavior belongs in the provider package
+  or its `/installation` subpath.
 - **How WIDE a platform command is, is the provider's answer, not this package's**
   ([ADR-0027](../../docs/decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)).
   Zerops' `platform deploy` owns a whole ordered sequence; Cloudflare's composes

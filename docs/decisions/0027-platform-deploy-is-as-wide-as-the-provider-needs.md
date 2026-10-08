@@ -15,18 +15,19 @@ of an installation that command deploys, and the two providers had already answe
 without anyone writing it down.
 
 **On Cloudflare the order lives in the operator's pipeline.** The scaffolded workflow
-(`packages/installation-cloudflare/src/templates/platform.yml`) runs three steps: IAM (`:96`),
-Operations (`:123`), then the runner and control plane (`:136`). The first two are `fabrika app
-deploy` against a package directory; only the third is `fabrika platform deploy`, and
-`deployPlatform` (`packages/installation-cloudflare/src/installation.ts:14-33`) composes exactly that
-runner+control pair. So the command is narrow and the YAML holds the sequence.
+(`packages/provider-cloudflare/src/installation/templates/platform.yml`) runs three steps: IAM (`:106`),
+Operations (`:135`), then the runner and control plane (`:147`). Each is one `fabrika platform deploy`
+call naming the component configs it deploys; `deployPlatform`
+(`packages/provider-cloudflare/src/installation/installation.ts:21`) deploys exactly the components it
+is given. So the command is narrow and the YAML holds the sequence.
 
-**On Zerops the command did not exist at all.** `packages/installation-zerops/src/index.ts:16`
-declares `commands: ['plan']`. Bringing the live installation to HEAD on 2026-08-05 took `zops push`
+**On Zerops the command did not exist at all.** The Zerops installation package of the time
+declared `commands: ['plan']`. Bringing the live installation to HEAD on 2026-08-05 took `zops push`
 from a laptop, once per service, in a hand-chosen order — and the knowledge that made that run
 correct stayed in a run log.
 
-Backlog 61 proposed resolving this by giving the shared `@fabrika/installation-contract` the order,
+Backlog 61 proposed resolving this by giving the shared installation contract (now
+`@fabrika/provider-contract/installation`) the order,
 with each provider owning only its per-service mechanics. Writing the Zerops implementation showed
 that the two providers do not have the same shape of work to order:
 
@@ -58,7 +59,7 @@ rather than forcing them to match.
   pipeline calls one step.
 - **On Cloudflare, `fabrika platform deploy` stays narrow** and the scaffolded workflow keeps the
   order, as it ships today.
-- `@fabrika/installation-contract` keeps owning **the command surface** — which commands a provider
+- `@fabrika/provider-contract/installation` keeps owning **the command surface** — which commands a provider
   offers and how they are invoked — and does **not** own the deploy order.
 
 **Invariant: whatever owns the order must apply the proxy manifest in the same run as the code it
@@ -82,7 +83,7 @@ manifest in front of new code.**
 
 ## Alternatives considered
 
-**Put the order in `@fabrika/installation-contract` and make both providers implement it** — backlog
+**Put the order in `@fabrika/provider-contract/installation` and make both providers implement it** — backlog
 61's original proposal. It loses because the two providers' units of work are not the same kind of
 thing: a contract-level "deploy IAM, then Operations" would have to be either a directory-and-command
 pair (meaningless on Zerops) or a service-id-and-setup pair (meaningless on Cloudflare). The

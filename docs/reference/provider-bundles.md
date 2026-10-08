@@ -6,52 +6,34 @@ root. Shared code receives that provider explicitly.
 
 ## Package boundary
 
-| Package                            | Owns                                                                                                                                |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `@fabrika/provider-contract`       | JSON value/envelope types, typed codecs, runtime deploy sessions, control capabilities, and provider-neutral authoring contracts.   |
-| `@fabrika/provider-cloudflare`     | Oblaka-based app authoring, Cloudflare codecs and plan, collaborators, control adapter, runner job contract, and internal executor. |
-| `@fabrika/provider-zerops`         | Zerops app authoring, manifest compiler, schema/API client, codecs and plan, and control adapter.                                   |
-| `@fabrika/engine`                  | Ordered execution of one explicit `RuntimeProvider` session, including step state, logs, failure, and cancellation observation.     |
-| `@fabrika/control`                 | Provider-neutral registry, persistence, queue semantics, locking, run status, secret resolution, and HTTP API.                      |
-| `@fabrika/installation-contract`   | Open platform `init`, `plan`, and `deploy` command contract.                                                                        |
-| `@fabrika/installation-cloudflare` | Cloudflare account bootstrap and platform deployment composition.                                                                   |
-| `@fabrika/installation-zerops`     | Zerops platform topology, generated artifacts, plan validation, and the ordered platform deploy.                                    |
-| `@fabrika/installation-init`       | The operator-side `platform init` mechanics both installation packages share: prompts, `gh`, and the sidecar scaffold.              |
+| Package                        | Owns                                                                                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@fabrika/provider-contract`   | JSON value/envelope types, typed codecs, the `ControlProvider` contract, the shared `runSteps` helper, authoring contracts; `/installation` command contract. |
+| `@fabrika/provider-cloudflare` | Oblaka-based app authoring, codecs, plan, collaborators, control adapter; `/runner` runner job and protocol; `/installation` account bootstrap and deploy.    |
+| `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, schema/API client, codecs, plan, control adapter; `/installation` topology, plan validation, ordered deploy.         |
+| `@fabrika/control`             | Provider-neutral registry, persistence, queue semantics, leases, run status, secret resolution, and HTTP API.                                                 |
+| `@fabrika/installation-init`   | The operator-side `platform init` mechanics both `/installation` subpaths share: prompts, `gh`, and the sidecar scaffold.                                     |
+| `@fabrika/platform-artifacts`  | Private. Zerops installation codegen: the rendered `zerops.yaml`, import YAMLs, proxy manifest, and console schema.                                           |
 
 `@fabrika/platform` is a separate boundary. It describes host-runtime
 capabilities such as SQL, queues, blobs, locks, assets, and background work. A
 composition root supplies both the runtime adapters and the provider bundle.
 
-## Runtime contract
+## Deploy steps
 
-A provider defines typed target and artifact codecs and opens a deploy session:
-
-- `ProviderModule` exposes typed target/artifact encoders and its opaque
-  `RuntimeProvider`.
-- `RuntimeProvider.open(run)` validates the envelopes and returns a
-  `ProviderDeploySession`.
-- The session supplies an ordered `ProviderDeployPlan` and executes one step id
-  at a time.
-- `@fabrika/engine` owns generic step status and calls the session. It does not
-  interpret the target, artifact, or open-ended step `kind`.
-
-The runtime call has no default provider:
-
-```ts
-deploy(provider, run)
-```
-
-Callers construct `provider` in their provider-specific composition code.
+Each provider's `deploy()` builds its own ordered step list and runs it through
+`runSteps` (`packages/provider-contract/src/steps.ts`). `runSteps` records step
+status and logs, stops at the first failure, and observes cancellation between
+steps. It does not interpret the target, the artifact, or a step's kind. There
+is no shared plan type, no runtime session, and no engine package.
 
 ## Control contract
 
-The control plane receives one `ControlProvider`. Every provider implements:
+The control plane receives one `ControlProvider`. Every provider implements
+`id` and `deploy` (start or execute one run). A provider may also implement:
 
 - `normalizeRegistration` to validate and canonicalize its target and artifact;
-- `deploy` to start or execute one run.
-
-A provider may also implement:
-
+  absent means control stores the registration as submitted;
 - `resolveSource` to resolve a requested source revision before deployment;
 - `source: { binding: 'connection' | 'installation' }` to accept a private-source binding, which
   Control then passes as `sourceBinding` to `resolveSource` and `deploy`;
@@ -59,24 +41,23 @@ A provider may also implement:
 - `reconcile` for unfinished external operations;
 - `secrets` for immediate writes to provider-managed secret storage.
 - `namespaces` for provider-owned placement validation, resource claims,
-  provisioning, reconciliation, and operator planning.
+  provisioning, reconciliation, proxy republishing, and operator planning;
+- `declaredVariables` to name the variables an artifact declares.
 
 The bound-source inputs and credential-free `ProviderSourceBinding` are declared
 once in `@fabrika/provider-contract`. Control loads the exact connection and
 installation coordinates from persistence; a bound operation refuses a missing
 capability or mismatched coordinates rather than using an unbound fallback.
-Zerops retains its provider-specific type names as aliases to this shared contract.
 
 Every deploy receives a provider-neutral `managedEnvironment` map assembled by
-control. The current reserved values are the source-scoped
-`FABRIKA_OPERATIONS_DSN` and deploy-scoped `FABRIKA_RELEASE`. Providers merge
-these values at their native deployment seam and reject app-authored collisions.
-The Cloudflare provider passes them through the runner job; the Zerops provider
-writes them as service-level variables before triggering the platform build.
-`null` removes a previously managed value. The remaining question of making
-those Zerops writes activation-consistent with an asynchronously successful app
-version is tracked in
-[backlog 37](../decisions/0044-zerops-delivery-ownership-and-recovery.md).
+control: `FABRIKA_RELEASE`, `FABRIKA_IAM_ISSUER`, and the source-scoped
+Operations keys (`FABRIKA_OPERATIONS_DSN`, `FABRIKA_APP_ID`,
+`FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`). `null` removes a previously
+managed value. Providers merge these values at their native deployment seam and
+reject app-authored collisions. The Cloudflare provider passes them through the
+runner job. The Zerops provider writes `FABRIKA_RELEASE` into the execution
+descriptor of the version it builds and every other key as a service variable
+([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)).
 
 An optional `artifactUpload` contains the bounded, release-scoped Operations
 source-map endpoint and bearer. The Cloudflare runner consumes it where the build
@@ -129,11 +110,10 @@ adding provider-specific columns or fields to shared control code.
 
 The Cloudflare installation starts at `packages/control/src/index.ts`.
 `platform-cf.ts` composes `@fabrika/provider-cloudflare` with native Worker
-bindings and the separate runner service. The provider owns
-`CloudflareRunnerJob`; `@fabrika/runner-contract` owns only the transport
-protocol, `@fabrika/runner-container` executes the job, and
-`@fabrika/runner-cloudflare` hosts and relays the container. None of the runner
-packages owns provider plan semantics.
+bindings and the separate runner service. `@fabrika/provider-cloudflare/runner`
+owns `CloudflareRunnerJob` and the runner protocol, `@fabrika/runner-container`
+executes the job, and `@fabrika/runner-cloudflare` hosts and relays the
+container. Neither runner package owns provider plan semantics.
 
 ### Cloudflare source and runner admission
 
@@ -180,45 +160,34 @@ The detached runner/image precedes Control in an operator-owned rollout; see
 ### Zerops composition
 
 The Zerops installation starts at `packages/control/src/zerops/server.ts`.
-`node/provider.ts` composes `@fabrika/provider-zerops` with the neutral engine,
-Zerops credentials, and the proxy-manifest synchronization hook. Deploy
-execution stays in the Bun process. `createZeropsControlProvider` requires an
-executor; the composition root injects `@fabrika/engine` and there is no
-provider-local fallback lifecycle. Accepted app-version ids are reconciled
-through the provider capability after restarts. Control then records the
-terminal run and projects its terminal release state to Operations before
-releasing the run lock.
+`zerops/provider.ts` composes `@fabrika/provider-zerops` with the Zerops access
+token, control's in-process GitHub source (`packages/control/src/source/`, App
+keys from the vault), and the namespace inputs. Deploy execution stays in the
+Bun process. Recorded app-version ids are reconciled through the provider
+capability after restarts: polled when the build was requested, deleted when it
+was not. Control then records the terminal run and projects its terminal release
+state to Operations before releasing the run lease.
 
 ### Shared lifecycle ownership
 
 `@fabrika/platform` supplies the shared SQL lease implementation. Acquisition is non-reentrant;
 release matches the holder. `renew(key, holder, ttlMs)` extends only a still-live lease owned by that
-holder, using one conditional update and the injected clock. Renewal at or after expiry returns
-false, even before another holder acquires the key. Deploy, cancellation, recovery and stale-run
-settlement acquire a unique invocation holder and renew while working. Failed renewal or a missed
-confirmed deadline invalidates ownership. Lease loss stops the invocation; it does not request
-external cancellation.
+holder, using one conditional update. Control wraps it in one primitive (`packages/control/src/lease.ts`):
+a 90 s TTL renewed every 30 s, with a local deadline one renew period before the stored expiry. Runs,
+namespace jobs, terminal repair and the Operations catalog sync all use it. Failed renewal or a missed
+local deadline aborts the lease's signal. Lease loss stops the invocation; it does not request external
+cancellation.
 
-The run repository accepts an optional `RunMutationGuard` for start, commit, external-id,
-checkpoint and terminal writes. Guarded writes lock the app/environment lease row and apply an
-exact checkpoint comparison within the same database transaction. The caller must acquire the
-lease first, use a unique invocation holder and supply a fresh millisecond timestamp per call.
-Guarded starts also refuse another running run for the target. Lifecycle event writes are serialized
-with the accepted checkpoint as their next comparison value. The special initial identity write may
-record a reservation after a cancellation request, while still requiring the live owner and an empty
-external identity; this preserves cleanup evidence without permitting deployment to continue.
+Every run lifecycle write is holder-checked: `RunRepository` locks the run's `<app>:<env>` lease row
+and writes only while that holder's lease is live, in the same database transaction. There is no
+checkpoint compare-and-swap. A cancellation request changes no lifecycle state; the lease holder reads
+it at its next step boundary.
 
 An unresolved provider result keeps the run running after the invocation releases its lease. That row
 blocks a later deployment until recovery establishes settlement. Cancellation similarly remains
 requested until the provider returns `settled`; acknowledgement alone is insufficient. Cloudflare
 runner recovery fences delayed startup before settling a never-dispatched run, while dispatched work
 retains its detached completion backstop.
-
-Providers may read retained checkpoints through a Control-supplied callback scoped to the current
-app/environment and an exact external version ID. The repository refuses duplicate matches and does
-not filter by success status: rollback can activate an older version, including one whose Control run
-did not finish successfully. Persisted JSON is bounded and parsed before delivery to the provider,
-which remains responsible for its checkpoint schema and ownership checks.
 
 `packages/control/src/__tests__/entrypoint-isolation.test.ts` walks both import
 graphs. It verifies that each root reaches only its selected provider and runtime,
@@ -282,7 +251,7 @@ checkpointed lifecycle.
 ## Installation commands
 
 `@fabrika/cli` is the only public executable. Platform commands select an
-`InstallationCli` from `@fabrika/installation-contract`:
+`InstallationCli` from `@fabrika/provider-contract/installation`:
 
 ```text
 fabrika platform init --provider=cloudflare <account>
@@ -305,8 +274,8 @@ that already exists; on Zerops the first bring-up is `platform install`, which c
 also create the project it installs into; it is two passes, because a proxy that
 has never been deployed publishes no hostname for the manifest to carry.
 `fabrika platform <command> --provider=<name> --help` prints the installation's own
-surface. The CLI maps the official `cloudflare` and `zerops` ids to their
-installation packages and treats any other provider value as an importable package
+surface. The CLI maps the official `cloudflare` and `zerops` ids to
+`@fabrika/provider-<cloud>/installation` and treats any other provider value as an importable package
 specifier.
 
 For app commands, provider selection comes from the default-exported

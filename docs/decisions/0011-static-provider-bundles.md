@@ -77,13 +77,14 @@ across versions ([ADR-0044](0044-zerops-delivery-ownership-and-recovery.md)).
 | Package                                 | Visibility | Contents                                                                               |
 | --------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
 | `@fabrika/provider-contract`            | public     | `.` the provider contract · `/installation` the open platform-installation contract    |
-| `@fabrika/provider-cloudflare`          | public     | `.` authoring · `/control` · `/installation` · `/runner` (runner job, executor)        |
-| `@fabrika/provider-zerops`              | public     | `.` authoring · `/control` · `/installation`                                           |
+| `@fabrika/provider-cloudflare`          | public     | `.` authoring and control adapter · `/cli` · `/installation` · `/runner` (runner job)  |
+| `@fabrika/provider-zerops`              | public     | `.` authoring and control adapter · `/cli` · `/installation` (+ `/topology`)           |
 | `@fabrika/installation-init`            | public     | The operator-side `init` mechanics both `provider-<cloud>/installation` subpaths share |
 | `runner-cloudflare`, `runner-container` | private    | The Cloudflare deploy executor Worker and its container image                          |
 | `platform-artifacts`                    | private    | Zerops installation codegen and generated topology output                              |
 
-The two composition roots stay inside `@fabrika/control` (`src/cloudflare`, `src/zerops`).
+The two composition roots stay inside `@fabrika/control` (`src/index.ts` with `src/platform-cf.ts`
+for Cloudflare, `src/zerops/` for Zerops).
 Only the Cloudflare root imports `@fabrika/provider-cloudflare`; only the Zerops root imports
 `@fabrika/provider-zerops`.
 
@@ -107,8 +108,8 @@ blobs, locks). The composition root binds one runtime implementation set to one 
   provider fails closed.
 - Cloudflare-only dependencies (`oblaka-iac`, Workers types) stay out of the contract and of
   shared Control typechecks.
-- An npm consumer installs one package per cloud. Subpaths keep authoring code free of control
-  and installation dependencies at import time.
+- An npm consumer installs one package per cloud. Subpaths keep installation and runner
+  dependencies out of an import of `.`.
 - One installation managing several clouds would need a new decision and a runtime registry.
   The contract deliberately does not support it.
 

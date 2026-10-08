@@ -63,7 +63,7 @@ resumes with `--project-id=<id>`. To install into a project you created yourself
 instead; that project must be empty and carry both settings already.
 
 The command confirms before every step that leaves the machine. A stdin that is not a terminal is
-refused unless `--yes` is passed. It then imports the services without code, generates seven secrets,
+refused unless `--yes` is passed. It then imports the services without code, generates six secrets,
 mints the integration token, builds the proxy once to learn the three public hosts, writes every
 variable, and runs the full ordered deploy.
 
@@ -75,7 +75,7 @@ The CLI prints it once and keeps no copy. The only other copies are the `iam` an
 environments, readable by anyone with access to the Zerops project. Steps 2, 3 and 4 need it.
 
 **Check.** The output lists `✓ iam <host>`, the console origin, and a ready-to-run `platform admin`
-command. All five runtime services read `ACTIVE` in the Zerops GUI.
+command. All four runtime services read `ACTIVE` in the Zerops GUI.
 
 `install` refuses a project that already holds an installation's generated secrets, and refuses a
 partial set of services. Update an existing installation through the sidecar pipeline (step 3), never
@@ -125,8 +125,7 @@ answers (Zerops subdomains, or three custom hosts). It then asks for two secrets
 | `FABRIKA_ZEROPS_ACCESS_TOKEN`  | The integration token `install` minted. Read it from the `control` service's environment in the Zerops GUI. Never use the personal token here. |
 
 Both are sent to GitHub over `gh` stdin. `init` confirms before each outward step: reading the project,
-configuring the `source` service, creating or pushing the repository, writing the Environment, and
-triggering the first run. Declining stops there and prints the command to run instead. A re-run is safe.
+creating or pushing the repository, writing the Environment, and triggering the first run. Declining stops there and prints the command to run instead. A re-run is safe.
 
 **Check.** The `platform` workflow run in the sidecar repository ends green. Its first run changes
 little, because step 1 already deployed the same code.
@@ -236,7 +235,7 @@ source names a repository and not a revision; the sidecar's own README states th
 | Zerops integration token          | The `control` service's environment, and the sidecar GitHub Environment.            |
 | Provisioning key                  | The `iam` and `control` services' environments, and the sidecar GitHub Environment. |
 | Signing keys, vault key, RPC keys | The environments of the services that use them. Nowhere else.                       |
-| GitHub App private key            | The `source` service. The webhook secret is in control's vault.                     |
+| GitHub App id and private key     | Control's vault, next to the connection's webhook secret.                           |
 | Machine keys                      | Whoever they were issued to. `key issue` prints each one once.                      |
 
 The vault key cannot be recovered or re-rolled. Losing the Zerops project's service environments loses

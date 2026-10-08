@@ -88,8 +88,9 @@ checkout's HEAD, index, or uncommitted files. Control receives the platform
 fixture's immutable proxy source pin. Conflicting existing pins require an
 explicit reset; preparation does not silently change a persisted namespace's source.
 
-The local source entrypoint uses the real source runtime and archive admission.
-Injected metadata/download transports serve only these exact fixture coordinates.
+The local control process uses control's real in-process source and archive
+admission (`packages/local-stack/src/control-server.ts`). Injected metadata/download
+transports (`local-source-transports.ts`) serve only these exact fixture coordinates.
 The upload transport maps a capability-bearing logical Zerops HTTPS URL to the
 private emulator endpoint. Production destination validation is unchanged, and
 unknown coordinates or destinations have no network fallback.

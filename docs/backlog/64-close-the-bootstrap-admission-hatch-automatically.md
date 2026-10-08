@@ -14,8 +14,8 @@ itself, or stop needing one. Effort M.
 
 `fabrika platform init --provider=cloudflare` writes two admission lists into the operator's GitHub
 Environment — `FABRIKA_IAM_BOOTSTRAP_ADMINS` and `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`
-(`packages/installation-cloudflare/src/init.ts:161`, `:176`) — and then prints how to close them
-(`:522-524`):
+(`packages/provider-cloudflare/src/installation/init.ts:235`, `:220`) — and then prints how to close them
+(`:684-686`):
 
 > `1. gh variable set FABRIKA_CONTROL_BOOTSTRAP_ADMINS … --body '[]'`
 > `2. gh workflow run platform.yml …`
@@ -58,7 +58,7 @@ Whichever is chosen, the acceptance is the same and has two halves:
 ## Touch points
 
 `packages/iam/src/{services,resolve,tokens}.ts`, `packages/control/` (its own list),
-`packages/installation-cloudflare/src/{init,templates}/`, and whatever surfaces the witness.
+`packages/provider-cloudflare/src/installation/{init,templates}/`, and whatever surfaces the witness.
 
 <!-- Origin: sprint-2026-08-06-zerops-platform-deploy run log, WU4. Raised in 62 and left unanswered
      for Cloudflare when WU4 answered it for Zerops by removing the hatch. -->
