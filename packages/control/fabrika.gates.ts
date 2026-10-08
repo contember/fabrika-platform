@@ -15,7 +15,8 @@ import type { AppGates } from '@fabrika/auth-core'
 
 /**
  * The control surface's default pair: `/api/*` admits a machine `px_` key or a logged-in human. The
- * source connection browser routes override it with earlier human-only rules.
+ * earlier human rules on the source-connection browser routes do not make them human-only: without a
+ * session they fall through to this `service` rule, so a `px_` key still gets in. `requireHuman` refuses it.
  */
 const CONTROL_GATES: AppGates = {
 	rules: [
