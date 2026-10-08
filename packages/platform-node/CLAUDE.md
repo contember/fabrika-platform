@@ -42,6 +42,14 @@ Read this before moving a service onto this driver.
   (ADR-0017). `definePostgresServiceMigrations` keeps service identity and dependency order explicit
   inputs — do not rename them, and do not introduce a shared ledger. There is no adoption of an older
   ledger: an empty service ledger means a fresh schema.
+- **An application's migration identity is derived, never configured** (ADR-0017,
+  `application-postgres-migrations.ts`): schema `app_<id>`, ledger `app_<id>.fabrika_migrations` with a
+  checksum column, bundle `app`, lock key from SHA-256(`fabrika-db:<appId>`). Changing a derivation
+  orphans every deployed ledger or lets two containers migrate at once; the tests pin each one. Only an
+  application plan (`plan.application`) records checksums, sets `lock_timeout`/`statement_timeout` and
+  may name a schema-qualified ledger; service ledgers keep `(bundle, name, applied_at)`.
+- **Checksums are verified before anything is applied.** An applied file that changed fails the run with
+  nothing applied; a ledger row with no file (a rollback) is tolerated.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**
 
 ## Patterns

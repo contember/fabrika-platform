@@ -36,15 +36,18 @@ each table is declared in `src/db/tables.ts`.**
 ```
 db/migrations/20261008120000_init.sql    # frozen once merged; plain SQL
 db/seeds/example.sql                     # local and test only
-src/db/schema.generated.ts               # kysely-codegen output; committed; never hand-edited
+src/db/schema.generated.ts               # fabrika db codegen output; committed; never hand-edited
 src/db/tables.ts                         # the access policy of every application table; a literal
 src/db/stores/*.ts                       # the application's queries, written against the scoped API
 ```
 
-- Types come from [`kysely-codegen`](https://github.com/RobinBlomberg/kysely-codegen) with
-  `--default-schema app_<id>` and `--exclude-pattern` for framework tables (`fabrika_*`: the migration
-  ledger, files, job leases, webhook deliveries). `--verify` runs in the checker's build step against a throwaway
-  Postgres and fails when the committed types are stale.
+- Types come from `fabrika db codegen` (`@fabrika/db/codegen`), which reads the catalog of `app_<id>`, leaves
+  out framework tables (`fabrika_*`: the migration ledger, files, job leases, webhook deliveries), and writes the
+  interfaces, `DB` and the runtime column list in one file. It types a column as `Bun.SQL` decodes it and refuses
+  a type the layer cannot bind (JSON, `bytea`, arrays, domains). `kysely-codegen` was not used: it writes no
+  column list and needs the `pg` driver beside `Bun.SQL`.
+  `--verify` runs in the checker's build step against a throwaway Postgres and fails when the committed types
+  are stale.
 - The driver is [`kysely-postgres-js`](https://github.com/kysely-org/kysely-postgres-js) over `Bun.SQL`. Only
   the framework creates the connection, from a credential it removes from `process.env`. The pool runs with
   `prepare: false`, because Bun keeps a prepared statement per distinct SQL text and `in` lists of different
@@ -235,7 +238,9 @@ after a rollback. The ADR-0017 runner tolerates that. For applications it needs:
 `CREATE INDEX CONCURRENTLY` cannot run inside the per-file transaction ADR-0017 requires; v1 does not support it.
 
 **Identity.** Each application gets its own schema `app_<id>`, its own ledger
-`app_<id>.fabrika_migrations (bundle, filename, checksum, applied_at)` with bundle `app`, and its own lock key. The
+`app_<id>.fabrika_migrations (bundle, name, checksum, applied_at)` with bundle `app`, and its own lock key
+([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md) states the derivations and the timeouts).
+`fabrika db migrate` reads `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL`. The
 schema separates names, not access: in a cheap namespace every application uses the same credential.
 
 **Who runs them.** The application container, before the new version serves: `fabrika db migrate` in

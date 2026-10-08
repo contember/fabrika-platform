@@ -182,6 +182,12 @@ bundle. Migration identity is `(bundle, filename)` under
 [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md). Bundle names,
 filenames, ledger tables, and lock keys are durable and must not be renamed.
 
+Applications on the contract framework use the same runner through
+`definePostgresApplicationMigrations()`, run by `fabrika db migrate`. Their
+schema, ledger, bundle, and lock key are derived from the application id, and
+their plans add checksums and per-migration timeouts that service plans do not
+have (ADR-0017, "Application migrations").
+
 The old `schema_migrations` table is read-only adoption evidence. The wrapper
 checks the service's sentinel tables and recorded effects before it adopts an
 existing schema into the service-owned ledger. It does not turn the legacy table
@@ -206,7 +212,8 @@ Cloudflare composition.
 Configuration uses component-owned names from
 [ADR-0024](../decisions/0024-canonical-environment-names.md):
 
-- applications use `FABRIKA_APP_ID` and `FABRIKA_IAM_ISSUER`;
+- applications use `FABRIKA_APP_ID` and `FABRIKA_IAM_ISSUER`; `fabrika db` reads the
+  application's database from `FABRIKA_APP_DATABASE_URL`;
 - IAM service configuration uses `FABRIKA_IAM_*`;
 - Delivery service configuration uses `FABRIKA_CONTROL_*`;
 - runner-owned workspace configuration uses `FABRIKA_RUNNER_WORKSPACE`;

@@ -32,8 +32,9 @@ also keep their tables in Postgres. In a cheap namespace several applications
 share one database ([ADR-0014](0014-provider-owned-deployment-namespaces.md)).
 Their migrations run from the application's own container, because Control
 cannot reach a namespace's Postgres. An agent writes these migrations, and an
-agent may also edit a migration that already ran. The runner today has no
-checksum and no timeouts, and it rejects a schema-qualified ledger.
+agent may also edit a migration that already ran, and a migration's `ALTER`
+can wait behind the live version's locks. The service runner records no
+checksum, sets no timeouts, and accepts only an unqualified ledger.
 
 ## Decision
 
@@ -103,32 +104,47 @@ squash rule applies to them.
 
 ### Application migrations
 
-The same runner applies an application's migrations, with three additions:
+The same runner applies an application's migrations. An application's plan
+carries three additions that service plans do not:
 
-- **The ledger lives in the application's schema.** The runner accepts a
-  schema-qualified ledger for this purpose. Work unit A9 decides the
-  application's bundle name and ledger table name.
-- **Each applied migration has a checksum.** The runner records it and fails
-  when an applied file has changed.
-- **Each migration runs under `lock_timeout` and `statement_timeout`.** A
-  blocked `ALTER` fails within the timeout instead of holding the deploy.
+- **The ledger lives in the application's schema.** The schema is
+  `app_<id>`, with each `-` of the application id written as `_` (IAM's id
+  alphabet has no `_`, so two ids never share a schema; an id has at most 59
+  characters, so the schema name fits Postgres' 63). The runner creates the
+  schema when it is absent and runs each migration with it as the only
+  `search_path`. The ledger is `app_<id>.fabrika_migrations` with the columns
+  `(bundle, name, checksum, applied_at)`; the bundle is `app`. Only an
+  application's plan may name a schema-qualified ledger, and only in its own
+  schema. Tables named `fabrika_*` belong to the framework.
+- **Each applied migration has a checksum**, the SHA-256 of the file's text.
+  The runner compares every applied file before it applies anything, and a
+  changed file fails the run. A ledger row without a file is the database
+  being ahead of the code after a rollback, and is tolerated.
+- **Each migration runs under `lock_timeout` (5 s) and `statement_timeout`
+  (60 s)**, set with `SET LOCAL` in the migration's transaction. A blocked
+  `ALTER` fails within 5 s instead of queueing the live version's queries
+  behind its lock; 60 s bounds a backfill or a non-concurrent index build,
+  which holds its lock for as long as it runs.
 
-The advisory lock key derives from `fabrika-db:<appId>`, so applications that
-share one database do not serialize each other.
+The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
+plus one, so applications that share one database do not serialize each other.
+Migration file names are `YYYYMMDDHHMMSS_slug.sql` in `db/migrations/`; the
+runner refuses any other name, as the checker does.
 
 `fabrika db migrate` runs the migrations. It is the generated
 `run.initCommands` entry of the application's execution descriptor
 ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), and it
-uses the application's runtime credential. The checker verifies migration file
-names, because an agent over MCP cannot run `fabrika db new`.
+uses the application's runtime credential: `FABRIKA_APP_ID` and
+`FABRIKA_APP_DATABASE_URL`, read from the environment only. The checker
+verifies migration file names, because an agent over MCP cannot run
+`fabrika db new`. `fabrika db codegen` generates the schema's types from the
+migrated database.
 
 The pre-1.0 squash rule does not cover application ledgers. An application
 migration that has run is immutable: a changed checksum fails the run, and a
 change is a new file. Every new or changed
 migration file is a widening in the approval diff
-([ADR-0050](0050-approved-access.md)).
-
-The code does none of this yet (part A, work unit A9; part B, work unit B7).
+([ADR-0050](0050-approved-access.md)); that part is work unit B7.
 
 ## Consequences
 

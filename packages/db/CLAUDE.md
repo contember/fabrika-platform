@@ -10,7 +10,7 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · store · guard · hardening · type-attacks · postgres (needs FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · store · guard · hardening · type-attacks · codegen · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 | Module           | What it owns                                                                                              |
@@ -23,9 +23,12 @@ bun test    # policy · store · guard · hardening · type-attacks · postgres 
 | `guard.ts`       | The allowlist over the final operation tree, run immediately before compiling.                            |
 | `database.ts`    | `Database` (the connection, with no public query method) and `Session`, the only path to it.              |
 | `store.ts`       | `scoped` → `defineStore` / `defineChildStore`; the table handles; every capability and scope check.       |
+| `codegen.ts`     | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.    |
 
-Not built yet: binding a capability to its request (the framework's `CapabilityAuthority`), migrations
-and codegen, generated locators, `@fabrika/db/testing`, and stores for `reference` and `inbox` tables
+Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
+(ADR-0017); `fabrika db codegen` calls `codegen.ts`.
+
+Not built yet: binding a capability to its request (the framework's `CapabilityAuthority`), generated locators, `@fabrika/db/testing`, and stores for `reference` and `inbox` tables
 (`defineTables` accepts their policies; no store reaches them).
 
 ## Invariants
@@ -86,3 +89,10 @@ and codegen, generated locators, `@fabrika/db/testing`, and stores for `referenc
   The key, scope columns, version and `createdBy` are stamped by the layer and can never be written.
 - **A column with its own read action** (`columns: { c: { read } }`) falls back to nothing: every
   read needs the table's read action, so v1 never returns, filters or sorts by such a column.
+- **Codegen types a column exactly as `Bun.SQL` decodes it, or refuses it.** `int8` and `numeric` are
+  strings (bound as a number, bigint or string), dates are `Date`, an enum is its label union; JSON,
+  `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
+  them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
+  is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the
+  fixture together. `fabrika db codegen --verify` compares text, so an application's formatter must
+  skip the generated file (the output is already dprint-stable here).
