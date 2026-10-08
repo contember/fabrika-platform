@@ -21,6 +21,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/cli',
 	'@fabrika/control-contract',
 	'@fabrika/daemon-kit',
+	'@fabrika/db',
 	'@fabrika/email',
 	'@fabrika/github-app',
 	'@fabrika/iam-contract',

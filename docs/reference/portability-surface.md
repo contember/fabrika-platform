@@ -144,7 +144,10 @@ that stops being true — it is the guard, not a description of one.
 - **Alternative — Kysely.** Was a real option, and would have handled textual
   dialect divergence for us. Rejected because the existing port is less
   machinery and repository operations also cover non-textual differences such as
-  statement count and atomicity.
+  statement count and atomicity. The rejection covers the platform's own
+  dual-dialect services only. Applications are Postgres-only and use Kysely
+  through `@fabrika/db` (`packages/db/CLAUDE.md`), whose job is a scoped query
+  surface, not dialect portability.
 
 Sequencing note that paid off: the **test harness was ported first**, before any
 production code, so dialect bugs surfaced against real tests rather than against

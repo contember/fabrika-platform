@@ -46,7 +46,11 @@ src/db/stores/*.ts                       # the application's queries, written ag
   ledger, files, job leases, webhook deliveries). `--verify` runs in the checker's build step against a throwaway
   Postgres and fails when the committed types are stale.
 - The driver is [`kysely-postgres-js`](https://github.com/kysely-org/kysely-postgres-js) over `Bun.SQL`. Only
-  the framework creates the connection, from a credential it removes from `process.env`.
+  the framework creates the connection, from a credential it removes from `process.env`. The pool runs with
+  `prepare: false`, because Bun keeps a prepared statement per distinct SQL text and `in` lists of different
+  lengths make that grow without bound. `Bun.SQL` mis-binds a JavaScript array and stores a bound JSON string
+  as a JSON string, so the layer binds scalars only and expands `in` lists into parameters. `int8`, `count`,
+  `sum` and `numeric` come back as strings; streaming is not supported, and v1 does not need it.
 - Row shapes stay snake_case and mirror the migrations; no `CamelCasePlugin`.
 
 Rejected: a schema declared in TypeScript plus a catalog verifier (a second schema language and two places to
@@ -155,7 +159,7 @@ export const notes = defineStore('notes', (t) => ({
   `Ref` or by a `Within` of the parent's container.
 - **The callback receives a frozen query description, not a Kysely builder.** Its methods are `columns`,
   `where` (this table's columns, an operator from a literal allowlist, plain values only), `whereAny` (one OR
-  group), `contains` (a LIKE with the user's `%` and `_` escaped), `orderBy`, `limit`, `offset`, and `join` to a
+  group), `contains` (a case-insensitive `ILIKE` with the user's `%`, `_` and `\` escaped), `orderBy`, `limit`, `offset`, and `join` to a
   declared child. There is no `selectFrom`, subquery, `union`, CTE, plugin, `execute` or `sql`; calling one is a
   type error and, with the types defeated, a `TypeError`. Identifiers must match `^[a-z_][a-z0-9_]*$`, and the
   callback must return the description it received.
@@ -179,8 +183,10 @@ export const notes = defineStore('notes', (t) => ({
 - `get`, `update` and `remove` on an object that no longer exists answer `NotFoundError` (404).
 - **Column allowlists at runtime,** from a column list generated next to the types. Unknown keys in insert and
   update data are **refused**, not dropped, so the agent learns about them. `created_by` is a policy field stamped
-  from the request's principal. The same column list carries an optional per-column read policy, because
-  `returning *` and a bare row would otherwise expose every column.
+  from the request's principal. The layer never selects `*`: it names the readable columns. A column may declare
+  its own read action in `tables.ts` (`columns: { internal: { read: 'notes.admin' } }`); without one it falls back
+  to the table's read action ([ADR-0050](../decisions/0050-approved-access.md)). Every read needs the table's read
+  action, so in v1 a column with a different read action is written but never returned, filtered or sorted by.
 - **Optimistic concurrency** with `version`: zero changed rows → one follow-up read → 404 or 409. The update and
   its follow-up read, and a move with its children, run in one transaction.
 - **`t.move(ref, toRef)`** takes one target container (`Ref<'workspace', insertAction>`) and requires the delete
