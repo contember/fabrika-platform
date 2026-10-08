@@ -7,10 +7,12 @@
 import { type AuditInput, buildAccessClaims, buildResourceAccessClaims } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
+import { exportJWK, generateKeyPair } from 'jose'
+import { AUDIT_TOKEN_EXPIRY_GRACE_SECONDS } from '../auth'
 import type { Env, RequestContext } from '../env'
 import { createIamRpc } from '../rpc'
 import { handleRpcHttp } from '../rpc-http'
-import { getSigner } from '../signing'
+import { getSigner, Signer } from '../signing'
 import { createHarness, type Harness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ISSUER = 'https://iam.example.test'
@@ -46,17 +48,53 @@ function env(h: Harness): Env {
 const now = Math.floor(Date.now() / 1000)
 const signer = await getSigner(TEST_SIGNING_ENV)
 
-function appToken(app: string, options: { iss?: string; expiresAt?: number } = {}): Promise<string> {
-	return signer.sign(buildAccessClaims({
+const { privateKey: strangerKey } = await generateKeyPair('ES256', { extractable: true })
+/** A well-formed signer whose keys IAM never published. */
+const stranger = await Signer.fromPrivateJwks([await exportJWK(strangerKey)])
+
+interface TokenOptions {
+	iss?: string
+	expiresAt?: number
+	by?: Signer
+}
+
+function appToken(app: string, options: TokenOptions = {}): Promise<string> {
+	const expiresAt = options.expiresAt ?? now + 300
+	return (options.by ?? signer).sign(buildAccessClaims({
 		iss: options.iss ?? ISSUER,
 		app,
 		subject: 'cred-1',
 		label: 'share link',
 		permissions: [],
-		issuedAt: now - 600,
-		expiresAt: options.expiresAt ?? now + 300,
+		issuedAt: expiresAt - 300,
+		expiresAt,
 	}))
 }
+
+function resourceToken(app: string, options: TokenOptions = {}): Promise<string> {
+	const expiresAt = options.expiresAt ?? now + 300
+	return (options.by ?? signer).signResourceToken(buildResourceAccessClaims({
+		iss: options.iss ?? ISSUER,
+		app,
+		resource: 'https://control.example.test/mcp',
+		subject: 'user-1',
+		label: 'a@b.cz',
+		permissions: [],
+		issuedAt: expiresAt - 300,
+		expiresAt,
+		clientId: 'https://client.test/metadata.json',
+		scopes: ['authoring'],
+		grantId: 'grant-1',
+		tokenId: 'token-1',
+	}))
+}
+
+const KINDS: [string, (app: string, options?: TokenOptions) => Promise<string>][] = [
+	['a native token', appToken],
+	['an OAuth resource token', resourceToken],
+]
+const JUST_INSIDE = now - AUDIT_TOKEN_EXPIRY_GRACE_SECONDS + 60
+const JUST_OUTSIDE = now - AUDIT_TOKEN_EXPIRY_GRACE_SECONDS - 60
 
 function event(credential: string): AuditInput {
 	return { credential, requestId: 'req-1', principalId: null, principalLabel: 'share link', action: 'report.view', resourceType: 'report' }
@@ -112,27 +150,32 @@ describe('audit takes the app from the verified caller', () => {
 
 	test.each([
 		['a value that is not a token', () => Promise.resolve('not.a.jwt')],
-		['a token from another issuer', () => appToken('reports', { iss: 'https://elsewhere.test' })],
-		['an expired token', () => appToken('reports', { expiresAt: now - 60 })],
+		['a native token from another issuer', () => appToken('reports', { iss: 'https://elsewhere.test' })],
+		['a resource token from another issuer', () => resourceToken('reports', { iss: 'https://elsewhere.test' })],
+		['a native token signed by an unpublished key', () => appToken('reports', { by: stranger })],
+		['a resource token signed by an unpublished key', () => resourceToken('reports', { by: stranger })],
 	])('%s writes no row and does not throw', async (_name, credential) => {
 		expect(await auditOverBinding(await credential())).toEqual([])
 	})
 
 	test('an OAuth resource token records its signed app, not the resource it names', async () => {
-		const claims = buildResourceAccessClaims({
-			iss: ISSUER,
-			app: 'vozka',
-			resource: 'https://control.example.test/mcp',
-			subject: 'user-1',
-			label: 'a@b.cz',
-			permissions: [],
-			issuedAt: now - 60,
-			expiresAt: now + 300,
-			clientId: 'https://client.test/metadata.json',
-			scopes: ['authoring'],
-			grantId: 'grant-1',
-			tokenId: 'token-1',
-		})
-		expect(await auditOverBinding(await signer.signResourceToken(claims))).toEqual(['vozka'])
+		expect(await auditOverBinding(await resourceToken('vozka'))).toEqual(['vozka'])
+	})
+})
+
+describe('a request that outlives its token still audits, within the grace', () => {
+	test.each(KINDS)('%s expired just inside the grace is recorded', async (_kind, token) => {
+		expect(await auditOverBinding(await token('reports', { expiresAt: JUST_INSIDE }))).toEqual(['reports'])
+	})
+
+	test.each(KINDS)('%s expired just outside the grace writes no row', async (_kind, token) => {
+		expect(await auditOverBinding(await token('reports', { expiresAt: JUST_OUTSIDE }))).toEqual([])
+	})
+
+	test('the grace is not authorization: a management call refuses the same expired token', async () => {
+		const h = createHarness()
+		const credential = await appToken('reports', { expiresAt: now - 60 })
+		const result = await createIamRpc(env(h), new TestContext()).listPrincipals({ app: 'reports', credential, requestId: 'req-1' })
+		expect(result).toEqual({ ok: false, reason: 'invalid_token' })
 	})
 })

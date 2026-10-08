@@ -63,14 +63,16 @@ describe('direct admin use-case contracts', () => {
 	})
 })
 
-describe('share links: an expiry within the key bound and catalog actions only', () => {
+describe('share links: an expiry within the key bound and exact catalog actions only', () => {
 	test('a malformed request is a 400 naming the problem, not a 403', async () => {
 		const h = createHarness()
 		try {
 			seedAppAction(h.sqlite, 'example', 'read')
 			const inOneHour = Math.floor(Date.now() / 1000) + 3600
 			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: 'write' }], expiresAt: inOneHour }))
-				.rejects.toMatchObject({ httpStatus: 400, message: 'unknown action pattern: write' })
+				.rejects.toMatchObject({ httpStatus: 400, message: 'unknown action: write' })
+			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: '*' }], expiresAt: inOneHour }))
+				.rejects.toMatchObject({ httpStatus: 400, message: 'a key lists exact actions, not the wildcard: *' })
 			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: 'read' }], expiresAt: inOneHour + 31 * 24 * 3600 }))
 				.rejects.toMatchObject({ httpStatus: 400, message: 'expiresAt must be at most 2592000 seconds (30 days) ahead' })
 			await expect(createShareLinkUseCase(context(h), { app: 'example', grants: [{ action: 'read' }], expiresAt: 1 }))

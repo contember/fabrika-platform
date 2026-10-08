@@ -147,7 +147,7 @@ fabrika control key issue --label=<name> --permissions=app.manage,namespace.mana
 
 The permissions are control's actions: `app.manage`, `namespace.manage`, `deploy.trigger`,
 `deploy.read`, `secret.manage`, `source.connection.manage`. Grant only what the client needs. IAM
-refuses an action outside control's catalog.
+refuses a wildcard and any action outside control's catalog.
 
 Every key expires. `--expires-in` is required and is at most 2592000 seconds (30 days), so a long-lived
 client mints a new key before the old one expires.

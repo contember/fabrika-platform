@@ -127,17 +127,24 @@ fails if that stops being true — it is the guard, not documentation of one.
   authority, and neither may outlive the bound either. 30 days is the longest any current caller
   asks for (the builder's device-authorized key; `fabrika control key issue` requires
   `--expires-in`). The device repository caps its keys with the same constant.
-- **`issueKey` GRANTS ONLY ACTIONS IN THE APP'S CATALOG** (`isActionAllowed` over `app_actions`, the
-  rule policies use), checked before delegation, so an issuer holding `*` still cannot mint a key
-  for an action the app never declared. An expiry or catalog refusal is `not_allowed` over RPC and a
-  400 naming the problem on the admin share-link path (`IssueOutcome.problem`).
+- **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
+  `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
+  so an issuer holding `*` still cannot mint a key for an action the app never declared, and a key
+  never grows when the app declares more. (Policies and grants keep their pattern rule; that is not
+  this.) No current caller issues a wildcard key: the builder's device keys are written by the device
+  repository with exact actions, and the CLI passes the operator's list. An expiry or action refusal
+  is `not_allowed` over RPC and a 400 naming the problem on the admin share-link path
+  (`IssueOutcome.problem`).
 - **`revokeKey` ACTS ONLY ON A CREDENTIAL OF THE CALLER'S VERIFIED APP.** Any other credential,
   including a cross-app (`app IS NULL`) one, is `not_found` — the answer for an unknown id — so one
   app can neither end nor probe another app's keys.
 - **`audit` RECORDS THE APP OF THE CALLER'S VERIFIED TOKEN, NEVER ONE THE EVENT NAMES.** `AuditInput`
   has no `app`; it carries the proxy-injected token, and `verifiedTokenApp` (`src/auth.ts`) reads a
-  native token's `aud` or a resource token's signed `app`. A token that does not verify drops the
-  event with a warning. The principal fields are still the caller's word.
+  native token's `aud` or a resource token's signed `app`. Signature, issuer and token kind are
+  strict; only `exp` gets `AUDIT_TOKEN_EXPIRY_GRACE_SECONDS` (1 h), because a request authenticated
+  before its token expired may finish after it, and this decides where an event is filed, never what
+  is allowed. Every authorizing verify stays strict. A token that does not verify drops the event
+  with a warning. The principal fields are still the caller's word.
 - **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** The session cookie is
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding

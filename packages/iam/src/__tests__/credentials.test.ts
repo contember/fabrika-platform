@@ -327,17 +327,21 @@ describe('issueKey: an expiry is required, in the future and within MAX_KEY_LIFE
 	})
 })
 
-describe("issueKey: only actions in the app's catalog", () => {
+describe("issueKey: only exact actions of the app's catalog", () => {
 	test.each(MODES)('%s: an unknown action is refused even for an issuer holding `*`', async (mode) => {
 		const { h, outcome } = await issueIn(mode, { expiresAt: inOneHour(), action: 'report.delete' })
 		expect(outcome.result).toEqual({ ok: false, reason: 'not_allowed' })
-		expect(outcome.problem).toBe('unknown action pattern: report.delete')
+		expect(outcome.problem).toBe('unknown action: report.delete')
 		expect(h.sqlite.query('SELECT id FROM credentials').all()).toHaveLength(0)
 	})
 
-	test('a wildcard over an empty namespace is refused; one over a declared namespace is not', async () => {
-		expect((await issueIn('standalone', { expiresAt: inOneHour(), action: 'billing.*' })).outcome.problem).toBe('unknown action pattern: billing.*')
-		expect((await issueIn('standalone', { expiresAt: inOneHour(), action: 'report.*' })).outcome.result.ok).toBe(true)
+	test.each(MODES)('%s: a wildcard is refused, even one over a declared namespace', async (mode) => {
+		for (const action of ['*', 'report.*', 'billing.*']) {
+			const { h, outcome } = await issueIn(mode, { expiresAt: inOneHour(), action })
+			expect(outcome.result).toEqual({ ok: false, reason: 'not_allowed' })
+			expect(outcome.problem).toBe(`a key lists exact actions, not the wildcard: ${action}`)
+			expect(h.sqlite.query('SELECT id FROM credentials').all()).toHaveLength(0)
+		}
 	})
 
 	test("another app's catalog does not count", async () => {
@@ -350,7 +354,7 @@ describe("issueKey: only actions in the app's catalog", () => {
 			{ id: issuerId, permissions: [perm('*')] },
 			'a',
 		)
-		expect(outcome.problem).toBe('unknown action pattern: report.delete')
+		expect(outcome.problem).toBe('unknown action: report.delete')
 	})
 })
 

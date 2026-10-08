@@ -128,7 +128,7 @@ export class Signer {
 export async function verifyAccessToken(
 	signer: Signer,
 	token: string,
-	opts: { issuer: string; audience?: string },
+	opts: VerifyOptions & { audience?: string },
 ): Promise<AccessTokenClaims | null> {
 	const verified = await verifySigned(signer, token, opts)
 	if (verified === null || verified.typ !== undefined || verified.claims.oauth !== undefined) return null
@@ -136,22 +136,29 @@ export async function verifyAccessToken(
 }
 
 /** Verify an OAuth resource token (`typ: at+jwt`, OAuth claims present); null for anything else. */
-export async function verifyResourceAccessToken(signer: Signer, token: string, opts: { issuer: string }): Promise<AccessTokenClaims | null> {
+export async function verifyResourceAccessToken(signer: Signer, token: string, opts: VerifyOptions): Promise<AccessTokenClaims | null> {
 	const verified = await verifySigned(signer, token, opts)
 	if (verified === null || verified.typ !== RESOURCE_ACCESS_TOKEN_TYP || verified.claims.oauth === undefined) return null
 	return verified.claims
 }
 
+interface VerifyOptions {
+	issuer: string
+	/** Accept a token this many seconds past its `exp`. Only a caller that records, never authorizes, may pass it. */
+	expiryGraceSeconds?: number
+}
+
 async function verifySigned(
 	signer: Signer,
 	token: string,
-	opts: { issuer: string; audience?: string },
+	opts: VerifyOptions & { audience?: string },
 ): Promise<{ claims: AccessTokenClaims; typ: string | undefined } | null> {
 	try {
 		const { payload, protectedHeader } = await jwtVerify(token, createLocalJWKSet(signer.jwks()), {
 			algorithms: [TOKEN_ALG],
 			issuer: opts.issuer,
 			...(opts.audience === undefined ? {} : { audience: opts.audience }),
+			...(opts.expiryGraceSeconds === undefined ? {} : { clockTolerance: opts.expiryGraceSeconds }),
 		})
 		const claims = parseAccessClaims(payload)
 		return claims === null ? null : { claims, typ: protectedHeader.typ }

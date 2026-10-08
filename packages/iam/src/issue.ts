@@ -10,7 +10,6 @@
 
 import {
 	API_KEY_PREFIX,
-	isActionAllowed,
 	type IssueKeyInput,
 	type IssueKeyResult,
 	type KeyGrant,
@@ -72,10 +71,18 @@ export function keyExpiryProblem(expiresAt: number, now: number): string | null 
 	return null
 }
 
-/** The first requested action pattern the app's catalog does not declare, or null. */
-async function findUnknownAction(services: Services, app: string, actions: string[]): Promise<string | null> {
-	const catalog = await services.repositories.appSchema.listActionCatalog(app)
-	return actions.find((action) => !isActionAllowed(action, catalog)) ?? null
+/**
+ * Why a requested action may not go on a key, or null when every one may. A key lists EXACT catalog
+ * actions: a wildcard would also cover actions the app declares later, or never declares at all.
+ */
+async function actionProblem(services: Services, app: string, actions: string[]): Promise<string | null> {
+	const wildcard = actions.find((action) => action.includes('*'))
+	if (wildcard !== undefined) {
+		return `a key lists exact actions, not the wildcard: ${wildcard}`
+	}
+	const catalog = new Set(await services.repositories.appSchema.listActionCatalog(app))
+	const unknown = actions.find((action) => !catalog.has(action))
+	return unknown === undefined ? null : `unknown action: ${unknown}`
 }
 
 // ── issueKey ──────────────────────────────────────────────────────────────────
@@ -87,7 +94,8 @@ async function findUnknownAction(services: Services, app: string, actions: strin
  * binding is what makes delegation mean anything: the grants below are checked against the issuer's
  * permissions *for this app*, so a credential that could be spent at another one would convert
  * app-scoped authority into installation-wide authority (SEC-2). For the same reason every granted
- * action must be in that app's catalog, and every key must expire within `MAX_KEY_LIFETIME_SECONDS`.
+ * action must be an exact action of that app's catalog, and every key must expire within
+ * `MAX_KEY_LIFETIME_SECONDS`.
  */
 export async function issueKey(services: Services, input: IssueKeyInput, issuer: Issuer, app: string): Promise<IssueOutcome> {
 	// Every mode: a self-bound key is a standing copy of a 300-second token, a service key a new
@@ -106,9 +114,9 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 		if (grants.length === 0) {
 			return NOT_ALLOWED
 		}
-		const unknown = await findUnknownAction(services, app, svc.permissions)
-		if (unknown !== null) {
-			return refused(`unknown action pattern: ${unknown}`)
+		const problem = await actionProblem(services, app, svc.permissions)
+		if (problem !== null) {
+			return refused(problem)
 		}
 		if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 			return NOT_ALLOWED
@@ -145,9 +153,9 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 	if (input.principalId === undefined && grants.length === 0) {
 		return NOT_ALLOWED
 	}
-	const unknown = await findUnknownAction(services, app, grants.map((grant) => grant.action))
-	if (unknown !== null) {
-		return refused(`unknown action pattern: ${unknown}`)
+	const problem = await actionProblem(services, app, grants.map((grant) => grant.action))
+	if (problem !== null) {
+		return refused(problem)
 	}
 	// Delegation: the issuer must hold every inline grant (trivially true for a self-bound downscope).
 	if (findUncoveredGrant(issuer.permissions, grants) !== null) {

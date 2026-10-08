@@ -299,7 +299,7 @@ export interface IamRpc {
 	mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult>
 	/**
 	 * Mint an opaque, stored, revocable `px_` credential (API key / share link). Delegated: the issuer
-	 * is resolved from the forwarded credentials and may only grant what it holds, only actions in the
+	 * is resolved from the forwarded credentials and may only grant what it holds, only exact actions of the
 	 * app's catalog, and only with an expiry inside `MAX_KEY_LIFETIME_SECONDS`. Returns the
 	 * plaintext token ONCE; `id` is the durable handle for revoke.
 	 */

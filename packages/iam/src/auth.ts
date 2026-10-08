@@ -122,9 +122,14 @@ export async function resolveCaller(
 	}
 }
 
+/** A request authenticated before its token expired may finish, and audit, after it; one hour covers that. */
+export const AUDIT_TOKEN_EXPIRY_GRACE_SECONDS = 60 * 60
+
 /**
  * The app an `audit` event belongs to, read from the caller's own token rather than from the event: a
  * native access token's `aud`, or an OAuth resource token's signed `app`. Null when neither verifies.
+ * Signature, issuer and token kind are checked as strictly as anywhere; only `exp` gets
+ * `AUDIT_TOKEN_EXPIRY_GRACE_SECONDS`, because this decides where an event is filed, never what is allowed.
  */
 export async function verifiedTokenApp(
 	services: Services,
@@ -132,10 +137,11 @@ export async function verifiedTokenApp(
 	credential: string,
 ): Promise<string | null> {
 	const signer = await getSigner(env)
-	const native = await verifyAccessToken(signer, credential, { issuer: services.config.issuer })
+	const opts = { issuer: services.config.issuer, expiryGraceSeconds: AUDIT_TOKEN_EXPIRY_GRACE_SECONDS }
+	const native = await verifyAccessToken(signer, credential, opts)
 	if (native !== null) {
 		return native.aud
 	}
-	const resource = await verifyResourceAccessToken(signer, credential, { issuer: services.config.issuer })
+	const resource = await verifyResourceAccessToken(signer, credential, opts)
 	return resource?.oauth?.app ?? null
 }
