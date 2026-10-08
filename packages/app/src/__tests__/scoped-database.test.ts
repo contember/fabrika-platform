@@ -13,7 +13,7 @@ import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped
 import { bindScopedDatabase } from '@fabrika/db/framework'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
-import { bootApp, errorType, FRAMEWORK_ENV, grant, keepingProcessEnvironment, resultOf, send, token } from './fixtures/implement/harness'
+import { bootApp, errorType, frameworkEnvFor, grant, keepingProcessEnvironment, resultOf, send, token } from './fixtures/implement/harness'
 import { contract } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { type Hooks, scopedNotesApp } from './fixtures/scoped-notes/src/app'
@@ -246,17 +246,19 @@ describe('boot binds the data layer once', () => {
 
 	test('serveContract refuses without FABRIKA_APP_DATABASE_URL and names no value', async () => {
 		await keepingProcessEnvironment(async () => {
-			const env = { ...FRAMEWORK_ENV, FABRIKA_APP_ID: 'notes', PORT: '0' }
-			const served = serveContract(() => Promise.resolve({ default: scopedNotesApp(hooks, scoped(tables)) }), env)
+			const application = scopedNotesApp(hooks, scoped(tables))
+			const env = { ...frameworkEnvFor(application), FABRIKA_APP_ID: 'notes', PORT: '0' }
+			const served = serveContract(() => Promise.resolve({ default: application }), env)
 			await expect(served).rejects.toThrow('FABRIKA_APP_DATABASE_URL is not set')
 		})
 	})
 
 	test.skipIf(!hasPostgres)('serveContract opens the application schema from the framework variables and connects it', async () => {
 		await keepingProcessEnvironment(async () => {
-			const env = { ...FRAMEWORK_ENV, FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: url, PORT: '0' }
 			const served = scoped(tables)
-			const server = await serveContract(() => Promise.resolve({ default: scopedNotesApp(hooks, served) }), env)
+			const application = scopedNotesApp(hooks, served)
+			const env = { ...frameworkEnvFor(application), FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: url, PORT: '0' }
+			const server = await serveContract(() => Promise.resolve({ default: application }), env)
 			try {
 				expect((await fetch(`http://localhost:${server.port}/healthz`)).status).toBe(200)
 				expect(() => bindScopedDatabase(served, { database, capabilities: requestCapabilities })).toThrow('already connected')

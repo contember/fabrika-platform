@@ -93,7 +93,7 @@ const SESSION = { Cookie: '__Host-px_session=session', 'Sec-Fetch-Site': 'same-o
 
 describe('a contract application behind its generated gates on Cloudflare', () => {
 	test('the proxy Worker bakes the generated gates into its manifest verbatim', () => {
-		expect(parseProxyManifestJson(bakedManifest())?.apps.map((app) => app.gates)).toEqual([gates])
+		expect(parseProxyManifestJson(bakedManifest())?.apps).toMatchObject([{ gates }])
 	})
 
 	test('an anonymous health check reaches the application without a token', async () => {

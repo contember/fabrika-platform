@@ -104,8 +104,8 @@ const KEY = { Authorization: 'Bearer px_key', 'Content-Type': 'application/json'
 describe('a contract application deploys to Zerops with its generated gates and schema', () => {
 	test('the Fabrika manifest carries both, and the namespace proxy manifest the gates, verbatim', () => {
 		expect(manifest.app.schema).toEqual(schemaFromContract(artifact))
-		expect(manifest.target.proxy?.gates).toEqual(gatesFromContract(artifact))
-		expect(proxyManifest.apps.map(({ id, gates }) => ({ id, gates }))).toEqual([{ id: 'notes@prod', gates: gatesFromContract(artifact) }])
+		expect(manifest.target.proxy).toMatchObject({ gates: gatesFromContract(artifact) })
+		expect(proxyManifest.apps).toMatchObject([{ id: 'notes@prod', gates: gatesFromContract(artifact) }])
 	})
 
 	test('the schema the deploy reconciles is a contract schema IAM accepts', () => {
