@@ -42,6 +42,12 @@ src/
   evaluator. `.require()` and the contract's requirement check are **authorization**
   in the vocabulary of `docs/reference/overview.md`; the same-origin check of
   `implement` is **admission**. Neither evaluates a gate rule. Never add one here.
+- `defineApp()` answers 400 for a non-canonical raw path (`isCanonicalPath` from
+  `@fabrika/auth-core`) before context, middleware or routing run. Middleware that
+  reads the path therefore sees what the router and the proxy's gates saw.
+- The router splits paths literally: a trailing `/` is significant, so `/a/` and
+  `/a` are different routes. Never drop empty segments again — the gate matcher
+  compares the raw path, and the two must agree.
 - Error handling is structural. Never rely on cross-package `instanceof`.
 - The RPC wire protocol is `{ method, input }` requests and `{ result }` or
   `{ error }` responses. `{ batch }` is removed (A3): no client sends it. Until A3

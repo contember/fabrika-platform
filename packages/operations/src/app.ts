@@ -35,7 +35,7 @@ export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 			isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)
 				? notFound()
 				: Response.json({ status: 'ok' })),
-		route.all('/api/:projectId/envelope', (ctx) => directIngest(ctx)),
+		route.all('/api/:projectId/envelope/', (ctx) => directIngest(ctx)),
 		route.all(OPERATIONS_SOURCE_MAP_UPLOAD_PATH, (ctx) => sourceMapUpload(ctx)),
 		route.all('/private/catalog/reconcile', (ctx) => catalogReconcile(ctx)),
 		route.all(OPERATIONS_RELEASE_RECONCILE_PATH, (ctx) => releaseReconcile(ctx)),

@@ -42,7 +42,8 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@fabrika/auth": "workspace:*"
+		"@fabrika/auth": "workspace:*",
+		"@fabrika/auth-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

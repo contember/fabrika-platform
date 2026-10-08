@@ -43,8 +43,16 @@ export interface RpcRoute<Ctx> {
 
 export type Route<Ctx> = HttpRoute<Ctx, string> | RpcRoute<Ctx>
 
+/** Split literally: a trailing `/` stays an empty last segment, so `/a/` and `/a` are different routes. */
 function splitPath(path: string): string[] {
-	return path.split('/').filter((segment) => segment.length > 0)
+	return path === '/' ? [] : path.slice(1).split('/')
+}
+
+function patternSegments(pattern: string): string[] {
+	if (!pattern.startsWith('/')) {
+		throw new Error('a route pattern must start with /')
+	}
+	return splitPath(pattern)
 }
 
 function decodePathSegment(segment: string): string | null {
@@ -61,7 +69,7 @@ function makeHttpRoute<Ctx, Pattern extends string>(
 	handler: HttpHandler<Ctx, Pattern>,
 	opts: RouteOptions<Ctx> | undefined,
 ): HttpRoute<Ctx, Pattern> {
-	const segments = splitPath(pattern)
+	const segments = patternSegments(pattern)
 	const wildcard = segments.findIndex((segment) => segment.startsWith('*'))
 	if (wildcard !== -1 && wildcard !== segments.length - 1) {
 		throw new Error('a wildcard route segment must be terminal')
@@ -95,7 +103,7 @@ export const route = {
 		return makeHttpRoute('DELETE', pattern, handler, opts)
 	},
 	rpc<Ctx>(path: string, router: AnyRouter, opts?: RouteOptions<Ctx>): RpcRoute<Ctx> {
-		return { kind: 'rpc', pattern: path, segments: splitPath(path), use: opts?.use ?? [], router }
+		return { kind: 'rpc', pattern: path, segments: patternSegments(path), use: opts?.use ?? [], router }
 	},
 }
 
@@ -120,7 +128,8 @@ function matchSegments(routeSegments: ReadonlyArray<string>, pathSegments: Reado
 		const pathSegment = pathSegments[i]
 		if (pathSegment === undefined) return null
 		if (routeSegment.startsWith(':')) {
-			const value = decodePathSegment(pathSegment)
+			// The empty last segment of a trailing `/` is not a parameter value.
+			const value = pathSegment === '' ? null : decodePathSegment(pathSegment)
 			if (value === null) return null
 			params[routeSegment.slice(1)] = value
 		} else if (routeSegment !== pathSegment) {

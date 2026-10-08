@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { defineApp } from '../app.js'
 import { matchRoutes, route } from '../router.js'
 import type { Route } from '../router.js'
 import { initRpc } from '../rpc/builder.js'
-import { getRequest } from './helpers.js'
+import { fakeExec, getRequest, record } from './helpers.js'
 
 interface Ctx {
 	value: number
@@ -40,8 +41,8 @@ describe('matchRoutes', () => {
 	})
 
 	test('url-decodes param values', () => {
-		const matched = matchRoutes(routes, getRequest('https://x/api/a%2Fb/envelope'))
-		expect(matched?.params).toEqual({ project: 'a/b' })
+		const matched = matchRoutes(routes, getRequest('https://x/api/a%20b/envelope'))
+		expect(matched?.params).toEqual({ project: 'a b' })
 	})
 
 	test('malformed percent-encoding does not throw or match a parameterized route', () => {
@@ -88,12 +89,95 @@ describe('matchRoutes', () => {
 	})
 
 	test('a terminal wildcard may capture an empty remainder', () => {
-		const matched = matchRoutes(routes, getRequest('https://x/public/'))
+		const matched = matchRoutes(routes, getRequest('https://x/public'))
 		expect(matched?.params).toEqual({ path: '' })
+	})
+
+	test('a terminal wildcard keeps a trailing slash in what it captures', () => {
+		expect(matchRoutes(routes, getRequest('https://x/public/docs/'))?.params).toEqual({ path: 'docs/' })
+	})
+
+	test('a trailing slash is significant: /foo/ and /foo are different routes', () => {
+		const foo = route.get('/foo', () => new Response('foo'))
+		const fooSlash = route.get('/foo/', () => new Response('foo/'))
+		// A gate `/foo/*` admits `/foo/`; the `/foo` route must not answer it.
+		expect(matchRoutes([foo], getRequest('https://x/foo/'))).toBeNull()
+		expect(matchRoutes([fooSlash], getRequest('https://x/foo'))).toBeNull()
+		expect(matchRoutes([foo, fooSlash], getRequest('https://x/foo/'))?.route).toBe(fooSlash)
+		expect(matchRoutes(routes, getRequest('https://x/health/'))).toBeNull()
+	})
+
+	test('the empty last segment of a trailing slash is not a parameter value', () => {
+		expect(matchRoutes(routes, new Request('https://x/users/', { method: 'POST' }))).toBeNull()
+	})
+
+	test('a route pattern must start with a slash', () => {
+		expect(() => route.get('health', () => new Response('nope'))).toThrow('a route pattern must start with /')
+		expect(() => route.rpc('api/rpc', apiRouter)).toThrow('a route pattern must start with /')
 	})
 
 	test('a non-terminal wildcard is rejected at definition time', () => {
 		expect(() => route.get('/public/*path/tail', () => new Response('nope'))).toThrow('a wildcard route segment must be terminal')
+	})
+})
+
+/**
+ * A request whose `url` is the string as written. Bun's `Request` resolves dot segments on
+ * construction; another runtime may hand them to the application unresolved.
+ */
+class RawUrlRequest extends Request {
+	constructor(private readonly raw: string) {
+		super(raw)
+	}
+
+	override get url(): string {
+		return this.raw
+	}
+}
+
+describe('defineApp — a non-canonical path is a 400 before routing', () => {
+	let reached = 0
+	const app = defineApp<Record<string, never>, Ctx>({
+		context: () => {
+			reached++
+			return { value: 1 }
+		},
+		routes: [
+			route.get('/admin/users', () => new Response('admin')),
+			route.get('/api/:project/envelope', (_ctx, params) => new Response(params.project)),
+			route.get('/public/*path', (_ctx, params) => new Response(params.path)),
+			route.rpc('/api/rpc', apiRouter),
+		],
+		assets: () => ({ fetch: () => Promise.resolve(new Response('spa')) }),
+	})
+
+	test.each([
+		['a repeated slash', 'https://x//admin/users'],
+		['a dot-dot segment', 'https://x/a/../admin/users'],
+		['an encoded dot-dot segment', 'https://x/a/%2e%2e/admin/users'],
+		['an encoded slash inside a parameter', 'https://x/api/a%2Fb/envelope'],
+		['an encoded slash under a wildcard', 'https://x/public/x%2Fy'],
+		['an encoded backslash', 'https://x/public/x%5Cy'],
+		['a dot segment', 'https://x/admin/./users'],
+		['an empty segment before a trailing slash', 'https://x/admin/users//'],
+		['a repeated slash before an RPC mount', 'https://x//api/rpc'],
+	])('%s', async (_name, url) => {
+		reached = 0
+		const response = await app.fetch(new RawUrlRequest(url), {}, fakeExec())
+		expect(response.status).toBe(400)
+		expect(record(record(await response.json())['error'])['type']).toBe('bad_request')
+		expect(reached).toBe(0)
+	})
+
+	test('a canonical path still routes, and the root is canonical', async () => {
+		expect(await (await app.fetch(getRequest('https://x/admin/users'), {}, fakeExec())).text()).toBe('admin')
+		expect(await (await app.fetch(getRequest('https://x/'), {}, fakeExec())).text()).toBe('spa')
+	})
+
+	test('a trailing slash is canonical but never reaches the route without it', async () => {
+		const response = await app.fetch(getRequest('https://x/admin/users/'), {}, fakeExec())
+		expect(response.status).toBe(200)
+		expect(await response.text()).toBe('spa')
 	})
 })
 

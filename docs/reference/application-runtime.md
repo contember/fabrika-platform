@@ -8,13 +8,15 @@ error handling, object-level authorization, and a typed browser client.
 
 `defineApp()` builds the runtime-neutral request application. For each request it:
 
-1. builds the caller-owned context;
-2. runs global middleware in declaration order;
-3. matches an HTTP or RPC route;
-4. runs route-scoped middleware;
-5. invokes the handler or RPC dispatcher;
-6. maps thrown structural errors to a response;
-7. serves the optional asset fallback for an unmatched `GET`.
+1. answers 400 for a non-canonical raw path (`isCanonicalPath` from `@fabrika/auth-core`: an
+   empty segment, `.` or `..`, an encoded `/` or `\`), before anything else runs;
+2. builds the caller-owned context;
+3. runs global middleware in declaration order;
+4. matches an HTTP or RPC route;
+5. runs route-scoped middleware;
+6. invokes the handler or RPC dispatcher;
+7. maps thrown structural errors to a response;
+8. serves the optional asset fallback for an unmatched `GET`.
 
 Middleware may mutate context, short-circuit with a response, or wrap the
 downstream response. `@fabrika/auth` owns the canonical `Middleware` type;
@@ -22,7 +24,9 @@ downstream response. `@fabrika/auth` owns the canonical `Middleware` type;
 
 HTTP route patterns support typed `:segment` parameters and one optional terminal
 wildcard such as `/public/*path`. The wildcard captures the decoded remaining
-path. `route.all()` mounts a Fetch-style handler for every method. It is the
+path; it can never contain an encoded `/`, because step 1 refuses one. A trailing `/` is
+significant and matched literally: `/a/` and `/a` are different routes, and a `:segment`
+never matches the empty segment after a trailing `/`. `route.all()` mounts a Fetch-style handler for every method. It is the
 compatibility seam for an established REST surface that joins the shared
 application pipeline without changing its wire contract.
 

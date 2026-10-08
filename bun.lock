@@ -79,6 +79,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/auth": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",

@@ -232,6 +232,13 @@ describe('Operations public/private HTTP isolation', () => {
 		expect(missingSlash.status).toBe(404)
 	})
 
+	test('ingest is routed at the Sentry envelope path, whose trailing slash is matched literally', async () => {
+		const fetch = handler()
+		const envelope = await fetch(new Request(`https://${publicHost}/api/1/envelope/`, { method: 'POST', body: '' }))
+		expect(envelope.status).not.toBe(404)
+		expect((await fetch(new Request(`https://${publicHost}/api/1/envelope`, { method: 'POST', body: '' }))).status).toBe(404)
+	})
+
 	test('the private service hostname reaches health and authenticated catalog reconciliation', async () => {
 		const fetch = handler()
 		expect((await fetch(new Request('https://operations.internal/healthz'))).status).toBe(200)

@@ -262,18 +262,14 @@ describe('controlApp under the origin guard', () => {
 		expect(await appIds(fetch)).toEqual([])
 	})
 
-	test('a doubled slash skips neither the authentication nor the guard', async () => {
+	test('a doubled slash is refused before the authentication and the guard can be skipped', async () => {
 		const fetch = application()
 
 		const anonymous = await fetch(createRequest(null, {}, 'slash-app', '//api/rpc'))
-		expect(anonymous.status).toBe(401)
-		const anonymousBody: unknown = await anonymous.json()
-		expect(anonymousBody).toEqual({ error: { type: 'auth', message: 'no_token' } })
+		expect(anonymous.status).toBe(400)
 
 		const forged = await fetch(createRequest(adminToken, { origin: 'https://evil.example' }, 'slash-app', '//api/rpc'))
-		expect(forged.status).toBe(403)
-		const forgedBody: unknown = await forged.json()
-		expect(forgedBody).toEqual({ error: { type: 'forbidden', message: 'cross-origin request rejected' } })
+		expect(forged.status).toBe(400)
 		expect(await appIds(fetch)).toEqual([])
 	})
 })

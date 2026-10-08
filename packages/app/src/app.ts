@@ -2,6 +2,7 @@
 //
 // `defineApp` owns the runtime-neutral Fetch request pipeline.
 
+import { isCanonicalPath, rawRequestTarget } from '@fabrika/auth-core'
 import { defaultOnError, jsonResponse } from './errors.js'
 import type { Middleware } from './middleware.js'
 import { runChain } from './middleware.js'
@@ -42,6 +43,10 @@ function createFetch<Env, Ctx>(
 	const onError = config.onError ?? defaultOnError
 
 	return async (request: Request, env: Env, exec: RequestExecutionContext): Promise<Response> => {
+		// Before context and middleware: they and the router would each read a rewritten path otherwise.
+		if (!isCanonicalPath(rawRequestTarget(request.url).pathname)) {
+			return jsonResponse({ error: { type: 'bad_request', message: 'The request path is not canonical' } }, 400)
+		}
 		try {
 			const ctx = await config.context(env, request, exec)
 			const middleware = config.middleware ? config.middleware(env) : []
