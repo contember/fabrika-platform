@@ -2,21 +2,26 @@ import type { AppSchema } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	createZeropsApi,
 	type FetchLike,
 	type ZeropsApi,
 	ZeropsApiError,
 	type ZeropsAppVersion,
+	type ZeropsImportedService,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
+	type ZeropsService,
 	type ZeropsServiceEnv,
 } from '../api'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { parseZeropsCheckpoint } from '../control'
+import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION } from '../execution'
+import type { ExposureAlert } from '../exposure'
 import type { ManagedValues } from '../managed-env'
-import { compileFabrikaManifest } from '../manifest'
+import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor } from '../manifest'
 import { CANCELLED, createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
@@ -40,6 +45,7 @@ interface Recorded {
 	timeline: string[]
 	envWrites: Array<{ key: string; value: string }>
 	envDeletes: string[]
+	alerts: ExposureAlert[]
 }
 
 const fresh = (): Recorded => ({
@@ -59,6 +65,7 @@ const fresh = (): Recorded => ({
 	timeline: [],
 	envWrites: [],
 	envDeletes: [],
+	alerts: [],
 })
 
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
@@ -76,6 +83,11 @@ interface Overrides {
 	importProcesses?: { id: string; status: ZeropsProcess['status'] }[]
 	pipelineStart?: string
 	serviceEnv?: ZeropsServiceEnv[]
+	/** What `findService` answers per hostname; every service reads `subdomainAccess: false` by default. */
+	services?: Record<string, Partial<ZeropsService> | null>
+	/** The services the import reports, replacing the default one for `api`. */
+	importedServices?: ZeropsImportedService[]
+	alertError?: Error
 	/** Wire the REAL log reader to a canned window, so the relay's version scoping is exercised end to end. */
 	logFetch?: FetchLike
 }
@@ -99,7 +111,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
 			recorded.imports.push({ projectId, yaml })
-			return { projectId, services: [{ id: 'service-1', name: 'api', processes: overrides.importProcesses ?? [] }] }
+			return { projectId, services: overrides.importedServices ?? [{ id: 'service-1', name: 'api', processes: overrides.importProcesses ?? [] }] }
 		},
 		importProject: async ({ clientId }) => ({ projectId: clientId, services: [] }),
 		triggerPipeline: async ({ serviceId, buildFromGit, zeropsSetup }) => {
@@ -156,7 +168,11 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		},
 		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change autoscaling')),
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'api' }),
-		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
+		findService: async ({ hostname }) => {
+			recorded.calls.push(`findService:${hostname}`)
+			const answer = overrides.services?.[hostname]
+			return answer === null ? null : { id: 'service-1', name: hostname, subdomainAccess: false, ...answer }
+		},
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),
 		listProjects: async () => [],
 		findProjects: async () => [],
@@ -210,6 +226,11 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 		recorded.calls.push('reconcileSchema')
 		recorded.schemas.push(app)
 		recorded.schemaSignals.push(signal)
+	},
+	alertExposure: async ({ alert }) => {
+		recorded.calls.push('alertExposure')
+		recorded.alerts.push(alert)
+		if (overrides.alertError !== undefined) throw overrides.alertError
 	},
 	sleep: async (ms) => {
 		recorded.sleeps.push(ms)
@@ -340,6 +361,7 @@ describe('Zerops provider', () => {
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual([
 			'apply-import',
+			'verify-exposure',
 			'write-service-env',
 			'reserve-version',
 			'upload-source',
@@ -349,6 +371,8 @@ describe('Zerops provider', () => {
 		])
 		expect(recorded.calls).toEqual([
 			'importServices',
+			'findService:db',
+			'findService:api',
 			'listServiceEnv',
 			'createAppVersion:service-1',
 			'sourceUpload',
@@ -453,6 +477,8 @@ describe('Zerops provider', () => {
 		expect(stepError(result, 'upload-source')).toBe('source upload failed')
 		expect(recorded.calls).toEqual([
 			'importServices',
+			'findService:db',
+			'findService:api',
 			'listServiceEnv',
 			'createAppVersion:service-1',
 			'sourceUpload',
@@ -615,6 +641,8 @@ describe('Zerops provider', () => {
 		expect(result.status).toBe('failed')
 		expect(recorded.calls).toEqual([
 			'importServices',
+			'findService:db',
+			'findService:api',
 			'listServiceEnv',
 			'createAppVersion:service-1',
 			'sourceUpload',
@@ -690,7 +718,7 @@ describe('Zerops provider', () => {
 				triggerVersionId: 'version-1',
 			})
 		)
-		await deployUntil(provider, deployRun(recorded, target()), 'write-service-env')
+		await deployUntil(provider, deployRun(recorded, target()), 'verify-exposure')
 
 		// Triggering a pipeline on a service Zerops is still creating answers 400
 		// `projectImportInvalidParameter`; the first deploy into a fresh namespace hit exactly that.
@@ -706,7 +734,16 @@ describe('Zerops provider', () => {
 		expect(stepError(result, 'await-version')).toBe(
 			'zerops: pipeline process process-1 is FAILED while app-version version-waiting is WAITING_TO_BUILD',
 		)
-		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded', 'succeeded', 'succeeded', 'succeeded', 'failed', 'skipped'])
+		expect(result.steps.map((step) => step.status)).toEqual([
+			'succeeded',
+			'succeeded',
+			'succeeded',
+			'succeeded',
+			'succeeded',
+			'succeeded',
+			'failed',
+			'skipped',
+		])
 		expect(recorded.calls.slice(-3)).toEqual(['buildAndDeployAppVersion:version-waiting', 'getProcess', 'getAppVersion'])
 		expect(recorded.sleeps).toEqual([])
 	})
@@ -732,7 +769,7 @@ describe('Zerops provider', () => {
 		const result = await provider({ ...run, artifact: driftedArtifact })
 
 		expect(stepError(result, 'reserve-version')).toContain('source descriptor digest')
-		expect(recorded.calls).toEqual(['importServices', 'listServiceEnv'])
+		expect(recorded.calls).toEqual(['importServices', 'findService:db', 'findService:api', 'listServiceEnv'])
 	})
 
 	test('propagates cancellation into an active schema reconciliation', async () => {
@@ -881,5 +918,115 @@ describe('Zerops compiler invariants', () => {
 	test('the API surface has no project-level environment writer', () => {
 		const api = makeApi(recorded)
 		expect(Reflect.has(api, 'putProjectEnv')).toBe(false)
+	})
+})
+
+const BUCKET: ZeropsServiceSpec = { hostname: 'files', type: 'object-storage', objectStorageSize: 1 }
+const DSN = 'https://0123456789abcdef0123456789abcdef@operations.example.test/7'
+
+const runOf = (services: ZeropsServiceSpec[], managedEnvironment: ManagedValues = NO_MANAGED_VALUES): ZeropsDeployRun => ({
+	...deployRun(recorded),
+	managedEnvironment,
+	artifact: compileFabrikaManifest(app(services), 'prod', SOURCE_DESCRIPTOR),
+})
+
+describe('the exposure read-back before activation', () => {
+	test('a service with subdomain access on blocks the run before any version exists and raises an Operations alert', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded, { services: { api: { subdomainAccess: true } } }))
+		const result = await provider(runOf([DB, API], { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: DSN, FABRIKA_RELEASE: RELEASE }))
+
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'verify-exposure')).toBe(
+			'zerops: activation refused; service `api` has a `.zerops.app` subdomain, which reaches it past the namespace proxy; disable it in Zerops',
+		)
+		expect(recorded.calls).toEqual(['importServices', 'findService:db', 'findService:api', 'alertExposure'])
+		expect(recorded.alerts).toEqual([{
+			appId: 'demo',
+			env: 'prod',
+			release: RELEASE,
+			findings: [{ hostname: 'api', reason: expect.stringContaining('`.zerops.app` subdomain') }],
+		}])
+	})
+
+	test('a refusal stands when Operations is not configured or its alert cannot be sent', async () => {
+		const quiet = createZeropsDeployer(() => makeCollaborators(recorded, { services: { db: { subdomainAccess: true } } }))
+		expect(stepError(await quiet(runOf([DB, API])), 'verify-exposure')).toContain('service `db` has a `.zerops.app` subdomain')
+		expect(recorded.alerts).toEqual([])
+
+		recorded = fresh()
+		const failing = createZeropsDeployer(() =>
+			makeCollaborators(recorded, { services: { api: { subdomainAccess: true } }, alertError: new Error('ingest down') })
+		)
+		const result = await failing(runOf([API], { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: DSN }))
+		expect(stepError(result, 'verify-exposure')).toContain('service `api`')
+		expect(recorded.logs).toContain('  [warn] the Operations alert could not be sent')
+		expect(recorded.calls).not.toContain('createAppVersion:service-1')
+	})
+
+	test('a service that reports no subdomain state, or is absent, is refused rather than assumed private', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded, { services: { api: { subdomainAccess: undefined }, db: null } }))
+		expect(stepError(await provider(runOf([DB, API])), 'verify-exposure')).toBe(
+			'zerops: activation refused; service `db` is absent after the import, so its exposure cannot be read back; service `api` did not report its subdomain access',
+		)
+	})
+
+	test('a bucket this import did not create and no marker names is refused', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded, { services: { files: { id: 'bucket-1' } } }))
+		expect(stepError(await provider(runOf([BUCKET, API])), 'verify-exposure')).toContain(
+			'service `files` is a bucket the platform did not create private (no provenance)',
+		)
+	})
+
+	test('a bucket this import created is recorded in the provenance marker, and a recorded one is accepted', async () => {
+		const created = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				services: { files: { id: 'bucket-1' } },
+				importedServices: [{ id: 'bucket-1', name: 'files', processes: [{ id: 'create-1', actionName: 'stack.create' }] }],
+			})
+		)
+		expect((await created(runOf([BUCKET, API]))).status).toBe('succeeded')
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1' })
+
+		recorded = fresh()
+		const marked = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				services: { files: { id: 'bucket-1' } },
+				serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1' }],
+			})
+		)
+		expect((await marked(runOf([BUCKET, API]))).status).toBe('succeeded')
+		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_STORAGE_PROVENANCE')
+	})
+
+	test('a marker no bucket needs any more is removed', async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, { serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1' }] })
+		)
+		expect((await provider(runOf([DB, API]))).status).toBe('succeeded')
+		expect(recorded.envDeletes).toContain('env-provenance')
+	})
+})
+
+describe('a contract application deploy', () => {
+	test('sends the generated execution descriptor with the contract digest and release as literals', async () => {
+		const contents = 'zerops:\n  - setup: api\n'
+		const config: ZeropsAppConfig = { ...app([API]), id: 'notes', target: { ...app([API]).target, contract: notesArtifact } }
+		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor(contents))
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
+		const result = await provider({
+			...deployRun(recorded),
+			appId: 'notes',
+			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE },
+			artifact,
+		})
+
+		expect(result.status).toBe('succeeded')
+		const sent = recorded.builds[0]?.zeropsYaml ?? ''
+		expect(sent).toContain(`FABRIKA_CONTRACT_DIGEST: "${artifact.target.contract?.digest ?? 'missing'}"`)
+		expect(sent).toContain(`FABRIKA_RELEASE: ${RELEASE}\n`)
+		expect(sent).toContain('start: "sh /var/www/fabrika/start.generated.sh"')
+		expect(recorded.logs).toContain(
+			`  generated run section; build checks @fabrika/check@${FABRIKA_CHECK_VERSION}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`,
+		)
 	})
 })

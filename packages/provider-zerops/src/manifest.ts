@@ -5,6 +5,16 @@ import { normalizeGateRule, proxyEndpointRowSchema, proxyGateRuleFieldsSchema } 
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
+import {
+	CONTRACT_DIGEST_PATTERN,
+	LOCKED_APP_ID_PATTERN,
+	lockedAuthoredBuild,
+	ZEROPS_RUNTIME_PACKAGES,
+	type ZeropsContractRun,
+	zeropsContractRun,
+	type ZeropsLockedExecution,
+	type ZeropsRuntimePackage,
+} from './execution'
 import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-env'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
@@ -57,6 +67,9 @@ export interface FabrikaManifest {
 		zeropsSetup?: string
 		proxy?: ZeropsProxySpec
 		namespaceResources?: ZeropsNamespaceResourceRequirement[]
+		/** Present for a contract application, whose run section and server build the platform generates. */
+		contract?: ZeropsContractRun
+		runtimePackages?: ZeropsRuntimePackage[]
 	}
 }
 
@@ -280,6 +293,19 @@ const importDocumentSchema = z.object({ project: importProjectSchema.optional(),
 /** The import document a manifest carries: every service already holds the ADR-0004 invariants. */
 export type FabrikaManifestImportDocument = z.infer<typeof importDocumentSchema>
 
+/** A literal path of unreserved characters: it is written into the generated probes unquoted by any shell. */
+const READINESS_PATH = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
+const JOB_NAME = /^[A-Za-z][A-Za-z0-9_]*$/
+const CRON_SCHEDULE = /^[0-9*/,-]+(?: [0-9*/,-]+){4}$/
+
+const contractRunSchema = z.object({
+	digest: z.string().regex(CONTRACT_DIGEST_PATTERN),
+	readinessPath: z.string().regex(READINESS_PATH),
+	jobs: z.array(z.object({ name: z.string().regex(JOB_NAME), schedule: z.string().regex(CRON_SCHEDULE) }).strict()),
+}).strict()
+
+const runtimePackagesSchema = z.array(z.enum(ZEROPS_RUNTIME_PACKAGES)).refine((packages) => new Set(packages).size === packages.length)
+
 const manifestTargetSchema = z.object({
 	sourceDescriptor: zeropsArtifactSourceDescriptorSchema,
 	platform: z.literal('zerops'),
@@ -288,6 +314,8 @@ const manifestTargetSchema = z.object({
 	zeropsSetup: z.string().min(1).optional(),
 	proxy: manifestProxySchema.optional(),
 	namespaceResources: namespaceResourcesSchema.optional(),
+	contract: contractRunSchema.optional(),
+	runtimePackages: runtimePackagesSchema.optional(),
 })
 
 const importDocumentError = (issue: z.ZodIssue, path: readonly (string | number)[]): string => {
@@ -320,6 +348,10 @@ const targetError = (issue: z.ZodIssue | undefined): string => {
 			return 'invalid fabrika manifest proxy declaration'
 		case 'namespaceResources':
 			return 'invalid fabrika manifest namespace resources'
+		case 'contract':
+			return 'invalid fabrika manifest contract run'
+		case 'runtimePackages':
+			return `invalid fabrika manifest runtime packages (allowed: ${ZEROPS_RUNTIME_PACKAGES.join(', ')}, each once)`
 		default:
 			return 'invalid fabrika manifest Zerops target'
 	}
@@ -342,6 +374,39 @@ export const verifyZeropsArtifactSourceDescriptor = async (descriptor: ZeropsArt
 	const actual = await createZeropsArtifactSourceDescriptor(descriptor.contents)
 	if (actual.sha256 !== descriptor.sha256) {
 		throw new Error('Zerops artifact source descriptor digest mismatch')
+	}
+}
+
+const isDescriptorSetup = (value: JsonValue, setup: string): value is { readonly [key: string]: JsonValue } =>
+	typeof value === 'object' && value !== null && !Array.isArray(value) && value['setup'] === setup
+
+/**
+ * The `${host_…}` reference `FABRIKA_APP_DATABASE_URL` is generated from: the namespace's shared PostgreSQL, or the
+ * application's one PostgreSQL service. Two candidates would make the generated migration pick one.
+ */
+const applicationDatabaseUrl = (
+	services: FabrikaManifestImportDocument['services'],
+	namespaceResources: readonly ZeropsNamespaceResourceRequirement[] | undefined,
+): string | null => {
+	const own = services.filter((service) => service.type.startsWith('postgresql')).map((service) => service.hostname)
+	const shared = namespaceResources?.find((resource) => resource.resourceKey === 'service:postgres')
+	if (own.length + (shared === undefined ? 0 : 1) > 1) {
+		throw new Error('invalid fabrika manifest: a contract application has one PostgreSQL database; it declares more than one')
+	}
+	if (shared !== undefined) return shared.connectionString
+	const host = own[0]
+	return host === undefined ? null : `\${${host}_connectionTlsString}/\${${host}_dbName}?sslmode=require`
+}
+
+/** What the platform renders a contract application's execution descriptor from, or null for any other application. */
+export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecution | null => {
+	const { contract } = manifest.target
+	if (contract === undefined) return null
+	return {
+		appId: manifest.app.id,
+		contract,
+		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
+		runtimePackages: manifest.target.runtimePackages ?? [],
 	}
 }
 
@@ -371,7 +436,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (!target.success) {
 		throw new Error(targetError(target.error.issues[0]))
 	}
-	const { sourceDescriptor, deployService, importDocument, zeropsSetup, proxy, namespaceResources } = target.data
+	const { sourceDescriptor, deployService, importDocument, zeropsSetup, proxy, namespaceResources, contract, runtimePackages } = target.data
 	assertAuthoredManagedDocument(importDocument.services)
 	if (importDocument.project !== undefined) assertAuthoredManagedDocument(importDocument.project)
 	assertAuthoredManagedInputs({ variableNames: vars, secretNames: secrets })
@@ -388,10 +453,19 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (foreignInDescriptor !== null) {
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
-	selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
+	const selectedSetup = selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
 	if (proxy !== undefined && schema?.contract === true && !('endpoints' in proxy)) {
 		// A contract application is served only behind its endpoint table; behind gates it would answer 503.
 		throw new Error('invalid fabrika manifest: a contract application is protected by its endpoint table (`contractProxyTable(artifact)`), not gates')
+	}
+	if (contract !== undefined) {
+		if (!LOCKED_APP_ID_PATTERN.test(id)) throw new Error('invalid fabrika manifest: a contract application id must match [a-z0-9][a-z0-9-]*')
+		applicationDatabaseUrl(importDocument.services, namespaceResources)
+		const entries = parsedDescriptor.document['zerops']
+		const entry = Array.isArray(entries) ? entries.find((candidate) => isDescriptorSetup(candidate, selectedSetup)) : undefined
+		if (entry !== undefined) lockedAuthoredBuild(entry, selectedSetup)
+	} else if (runtimePackages !== undefined) {
+		throw new Error('invalid fabrika manifest: runtime packages are generated for a contract application only')
 	}
 	if (proxy !== undefined) {
 		const separator = proxy.upstream.indexOf(':')
@@ -420,6 +494,8 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 			...(zeropsSetup !== undefined ? { zeropsSetup } : {}),
 			...(proxy !== undefined ? { proxy } : {}),
 			...(namespaceResources !== undefined ? { namespaceResources } : {}),
+			...(contract !== undefined ? { contract } : {}),
+			...(runtimePackages !== undefined ? { runtimePackages } : {}),
 		},
 	}
 }
@@ -427,6 +503,9 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 export function compileFabrikaManifest(config: ZeropsAppConfig, env: string, sourceDescriptor: ZeropsArtifactSourceDescriptor): FabrikaManifest {
 	if (config.target.services === undefined) {
 		throw new Error('fabrika app build requires a source Zerops config')
+	}
+	if (config.target.contract !== undefined && config.target.contract.app !== config.id) {
+		throw new Error(`fabrika app build: the contract declares app \`${config.target.contract.app}\`, but the config is app \`${config.id}\``)
 	}
 	const declaredVars = config.pipeline?.vars ?? []
 	const prior: Record<string, string | undefined> = {}
@@ -452,6 +531,8 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string, sou
 				zeropsSetup: config.target.zeropsSetup,
 				proxy: config.target.proxy,
 				namespaceResources: config.target.namespaceResources,
+				contract: config.target.contract === undefined ? undefined : zeropsContractRun(config.target.contract),
+				runtimePackages: config.target.runtimePackages,
 			},
 		}
 		// The JSON copy is the artifact's own form: authored objects lose inherited fields and undefined keys once, here.

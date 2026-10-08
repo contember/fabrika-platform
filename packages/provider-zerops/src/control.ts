@@ -22,6 +22,7 @@ import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
+import { createdServices, type ExposureAlerter, formatStorageProvenance, isObjectStorageType, STORAGE_PROVENANCE_KEY } from './exposure'
 import { assertAuthoredManagedInputs, assertAuthoredManagedName, parseManagedValues } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
@@ -76,6 +77,7 @@ export interface ZeropsControlProviderOptions {
 	readonly api?: ZeropsApi
 	readonly source: ZeropsSourcePort
 	readonly reconcileSchema?: SchemaReconciler
+	readonly alertExposure?: ExposureAlerter
 	readonly sleep?: Sleeper
 	readonly namespaces?: {
 		readonly clientId: string
@@ -205,6 +207,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			api,
 			source: options.source,
 			reconcileSchema: options.reconcileSchema ?? defaults.reconcileSchema,
+			alertExposure: options.alertExposure ?? defaults.alertExposure,
 			sleep: options.sleep ?? defaultSleep,
 		}
 	})
@@ -510,6 +513,22 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						const discovered = present.length === 0 ? reported : existingDeploy
 						if (discovered === null || discovered === undefined || discovered.id === '') {
 							throw new Error(`Zerops import did not create deploy service \`${manifest.target.deployService}\``)
+						}
+						// Only this collision-refusing import proves the platform created the buckets private (ADR-0043).
+						if (present.length === 0) {
+							const created = createdServices(imported)
+							const buckets = manifest.target.importDocument.services.flatMap((service) => {
+								const id = isObjectStorageType(service.type) ? created.get(service.hostname) : undefined
+								return id === undefined ? [] : [id]
+							})
+							if (buckets.length > 0) {
+								await api.putServiceEnv({
+									serviceId: discovered.id,
+									key: STORAGE_PROVENANCE_KEY,
+									value: formatStorageProvenance(buckets),
+									signal: input.signal,
+								})
+							}
 						}
 						return normalizeRegistration({
 							app: input.registration.app,

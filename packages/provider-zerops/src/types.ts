@@ -1,6 +1,7 @@
-import type { AppGates } from '@fabrika/auth-core'
+import type { AppGates, ContractArtifact } from '@fabrika/auth-core'
 import type { AppConfigBase } from '@fabrika/provider-contract'
 import type { ContractProxyApp } from '@fabrika/proxy-core/manifest'
+import type { ZeropsRuntimePackage } from './execution'
 import type {
 	ZeropsHealthCheck,
 	ZeropsImportProject,
@@ -116,6 +117,13 @@ export interface ZeropsSourceTarget {
 	zeropsSetup?: string
 	proxy?: ZeropsProxySpec
 	namespaceResources?: ZeropsNamespaceResourceRequirement[]
+	/**
+	 * The compiled contract of a contract application. Its presence locks the setup down (ADR-0043): the platform
+	 * generates the run section and the server build, and the authored `zerops.yaml` keeps only the SPA build.
+	 */
+	contract?: ContractArtifact
+	/** System packages for the runtime image of a contract application, from a closed list. */
+	runtimePackages?: ZeropsRuntimePackage[]
 	services: (ctx: ZeropsResourceContext) => ZeropsServiceSpec[]
 	project?: ZeropsProjectSpec
 }

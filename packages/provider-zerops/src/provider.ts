@@ -32,6 +32,16 @@ import {
 } from './api'
 import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
+import { FABRIKA_CHECK_VERSION, PLATFORM_TYPESCRIPT_VERSION, renderLockedExecutionDescriptor } from './execution'
+import {
+	createdServices,
+	type ExposureFinding,
+	formatExposureFindings,
+	formatStorageProvenance,
+	isObjectStorageType,
+	parseStorageProvenance,
+	STORAGE_PROVENANCE_KEY,
+} from './exposure'
 import {
 	assertAuthoredManagedDocument,
 	assertAuthoredManagedInputs,
@@ -40,7 +50,13 @@ import {
 	parseManagedValues,
 	SERVICE_MANAGED_KEYS,
 } from './managed-env'
-import { type FabrikaImportDocument, type FabrikaManifest, manifestServiceHostnames, verifyZeropsArtifactSourceDescriptor } from './manifest'
+import {
+	type FabrikaImportDocument,
+	type FabrikaManifest,
+	lockedExecutionOf,
+	manifestServiceHostnames,
+	verifyZeropsArtifactSourceDescriptor,
+} from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsStep } from './plan'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import { isZeropsUploadDestination } from './source'
@@ -244,6 +260,10 @@ const terminalFailure = (version: ZeropsAppVersion): string => {
  * just before the build request is sent; together they decide whether a failure may delete the version.
  */
 interface Attempt {
+	/** Hostname → id of every service this run's import created. */
+	created?: ReadonlyMap<string, string>
+	/** The provenance marker `write-service-env` writes, or null to remove a marker no bucket needs any more. */
+	storageProvenance?: string | null
 	appVersionId?: string
 	uploadUrl?: string
 	processId?: string
@@ -412,6 +432,66 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 	}
 }
 
+/**
+ * The exposure read-back (ADR-0043): before a version can activate, every declared service must read
+ * `subdomainAccess: false`, and every object-storage service must be one this import created or the provenance
+ * marker names. A refusal raises an Operations alert, best-effort, and fails the run before any version exists.
+ */
+const verifyExposure = async (env: StepEnv): Promise<void> => {
+	const { zerops, log, signal, run } = env
+	const { artifact, target } = run
+	if (env.dryRun) {
+		log('  [dry-run] would read back subdomain access and bucket provenance of every declared service')
+		return
+	}
+	const created = env.attempt.created ?? new Map<string, string>()
+	const buckets = artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
+	const records = buckets.length === 0 ? [] : await zerops.api.listServiceEnv({ serviceId: target.serviceId, signal })
+	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
+	const known = parseStorageProvenance(marker?.content)
+	const findings: ExposureFinding[] = []
+	const bucketIds: string[] = []
+	for (const hostname of manifestServiceHostnames(artifact)) {
+		assertRunning(signal)
+		const service = await zerops.api.findService({ projectId: target.projectId, hostname, signal })
+		if (service === null) {
+			findings.push({ hostname, reason: 'is absent after the import, so its exposure cannot be read back' })
+			continue
+		}
+		if (service.subdomainAccess !== false) {
+			findings.push({
+				hostname,
+				reason: service.subdomainAccess === true
+					? 'has a `.zerops.app` subdomain, which reaches it past the namespace proxy; disable it in Zerops'
+					: 'did not report its subdomain access',
+			})
+		}
+		if (!buckets.includes(hostname)) continue
+		if (created.get(hostname) === service.id || known.has(service.id)) {
+			bucketIds.push(service.id)
+		} else {
+			findings.push({ hostname, reason: 'is a bucket the platform did not create private (no provenance); create it through a Fabrika import' })
+		}
+	}
+	if (findings.length > 0) {
+		const dsn = env.managedValues.FABRIKA_OPERATIONS_DSN
+		if (dsn !== null) {
+			const alert = { appId: run.appId, env: run.env, release: env.managedValues.FABRIKA_RELEASE, findings }
+			await zerops.alertExposure({ dsn, alert, signal }).then(
+				() => log('  raised an Operations alert'),
+				() => log('  [warn] the Operations alert could not be sent'),
+			)
+		}
+		throw new Error(formatExposureFindings(findings))
+	}
+	env.attempt.storageProvenance = bucketIds.length > 0 ? formatStorageProvenance(bucketIds) : null
+	log(
+		`  ${manifestServiceHostnames(artifact).length} service(s) without subdomain access${
+			bucketIds.length === 0 ? '' : `; ${bucketIds.length} bucket(s) of platform provenance`
+		}`,
+	)
+}
+
 /** Write the six service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
 const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	const { zerops, log, signal, managedValues } = env
@@ -440,6 +520,17 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 			log(`  ${key}: unchanged`)
 		}
 	}
+	const provenance = env.attempt.storageProvenance
+	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
+	if (typeof provenance === 'string' && marker?.content !== provenance) {
+		assertRunning(signal)
+		await zerops.api.putServiceEnv({ serviceId, key: STORAGE_PROVENANCE_KEY, value: provenance, signal })
+		log(`  ${STORAGE_PROVENANCE_KEY}: updated`)
+	} else if (provenance === null && marker !== undefined) {
+		assertRunning(signal)
+		await zerops.api.deleteServiceEnv({ envId: marker.id, signal })
+		log(`  ${STORAGE_PROVENANCE_KEY}: removed`)
+	}
 	const strayRelease = records.find((record) => record.key === RELEASE_KEY)
 	if (strayRelease !== undefined) {
 		assertRunning(signal)
@@ -467,6 +558,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			// `override: true` on every service (written by the compiler) is what makes re-applying safe.
 			const result = await zerops.api.importServices({ projectId: target.projectId, yaml: compiled.yaml, signal })
 			log(`  imported: ${result.services.map((service) => `${service.name} (${service.id})`).join(', ') || '(none reported)'}`)
+			attempt.created = createdServices(result)
 			// An import ANSWERS before its services exist. Triggering a pipeline on a service Zerops is
 			// still creating answers 400 `projectImportInvalidParameter`, which is what the first deploy
 			// into a fresh namespace hit; a re-apply onto services that already exist reports none.
@@ -478,6 +570,11 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			if (pending.length > 0) {
 				log(`  awaited ${pending.length} import process(es)`)
 			}
+			return
+		}
+
+		case 'verify-exposure': {
+			await verifyExposure(env)
 			return
 		}
 
@@ -538,13 +635,25 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 		}
 
 		case 'trigger-build': {
+			const locked = lockedExecutionOf(artifact)
 			if (dryRun) {
-				log('  [dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor')
+				log(
+					locked === null
+						? '  [dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor'
+						: '  [dry-run] would trigger build+deploy with the generated run section and build checks',
+				)
 				return
 			}
 			const appVersionId = requireVersion(env, 'trigger-build')
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
-			const descriptor = overlayRelease(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup, env.managedValues.FABRIKA_RELEASE)
+			const { contents } = artifact.target.sourceDescriptor
+			const release = env.managedValues.FABRIKA_RELEASE
+			const descriptor = locked === null
+				? overlayRelease(contents, artifact.target.zeropsSetup, release)
+				: renderLockedExecutionDescriptor(contents, artifact.target.zeropsSetup, release, locked)
+			if (locked !== null) {
+				log(`  generated run section; build checks @fabrika/check@${FABRIKA_CHECK_VERSION}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`)
+			}
 			assertRunning(signal)
 			// Recorded BEFORE the request: from here on the version is settled only by polling it (ADR-0044).
 			const checkpoint: ZeropsRunState = { appVersionId, triggered: true }

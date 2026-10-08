@@ -3,6 +3,7 @@ import type { ZeropsRuntimeTarget } from './types'
 
 export type ZeropsStepKind =
 	| 'apply-import'
+	| 'verify-exposure'
 	| 'write-service-env'
 	| 'reserve-version'
 	| 'upload-source'
@@ -35,6 +36,11 @@ export const buildZeropsPlan = (manifest: FabrikaManifest, target: ZeropsRuntime
 		id: 'apply-import',
 		kind: 'apply-import',
 		description: `Apply the Zerops import for ${serviceHostnames.length} service(s): ${serviceHostnames.join(', ')}`,
+	})
+	steps.push({
+		id: 'verify-exposure',
+		kind: 'verify-exposure',
+		description: 'Read back that no service has subdomain access and every bucket is one the platform created private',
 	})
 	steps.push({ id: 'write-service-env', kind: 'write-service-env', description: 'Write the managed service variables' })
 	steps.push({ id: 'reserve-version', kind: 'reserve-version', description: 'Reserve a Zerops app version' })
