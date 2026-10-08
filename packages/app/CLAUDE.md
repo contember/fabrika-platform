@@ -61,9 +61,9 @@ src/
   `/x`). Never drop empty segments again — the gate matcher compares the raw path,
   and the two must agree (`provider-cloudflare`'s `proxy-to-router.test.ts`).
 - Error handling is structural. Never rely on cross-package `instanceof`.
-- The RPC wire protocol is `{ method, input }` requests and `{ result }` or
-  `{ error }` responses. `{ batch }` is removed (A3): no client sends it. Until A3
-  lands the dispatcher still accepts it; never add a caller that depends on it.
+- The `defineApp()` RPC wire protocol is `{ method, input }` requests and
+  `{ result }` or `{ error }` responses. `{ batch }` is removed: one request is one
+  call, and a `{ batch }` body is a 400.
 - Browser-safe procedure contracts may be implemented with `RpcRouterFor` and
   consumed with `createRpcClient`; they must not import a server runtime.
 - `defineApp()` owns request behavior. Runtime adapters only supply lifecycle

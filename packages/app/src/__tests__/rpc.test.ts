@@ -204,22 +204,11 @@ describe('rpc dispatch — accepts any Standard Schema (not just zod)', () => {
 	})
 })
 
-describe('rpc dispatch — batch', () => {
-	test('runs every call and returns { batch: [...] }', async () => {
-		const { status, body } = await dispatch({
-			batch: [
-				{ method: 'echo', input: { msg: 'a' } },
-				{ method: 'math.add', input: { a: 1, b: 1 } },
-				{ method: 'nope', input: null },
-			],
-		})
-		expect(status).toBe(200)
-		const batch = record(body)['batch']
-		if (!Array.isArray(batch)) throw new Error('expected batch array')
-		expect(batch.length).toBe(3)
-		expect(record(record(batch[0])['result'])['echoed']).toBe('a')
-		expect(record(batch[1])['result']).toBe(2)
-		expect(record(record(batch[2])['error'])['type']).toBe('method_not_found')
+describe('rpc dispatch — batch is removed', () => {
+	test('a { batch } body is refused, and none of its calls runs', async () => {
+		const { status, body } = await dispatch({ batch: [{ method: 'echo', input: { msg: 'a' } }] })
+		expect(status).toBe(400)
+		expect(record(record(body)['error'])['type']).toBe('validation')
 	})
 })
 

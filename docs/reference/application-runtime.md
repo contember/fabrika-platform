@@ -88,8 +88,9 @@ procedure may declare:
 
 The wire protocol uses one POST endpoint:
 
-- request: `{ method, input }` or `{ batch: [...] }`;
-- response: `{ result }`, `{ error }`, or `{ batch: [...] }`.
+- request: `{ method, input }`, one call per request (`{ batch }` is removed and
+  answers 400);
+- response: `{ result }` or `{ error }`.
 
 Browser-safe contract packages describe the named procedure surface without
 importing a server runtime. `RpcRouterFor<Context, Contract>` checks the server

@@ -115,8 +115,8 @@ async function dispatchOne(router: AnyRouter, ctx: unknown, call: SingleCall): P
 
 /**
  * Dispatch an RPC POST. The `ctx` is already built (and decorated by middleware,
- * e.g. `ctx.auth`) by the server before this is called. Handles a single call
- * `{ method, input }` or a `{ batch: [...] }`.
+ * e.g. `ctx.auth`) by the server before this is called. One request is one call,
+ * `{ method, input }`.
  */
 export async function dispatchRpcRequest(args: { router: AnyRouter; ctx: unknown; request: Request }): Promise<Response> {
 	let rawBody: unknown
@@ -126,25 +126,10 @@ export async function dispatchRpcRequest(args: { router: AnyRouter; ctx: unknown
 		return jsonResponse({ error: { type: 'validation', message: 'Invalid JSON body' } }, 400)
 	}
 
-	if (isRecord(rawBody) && Array.isArray(rawBody['batch'])) {
-		const results: SingleResult[] = []
-		for (const call of rawBody['batch']) {
-			results.push((await dispatchOne(args.router, args.ctx, normalizeCall(call))).body)
-		}
-		return jsonResponse({ batch: results }, 200)
-	}
-
 	if (!isRecord(rawBody) || typeof rawBody['method'] !== 'string') {
-		return jsonResponse({ error: { type: 'validation', message: 'Body must be { method, input } or { batch: [...] }' } }, 400)
+		return jsonResponse({ error: { type: 'validation', message: 'Body must be { method, input }' } }, 400)
 	}
 
 	const single = await dispatchOne(args.router, args.ctx, { method: rawBody['method'], input: rawBody['input'] })
 	return jsonResponse(single.body, single.status)
-}
-
-function normalizeCall(call: unknown): SingleCall {
-	if (isRecord(call) && typeof call['method'] === 'string') {
-		return { method: call['method'], input: call['input'] }
-	}
-	return { method: '', input: undefined }
 }
