@@ -30,5 +30,6 @@ export {
 	type TablePolicy,
 	Tables,
 	type UpdateValues,
+	type VersionColumn,
 } from './policy'
 export { type AggregateRow, type AggregateSpec, type ChildListScope, ChildTable, type DataLayerRuntime, DimensionTable, scoped } from './store'

@@ -1,7 +1,7 @@
 // Compiled by type-attacks.test.ts, never by the package's typecheck. Every statement under `// attack:` must be
 // a type error; every statement under `// allowed:` must compile (the runtime refuses those, see store.test.ts).
 
-import { sql } from 'kysely'
+import { type ColumnType, type Generated, sql } from 'kysely'
 import type { Ref, Within } from '../../capability'
 import { defineTables } from '../../policy'
 import { type DataLayerRuntime, scoped } from '../../store'
@@ -156,6 +156,19 @@ defineTables<DB, Action>(columns)({
 // attack: an action outside the vocabulary
 defineTables<DB, Action>(columns)({ ...tables_, secrets: { scope: { dimension: 'secret', key: 'id' }, actions: { read: 'secrets.raed' } } })
 
+// attack: a BIGINT version column, which Postgres returns as a string
+defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'big' } })
+
+// attack: a nullable version column
+defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'maybe' } })
+
+// attack: a text version column
+defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'id' } })
+
+// allowed: an INTEGER version column, generated or not
+defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'counter' } })
+defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'generated' } })
+
 // allowed: excess properties are checked on object literals only (the runtime refuses the key)
 const values = { title: 'x', body: null, workspace_id: 'w9' }
 notes.insert(workspaceWrite, values)
@@ -186,3 +199,15 @@ declare const tables_: {
 	countries: { scope: { reference: 'lookup' }; actions: { read: 'notes.read' } }
 	contact_messages: { scope: { inbox: 'contact'; read: 'contact.read' } }
 }
+
+interface Versioned {
+	ledgers: {
+		id: string
+		big: ColumnType<string, bigint | number | string, bigint | number | string>
+		maybe: number | null
+		counter: number
+		generated: Generated<number>
+	}
+}
+declare const versionedColumns: { ledgers: readonly ['id', 'big', 'maybe', 'counter', 'generated'] }
+declare const ledger: { scope: { dimension: 'ledger'; key: 'id' }; actions: { read: 'notes.read' } }

@@ -1,14 +1,9 @@
 import type { OperationNode } from 'kysely'
+import { freeze, hasOwn, inSet, isArray, type NameSet, nameSet, ownDescriptor, ownKeys } from './builtins'
 import { QueryRefusedError } from './errors'
 import { isPlainAlias, isPlainIdentifier } from './identifier'
 
-// Captured when the module loads, before application code: patching Object or Array later cannot disable the guard.
-// The walk below uses index loops and these references only, never an iterator or a prototype method.
-const ownKeys = Object.keys
-const describe = Object.getOwnPropertyDescriptor
-const hasOwn = Object.hasOwn
-const isArray = Array.isArray
-const freeze = Object.freeze
+// The walk below uses index loops and the captured built-ins only, never an iterator or a prototype method.
 
 export type RootKind = 'SelectQueryNode' | 'InsertQueryNode' | 'UpdateQueryNode' | 'DeleteQueryNode'
 
@@ -28,22 +23,12 @@ export interface GuardContext {
 	readonly lock?: true
 }
 
-type Lookup = Readonly<Record<string, true>>
-
-function lookup(...names: string[]): Lookup {
-	const table: Record<string, true> = {}
-	for (let index = 0; index < names.length; index++) {
-		table[names[index] ?? ''] = true
-	}
-	return freeze(table)
-}
-
-function has(table: Lookup, name: unknown): boolean {
-	return typeof name === 'string' && hasOwn(table, name)
+function lookup(...names: string[]): NameSet {
+	return nameSet(names)
 }
 
 /** The properties each root node may carry; anything else (with, explain, modifiers, on conflict, …) is refused. */
-const ROOT_PROPERTIES: Readonly<Record<RootKind, Lookup>> = freeze({
+const ROOT_PROPERTIES: Readonly<Record<RootKind, NameSet>> = freeze({
 	SelectQueryNode: lookup('kind', 'from', 'selections', 'joins', 'where', 'groupBy', 'orderBy', 'limit', 'offset'),
 	InsertQueryNode: lookup('kind', 'into', 'columns', 'values', 'returning'),
 	UpdateQueryNode: lookup('kind', 'table', 'updates', 'where', 'returning'),
@@ -108,7 +93,7 @@ export function assertAllowedTree(root: OperationNode, context: GuardContext): v
 	for (let index = 0; index < keys.length; index++) {
 		const key = keys[index] ?? ''
 		const lockModifier = key === 'endModifiers' && context.lock === true && context.root === 'SelectQueryNode'
-		if (read(root, key) !== undefined && !has(allowed, key) && !lockModifier) {
+		if (read(root, key) !== undefined && !inSet(allowed, key) && !lockModifier) {
 			throw new QueryRefusedError(`${context.root}.${key} is not allowed`)
 		}
 	}
@@ -170,13 +155,13 @@ function walk(node: OperationNode, parent: Visit | undefined, context: GuardCont
 }
 
 function checkNode(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
-	if (has(ROOT_KINDS, node.kind)) {
+	if (inSet(ROOT_KINDS, node.kind)) {
 		if (parent !== undefined) {
 			throw new QueryRefusedError('subqueries are not allowed')
 		}
 		return
 	}
-	if (!has(NODE_KINDS, node.kind)) {
+	if (!inSet(NODE_KINDS, node.kind)) {
 		throw new QueryRefusedError(`${String(node.kind)} is not allowed`)
 	}
 	switch (node.kind) {
@@ -220,7 +205,8 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			return checkOperator(node, parent)
 		case 'AggregateFunctionNode':
 			if (
-				!has(AGGREGATES, read(node, 'func')) || read(node, 'distinct') === true || read(node, 'filter') !== undefined || read(node, 'over') !== undefined
+				!inSet(AGGREGATES, read(node, 'func')) || read(node, 'distinct') === true || read(node, 'filter') !== undefined
+				|| read(node, 'over') !== undefined
 			) {
 				throw new QueryRefusedError('aggregate function not allowed')
 			}
@@ -234,7 +220,7 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 
 function checkOperator(node: OperationNode, parent: Visit | undefined): void {
 	const operator = read(node, 'operator')
-	if (has(COMPARISON_OPERATORS, operator)) {
+	if (inSet(COMPARISON_OPERATORS, operator)) {
 		return
 	}
 	// The version bump `version = version + 1` is the one arithmetic the layer writes, as a SET value.
@@ -351,7 +337,7 @@ function read(node: unknown, key: string): unknown {
 	if (typeof node !== 'object' || node === null) {
 		return undefined
 	}
-	const descriptor = describe(node, key)
+	const descriptor = ownDescriptor(node, key)
 	if (descriptor === undefined) {
 		return undefined
 	}

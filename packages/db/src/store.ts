@@ -1,4 +1,24 @@
 import { BinaryOperationNode, type OperationNode, OperatorNode, type ReturningNode, ValueNode } from 'kysely'
+import {
+	freeze,
+	hasOwn,
+	inSet,
+	isArray,
+	isSafeInteger,
+	type NameSet,
+	nameSet,
+	namesOf,
+	OBJECT_PROTOTYPE,
+	ownDescriptor,
+	ownEntry,
+	ownKeys,
+	ownNames,
+	ownSymbols,
+	parseList,
+	prototypeOf,
+	recordOf,
+	setOwn,
+} from './builtins'
 import type { CapabilityAuthority, Ref, RefGrant, Within, WithinGrant } from './capability'
 import { type Database, type Session, sessionOf } from './database'
 import {
@@ -12,7 +32,7 @@ import {
 	startSelect,
 	type TableShape,
 } from './description'
-import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from './errors'
+import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import {
 	acknowledgement,
@@ -42,11 +62,13 @@ import {
 	type InsertValues,
 	type JoinableChildren,
 	type ListDimensionOf,
+	modelOf,
 	type MoveAcknowledgement,
 	type Operation,
 	type ParentOf,
 	type RowOf,
 	type TableModel,
+	type TableModels,
 	tableModels,
 	type Tables,
 	type UpdateValues,
@@ -130,8 +152,8 @@ function withinGrant(context: TableContext, capability: unknown, dimension: stri
 	return grant
 }
 
-function chainValue(grant: RefGrant, dimension: string): string {
-	const value = grant.chain.get(dimension)
+function chainValue(grant: RefGrant, chain: Readonly<Record<string, string>>, dimension: string): string {
+	const value = ownEntry(chain, dimension)
 	if (value === undefined) {
 		throw new CapabilityError(`the Ref of ${grant.dimension} carries no ${dimension} in its chain`)
 	}
@@ -156,16 +178,31 @@ interface LinkValue {
  * from its chain. A chain entry no link covers cannot be enforced, so it is refused rather than ignored.
  */
 function linkValues(table: string, links: readonly Container[], grant: RefGrant): readonly LinkValue[] {
-	const [first, ...rest] = links
+	const first = links[0]
 	if (first === undefined) {
 		throw new CapabilityError(`${table} has no containment link for a Ref of ${grant.dimension}`)
 	}
-	for (const dimension of grant.chain.keys()) {
-		if (!rest.some((link) => link.dimension === dimension)) {
+	const chain = recordOf(grant.chain)
+	const covered: string[] = []
+	for (let index = 1; index < links.length; index++) {
+		covered[covered.length] = links[index]?.dimension ?? ''
+	}
+	const coveredSet = nameSet(covered)
+	const dimensions = ownKeys(chain)
+	for (let index = 0; index < dimensions.length; index++) {
+		const dimension = dimensions[index] ?? ''
+		if (!inSet(coveredSet, dimension)) {
 			throw new CapabilityError(`the Ref of ${grant.dimension} lies in ${dimension}, which ${table} carries no column for; the layer cannot enforce it`)
 		}
 	}
-	return [{ link: first, value: grant.id }, ...rest.map((link) => ({ link, value: chainValue(grant, link.dimension) }))]
+	const values: LinkValue[] = [{ link: first, value: grant.id }]
+	for (let index = 1; index < links.length; index++) {
+		const link = links[index]
+		if (link !== undefined) {
+			values[values.length] = { link, value: chainValue(grant, chain, link.dimension) }
+		}
+	}
+	return freeze(values)
 }
 
 function linksPredicate(table: string, values: readonly LinkValue[]): OperationNode {
@@ -230,32 +267,35 @@ function session(context: TableContext): Session {
  * non-enumerable key slips past. Every key is checked before any value is read; unknown keys are refused, not
  * dropped, so an agent learns about them.
  */
-function readValues(values: unknown, allowed: ReadonlySet<string>, what: 'insert' | 'update', table: string): Map<string, Primitive | null> {
-	if (typeof values !== 'object' || values === null || Array.isArray(values)) {
+function readValues(values: unknown, allowed: NameSet, what: 'insert' | 'update', table: string): Map<string, Primitive | null> {
+	if (typeof values !== 'object' || values === null || isArray(values)) {
 		throw new QueryRefusedError(`${what} takes an object of column values`)
 	}
-	const prototype: unknown = Object.getPrototypeOf(values)
-	if (prototype !== Object.prototype && prototype !== null) {
+	const prototype: unknown = prototypeOf(values)
+	if (prototype !== OBJECT_PROTOTYPE && prototype !== null) {
 		throw new QueryRefusedError(`${what} takes a plain object literal, not an instance of a class`)
 	}
-	if (Object.getOwnPropertySymbols(values).length > 0) {
+	if (ownSymbols(values).length > 0) {
 		throw new QueryRefusedError(`${what} takes column names as keys, not symbols`)
 	}
-	const descriptors = Object.getOwnPropertyDescriptors(values)
-	const keys = Object.keys(descriptors)
-	for (const key of keys) {
-		const descriptor = descriptors[key]
-		if (descriptor === undefined || !('value' in descriptor)) {
+	const keys = ownNames(values)
+	const descriptors: PropertyDescriptor[] = []
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index] ?? ''
+		const descriptor = ownDescriptor(values, key)
+		if (descriptor === undefined || !hasOwn(descriptor, 'value')) {
 			throw new QueryRefusedError(`${table}.${key} is an accessor; ${what} takes plain values`)
 		}
-		if (!allowed.has(key)) {
-			const columns = [...allowed].join(', ') || 'none'
+		if (!inSet(allowed, key)) {
+			const columns = namesOf(allowed).join(', ') || 'none'
 			throw new QueryRefusedError(`${key} is not an ${what} column of ${table} (${what} columns: ${columns})`)
 		}
+		descriptors[index] = descriptor
 	}
 	const copied = new Map<string, Primitive | null>()
-	for (const key of keys) {
-		const value: unknown = descriptors[key]?.value
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index] ?? ''
+		const value: unknown = descriptors[index]?.value
 		if (value === undefined) {
 			continue
 		}
@@ -282,17 +322,18 @@ function versionArgument(context: TableContext, options: readonly unknown[]): Op
 	if (version === undefined) {
 		return undefined
 	}
-	const [first] = options
+	const first = options[0]
 	const expected: unknown = typeof first === 'object' && first !== null ? Reflect.get(first, 'expectVersion') : undefined
-	if (typeof expected !== 'number' || !Number.isSafeInteger(expected)) {
+	if (typeof expected !== 'number' || !isSafeInteger(expected)) {
 		throw new QueryRefusedError(`${context.model.name} has a version column; update takes { expectVersion: number }`)
 	}
 	return BinaryOperationNode.create(column(context.model.name, version), OperatorNode.create('='), ValueNode.create(expected))
 }
 
 async function selectRows<S>(context: TableContext, scope: OperationNode | undefined, state: SelectState, action: string): Promise<S[]> {
-	for (const join of state.joins) {
-		if (join.join.readAction !== action) {
+	for (let index = 0; index < state.joins.length; index++) {
+		const join = state.joins[index]
+		if (join !== undefined && join.join.readAction !== action) {
 			throw new CapabilityError(`joining ${join.join.shape.table} requires ${join.join.readAction}; the capability holds ${action}`)
 		}
 	}
@@ -314,6 +355,20 @@ async function selectOne<O>(context: TableContext, scope: OperationNode): Promis
 
 function answer(context: TableContext): ReturningNode {
 	return acknowledgement(context.model.name, keyOf(context.model), context.model.version)
+}
+
+/** Throws inside the mutation's transaction, so a table whose version is not an INTEGER keeps nothing written. */
+function checkVersion(context: TableContext, row: unknown): void {
+	const version = context.model.version
+	if (version === undefined) {
+		return
+	}
+	const value: unknown = typeof row === 'object' && row !== null ? Reflect.get(row, 'version') : undefined
+	if (typeof value !== 'number' || !isSafeInteger(value)) {
+		throw new PolicyError(
+			`${context.model.name}.${version} came back as ${typeof value}; a version column must be INTEGER (int4), which Postgres returns as a number`,
+		)
+	}
 }
 
 function keyOf(model: TableModel): string {
@@ -349,6 +404,7 @@ async function insertRow<O>(context: TableContext, values: ReadonlyMap<string, P
 		if (row === undefined) {
 			throw new QueryRefusedError(`the insert into ${context.model.name} returned no row`)
 		}
+		checkVersion(context, row)
 		return row
 	})
 }
@@ -369,6 +425,7 @@ async function updateRow<O>(
 		}
 		const [row] = await transaction.run<O>(node, guard(context, 'UpdateQueryNode', scope))
 		if (row !== undefined) {
+			checkVersion(context, row)
 			return row
 		}
 		if (expectedVersion !== undefined) {
@@ -430,15 +487,16 @@ function aggregateColumns(context: TableContext, spec: AggregateInput): Aggregat
 		if (value === undefined) {
 			return []
 		}
-		if (!Array.isArray(value)) {
-			throw new QueryRefusedError(`aggregate ${field} takes a list of column names`)
-		}
-		return value.map((name: unknown) => {
-			if (typeof name !== 'string' || !context.shape.visible.has(name)) {
+		const names = parseList(value, (name) => {
+			if (!inSet(context.shape.visible, name)) {
 				throw new QueryRefusedError(`${String(name)} is not a column of ${context.model.name} (columns: ${context.model.visible.join(', ')})`)
 			}
 			return name
 		})
+		if (names === undefined) {
+			throw new QueryRefusedError(`aggregate ${field} takes a plain array of column names`)
+		}
+		return names
 	}
 	const count = spec.count === true
 	const columns = { groupBy: list('groupBy', spec.groupBy), count, sum: list('sum', spec.sum), min: list('min', spec.min), max: list('max', spec.max) }
@@ -641,7 +699,7 @@ export class ChildTable<DB, P, T extends string> {
 }
 Object.freeze(ChildTable.prototype)
 
-function destinationOf(models: ReadonlyMap<string, TableModel>, model: TableModel, parent: TableModel | undefined): TableModel | undefined {
+function destinationOf(models: TableModels, model: TableModel, parent: TableModel | undefined): TableModel | undefined {
 	if (model.scope.mode === 'child') {
 		return parent
 	}
@@ -649,28 +707,38 @@ function destinationOf(models: ReadonlyMap<string, TableModel>, model: TableMode
 	if (container === undefined) {
 		return undefined
 	}
-	return [...models.values()].find((candidate) => candidate.scope.mode === 'dimension' && candidate.scope.dimension === container.dimension)
-}
-
-function shapeOf(model: TableModel, joinable: ReadonlyMap<string, JoinShape>): TableShape {
-	return { table: model.name, visible: new Set(model.visible), joinable }
-}
-
-function joinShapes(models: ReadonlyMap<string, TableModel>, parent: TableModel): Map<string, JoinShape> {
-	const joinable = new Map<string, JoinShape>()
-	if (parent.scope.mode !== 'dimension') {
-		return joinable
-	}
-	for (const model of models.values()) {
-		if (model.scope.mode === 'child' && model.scope.parent === parent.name) {
-			const on = [
-				{ childColumn: model.scope.column, parentColumn: parent.scope.key },
-				...model.scope.inherit.map((name) => ({ childColumn: name, parentColumn: name })),
-			]
-			joinable.set(model.name, { shape: shapeOf(model, new Map()), readAction: model.actions.read, on })
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const candidate = modelOf(models, names[index] ?? '')
+		if (candidate?.scope.mode === 'dimension' && candidate.scope.dimension === container.dimension) {
+			return candidate
 		}
 	}
-	return joinable
+	return undefined
+}
+
+function shapeOf(model: TableModel, joinable: Readonly<Record<string, JoinShape>>): TableShape {
+	return freeze({ table: model.name, visible: nameSet(model.visible), joinable })
+}
+
+function joinShapes(models: TableModels, parent: TableModel): Readonly<Record<string, JoinShape>> {
+	const joinable: Record<string, JoinShape> = {}
+	if (parent.scope.mode !== 'dimension') {
+		return freeze(joinable)
+	}
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model?.scope.mode === 'child' && model.scope.parent === parent.name) {
+			const on: ForeignKeyPair[] = [{ childColumn: model.scope.column, parentColumn: parent.scope.key }]
+			for (let position = 0; position < model.scope.inherit.length; position++) {
+				const name = model.scope.inherit[position] ?? ''
+				on[on.length] = { childColumn: name, parentColumn: name }
+			}
+			setOwn(joinable, model.name, freeze({ shape: shapeOf(model, freeze({})), readAction: model.actions.read, on: freeze(on) }))
+		}
+	}
+	return freeze(joinable)
 }
 
 /**
@@ -681,14 +749,23 @@ export function scoped<DB, P>(tables: Tables<DB, P>, runtime: DataLayerRuntime) 
 	const models = tableModels(tables)
 
 	function contextFor(table: string, mode: 'dimension' | 'child'): TableContext {
-		const model = models.get(table)
+		const model = typeof table === 'string' ? modelOf(models, table) : undefined
 		if (model === undefined || model.scope.mode !== mode) {
-			throw new QueryRefusedError(`${table} is not a ${mode} table`)
+			throw new QueryRefusedError(`${String(table)} is not a ${mode} table`)
 		}
-		const parent = model.scope.mode === 'child' ? models.get(model.scope.parent) : undefined
+		const parent = model.scope.mode === 'child' ? modelOf(models, model.scope.parent) : undefined
 		const joinable = joinShapes(models, model)
-		const joins = Object.freeze(Object.fromEntries([...joinable].map(([name, join]) => [name, join.on])))
-		return Object.freeze({ model, parent, destination: destinationOf(models, model, parent), shape: shapeOf(model, joinable), joins, runtime })
+		const joins: Record<string, readonly ForeignKeyPair[]> = {}
+		const children = ownKeys(joinable)
+		for (let index = 0; index < children.length; index++) {
+			const child = children[index] ?? ''
+			const join = ownEntry(joinable, child)
+			if (join !== undefined) {
+				setOwn(joins, child, join.on)
+			}
+		}
+		const shape = shapeOf(model, joinable)
+		return freeze({ model, parent, destination: destinationOf(models, model, parent), shape, joins: freeze(joins), runtime })
 	}
 
 	return Object.freeze({

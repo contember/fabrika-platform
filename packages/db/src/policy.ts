@@ -1,4 +1,5 @@
-import type { Insertable, Selectable, Updateable } from 'kysely'
+import type { Insertable, Selectable, SelectType, Updateable } from 'kysely'
+import { freeze, hasOwn, inSet, type NameSet, nameSet, namesOf, ownEntry, ownKeys, parseList, setOwn } from './builtins'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 
@@ -31,11 +32,12 @@ export interface TableActions<A extends string> {
 	readonly delete?: A
 }
 
-interface WritablePolicy<Col extends string, A extends string> {
+interface WritablePolicy<Col extends string, A extends string, V extends Col> {
 	readonly actions: TableActions<A>
 	readonly insert?: readonly Col[]
 	readonly update?: readonly Col[]
-	readonly version?: Col
+	/** An INTEGER (int4) column: Postgres returns a BIGINT as a string, so it cannot be compared as a number. */
+	readonly version?: V
 	readonly createdBy?: Col
 	readonly columns?: ColumnPolicies<Col, A>
 }
@@ -47,11 +49,11 @@ interface WritablePolicy<Col extends string, A extends string> {
  */
 export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
 
-export interface DimensionPolicy<Col extends string, A extends string> extends WritablePolicy<Col, A> {
+export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
 	readonly scope: DimensionScope<Col>
 }
 
-export interface ChildPolicy<Table extends string, Col extends string, A extends string> extends WritablePolicy<Col, A> {
+export interface ChildPolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
 	readonly scope: ChildScope<Table, Col>
 }
 
@@ -73,15 +75,18 @@ export interface InboxPolicy<Col extends string, A extends string> extends ReadO
 	readonly actions?: never
 }
 
-export type TablePolicy<Table extends string, Col extends string, A extends string> =
-	| DimensionPolicy<Col, A>
-	| ChildPolicy<Table, Col, A>
+export type TablePolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> =
+	| DimensionPolicy<Col, A, V>
+	| ChildPolicy<Table, Col, A, V>
 	| ReferencePolicy<Col, A>
 	| InboxPolicy<Col, A>
 
+/** The columns a version can live in: those whose generated select type is `number`, an INTEGER (int4). */
+export type VersionColumn<Row> = { [K in keyof Row & string]: SelectType<Row[K]> extends number ? K : never }[keyof Row & string]
+
 /** Every table of the schema, and no other, maps to a policy. */
 export type PolicyMap<DB, A extends string> = {
-	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A>
+	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A, VersionColumn<DB[T]>>
 }
 
 /** The column names of every table, generated next to the schema types. */
@@ -113,11 +118,11 @@ export interface TableModel {
 	readonly scope: ScopeModel
 	readonly actions: ActionModel
 	/** Every column the table has. */
-	readonly columns: ReadonlySet<string>
+	readonly columns: NameSet
 	/** The columns the table's read action reads, in column-list order. */
 	readonly visible: readonly string[]
-	readonly insert: ReadonlySet<string>
-	readonly update: ReadonlySet<string>
+	readonly insert: NameSet
+	readonly update: NameSet
 	readonly version: string | undefined
 	readonly createdBy: string | undefined
 	/**
@@ -129,14 +134,17 @@ export interface TableModel {
 
 type ParsedTable = Omit<TableModel, 'chain'>
 
-let readModels: <DB, P>(tables: Tables<DB, P>) => ReadonlyMap<string, TableModel>
+let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
+
+/** Every table's model by name; read it through `modelOf`, never by a plain property access. */
+export type TableModels = Readonly<Record<string, TableModel>>
 
 /** The validated policies of every table; carries the schema and the literal policy types to the store. */
 export class Tables<DB, P> {
-	readonly #models: ReadonlyMap<string, TableModel>
+	readonly #models: TableModels
 	readonly #types: { readonly db?: (db: DB) => DB; readonly policies?: (policies: P) => P } = {}
 
-	constructor(models: ReadonlyMap<string, TableModel>) {
+	constructor(models: TableModels) {
 		this.#models = models
 	}
 
@@ -146,8 +154,12 @@ export class Tables<DB, P> {
 }
 Object.freeze(Tables.prototype)
 
-export function tableModels<DB, P>(tables: Tables<DB, P>): ReadonlyMap<string, TableModel> {
+export function tableModels<DB, P>(tables: Tables<DB, P>): TableModels {
 	return readModels(tables)
+}
+
+export function modelOf(models: TableModels, table: string): TableModel | undefined {
+	return ownEntry(models, table)
 }
 
 /**
@@ -162,222 +174,315 @@ export function defineTables<DB, A extends string>(columns: ColumnList<DB>) {
 function parseTables(
 	columns: Readonly<Record<string, readonly string[]>>,
 	policies: Readonly<Record<string, AnyPolicy>>,
-): ReadonlyMap<string, TableModel> {
-	const parsed = new Map<string, ParsedTable>()
-	for (const table of Object.keys(policies)) {
-		if (!Object.hasOwn(columns, table)) {
-			throw new PolicyError(`${table}: no such table in the column list (tables: ${Object.keys(columns).join(', ')})`)
+): TableModels {
+	const tables = ownKeys(columns)
+	const policyTables = ownKeys(policies)
+	for (let index = 0; index < policyTables.length; index++) {
+		const table = policyTables[index] ?? ''
+		if (!hasOwn(columns, table)) {
+			throw new PolicyError(`${table}: no such table in the column list (tables: ${tables.join(', ')})`)
 		}
 	}
-	for (const [table, tableColumns] of Object.entries(columns)) {
-		const policy = policies[table]
+	const parsed: ParsedTable[] = []
+	for (let index = 0; index < tables.length; index++) {
+		const table = tables[index] ?? ''
+		const policy = ownEntry(policies, table)
 		if (policy === undefined) {
 			throw new PolicyError(`${table}: every table needs a policy in tables.ts`)
 		}
-		parsed.set(table, parseTable(table, tableColumns, policy))
+		parsed[index] = parseTable(table, ownEntry(columns, table), policy)
 	}
 	return linkTables(parsed)
 }
 
-function parseTable(table: string, columnNames: readonly string[], policy: AnyPolicy): ParsedTable {
+function parseTable(table: string, columnList: unknown, policy: AnyPolicy): ParsedTable {
 	if (!isPlainIdentifier(table)) {
 		throw new PolicyError(`${table}: a table name must match ^[a-z_][a-z0-9_]*$`)
 	}
-	for (const name of columnNames) {
+	const columnNames = parseList(columnList, (name) => {
 		if (!isPlainIdentifier(name)) {
-			throw new PolicyError(`${table}.${name}: a column name must match ^[a-z_][a-z0-9_]*$`)
+			throw new PolicyError(`${table}.${String(name)}: a column name must match ^[a-z_][a-z0-9_]*$`)
 		}
+		return name
+	})
+	if (columnNames === undefined) {
+		throw new PolicyError(`${table}: the column list takes a plain array of column names`)
 	}
-	const columns = new Set(columnNames)
-	const column = (name: string, field: string): string => {
-		if (!columns.has(name)) {
-			throw new PolicyError(`${table}: ${field} names ${name}, which is not a column (columns: ${columnNames.join(', ')})`)
+	const columns = nameSet(columnNames)
+	const column = (name: unknown, field: string): string => {
+		if (!inSet(columns, name)) {
+			throw new PolicyError(`${table}: ${field} names ${String(name)}, which is not a column (columns: ${columnNames.join(', ')})`)
 		}
 		return name
 	}
-	const scope = parseScope(table, policy, column)
+	const columnsOf = (value: unknown, field: string): string[] => {
+		if (value === undefined) {
+			return []
+		}
+		const names = parseList(value, (name) => column(name, field))
+		if (names === undefined) {
+			throw new PolicyError(`${table}: ${field} takes a plain array of column names`)
+		}
+		return names
+	}
+	const scope = parseScope(table, policy, column, columnsOf)
 	const actions = parseActions(table, policy)
-	const insert = new Set((policy.insert ?? []).map((name) => column(name, 'insert')))
-	const update = new Set((policy.update ?? []).map((name) => column(name, 'update')))
+	const insert = nameSet(columnsOf(policy.insert, 'insert'))
+	const update = nameSet(columnsOf(policy.update, 'update'))
 	const version = policy.version === undefined ? undefined : column(policy.version, 'version')
 	const createdBy = policy.createdBy === undefined ? undefined : column(policy.createdBy, 'createdBy')
-	const restricted = new Set<string>()
+	const restricted: string[] = []
 	const columnPolicies: Readonly<Record<string, { readonly read: string } | undefined>> = policy.columns ?? {}
-	for (const [name, columnPolicy] of Object.entries(columnPolicies)) {
-		column(name, 'columns')
+	const restrictable = ownKeys(columnPolicies)
+	for (let index = 0; index < restrictable.length; index++) {
+		const name = column(restrictable[index], 'columns')
+		const columnPolicy = ownEntry(columnPolicies, name)
 		if (columnPolicy !== undefined && nonEmpty(table, columnPolicy.read, `columns.${name}.read`) !== actions.read) {
-			restricted.add(name)
+			restricted[restricted.length] = name
 		}
 	}
+	const hidden = nameSet(restricted)
 
-	const stamped = stampedColumns(scope)
-	if (version !== undefined) {
-		stamped.add(version)
-	}
-	if (createdBy !== undefined) {
-		stamped.add(createdBy)
-	}
-	for (const name of [...insert, ...update]) {
-		if (stamped.has(name)) {
-			throw new PolicyError(`${table}: ${name} is stamped by the layer; remove it from insert and update`)
-		}
-	}
-	if ('key' in scope && restricted.has(scope.key)) {
+	if ((scope.mode === 'dimension' || scope.mode === 'child') && inSet(hidden, scope.key)) {
 		throw new PolicyError(`${table}: the key ${scope.key} cannot have its own read action`)
 	}
 	const writable = scope.mode === 'dimension' || scope.mode === 'child'
-	if (!writable && (insert.size > 0 || update.size > 0 || version !== undefined || createdBy !== undefined)) {
+	if (!writable && (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined)) {
 		throw new PolicyError(`${table}: a ${scope.mode} table is never written by a handler`)
 	}
-	return {
-		name: table,
-		scope,
-		actions,
-		columns,
-		visible: columnNames.filter((name) => !restricted.has(name)),
-		insert,
-		update,
-		version,
-		createdBy,
+	const visible: string[] = []
+	for (let index = 0; index < columnNames.length; index++) {
+		const name = columnNames[index] ?? ''
+		if (!inSet(hidden, name)) {
+			visible[visible.length] = name
+		}
 	}
+	return { name: table, scope, actions, columns, visible: freeze(visible), insert, update, version, createdBy }
 }
 
-function parseScope(table: string, policy: AnyPolicy, column: (name: string, field: string) => string): ScopeModel {
+function parseScope(
+	table: string,
+	policy: AnyPolicy,
+	column: (name: unknown, field: string) => string,
+	columnsOf: (value: unknown, field: string) => string[],
+): ScopeModel {
 	const scope = policy.scope
 	if ('dimension' in scope) {
 		const container = scope.in === undefined
 			? undefined
-			: { dimension: nonEmpty(table, scope.in.dimension, 'scope.in.dimension'), column: column(scope.in.column, 'scope.in.column') }
-		return { mode: 'dimension', dimension: nonEmpty(table, scope.dimension, 'scope.dimension'), key: column(scope.key, 'scope.key'), container }
+			: freeze({ dimension: nonEmpty(table, scope.in.dimension, 'scope.in.dimension'), column: column(scope.in.column, 'scope.in.column') })
+		return freeze({
+			mode: 'dimension',
+			dimension: nonEmpty(table, scope.dimension, 'scope.dimension'),
+			key: column(scope.key, 'scope.key'),
+			container,
+		})
 	}
 	if ('child' in scope) {
-		return {
+		return freeze({
 			mode: 'child',
 			parent: scope.child,
 			key: column(scope.key, 'scope.key'),
 			column: column(scope.column, 'scope.column'),
-			inherit: scope.inherit.map((name) => column(name, 'scope.inherit')),
-		}
+			inherit: freeze(columnsOf(scope.inherit, 'scope.inherit')),
+		})
 	}
 	if ('reference' in scope) {
-		return { mode: 'reference', reason: nonEmpty(table, scope.reference, 'scope.reference') }
+		return freeze({ mode: 'reference', reason: nonEmpty(table, scope.reference, 'scope.reference') })
 	}
-	return { mode: 'inbox', form: nonEmpty(table, scope.inbox, 'scope.inbox') }
+	return freeze({ mode: 'inbox', form: nonEmpty(table, scope.inbox, 'scope.inbox') })
 }
 
 function parseActions(table: string, policy: AnyPolicy): ActionModel {
 	if ('inbox' in policy.scope) {
-		return { read: nonEmpty(table, policy.scope.read, 'scope.read'), insert: undefined, update: undefined, delete: undefined }
+		return freeze({ read: nonEmpty(table, policy.scope.read, 'scope.read'), insert: undefined, update: undefined, delete: undefined })
 	}
 	if (policy.actions === undefined) {
 		throw new PolicyError(`${table}: the policy needs actions`)
 	}
 	const actions: TableActions<string> = policy.actions
 	const optional = (value: string | undefined, field: string) => value === undefined ? undefined : nonEmpty(table, value, field)
-	return {
+	return freeze({
 		read: nonEmpty(table, actions.read, 'actions.read'),
 		insert: optional(actions.insert, 'actions.insert'),
 		update: optional(actions.update, 'actions.update'),
 		delete: optional(actions.delete, 'actions.delete'),
-	}
+	})
 }
 
-function nonEmpty(table: string, value: string, field: string): string {
-	if (value.length === 0) {
-		throw new PolicyError(`${table}: ${field} cannot be empty`)
+function nonEmpty(table: string, value: unknown, field: string): string {
+	if (typeof value !== 'string' || value.length === 0) {
+		throw new PolicyError(`${table}: ${field} must be a non-empty string`)
 	}
 	return value
 }
 
-function stampedColumns(scope: ScopeModel): Set<string> {
-	switch (scope.mode) {
-		case 'dimension':
-			return new Set(scope.container === undefined ? [scope.key] : [scope.key, scope.container.column])
-		case 'child':
-			return new Set([scope.key, scope.column, ...scope.inherit])
-		default:
-			return new Set()
+interface Stamp {
+	readonly column: string
+	readonly role: string
+}
+
+/** The columns the layer writes itself: the key, every containment link, the version and the creator. */
+function stampsOf(table: ParsedTable, chain: readonly Container[]): readonly Stamp[] {
+	const stamps: Stamp[] = []
+	if (table.scope.mode === 'dimension' || table.scope.mode === 'child') {
+		stamps[stamps.length] = { column: table.scope.key, role: 'the key' }
+	}
+	for (let index = 0; index < chain.length; index++) {
+		const link = chain[index]
+		if (link !== undefined) {
+			stamps[stamps.length] = { column: link.column, role: `the ${link.dimension} containment column` }
+		}
+	}
+	if (table.version !== undefined) {
+		stamps[stamps.length] = { column: table.version, role: 'the version' }
+	}
+	if (table.createdBy !== undefined) {
+		stamps[stamps.length] = { column: table.createdBy, role: 'createdBy' }
+	}
+	return stamps
+}
+
+/**
+ * Each stamped column holds one role and is never written by a handler. A shared column would let one stamp
+ * overwrite another: `createdBy` on the key inserts the principal as the id, `version` on a container column
+ * moves the row on every update.
+ */
+function checkStamps(table: ParsedTable, chain: readonly Container[]): void {
+	const stamps = stampsOf(table, chain)
+	for (let index = 0; index < stamps.length; index++) {
+		const stamp = stamps[index]
+		if (stamp === undefined) {
+			continue
+		}
+		for (let other = 0; other < index; other++) {
+			const earlier = stamps[other]
+			if (earlier !== undefined && earlier.column === stamp.column) {
+				throw new PolicyError(
+					`${table.name}: ${stamp.column} is both ${earlier.role} and ${stamp.role}; the layer stamps each, so they need distinct columns`,
+				)
+			}
+		}
+		if (inSet(table.insert, stamp.column) || inSet(table.update, stamp.column)) {
+			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; remove it from insert and update`)
+		}
 	}
 }
 
+function prepend(first: Container, rest: readonly Container[]): readonly Container[] {
+	const chain: Container[] = [first]
+	for (let index = 0; index < rest.length; index++) {
+		const link = rest[index]
+		if (link !== undefined) {
+			chain[chain.length] = link
+		}
+	}
+	return freeze(chain)
+}
+
+function includes(names: readonly string[], name: string): boolean {
+	for (let index = 0; index < names.length; index++) {
+		if (names[index] === name) {
+			return true
+		}
+	}
+	return false
+}
+
 /** Resolves every table's containment chain and refuses a shape the layer cannot enforce. */
-function linkTables(parsed: ReadonlyMap<string, ParsedTable>): ReadonlyMap<string, TableModel> {
-	const owners = new Map<string, ParsedTable>()
-	for (const table of parsed.values()) {
+function linkTables(parsed: readonly ParsedTable[]): TableModels {
+	const byName: Record<string, ParsedTable> = {}
+	const owners: Record<string, ParsedTable> = {}
+	for (let index = 0; index < parsed.length; index++) {
+		const table = parsed[index]
+		if (table === undefined) {
+			continue
+		}
+		setOwn(byName, table.name, table)
 		if (table.scope.mode !== 'dimension') {
 			continue
 		}
-		const owner = owners.get(table.scope.dimension)
+		const owner = ownEntry(owners, table.scope.dimension)
 		if (owner !== undefined) {
 			throw new PolicyError(`${table.name}: dimension ${table.scope.dimension} is already owned by ${owner.name}`)
 		}
-		owners.set(table.scope.dimension, table)
+		setOwn(owners, table.scope.dimension, table)
 	}
 
-	const chains = new Map<string, readonly Container[]>()
+	const chains: Record<string, readonly Container[]> = {}
 	const chainOf = (table: ParsedTable, visiting: readonly string[]): readonly Container[] => {
-		const known = chains.get(table.name)
+		const known = ownEntry(chains, table.name)
 		if (known !== undefined) {
 			return known
 		}
-		if (visiting.includes(table.name)) {
-			throw new PolicyError(`${table.name}: its containment is a cycle (${[...visiting, table.name].join(' → ')})`)
+		const path = [...visiting, table.name]
+		if (includes(visiting, table.name)) {
+			throw new PolicyError(`${table.name}: its containment is a cycle (${path.join(' → ')})`)
 		}
-		const chain = resolveChain(table, parsed, owners, (next) => chainOf(next, [...visiting, table.name]))
-		for (const link of chain) {
-			if (!table.columns.has(link.column)) {
+		const chain = resolveChain(table, byName, owners, (next) => chainOf(next, path))
+		for (let index = 0; index < chain.length; index++) {
+			const link = chain[index]
+			if (link !== undefined && !inSet(table.columns, link.column)) {
 				throw new PolicyError(
 					`${table.name}: must carry ${link.column}, because it lies in ${link.dimension}; a row carries its whole containment chain`,
 				)
 			}
-			if (table.insert.has(link.column) || table.update.has(link.column)) {
-				throw new PolicyError(`${table.name}: ${link.column} is stamped by the layer; remove it from insert and update`)
-			}
 		}
-		chains.set(table.name, chain)
+		checkStamps(table, chain)
+		setOwn(chains, table.name, chain)
 		return chain
 	}
 
-	const models = new Map<string, TableModel>()
-	for (const table of parsed.values()) {
-		models.set(table.name, { ...table, chain: chainOf(table, []) })
+	const models: Record<string, TableModel> = {}
+	for (let index = 0; index < parsed.length; index++) {
+		const table = parsed[index]
+		if (table !== undefined) {
+			setOwn(models, table.name, freeze({ ...table, chain: chainOf(table, []) }))
+		}
 	}
-	return models
+	return freeze(models)
 }
 
 function resolveChain(
 	table: ParsedTable,
-	parsed: ReadonlyMap<string, ParsedTable>,
-	owners: ReadonlyMap<string, ParsedTable>,
+	byName: Readonly<Record<string, ParsedTable>>,
+	owners: Readonly<Record<string, ParsedTable>>,
 	chainOf: (table: ParsedTable) => readonly Container[],
 ): readonly Container[] {
 	const scope = table.scope
 	if (scope.mode === 'dimension') {
 		if (scope.container === undefined) {
-			return []
+			return freeze([])
 		}
-		const owner = owners.get(scope.container.dimension)
+		const owner = ownEntry(owners, scope.container.dimension)
 		// An ancestor carries its column under the same name as in the table that owns its dimension.
-		return [scope.container, ...(owner === undefined ? [] : chainOf(owner))]
+		return prepend(scope.container, owner === undefined ? [] : chainOf(owner))
 	}
 	if (scope.mode !== 'child') {
-		return []
+		return freeze([])
 	}
-	const parent = parsed.get(scope.parent)
+	const parent = ownEntry(byName, scope.parent)
 	if (parent === undefined || parent.scope.mode !== 'dimension') {
 		throw new PolicyError(`${table.name}: the parent ${scope.parent} must be a dimension table`)
 	}
 	const parentChain = chainOf(parent)
-	const expected = parentChain.map((link) => link.column)
-	const inherited = new Set(scope.inherit)
-	if (inherited.size !== expected.length || !expected.every((name) => inherited.has(name))) {
+	const expected: string[] = []
+	for (let index = 0; index < parentChain.length; index++) {
+		expected[index] = parentChain[index]?.column ?? ''
+	}
+	const inherited = nameSet(scope.inherit)
+	let matches = scope.inherit.length === expected.length && namesOf(inherited).length === expected.length
+	for (let index = 0; index < expected.length; index++) {
+		matches = matches && inSet(inherited, expected[index])
+	}
+	if (!matches) {
 		throw new PolicyError(
 			`${table.name}: must inherit exactly the containment columns of ${scope.parent} (${
 				expected.join(', ') || 'none'
 			}), so a composite foreign key keeps it in scope`,
 		)
 	}
-	return [{ dimension: parent.scope.dimension, column: scope.column }, ...parentChain]
+	return prepend({ dimension: parent.scope.dimension, column: scope.column }, parentChain)
 }
 
 type PolicyOf<P, T> = T extends keyof P ? P[T] : never

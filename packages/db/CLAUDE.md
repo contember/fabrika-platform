@@ -15,6 +15,7 @@ bun test    # policy · store · guard · hardening · type-attacks · postgres 
 
 | Module           | What it owns                                                                                              |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.         |
 | `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`, which the framework implements.    |
 | `policy.ts`      | `defineTables`: the literal table policies, checked against the generated column list, and the row types. |
 | `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                   |
@@ -44,6 +45,15 @@ and codegen, generated locators, `@fabrika/db/testing`, and stores for `referenc
   `GuardContext.lock`.
 - **Mutations answer `{ id, version }` (and `move` the new chain), never row data.** A write action does
   not include the read action; returning the row would leak columns the caller may not read.
+- **A column holds at most one stamped role.** The key, every containment column of the chain, `version`
+  and `createdBy` are distinct columns, or `defineTables` refuses the policy (`checkStamps`). Otherwise
+  one stamp overwrites another: `createdBy` on the key inserts the principal as the id, `version` on a
+  container column moves the row on every update.
+- **A `version` column is INTEGER (int4).** Postgres returns BIGINT as a string (the platform-node rule in
+  `packages/platform-node/CLAUDE.md`), and the acknowledgement and `expectVersion` are numbers. The policy
+  types accept only a column whose generated select type is `number` (`VersionColumn`); the column list
+  carries names only, so at runtime a mutation that gets a non-number version back throws inside its
+  transaction and writes nothing.
 - **Insert and update data are read through own property descriptors** (`readValues`): a plain or
   null-prototype object only, no symbol keys, no accessors, every key checked before any value is read.
 - **The data layer checks kind, dimension and action itself, on every operation.** The authority only
@@ -61,10 +71,17 @@ and codegen, generated locators, `@fabrika/db/testing`, and stores for `referenc
 - **The guard depends on Kysely internals** (node factories marked `@internal`, node property names,
   the operator and function strings the compiler prints). `kysely` and `kysely-postgres-js` are pinned
   exactly; `guard.test.ts` and `type-attacks.test.ts` are the upgrade check.
-- **The guard uses only references it captured at load and index loops.** Loading `database.ts`
-  freezes the Kysely compiler's prototype chain. Both close the two same-process attacks that
-  succeeded against the spike (patching the compiler after the guard ran; patching `Set.prototype.has`).
-  Do not use an iterator, a spread or a prototype method in `guard.ts` or `identifier.ts`.
+- **The guard and every policy and allowlist check use only the built-ins `builtins.ts` captured at
+  load, index loops, and frozen `NameSet` lookups.** Loading `database.ts` freezes the Kysely compiler's
+  prototype chain. Both close the two same-process attacks that succeeded against the spike (patching
+  the compiler after the guard ran; patching `Set.prototype.has`). Do not use an iterator, a spread, a
+  `Set`/`Map` method or a prototype method in `guard.ts`, `identifier.ts`, or a check in `policy.ts`,
+  `description.ts` or `store.ts`. Building the tree (`nodes.ts`, the value `Map`) still uses ordinary
+  built-ins, so a patched `Array.prototype.map` can change what is built after the checks passed.
+- **A caller's array is read only through `parseList`:** a plain array, by index, through own data
+  properties. A subclass, an own property besides the indexes and `length` (an own `map`, `filter` or
+  `Symbol.iterator`), a hole or an accessor element is refused, so no method the input owns ever runs.
+  Each element is validated before it is copied.
 - **Unknown keys in insert and update data are refused, not dropped**, so an agent learns about them.
   The key, scope columns, version and `createdBy` are stamped by the layer and can never be written.
 - **A column with its own read action** (`columns: { c: { read } }`) falls back to nothing: every

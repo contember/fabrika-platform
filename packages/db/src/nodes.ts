@@ -34,6 +34,7 @@ import {
 	ValuesNode,
 	WhereNode,
 } from 'kysely'
+import { namesOf } from './builtins'
 import type { Compare, Condition, Contains, JoinState, Primitive, SelectState } from './description'
 import { QueryRefusedError } from './errors'
 
@@ -137,7 +138,7 @@ function joinNode(parent: string, join: JoinState): JoinNode {
 
 function joinedSelections(join: JoinState): SelectionNode[] {
 	const child = join.join.shape.table
-	const columns = join.select.columns ?? [...join.join.shape.visible]
+	const columns = join.select.columns ?? namesOf(join.join.shape.visible)
 	return columns.map((name) => SelectionNode.create(AliasNode.create(column(child, name), IdentifierNode.create(`${child}.${name}`))))
 }
 

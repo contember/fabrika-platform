@@ -9,9 +9,14 @@
 
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import type { Ref } from '../capability'
 import { Database } from '../database'
-import { CapabilityError, ConflictError, NotFoundError } from '../errors'
+import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
+import { defineTables } from '../policy'
+import { scoped } from '../store'
 import { TestAuthority } from './fixtures/authority'
+import { call } from './fixtures/harness'
+import { patchedChecks } from './fixtures/patch'
 import { migration } from './fixtures/schema'
 import { defineStores } from './fixtures/stores'
 
@@ -289,5 +294,108 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 		expect(Object.keys(await stores.notes.get(note('notes.read', id, 'w1')))).not.toContain('internal')
 		const stored = await admin((sql) => sql.unsafe(`select internal from ${schema}.notes where id = $1`, [id]))
 		expect(stored[0]?.internal).toBe('only for admins')
+	})
+})
+
+/** The error `work` fails with, or undefined when it succeeds. */
+async function failure(work: () => unknown): Promise<unknown> {
+	try {
+		await work()
+	} catch (error) {
+		return error
+	}
+	return undefined
+}
+
+describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
+	interface Tops {
+		id: string
+		created_by: string
+	}
+	interface TenantItems {
+		id: string
+		tenant_id: number
+		title: string
+	}
+	interface Ledgers {
+		id: string
+		// A wrong generated type for a BIGINT column: the policy types cannot see the mismatch, the runtime does.
+		version: number
+	}
+	interface Extra {
+		tops: Tops
+		tenant_items: TenantItems
+		ledgers: Ledgers
+	}
+	const extraColumns = { tops: ['id', 'created_by'], tenant_items: ['id', 'tenant_id', 'title'], ledgers: ['id', 'version'] } as const
+	const tops = { scope: { dimension: 'top', key: 'id' }, actions: { read: 'read', insert: 'write' }, createdBy: 'created_by' } as const
+	const tenantItems = {
+		scope: { dimension: 'tenant_item', key: 'id', in: { dimension: 'tenant', column: 'tenant_id' } },
+		actions: { read: 'read', update: 'write' },
+		update: ['title'],
+	} as const
+	const ledgers = { scope: { dimension: 'ledger', key: 'id' }, actions: { read: 'read', insert: 'write' }, version: 'version' } as const
+	const extra = { tops, tenant_items: tenantItems, ledgers }
+
+	beforeAll(async () => {
+		await admin((sql) =>
+			sql.unsafe(`set search_path to ${schema};
+				create table tops (id text primary key, created_by text not null);
+				create table tenant_items (id text primary key, tenant_id integer not null, title text not null);
+				create table ledgers (id text primary key, version bigint not null);
+				insert into tenant_items (id, tenant_id, title) values ('t1', 1, 'one');`)
+		)
+	})
+
+	test('the two reproduced policies are refused at definition time: createdBy on the key, the version on the container', async () => {
+		const define = defineTables<Extra, string>(extraColumns)
+		expect(() => define({ ...extra, tops: { ...tops, createdBy: 'id' } })).toThrow('tops: id is both the key and createdBy')
+		expect(() => define({ ...extra, tenant_items: { ...tenantItems, version: 'tenant_id' } })).toThrow(
+			'tenant_items: tenant_id is both the tenant containment column and the version',
+		)
+		const honest = scoped(define(extra), { database, capabilities: alice })
+		const top = honest.defineStore('tops', (t) => ({ create: (ref: Ref<'top', 'write'>) => t.insert(ref, {}) }))
+		expect(await top.create(alice.ref('top', 'write', 'authorized-top'))).toEqual({ id: 'authorized-top' })
+		const [stored] = await admin((sql) => sql.unsafe(`select id, created_by from ${schema}.tops`))
+		expect(stored).toEqual({ id: 'authorized-top', created_by: 'user:alice' })
+	})
+
+	test('with Set.has, Array.includes and Object.prototype.hasOwnProperty patched, a scope write and a restricted read are still refused', async () => {
+		const id = await createNote('w1', 'pinned', null)
+		const raw = stores.defineStore('notes', (t) => ({ t })).t
+		const patches = { setHas: true, includes: true, hasOwnProperty: true } as const
+		const move = () => call(raw, 'update', note('notes.write', id, 'w1'), { workspace_id: 'w2', organization_id: 'o2' }, { expectVersion: 1 })
+		const moved = await patchedChecks(patches, () => failure(move))
+		expect(moved).toBeInstanceOf(QueryRefusedError)
+		const [row] = await admin((sql) => sql.unsafe(`select workspace_id, organization_id, version from ${schema}.notes where id = $1`, [id]))
+		expect(row).toEqual({ workspace_id: 'w1', organization_id: 'o1', version: 1 })
+
+		const select = () => call(raw, 'select', read(['w1']), (q: unknown) => call(q, 'columns', ['internal']))
+		const hidden = await patchedChecks(patches, () => failure(select))
+		expect(hidden).toBeInstanceOf(QueryRefusedError)
+	})
+
+	test('a caller array with its own map cannot select, filter or aggregate a restricted column', async () => {
+		const { id } = await stores.notes.create(into('w1'), { title: 'guarded', body: null, internal: 'only for admins' })
+		const raw = stores.defineStore('notes', (t) => ({ t })).t
+		const own = <T>(items: T[]): T[] => Object.defineProperty(items, 'map', { value: () => ['internal'] })
+		const columns: 'title'[] = own(['title'])
+		await expect(raw.select(read(['w1']), (q) => q.columns(columns))).rejects.toBeInstanceOf(QueryRefusedError)
+		const conditions: (readonly ['title', '=', string])[] = own([['title', '=', 'guarded']])
+		await expect(raw.select(read(['w1']), (q) => q.whereAny(conditions))).rejects.toBeInstanceOf(QueryRefusedError)
+		const min: 'title'[] = own(['title'])
+		await expect(raw.aggregate(read(['w1']), { min })).rejects.toBeInstanceOf(QueryRefusedError)
+		const plain = await raw.select(read(['w1']), (q) => q.columns(['id', 'title']).where('id', '=', id))
+		expect(plain).toEqual([{ id, title: 'guarded' }])
+	})
+
+	test('a version column that is not INTEGER is refused at the first mutation, and nothing is written', async () => {
+		const ledger = scoped(defineTables<Extra, string>(extraColumns)(extra), { database, capabilities: alice }).defineStore('ledgers', (t) => ({
+			open: (ref: Ref<'ledger', 'write'>) => t.insert(ref, {}),
+		}))
+		await expect(ledger.open(alice.ref('ledger', 'write', 'l1'))).rejects.toThrow(
+			'ledgers.version came back as string; a version column must be INTEGER (int4)',
+		)
+		expect(await count('ledgers')).toBe(0)
 	})
 })

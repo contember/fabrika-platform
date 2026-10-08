@@ -31,6 +31,7 @@ import {
 	ValueNode,
 	WhereNode,
 } from 'kysely'
+import { nameSet } from '../builtins'
 import { finishSelect, startSelect, type TableShape } from '../description'
 import { QueryRefusedError } from '../errors'
 import { assertAllowedTree, type GuardContext } from '../guard'
@@ -57,11 +58,11 @@ const foreignKey = [{ childColumn: 'note_id', parentColumn: 'id' }, { childColum
 const scope = inList('notes', 'workspace_id', ['w1'])
 const selectContext: GuardContext = { root: 'SelectQueryNode', table: 'notes', joins: { note_comments: foreignKey }, scope }
 
-const commentsShape: TableShape = { table: 'note_comments', visible: new Set(['id', 'body']), joinable: new Map() }
+const commentsShape: TableShape = { table: 'note_comments', visible: nameSet(['id', 'body']), joinable: {} }
 const notesShape: TableShape = {
 	table: 'notes',
-	visible: new Set(['id', 'title', 'workspace_id']),
-	joinable: new Map([['note_comments', { shape: commentsShape, readAction: 'notes.read', on: foreignKey }]]),
+	visible: nameSet(['id', 'title', 'workspace_id']),
+	joinable: { note_comments: { shape: commentsShape, readAction: 'notes.read', on: foreignKey } },
 }
 
 function legitSelect(): SelectQueryNode {

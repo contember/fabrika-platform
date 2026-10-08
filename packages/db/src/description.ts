@@ -1,3 +1,4 @@
+import { inSet, isSafeInteger, type NameSet, nameSet, namesOf, ownEntry, ownKeys, parseList } from './builtins'
 import { QueryRefusedError } from './errors'
 import { isPlainIdentifier } from './identifier'
 
@@ -8,7 +9,7 @@ export type ListOperator = 'in' | 'not in'
 export type NullOperator = 'is' | 'is not'
 export type AllowedOperator = ComparisonOperator | PatternOperator | ListOperator | NullOperator
 
-const OPERATORS: readonly AllowedOperator[] = [
+const OPERATOR_LIST: readonly AllowedOperator[] = [
 	'=',
 	'<>',
 	'<',
@@ -24,6 +25,11 @@ const OPERATORS: readonly AllowedOperator[] = [
 	'is',
 	'is not',
 ]
+const OPERATORS = nameSet(OPERATOR_LIST)
+
+function isOperator(value: unknown): value is AllowedOperator {
+	return inSet(OPERATORS, value)
+}
 
 export interface Compare {
 	readonly kind: 'compare'
@@ -49,8 +55,8 @@ export type Condition = Compare | Contains | AnyOf
 /** What a select may name: the visible columns of its table and of the children it may join. */
 export interface TableShape {
 	readonly table: string
-	readonly visible: ReadonlySet<string>
-	readonly joinable: ReadonlyMap<string, JoinShape>
+	readonly visible: NameSet
+	readonly joinable: Readonly<Record<string, JoinShape>>
 }
 
 export interface JoinShape {
@@ -121,10 +127,11 @@ export class ScopedSelect<Row, Selected, Children> {
 
 	/** The columns to return; without it, every visible column. */
 	columns<const C extends Columns<Row>>(columns: readonly C[]): ScopedSelect<Row, Pick<Row, C>, Children> {
-		if (!Array.isArray(columns) || columns.length === 0) {
-			throw new QueryRefusedError('columns needs a non-empty list of column names')
+		const names = parseList(columns, (name) => this.#column(name))
+		if (names === undefined || names.length === 0) {
+			throw new QueryRefusedError('columns needs a non-empty plain array of column names')
 		}
-		return this.#next({ columns: columns.map((name) => this.#column(name)) })
+		return this.#next({ columns: names })
 	}
 
 	where<C extends Columns<Row>>(column: C, operator: ComparisonOperator, value: Comparable<Row[C]>): ScopedSelect<Row, Selected, Children>
@@ -138,15 +145,16 @@ export class ScopedSelect<Row, Selected, Children> {
 	/** One OR group of conditions on this table's columns. */
 	whereAny(conditions: readonly ConditionTuple<Row>[]): ScopedSelect<Row, Selected, Children>
 	whereAny(conditions: readonly (readonly unknown[])[]): ScopedSelect<Row, Selected, Children> {
-		if (!Array.isArray(conditions) || conditions.length === 0) {
-			throw new QueryRefusedError('whereAny needs at least one [column, operator, value] condition')
-		}
-		const parsed = conditions.map((condition) => {
-			if (!Array.isArray(condition) || condition.length !== 3) {
-				throw new QueryRefusedError('whereAny takes [column, operator, value] conditions')
+		const parsed = parseList(conditions, (condition) => {
+			const parts = parseList(condition, (part) => part)
+			if (parts === undefined || parts.length !== 3) {
+				throw new QueryRefusedError('whereAny takes [column, operator, value] conditions, each a plain array')
 			}
-			return this.#parseCondition(condition[0], condition[1], condition[2])
+			return this.#parseCondition(parts[0], parts[1], parts[2])
 		})
+		if (parsed === undefined || parsed.length === 0) {
+			throw new QueryRefusedError('whereAny needs a non-empty plain array of [column, operator, value] conditions')
+		}
 		return this.#withCondition({ kind: 'any', conditions: parsed })
 	}
 
@@ -175,9 +183,9 @@ export class ScopedSelect<Row, Selected, Children> {
 		child: C,
 		build: (q: ScopedSelect<Children[C], Children[C], NoColumns>) => ScopedSelect<Children[C], J, NoColumns>,
 	): ScopedSelect<Row, Selected & Prefixed<C, J>, Children> {
-		const join = typeof child === 'string' ? this.#shape.joinable.get(child) : undefined
+		const join = typeof child === 'string' ? ownEntry(this.#shape.joinable, child) : undefined
 		if (join === undefined) {
-			const children = [...this.#shape.joinable.keys()].join(', ') || 'none'
+			const children = ownKeys(this.#shape.joinable).join(', ') || 'none'
 			throw new QueryRefusedError(`${String(child)} is not a joinable child of ${this.#state.table} (joinable: ${children})`)
 		}
 		const start = startSelect<Children[C], NoColumns>(join.shape)
@@ -197,13 +205,13 @@ export class ScopedSelect<Row, Selected, Children> {
 	}
 
 	#column(name: unknown): string {
-		const columns = [...this.#shape.visible].join(', ')
+		const columns = namesOf(this.#shape.visible).join(', ')
 		if (typeof name !== 'string') {
 			throw new QueryRefusedError(
 				`a column is named by a string, not by ${typeof name === 'object' ? 'an expression' : typeof name} (columns: ${columns})`,
 			)
 		}
-		if (!isPlainIdentifier(name) || !this.#shape.visible.has(name)) {
+		if (!isPlainIdentifier(name) || !inSet(this.#shape.visible, name)) {
 			throw new QueryRefusedError(`${name} is not a column of ${this.#state.table} (columns: ${columns})`)
 		}
 		return name
@@ -217,20 +225,19 @@ export class ScopedSelect<Row, Selected, Children> {
 			}
 			return { kind: 'contains', column: name, text: value }
 		}
-		const allowed = OPERATORS.find((candidate) => candidate === operator)
-		if (allowed === undefined) {
-			throw new QueryRefusedError(`operator ${String(operator)} is not allowed (allowed: ${OPERATORS.join(', ')}, contains)`)
+		if (!isOperator(operator)) {
+			throw new QueryRefusedError(`operator ${String(operator)} is not allowed (allowed: ${OPERATOR_LIST.join(', ')}, contains)`)
 		}
+		const allowed = operator
 		if (allowed === 'in' || allowed === 'not in') {
-			if (!Array.isArray(value) || value.length === 0) {
-				throw new QueryRefusedError(`${allowed} needs a non-empty list of values`)
-			}
-			const list: Primitive[] = []
-			for (const item of value) {
+			const list = parseList(value, (item) => {
 				if (!isPrimitive(item)) {
 					throw new QueryRefusedError(`${allowed} takes plain values only`)
 				}
-				list.push(item)
+				return item
+			})
+			if (list === undefined || list.length === 0) {
+				throw new QueryRefusedError(`${allowed} needs a non-empty plain array of values`)
 			}
 			return { kind: 'compare', column: name, operator: allowed, value: list }
 		}
@@ -282,7 +289,7 @@ export function isPrimitive(value: unknown): value is Primitive {
 }
 
 function count(value: unknown, what: string): number {
-	if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+	if (typeof value !== 'number' || !isSafeInteger(value) || value < 0) {
 		throw new QueryRefusedError(`${what} must be a non-negative integer`)
 	}
 	return value

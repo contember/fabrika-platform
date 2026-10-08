@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { PolicyError } from '../errors'
-import { defineTables, tableModels } from '../policy'
+import { defineTables, modelOf, tableModels } from '../policy'
 import { tables } from './fixtures/tables'
 
 interface Notes {
@@ -110,6 +110,130 @@ describe('defineTables refuses a policy it cannot enforce', () => {
 	})
 })
 
+describe('a column holds at most one stamped role', () => {
+	interface Tenants {
+		id: number
+	}
+	interface Items {
+		id: number
+		tenant_id: number
+		version: number
+		created_by: string
+		title: string
+	}
+	interface Docs {
+		id: number
+		item_id: number
+		tenant_id: number
+		version: number
+	}
+	interface ItemNotes {
+		id: number
+		item_id: number
+		tenant_id: number
+		body: string
+	}
+	interface Stamped {
+		tenants: Tenants
+		items: Items
+		docs: Docs
+		item_notes: ItemNotes
+	}
+	const stampedColumns = {
+		tenants: ['id'],
+		items: ['id', 'tenant_id', 'version', 'created_by', 'title'],
+		docs: ['id', 'item_id', 'tenant_id', 'version'],
+		item_notes: ['id', 'item_id', 'tenant_id', 'body'],
+	} as const
+	const tenants = { scope: { dimension: 'tenant', key: 'id' }, actions: { read: 'read' } } as const
+	const items = {
+		scope: { dimension: 'item', key: 'id', in: { dimension: 'tenant', column: 'tenant_id' } },
+		actions: { read: 'read', insert: 'write', update: 'write' },
+		update: ['title'],
+		version: 'version',
+		createdBy: 'created_by',
+	} as const
+	const docs = {
+		scope: { dimension: 'doc', key: 'id', in: { dimension: 'item', column: 'item_id' } },
+		actions: { read: 'read', update: 'write' },
+		version: 'version',
+	} as const
+	const itemNotes = {
+		scope: { child: 'items', key: 'id', column: 'item_id', inherit: ['tenant_id'] },
+		actions: { read: 'read', insert: 'write' },
+		insert: ['body'],
+	} as const
+	const stamped = { tenants, items, docs, item_notes: itemNotes }
+	const define = defineTables<Stamped, string>(stampedColumns)
+
+	test('distinct stamped columns are accepted', () => {
+		expect(modelOf(tableModels(define(stamped)), 'docs')?.chain).toEqual([
+			{ dimension: 'item', column: 'item_id' },
+			{ dimension: 'tenant', column: 'tenant_id' },
+		])
+	})
+
+	test('the version on the key', () => {
+		expect(() => define({ ...stamped, items: { ...items, version: 'id' } })).toThrow('items: id is both the key and the version')
+	})
+
+	test('createdBy on the key', () => {
+		expect(() => define({ ...stamped, items: { ...items, createdBy: 'id' } })).toThrow('items: id is both the key and createdBy')
+	})
+
+	test('the version on the containment column', () => {
+		expect(() => define({ ...stamped, items: { ...items, version: 'tenant_id' } })).toThrow(
+			'items: tenant_id is both the tenant containment column and the version',
+		)
+	})
+
+	test('createdBy on the containment column', () => {
+		expect(() => define({ ...stamped, items: { ...items, createdBy: 'tenant_id' } })).toThrow(
+			'items: tenant_id is both the tenant containment column and createdBy',
+		)
+	})
+
+	test('the version on an ancestor column the scope does not name', () => {
+		expect(() => define({ ...stamped, docs: { ...docs, version: 'tenant_id' } })).toThrow(
+			'docs: tenant_id is both the tenant containment column and the version',
+		)
+	})
+
+	test('the version and createdBy on one column', () => {
+		expect(() => define({ ...stamped, items: { ...items, createdBy: 'version' } })).toThrow('items: version is both the version and createdBy')
+	})
+
+	test('the key as its own containment column', () => {
+		const contained = { ...items, scope: { dimension: 'item', key: 'id', in: { dimension: 'tenant', column: 'id' } } } as const
+		expect(() => define({ ...stamped, items: contained })).toThrow('items: id is both the key and the tenant containment column')
+	})
+
+	test("a child's key as its parent column", () => {
+		const child = { ...itemNotes, scope: { ...itemNotes.scope, key: 'item_id' } } as const
+		expect(() => define({ ...stamped, item_notes: child })).toThrow('item_notes: item_id is both the key and the item containment column')
+	})
+
+	test("a child's key as an inherited column", () => {
+		const child = { ...itemNotes, scope: { ...itemNotes.scope, key: 'tenant_id' } } as const
+		expect(() => define({ ...stamped, item_notes: child })).toThrow('item_notes: tenant_id is both the key and the tenant containment column')
+	})
+
+	test('an inherited column listed twice', () => {
+		const child = { ...itemNotes, scope: { ...itemNotes.scope, inherit: ['tenant_id', 'tenant_id'] } } as const
+		expect(() => define({ ...stamped, item_notes: child })).toThrow('item_notes: must inherit exactly the containment columns of items (tenant_id)')
+	})
+})
+
+describe('policy arrays are read as plain arrays', () => {
+	test('an array with its own map is refused; the map never runs', () => {
+		const update: 'title'[] = ['title']
+		Object.defineProperty(update, 'map', { value: () => ['workspace_id'] })
+		expect(() => defineTables<DB, string>(columns)({ notes: { ...notes, update }, note_comments: comments, countries })).toThrow(
+			'notes: update takes a plain array of column names',
+		)
+	})
+})
+
 describe('every row carries its whole containment chain', () => {
 	interface Organizations {
 		id: string
@@ -142,11 +266,11 @@ describe('every row carries its whole containment chain', () => {
 
 	test('the chains are resolved through the tables that own each dimension', () => {
 		const models = tableModels(defineTables<Deep, string>(deepColumns)(deep))
-		expect(models.get('notes')?.chain).toEqual([
+		expect(modelOf(models, 'notes')?.chain).toEqual([
 			{ dimension: 'workspace', column: 'workspace_id' },
 			{ dimension: 'organization', column: 'organization_id' },
 		])
-		expect(models.get('note_comments')?.chain).toEqual([
+		expect(modelOf(models, 'note_comments')?.chain).toEqual([
 			{ dimension: 'note', column: 'note_id' },
 			{ dimension: 'workspace', column: 'workspace_id' },
 			{ dimension: 'organization', column: 'organization_id' },
@@ -177,7 +301,7 @@ describe('every row carries its whole containment chain', () => {
 
 describe('the parsed model', () => {
 	test('a column with its own read action is left out; one with the table read action stays', () => {
-		const notesModel = tableModels(tables).get('notes')
+		const notesModel = modelOf(tableModels(tables), 'notes')
 		expect(notesModel?.visible).toEqual(['id', 'workspace_id', 'organization_id', 'title', 'body', 'word_count', 'created_by', 'version', 'created_at'])
 		expect(notesModel?.scope).toEqual({
 			mode: 'dimension',
@@ -189,8 +313,8 @@ describe('the parsed model', () => {
 
 	test('reference and inbox tables keep their mode and read action', () => {
 		const models = tableModels(tables)
-		expect(models.get('countries')?.scope).toEqual({ mode: 'reference', reason: 'read-only lookup data' })
-		expect(models.get('contact_messages')?.scope).toEqual({ mode: 'inbox', form: 'contact' })
-		expect(models.get('contact_messages')?.actions.read).toBe('contact.read')
+		expect(modelOf(models, 'countries')?.scope).toEqual({ mode: 'reference', reason: 'read-only lookup data' })
+		expect(modelOf(models, 'contact_messages')?.scope).toEqual({ mode: 'inbox', form: 'contact' })
+		expect(modelOf(models, 'contact_messages')?.actions.read).toBe('contact.read')
 	})
 })

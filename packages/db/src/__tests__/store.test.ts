@@ -346,6 +346,85 @@ describe('the query description cannot express anything but scoped reads (types 
 	})
 })
 
+describe('caller arrays are read by index, never through a method they own', () => {
+	/** An array with an own property that shadows Array.prototype: the input brings its own method. */
+	function owning<T>(items: T[], key: PropertyKey, value: unknown): T[] {
+		Object.defineProperty(items, key, { value })
+		return items
+	}
+	const hidden = () => ['internal']
+	const overrides: readonly (readonly [string, PropertyKey, unknown])[] = [
+		['map', 'map', hidden],
+		['filter', 'filter', hidden],
+		['includes', 'includes', () => true],
+		['Symbol.iterator', Symbol.iterator, function*() {
+			yield 'internal'
+		}],
+	]
+
+	for (const [label, key, value] of overrides) {
+		test(`columns with an own ${label} is refused; a restricted column is never selected`, async () => {
+			const layer = recordingLayer()
+			const titled: 'title'[] = owning(['title'], key, value)
+			const outcome = await layer.attempt(() => layer.raw.notes.select(layer.within('notes.read'), (q) => q.columns(titled)))
+			refused(outcome, QueryRefusedError, 'plain array')
+		})
+
+		test(`whereAny with an own ${label} is refused, on the list and on a condition`, async () => {
+			const layer = recordingLayer()
+			const conditions: (readonly ['title', '=', string])[] = owning([['title', '=', 'x']], key, value)
+			refused(await layer.attempt(() => layer.raw.notes.select(layer.within('notes.read'), (q) => q.whereAny(conditions))), QueryRefusedError)
+			const condition: ('title' | '=' | 'x')[] = owning(['title', '=', 'x'], key, value)
+			refused(
+				await layer.attempt(() => call(layer.raw.notes, 'select', layer.within('notes.read'), (q: unknown) => call(q, 'whereAny', [condition]))),
+				QueryRefusedError,
+			)
+		})
+
+		test(`an in-list with an own ${label} is refused`, async () => {
+			const layer = recordingLayer()
+			const ids: string[] = owning(['n1'], key, value)
+			refused(await layer.attempt(() => layer.raw.notes.select(layer.within('notes.read'), (q) => q.where('id', 'in', ids))), QueryRefusedError)
+		})
+
+		test(`an aggregate list with an own ${label} is refused; a restricted column is never aggregated`, async () => {
+			const layer = recordingLayer()
+			const min: 'title'[] = owning(['title'], key, value)
+			refused(await layer.attempt(() => layer.raw.notes.aggregate(layer.within('notes.read'), { min })), QueryRefusedError, 'plain array')
+		})
+	}
+
+	test('a subclass of Array is refused', async () => {
+		class Columns<T> extends Array<T> {}
+		const layer = recordingLayer()
+		const subclassed = new Columns<'title'>()
+		subclassed.push('title')
+		refused(await layer.attempt(() => layer.raw.notes.select(layer.within('notes.read'), (q) => q.columns(subclassed))), QueryRefusedError)
+	})
+
+	test('a hole is refused', async () => {
+		const layer = recordingLayer()
+		const holey: 'title'[] = []
+		holey[1] = 'title'
+		refused(await layer.attempt(() => layer.raw.notes.select(layer.within('notes.read'), (q) => q.columns(holey))), QueryRefusedError)
+	})
+
+	test('an accessor element is refused before its getter runs', async () => {
+		const layer = recordingLayer()
+		let reads = 0
+		const tricky: 'title'[] = []
+		Object.defineProperty(tricky, 0, {
+			enumerable: true,
+			get: () => {
+				reads++
+				return reads === 1 ? 'title' : 'internal'
+			},
+		})
+		refused(await layer.attempt(() => layer.raw.notes.select(layer.within('notes.read'), (q) => q.columns(tricky))), QueryRefusedError)
+		expect(reads).toBe(0)
+	})
+})
+
 describe('writes take declared columns and plain values only', () => {
 	describe('insert and update data are read through their own property descriptors', () => {
 		const target = (layer: ReturnType<typeof recordingLayer>) => layer.workspaceRef('notes.write')
@@ -493,7 +572,7 @@ describe('writes take declared columns and plain values only', () => {
 		refused(
 			await layer.attempt(() => call(layer.raw.notes, 'aggregate', within, { count: true, groupBy: 'workspace_id' })),
 			QueryRefusedError,
-			'list of column names',
+			'plain array of column names',
 		)
 		refused(
 			await layer.attempt(() => call(layer.raw.notes, 'aggregate', within, { count: true, where: (q: unknown) => call(q, 'columns', ['id']) })),
