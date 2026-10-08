@@ -153,22 +153,26 @@ live permissions, does the write and issues every key. The application supplies 
 grant and mints no credential. IAM gains these operations and the membership metadata on roles;
 today it has neither.
 
-### 7. What this decision does not decide
+### 7. Where the contract becomes binding
 
 The framework runs inside the application process and the application's own build. An agent that
 edits the contract, a role, `fabrika.config.ts`, the build commands or the checker's invocation can
 loosen any of it, and only the pull request shows the change.
 
-Making the contract binding outside the application process is a separate proposal
-([platform enforcement](../ideas/platform-enforcement.md)). It is **not decided here**:
+Other ADRs make the contract binding outside the application process:
 
-- whether the proxy reads endpoint tables instead of generated gates, and checks requirements and
-  admission itself;
-- how Control reads the contract from source, and whether a widened contract waits for a human;
-- whether the platform owns the run section and the build;
-- whether the installation's own services move to contracts.
+- The proxy reads endpoint tables instead of generated gates, and checks caller kinds, requirements
+  and admission itself: [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md).
+- Control reads the contract from source by static parsing
+  ([ADR-0005](0005-compile-app-config-to-static-manifest.md)), and a widened contract waits for a human
+  on a protected environment ([ADR-0050](0050-approved-access.md)).
+- The platform owns the run section and the server build on Zerops
+  ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)) and builds the proxy Worker
+  on Cloudflare ([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
+- Whether the installation's own services move to contracts is **not decided**. Until part B, work
+  unit B10 decides it, they keep `defineApp()` and gates.
 
-Each of these, if decided, rewrites the ADR that owns it, ADR-0022 first.
+None of these is built yet; until they are, the framework is the only check.
 
 ## Consequences
 
