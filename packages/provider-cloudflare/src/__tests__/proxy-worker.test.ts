@@ -7,6 +7,20 @@ import { APP, FakeIam, HOST, ISSUER, signUserToken } from '../../../proxy-core/s
 import { createCloudflareProxyWorker } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
 
+/**
+ * A request whose `url` is the string as written. Bun's `Request` resolves dot segments on
+ * construction; a Worker may receive them unresolved, which is the case the proxy must refuse.
+ */
+class RawUrlRequest extends Request {
+	constructor(private readonly raw: string) {
+		super(raw)
+	}
+
+	override get url(): string {
+		return this.raw
+	}
+}
+
 const environment = (
 	gates: AppGates,
 	upstream: CloudflareProxyEnv['APP'] = { fetch: () => Promise.resolve(new Response('upstream')) },
@@ -205,6 +219,26 @@ describe('Cloudflare proxy Worker', () => {
 
 		const malformed = createCloudflareProxyHandler({ ...service, FABRIKA_PROXY_MANIFEST_JSON: '{' })
 		expect((await malformed(new Request(`https://${HOST}/private`))).status).toBe(503)
+		expect(calls).toBe(0)
+	})
+
+	test.each([
+		['a repeated slash', '//admin/users'],
+		['a dot-dot segment', '/a/../admin'],
+		['an encoded dot-dot segment', '/a/%2e%2e/b'],
+		['an encoded slash', '/x%2Fy'],
+	])('refuses %s in the raw request URL before the app, even on a public gate', async (_name, path) => {
+		let calls = 0
+		const upstream = {
+			fetch: () => {
+				calls++
+				return Promise.resolve(new Response('should not run'))
+			},
+		}
+		const response = await createCloudflareProxyHandler(environment({ rules: [{ path: '/*', kind: 'public' }] }, upstream))(
+			new RawUrlRequest(`https://${HOST}${path}`),
+		)
+		expect(response.status).toBe(400)
 		expect(calls).toBe(0)
 	})
 

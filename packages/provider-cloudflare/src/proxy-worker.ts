@@ -1,3 +1,4 @@
+import { rawRequestTarget } from '@fabrika/auth-core'
 import type { IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
@@ -111,7 +112,10 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// on. The first two come back from the decision; the third is re-derived below from the edge.
 		stripClientAsserted(headers)
 		headers.set(FORWARDED_METHOD_HEADER, request.method)
-		headers.set(FORWARDED_URI_HEADER, `${url.pathname}${url.search}`)
+		// The RAW target, so the decision's canonical-path check sees what the upstream will receive:
+		// `url.pathname` has already had its dot segments resolved.
+		const target = rawRequestTarget(request.url)
+		headers.set(FORWARDED_URI_HEADER, `${target.pathname}${target.search}`)
 		headers.set(FORWARDED_HOST_HEADER, url.host)
 		headers.set(FORWARDED_PROTO_HEADER, url.protocol === 'http:' ? 'http' : 'https')
 		if (clientAddress !== null && clientAddress !== '') headers.set(CLIENT_ADDRESS_HEADER, clientAddress)
