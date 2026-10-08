@@ -29,6 +29,12 @@ export interface AppEnvRow {
 	trigger_ref: string | null
 	/** 1 when an operator marked this environment as an MCP authoring target (ADR-0049), else 0. */
 	authoring: number
+	/** The run whose snapshot is this environment's active access (ADR-0050); NULL until a run publishes. */
+	published_run_id: string | null
+	/** Advanced by every publication; a publication names the generation it read (compare-and-swap). */
+	generation: number
+	/** 1 when a widening waits for a human's approval here (ADR-0050), else 0. */
+	protected: number
 	created_at: number
 }
 

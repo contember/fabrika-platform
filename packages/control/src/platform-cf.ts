@@ -25,6 +25,7 @@ import { z } from 'zod'
 import { type ControlRepositories, createControlRepositories } from './db'
 import type { Env } from './env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from './github/connections/credentials'
+import { gitHubCommitSource } from './github/source/commit-files'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
 import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
@@ -70,7 +71,7 @@ export function cloudflareIamControlOptions(
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
-	return {
+	const env: Env = {
 		...bindings,
 		// The Worker's equivalent of the process's boot check: a Worker has no boot, so the first request
 		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
@@ -83,6 +84,7 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 	}
+	return { ...env, COMMITS: gitHubCommitSource(new GitHubMetadataClient({}), vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory() })) }
 }
 
 /** Present an R2 bucket as a `BlobStore` (the control plane reads run logs; vozka-runner writes them). */

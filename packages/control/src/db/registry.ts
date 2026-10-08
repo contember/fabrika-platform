@@ -628,9 +628,9 @@ export class ControlRegistryRepository {
 		return this.d1
 			.prepare(`INSERT INTO app_envs (
 					app_id, env, domain, public_origin, trigger_ref, namespace_id, provider,
-					provider_target_json, provider_artifact_json, authoring
+					provider_target_json, provider_artifact_json, authoring, protected
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0))
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?)
 				ON CONFLICT (app_id, env) DO UPDATE SET
 					domain = excluded.domain,
 					public_origin = excluded.public_origin,
@@ -652,6 +652,8 @@ export class ControlRegistryRepository {
 				input.providerTargetJson,
 				input.providerArtifactJson,
 				authoringFlag(input.authoring),
+				// Only a new row takes the default (ADR-0050); a stored flag changes only through `setAppEnvProtected`.
+				input.env === 'prod' ? 1 : 0,
 				authoringFlag(input.authoring),
 			)
 	}
@@ -692,6 +694,14 @@ export class ControlRegistryRepository {
 			}
 			throw cause
 		}
+	}
+
+	/** Change an environment's `protected` flag (ADR-0050); the caller has authorized a human with `access.approve`. */
+	async setAppEnvProtected(appId: string, env: string, value: boolean): Promise<AppEnvRow | null> {
+		return this.d1
+			.prepare('UPDATE app_envs SET protected = ? WHERE app_id = ? AND env = ? RETURNING *')
+			.bind(value ? 1 : 0, appId, env)
+			.first<AppEnvRow>()
 	}
 
 	async deleteAppEnv(appId: string, env: string): Promise<boolean> {

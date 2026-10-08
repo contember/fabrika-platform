@@ -20,6 +20,7 @@ import type { Env } from '../env'
 import { cloudflareGitHubSource } from '../platform-cf'
 import { executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { memoryCommits } from './helpers/commits'
 import { createHarness, type Harness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
@@ -84,7 +85,7 @@ async function seedCloudflareRun(db: ControlRepositories, trigger: RunTrigger, r
 		providerArtifactJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } }),
 	})
 	const runId = uuidv7()
-	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: REQUESTED_REF, trigger, commitSha: recordedCommit ?? null })
+	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: REQUESTED_REF, trigger, commitSha: recordedCommit ?? null, actor: 'user:test' })
 	return runId
 }
 
@@ -95,6 +96,7 @@ function sourceEnvironment(harness: Harness): Env {
 		REPOSITORIES: harness.repositories,
 		ASSETS: { fetch: () => Promise.reject(new Error('unexpected asset read')) },
 		RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
+		COMMITS: memoryCommits(),
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'test',
@@ -243,6 +245,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(db),
 			logs: { put: async () => {} },
+			commits: memoryCommits(),
 			operations: {
 				repository: db.operationsReleases,
 				syncKey: SYNC_KEY,

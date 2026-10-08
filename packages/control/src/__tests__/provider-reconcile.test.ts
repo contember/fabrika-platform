@@ -53,7 +53,7 @@ describe('reconcileProviderRuns', () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
-		await db.runs.createRun({ id: 'cancelling', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'cancelling', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned(db).start('cancelling', 'runs/cancelling/logs.ndjson')
 		await owned(db).externalId('cancelling', 'operation', { phase: 'uploaded' })
 		await db.runs.requestRunCancellation('cancelling')
@@ -103,7 +103,7 @@ describe('reconcileProviderRuns', () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
-		await db.runs.createRun({ id: 'activated', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'activated', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned(db).start('activated', 'runs/activated/logs.ndjson')
 		await owned(db).externalId('activated', 'operation', { appVersionId: 'operation', triggered: true })
 		await db.runs.requestRunCancellation('activated')
@@ -136,7 +136,7 @@ describe('reconcileProviderRuns', () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
-		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned(db).start('resumed', 'runs/resumed/logs.ndjson')
 		await owned(db).externalId('resumed', 'operation', { appVersionId: 'version-1', phase: 'uploaded' })
 
@@ -187,6 +187,7 @@ describe('reconcileProviderRuns', () => {
 				env: id === 'foreign' ? 'foreign' : 'prod',
 				ref: 'refs/heads/main',
 				trigger: 'manual',
+				actor: 'user:test',
 			})
 		}
 		for (const id of ['active', 'failed', 'building', 'foreign']) seedRunning(sqlite, id, id)
@@ -241,6 +242,7 @@ describe('reconcileProviderRuns', () => {
 			env: 'prod',
 			ref: 'refs/heads/main',
 			trigger: 'manual',
+			actor: 'user:test',
 			commitSha: '0123456789abcdef0123456789abcdef01234567',
 		})
 		await owned(db).start('recovering', 'runs/recovering/logs.ndjson')
@@ -308,7 +310,7 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'stage', { publicOrigin: 'https://stage.app.example.test' }))
-		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned(db).start('resumed', 'runs/resumed/logs.ndjson')
 		await owned(db).externalId('resumed', 'operation')
 
@@ -334,7 +336,7 @@ describe('reconcileProviderRuns', () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
-		await db.runs.createRun({ id: 'previewed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'previewed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned(db).start('previewed', 'runs/previewed/logs.ndjson')
 		await owned(db).externalId('previewed', 'operation')
 
@@ -382,10 +384,10 @@ describe('reconcileProviderRuns', () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
-		await db.runs.createRun({ id: 'owned', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'owned', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned(db).start('owned', 'runs/owned/logs.ndjson')
 		await owned(db).externalId('owned', 'operation')
-		await db.runs.createRun({ id: 'waiting', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: 'waiting', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 
 		const summary = await reconcileProviderRuns({
 			repositories: db,
@@ -413,7 +415,7 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		for (const id of ['broken', 'healthy']) {
-			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			seedRunning(sqlite, id, `${id}-operation`)
 		}
 
@@ -453,7 +455,7 @@ describe('reconcileProviderRuns', () => {
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		for (const id of ['cancelling', 'failed', 'succeeded']) {
-			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			seedRunning(sqlite, id, `${id}-operation`, { phase: 'accepted' })
 		}
 		await db.runs.requestRunCancellation('cancelling')

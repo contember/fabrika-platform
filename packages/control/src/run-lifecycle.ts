@@ -6,6 +6,7 @@ import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
 import {
 	type ControlProvider,
 	type ProviderApp,
+	type ProviderApprovedAccess,
 	type ProviderDeployInput,
 	type ProviderDeploymentNamespace,
 	type ProviderDeployOutcome,
@@ -18,6 +19,8 @@ import {
 } from '@fabrika/provider-contract'
 import { republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
+import { publishRunSnapshot } from './approval/publish'
+import { approvedProviderAccess } from './approval/snapshot'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -31,6 +34,7 @@ import {
 	type RunRow,
 	serializeProviderJson,
 } from './db'
+import type { CommitSource } from './github/source/commit-files'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { ProxySecrets } from './proxy-secret'
@@ -49,6 +53,11 @@ export interface RunDeps {
 	/** Where a namespace rebuild a deploy could not settle is handed to a `reconcile` job. */
 	queue?: Pick<JobQueue<ControlJobMessage>, 'send'>
 	logs: Pick<BlobStore, 'put'>
+	/**
+	 * Where a run's snapshot is read at its pinned commit (ADR-0050). A run with a pinned commit and no commit source
+	 * fails rather than publish access it could not read.
+	 */
+	commits?: CommitSource
 	operations?: OperationsReleaseProjectionDeps
 	/**
 	 * This installation's IAM issuer, delivered to every application it deploys (ADR-0035). Optional
@@ -110,17 +119,22 @@ export function redactKnownSecrets(text: string, secrets: readonly string[]): st
 class RunLogWriter {
 	readonly #lines: RunLogLine[] = []
 	#writeQueue: Promise<void> = Promise.resolve()
+	/** The secret values this run handed the provider. */
+	#secrets: readonly string[] = []
 
 	constructor(
 		private readonly logs: Pick<BlobStore, 'put'>,
 		private readonly key: string,
 		private readonly runId: string,
-		/** The secret values this run handed the provider. */
-		private readonly secrets: readonly string[],
 	) {}
 
+	/** Redact these values from every later line; the run's publication logs before its secrets are resolved. */
+	redact(secrets: readonly string[]): void {
+		this.#secrets = [...this.#secrets, ...secrets]
+	}
+
 	log(line: string): void {
-		const text = redactKnownSecrets(line, this.secrets)
+		const text = redactKnownSecrets(line, this.#secrets)
 		console.info(`deploy run ${this.runId}: ${text}`)
 		this.#lines.push({ ts: Date.now(), stream: 'meta', text })
 		const contents = `${this.#lines.map((line) => JSON.stringify(line)).join('\n')}\n`
@@ -181,7 +195,8 @@ const providerNamespace = (row: DeploymentNamespaceRow): ProviderDeploymentNames
 
 const storedProviderEnvironment = (
 	row: AppEnvRow,
-	namespace?: ProviderDeploymentNamespace,
+	namespace: ProviderDeploymentNamespace | undefined,
+	access: ProviderApprovedAccess | undefined,
 ): ProviderEnvironment => ({
 	appId: row.app_id,
 	env: row.env,
@@ -190,6 +205,7 @@ const storedProviderEnvironment = (
 	...(namespace === undefined ? {} : { namespace }),
 	target: parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
 	artifact: parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
+	...(access === undefined ? {} : { access }),
 })
 
 /**
@@ -199,13 +215,13 @@ const storedProviderEnvironment = (
  * need the original coordinates while a namespace is degraded, so those callers omit that guard.
  */
 export const providerEnvironment = async (
-	db: Pick<ControlRegistryRepository, 'getDeploymentNamespace'>,
+	repositories: Pick<ControlRepositories, 'registry' | 'runs'>,
 	row: AppEnvRow,
 	options: { requireReadyNamespace?: boolean } = {},
 ): Promise<ProviderEnvironment> => {
 	let namespace: ProviderDeploymentNamespace | undefined
 	if (row.namespace_id !== null) {
-		const stored = await db.getDeploymentNamespace(row.namespace_id)
+		const stored = await repositories.registry.getDeploymentNamespace(row.namespace_id)
 		if (stored === null) {
 			throw new Error(`deployment namespace "${row.namespace_id}" is missing`)
 		}
@@ -223,7 +239,8 @@ export const providerEnvironment = async (
 		}
 		namespace = providerNamespace(stored)
 	}
-	const environment = storedProviderEnvironment(row, namespace)
+	// The access a provider publishes is the approved snapshot's, never the artifact's (ADR-0050).
+	const environment = storedProviderEnvironment(row, namespace, await approvedProviderAccess(repositories, row))
 	if (
 		environment.target.provider !== row.provider
 		|| environment.artifact.provider !== row.provider
@@ -397,7 +414,7 @@ export class RunInvocation {
 	}
 }
 
-type DeployStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'deferred'
+type DeployStatus = 'running' | 'awaiting_approval' | 'succeeded' | 'failed' | 'skipped' | 'deferred'
 
 /**
  * Execute one queued deploy through the statically selected provider.
@@ -424,6 +441,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 	let accepted = false
 	// Lock order is always app/env, then namespace: a namespace path never takes an app/env lease.
 	let namespaceLease: Lease | null = null
+	let logWriter: RunLogWriter | null = null
 
 	try {
 		const run = await invocation.read()
@@ -443,6 +461,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		let startedRun = await invocation.boundary()
 		if (startedRun.log_key === null) throw new Error('started run has no log key')
 		const startedLogKey = startedRun.log_key
+		const runLogs = new RunLogWriter(deps.logs, startedLogKey, runId)
+		logWriter = runLogs
 		const app = await deps.repositories.registry.getApp(run.app_id)
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (app === null || appEnv === null) {
@@ -457,7 +477,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		}
 		const sourceBinding = await loadSourceBinding(deps, app)
 		const appInput = providerApp(app, run)
-		const environmentInput = await providerEnvironment(deps.repositories.registry, appEnv, { requireReadyNamespace: true })
+		const environmentInput = await providerEnvironment(deps.repositories, appEnv, { requireReadyNamespace: true })
 		let registration = deps.provider.normalizeRegistration?.({ app: appInput, environment: environmentInput })
 			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
@@ -483,6 +503,27 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			await invocation.write((fence) => runs.setRunCommit(runId, commitSha, fence))
 			startedRun = await invocation.boundary()
 			registration = { ...registration, app: providerAppAtCommit(registration.app, commitSha) }
+			// A pending change is published nowhere (ADR-0050): parked here, the run reaches no proxy and no IAM.
+			const commits = deps.commits
+			if (commits === undefined) throw new Error('no commit source is configured to read the run snapshot')
+			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
+				signal: invocation.work.signal,
+				boundary: () => invocation.boundary(),
+				write: (mutation) => invocation.write(mutation),
+				fence: () => invocation.lease.fence(),
+			}, {
+				run: startedRun,
+				app,
+				commitSha,
+				...(sourceBinding === undefined ? {} : { sourceBinding }),
+				log: (line) => runLogs.log(line),
+			})
+			if (publication.kind === 'parked') {
+				await runLogs.flush()
+				return { runId, status: 'awaiting_approval' }
+			}
+			startedRun = await invocation.boundary()
+			registration = { ...registration, environment: withAccess(registration.environment, await currentAccess(deps.repositories, appEnv)) }
 		}
 		const releaseContext = deps.operations === undefined
 			? null
@@ -536,16 +577,15 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
-		const handedSecrets = [...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? '']
-		const runLogs = new RunLogWriter(deps.logs, startedLogKey, runId, handedSecrets)
+		runLogs.redact([...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? ''])
 		let outcome: ProviderDeployOutcome
 		try {
 			if (ingestGap !== null) {
 				runLogs.log(`operations ingest not injected: app has no active ingest config (${ingestGap})`)
-				// A relay-backed provider re-flushes its own full buffer to this key, so the line survives
-				// only in the control log there — flush first so ours can never land after a relay flush.
-				await runLogs.flush()
 			}
+			// A relay-backed provider re-flushes its own full buffer to this key, so these lines survive only
+			// in the control log there — flush first so ours can never land after a relay flush.
+			await runLogs.flush()
 			await invocation.boundary()
 			if (namespaceLease !== null && namespaceId !== null) {
 				const queue = deps.queue
@@ -620,9 +660,22 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		await projectTerminalRun(deps, runId, dryRun, 'failed')
 		return { runId, status: 'failed' }
 	} finally {
+		await logWriter?.flush()
 		await namespaceLease?.release()
 		await invocation.release()
 	}
+}
+
+/** The environment's approved access as the provider reads it, read again after this run's publication. */
+async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<ProviderApprovedAccess | undefined> {
+	const row = await repositories.registry.getAppEnv(appEnv.app_id, appEnv.env)
+	if (row === null) throw new Error(`app environment ${appEnv.app_id}/${appEnv.env} disappeared during the deploy`)
+	return approvedProviderAccess(repositories, row)
+}
+
+function withAccess(environment: ProviderEnvironment, access: ProviderApprovedAccess | undefined): ProviderEnvironment {
+	const { access: _previous, ...rest } = environment
+	return access === undefined ? rest : { ...rest, access }
 }
 
 async function settleCancelledInvocation(
@@ -709,7 +762,7 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (appEnv === null || appEnv.provider !== deps.provider.id) throw new Error('provider environment disappeared or changed owner')
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, run.app_id, run.env)
-		const environment = await providerEnvironment(deps.repositories.registry, appEnv)
+		const environment = await providerEnvironment(deps.repositories, appEnv)
 		await invocation.boundary()
 		const outcome = await reconcile({
 			runId: run.id,
@@ -776,7 +829,7 @@ export async function settleRunCancellation(
 			throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} changed owner during cancellation`)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, cancelling.app_id, cancelling.env)
-		const environment = await providerEnvironment(deps.repositories.registry, appEnv)
+		const environment = await providerEnvironment(deps.repositories, appEnv)
 		// Only the lease holder may cancel external work, and only while it still holds the lease.
 		invocation.lease.assertHeld()
 		const result = await deps.provider.cancel({

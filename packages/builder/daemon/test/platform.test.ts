@@ -278,6 +278,8 @@ describe('exact-source deployment', () => {
 				triggerRef: 'release',
 				namespaceId: 'new-ns',
 				authoring: false,
+				protected: false,
+				publishedRunId: null,
 			}]
 			await until(() => {
 				try {

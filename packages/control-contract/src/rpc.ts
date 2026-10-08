@@ -14,8 +14,10 @@ import type {
 	AdoptDeploymentNamespaceRequest,
 	AppDto,
 	AppEnvDto,
+	ApprovalDto,
 	AppSecretDto,
 	AppVarDto,
+	CompleteApprovalRequest,
 	CreateDeploymentNamespaceRequest,
 	CursorList,
 	DeploymentNamespaceDetailDto,
@@ -36,6 +38,7 @@ import type {
 	RunDto,
 	RunLogResponse,
 	RunTailResponse,
+	SetEnvironmentProtectionRequest,
 	StartGitHubSourceConnectionRequest,
 	StartGitHubSourceConnectionResponse,
 	TriggerDeployRequest,
@@ -153,6 +156,8 @@ export interface ControlRpcContract {
 			list: RpcProcedure<AppIdInput, ListResponse<AppEnvDto>>
 			put: RpcProcedure<PutAppEnvironmentInput, AppEnvDto>
 			delete: RpcProcedure<AppEnvironmentInput, OkResponse>
+			/** Human user principals with `access.approve` only, from the console (ADR-0050 §4). */
+			protect: RpcProcedure<SetEnvironmentProtectionRequest, AppEnvDto>
 		}
 		secrets: {
 			list: RpcProcedure<AppIdInput, ListResponse<AppSecretDto>>
@@ -188,6 +193,13 @@ export interface ControlRpcContract {
 		log: RpcProcedure<RunIdInput, RunLogResponse>
 		tail: RpcProcedure<TailRunInput, RunTailResponse>
 		cancel: RpcProcedure<RunIdInput, RunDto>
+	}
+	/** Runs whose access change waits for a human (ADR-0050 §5), behind `access.approve`. */
+	approvals: {
+		list: RpcProcedure<void, ListResponse<ApprovalDto>>
+		get: RpcProcedure<RunIdInput, ApprovalDto>
+		/** A human user principal, from the console's own origin; no key, service or OAuth token completes one. */
+		complete: RpcProcedure<CompleteApprovalRequest, ApprovalDto>
 	}
 	deploy: RpcProcedure<TriggerDeployRequest, RunDto>
 	register: RpcProcedure<RegisterAppRequest, RegisterAppResponse>

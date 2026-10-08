@@ -34,6 +34,7 @@ export const controlSchema: AppSchema = {
 		{ action: ACTIONS.SOURCE_WORKSPACE_READ, description: 'Read own Git workspaces on an authoring target' },
 		{ action: ACTIONS.SOURCE_WORKSPACE_WRITE, description: 'Create and commit to own Git workspaces on an authoring target' },
 		{ action: ACTIONS.SOURCE_PULL_REQUEST_CREATE, description: 'Open a pull request from an own Git workspace' },
+		{ action: ACTIONS.ACCESS_APPROVE, description: 'Approve an access change and protect an environment (a person in the console only)' },
 		{ action: OPERATIONS_ACTIONS.READ, description: 'Read Operations errors and activity' },
 		{ action: OPERATIONS_ACTIONS.TRIAGE, description: 'Triage Operations errors' },
 		{ action: OPERATIONS_ACTIONS.MANAGE, description: 'Manage Operations sources, alerts, and retention' },

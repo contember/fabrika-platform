@@ -5,7 +5,8 @@ import { firstRow } from './returning'
 
 export type RunTrigger = 'webhook' | 'manual' | 'poll'
 
-export type RunStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+/** `awaiting_approval`: a widening on a protected environment parked the run until a human decides (ADR-0050). */
+export type RunStatus = 'pending' | 'running' | 'awaiting_approval' | 'succeeded' | 'failed'
 
 export interface RunRow {
 	id: string
@@ -27,6 +28,14 @@ export interface RunRow {
 	provider_state_json: string | null
 	/** Durable cancellation request; blocks ordinary lifecycle writes until an invocation settles it. */
 	cancel_requested_at: number | null
+	/** Who created the run: `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`; NULL before actors. */
+	actor: string | null
+	/** The access snapshot read at the pinned commit (`src/approval/snapshot.ts`). */
+	snapshot_json: string | null
+	/** The diff against the active snapshot the run was last compared with (`src/approval/diff.ts`). */
+	classification_json: string | null
+	/** The human approval of the classified change, bound to both digests. */
+	approval_json: string | null
 }
 
 // Serialization must reject cycles, non-plain objects and hidden keys before JSON.stringify can erase them.
@@ -98,12 +107,13 @@ export class RunRepository {
 		ref: string
 		commitSha?: string | null
 		trigger: RunTrigger
+		actor: string
 	}): Promise<RunRow> {
 		return firstRow<RunRow>(
 			this.d1
-				.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status)
-					VALUES (?, ?, ?, ?, ?, ?, 'pending') RETURNING *`)
-				.bind(input.id, input.appId, input.env, input.ref, input.commitSha ?? null, input.trigger),
+				.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor)
+					VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) RETURNING *`)
+				.bind(input.id, input.appId, input.env, input.ref, input.commitSha ?? null, input.trigger, input.actor),
 		)
 	}
 
@@ -214,6 +224,94 @@ export class RunRepository {
 		)
 	}
 
+	/** Record the access snapshot read at the run's pinned commit. */
+	async recordRunSnapshot(id: string, snapshotJson: string, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET snapshot_json = ?
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
+			[snapshotJson, id],
+			fence,
+		)
+	}
+
+	/** Record the classification a run publishes with. */
+	async recordRunClassification(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET classification_json = ?
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
+			[classificationJson, id],
+			fence,
+		)
+	}
+
+	/** Park a running run whose widening waits for a human (ADR-0050), with the classification the approver reads. */
+	async parkRunForApproval(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'awaiting_approval', classification_json = ?, approval_json = NULL
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
+			[classificationJson, id],
+			fence,
+		)
+	}
+
+	/**
+	 * Record a human approval of a parked run and queue it again, only while it still shows the classification the
+	 * approver read. Executed under the run's lease, like every lifecycle write.
+	 */
+	async approveParkedRun(id: string, classificationJson: string, approvalJson: string, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'pending', approval_json = ?
+			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
+			[approvalJson, id, classificationJson],
+			fence,
+		)
+	}
+
+	/** Refuse a parked run: it fails without touching the provider. */
+	async rejectParkedRun(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'failed', finished_at = ?
+			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
+			[this.now(), id, classificationJson],
+			fence,
+		)
+	}
+
+	/** Runs parked for approval, newest first. */
+	async listRunsAwaitingApproval(limit: number): Promise<RunRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM runs WHERE status = 'awaiting_approval' ORDER BY id DESC LIMIT ?`)
+			.bind(limit)
+			.all<RunRow>()
+		return results
+	}
+
+	/**
+	 * Publish the run's snapshot as its environment's active access (ADR-0050): a compare-and-swap on the generation
+	 * the run classified against, fenced on the run's lease. False when another publication won.
+	 */
+	async publishRunSnapshot(id: string, expectedGeneration: number, fence: LeaseFence): Promise<boolean> {
+		const results = await this.d1.batch<{ app_id: string }>([
+			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
+					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
+			this.d1.prepare(`UPDATE app_envs SET published_run_id = ?, generation = generation + 1
+				WHERE generation = ?
+					AND EXISTS (SELECT 1 FROM runs
+						WHERE runs.id = ? AND runs.app_id = app_envs.app_id AND runs.env = app_envs.env
+							AND runs.status = 'running' AND runs.cancel_requested_at IS NULL AND runs.snapshot_json IS NOT NULL)
+					AND EXISTS (SELECT 1 FROM deploy_locks
+						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
+				RETURNING app_id`).bind(id, expectedGeneration, id, fence.holder, fence.nowMs),
+		])
+		return (results[1]?.results.length ?? 0) > 0
+	}
+
 	/**
 	 * Record a cancellation REQUEST and return the latest active run snapshot. The one unfenced run update:
 	 * it changes no lifecycle state, and the lease holder reads it at its next step boundary.
@@ -221,7 +319,7 @@ export class RunRepository {
 	async requestRunCancellation(id: string): Promise<RunRow | null> {
 		return this.d1
 			.prepare(`UPDATE runs SET cancel_requested_at = COALESCE(cancel_requested_at, ?)
-				WHERE id = ? AND status IN ('pending','running') RETURNING *`)
+				WHERE id = ? AND status IN ('pending','running','awaiting_approval') RETURNING *`)
 			.bind(this.now(), id)
 			.first<RunRow>()
 	}
@@ -245,7 +343,7 @@ export class RunRepository {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = ?, exit_code = NULL, finished_at = ?
-			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NOT NULL`,
+			WHERE id = ? AND status IN ('pending','running','awaiting_approval') AND cancel_requested_at IS NOT NULL`,
 			[status, this.now(), id],
 			fence,
 		)

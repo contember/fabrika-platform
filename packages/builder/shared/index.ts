@@ -30,7 +30,8 @@ export type BuilderPairingState =
 	| { status: 'connected' }
 
 export interface BuilderDeploymentState {
-	status: 'preparing' | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+	/** `awaiting_approval`: the deploy widens access on a protected environment and waits for a person (ADR-0050). */
+	status: 'preparing' | 'pending' | 'running' | 'awaiting_approval' | 'succeeded' | 'failed' | 'cancelled'
 	runId: string | null
 	commitSha: string | null
 	message: string | null
@@ -290,7 +291,7 @@ export const builderPairingStateSchema = z.discriminatedUnion('status', [
 	z.object({ status: z.literal('connected') }).strict(),
 ])
 export const builderDeploymentStateSchema = z.object({
-	status: z.enum(['preparing', 'pending', 'running', 'succeeded', 'failed', 'cancelled']),
+	status: z.enum(['preparing', 'pending', 'running', 'awaiting_approval', 'succeeded', 'failed', 'cancelled']),
 	runId: nonemptyStringSchema.nullable(),
 	commitSha: nonemptyStringSchema.nullable(),
 	message: nonemptyStringSchema.nullable(),

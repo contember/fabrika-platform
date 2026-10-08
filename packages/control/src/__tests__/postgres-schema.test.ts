@@ -139,6 +139,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0002_authoring_workspaces.sql' },
 			{ bundle: 'control', name: '0003_namespace_update.sql' },
 			{ bundle: 'control', name: '0004_proxy_secrets.sql' },
+			{ bundle: 'control', name: '0005_approved_access.sql' },
 		])
 	})
 
@@ -239,7 +240,7 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 		expect(app.created_at).toBeGreaterThanOrEqual(before)
 		expect(app.created_at).toBeLessThanOrEqual(now() + 1)
 
-		const run = await db.runs.createRun({ id: uuidv7(), appId: app.id, env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const run = await db.runs.createRun({ id: uuidv7(), appId: app.id, env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 		expect(typeof run.created_at).toBe('number')
 		expect(run.started_at).toBeNull()
 	})
@@ -523,9 +524,17 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
 
-		const first = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'webhook' })
+		const first = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'webhook', actor: 'user:test' })
 		expect(first.status).toBe('pending')
-		const second = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'refs/heads/dev', commitSha: 'abc', trigger: 'poll' })
+		const second = await db.runs.createRun({
+			id: uuidv7(),
+			appId: 'acme',
+			env: 'stage',
+			ref: 'refs/heads/dev',
+			commitSha: 'abc',
+			trigger: 'poll',
+			actor: 'user:test',
+		})
 
 		expect((await db.runs.getRun(first.id))?.trigger).toBe('webhook')
 		// UUIDv7 ids are monotonic (RFC 9562 §6.2 counter), so `ORDER BY id DESC` is chronological on a
@@ -561,7 +570,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(done?.exit_code).toBe(0)
 		expect(await owned.checkpoint(first.id, { phase: 'late' })).toBe(false)
 
-		const cancelled = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
+		const cancelled = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await owned.start(cancelled.id, `runs/${cancelled.id}/logs.ndjson`)
 		await owned.externalId(cancelled.id, 'operation-2', { phase: 'uploaded' })
 		const cancellation = await db.runs.requestRunCancellation(cancelled.id)
@@ -856,7 +865,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 
 		const queue = new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' })
 		await queue.send({ runId: run.id })
@@ -876,7 +885,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 
 		const failingProvider = {
 			...fakeControlProvider,
@@ -895,7 +904,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 		// Somebody else holds the app-env lease.
 		await new SqlDeployLocks(raw).acquire('acme:prod', 'other-run', 60_000)
 
@@ -963,7 +972,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
-		const stale = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const stale = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 		await raw.prepare('UPDATE runs SET created_at = ? WHERE id = ?').bind(now() - 86_400, stale.id).run()
 
 		// A one-entry Atom feed with a new head sha, served locally — no test in this repo reaches github.com.
@@ -986,7 +995,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const stale = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
+		const stale = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await raw.prepare('UPDATE runs SET created_at = ? WHERE id = ?').bind(now() - 86_400, stale.id).run()
 		await db.operationsReleases.project(
 			stale.id,
@@ -1002,7 +1011,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 			}),
 		)
 		await db.operationsReleases.markApplied(stale.id, 1)
-		const absent = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
+		const absent = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await fixtureRuns(db.runs, new SqlDeployLocks(raw)).finish(absent.id, 'succeeded', 0)
 		const requests: OperationsReleaseReconcileRequest[] = []
 		const summary = await runMaintenance({

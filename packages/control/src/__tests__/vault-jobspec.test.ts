@@ -42,7 +42,7 @@ async function seed(db: ControlRepositories, valueRef: string): Promise<string> 
 	})
 	await db.registry.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef })
 	const runId = uuidv7()
-	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	return runId
 }
 

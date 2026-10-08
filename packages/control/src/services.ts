@@ -86,6 +86,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		lock: locks(env),
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
+		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
@@ -109,6 +110,8 @@ export interface ControlRpcDeps {
 	queue: DeployQueue
 	logs: LogReader
 	provider: ControlProvider
+	/** The run leases an approval writes under; absent, approvals answer 503. */
+	lock?: DeployLocks
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
 	catalogChanged?: () => void
@@ -123,6 +126,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
 		provider,
+		lock: locks(env),
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),
 		catalogChanged: () => scheduleOperationsCatalogChange(env),

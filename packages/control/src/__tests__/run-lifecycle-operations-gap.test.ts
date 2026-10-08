@@ -29,7 +29,7 @@ async function seedRun(db: ControlRepositories): Promise<string> {
 		providerArtifactJson: JSON.stringify(envelope('artifact')),
 	})
 	const runId = uuidv7()
-	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 	return runId
 }
 

@@ -149,7 +149,7 @@ export function leaseContract(database: () => SqlDatabase): void {
 				providerTargetJson: '{}',
 				providerArtifactJson: '{}',
 			})
-			await repositories.runs.createRun({ id: appId, appId, env: 'prod', ref: 'main', trigger: 'manual' })
+			await repositories.runs.createRun({ id: appId, appId, env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			const lease = await acquireLease(locks, key, clock)
 			if (lease === null) throw new Error('lease missing')
 			const staleFence = lease.fence()

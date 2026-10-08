@@ -144,6 +144,8 @@ export function fixture() {
 						if (refusePut) return Response.json({ error: { message: TOKEN } }, { status: 500 })
 						const environment = {
 							authoring: false,
+							protected: false,
+							publishedRunId: null,
 							...record(input['environment']),
 							appId: input['appId'],
 							env: input['env'],

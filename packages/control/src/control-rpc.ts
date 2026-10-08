@@ -60,12 +60,19 @@ import {
 	setAppSecretValueUseCase,
 	type VaultUseCaseContext,
 } from './api/vault'
+import {
+	type ApprovalUseCaseContext,
+	completeApprovalUseCase,
+	getApprovalUseCase,
+	listApprovalsUseCase,
+	setEnvironmentProtectionUseCase,
+} from './approval/api'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
 import { startSourceConnection } from './github/connections/manifest'
 import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
-import { appScope } from './iam'
+import { appScope, controlPublicOrigin } from './iam'
 import { jsonValueSchema } from './json-value'
 import { buildControlRpcDeps } from './services'
 
@@ -122,6 +129,14 @@ const appEnvironmentBody = z.object({
 	artifact: providerEnvelopeSchema,
 })
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
+const protectEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, protected: z.boolean() }).strict()
+const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
+const completeApprovalInput = z.object({
+	runId: nonEmpty,
+	decision: z.enum(['approve', 'reject']),
+	candidateDigest: accessDigest,
+	baselineDigest: accessDigest,
+}).strict()
 const secretBody = z.object({
 	name: nonEmpty,
 	value: z.string(),
@@ -239,6 +254,10 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 				delete: rpc.procedure.input(appEnvironment).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
 					controlCall(() => deleteAppEnvUseCase(registryContext(ctx), input.appId, input.env))
 				),
+				// `access.approve` is checked at the coordinates inside, with the human and origin rules (ADR-0050 §4).
+				protect: rpc.procedure.input(protectEnvironmentInput).mutation(({ ctx, input }) =>
+					controlCall(() => setEnvironmentProtectionUseCase(approvalContext(ctx), input))
+				),
 			}),
 			secrets: rpc.router({
 				list: rpc.procedure.input(appId).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
@@ -307,6 +326,13 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			),
 			cancel: rpc.procedure.input(runId).mutation(({ ctx, input }) => controlCall(() => cancelRunUseCase(runsContext(ctx), input.runId))),
 		}),
+		approvals: rpc.router({
+			list: rpc.procedure.query(({ ctx }) => controlCall(() => listApprovalsUseCase(approvalContext(ctx)))),
+			get: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getApprovalUseCase(approvalContext(ctx), input.runId))),
+			complete: rpc.procedure.input(completeApprovalInput).mutation(({ ctx, input }) =>
+				controlCall(() => completeApprovalUseCase(approvalContext(ctx), input))
+			),
+		}),
 		deploy: rpc.procedure.input(deployInput).mutation(({ ctx, input }) => controlCall(() => triggerDeployUseCase(runsContext(ctx), input))),
 		register: rpc.procedure.input(registerInput).require(ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => registerAppUseCase(registryContext(ctx), input))
@@ -347,6 +373,19 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 	function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
 		return { repositories: deps.repositories, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, auth: ctx.auth }
+	}
+
+	function approvalContext(ctx: ControlRpcContext): ApprovalUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		if (deps.lock === undefined) fail(503, 'approvals unavailable')
+		return {
+			repositories: deps.repositories,
+			auth: ctx.auth,
+			queue: deps.queue,
+			lock: deps.lock,
+			request: ctx.request,
+			publicOrigin: controlPublicOrigin(ctx.env),
+		}
 	}
 
 	function vaultContext(ctx: ControlRpcContext): VaultUseCaseContext {

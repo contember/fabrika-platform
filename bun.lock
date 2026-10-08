@@ -211,6 +211,7 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/check": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/github-app": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",

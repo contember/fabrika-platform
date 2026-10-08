@@ -23,6 +23,7 @@ import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
 import { Vault } from '../vault'
+import { memoryCommits } from './helpers/commits'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { fixtureNamespaceWrite, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
@@ -514,14 +515,14 @@ describe('app environment namespace assignment', () => {
 		expect((await deps.repositories.registry.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 		expect((await deps.repositories.registry.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 
-		await deps.repositories.runs.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
 			.toBe(409)
 		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).finish('pending-run', 'failed')
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
 			.toBe(200)
 
-		await deps.repositories.runs.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).finish('successful-run', 'succeeded', 0)
 		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('second') }), deps)).status)
 			.toBe(409)
@@ -973,11 +974,12 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
 		const run = 'run-alpha'
-		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const runDeps = {
 			...republishDeps(harness),
 			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
+			commits: memoryCommits(),
 		}
 		const release = Promise.withResolvers<void>()
 		const entered = Promise.withResolvers<void>()
@@ -1009,7 +1011,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
 		const run = 'run-alpha'
-		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		record.entered = () => {
 			void harness.deps.repositories.runs.requestRunCancellation(run)
 		}
@@ -1017,6 +1019,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			...republishDeps(harness),
 			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
+			commits: memoryCommits(),
 		}, { runId: run })
 
 		expect(result).toEqual({ runId: run, status: 'skipped' })
@@ -1029,6 +1032,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		...republishDeps(harness),
 		secrets: new VaultSecretResolver({}),
 		logs: { put: () => Promise.resolve() },
+		commits: memoryCommits(),
 	})
 
 	test('a deploy hands the proxy and the application the same proxy secret, generated once per environment (ADR-0022 rule 5)', async () => {
@@ -1039,7 +1043,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const proxySecrets = new VaultProxySecrets(harness.deps.repositories.registry, () => Promise.resolve(vault))
 		const deps = { ...runDepsOf(harness), proxySecrets }
 		for (const run of ['run-1', 'run-2']) {
-			await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+			await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			expect(await executeDeploy(deps, { runId: run })).toEqual({ runId: run, status: 'succeeded' })
 		}
 
@@ -1070,7 +1074,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const printed: string[] = []
 		const info = spyOn(console, 'info').mockImplementation((...args: unknown[]) => void printed.push(args.map(String).join(' ')))
 		try {
-			await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+			await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			const deps = {
 				...runDepsOf(harness),
 				logs: { put: (_key: string, contents: string) => Promise.resolve(void stored.push(contents)) },
@@ -1090,7 +1094,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const record = republishing()
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
-		await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		expect(await executeDeploy(runDepsOf(harness), { runId: 'run-1' })).toEqual({ runId: 'run-1', status: 'succeeded' })
 		expect(record.memberSecrets).toEqual([[undefined]])
 		expect(record.deploySecrets).toEqual([null])
@@ -1173,7 +1177,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const record = republishing()
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
-		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const resolving = Promise.withResolvers<void>()
 		record.resolving = resolving.promise
 		const deploy = executeDeploy(runDepsOf(harness), { runId: 'run-alpha' })
@@ -1201,7 +1205,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		record.fail = true
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
-		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 
 		expect(await executeDeploy(runDepsOf(harness), { runId: 'run-alpha' })).toEqual({ runId: 'run-alpha', status: 'failed' })
 		expect(record.deploys).toEqual([])
@@ -1213,7 +1217,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		const record = republishing()
 		const harness = makeDeps(republishingProvider(record))
 		await seed(harness)
-		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: 'run-alpha', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const { queue: _unused, ...withoutQueue } = runDepsOf(harness)
 
 		expect(await executeDeploy(withoutQueue, { runId: 'run-alpha' })).toEqual({ runId: 'run-alpha', status: 'failed' })

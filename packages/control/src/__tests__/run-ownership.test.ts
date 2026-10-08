@@ -5,6 +5,7 @@ import { acquireLease, LEASE_RENEW_MS, LEASE_TTL_MS } from '../lease'
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
 import { cancelDeploy, executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { memoryCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { flush, ManualClock, RecordingLocks } from './helpers/lease'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
@@ -15,7 +16,7 @@ async function fixture() {
 	const { db, d1 } = harness
 	await db.registry.createApp({ id: 'app', repoUrl: 'https://github.com/example/app' })
 	await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
-	const row = await db.runs.createRun({ id: 'run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	const row = await db.runs.createRun({ id: 'run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	const locks = new RecordingLocks(new SqlDeployLocks(d1, { now: clock.now }), clock)
 	const advance = (ms: number) => clock.advance(ms, locks.idle)
 	const provider: ControlProvider = { id: TEST_PROVIDER_ID, normalizeRegistration: (input) => input, deploy: async () => ({ state: 'succeeded' }) }
@@ -26,6 +27,7 @@ async function fixture() {
 		provider,
 		secrets: new VaultSecretResolver({}),
 		logs: { put: async () => {} },
+		commits: memoryCommits(),
 	}
 	return { ...harness, clock, locks, advance, deps, row }
 }
@@ -78,7 +80,7 @@ test('accepted unresolved work excludes another run after the invocation release
 		throw new Error('response lost')
 	}
 	expect(await executeDeploy(deps, { runId: 'run' })).toEqual({ runId: 'run', status: 'running' })
-	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'deferred' })
 	expect((await db.runs.getRun('next'))?.status).toBe('pending')
 })
@@ -140,7 +142,7 @@ test('a no-id crash is settled only after takeover, while pending queue work is 
 	const crashed = await acquireLease(locks, 'app:prod', clock)
 	if (crashed === null) throw new Error('lease missing')
 	expect(await db.runs.markRunStarted(row.id, 'logs', crashed.fence())).toBe(true)
-	await db.runs.createRun({ id: 'queued', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	await db.runs.createRun({ id: 'queued', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	expect(await reconcileProviderRuns(deps)).toMatchObject({ failed: 0 })
 	// The process dies: its lease is never renewed and never released.
 	locks.renewal = 'hanging'
@@ -257,7 +259,7 @@ test('the next deploy settles a run a dead holder left running, within one TTL a
 	expect(await db.runs.markRunStarted(row.id, 'logs', crashed.fence())).toBe(true)
 	// The process dies: its lease is never renewed and never released.
 	locks.renewal = 'hanging'
-	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'deferred' })
 	await advance(LEASE_TTL_MS)
 	locks.renewal = 'live'
@@ -278,7 +280,7 @@ test('the next deploy defers while the run it would settle still has external wo
 		return { state: 'running' }
 	}
 	expect(await executeDeploy(deps, { runId: row.id })).toEqual({ runId: row.id, status: 'running' })
-	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	await db.runs.createRun({ id: 'next', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	expect(await executeDeploy(deps, { runId: 'next' })).toEqual({ runId: 'next', status: 'deferred' })
 	expect(reconciled).toEqual(['version'])
 	deps.provider.reconcile = async () => ({ state: 'succeeded' })

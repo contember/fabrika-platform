@@ -263,6 +263,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 				ref: deployRef,
 				commitSha,
 				trigger: 'poll',
+				actor: 'poll',
 			})
 			await deps.queue.send({ runId: run.id })
 			await deps.repositories.polling.upsertRepoPollState({

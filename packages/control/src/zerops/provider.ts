@@ -27,6 +27,8 @@ import {
 import type { Env } from '../env'
 import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
 import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, type SourceUploadFetch } from '../github/source'
+import { type CommitSource, gitHubCommitSource } from '../github/source/commit-files'
+import { GitHubMetadataClient } from '../github/source/metadata'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]
@@ -82,6 +84,14 @@ export function zeropsGitHubSource(env: Env, seams: GitHubSourceSeams = {}): Zer
 		...(seams.downloadFetch === undefined ? {} : { downloadFetch: seams.downloadFetch }),
 		...(seams.uploadFetch === undefined ? {} : { uploadFetch: seams.uploadFetch }),
 	})
+}
+
+/** The files of a run's commit, for its access snapshot (ADR-0050), over the same GitHub transport as the source. */
+export function zeropsCommitSource(env: Env, seams: GitHubSourceSeams = {}): CommitSource {
+	return gitHubCommitSource(
+		new GitHubMetadataClient(seams.metadataFetch === undefined ? {} : { fetch: seams.metadataFetch }),
+		vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
+	)
 }
 
 /** Compose the only provider available in the process installation. */

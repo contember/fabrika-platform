@@ -50,6 +50,7 @@ export function toRunDto(row: RunRow): RunDto {
 		ref: row.ref,
 		commitSha: row.commit_sha,
 		trigger: row.trigger,
+		actor: row.actor,
 		status: row.status,
 		exitCode: row.exit_code,
 		externalRunId: row.external_run_id,
@@ -200,6 +201,7 @@ export async function createManualRun(
 		ref,
 		...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }),
 		trigger: 'manual',
+		actor: runActor(c.auth),
 	})
 	await c.queue.send({ runId: run.id })
 	await c.auth.audit({
@@ -209,6 +211,16 @@ export async function createManualRun(
 		metadata: { appId, env, ref, ...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }), trigger: 'manual' },
 	})
 	return toRunDto(run)
+}
+
+/**
+ * Who created a run (ADR-0050): the principal, and for an OAuth (MCP) token the user the client acts for, marked as
+ * such so a run an agent started is never mistaken for one the user started in the console.
+ */
+export function runActor(auth: AuthContext): string {
+	const principal = auth.principal
+	if (principal === null) return 'anonymous'
+	return auth.oauth === undefined ? `${principal.type}:${principal.id}` : `oauth:${principal.id}`
 }
 
 async function requireVisibleRun(c: RunReadContext, id: string, action: string): Promise<RunRow> {

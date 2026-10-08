@@ -37,7 +37,7 @@ import { vault } from '../services'
 import { HttpIamAdminGateway } from './iam-admin'
 import { controlMcpRoute, type McpRoute } from './mcp'
 import { HttpOperationsService } from './operations'
-import { type GitHubSourceSeams, zeropsControlProvider, zeropsGitHubSource } from './provider'
+import { type GitHubSourceSeams, zeropsCommitSource, zeropsControlProvider, zeropsGitHubSource } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -121,7 +121,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const sourceSeams = overrides.sourceSeams ?? {}
 	const controlRepositories = createControlRepositories(db)
 
-	const env: Env = {
+	const baseEnv: Env = {
 		DB: db,
 		REPOSITORIES: controlRepositories,
 		// SPA fallback on: the dashboard is client-routed, so `/apps/foo` must serve index.html.
@@ -148,6 +148,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	}
+	const env: Env = { ...baseEnv, COMMITS: zeropsCommitSource(baseEnv, sourceSeams) }
 
 	return {
 		env,

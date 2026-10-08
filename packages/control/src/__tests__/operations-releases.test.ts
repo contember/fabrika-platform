@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { replayOperationsReleases } from '../operations-releases'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { memoryCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
@@ -66,6 +67,7 @@ async function queuePayload(harness: ReturnType<typeof createHarness>, runId: st
 		ref: 'refs/heads/main',
 		commitSha: COMMIT,
 		trigger: 'manual',
+		actor: 'user:test',
 	})
 	await harness.repositories.operationsReleases.project(runId, raw)
 }
@@ -87,6 +89,7 @@ async function seed(harness: ReturnType<typeof createHarness>, commitSha: string
 		ref: 'refs/heads/main',
 		commitSha,
 		trigger: 'webhook',
+		actor: 'user:test',
 	})
 	return run.id
 }
@@ -296,6 +299,7 @@ describe('Control release projection', () => {
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
+			commits: memoryCommits(),
 			operations: { repository: harness.repositories.operationsReleases },
 		}
 
@@ -322,6 +326,7 @@ describe('Control release projection', () => {
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
+			commits: memoryCommits(),
 			operations,
 		}
 
@@ -366,6 +371,7 @@ describe('Control release projection', () => {
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
+			commits: memoryCommits(),
 			operations: {
 				repository: harness.repositories.operationsReleases,
 				syncKey: SYNC_KEY,
@@ -387,6 +393,7 @@ describe('Control release projection', () => {
 				secrets: new VaultSecretResolver({}),
 				lock: makeFakeLock(harness.repositories),
 				logs: { put: () => Promise.resolve() },
+				commits: memoryCommits(),
 				operations: {
 					repository: harness.repositories.operationsReleases,
 					syncKey: SYNC_KEY,

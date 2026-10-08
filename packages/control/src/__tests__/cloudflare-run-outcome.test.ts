@@ -8,6 +8,7 @@ import { type CloudflareRunnerService, recoverRunOnRunner, startRunOnRunner } fr
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { memoryCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { fixtureRuns, makeFakeLock } from './helpers/lock'
 
@@ -30,7 +31,7 @@ async function seedCloudflareRun(db: ControlRepositories): Promise<string> {
 		providerArtifactJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } }),
 	})
 	const runId = uuidv7()
-	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', commitSha: COMMIT })
+	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test', commitSha: COMMIT })
 	return runId
 }
 
@@ -77,7 +78,14 @@ function cloudflareProvider(runner: CloudflareRunnerService, iamCalls: string[],
 }
 
 function deps(db: ControlRepositories, provider: ControlProvider): RunDeps {
-	return { repositories: db, provider, secrets: new VaultSecretResolver({}), lock: makeFakeLock(db), logs: { put: () => Promise.resolve() } }
+	return {
+		repositories: db,
+		provider,
+		secrets: new VaultSecretResolver({}),
+		lock: makeFakeLock(db),
+		logs: { put: () => Promise.resolve() },
+		commits: memoryCommits(),
+	}
 }
 
 describe('Cloudflare run outcome through Control', () => {

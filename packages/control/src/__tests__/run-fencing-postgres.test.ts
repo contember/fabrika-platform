@@ -36,7 +36,7 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 			providerArtifactJson: envelope,
 		})
 		for (const id of ['runtime-first', 'runtime-next']) {
-			await repositories.runs.createRun({ id, appId, env: 'prod', ref: 'main', trigger: 'manual' })
+			await repositories.runs.createRun({ id, appId, env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		}
 		const deps: RunDeps = {
 			repositories,
@@ -93,8 +93,8 @@ describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 				providerTargetJson: '{}',
 				providerArtifactJson: '{}',
 			})
-			await runs.createRun({ id: 'takeover-race', appId: 'takeover-race', env: 'prod', ref: 'main', trigger: 'manual' })
-			await runs.createRun({ id: 'takeover-next', appId: 'takeover-race', env: 'prod', ref: 'main', trigger: 'manual' })
+			await runs.createRun({ id: 'takeover-race', appId: 'takeover-race', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+			await runs.createRun({ id: 'takeover-next', appId: 'takeover-race', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			await new SqlDeployLocks(mutationPool, { now: () => 100 }).acquire('takeover-race:prod', 'owner', 100)
 			// Pause the second batch statement inside Postgres, after the production code locked the lease row.
 			await fixture.db.prepare(`CREATE FUNCTION pause_fenced_run() RETURNS trigger LANGUAGE plpgsql AS $$

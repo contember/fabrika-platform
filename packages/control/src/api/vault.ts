@@ -52,7 +52,7 @@ async function writeAppSecretValue(
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
 		const { valueRef } = await putProviderSecret(target.secrets, {
-			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
+			environment: await providerEnvironment(c.repositories, target.appEnv),
 			name,
 			value: input.value,
 		})
@@ -107,7 +107,7 @@ export async function rotateAppSecretValueUseCase(
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
 		await putProviderSecret(target.secrets, {
-			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
+			environment: await providerEnvironment(c.repositories, target.appEnv),
 			name,
 			value: input.value,
 		})
@@ -144,7 +144,7 @@ export async function deleteAppSecretValueUseCase(
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
 		await target.secrets.delete({
-			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
+			environment: await providerEnvironment(c.repositories, target.appEnv),
 			name,
 		})
 		await c.auth.audit({

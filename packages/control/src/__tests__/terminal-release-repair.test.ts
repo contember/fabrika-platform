@@ -150,7 +150,15 @@ for (const backend of ['sqlite', 'postgres']) {
 		afterEach(async () => close())
 
 		async function seed(runId: string, payload: unknown = frozen(runId), clean = false): Promise<void> {
-			await repositories.runs.createRun({ id: runId, appId: 'notes', env: 'prod', ref: 'main', commitSha: COMMIT, trigger: 'manual' })
+			await repositories.runs.createRun({
+				id: runId,
+				appId: 'notes',
+				env: 'prod',
+				ref: 'main',
+				commitSha: COMMIT,
+				trigger: 'manual',
+				actor: 'user:test',
+			})
 			await repositories.operationsReleases.project(runId, JSON.stringify(payload))
 			if (clean) await repositories.operationsReleases.markApplied(runId, 1)
 		}
@@ -262,7 +270,15 @@ for (const backend of ['sqlite', 'postgres']) {
 		})
 
 		test('a run settled under the invocation suppresses its terminal projection, and repair sends it later', async () => {
-			await repositories.runs.createRun({ id: 'runner', appId: 'notes', env: 'prod', ref: 'main', commitSha: COMMIT, trigger: 'manual' })
+			await repositories.runs.createRun({
+				id: 'runner',
+				appId: 'notes',
+				env: 'prod',
+				ref: 'main',
+				commitSha: COMMIT,
+				trigger: 'manual',
+				actor: 'user:test',
+			})
 			const operations = { repository: repositories.operationsReleases, now: () => NOW_MS + 10_000 }
 			// The terminal write is refused because the row is already settled: the invocation projects nothing.
 			expect(
@@ -296,7 +312,15 @@ for (const backend of ['sqlite', 'postgres']) {
 					return super.project(runId, payloadJson)
 				}
 			}
-			await repositories.runs.createRun({ id: 'lost-write', appId: 'notes', env: 'prod', ref: 'main', commitSha: COMMIT, trigger: 'manual' })
+			await repositories.runs.createRun({
+				id: 'lost-write',
+				appId: 'notes',
+				env: 'prod',
+				ref: 'main',
+				commitSha: COMMIT,
+				trigger: 'manual',
+				actor: 'user:test',
+			})
 			expect(
 				(await executeDeploy({
 					repositories,

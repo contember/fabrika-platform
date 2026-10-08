@@ -69,8 +69,8 @@ describe('ACL enforcement (resolved auth context)', () => {
 		}
 		const alphaRun = uuidv7()
 		const betaRun = uuidv7()
-		await appRead.deps.repositories.runs.createRun({ id: alphaRun, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
-		await appRead.deps.repositories.runs.createRun({ id: betaRun, appId: 'beta', env: 'prod', ref: 'main', trigger: 'manual' })
+		await appRead.deps.repositories.runs.createRun({ id: alphaRun, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
+		await appRead.deps.repositories.runs.createRun({ id: betaRun, appId: 'beta', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 
 		expect((await rpcResult(rpcRequest('runs.get', { runId: alphaRun }), appRead.deps)).status).toBe(200)
 		expect((await rpcResult(rpcRequest('runs.get', { runId: betaRun }), appRead.deps)).status).toBe(404)

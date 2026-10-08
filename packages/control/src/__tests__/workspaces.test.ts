@@ -325,7 +325,14 @@ for (const backend of backends) {
 				const stranger = oauthUser(AUTHOR_ACTIONS, 'stranger@acme.test')
 				const theirs = await createWorkspaceUseCase(w.context(stranger), { appId: 'shop', env: 'stage', title: 'Theirs' })
 				const foreign = await deployStageUseCase(w.context(stranger), { workspaceId: theirs.id })
-				const prod = await w.repositories.runs.createRun({ id: uuidv7(), appId: 'shop', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+				const prod = await w.repositories.runs.createRun({
+					id: uuidv7(),
+					appId: 'shop',
+					env: 'prod',
+					ref: 'refs/heads/main',
+					trigger: 'manual',
+					actor: 'user:test',
+				})
 				for (const runId of [foreign.id, prod.id, 'missing']) {
 					await expect(getDeploymentUseCase(w.context(author), { runId })).rejects.toMatchObject({ httpStatus: 404 })
 				}

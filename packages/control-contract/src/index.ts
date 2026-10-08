@@ -185,6 +185,10 @@ export interface AppEnvDto {
 	triggerRef: string | null
 	/** An MCP authoring target (ADR-0049): users with `source.workspace.*` grants may edit and deploy it. */
 	authoring: boolean
+	/** A widening of access waits for a human's approval here (ADR-0050); `prod` is protected by default. */
+	protected: boolean
+	/** The run whose snapshot is this environment's active access; null until a run publishes one. */
+	publishedRunId: string | null
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto
@@ -386,7 +390,8 @@ export interface RegisterAppResponse {
 }
 
 export type RunTrigger = 'webhook' | 'manual' | 'poll'
-export type RunStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+/** `awaiting_approval`: the run widens access on a protected environment and waits for a human (ADR-0050). */
+export type RunStatus = 'pending' | 'running' | 'awaiting_approval' | 'succeeded' | 'failed'
 
 export interface RunDto {
 	id: string
@@ -395,6 +400,8 @@ export interface RunDto {
 	ref: string
 	commitSha: string | null
 	trigger: RunTrigger
+	/** Who created the run: `user:<id>`, `service:<id>`, `oauth:<id>` (an MCP client acting for a user), `webhook:<connection>` or `poll`. */
+	actor: string | null
 	status: RunStatus
 	exitCode: number | null
 	externalRunId: string | null
@@ -402,6 +409,42 @@ export interface RunDto {
 	createdAt: number
 	startedAt: number | null
 	finishedAt: number | null
+}
+
+/** One plain-language line of an access change; `widens` when it can grant access the baseline did not. */
+export interface AccessChangeDto {
+	widens: boolean
+	line: string
+}
+
+/** A run's access change against its environment's active snapshot (ADR-0050 §3). */
+export interface ApprovalDto {
+	run: RunDto
+	outcome: 'unchanged' | 'removal' | 'widening'
+	changes: AccessChangeDto[]
+	/** The digest of the run's snapshot and of the active one it was compared with: an approval is bound to both. */
+	candidateDigest: string
+	baselineDigest: string
+	/** The published run the change was compared with; null when nothing was published. */
+	baselineRunId: string | null
+	protected: boolean
+	/** The human who approved it, once one did. */
+	approval: { principalId: string; label: string; approvedAt: number } | null
+}
+
+/** Approve or refuse one parked run. The digests are the ones the approver read; a reclassified run refuses them. */
+export interface CompleteApprovalRequest {
+	runId: string
+	decision: 'approve' | 'reject'
+	candidateDigest: string
+	baselineDigest: string
+}
+
+/** Change whether a widening waits for approval on one environment (ADR-0050 §4). */
+export interface SetEnvironmentProtectionRequest {
+	appId: string
+	env: string
+	protected: boolean
 }
 
 export interface TriggerDeployRequest {

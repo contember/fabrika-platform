@@ -30,6 +30,8 @@ const treeEntrySchema = z.object({
 	z.object({ type: z.literal('blob'), mode: z.enum(['100644', '100755', '120000']) }),
 ]))
 
+type TreeEntry = z.infer<typeof treeEntrySchema>
+
 export type GitHubMetadataFetch = (
 	input: string | URL | Request,
 	init?: RequestInit,
@@ -73,35 +75,59 @@ export class GitHubMetadataClient {
 
 	/** Git trees retain gitlinks even when export attributes hide .gitmodules from the tarball. */
 	async validatePlatformTree(repository: SourceRepository, commitSha: string, signal: AbortSignal): Promise<void> {
-		if (!OBJECT_ID_PATTERN.test(commitSha)) throw rejected('archive')
-		const commit = await this.readCommit(repository, commitSha, undefined, signal, 'archive')
-		if (commit.sha !== commitSha) throw new SourceFailure('commit_mismatch', 'archive')
-		if (commit.treeSha === undefined) throw rejected('archive')
+		const paths = await this.readTree(repository, commitSha, undefined, signal, 'archive')
+		for (const path of paths.keys()) {
+			const separator = path.lastIndexOf('/')
+			if (separator !== -1 && paths.get(path.slice(0, separator))?.type !== 'tree') throw rejected('archive')
+		}
+	}
+
+	/** Every regular file of an exact commit (a symbolic link is not one), repository-relative. */
+	async commitFiles(
+		repository: SourceRepository,
+		commitSha: string,
+		token: string | undefined,
+		signal: AbortSignal,
+		stage: GitHubMetadataStage,
+	): Promise<ReadonlySet<string>> {
+		const entries = await this.readTree(repository, commitSha, token, signal, stage)
+		return new Set([...entries].filter(([, entry]) => entry.type === 'blob' && entry.mode !== '120000').map(([path]) => path))
+	}
+
+	/** The whole recursive tree of an exact commit; a truncated, oversized or malformed one is refused. */
+	private async readTree(
+		repository: SourceRepository,
+		commitSha: string,
+		token: string | undefined,
+		signal: AbortSignal,
+		stage: GitHubMetadataStage,
+	): Promise<Map<string, TreeEntry>> {
+		if (!OBJECT_ID_PATTERN.test(commitSha)) throw rejected(stage)
+		const commit = await this.readCommit(repository, commitSha, token, signal, stage)
+		if (commit.sha !== commitSha) throw new SourceFailure('commit_mismatch', stage)
+		if (commit.treeSha === undefined) throw rejected(stage)
 		const parsed = await this.requestJson(
 			`${prefix(repository)}/git/trees/${commit.treeSha}?recursive=1`,
-			undefined,
+			token,
 			signal,
-			'archive',
+			stage,
 			GITHUB_TREE_MAX_RESPONSE_BYTES,
 		)
 		const result = treeResponseSchema.safeParse(parsed)
 		if (!result.success || result.data.sha !== commit.treeSha) {
-			throw rejected('archive')
+			throw rejected(stage)
 		}
 		const entries = result.data.tree
-		if (entries.length > SOURCE_MAX_TREE_ENTRIES) throw new SourceFailure('archive_rejected', 'archive')
-		const paths = new Map<string, 'blob' | 'tree'>()
+		if (entries.length > SOURCE_MAX_TREE_ENTRIES) throw new SourceFailure('archive_rejected', stage)
+		const paths = new Map<string, TreeEntry>()
 		for (const entry of entries) {
 			const result = treeEntrySchema.safeParse(entry)
-			if (!result.success) throw rejected('archive')
-			const { path, type } = result.data
-			if (!safeRepositoryPath(path) || paths.has(path)) throw rejected('archive')
-			paths.set(path, type)
+			if (!result.success) throw rejected(stage)
+			const { path } = result.data
+			if (!safeRepositoryPath(path) || paths.has(path)) throw rejected(stage)
+			paths.set(path, result.data)
 		}
-		for (const path of paths.keys()) {
-			const separator = path.lastIndexOf('/')
-			if (separator !== -1 && paths.get(path.slice(0, separator)) !== 'tree') throw rejected('archive')
-		}
+		return paths
 	}
 
 	private async readCommit(
@@ -155,13 +181,27 @@ export class GitHubMetadataClient {
 		signal: AbortSignal,
 		stage: GitHubMetadataStage,
 	): Promise<Uint8Array> {
+		return await this.readFileAtCommit(repository, rule.path, rule.maxBytes, commitSha, token, signal, stage)
+	}
+
+	/** Read one file at an exact commit, bounded; a missing file is `descriptor_missing`. */
+	async readFileAtCommit(
+		repository: SourceRepository,
+		path: string,
+		maxBytes: number,
+		commitSha: string,
+		token: string | undefined,
+		signal: AbortSignal,
+		stage: GitHubMetadataStage,
+	): Promise<Uint8Array> {
+		if (!safeRepositoryPath(path) || !OBJECT_ID_PATTERN.test(commitSha)) throw rejected(stage)
 		return await this.request(
-			`${prefix(repository)}/contents/${rule.path}?ref=${encodeURIComponent(commitSha)}`,
+			`${prefix(repository)}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(commitSha)}`,
 			GITHUB_RAW_ACCEPT,
 			token,
 			signal,
 			stage,
-			rule.maxBytes,
+			maxBytes,
 			() => new SourceFailure('archive_rejected', stage),
 			() => new SourceFailure('descriptor_missing', stage),
 		)

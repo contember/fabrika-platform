@@ -1,0 +1,144 @@
+// The approval surface (ADR-0050 §4–§5): parked runs behind `access.approve`, completed only by a human user
+// principal from the console, and the `protected` flag changed by the same rule. The user-principal and action
+// checks are authorization; the same-origin check is admission (docs/reference/overview.md).
+
+import type { AuthContext } from '@fabrika/auth'
+import type { AppEnvDto, ApprovalDto, CompleteApprovalRequest, ListResponse, SetEnvironmentProtectionRequest } from '@fabrika/control-contract'
+import type { DeployLocks } from '@fabrika/platform'
+import { ACTIONS } from '../actions'
+import { fail } from '../api/domain'
+import { toAppEnvDto } from '../api/registry/registration'
+import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
+import type { ControlRepositories, RunRow } from '../db'
+import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
+import { sameOrigin } from '../origin-guard'
+import { parseApproval, parseClassification, type StoredApproval } from './publish'
+
+export interface ApprovalUseCaseContext {
+	readonly repositories: ControlRepositories
+	readonly auth: AuthContext
+	readonly queue: DeployQueue
+	readonly lock: DeployLocks
+	readonly leaseClock?: LeaseClock
+	/** The request itself: an approval is admitted only from the console's own origin. */
+	readonly request: Request
+	/** The console's configured public origin (`controlPublicOrigin`); absent refuses every approval. */
+	readonly publicOrigin: string | undefined
+	readonly now?: () => number
+}
+
+const LIST_LIMIT = 100
+
+export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
+	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
+	return { items: rows.filter((row) => mayApprove(c.auth, row)).map(toApprovalDto) }
+}
+
+export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
+	return toApprovalDto(await requireClassifiedRun(c, runId))
+}
+
+/**
+ * Approve or refuse one parked run. Only a human user principal, on a console request from its own origin, holding
+ * `access.approve` at the run's coordinates; the approval names the two digests the approver read, so a run that was
+ * classified again since refuses it. An approved run is queued again and classified once more before it publishes.
+ */
+export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: CompleteApprovalRequest): Promise<ApprovalDto> {
+	const approver = requireHumanApprover(c)
+	const run = await requireClassifiedRun(c, input.runId)
+	if (run.status !== 'awaiting_approval' || run.classification_json === null) fail(409, 'the run is not waiting for approval')
+	const classification = parseClassification(run.classification_json)
+	if (classification.candidateDigest !== input.candidateDigest || classification.baselineDigest !== input.baselineDigest) {
+		fail(409, 'the change was classified again since it was read; reload it and decide again')
+	}
+	const lease = await acquireLease(c.lock, runLeaseKey(run.app_id, run.env), c.leaseClock)
+	if (lease === null) fail(409, 'the environment is deploying; try again in a moment')
+	try {
+		const fence = lease.fence()
+		const approval: StoredApproval = {
+			principalId: approver.id,
+			label: approver.label,
+			approvedAt: (c.now ?? (() => Math.floor(Date.now() / 1000)))(),
+			candidateDigest: classification.candidateDigest,
+			baselineDigest: classification.baselineDigest,
+		}
+		const changed = input.decision === 'approve'
+			? await c.repositories.runs.approveParkedRun(run.id, run.classification_json, JSON.stringify(approval), fence)
+			: await c.repositories.runs.rejectParkedRun(run.id, run.classification_json, fence)
+		if (!changed) fail(409, 'the run is not waiting for approval')
+	} finally {
+		await lease.release()
+	}
+	await c.auth.audit({
+		action: ACTIONS.ACCESS_APPROVE,
+		resourceType: 'run',
+		resourceId: run.id,
+		metadata: {
+			appId: run.app_id,
+			env: run.env,
+			decision: input.decision,
+			candidateDigest: classification.candidateDigest,
+			baselineDigest: classification.baselineDigest,
+		},
+	})
+	if (input.decision === 'approve') await c.queue.send({ runId: run.id })
+	return toApprovalDto(await requireClassifiedRun(c, run.id))
+}
+
+/** Set an environment's `protected` flag: the same human rule as approving, and audited (ADR-0050 §4). */
+export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
+	requireHumanApprover(c)
+	if (!canAtCoordinates(c.auth, ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
+	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
+	if (before === null) fail(404, 'app env not found')
+	const row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected)
+	if (row === null) fail(404, 'app env not found')
+	await c.auth.audit({
+		action: 'access.protect',
+		resourceType: 'app_env',
+		resourceId: `${input.appId}/${input.env}`,
+		metadata: { appId: input.appId, env: input.env, from: before.protected === 1, to: input.protected },
+	})
+	return toAppEnvDto(row)
+}
+
+/**
+ * The caller is a person in the console: a user principal on a session, not a key (`Authorization`), an OAuth (MCP)
+ * token or a share link, on a request from the console's own origin. A service principal, the builder key and any
+ * agent credential are refused whatever they carry (ADR-0050 §5).
+ */
+function requireHumanApprover(c: ApprovalUseCaseContext): { readonly id: string; readonly label: string } {
+	const principal = c.auth.principal
+	if (principal === null || principal.type !== 'user' || c.auth.oauth !== undefined || c.auth.link !== undefined) {
+		fail(403, 'only a person signed in to the console can approve an access change')
+	}
+	if (c.request.headers.get('Authorization') !== null) fail(403, 'an access change is approved in the console, not with a key')
+	if (!sameOrigin(c.request, c.publicOrigin)) fail(403, 'an access change is approved from the console itself')
+	return { id: principal.id, label: principal.label }
+}
+
+function mayApprove(auth: AuthContext, run: RunRow): boolean {
+	return canAtCoordinates(auth, ACTIONS.ACCESS_APPROVE, run.app_id, run.env)
+}
+
+async function requireClassifiedRun(c: ApprovalUseCaseContext, runId: string): Promise<RunRow> {
+	const run = await c.repositories.runs.getRun(runId)
+	if (run === null || run.classification_json === null || !mayApprove(c.auth, run)) fail(404, 'approval not found')
+	return run
+}
+
+function toApprovalDto(run: RunRow): ApprovalDto {
+	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
+	const classification = parseClassification(run.classification_json)
+	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
+	return {
+		run: toRunDto(run),
+		outcome: classification.outcome,
+		changes: classification.changes.map((change) => ({ widens: change.widens, line: change.line })),
+		candidateDigest: classification.candidateDigest,
+		baselineDigest: classification.baselineDigest,
+		baselineRunId: classification.baselineRunId,
+		protected: classification.protected,
+		approval: approval === null ? null : { principalId: approval.principalId, label: approval.label, approvedAt: approval.approvedAt },
+	}
+}

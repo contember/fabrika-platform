@@ -470,10 +470,13 @@ export class BuilderPlatform {
 					? 'Deployment succeeded. The configured URL has not been checked for reachability.'
 					: run.status === 'failed'
 					? 'Platform deployment failed. See the console for details.'
+					: run.status === 'awaiting_approval'
+					? 'The deployment changes access on a protected environment and waits for a person to approve it in the console.'
 					: 'Platform deployment is in progress.',
 			}
 			this.storage.saveProject(project)
-			if (terminal) return
+			// A parked run waits for a person, not for the platform; the builder key cannot approve it.
+			if (terminal || run.status === 'awaiting_approval') return
 			await this.sleep(3000, signal)
 		}
 		throw new ObservationError('Deployment polling timed out. Inspect the saved run in the platform console.')

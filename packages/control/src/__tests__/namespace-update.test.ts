@@ -668,7 +668,7 @@ describe('a namespace whose update is unconfirmed', () => {
 			providerTargetJson: opaque,
 			providerArtifactJson: opaque,
 		})
-		await harness.deps.repositories.runs.createRun({ id: 'run-notes', appId: 'notes', env: 'prod', ref: 'main', trigger: 'manual' })
+		await harness.deps.repositories.runs.createRun({ id: 'run-notes', appId: 'notes', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const logged = spyOn(console, 'error')
 
 		try {

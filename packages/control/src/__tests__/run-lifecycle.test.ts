@@ -18,6 +18,7 @@ import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
+import { memoryCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureCatalogApplied, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
@@ -102,6 +103,7 @@ async function seedRun(
 		ref: 'refs/heads/deploy/prod',
 		...(options.commitSha === undefined ? {} : { commitSha: options.commitSha }),
 		trigger: 'manual',
+		actor: 'user:test',
 	})
 	if (options.externalId !== undefined) {
 		const owned = fixtureRuns(db.runs, makeFakeLock(db))
@@ -185,7 +187,7 @@ function makeDeps(
 	secrets: SecretResolver = vaultSecrets,
 	lock = makeFakeLock(db),
 ): RunDeps {
-	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() } }
+	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() }, commits: memoryCommits() }
 }
 
 function memoryLogs(
@@ -798,6 +800,7 @@ describe('provider-neutral run lifecycle', () => {
 			env: 'prod',
 			ref: 'refs/heads/deploy/prod',
 			trigger: 'manual',
+			actor: 'user:test',
 		})
 		const dsn = await activateOperationsIngest(db)
 		const activeInputs: ProviderDeployInput[] = []
@@ -845,6 +848,7 @@ describe('provider-neutral run lifecycle', () => {
 			env: 'prod',
 			ref: 'refs/heads/deploy/prod',
 			trigger: 'manual',
+			actor: 'user:test',
 			commitSha: null,
 		})
 		const refused: ProviderDeployInput[] = []
@@ -956,7 +960,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
 		})
 		const secondRunId = uuidv7()
-		await db.runs.createRun({ id: secondRunId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual' })
+		await db.runs.createRun({ id: secondRunId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual', actor: 'user:test' })
 		const moved: ProviderDeployInput[] = []
 		expect((await executeDeploy(makeDeps(db, makeProvider(moved, { state: 'succeeded' })), { runId: secondRunId })).status).toBe(
 			'succeeded',
@@ -1042,7 +1046,7 @@ describe('provider-neutral run lifecycle', () => {
 		}
 		const deploy = async (): Promise<string> => {
 			const runId = uuidv7()
-			await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 			return (await executeDeploy(makeDeps(db, provider), { runId })).status
 		}
 
@@ -1075,7 +1079,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
 		})
 		const runId = uuidv7()
-		await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const inputs: ProviderDeployInput[] = []
 		const provider: ControlProvider = {
 			...makeProvider(inputs, { state: 'succeeded' }),
@@ -1102,7 +1106,7 @@ describe('provider-neutral run lifecycle', () => {
 		).toBe('skipped')
 
 		const pendingId = uuidv7()
-		await db.runs.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const lock = makeFakeLock(db)
 		await lock.acquire('app:prod', 'other-run', 60_000)
 		expect(

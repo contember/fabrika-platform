@@ -32,6 +32,8 @@ const environmentsSchema = z.object({
 		publicOrigin: storedTextSchema.nullable(),
 		triggerRef: storedTextSchema.nullable(),
 		authoring: z.boolean(),
+		protected: z.boolean(),
+		publishedRunId: storedTextSchema.nullable(),
 		namespaceId: storedTextSchema.nullable(),
 		provider: storedTextSchema,
 		target: envelopeSchema,
@@ -45,7 +47,7 @@ const runSchema = z.object({
 	env: storedTextSchema,
 	ref: storedTextSchema,
 	commitSha: storedTextSchema.nullable(),
-	status: z.enum(['pending', 'running', 'succeeded', 'failed']),
+	status: z.enum(['pending', 'running', 'awaiting_approval', 'succeeded', 'failed']),
 })
 
 export async function boundedJson(response: Response): Promise<unknown> {

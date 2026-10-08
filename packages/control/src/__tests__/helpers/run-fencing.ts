@@ -16,7 +16,7 @@ export function runFencingContract(database: () => SqlDatabase): void {
 		const second = `${appId}-second`
 		const stage = `${appId}-stage`
 		for (const { id, env } of [{ id: first, env: 'prod' }, { id: second, env: 'prod' }, { id: stage, env: 'stage' }]) {
-			await runs.createRun({ id, appId, env, ref: 'main', trigger: 'manual' })
+			await runs.createRun({ id, appId, env, ref: 'main', trigger: 'manual', actor: 'user:test' })
 		}
 		const locks = (now: number) => new SqlDeployLocks(sql, { now: () => now })
 		const key = `${appId}:prod`

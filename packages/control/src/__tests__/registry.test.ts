@@ -630,9 +630,9 @@ describe('run history API', () => {
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment('b', 'prod'))
 		const r1 = uuidv7()
-		await deps.repositories.runs.createRun({ id: r1, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: r1, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const r2 = uuidv7()
-		await deps.repositories.runs.createRun({ id: r2, appId: 'b', env: 'prod', ref: 'main', trigger: 'webhook' })
+		await deps.repositories.runs.createRun({ id: r2, appId: 'b', env: 'prod', ref: 'main', trigger: 'webhook', actor: 'user:test' })
 
 		const all = await rpcResult(rpcRequest('runs.list', {}), deps)
 		const allBody = (await all.json()) as { items: { id: string }[] }
@@ -652,7 +652,7 @@ describe('run history API', () => {
 		await deps.repositories.registry.createApp({ id: 'a', repoUrl: 'r' })
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
-		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).start(runId, logsKey(runId))
 		// Stage two log lines in the fake R2 under the run's log key.
 		logStore.set(
@@ -684,7 +684,7 @@ describe('run history API', () => {
 		await deps.repositories.registry.createApp({ id: 'a', repoUrl: 'r' })
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
-		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		await fixtureRuns(deps.repositories.runs, makeFakeLock(deps.repositories)).start(runId, logsKey(runId))
 
 		const cancelled = await rpcResult(rpcRequest('runs.cancel', { runId }), deps)

@@ -21,6 +21,7 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
+import type { CommitSource } from './github/source/commit-files'
 import type { ControlJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -57,6 +58,11 @@ export interface Env {
 	IAM_ADMIN?: HttpService
 	/** Private Operations transport shared by catalog projection and the console operator gateway. */
 	OPERATIONS?: HttpService
+	/**
+	 * The files of a run's pinned commit, through the app's GitHub connection: where Control reads the access snapshot
+	 * (ADR-0050). Each composition root builds it; a deploy with a pinned commit fails without it.
+	 */
+	COMMITS?: CommitSource
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string

@@ -42,6 +42,11 @@ export const ACTIONS = {
 	SOURCE_WORKSPACE_WRITE: 'source.workspace.write',
 	/** Open a pull request from one's own workspace to the default branch. Scoped by app/environment. */
 	SOURCE_PULL_REQUEST_CREATE: 'source.pull-request.create',
+	/**
+	 * Approve a widening of an environment's access and change its `protected` flag (ADR-0050). Outside `deploy.*`, so
+	 * the operator role does not hold it; only a human user principal in the console may use it. Scoped by app/environment.
+	 */
+	ACCESS_APPROVE: 'access.approve',
 } as const
 
 export type VozkaAction = (typeof ACTIONS)[keyof typeof ACTIONS]

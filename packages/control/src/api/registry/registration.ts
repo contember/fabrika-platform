@@ -218,6 +218,8 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		publicOrigin: row.public_origin,
 		triggerRef: row.trigger_ref,
 		authoring: row.authoring === 1,
+		protected: row.protected === 1,
+		publishedRunId: row.published_run_id,
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),

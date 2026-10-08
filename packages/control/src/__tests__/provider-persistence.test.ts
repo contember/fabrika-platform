@@ -33,7 +33,7 @@ describe('generic provider persistence', () => {
 		const { db, sqlite } = createHarness(() => now)
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(appEnvironment('app', 'prod'))
-		const run = await db.runs.createRun({ id: 'run-1', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		const run = await db.runs.createRun({ id: 'run-1', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 		const owned = fixtureRuns(db.runs, makeFakeLock(db))
 		await owned.start(run.id, 'runs/run-1/logs.ndjson')
 

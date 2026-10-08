@@ -31,6 +31,7 @@ import {
 	type ProviderNamespaceUpdatePlan,
 	type ProviderNamespaceUpdates,
 } from '@fabrika/provider-contract'
+import { approvedProviderAccess } from '../approval/snapshot'
 import {
 	type ControlRepositories,
 	type DeploymentNamespaceRow,
@@ -363,7 +364,10 @@ async function writeNamespace(
 	)
 }
 
-/** Every app environment the namespace's entry point routes, read under its lease, with the secret its proxy sends. */
+/**
+ * Every app environment the namespace's entry point routes, read under its lease, with the secret its proxy sends and
+ * its approved access: the proxy table of a contract application comes from `approvedSnapshot`, never from its artifact (ADR-0050).
+ */
 async function namespaceMembers(
 	deps: Pick<NamespaceJobDeps, 'repositories' | 'proxySecrets'>,
 	namespaceId: string,
@@ -371,12 +375,14 @@ async function namespaceMembers(
 	const members: ProviderNamespaceMember[] = []
 	for (const row of await deps.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
 		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)
+		const access = await approvedProviderAccess(deps.repositories, row)
 		members.push({
 			appId: row.app_id,
 			env: row.env,
 			...(row.domain === null ? {} : { domain: row.domain }),
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			...(proxySecret === undefined ? {} : { proxySecret }),
+			...(access === undefined ? {} : { access }),
 		})
 	}
 	return members

@@ -11,6 +11,8 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		publicOrigin: null,
 		triggerRef: '',
 		authoring: false,
+		protected: false,
+		publishedRunId: null,
 		namespaceId: null,
 		provider: 'zerops',
 		target: envelope,

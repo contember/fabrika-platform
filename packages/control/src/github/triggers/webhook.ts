@@ -62,6 +62,7 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 				ref: push.ref,
 				commitSha: push.commitSha,
 				trigger: 'webhook',
+				actor: `webhook:${deps.connectionId}`,
 			})
 			await deps.queue.send({ runId: run.id })
 			triggered.push(run.id)
