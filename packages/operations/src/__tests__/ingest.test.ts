@@ -117,4 +117,28 @@ describe('Sentry-compatible ingest kernel', () => {
 		expect(event?.tags).toEqual({ region: 'eu' })
 		expect(Object.keys(event?.tags ?? {})).toEqual(['region'])
 	})
+
+	test('redacts URL fragments, Authorization headers and px_ credentials before anything reads the event', () => {
+		const key = 'px_0123456789abcdefABCDEF_-xyz'
+		const event = buildParsedEvent('app-web', {
+			message: 'm',
+			exception: { values: [{ type: 'Error', value: `bad key ${key} at https://notes.test/s/#${key}` }] },
+			request: {
+				url: `https://notes.test/s/#${key}`,
+				headers: { Authorization: 'Bearer eyJ.secret', Accept: 'text/html' },
+			},
+			breadcrumbs: { values: [{ data: { url: '/s/#token', headers: [['authorization', 'Basic abc'], ['x-other', 'kept']] } }] },
+		}, 100)
+		const stored = JSON.stringify(event?.raw)
+		expect(stored).not.toContain(key)
+		expect(stored).not.toContain('eyJ.secret')
+		expect(stored).not.toContain('Basic abc')
+		expect(stored).not.toContain('#token')
+		expect(stored).toContain('kept')
+		expect(event?.exception.value).toBe('bad key px_[redacted] at https://notes.test/s/#[redacted]')
+		expect(event?.raw['request']).toEqual({
+			url: 'https://notes.test/s/#[redacted]',
+			headers: { Authorization: '[redacted]', Accept: 'text/html' },
+		})
+	})
 })

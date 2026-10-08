@@ -40,6 +40,11 @@ the console's app id, not `OPERATIONS_APP_ID` — see
 [`backlog 54`](../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md).
 Operations evaluates no gate, writes no cookie, and never produces a login URL.
 
+Ingest redacts before it parses (`src/redact.ts`, called by `buildParsedEvent`): every URL fragment,
+every `Authorization` header (an object key or a `[name, value]` pair) and every `px_` credential pattern
+is replaced in the raw payload, so no title, culprit, fingerprint or stored blob carries one. A share link
+travels as `/s/#<key>`; the fragment rule is what keeps it out of Operations.
+
 Exact occurrence counts come from the append-only SQL occurrence index. Do not
 replace that correctness source with sampled Analytics Engine data. Blob storage
 holds raw bodies, while SQL indexes every event, source map, and dead event; the

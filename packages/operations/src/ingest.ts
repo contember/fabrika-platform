@@ -1,5 +1,6 @@
 import type { ParsedEvent, ParsedException, StackFrame } from '@fabrika/operations-contract/ingest'
 import { envelopeItemSchema, type SentryEvent, sentryEventSchema, type SentryException } from './event-schemas.js'
+import { redactEventPayload } from './redact.js'
 
 export interface ParsedEnvelope {
 	eventPayload: Record<string, unknown> | null
@@ -151,9 +152,10 @@ function parseJsonRecord(bytes: Uint8Array, message: string): Record<string, unk
 
 export function buildParsedEvent(
 	projectId: string,
-	eventPayload: Record<string, unknown>,
+	untrustedPayload: Record<string, unknown>,
 	receivedAt: number = Date.now(),
 ): ParsedEvent | null {
+	const eventPayload = redactEventPayload(untrustedPayload)
 	const event = sentryEventSchema.parse(eventPayload)
 	const exception = exceptionOf(event)
 	if (!exception) return null
