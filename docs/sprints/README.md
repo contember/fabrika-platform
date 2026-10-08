@@ -20,7 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 - [MCP application authoring](sprint-2026-10-07-mcp-authoring.md) — employees author apps from Claude/ChatGPT through MCP in Control: Git workspaces, stage deploys, pull requests; Zerops first. Decisions in ADR-0049.
-- [A-M1 — framework core](sprint-2026-10-08-a-m1-framework-core.md) — the contract, `implement`, generated gates, the checker.
 - [A-M2 — data](sprint-2026-10-08-a-m2-data.md) — `@fabrika/db`, migrations, locators, isolation tests.
 - [B-M1 — binding contract](sprint-2026-10-08-b-m1-binding-contract.md) — endpoint tables at the proxy, IAM restrictions, approval.
 - [A-M3 — multi-tenant](sprint-2026-10-08-a-m3-multi-tenant.md) — members, share links, forms, webhooks.

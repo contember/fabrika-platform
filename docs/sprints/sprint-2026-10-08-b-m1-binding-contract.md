@@ -45,3 +45,6 @@ B1 ∥ B5; A3 → B2 → B3 → B4; B1 + B2 → B6.
 - 2026-10-08: B1 landed after one fix round: the reader refuses import mappings that can redirect `@fabrika/*`,
   `zod` or `bun`, ambiguous and directory imports, forward references and import cycles, and bounds its work
   (`CONTRACT_LIMITS`). Paired source/runtime fixtures prove each refused case diverges in Bun.
+- 2026-10-09: B2 landed after one fix round: the digest covers the delegation; delegation grants are obtained on
+  both providers (new IAM route `POST /auth/mint/delegation` for the Zerops proxy); one caller-kind mapping
+  (`callerOf`). Decision: contract apps are always behind their endpoint table; generated gates removed.

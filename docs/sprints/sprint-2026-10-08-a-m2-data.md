@@ -40,3 +40,7 @@ A8a → A9; A8a + A3 → A8b → A10 → A11.
   that patches built-ins used while building the query (documented in `packages/db/CLAUDE.md`).
 - 2026-10-08: A9 landed after one fix round: the runner refuses transaction-control and setting statements lexically
   and verifies the transaction and settings after each file. Squawk and destructive-migration rules are deferred.
+- 2026-10-09: A8b landed after one fix round: the data layer binds only through framework-owned state
+  (`@fabrika/db/framework`, refused for applications by the checker); the locator is framework-only.
+- 2026-10-09: A10 landed after one fix round: a `Within` carries its container grants and the store judges them in
+  the same statement (a moved scope is out of reach); at most 1000 values per `Within`.

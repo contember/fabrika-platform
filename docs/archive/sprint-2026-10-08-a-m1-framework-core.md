@@ -1,3 +1,11 @@
+> **OUTCOME — shipped 2026-10-09.** Applications are written against a literal contract: `defineContract` and
+> `compileContract` (canonical artifact), `implement` and `boot` with in-process authorization and admission, a typed
+> client, a test kit that runs proxy-core's real decision, `schemaFromContract` for IAM, and `@fabrika/check`. Every
+> work unit had an independent review and one or two fix rounds. Verification: full `bun run test` with Postgres and S3
+> at each merge (last: 5479 pass, 38 skip — live Zerops only, 0 fail), `bun run local:reset && bun run local:smoke`
+> passed (run `01a11dc3-9c6f-708a-afa7-3e669814a615`). Superseded in the same run: generated gates (A4) — B2 serves
+> every contract application behind its endpoint table. Deferred: the examples move to contracts in A17.
+
 # Sprint — A-M1: framework core (2026-10-08)
 
 **Goal.** Applications written against the contract on both clouds, with generated gates, in-process checks and a
@@ -56,3 +64,8 @@ A1 → A2 → A3 → {A4, A5, A6}; A7 independent.
   (`<app>@<env>`) and refuses to boot when its app part differs from the contract; capabilities resolve to frozen
   copies; every 5xx answers a fixed body; the generated entrypoint scrubs `FABRIKA_*` before importing the app;
   union outputs project through the first accepting branch. `handlers` is a function of `deps`.
+- 2026-10-09: A4 landed after one fix round (wildcards and reserved role keys refused at the artifact parser;
+  `creates` only for top-level dimensions). B2 then removed `gatesFromContract`: a contract app requires the proxy's
+  `X-Fabrika-Endpoint`, so it is always served behind its endpoint table.
+- 2026-10-09: A5+A6 landed after one fix round: the kit runs proxy-core's verify service; production code cannot
+  import the kit (`test-only-import`); keys go only to the same origin in a browser; the token size limit is shared.
