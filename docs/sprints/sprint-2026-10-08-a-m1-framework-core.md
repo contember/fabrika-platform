@@ -52,3 +52,7 @@ A1 → A2 → A3 → {A4, A5, A6}; A7 independent.
   string checks, defaulted discriminators and boolean coercion are refused; the artifact is canonical
   (`canonicalArtifactJson` in auth-core); `compileContract` parses its own result. Open for A13: webhook bodies parse
   with a stripping schema. Open for A8b: table policies as data from a browser-safe `@fabrika/db` subpath.
+- 2026-10-08: A3 landed after one fix round: the app verifies the token audience against `FABRIKA_IAM_APP_ID`
+  (`<app>@<env>`) and refuses to boot when its app part differs from the contract; capabilities resolve to frozen
+  copies; every 5xx answers a fixed body; the generated entrypoint scrubs `FABRIKA_*` before importing the app;
+  union outputs project through the first accepting branch. `handlers` is a function of `deps`.

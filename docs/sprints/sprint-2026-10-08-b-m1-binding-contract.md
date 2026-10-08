@@ -42,3 +42,6 @@ B1 ∥ B5; A3 → B2 → B3 → B4; B1 + B2 → B6.
 
 - 2026-10-08: B5 landed after one fix round. The review found that a Cloudflare graph could choose its proxy
   audience (`notes@stage`, `vozka`); the provider now refuses any audience other than the run's `<app>@<env>`.
+- 2026-10-08: B1 landed after one fix round: the reader refuses import mappings that can redirect `@fabrika/*`,
+  `zod` or `bun`, ambiguous and directory imports, forward references and import cycles, and bounds its work
+  (`CONTRACT_LIMITS`). Paired source/runtime fixtures prove each refused case diverges in Bun.
