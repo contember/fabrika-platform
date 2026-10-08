@@ -72,8 +72,9 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
 - **A delegation grant is fresh per request.** A row marked `members` or `creates` gets a single-use
   grant from `delegations` (a structural subset of IAM's membership RPC) after every other check
   passed, also on a warm token cache, and it rides in `X-Fabrika-Delegation`. A refused grant is a
-  403, an unreachable IAM a 503. Without an issuer no grant is obtained and IAM refuses the membership
-  operation unless the framework obtained one itself; wire the issuer where the binding serves it.
+  403, an unreachable IAM a 503. Both compositions pass one: the Bun service its `HttpIamGateway`
+  (`POST /auth/mint/delegation` on IAM's proxy surface), the Cloudflare Worker its `IAM` binding. The
+  row's `delegation` is part of its digest, so a manifest cannot add or drop a grant unnoticed.
 - **Test helpers are imported across packages.** `src/__tests__/helpers.ts` fakes IAM at the
   `IamGateway` seam and signs real ES256 tokens; `provider-cloudflare` and `local-stack` import it by
   relative path so the two enforcement points are tested against the same doubles. It is excluded

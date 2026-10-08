@@ -256,7 +256,7 @@ For a contract application, the hop carries more facts, and the application chec
   variable to the proxy and to the application. On Cloudflare the service binding takes its place
   (rule 1).
 - **The endpoint.** The allow response carries `X-Fabrika-Endpoint: <id>@<digest>`. The digest covers
-  the endpoint's kind, method, path, callers, requirement and admission. The application serves the
+  the endpoint's kind, method, path, callers, requirement, admission and delegation. The application serves the
   endpoint the id names, and only when its own `planEndpoint` selects the same endpoint and the digest
   equals its own; a missing header or any disagreement is a 503. A request is therefore never served by
   code that expects different rules than the proxy applied. A health endpoint alone may arrive without
@@ -320,7 +320,9 @@ registry of its own.
 
 Work units B5 and A12 built rule 6 at IAM, and B2 built the proxy side of delegation grants: a row
 marked `members` or `creates` gets a fresh grant from IAM's `requestDelegation` for every request,
-forwarded in `X-Fabrika-Delegation`. The platform audiences are IAM
+forwarded in `X-Fabrika-Delegation`. On Cloudflare the proxy calls it on the `IAM` binding; on Zerops on
+IAM's proxy surface, `/auth/mint/delegation`, because the grant's authority is the caller's token in the
+request and the proxy key adds none. The platform audiences are IAM
 (`propustka`), the console (`vozka`), Operations and every admin audience. A contract application is
 one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. `listPrincipals` is
 refused for an application token; an application lists the members of a value with IAM's

@@ -4,8 +4,9 @@
  * of them may put a credential anywhere it can be read.
  */
 
+import type { IamMembershipRpc } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { type FetchLike, HttpIamGateway, IamUnavailableError } from '../iam'
+import { type DelegationIssuer, type FetchLike, HttpIamGateway, IamUnavailableError } from '../iam'
 import { TokenVerifier } from '../verifier'
 import { APP, ISSUER, PUBLIC_JWKS, signToken } from './helpers'
 
@@ -286,5 +287,33 @@ describe('JWKS response boundary', () => {
 		})
 		await gateway.getJwks()
 		expect(headers.get('authorization')).toBe('Bearer proxy-key')
+	})
+})
+
+describe('requestDelegation', () => {
+	test("IAM's membership RPC is a delegation issuer, so the Cloudflare binding drops in like the HTTP gateway", () => {
+		const issuerOf = (rpc: Pick<IamMembershipRpc, 'requestDelegation'>): DelegationIssuer => rpc
+		const gateway: DelegationIssuer = new HttpIamGateway({ origin: 'https://iam.test' })
+		expect(typeof issuerOf).toBe('function')
+		expect(typeof gateway.requestDelegation).toBe('function')
+	})
+
+	const input = { app: 'notes@prod', credential: 'signed.jwt', requestId: 'r', endpoint: 'api.workspaces.invite' }
+
+	test('posts the caller and the endpoint to the proxy surface and reads a grant', async () => {
+		const { gateway, recorded } = gatewayReturning(200, { ok: true, grant: 'grant-1', expiresAt: 120, extra: true })
+		expect(await gateway.requestDelegation(input)).toStrictEqual({ ok: true, grant: 'grant-1', expiresAt: 120 })
+		expect(recorded[0]?.url).toBe('https://iam.test/auth/mint/delegation')
+		expect(recorded[0]?.method).toBe('POST')
+		expect(JSON.parse(recorded[0]?.body ?? '{}')).toEqual(input)
+	})
+
+	test("IAM's decided refusal is a result; a malformed answer or a non-200 is unavailable", async () => {
+		expect(await gatewayReturning(200, { ok: false, reason: 'invalid_request', message: 'x' }).gateway.requestDelegation(input)).toEqual({
+			ok: false,
+			reason: 'invalid_request',
+		})
+		await expect(gatewayReturning(200, { ok: true, grant: '', expiresAt: 1 }).gateway.requestDelegation(input)).rejects.toThrow(IamUnavailableError)
+		await expect(gatewayReturning(500, { ok: true, grant: 'g', expiresAt: 1 }).gateway.requestDelegation(input)).rejects.toThrow(IamUnavailableError)
 	})
 })

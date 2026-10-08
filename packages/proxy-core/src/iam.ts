@@ -29,6 +29,10 @@ const mintResultSchema = z.discriminatedUnion('ok', [
 	z.object({ ok: z.literal(true), token: z.string().min(1), expiresAt: z.number().finite() }),
 	denialSchema,
 ])
+const delegationResultSchema = z.discriminatedUnion('ok', [
+	z.object({ ok: z.literal(true), grant: z.string().min(1), expiresAt: z.number().finite() }),
+	denialSchema,
+])
 const exchangeResultSchema = z.discriminatedUnion('ok', [
 	z.object({ ok: z.literal(true), session: z.string().min(1), returnUrl: z.string().min(1), expiresAt: z.number().finite() }),
 	denialSchema,
@@ -105,9 +109,10 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  *   POST {origin}/auth/mint/session   {app, session, requestId} -> MintTokenResult
  *   POST {origin}/auth/mint/key       {app, key, requestId}     -> MintFromKeyResult
  *   POST {origin}/auth/mint/exchange  {app, code, requestId}    -> ExchangeAuthCodeResult   (ADR-0022)
+ *   POST {origin}/auth/mint/delegation {app, credential, requestId, endpoint} -> a grant or a denial (rule 6)
  *   GET  {origin}/.well-known/jwks.json                         -> Jwks                     (public)
  *
- * The three POST endpoints are the `/auth/mint/*` PROXY surface, gated by IAM's `proxyKey` — the
+ * The four POST endpoints are the `/auth/mint/*` PROXY surface, gated by IAM's `proxyKey` — the
  * least-privilege split ADR-0022 requires, kept apart from the management `/rpc/*` surface. They
  * answer **200 on any decided outcome, including a denial**: `{ ok: false, reason }` is "IAM answered:
  * no", a non-200 is "IAM could not be consulted". Both deny; only the second is an incident.
@@ -115,7 +120,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  * Credentials always ride in the POST body, never in a URL — a URL ends up in access logs and error
  * strings; a body does not.
  */
-export class HttpIamGateway implements IamGateway {
+export class HttpIamGateway implements IamGateway, DelegationIssuer {
 	private readonly origin: string
 	private readonly timeoutMs: number
 	private readonly key: string | undefined
@@ -169,6 +174,14 @@ export class HttpIamGateway implements IamGateway {
 				'invalid_code',
 			),
 		}
+	}
+
+	async requestDelegation(input: DelegationRequest): Promise<{ ok: true; grant: string; expiresAt: number } | { ok: false; reason: string }> {
+		const result = delegationResultSchema.safeParse(await this.post('/auth/mint/delegation', input, 'requestDelegation'))
+		if (!result.success) {
+			throw new IamUnavailableError('requestDelegation')
+		}
+		return result.data.ok ? result.data : { ok: false, reason: result.data.reason }
 	}
 
 	async getJwks(): Promise<Jwks> {

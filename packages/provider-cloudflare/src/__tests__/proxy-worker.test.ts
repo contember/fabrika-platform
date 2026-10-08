@@ -9,6 +9,7 @@ import {
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
+import type { DelegationRequest } from '@fabrika/proxy-core'
 import { encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
@@ -393,7 +394,16 @@ class RecordingUpstream {
 }
 
 describe('Cloudflare proxy Worker — a contract app', () => {
-	const health = { id: 'health', kind: 'health', method: 'GET', path: '/healthz', callers: [], requirement: null, admission: null } satisfies
+	const health = {
+		id: 'health',
+		kind: 'health',
+		method: 'GET',
+		path: '/healthz',
+		callers: [],
+		requirement: null,
+		admission: null,
+		delegation: null,
+	} satisfies
 		& EndpointRules
 		& {
 			id: string
@@ -406,6 +416,15 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		callers: ['human', 'machine'],
 		requirement: { kind: 'member' },
 		admission: { contentTypes: ['application/json'], maxBytes: null },
+		delegation: null,
+	} satisfies EndpointRules & { id: string }
+	const invite = {
+		...me,
+		id: 'api.workspaces.invite',
+		path: '/api/workspaces.invite',
+		callers: ['human'],
+		requirement: { kind: 'action', action: 'notes.admin', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
+		delegation: 'members',
 	} satisfies EndpointRules & { id: string }
 	const contractEnvironment = (iam: FakeIam, seen: Request[]): CloudflareProxyEnv => ({
 		IAM: iam,
@@ -417,8 +436,9 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 				upstream: 'APP',
 				scheme: 'https',
 				endpoints: [
-					{ ...health, digest: requirementDigest(health), delegation: null },
-					{ ...me, digest: requirementDigest(me), delegation: null },
+					{ ...health, digest: requirementDigest(health) },
+					{ ...me, digest: requirementDigest(me) },
+					{ ...invite, digest: requirementDigest(invite) },
 				],
 				reservedPrefixes: ['/api'],
 				snapshot: `sha256:${'0'.repeat(64)}`,
@@ -462,6 +482,34 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		expect(seen[0]?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(me.id, requirementDigest(me)))
 		expect(seen[0]?.headers.get('X-Fabrika-Token')).not.toBeNull()
 		expect(seen[0]?.headers.get('Authorization')).toBe('Bearer px_key')
+	})
+
+	test("a membership endpoint gets its grant from the IAM binding's requestDelegation and forwards it", async () => {
+		class DelegatingIam extends FakeIam {
+			readonly delegations: DelegationRequest[] = []
+			requestDelegation(input: DelegationRequest): Promise<{ ok: true; grant: string; expiresAt: number }> {
+				this.delegations.push(input)
+				return Promise.resolve({ ok: true, grant: 'grant-1', expiresAt: Math.floor(Date.now() / 1000) + 120 })
+			}
+		}
+		const seen: Request[] = []
+		const iam = new DelegatingIam({
+			mintFromKey: {
+				ok: true,
+				token: await signToken({ type: 'user', permissions: [{ action: 'notes.admin', scope: null, source: 'grant' }] }),
+				expiresAt: Math.floor(Date.now() / 1000) + 300,
+			},
+		})
+		const response = await createCloudflareProxyHandler(contractEnvironment(iam, seen))(
+			new Request(`https://${HOST}/api/workspaces.invite`, {
+				method: 'POST',
+				body: '{}',
+				headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json', [DELEGATION_HEADER]: 'forged' },
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(iam.delegations.map((input) => input.endpoint)).toEqual([invite.id])
+		expect(seen[0]?.headers.get(DELEGATION_HEADER)).toBe('grant-1')
 	})
 
 	test('no endpoint is a 403 that never reaches the app', async () => {

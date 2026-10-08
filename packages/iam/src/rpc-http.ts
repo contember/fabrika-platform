@@ -36,10 +36,11 @@
 // ── TWO SURFACES, TWO KEYS ────────────────────────────────────────────────────────────────────────
 //
 // `/rpc/*`        — the MANAGEMENT surface (`IamRpc` and `IamMembershipRpc`), gated by `rpcKey`.
-// `/auth/mint/*`  — the PROXY surface, gated by `proxyKey`: `mintToken`, `mintFromKey`, and — since
-//                   ADR-0022 — `exchangeAuthCode`, which redeems a cross-host handoff code for an
-//                   app-bound session. Paths and wire shapes are fixed by `packages/proxy/src/iam.ts`
-//                   (`HttpIamGateway`); that file is the contract.
+// `/auth/mint/*`  — the PROXY surface, gated by `proxyKey`: `mintToken`, `mintFromKey`,
+//                   `exchangeAuthCode`, which redeems a cross-host handoff code for an app-bound
+//                   session, and `requestDelegation`, a grant spent by the caller's token. Paths and
+//                   wire shapes are fixed by `packages/proxy-core/src/iam.ts` (`HttpIamGateway`); that
+//                   file is the contract.
 //
 // They are separate secrets on purpose, and the reason is least privilege rather than tidiness. The
 // auth proxy is the ONLY publicly-routed component in the deployment, so it is the one most likely to
@@ -174,8 +175,8 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershi
 
 // ── The proxy surface: `/auth/mint/*` ─────────────────────────────────────────
 //
-// Three endpoints, fixed by `packages/proxy/src/iam.ts`: `mintToken`, `mintFromKey` and
-// `exchangeAuthCode`. They are the COLD PATH of every request the proxy handles — the first exchange
+// Four endpoints, fixed by `packages/proxy-core/src/iam.ts`: `mintToken`, `mintFromKey`,
+// `exchangeAuthCode` and `requestDelegation`. They are the COLD PATH of every request the proxy handles — the first exchange
 // of a browser session, a `px_` key, or an ADR-0022 handoff code for a short-lived signed token — and
 // everything after that is a local JWKS verification inside the project. Do not change a
 // path or a body shape here without changing `HttpIamGateway` in the same commit: a mismatch fails
@@ -193,10 +194,16 @@ export const MINT_SESSION_PATH = `${MINT_PREFIX}session`
 export const MINT_KEY_PATH = `${MINT_PREFIX}key`
 /** Redeem a cross-host handoff code for an app session (ADR-0022). Body: `ExchangeAuthCodeInput`. */
 export const MINT_EXCHANGE_PATH = `${MINT_PREFIX}exchange`
+/**
+ * A single-use delegation grant for one request to a membership or scope-creating endpoint (ADR-0022 rule 6).
+ * Body: `RequestDelegationInput`. On the proxy surface because the proxy obtains it for every such request; the
+ * authority is the caller's token in the body, so the proxy key adds none.
+ */
+export const MINT_DELEGATION_PATH = `${MINT_PREFIX}delegation`
 
 /** True when `pathname` addresses the proxy mint surface. Checked BEFORE the public `/auth/*` routes. */
 export function isMintPath(pathname: string): boolean {
-	return pathname === MINT_SESSION_PATH || pathname === MINT_KEY_PATH || pathname === MINT_EXCHANGE_PATH
+	return pathname === MINT_SESSION_PATH || pathname === MINT_KEY_PATH || pathname === MINT_EXCHANGE_PATH || pathname === MINT_DELEGATION_PATH
 }
 
 /**
@@ -220,7 +227,11 @@ export function isMintPath(pathname: string): boolean {
  * per-client limit belongs. Detection is covered meanwhile: every failed mint writes an `auth_log`
  * deny row with the app and the reason, so a burst is visible in the admin auth log.
  */
-export async function handleMintHttp(request: Request, rpc: IamRpc & IamHandoffRpc, proxyKey: string): Promise<Response> {
+export async function handleMintHttp(
+	request: Request,
+	rpc: IamRpc & IamHandoffRpc & Pick<IamMembershipRpc, 'requestDelegation'>,
+	proxyKey: string,
+): Promise<Response> {
 	if (proxyKey.trim() === '') {
 		return problem(404, 'not found')
 	}
@@ -249,6 +260,9 @@ export async function handleMintHttp(request: Request, rpc: IamRpc & IamHandoffR
 		}
 		if (path === MINT_EXCHANGE_PATH) {
 			return json(await rpc.exchangeAuthCode(exchangeAuthCodeSchema.parse(body)))
+		}
+		if (path === MINT_DELEGATION_PATH) {
+			return json(await rpc.requestDelegation(requestDelegationSchema.parse(body)))
 		}
 		return problem(404, 'not found')
 	} catch (err) {

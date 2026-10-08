@@ -61,12 +61,13 @@ key — and a browser never attaches a bearer on its own.
 ### The proxy's surface is not the management surface
 
 The proxy never calls `IamRpc`. On the Bun composition it calls `/auth/mint/*` —
-`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange` — gated by
+`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange`, `/auth/mint/delegation` — gated by
 `FABRIKA_IAM_PROXY_KEY`, which is a different secret from the `FABRIKA_IAM_RPC_KEY`
 that gates `/rpc/*`. Either key left unset makes its surface answer 404 as though it
 were never mounted; neither surface exists at all in the Cloudflare composition,
 where both are service-binding method calls. `@fabrika/proxy` narrows the binding to
-four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`) structurally,
+four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`), plus
+`requestDelegation` for contract applications' membership endpoints, structurally,
 so it never imports IAM. How far that separation actually goes per provider is in
 [`cross-host-sso.md`](cross-host-sso.md).
 
@@ -112,7 +113,7 @@ Protocol-specific HTTP surfaces remain:
 | IAM         | `/admin/*` REST — four machine operations            | App-schema reconciliation and machine-key provisioning; outside the Control/Operations transport consolidation. |
 | IAM         | `/auth/*`, `/.well-known/jwks.json`                  | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                         |
 | IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport  | Applications and Control use the process-to-process management contract; it is separate from browser admin RPC. |
-| IAM         | `/auth/mint/*`                                       | The proxy's own least-privilege surface — session mint, key mint, handoff redemption; see below.                |
+| IAM         | `/auth/mint/*`                                       | The proxy's own least-privilege surface — session mint, key mint, handoff redemption, delegation grants.        |
 | Delivery    | `/webhooks/github/:connectionId`, health, and assets | Webhooks, probes, and static files have protocol-specific HTTP semantics.                                       |
 | Operations  | Sentry envelope ingest and source-map upload         | SDK ingest and artifact upload are established streaming/binary HTTP protocols.                                 |
 | Operations  | private catalog and release reconciliation           | Control-to-Operations synchronization is a service protocol, not a browser domain API.                          |

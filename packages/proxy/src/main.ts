@@ -22,9 +22,12 @@ if (manifest === null) {
 	process.exit(1)
 }
 
+const iam = new HttpIamGateway({ origin: env.iamUrl, timeoutMs: env.iamTimeoutMs, key: env.iamKey })
 const service = createVerifyService({
 	manifest,
-	iam: new HttpIamGateway({ origin: env.iamUrl, timeoutMs: env.iamTimeoutMs, key: env.iamKey }),
+	iam,
+	// The same proxy surface serves the single-use grants of membership and scope-creating endpoints.
+	delegations: iam,
 	issuer: env.iamUrl,
 	cache: env.cacheEnabled ? new MemoryTokenCache() : null,
 	logger: consoleLogger,

@@ -28,7 +28,16 @@ import type {
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { prop } from '../json'
-import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath, MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
+import {
+	handleMintHttp,
+	handleRpcHttp,
+	isMintPath,
+	isRpcPath,
+	MINT_DELEGATION_PATH,
+	MINT_EXCHANGE_PATH,
+	MINT_KEY_PATH,
+	MINT_SESSION_PATH,
+} from '../rpc-http'
 
 const KEY = 'rpc-test-key-0123456789abcdefghij'
 const BASE = 'https://iam.test'
@@ -457,13 +466,15 @@ describe('the proxy mint surface', () => {
 		return { rpc, response: handleMintHttp(request, rpc, PROXY_KEY) }
 	}
 
-	test('claims exactly the three contract paths and nothing else under /auth', () => {
+	test('claims exactly the four contract paths and nothing else under /auth', () => {
 		expect(MINT_SESSION_PATH).toBe('/auth/mint/session')
 		expect(MINT_KEY_PATH).toBe('/auth/mint/key')
 		expect(MINT_EXCHANGE_PATH).toBe('/auth/mint/exchange')
+		expect(MINT_DELEGATION_PATH).toBe('/auth/mint/delegation')
 		expect(isMintPath(MINT_SESSION_PATH)).toBe(true)
 		expect(isMintPath(MINT_KEY_PATH)).toBe(true)
 		expect(isMintPath(MINT_EXCHANGE_PATH)).toBe(true)
+		expect(isMintPath(MINT_DELEGATION_PATH)).toBe(true)
 		// The public auth routes must keep reaching `handleAuth`, so nothing else here is claimed.
 		expect(isMintPath('/auth/login')).toBe(false)
 		expect(isMintPath('/auth/callback')).toBe(false)
@@ -513,6 +524,23 @@ describe('the proxy mint surface', () => {
 		expect(prop(body, 'session')).toBe('px_app_session')
 		expect(prop(body, 'returnUrl')).toBe('https://app.test/private')
 		expect(prop(body, 'expiresAt')).toBe(99)
+	})
+
+	test('/auth/mint/delegation forwards {app, credential, requestId, endpoint} to requestDelegation', async () => {
+		const input = { app: 'notes@prod', credential: 'token', requestId: 'r1', endpoint: 'api.workspaces.invite' }
+		const { rpc, response } = mint(MINT_DELEGATION_PATH, input)
+		const res = await response
+		expect(res.status).toBe(200)
+		expect(rpc.calls).toEqual([{ method: 'requestDelegation', input }])
+		const body: unknown = await res.json()
+		expect(prop(body, 'ok')).toBe(true)
+		expect(prop(body, 'grant')).toBe('grant')
+	})
+
+	test('the delegation route is closed without the proxy key', async () => {
+		const { rpc, response } = mint(MINT_DELEGATION_PATH, { app: 'notes@prod', credential: 't', requestId: 'r1', endpoint: 'e' }, null)
+		expect((await response).status).toBe(401)
+		expect(rpc.calls).toEqual([])
 	})
 
 	test('a REFUSED redemption is 200 with a reason, exactly like a refused mint', async () => {
