@@ -3,23 +3,24 @@
 
 import type { RpcCaller } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
-import type {
-	CronDeclaration,
-	CspDeclaration,
-	ExportDeclaration,
-	FilesDeclaration,
-	FormMountDeclaration,
-	HealthMountDeclaration,
-	ImportDeclaration,
-	LinkAccessDeclaration,
-	LinkMountDeclaration,
-	ProcedureDeclaration,
-	ProcedureTreeDeclaration,
-	ProcedureType,
-	RpcMountDeclaration,
-	SpaAccessDeclaration,
-	SpaMountDeclaration,
-	WebhookMountDeclaration,
+import {
+	type CronDeclaration,
+	type CspDeclaration,
+	type ExportDeclaration,
+	type FilesDeclaration,
+	type FormMountDeclaration,
+	type HealthMountDeclaration,
+	type ImportDeclaration,
+	type LinkAccessDeclaration,
+	type LinkMountDeclaration,
+	type ProcedureDeclaration,
+	type ProcedureTreeDeclaration,
+	type ProcedureType,
+	type RpcMountDeclaration,
+	type SpaAccessDeclaration,
+	type SpaMountDeclaration,
+	unknownOptions,
+	type WebhookMountDeclaration,
 } from './declaration'
 
 export type Path = `/${string}`
@@ -39,6 +40,9 @@ type LooseMessage = 'a loose object admits undeclared keys: declare it with z.st
 export type NotLoose<S> = S extends z.ZodObject<z.core.$ZodShape, infer Config extends z.core.$ZodObjectConfig>
 	? string extends keyof Config['out'] ? LooseMessage : S
 	: S
+
+/** Fields a builder sets itself: an options object that carries one does not type-check. */
+type Owned<K extends string> = { readonly [P in K]?: never }
 
 type WildcardMessage = 'an action is exact: a role grants listed actions, and * is not an action'
 
@@ -128,7 +132,7 @@ export interface QueryTree {
 	readonly [name: string]: (ProcedureDeclaration<Schema> & { readonly type: 'query' }) | QueryTree
 }
 
-export interface ProcedureDef<I, O, Acc> {
+export interface ProcedureDef<I, O, Acc> extends Owned<'~kind' | 'type'> {
 	readonly input?: I & NotLoose<I>
 	readonly output: O & NotLoose<O>
 	readonly access: Acc
@@ -217,7 +221,7 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 	/** Procedures served at `POST <prefix>/<name>`, to the callers named once here. There is no public caller. */
 	rpc<const C extends readonly [RpcCaller, ...RpcCaller[]], const T extends ProcedureTree>(
 		prefix: Path,
-		options: { readonly callers: C },
+		options: { readonly callers: C } & Owned<'kind' | 'prefix' | 'procedures'>,
 		procedures: T,
 	): RpcMount<C, T>
 	/** A share SPA under `prefix` and its procedures under `<prefix>/api`, for an anonymous key bound to one object. */
@@ -230,14 +234,17 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly issuedBy: IB
 			readonly maxDays: number
 			readonly procedures: (l: LinkKit<G[number]>) => T
-		},
+		} & Owned<'kind' | 'prefix'>,
 	): LinkMount<LD, G[number], IB, T>
 	/** The SPA under `prefix`, for signed-in people only. */
-	spa<const Acc extends MemberAccess | OverAccess<A, D>>(prefix: Path, options: { readonly dir: string; readonly access: Acc }): SpaMount<Acc>
+	spa<const Acc extends MemberAccess | OverAccess<A, D>>(
+		prefix: Path,
+		options: { readonly dir: string; readonly access: Acc } & Owned<'kind' | 'prefix'>,
+	): SpaMount<Acc>
 	health(path: Path): HealthMount
 	form<I extends InputSchema>(
 		path: Path,
-		options: { readonly input: I & NotLoose<I>; readonly appendTo: string; readonly maxBytes?: number },
+		options: { readonly input: I & NotLoose<I>; readonly appendTo: string; readonly maxBytes?: number } & Owned<'kind' | 'path'>,
 	): FormMount<I>
 	webhook<const B extends D | 'app', const Acts extends readonly [A, ...A[]], I extends InputSchema>(
 		path: Path,
@@ -247,28 +254,32 @@ export interface Kit<A extends string, D extends string, CD extends string> {
 			readonly actions: Acts
 			readonly input: I & NotLoose<I>
 			readonly maxBytes?: number
-		},
+		} & Owned<'kind' | 'path'>,
 	): WebhookMount<B, Acts[number], I>
-	files(collection: {
-		readonly owner: string
-		readonly read: A
-		readonly write: A
-		readonly delete: A
-		readonly maxBytes: number
-		readonly types: readonly [string, ...string[]]
-		readonly maxPerOwner?: number
-		readonly link?: boolean
-	}): FileCollection<A>
+	files(
+		collection: {
+			readonly owner: string
+			readonly read: A
+			readonly write: A
+			readonly delete: A
+			readonly maxBytes: number
+			readonly types: readonly [string, ...string[]]
+			readonly maxPerOwner?: number
+			readonly link?: boolean
+		} & Owned<'kind'>,
+	): FileCollection<A>
 	cron<const Acts extends readonly [A, ...A[]], const Sc extends D | 'app'>(
 		schedule: string,
-		options: { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number },
+		options: { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number } & Owned<'kind' | 'schedule'>,
 	): CronJob<Acts[number], Sc>
-	export<const T extends QueryTree>(definition: {
-		readonly version: number
-		readonly consumers: readonly [string, ...string[]]
-		readonly audience: 'any consumer user'
-		readonly procedures: T
-	}): Export<T>
+	export<const T extends QueryTree>(
+		definition: {
+			readonly version: number
+			readonly consumers: readonly [string, ...string[]]
+			readonly audience: 'any consumer user'
+			readonly procedures: T
+		} & Owned<'kind'>,
+	): Export<T>
 }
 
 // ── The contract ────────────────────────────────────────────────────────────────────────────────
@@ -290,7 +301,14 @@ function procedure<T extends ProcedureType, I extends InputSchema | null, O exte
 	type: T,
 	def: ProcedureDef<I, O, Acc>,
 ): Procedure<T, I, O, Acc> {
-	return { '~kind': 'procedure', type, input: def.input ?? null, output: def.output, access: def.access }
+	return {
+		'~kind': 'procedure',
+		type,
+		input: def.input ?? null,
+		output: def.output,
+		access: def.access,
+		unknownOptions: unknownOptions(def, 'procedure'),
+	}
 }
 
 function linkKit<A extends string>(): LinkKit<A> {
@@ -304,7 +322,13 @@ function kit<A extends string, D extends string, CD extends string>(): Kit<A, D,
 	return {
 		query: (def) => procedure('query', def),
 		mutation: (def) => procedure('mutation', def),
-		rpc: (prefix, options, procedures) => ({ kind: 'rpc', prefix, callers: options.callers, procedures }),
+		rpc: (prefix, options, procedures) => ({
+			kind: 'rpc',
+			prefix,
+			callers: options.callers,
+			procedures,
+			unknownOptions: unknownOptions(options, 'rpc'),
+		}),
 		link: (prefix, options) => ({
 			kind: 'link',
 			prefix,
@@ -314,14 +338,57 @@ function kit<A extends string, D extends string, CD extends string>(): Kit<A, D,
 			issuedBy: options.issuedBy,
 			maxDays: options.maxDays,
 			procedures: options.procedures(linkKit()),
+			unknownOptions: unknownOptions(options, 'link'),
 		}),
-		spa: (prefix, options) => ({ kind: 'spa', prefix, dir: options.dir, access: options.access }),
+		spa: (prefix, options) => ({ kind: 'spa', prefix, dir: options.dir, access: options.access, unknownOptions: unknownOptions(options, 'spa') }),
 		health: (path) => ({ kind: 'health', path }),
-		form: (path, options) => ({ kind: 'form', path, ...options }),
-		webhook: (path, options) => ({ kind: 'webhook', path, ...options }),
-		files: (collection) => ({ kind: 'files', ...collection }),
-		cron: (schedule, options) => ({ kind: 'cron', schedule, ...options }),
-		export: (definition) => ({ kind: 'export', ...definition }),
+		form: (path, options) => ({
+			kind: 'form',
+			path,
+			input: options.input,
+			appendTo: options.appendTo,
+			maxBytes: options.maxBytes,
+			unknownOptions: unknownOptions(options, 'form'),
+		}),
+		webhook: (path, options) => ({
+			kind: 'webhook',
+			path,
+			scheme: options.scheme,
+			boundTo: options.boundTo,
+			actions: options.actions,
+			input: options.input,
+			maxBytes: options.maxBytes,
+			unknownOptions: unknownOptions(options, 'webhook'),
+		}),
+		files: (collection) => ({
+			kind: 'files',
+			owner: collection.owner,
+			read: collection.read,
+			write: collection.write,
+			delete: collection.delete,
+			maxBytes: collection.maxBytes,
+			types: collection.types,
+			maxPerOwner: collection.maxPerOwner,
+			link: collection.link,
+			unknownOptions: unknownOptions(collection, 'files'),
+		}),
+		cron: (schedule, options) => ({
+			kind: 'cron',
+			schedule,
+			actions: options.actions,
+			scope: options.scope,
+			timeout: options.timeout,
+			retries: options.retries,
+			unknownOptions: unknownOptions(options, 'cron'),
+		}),
+		export: (definition) => ({
+			kind: 'export',
+			version: definition.version,
+			consumers: definition.consumers,
+			audience: definition.audience,
+			procedures: definition.procedures,
+			unknownOptions: unknownOptions(definition, 'export'),
+		}),
 	}
 }
 

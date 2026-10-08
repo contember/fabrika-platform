@@ -6,6 +6,7 @@ import {
 	assertNoAmbiguity,
 	type BodyAdmission,
 	type Caller,
+	canonicalizeArtifact,
 	type ContractArtifact,
 	type CspExtensions,
 	type CspSource,
@@ -23,8 +24,11 @@ import {
 	type ScopeBinding,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
+import { contractArtifactSchema } from './artifact-schema'
 import {
 	type AccessDeclaration,
+	type Builder,
+	BUILDER_FIELDS,
 	type ContractDeclaration,
 	type CronDeclaration,
 	type CspDeclaration,
@@ -40,7 +44,7 @@ import {
 	type SpaAccessDeclaration,
 } from './declaration'
 import { CONNECT_PREFIX, CONTRACT_DEFAULTS, FILES_PREFIX, joinPath, JSON_ADMISSION, LINK_API_SEGMENT, WEBHOOK_BINDING_PARAMETER } from './defaults'
-import { Problems } from './problems'
+import { ContractError, Problems } from './problems'
 
 const APP_ID = /^[a-z0-9][a-z0-9-]*$/
 const NAME = /^[A-Za-z][A-Za-z0-9_]*$/
@@ -56,6 +60,8 @@ const FRAMEWORK_PREFIX = '/__fabrika'
 /** The `boundTo` and job `scope` value for the whole application; no dimension may take the name. */
 const APP_SCOPE = 'app'
 const AUDIENCE = 'any consumer user'
+const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'usedBy', 'timeoutMs']
+const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors']
 
 const UUID: SchemaShape = {
 	type: 'string',
@@ -72,9 +78,14 @@ const ID_OBJECT: SchemaShape = { type: 'object', fields: { id: UUID } }
 /** Validates a described contract against its table policies and normalizes it; throws `ContractError` with every problem. */
 export function buildArtifact(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
 	const problems = new Problems()
-	const artifact = new ArtifactBuilder(contract, tables, problems).build()
+	const artifact = canonicalizeArtifact(new ArtifactBuilder(contract, tables, problems).build())
 	problems.throwIfAny()
-	return artifact
+	// A check missing above must surface here, not in the proxy or Control that reads the artifact later.
+	const parsed = contractArtifactSchema.safeParse(JSON.parse(JSON.stringify(artifact)))
+	if (!parsed.success) {
+		throw new ContractError(parsed.error.issues.map((issue) => `artifact ${issue.path.map(String).join('.')}: ${issue.message}`))
+	}
+	return parsed.data
 }
 
 class ArtifactBuilder {
@@ -230,10 +241,13 @@ class ArtifactBuilder {
 
 	#mount(name: string, mount: MountDeclaration<SchemaShape>): MountArtifact | null {
 		const where = `mount '${name}'`
+		if (mount.kind !== 'health') {
+			this.#options(where, mount.kind, mount.unknownOptions)
+		}
 		switch (mount.kind) {
 			case 'rpc': {
 				this.#prefix(where, mount.prefix)
-				this.#unique(where, 'callers', mount.callers)
+				this.#callers(where, mount.callers)
 				this.#reserve(mount.prefix)
 				for (const [path, procedure] of procedures(mount.procedures)) {
 					this.#procedure({ kind: 'mount', name }, `${name}.${path}`, joinPath(mount.prefix, path), mount.callers, procedure)
@@ -377,6 +391,7 @@ class ArtifactBuilder {
 	}
 
 	#procedureSchemas(where: string, procedure: ProcedureDeclaration<SchemaShape, unknown>): void {
+		this.#options(where, 'procedure', procedure.unknownOptions)
 		if (procedure.type !== 'query' && procedure.type !== 'mutation') {
 			this.#problem(where, `is not a procedure (allowed: c.query or c.mutation)`)
 		}
@@ -466,8 +481,8 @@ class ArtifactBuilder {
 	/** `from` must name a required string field of the input, which the framework removes before the handler. */
 	#fromField(where: string, input: SchemaShape | null, from: string): void {
 		const field = input?.type === 'object' ? input.fields[from] : undefined
-		if (field?.type !== 'string') {
-			this.#problem(where, `access.from '${from}' is not a required string field of the input`)
+		if (field === undefined || !isRequiredString(field)) {
+			this.#problem(where, `access.from '${from}' is not a required string field of the input (allowed: a string, a string literal or an enum)`)
 		}
 	}
 
@@ -546,6 +561,7 @@ class ArtifactBuilder {
 	}
 
 	#fileCollection(where: string, collection: FilesDeclaration): FileCollectionArtifact {
+		this.#options(where, 'files', collection.unknownOptions)
 		this.#knownAction(`${where} read`, collection.read)
 		this.#knownAction(`${where} write`, collection.write)
 		this.#knownAction(`${where} delete`, collection.delete)
@@ -596,6 +612,7 @@ class ArtifactBuilder {
 	}
 
 	#job(where: string, job: CronDeclaration): ScopeBinding | null {
+		this.#options(where, 'cron', job.unknownOptions)
 		const fields = job.schedule.split(' ')
 		if (fields.length !== 5 || !fields.every((field) => CRON_FIELD.test(field))) {
 			this.#problem(where, `schedule '${job.schedule}' is not five cron fields separated by single spaces (allowed: '0 3 * * *')`)
@@ -634,6 +651,7 @@ class ArtifactBuilder {
 	}
 
 	#consumers(where: string, declaration: ExportDeclaration<SchemaShape>): readonly [Caller, ...Caller[]] | null {
+		this.#options(where, 'export', declaration.unknownOptions)
 		this.#positiveInteger(`${where} version`, declaration.version)
 		if (declaration.audience !== AUDIENCE) {
 			this.#problem(where, `audience '${declaration.audience}' is not supported (allowed: '${AUDIENCE}')`)
@@ -677,6 +695,7 @@ class ArtifactBuilder {
 	}
 
 	#import(where: string, declaration: ImportDeclaration, procedureIds: ReadonlySet<string>): void {
+		this.#keys(where, declaration, IMPORT_FIELDS)
 		if (!APP_ID.test(declaration.app) || declaration.app === this.#contract.app) {
 			this.#problem(where, `app '${declaration.app}' is not another application's id`)
 		}
@@ -704,6 +723,7 @@ class ArtifactBuilder {
 	}
 
 	#csp(declaration: CspDeclaration): CspExtensions {
+		this.#keys('csp', declaration, CSP_FIELDS)
 		return {
 			connectSrc: this.#cspSources('csp connectSrc', declaration.connectSrc ?? []),
 			imgSrc: this.#cspSources('csp imgSrc', declaration.imgSrc ?? []),
@@ -713,6 +733,7 @@ class ArtifactBuilder {
 
 	#cspSources(where: string, sources: readonly CspSource[]): CspSource[] {
 		for (const source of sources) {
+			this.#keys(where, source, ['origin', 'purpose'])
 			if (!isHttpsOrigin(source.origin)) {
 				this.#problem(where, `'${source.origin}' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)`)
 			}
@@ -782,6 +803,36 @@ class ArtifactBuilder {
 
 	#problem(where: string, problem: string): void {
 		this.#problems.add(where, problem)
+	}
+
+	#options(where: string, builder: Builder, unknown: readonly string[] | undefined): void {
+		const fields = BUILDER_FIELDS[builder]
+		const call = builder === 'procedure' ? 'c.query and c.mutation' : `c.${builder}`
+		for (const key of unknown ?? []) {
+			if (fields.owned.includes(key)) {
+				this.#problem(where, `'${key}' is set by ${call} itself and cannot be an option; remove it`)
+			} else {
+				this.#problem(where, `'${key}' is not an option of ${call} (allowed: ${fields.options.join(', ')})`)
+			}
+		}
+	}
+
+	#keys(where: string, value: object, allowed: readonly string[]): void {
+		for (const key of Object.keys(value)) {
+			if (!allowed.includes(key)) {
+				this.#problem(where, `'${key}' is not a field here (allowed: ${allowed.join(', ')})`)
+			}
+		}
+	}
+
+	#callers(where: string, callers: readonly string[]): void {
+		this.#unique(where, 'callers', callers)
+		for (const caller of callers) {
+			const app = caller.startsWith('app:') ? caller.slice('app:'.length) : null
+			if (caller !== 'human' && caller !== 'machine' && (app === null || !APP_ID.test(app) || app === this.#contract.app)) {
+				this.#problem(where, `'${caller}' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'app:<another application id>')`)
+			}
+		}
 	}
 
 	#name(where: string, name: string): boolean {
@@ -892,6 +943,21 @@ function accessForm(access: AccessDeclaration): ResolvedAccess | null {
 			: null
 	}
 	return null
+}
+
+/** A shape whose every admitted value is a string, so it can carry a scope value. */
+function isRequiredString(shape: SchemaShape): boolean {
+	switch (shape.type) {
+		case 'string':
+		case 'enum':
+			return true
+		case 'literal':
+			return typeof shape.value === 'string'
+		case 'union':
+			return shape.options.length > 0 && shape.options.every(isRequiredString)
+		default:
+			return false
+	}
 }
 
 function hasExactKeys(value: object, keys: readonly string[]): boolean {

@@ -27,6 +27,10 @@ export function describeSchema(schema: z.core.$ZodType, where: string, problems:
 		return null
 	}
 	if (schema instanceof z.core.$ZodBoolean) {
+		if (schema._zod.def.coerce === true) {
+			problems.add(where, `a coercing schema is outside the contract subset (${SUBSET})`)
+			return null
+		}
 		return { type: 'boolean' }
 	}
 	if (schema instanceof z.core.$ZodNull) {
@@ -54,6 +58,10 @@ export function describeSchema(schema: z.core.$ZodType, where: string, problems:
 		const value = describeSchema(schema._zod.def.valueType, `${where} value`, problems)
 		return key === null || value === null ? null : { type: 'record', key, value }
 	}
+	if (schema instanceof z.core.$ZodDiscriminatedUnion && !hasRequiredDiscriminator(schema, where, problems)) {
+		return null
+	}
+	// A discriminated union admits what the plain union of its options admits, once no discriminator has a default.
 	if (schema instanceof z.core.$ZodUnion) {
 		const options = schema._zod.def.options.map((option, index) => describeSchema(option, `${where} option ${index}`, problems))
 		return allPresent(options) ? { type: 'union', options } : null
@@ -144,13 +152,11 @@ function describeString(schema: z.core.$ZodString | z.core.$ZodStringFormat, whe
 		}
 	}
 	for (const check of checks) {
-		if (check instanceof z.core.$ZodCheckMinLength) {
-			shape.minLength = Math.max(shape.minLength ?? 0, check._zod.def.minimum)
-		} else if (check instanceof z.core.$ZodCheckMaxLength) {
-			shape.maxLength = Math.min(shape.maxLength ?? Number.POSITIVE_INFINITY, check._zod.def.maximum)
-		} else if (check instanceof z.core.$ZodCheckLengthEquals) {
-			shape.minLength = Math.max(shape.minLength ?? 0, check._zod.def.length)
-			shape.maxLength = Math.min(shape.maxLength ?? Number.POSITIVE_INFINITY, check._zod.def.length)
+		if (isLengthCheck(check)) {
+			const bounds = lengthBounds(check, { min: shape.minLength, max: shape.maxLength }, where, problems)
+			complete &&= bounds !== null
+			shape.minLength = bounds?.min ?? shape.minLength
+			shape.maxLength = bounds?.max ?? shape.maxLength
 		} else if (check instanceof z.core.$ZodCheckRegex) {
 			if (check._zod.def.pattern.flags !== '') {
 				problems.add(where, `the pattern /${check._zod.def.pattern.source}/ has flags (allowed: a pattern without flags)`)
@@ -183,7 +189,73 @@ function describeString(schema: z.core.$ZodString | z.core.$ZodStringFormat, whe
 			complete = false
 		}
 	}
-	return complete ? shape : null
+	return complete && isOrderFree(shape, where, problems) && isSatisfiable(shape.minLength, shape.maxLength, where, problems) ? shape : null
+}
+
+/**
+ * The artifact keeps a string's checks unordered, so they must not depend on their order. `z.url()` rewrites the
+ * value it accepts (`HTTPS://A.CO` → `https://a.co/`), so a check before it and after it see different strings;
+ * `startsWith`, `endsWith` and `includes` overlap with what a format admits, so they stay on a plain string.
+ */
+function isOrderFree(shape: StringShape, where: string, problems: Problems): boolean {
+	const affixed = shape.startsWith !== null || shape.endsWith !== null || shape.includes !== null
+	if (shape.format === 'url' && (affixed || shape.pattern !== null || shape.minLength !== null || shape.maxLength !== null)) {
+		problems.add(where, 'z.url() rewrites the value, so another string check depends on its order (allowed: z.url() with no other check)')
+		return false
+	}
+	if (shape.format !== null && affixed) {
+		problems.add(where, `.startsWith(), .endsWith() and .includes() do not combine with the format '${shape.format}' (allowed: one or the other)`)
+		return false
+	}
+	return true
+}
+
+/** A discriminator with a default lets a value without it match an option, which the artifact's union cannot say. */
+function hasRequiredDiscriminator(schema: z.core.$ZodDiscriminatedUnion, where: string, problems: Problems): boolean {
+	const discriminator = schema._zod.def.discriminator
+	for (const option of schema._zod.def.options) {
+		const field = option instanceof z.core.$ZodObject ? option._zod.def.shape[discriminator] : undefined
+		if (field instanceof z.core.$ZodDefault) {
+			problems.add(where, `the discriminator '${discriminator}' has a default (allowed: a required literal in every option)`)
+			return false
+		}
+	}
+	return true
+}
+
+type LengthCheck = z.core.$ZodCheckMinLength | z.core.$ZodCheckMaxLength | z.core.$ZodCheckLengthEquals
+
+function isLengthCheck(check: z.core.$ZodCheck<never>): check is LengthCheck {
+	return check instanceof z.core.$ZodCheckMinLength || check instanceof z.core.$ZodCheckMaxLength || check instanceof z.core.$ZodCheckLengthEquals
+}
+
+interface Bounds {
+	readonly min: number | null
+	readonly max: number | null
+}
+
+/** The tighter bounds after one length check, or `null` when its value is not a length. */
+function lengthBounds(check: LengthCheck, bounds: Bounds, where: string, problems: Problems): Bounds | null {
+	const value = check instanceof z.core.$ZodCheckMinLength
+		? check._zod.def.minimum
+		: check instanceof z.core.$ZodCheckMaxLength
+		? check._zod.def.maximum
+		: check._zod.def.length
+	if (!Number.isSafeInteger(value) || value < 0) {
+		problems.add(where, `the length ${value} is not a whole number of at least 0`)
+		return null
+	}
+	const min = check instanceof z.core.$ZodCheckMaxLength ? bounds.min : Math.max(bounds.min ?? 0, value)
+	const max = check instanceof z.core.$ZodCheckMinLength ? bounds.max : Math.min(bounds.max ?? value, value)
+	return { min, max }
+}
+
+function isSatisfiable(min: number | null, max: number | null, where: string, problems: Problems): boolean {
+	if (min !== null && max !== null && min > max) {
+		problems.add(where, `the minimum ${min} is above the maximum ${max}, so nothing is admitted`)
+		return false
+	}
+	return true
 }
 
 /** Options change what a format admits, and the artifact names only the format. */
@@ -228,6 +300,12 @@ function describeNumber(schema: z.core.$ZodNumber, where: string, problems: Prob
 	for (const check of checks) {
 		if (check instanceof z.core.$ZodCheckNumberFormat && check._zod.def.format === 'safeint') {
 			shape.int = true
+		} else if (
+			(check instanceof z.core.$ZodCheckGreaterThan || check instanceof z.core.$ZodCheckLessThan || check instanceof z.core.$ZodCheckMultipleOf)
+			&& !(typeof check._zod.def.value === 'number' && Number.isFinite(check._zod.def.value))
+		) {
+			problems.add(where, `the bound ${String(check._zod.def.value)} is not a finite number`)
+			complete = false
 		} else if (check instanceof z.core.$ZodCheckGreaterThan && typeof check._zod.def.value === 'number') {
 			const value = check._zod.def.value
 			const exclusive = !check._zod.def.inclusive
@@ -243,11 +321,19 @@ function describeNumber(schema: z.core.$ZodNumber, where: string, problems: Prob
 				shape.exclusiveMax = exclusive
 			}
 		} else if (check instanceof z.core.$ZodCheckMultipleOf && typeof check._zod.def.value === 'number' && shape.multipleOf === null) {
+			if (check._zod.def.value <= 0) {
+				problems.add(where, `.multipleOf(${check._zod.def.value}) is not a positive step`)
+				complete = false
+			}
 			shape.multipleOf = check._zod.def.value
 		} else {
 			problems.add(where, `a '${check._zod.def.check}' check is outside the contract subset (${SUBSET}; one .multipleOf() per number)`)
 			complete = false
 		}
+	}
+	if (shape.min !== null && shape.max !== null && (shape.min > shape.max || (shape.min === shape.max && (shape.exclusiveMin || shape.exclusiveMax)))) {
+		problems.add(where, `the bounds ${shape.min} and ${shape.max} admit no number`)
+		return null
 	}
 	return complete ? shape : null
 }
@@ -258,19 +344,17 @@ function describeArray(schema: z.core.$ZodArray, where: string, problems: Proble
 	let maxItems: number | null = null
 	let complete = items !== null
 	for (const check of schema._zod.def.checks ?? []) {
-		if (check instanceof z.core.$ZodCheckMinLength) {
-			minItems = Math.max(minItems ?? 0, check._zod.def.minimum)
-		} else if (check instanceof z.core.$ZodCheckMaxLength) {
-			maxItems = Math.min(maxItems ?? Number.POSITIVE_INFINITY, check._zod.def.maximum)
-		} else if (check instanceof z.core.$ZodCheckLengthEquals) {
-			minItems = Math.max(minItems ?? 0, check._zod.def.length)
-			maxItems = Math.min(maxItems ?? Number.POSITIVE_INFINITY, check._zod.def.length)
+		if (isLengthCheck(check)) {
+			const bounds = lengthBounds(check, { min: minItems, max: maxItems }, where, problems)
+			complete &&= bounds !== null
+			minItems = bounds?.min ?? minItems
+			maxItems = bounds?.max ?? maxItems
 		} else {
 			problems.add(where, `a '${check._zod.def.check}' check is outside the contract subset (${SUBSET})`)
 			complete = false
 		}
 	}
-	return complete && items !== null ? { type: 'array', items, minItems, maxItems } : null
+	return complete && items !== null && isSatisfiable(minItems, maxItems, where, problems) ? { type: 'array', items, minItems, maxItems } : null
 }
 
 function hasNoChecks(schema: z.core.$ZodType, where: string, problems: Problems): boolean {

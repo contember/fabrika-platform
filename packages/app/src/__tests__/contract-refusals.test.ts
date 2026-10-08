@@ -148,6 +148,81 @@ describe('compileContract refuses what the types let through', () => {
 			.toEqual(["mount 'contact': appends to 'messages', which is not an inbox table of this form (scope: { inbox: 'contact', … })"])
 	})
 
+	test('an option that names a field the builder sets is refused, and never replaces it', () => {
+		const webhookOptions = { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id } as const
+		Object.defineProperty(webhookOptions, 'kind', { value: 'form', enumerable: true })
+		Object.defineProperty(webhookOptions, 'path', { value: '/contact', enumerable: true })
+		const cronOptions = { actions: ['tasks.write'], scope: 'app' } as const
+		Object.defineProperty(cronOptions, 'schedule', { value: '* * * * *', enumerable: true })
+		Object.defineProperty(cronOptions, 'retry', { value: 3, enumerable: true })
+		const contract = defineContract(vocabulary, (c) => ({
+			hook: c.webhook('/hooks/github', webhookOptions),
+			jobs: { nightly: c.cron('0 3 * * *', cronOptions) },
+		}))
+		const hook = contract.surface.hook
+		expect([hook.kind, hook.path, hook.unknownOptions]).toEqual(['webhook', '/hooks/github', ['kind', 'path']])
+		expect(contract.surface.jobs.nightly.schedule).toBe('0 3 * * *')
+		expect(compileProblems(contract)).toEqual([
+			"mount 'hook': 'kind' is set by c.webhook itself and cannot be an option; remove it",
+			"mount 'hook': 'path' is set by c.webhook itself and cannot be an option; remove it",
+			"job 'nightly': 'schedule' is set by c.cron itself and cannot be an option; remove it",
+			"job 'nightly': 'retry' is not an option of c.cron (allowed: actions, scope, timeout, retries)",
+		])
+	})
+
+	test('an application caller without an id, or with the id of this application', () => {
+		const contract = defineContract(vocabulary, (c) => ({
+			connect: c.rpc('/connect', { callers: ['app:', 'app:tasks'] }, { list: c.query({ output: Id, access: { member: true } }) }),
+		}))
+		expect(compileProblems(contract)).toEqual([
+			"mount 'connect': 'app:' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'app:<another application id>')",
+			"mount 'connect': 'app:tasks' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'app:<another application id>')",
+		])
+	})
+
+	test('a string literal or an enum is a scope coordinate', () => {
+		const contract = defineContract(vocabulary, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				byLiteral: c.query({ input: z.strictObject({ id: z.literal('alpha') }), output: Id, access: { action: 'tasks.read', on: 'task', from: 'id' } }),
+				byEnum: c.query({
+					input: z.strictObject({ id: z.enum(['alpha', 'beta']) }),
+					output: Id,
+					access: { action: 'tasks.read', in: 'workspace', from: 'id' },
+				}),
+			}),
+		}))
+		expect(compileContract(contract, {}).endpoints.map((row) => row.id)).toEqual(['api.byEnum', 'api.byLiteral'])
+	})
+
+	test('a constraint the artifact parser would refuse is refused when compiling', () => {
+		const contract = defineContract(vocabulary, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				short: c.query({ output: z.strictObject({ id: z.string().max(-1) }), access: { member: true } }),
+				stepless: c.query({ output: z.strictObject({ n: z.number().multipleOf(0) }), access: { member: true } }),
+			}),
+		}))
+		expect(compileProblems(contract)).toEqual([
+			"mount 'api' procedure 'short' output.id: the length -1 is not a whole number of at least 0",
+			"mount 'api' procedure 'stepless' output.n: .multipleOf(0) is not a positive step",
+		])
+	})
+
+	test('the compiled artifact is parsed before it is returned', () => {
+		const reference: TablePolicyArtifact = {
+			scope: { mode: 'reference', reason: '' },
+			actions: { read: 'tasks.read', insert: null, update: null, delete: null },
+			insert: [],
+			update: [],
+			version: null,
+			createdBy: null,
+			columns: {},
+		}
+		const contract = defineContract(vocabulary, (c) => ({ health: c.health('/healthz') }))
+		expect(compileProblems(contract, { countries: reference })).toEqual([
+			'artifact tables.countries.scope.reason: Too small: expected string to have >=1 characters',
+		])
+	})
+
 	test('applies the defaults in one place', () => {
 		const contract = defineContract(vocabulary, (c) => ({
 			hook: c.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'app', actions: ['tasks.write'], input: Id }),
@@ -205,7 +280,7 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(problems.filter((problem) => problem.startsWith('procedure'))).toEqual([
 			`procedure 'api.mixed': access {"member":true,"action":"notes.read","over":"workspace"} is not one access form (allowed: { member: true }, { action, over }, { action, in, from }, { action, on, from }, { action, creates })`,
 			"procedure 'api.typo': 'notes.raed' is not an action of the contract — did you mean 'notes.read'?",
-			"procedure 'api.optional': access.from 'id' is not a required string field of the input",
+			"procedure 'api.optional': access.from 'id' is not a required string field of the input (allowed: a string, a string literal or an enum)",
 			"procedure 'api.create': creates a 'workspace' in a query (allowed: c.mutation)",
 		])
 	})

@@ -153,7 +153,42 @@ describe('forms outside the subset', () => {
 		['a bigint literal', z.literal(1n), 'schema: the literal 1 is not JSON'],
 		['a numeric enum', z.enum({ a: 1 }), 'schema: the enum value 1 is not a string'],
 		['a date', z.date(), "schema: a 'date' schema is outside the contract subset"],
+		['a coercing boolean', z.coerce.boolean(), 'schema: a coercing schema is outside the contract subset'],
+		['two formats', z.string().email().uuid(), 'schema: the string has two formats, email and uuid (allowed: one format per string)'],
+		['a negative length', z.string().max(-1), 'schema: the length -1 is not a whole number of at least 0'],
+		['a fractional length', z.array(z.null()).min(1.5), 'schema: the length 1.5 is not a whole number of at least 0'],
+		['a minimum above the maximum', z.array(z.null()).min(5).max(2), 'schema: the minimum 5 is above the maximum 2, so nothing is admitted'],
+		['a zero step', z.number().multipleOf(0), 'schema: .multipleOf(0) is not a positive step'],
+		['an infinite bound', z.number().max(Number.POSITIVE_INFINITY), 'schema: the bound Infinity is not a finite number'],
+		['bounds that exclude everything', z.number().gt(1).lt(1), 'schema: the bounds 1 and 1 admit no number'],
+		['an affix with a format', z.uuid().startsWith('0'), ".startsWith(), .endsWith() and .includes() do not combine with the format 'uuid'"],
 	])('%s', (_name, schema, expected) => {
 		expect(refusal(schema).join('\n')).toContain(expected)
+	})
+})
+
+describe('forms whose meaning the artifact cannot keep', () => {
+	test('z.url() with another string check depends on their order, so either order is refused', () => {
+		const urlFirst = z.string().url().startsWith('https://example.com')
+		const urlLast = z.string().startsWith('https://example.com').url()
+		expect(urlFirst.safeParse('HTTPS://EXAMPLE.COM').success).toBe(true)
+		expect(urlLast.safeParse('HTTPS://EXAMPLE.COM').success).toBe(false)
+		const refused = 'schema: z.url() rewrites the value, so another string check depends on its order (allowed: z.url() with no other check)'
+		expect(refusal(urlFirst)).toEqual([refused])
+		expect(refusal(urlLast)).toEqual([refused])
+		expect(refusal(z.url().max(50))).toEqual([refused])
+	})
+
+	test('a format with a length is order-free and kept', () => {
+		expect(shape(z.email().max(254))).toEqual(string({ format: 'email', maxLength: 254 }))
+	})
+
+	test('a discriminator with a default admits a value the plain union would describe differently, so it is refused', () => {
+		const options = [z.strictObject({ kind: z.literal('a').default('a') }), z.strictObject({ kind: z.literal('b') })] as const
+		expect(z.discriminatedUnion('kind', [...options]).safeParse({}).success).toBe(false)
+		expect(z.union([...options]).safeParse({}).success).toBe(true)
+		expect(refusal(z.discriminatedUnion('kind', [...options]))).toEqual([
+			"schema: the discriminator 'kind' has a default (allowed: a required literal in every option)",
+		])
 	})
 })

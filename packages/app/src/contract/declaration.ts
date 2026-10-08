@@ -25,6 +25,41 @@ export const SURFACE_SECTIONS = ['files', 'jobs', 'exports', 'imports', 'csp'] a
 
 export type SurfaceSection = (typeof SURFACE_SECTIONS)[number]
 
+/**
+ * The option fields each builder takes, and the fields it sets itself. A builder copies only its option fields and
+ * records every other key of its options in `unknownOptions`, so an option can never replace what the builder set;
+ * `buildArtifact` refuses a non-empty `unknownOptions`. A reader of source fills it the same way.
+ */
+export type Builder = 'procedure' | 'rpc' | 'link' | 'spa' | 'form' | 'webhook' | 'files' | 'cron' | 'export'
+
+export interface BuilderFields {
+	readonly options: readonly string[]
+	readonly owned: readonly string[]
+}
+
+export const BUILDER_FIELDS: Readonly<Record<Builder, BuilderFields>> = {
+	procedure: { options: ['input', 'output', 'access'], owned: ['~kind', 'type'] },
+	rpc: { options: ['callers'], owned: ['kind', 'prefix', 'procedures'] },
+	link: { options: ['spa', 'dimension', 'grants', 'issuedBy', 'maxDays', 'procedures'], owned: ['kind', 'prefix'] },
+	spa: { options: ['dir', 'access'], owned: ['kind', 'prefix'] },
+	form: { options: ['input', 'appendTo', 'maxBytes'], owned: ['kind', 'path'] },
+	webhook: { options: ['scheme', 'boundTo', 'actions', 'input', 'maxBytes'], owned: ['kind', 'path'] },
+	files: { options: ['owner', 'read', 'write', 'delete', 'maxBytes', 'types', 'maxPerOwner', 'link'], owned: ['kind'] },
+	cron: { options: ['actions', 'scope', 'timeout', 'retries'], owned: ['kind', 'schedule'] },
+	export: { options: ['version', 'consumers', 'audience', 'procedures'], owned: ['kind'] },
+}
+
+/** The keys of `options` that are not `builder`'s option fields. */
+export function unknownOptions(options: object, builder: Builder): string[] {
+	const declared = BUILDER_FIELDS[builder].options
+	return Object.keys(options).filter((key) => !declared.includes(key))
+}
+
+/** Option keys outside the builder's option fields; `buildArtifact` refuses any. */
+interface OptionsRecord {
+	readonly unknownOptions?: readonly string[]
+}
+
 export interface DimensionDeclaration {
 	readonly in?: string
 	readonly creator?: string
@@ -52,7 +87,7 @@ export type SpaAccessDeclaration = { readonly member: true } | { readonly action
 
 export type ProcedureType = 'query' | 'mutation'
 
-export interface ProcedureDeclaration<S, Access = AccessDeclaration> {
+export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends OptionsRecord {
 	readonly '~kind': 'procedure'
 	readonly type: ProcedureType
 	/** `null` when the procedure takes no input. */
@@ -74,14 +109,14 @@ export type MountDeclaration<S> =
 	| FormMountDeclaration<S>
 	| WebhookMountDeclaration<S>
 
-export interface RpcMountDeclaration<S> {
+export interface RpcMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'rpc'
 	readonly prefix: string
 	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
 	readonly procedures: ProcedureTreeDeclaration<S>
 }
 
-export interface LinkMountDeclaration<S> {
+export interface LinkMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'link'
 	readonly prefix: string
 	readonly spa: string
@@ -92,7 +127,7 @@ export interface LinkMountDeclaration<S> {
 	readonly procedures: ProcedureTreeDeclaration<S, LinkAccessDeclaration>
 }
 
-export interface SpaMountDeclaration {
+export interface SpaMountDeclaration extends OptionsRecord {
 	readonly kind: 'spa'
 	readonly prefix: string
 	readonly dir: string
@@ -104,7 +139,7 @@ export interface HealthMountDeclaration {
 	readonly path: string
 }
 
-export interface FormMountDeclaration<S> {
+export interface FormMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'form'
 	readonly path: string
 	readonly input: S
@@ -112,7 +147,7 @@ export interface FormMountDeclaration<S> {
 	readonly maxBytes?: number
 }
 
-export interface WebhookMountDeclaration<S> {
+export interface WebhookMountDeclaration<S> extends OptionsRecord {
 	readonly kind: 'webhook'
 	readonly path: string
 	readonly scheme: 'github-sha256'
@@ -123,7 +158,7 @@ export interface WebhookMountDeclaration<S> {
 	readonly maxBytes?: number
 }
 
-export interface FilesDeclaration {
+export interface FilesDeclaration extends OptionsRecord {
 	readonly kind: 'files'
 	readonly owner: string
 	readonly read: string
@@ -135,7 +170,7 @@ export interface FilesDeclaration {
 	readonly link?: boolean
 }
 
-export interface CronDeclaration {
+export interface CronDeclaration extends OptionsRecord {
 	readonly kind: 'cron'
 	readonly schedule: string
 	readonly actions: readonly string[]
@@ -145,7 +180,7 @@ export interface CronDeclaration {
 	readonly retries?: number
 }
 
-export interface ExportDeclaration<S> {
+export interface ExportDeclaration<S> extends OptionsRecord {
 	readonly kind: 'export'
 	readonly version: number
 	readonly consumers: readonly string[]

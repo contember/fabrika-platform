@@ -97,11 +97,22 @@ src/
   (B1) must produce the same `ContractDeclaration<SchemaShape>` from source and
   call `buildArtifact`, never a copy. Every default and generated path is in
   `defaults.ts`; add new ones there, nowhere else.
+- **A builder never spreads its options.** Each copies only its option fields
+  (`BUILDER_FIELDS`) and records every other key in `unknownOptions`, which
+  `buildArtifact` refuses; the types make a field the builder sets (`kind`,
+  `path`, `prefix`, `schedule`, …) `never` in its options. A spread would let a
+  shared options const turn a webhook into a form.
+- `buildArtifact` returns the canonical artifact (`canonicalizeArtifact` from
+  `@fabrika/auth-core`, see its CLAUDE.md) after parsing it with
+  `contractArtifactSchema`. A parse failure there is a check missing from
+  `build.ts` or `schema-shape.ts`; add the check, never loosen the parser.
 - **The schema subset is `@fabrika/check`'s.** `schema-shape.test.ts` covers each
   factory and method `packages/check/CLAUDE.md` lists, and `contract-check.test.ts`
   runs the checker over the fixtures. Change the checker, `schema-shape.ts` and
   `SchemaShape` together. A default becomes `optional`, a discriminated union a
-  `union`; `.describe()` adds nothing.
+  `union` (so a discriminator may not have a default); `.describe()` adds nothing.
+  The shape keeps a string's checks unordered, so a chain whose order matters is
+  refused: two formats, `url` with any other check, an affix with a format.
 - zod 4's types cannot tell `z.object` from `z.strictObject` (`$strip` and
   `$strict` are the same type), so the types refuse only loose objects;
   `compileContract` and the checker refuse `z.object`. Compose schemas through

@@ -24,6 +24,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'16-wildcard-action.ts': 'an action is exact: a role grants listed actions, and * is not an action',
 	'17-mutation-in-export.ts': `Type '"mutation"' is not assignable to type '"query"'`,
 	'18-link-procedure-outside-grants.ts': `Type '"notes.delete"' is not assignable to type '"notes.read"'`,
+	'19-options-set-builder-fields.ts': `is not assignable to type 'Owned<"kind" | "path">'`,
 }
 
 interface Diagnostic {
