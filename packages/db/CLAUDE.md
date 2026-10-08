@@ -33,6 +33,19 @@ and codegen, generated locators, `@fabrika/db/testing`, and stores for `referenc
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
   shape (`checkRoot`); without the parenthesis, `true or 1=1` followed by the scope would match every
   row. An insert carries no WHERE and gets its scope columns stamped from the capability instead.
+- **A Ref's predicate covers every link of its chain, one equality per chain column.** A table carries
+  a column for each ancestor (`TableModel.chain`, resolved by `defineTables` through the tables that own
+  each dimension); a `Ref` whose chain names a dimension the table has no column for is refused, never
+  ignored. Otherwise a `Ref` minted before an ancestor moved would still reach its rows.
+- **An insert into a container, a child insert and a move lock the destination row first** (`FOR SHARE`,
+  matched on the destination `Ref`'s whole chain, in the mutation's transaction; `lockDestination`), when a
+  table owns the destination dimension. A
+  stale destination is 404 and nothing is written. The guard admits that one lock only with
+  `GuardContext.lock`.
+- **Mutations answer `{ id, version }` (and `move` the new chain), never row data.** A write action does
+  not include the read action; returning the row would leak columns the caller may not read.
+- **Insert and update data are read through own property descriptors** (`readValues`): a plain or
+  null-prototype object only, no symbol keys, no accessors, every key checked before any value is read.
 - **The data layer checks kind, dimension and action itself, on every operation.** The authority only
   says whether a value is an authentic capability of the current request. TypeScript checks method
   parameters bivariantly, so a widened handle passes a read `Ref` to `remove` without a cast — the

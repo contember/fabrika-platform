@@ -118,6 +118,12 @@ export const tables = defineTables<DB, typeof contract>()({
   the framework generates from `scope.in`; there is no hand-written locator to "fix". The resulting `Ref` carries
   the whole chain (`note:n1`, `workspace:w1`), and every statement for that `Ref` includes every chain column in
   its predicate.
+- **Every row carries its whole containment chain.** When `workspaces` lies in `organization`, `notes` carries
+  `organization_id` as well as `workspace_id` (the same column name as in the table that owns the dimension), and
+  children inherit every chain column of their parent. A composite foreign key with `ON UPDATE CASCADE` keeps the
+  columns current when an ancestor moves, so a `Ref` minted before the move reaches nothing. `defineTables`
+  refuses a table that lacks a chain column, and the layer refuses a `Ref` whose chain names a dimension the table
+  carries no column for.
 - **Membership needs no mode of its own.** IAM holds scoped grants (`editor @ workspace:w1`), so a
   `Within<'workspace', 'notes.read'>` contains exactly the workspaces where the caller holds the action.
 - **A policy change is an access change.** A new table, a different scope mode or a changed action changes who can
@@ -187,11 +193,17 @@ export const notes = defineStore('notes', (t) => ({
   its own read action in `tables.ts` (`columns: { internal: { read: 'notes.admin' } }`); without one it falls back
   to the table's read action ([ADR-0050](../decisions/0050-approved-access.md)). Every read needs the table's read
   action, so in v1 a column with a different read action is written but never returned, filtered or sorted by.
+- **Mutations answer an acknowledgement, not the row:** `insert` and `update` answer `{ id, version }` (`version`
+  only for a versioned table), `move` also the new chain. A write action does not include the read action, so a
+  handler that needs the row reads it with a read capability.
 - **Optimistic concurrency** with `version`: zero changed rows → one follow-up read → 404 or 409. The update and
   its follow-up read, and a move with its children, run in one transaction.
+- **The destination is checked against the database.** An insert into a container, a child insert and a move
+  first select the destination row with the destination `Ref`'s whole chain, `FOR SHARE`, in the same
+  transaction. A `Ref` minted before its object moved finds nothing (404), and nothing is inserted or moved.
 - **`t.move(ref, toRef)`** takes one target container (`Ref<'workspace', insertAction>`) and requires the delete
-  action at the source. Children that copy the container column follow through `ON UPDATE CASCADE` on the
-  composite foreign key.
+  action at the source. It sets every chain column from the target's chain; children that copy them follow
+  through `ON UPDATE CASCADE` on the composite foreign key.
 - **Aggregates:** `t.aggregate(within, { groupBy, count, sum, min, max })`. `count` is typed `string`, because
   Postgres returns a bigint.
 
