@@ -224,8 +224,134 @@ pushes, prints the workflow run URL, and watches the run. The push is the trigge
 the roll without committing. A redeploy at the same tag is _Actions → platform → Run workflow_ in the
 sidecar repository.
 
-The tag pins what the pipeline does. It does not pin the revision Zerops builds, because a Zerops build
-source names a repository and not a revision; the sidecar's own README states the consequence.
+The tag selects the checkout the pipeline uploads, so it pins both what the pipeline does and the
+code Zerops builds ([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)).
+Existing namespaces keep their own proxy commit; the upgrade changes only the default for new ones.
+
+## How install and deploy work
+
+The internals behind steps 1, 3 and 6. The platform facts they rely on are in
+[`zerops-platform.md`](zerops-platform.md).
+
+### `fabrika platform install --provider=zerops`
+
+The from-scratch bring-up: `packages/provider-zerops/src/installation/install.ts`. The operator either
+creates an EMPTY project (core package `LIGHT`, `envIsolation: service` — a project-level setting
+the platform accepts at creation only and never hands back, so nothing can verify it) and names it
+with `--project-id`, or passes `--create-project` and this command creates it from the same compiled
+declaration the services import comes from. A created project is polled to `ACTIVE` (`NEW` →
+`CREATING` → `ACTIVE`, about 20 s live) before the first service import, because whether a service
+import into a `CREATING` project succeeds has not been measured; its id is printed before the wait so
+an interrupted run resumes with `--project-id`. The command is interactive and laptop-side,
+confirming before every step that leaves the operator's disk, and it is the only command that
+generates a credential for an installation. `platform admin` and `platform init` end with a pasteable
+block for the first machine key: `export FABRIKA_IAM_RPC_URL=<IAM's PUBLIC origin>` (the value
+`control` holds as `FABRIKA_IAM_ISSUER`), the NAMES of `FABRIKA_IAM_RPC_KEY` and
+`FABRIKA_IAM_PROVISIONING_KEY` with the place each can be read from, and the `fabrika control key
+issue` line — never a value. `http://iam:3000` answers only inside the project; `key issue` says so
+when it cannot connect.
+
+Its shape is decided by three [platform facts](zerops-platform.md):
+
+- **Two passes, because the public hostnames come from a DEPLOY.** `zeropsSubdomain` names one host
+  per deployed HTTP port and the proxy's ports come from its app version, not from the import — so
+  pass 1 writes the legal empty manifest `{"apps":[]}` plus a syntactically valid IAM URL and key,
+  builds the proxy alone, and reads the six lines back. Pass 2 writes everything else and hands the
+  whole ordered sequence to `platform deploy`, which owns it (ADR-0027).
+- **The import is skipped when the services already exist**, because re-applying a
+  `startWithoutCode: true` document at a service carrying code activates an EMPTY app version and
+  demotes the running one to `BACKUP`. A PARTIAL set is refused rather than completed: an import
+  applies as one document and cannot skip the services that are already there. A service still reading
+  `NEW` is refused too — see the [platform facts](zerops-platform.md).
+- **Every process the import returns is waited on before anything is read or written**, because a
+  service holds no environment at all until it leaves `NEW`.
+- **Generated secrets are written blind.** They are never read back for comparison, so the command
+  cannot tell a correct value from a stale one — which is why it refuses a project that already carries
+  those KEYS instead of writing over them. A second bring-up would roll a new vault KEK (unrecoverable)
+  and new signing keys (every live token invalid).
+
+It places six generated values — IAM's ES256 signing keys, the IAM RPC key, the proxy key, the
+provisioning key, the Operations sync key and the control vault KEK
+(`packages/provider-zerops/src/installation/secrets.ts`) — plus one minted on the account: a Zerops
+INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on this
+project only), so the installation never holds the personal token the operator authenticated with.
+Exactly one value is printed: the provisioning key, once, at the end, because it lives
+nowhere else and `platform init` asks for it.
+
+Fresh install always leaves GitHub source anonymous: it writes no App private key or webhook secret.
+Public repositories therefore deploy without another setup step.
+
+Both passes and the integration-token mint have run live on a fresh account
+([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).
+
+### `fabrika platform deploy --provider=zerops --source-dir=.`
+
+Both ordering rules in the [platform facts](zerops-platform.md), plus the manifest composition, live in code:
+`packages/provider-zerops/src/installation/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
+prepare the committed source snapshot, resolve the project and its services, write each service's environment,
+deploy IAM + Operations concurrently, then proxy and then Control, ensure the public entry point,
+and reconcile the console's schema — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
+the scaffolded workflow keeps the order. The asymmetry is deliberate
+([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)); its full flag and
+variable surface is the `usage` string in `packages/provider-zerops/src/installation/index.ts`.
+
+Both `platform deploy` and `platform install` require `--source-dir` naming the clean full checkout
+that contains the executing installation module. They refuse `--from-git` and
+`FABRIKA_ZEROPS_BUILD_FROM_GIT`. The source is prepared once from a resolved commit before remote
+mutations; all four setups are checked before writes. Each service reserves its own app version,
+uploads that snapshot, builds the reserved version and polls its ID. No fallback selects a Git pipeline.
+The first-install proxy pass and subsequent full pass share the same snapshot.
+
+Install and deploy also derive Control's `FABRIKA_ZEROPS_PROXY_SOURCE_JSON` default from that snapshot's
+commit and original descriptor, with the canonical public release repository coordinates. The JSON
+environment representation escapes `$` as `\u0024` so Zerops does not interpolate references inside
+the embedded descriptor; JSON decoding restores the exact bytes covered by its digest. Updating this
+default does not modify existing namespace pins. An unpublished local commit cannot be fetched by
+control's anonymous GitHub source; namespace source resolution must succeed before its provider mutations.
+
+An ambiguous build response is observed without another submission or deletion; an unresolved wait
+does not prove that the version failed. Namespace proxy sources are separately persisted and are not
+pinned merely by selecting this installation checkout.
+
+Three behaviours worth knowing before reading that file:
+
+- **The manifest is MERGED.** On the light tier an application shares the project and therefore the
+  platform proxy's one `FABRIKA_PROXY_MANIFEST_JSON` — the light-tier installation carried `notes` → `notesapi:3000`
+  beside the three platform apps. Application entries are carried through unchanged; an entry standing
+  on one of the platform's own public hosts is superseded and reported, because a host belongs to
+  exactly one app.
+- **Hosts come from `zeropsSubdomain` unless the operator names them.** That variable is a NAME and not
+  a state (see the [platform facts](zerops-platform.md)), so it can be read one step before `enableSubdomainAccess`. Naming all three hosts
+  instead marks the installation `custom-domain`, and no subdomain is published.
+- **Every variable is read and compared before it is written**, through `GET /service-stack/{id}/env`,
+  so a re-run writes nothing. `putServiceEnv` itself stays write-first — it must also work on a service
+  that has never been deployed.
+
+Measured against the live `fabrika-test` on 2026-08-06 with `--dry-run` (reads only): of the
+per-installation variables the command derives, only `ENVIRONMENT` on `operations`, `control` and
+`proxy` and the proxy manifest differ from what was placed by hand. Every origin — `ISSUER`,
+`FABRIKA_IAM_ADMIN_ORIGINS`, `FABRIKA_CONTROL_DOMAIN`, `OPERATIONS_ARTIFACT_ORIGIN`,
+`FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_ISSUER`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
+live value byte for byte, and the composed manifest reproduces `vozka`, `operations` and `notes`
+identically while replacing `iam-local` with `iam`.
+
+### The platform proxy manifest
+
+**The platform installation's proxy manifest is generated in two halves.** The installation-independent
+half — which apps exist, their ids, their private upstreams, the public listener each answers on and
+their gates — is declared in `packages/platform-artifacts/src/proxy-manifest.ts` and rendered into
+the committed `packages/provider-zerops/src/installation/generated/platform-proxy-manifest.ts` by `bun run --filter
+@fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `CONTROL_PROXY_GATES` or
+`OPERATIONS_PROXY_GATES`. The hosts and the browser-facing scheme belong to one installation and are
+bound at deploy time by `resolvePlatformProxyManifest` (`packages/provider-zerops/src/installation/proxy-manifest.ts`).
+`localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local
+hosts, so the two compositions can no longer disagree; `compileNamespaceProxyManifest`
+(`republishProxy` in `packages/provider-zerops/src/namespace/proxy-attempt.ts`) remains separate — it builds an APP namespace's manifest
+from the control registry.
+
+IAM's app id on a deployed installation is `iam`. The live document said `iam-local` until this
+generator replaced it, inherited from the local composition it was copied from at bring-up; the id is
+inert for an app whose every gate rule is `public`, so correcting it costs nothing.
 
 ## Where each credential lives
 

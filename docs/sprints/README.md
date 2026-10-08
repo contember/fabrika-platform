@@ -19,5 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [Zerops production readiness](sprint-2026-09-23-zerops-production-readiness.md) — approved release-readiness sprint for a small internal fleet; platform probes and contract design in progress.
-- [Second simplification pass](sprint-2026-10-08-second-simplification-pass.md) — four defect fixes, then dead API, duplicate models and single-consumer packages removed; migrations squashed; canvas packages back to `agent-canvas`.
+- [Second simplification pass](sprint-2026-10-08-second-simplification-pass.md) — four defect fixes, then dead API, duplicate models and single-consumer packages removed, and migrations squashed.

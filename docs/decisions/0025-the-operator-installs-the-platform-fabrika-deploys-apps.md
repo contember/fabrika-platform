@@ -15,28 +15,24 @@ never said which of them fabrika is responsible for:
 1. **The platform installation** — IAM, Operations, the proxy, and the control plane, running in
    somebody's Cloudflare or Zerops account.
 2. **The namespace proxy** — fabrika's own proxy code, built into each deployment namespace by the
-   control plane at runtime (`deployProxy`, `packages/provider-zerops/src/namespace.ts:858`).
+   control plane at runtime (`packages/provider-zerops/src/namespace/proxy-attempt.ts`).
 3. **Applications** — the things the platform exists to run, which may be public or private
    repositories.
 
-The absence of that boundary showed up as a defect rather than as a question. `triggerPipeline`
-(`packages/provider-zerops/src/api.ts:246`) offers the platform two sources: a one-time build from a
-**public** URL, or the service's own configured Git integration. The second branch is documented as
-"the private-repo path" and is never called, because nothing configures an integration. The
-consequence was recorded as a blocker — a private repository cannot deploy to Zerops — and the
-proposed fix was to thread fabrika's GitHub App installation token into a clone URL. That approach
-fails on its own terms: the platform stores what it is given, so a token minted to live for an hour
-becomes persisted state on a service, and the repository's standing rule against ever letting a
-clone URL with an embedded credential reach a log becomes much harder to hold when the URL is also
-platform state.
+The absence of that boundary showed up as a defect rather than as a question. Zerops'
+`trigger-pipeline` offers two sources: a one-time build from a **public** Git URL, or the service's
+own configured Git integration. Nothing configured an integration, so a private repository could not
+deploy to Zerops, and the proposed fix was to thread fabrika's GitHub App installation token into a
+clone URL. That approach fails on its own terms: the platform stores what it is given, so a token
+minted to live for an hour becomes persisted state on a service, and the repository's standing rule
+against ever letting a clone URL with an embedded credential reach a log becomes much harder to hold
+when the URL is also platform state.
 
 The live bring-up made the same gap visible from the other end. Bringing the `fabrika-test`
 installation to HEAD on 2026-08-05 required `zops push` from a laptop, because nothing in this
 repository deploys a platform installation. Two filed defects are consequences of that manual step,
-not independent bugs: the deployed proxy manifest went stale because no generator produces one for a
-deployed installation ([backlog 58](../backlog/58-generate-the-platform-installations-proxy-manifest.md)),
-and the live services still call themselves `local`
-([backlog 59](../backlog/59-the-live-installation-calls-itself-local.md)).
+not independent bugs: the deployed proxy manifest went stale because no generator produced one for a
+deployed installation, and the live services still called themselves `local`.
 
 **What decides it is credentials.** A pipeline that deploys an installation needs write access to
 that installation's cloud account. fabrika-platform is one public repository and there are many
@@ -61,22 +57,26 @@ command (`fabrika platform deploy`) and the scaffolding that generates a caller 
 ships the pipeline that runs it. Two shapes are supported, and both are first-class:
 
 - **A sidecar repository** owned by the operator, holding a pipeline, a file pinning the
-  fabrika-platform ref it deploys, and nothing else. The pipeline checks this repository out at the
-  pinned ref and runs `fabrika platform deploy`. Bumping the pinned ref is how an installation takes
-  a new version. `fabrika platform init` generates and maintains it.
+  fabrika-platform tag it deploys, and nothing else. The pipeline checks fabrika-platform out at the
+  pinned tag and runs `fabrika platform deploy --source-dir` on that checkout, which uploads it to
+  every installation service
+  ([ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)). Bumping the pinned tag
+  is how an installation takes a new version. `fabrika platform init` generates and maintains it.
 - **A one-click install from the public repository**, where the provider offers one. On Zerops that
   is the project import document this repository already generates.
 
-**2 — The namespace proxy is built from a pinned tag of the public repository.** It is fabrika's own
-code, created at runtime by the control plane, so no pipeline can own it and no account credential is
-involved: `proxyBuildFromGit` names a **tag** of `github.com/contember/fabrika-platform`, not a
-branch, so a namespace cannot silently take whatever is on `main`.
+**2 — The namespace proxy is built from a pinned commit of the public repository.** It is fabrika's
+own code, created at runtime by the control plane, so no pipeline can own it and no account credential
+is involved. Each namespace stores the repository, the full commit SHA and the descriptor identity of
+its proxy source; Control streams that exact commit into the proxy's app version and builds it. A
+namespace therefore cannot silently take whatever is on `main`
+([ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)).
 
 **3 — Applications are deployed by fabrika, and fabrika never embeds a credential in a URL to do
-it.** On Cloudflare the clone happens inside fabrika's own runner container, which already mints a
-GitHub App installation token per deploy and never persists it. On Zerops fabrika does not clone at
-all: it configures the service's repository integration once and then triggers the platform's own
-pipeline, which is the `triggerPipeline` branch that takes no `buildFromGit`.
+it.** On Cloudflare the clone happens inside fabrika's own runner container, which mints a GitHub App
+installation token per deploy and never persists it. On Zerops Control streams the exact commit's
+tarball into an app version it reserved and calls `build-and-deploy`; the token never leaves Control
+([ADR-0029](0029-github-app-sources.md)).
 
 **Invariant: fabrika never deploys its own installation, and no credential for an installation's
 account lives in this repository.** A change that adds a deploy job to `.github/workflows/`, or that
@@ -87,24 +87,18 @@ rewritten first.
 
 - `fabrika platform deploy` stops being an internal convenience and becomes a **public interface**.
   It must run unattended in someone else's CI, which means the steps that were hand-run during the
-  live bring-up belong inside it: generating and applying the proxy manifest (backlog 58) and
-  setting the installation's environment name (backlog 59). Those two are now scoped as steps of
-  this command rather than as free-standing bugs.
+  live bring-up belong inside it: generating and applying the proxy manifest and setting the
+  installation's environment name are steps of this command, not free-standing fixes.
 - The ordering discovered live — IAM, Operations, proxy, then control — is a property of the command,
   not advice in a runbook. Since [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) the
   application enforces nothing, so a control plane at a new version behind an old permissive manifest
   is an open `/api/*`. The command owns that order.
-- The private-repository problem shrinks to its useful half. No credentialed clone URL is ever
-  persisted on a Zerops service; what is needed is an API call configuring a service's repository
-  integration, plus the `triggerPipeline` branch that already exists.
-- **Provisioning a Zerops installation cannot be fully unattended.** Linking a GitHub account to
-  Zerops is an interactive OAuth flow, so an operator clicks once per Zerops account before fabrika
-  can deploy private applications there. That cost is accepted; it buys never holding a credential we
-  would have to persist. It also means a one-click install produces a platform that can deploy public
-  applications immediately and private ones after that click.
-- **The public repository becomes load-bearing.** Namespaces build from tags of it, so a tag that a
-  live installation references must not be deleted or moved. Publishing was already required for the
-  sidecar and one-click paths; this makes tag stability an operational obligation too.
+- No credentialed clone URL is ever persisted on a Zerops service. A fresh installation deploys
+  public applications at once; private ones need the operator to connect a GitHub App from the
+  console first ([ADR-0029](0029-github-app-sources.md)).
+- **The public repository becomes load-bearing.** Namespaces build from pinned commits of it, so a
+  commit that a live namespace references must stay reachable, and a published tag must not be
+  deleted or moved.
 - CI in this repository stays what it is — quality, tests, release. The absence of a deploy job is
   now a decision with a name, so the next person to notice the gap finds this file instead of filing
   it as an omission.
@@ -135,7 +129,7 @@ party whose account it is.
 Self-hosting is appealing precisely because the machinery already exists. It fails for the reason the
 Cloudflare deploy executor is already a separate out-of-band Worker: a control plane that redeploys
 the services it is running in resets itself mid-deploy. Rather than special-casing the installation's
-own services inside the deploy engine, the installation stays outside it.
+own services inside the deploy path, the installation stays outside it.
 
 ### Only support the sidecar repository, and skip one-click
 

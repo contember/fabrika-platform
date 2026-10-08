@@ -34,7 +34,6 @@ Success:
 - ✔ Builder phases name skills that exist nowhere (`intake-classification`, `rfc2119-principles`, …) — `packages/builder/cli/src/phases.ts`.
 - ✔ Four UUIDv7 generators — `packages/auth-core/src/ids.ts`, `packages/control/src/uuid.ts`, `packages/platform-node/src/uuid.ts`, `packages/operations/src/uuid.ts`.
 - ✔ `issueJwt` has callers only inside `auth`, `auth-core`, `iam` (grep, non-test).
-- ✔ `agent-canvas` consumes `@fabrika/{annotations,canvas-kernel,daemon-kit}` from npm at `0.2.0` — `~/projects/oss/agent-canvas/package.json:21-23`.
 - ✔ Migration files: control 44 (D1 + Postgres), iam 22, operations 12; ADR-0017 says a legacy ledger "is never renamed, rewritten, or dropped" — `docs/decisions/0017-service-owned-postgres-migrations.md:79`.
 
 Re-check every other `file:line` in a unit when it starts.
@@ -54,8 +53,8 @@ Re-check every other `file:line` in a unit when it starts.
   `valueRef` input. Tests that need a secret use the vault with a test key.
 - **D5 — One GitHub credential model.** Cloudflare moves to the vault-backed connections that Zerops
   uses. This keeps multiple connections (first-pass D6) on both clouds.
-- **D6 — Canvas packages go home.** `canvas-kernel`, `annotations` and `daemon-kit` move to
-  `agent-canvas`, which publishes them. The builder consumes them from npm.
+- **D6 — Canvas packages stay here.** `canvas-kernel`, `annotations` and `daemon-kit` remain in this
+  repository; `agent-canvas` keeps consuming them from npm.
 
 ## Work units
 
@@ -228,6 +227,16 @@ Re-check every other `file:line` in a unit when it starts.
   gateway. The full suite is green.
 - **Touch points.** `control/src/{zerops/runtime,origin-guard,iam-admin,operations-gateway,services}.ts`, `control/src/source-connection/**`, `control/src/repositories*`, `control-contract`.
 
+#### WU2.4 — Drop the legacy namespace proxy `buildFromGit` path (S)
+
+- **Problem.** ADR-0045 pins the namespace proxy to an uploaded `proxySource`, but `proxyBuildFromGit`
+  and `FABRIKA_PROXY_SOURCE` remain (`provider-zerops/src/installation/topology/topology.ts:140,416`,
+  `provider-zerops/src/namespace/{types,codec}.ts`, the CLI rejection at `cli/src/namespace.ts:178`).
+- **Scope.** Delete the field, its codec branch, the topology env and the CLI rejection. A stored
+  namespace without `proxySource` fails to decode (D2 of the first pass).
+- **Acceptance.** Namespace tests and `gen:check` are green; `local:smoke` provisions a namespace.
+- **Touch points.** `provider-zerops/src/{namespace,installation/topology}/**`, `cli/src/namespace.ts`, `platform-artifacts` (regenerate).
+
 ### Wave 3 — packages and the GitHub source
 
 #### WU3.1 — Fold `email` into `iam` and `proxy-contract` into `proxy-core` (S)
@@ -346,31 +355,12 @@ Re-check every other `file:line` in a unit when it starts.
 - **Touch points.** `control`, `iam`, `operations` migrations and `migrate.ts`, `platform-node`, ADR-0017.
 - **Owner action.** Reinstall the live test installations after this lands.
 
-### Wave 7 — repository boundary and lint
+### Wave 7 — lint
 
-#### WU7.1 — Canvas packages back to `agent-canvas` (M, two repositories)
-
-- **Problem.** `canvas-kernel`, `annotations` and `daemon-kit` import no platform package. They are
-  44% of the test time and 3 of the public packages. `agent-canvas` already consumes them from npm.
-- **Scope.**
-  - Move the sources into the `agent-canvas` workspace, keeping the package names, with its CI
-    publishing them.
-  - The builder depends on the published versions.
-  - In this repo, delete the three packages, `test:agent-interfaces`, `scripts/package-boundaries.test.ts`
-    and their release entries.
-- **Owner actions.**
-  - Configure npm trusted publishing for these names from `agent-canvas`.
-  - Tag a release there before this repo drops its copies.
-- **Acceptance.**
-  - `agent-canvas` builds and tests against the moved sources.
-  - Here, the builder suites pass against the published versions, and `release:validate` passes.
-- **Touch points.** `packages/{canvas-kernel,annotations,daemon-kit}` (delete), `builder` deps, root `package.json` scripts, `scripts/release.ts`; `~/projects/oss/agent-canvas`.
-
-#### WU7.2 — Lint for dead code (S)
+#### WU7.1 — Lint for dead code (S)
 
 - **Problem.** `noUnusedImports` and `noUnusedVariables` are off; turning them on reports 24 hits.
-  `noExplicitAny` reports 37 hits, 31 of them in `canvas-kernel/src/engine/compiler.ts`, which WU7.1
-  moves out.
+  `noExplicitAny` reports 37 hits, 31 of them in `canvas-kernel/src/engine/compiler.ts`.
 - **Scope.** Enable the three rules and fix the remaining hits. Do not disable a rule per file.
 - **Acceptance.** `bun run lint` is green with the rules on.
 - **Touch points.** `biome.json`, the files the rules hit.
@@ -384,20 +374,20 @@ Re-check every other `file:line` in a unit when it starts.
   output builder; shared env helpers; dropping `ENVIRONMENT` from Control; folding `jwks` into
   `auth-core`. All were "maybe" in the review and are small.
 - Simplifying catalog revision ordering and handoff passes (review "maybe"; backlog 84 holds it).
-- Moving the builder out of the repo.
+- Moving the builder or the canvas packages out of the repo (D6).
 
 ## Sequencing
 
-| Wave | Units                             | Mode                                              |
-| ---- | --------------------------------- | ------------------------------------------------- |
-| 0    | WU0.1                             | alone; touches imports across packages            |
-| 1    | WU1.1, WU1.2, WU1.3, WU1.4, WU1.5 | parallel; disjoint territories                    |
-| 2    | WU2.1, WU2.2, WU2.3               | parallel                                          |
-| 3    | WU3.1, WU3.2                      | parallel                                          |
-| 4    | WU4.1                             | alone                                             |
-| 5    | WU5.1, WU5.2                      | parallel                                          |
-| 6    | WU6.1                             | alone; after every unit that changes a schema     |
-| 7    | WU7.1, then WU7.2                 | WU7.1 waits on the owner's `agent-canvas` release |
+| Wave | Units                             | Mode                                          |
+| ---- | --------------------------------- | --------------------------------------------- |
+| 0    | WU0.1                             | alone; touches imports across packages        |
+| 1    | WU1.1, WU1.2, WU1.3, WU1.4, WU1.5 | parallel; disjoint territories                |
+| 2    | WU2.1, WU2.2, WU2.3, WU2.4        | parallel                                      |
+| 3    | WU3.1, WU3.2                      | parallel                                      |
+| 4    | WU4.1                             | alone                                         |
+| 5    | WU5.1, WU5.2                      | parallel                                      |
+| 6    | WU6.1                             | alone; after every unit that changes a schema |
+| 7    | WU7.1                             | last; lints the final tree                    |
 
 Gates per unit: typecheck, the narrowest tests, then the full suite with Postgres before commit.
 Units that touch delivery, auth or the console also run `local:reset && local:smoke` and, for the
@@ -407,3 +397,8 @@ whenever the package set changes.
 ## Run log
 
 <!-- Append as you work. -->
+
+- 2026-10-08 — Owner: the canvas packages stay here (D6 rewritten, old WU7.1 dropped).
+- WU0.1: `uuidv7` leaves `auth-core` (it stays dependency-free); `iam` and `proxy-core` import it from `@fabrika/platform`.
+- WU1.5 found the unused `proxyBuildFromGit` / `FABRIKA_PROXY_SOURCE` beside ADR-0045's `proxySource` pin (`provider-zerops/src/installation/topology/topology.ts:140,416`, `namespace/{types,codec}.ts`); added as WU2.4.
+- Items handed out of this repo by WU1.5: the oblaka DO-migration-history bug (old 11), deprecating `@trasa/core` (old 26), retiring standalone Poplach (old 34), restricting npm token publishing on `@fabrika/*` (old 25, owner task).

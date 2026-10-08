@@ -9,6 +9,12 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Simplify delivery and provider packaging (2026-10-07)](sprint-2026-10-07-simplify-delivery-and-providers.md)
+  — engine deleted, one shared lease, `source` merged into Control, one `provider-<cloud>` package per cloud; ADRs consolidated to 31.
+
+- [Zerops production readiness (2026-09-23)](sprint-2026-09-23-zerops-production-readiness.md)
+  — closed without a release; prerequisites shipped as ADR-0043/44/45; remaining work in backlog 05, 36, 38.
+
 - [Static validation and parser simplification (2026-10-05)](sprint-2026-10-05-static-validation.md)
   — owner-local schemas, static installation validation and drift detection; 5,056 passing tests, ten browser walkthroughs and same-version recovery after natural lease expiry. Includes retained-boundary, territory and local-integration ledgers.
 

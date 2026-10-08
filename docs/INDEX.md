@@ -6,14 +6,7 @@ decisions → reference → archive.
 
 **New here?** Start with [`reference/overview.md`](reference/overview.md) — what
 fabrika-platform is and how the pieces fit — then skim
-[`decisions/README.md`](decisions/README.md) for the _why_. For the current error
-ingest, grouping, triage, and alert workflows, read
-[`reference/operations-errors.md`](reference/operations-errors.md). For how
-authentication and authorization work, read
-[ADR-0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md), then
-[ADR-0023](decisions/0023-one-session-per-host.md) for the browser-bound session handoff.
-
-For local application development connected to an installation, see [Local builder](reference/local-builder.md).
+[`decisions/README.md`](decisions/README.md) for the _why_.
 
 ## Folders
 
@@ -26,117 +19,32 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
-[Static validation and parser simplification](archive/sprint-2026-10-05-static-validation.md) is complete: owner-local schemas, static Zerops installation validation, 5,056 passing tests, ten browser walkthroughs and natural-lease Docker recovery. Public Zerops type-generator replacement remains deferred.
-
-[Source identity and provider cleanup](archive/sprint-2026-10-05-source-identity-and-provider-cleanup.md) completed on 2026-10-05: verified Cloudflare commit/checkout/release/map identity and bounded provider cleanup; 4,615 tests passed with PostgreSQL/S3. C2 normalization reuse and operator-owned live acceptance remain deferred.
-
-[Platform simplification](archive/sprint-2026-10-04-platform-simplification.md) completed on 2026-10-04: fourteen reviewed and verified implementation commits preserve the complete product, remove unused/shared code, and repair deployment/Operations completion ownership. Missing release context requires the decisions in [backlog 95](backlog/95-close-release-recovery-without-frozen-context.md).
-
-[Zerops production readiness](sprints/sprint-2026-09-23-zerops-production-readiness.md) prepares the next release for a small internal fleet: deployment/configuration identity, immutable installation revisions, descriptor validation, safe egress, automatic source maps and real authentication/recovery witnesses. The sprint is approved and starts with platform probes and contract design; production deployment is separate.
-
-[Second simplification pass](sprints/sprint-2026-10-08-second-simplification-pass.md) is planned. It fixes vault-only secrets, the builder's unchecked PID signal, Operations telemetry health and phantom builder skills, then removes dead API and duplicate models, merges single-consumer packages, squashes migrations and moves the canvas packages back to `agent-canvas`.
-
-[Simplify delivery and provider packaging](archive/sprint-2026-10-07-simplify-delivery-and-providers.md) completed on 2026-10-08. It made the ADRs living and consolidated them to 31, deleted the engine, bound Zerops deploys only to the release, put runs, the catalog and namespaces on one 90 s lease, merged `source` into Control with App keys in the vault, and folded each cloud into one public `provider-<cloud>` package. Production TypeScript shrank by 5.2k lines and tests by 6.0k. S3, live Zerops, and real cloud deploys were not verified.
-
-[Connect the local builder to an installed platform](archive/sprint-2026-09-21-local-builder-platform-flow.md) completed on 2026-09-23: human consent, local Zerops development and repeated Control deployment, with in-process cross-plane verification and documented browser/recovery limits.
-
-[Remove duplicate administrative REST](archive/sprint-2026-09-21-remove-duplicate-rest.md) shipped on 2026-09-21: RPC-only administration for Control and Operations, following [ADR-0041](decisions/0041-one-administrative-transport-for-control-and-operations.md).
-
-[Simplify existing boundaries](archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21: shared Operations input definitions, one bound-source provider contract, and decomposition of sixteen large source files.
-
-The [bring-up without surprises](archive/sprint-2026-08-21-bring-up-without-surprises.md)
-shipped on 2026-08-21: `platform install --create-project`, `platform upgrade --to=<tag>` with the
-first three platform builds concurrent, a machine-key block after `admin`/`init`, registration that
-refuses a proxy target without its domain and a `namespaces get` that lists the hosts, a catalog
-sync that logs every outcome and a deploy that names a missing ingest config (backlog 84's cause:
-the lease a roll's dead container leaves behind), a registry smoke that waits out npm, a build-log
-relay scoped to one app version, a table of 48 platform facts asserted by the emulator and an
-opt-in live suite, and the `source` memory reading (1 × 128 MB through a 250 MB upload).
-
-The [cheap rebuild from scratch](archive/sprint-2026-08-21-cheap-rebuild-from-scratch.md)
-shipped on 2026-08-21: it emptied both live Zerops projects, removed the legacy v1 source credential path
-their deletion made unreachable,
-made `source` stream GitHub tarballs,
-sized namespaces cheaply by default ([ADR-0038](decisions/0038-size-namespaces-cheaply-by-default.md)),
-fixed the five bring-up defects, and stood one installation back up unattended with two private
-applications from two GitHub organizations — the second-organization deploy the multi-connection sprint
-had left open. The live run found two platform facts the emulator had hidden (recorded in
-[`reference/zerops-platform.md`](reference/zerops-platform.md)) and left backlog 83–84.
-
-The archived [multi-connection sprint](archive/sprint-2026-08-14-multiple-private-github-source-connections.md) —
-extend the Zerops source path to one private GitHub App per organization and multiple connections per
-installation. It gave
-every connection a keyed v2 credential and a scoped webhook, and binds every Zerops private app to a
-connection-and-installation pair. Cloudflare keeps its static-secret and installation-id webhook
-model. Fabrika sets no explicit connection-count limit. Deterministic local compatibility and isolation
-gates are complete. Live setup created and verified Apps for two additional organizations, and a
-keyed-v2 scoped push deployed its bound private application. A private deploy from a second
-organization remains open; the legacy-v1 generic delivery was retired with the
-account that held its only credential.
-
-Two auth sprints shipped on 2026-08-05 —
-[hardening](archive/sprint-2026-08-04-auth-hardening.md), then
-[track closeout](archive/sprint-2026-08-05-auth-track-closeout.md). The Access-plane
-hardening backlog is closed; the later source-aware organizational directory and group-entitlement
-expansion is tracked in [item 91](backlog/91-add-an-organizational-directory-to-iam.md). What is left
-of item 54 is a console architecture decision, not auth work.
+- [Second simplification pass](sprints/sprint-2026-10-08-second-simplification-pass.md) — fixes
+  vault-only secrets, the builder's unchecked PID signal, Operations telemetry health and phantom
+  builder skills, then removes dead API, duplicate models and single-consumer packages, and squashes
+  migrations.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Auth:** there is one enforcement point and one enforcement ADR —
-  [0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md). The SDK's duplicate in-process
-  gate path is deleted. [0023](decisions/0023-one-session-per-host.md) gives one session-delivery
-  mechanism and one session per host, `__Host-` on every cookie, binds each callback to the browser
-  that started it, and strips Fabrika cookies before the application. A session is now refused as soon as its
-  authentication method is disabled, and an abuse limit is keyed on a client coordinate
-  the caller cannot set — the proxy observes and injects it, IAM enforces, because
-  0022 forbids the proxy holding state a decision depends on.
-- **Enforcement is one decision, two deployments.** `@fabrika/proxy-core` holds the decision and is
-  public; `@fabrika/proxy` is the Caddy artifact that serves it and stays private. That split is what
-  lets the published Cloudflare provider reach the enforcement code without publishing a binary, and
-  it is what unblocked `release:validate`.
-- **Configuration names:** one spelling per setting. `FABRIKA_*` is the only family anything
-  reads — [ADR-0024](decisions/0024-canonical-environment-names.md); there is no `VOZKA_*`/`PROPUSTKA_*`
-  fallback. Durable
-  identifiers that carry those words as VALUES (app ids, worker/database/bucket/queue names,
-  migration identities) are untouched and stay that way.
-- **Releases are live and tokenless.** All twenty-two `@fabrika` packages are on npm at **`0.0.2`**,
-  every one published by `release.yml` through OIDC with a provenance attestation, and every one
-  trusting only that workflow ([`25`](backlog/25-bootstrap-npm-trusted-publishing.md)). `0.0.1` was
-  the bootstrap: npm demands an interactive one-time password for a first publish, so it went up from
-  a laptop and carries no provenance — which is exactly why `0.0.2` exists. **`v0.0.2` is also the
-  first tag this repository has ever had**, which is what the sidecar install path was waiting on.
-- **Zerops application delivery is live.** The light platform tier is installed and rolled forward by
-  its operator-owned CI. The archived
-  [application deploy sprint](archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) proved the
-  same exact application commit through the public and private source-upload paths, a private push
-  webhook, fast failed-build detection, readable run logs, cross-host sign-in and release-correlated
-  browser exception ingest. [ADR-0029](decisions/0029-github-app-sources.md) owns the source transport and the
-  authenticated Control setup. The archived
-  [multi-connection sprint](archive/sprint-2026-08-14-multiple-private-github-source-connections.md)
-  handed its second-organization deploy to the cheap-rebuild sprint's WU8; keyed-v2 scoped delivery is proven live. [ADR-0029](decisions/0029-github-app-sources.md)
-  now moves source delivery into Control. The
-  production two-project shape and custom domains remain in
-  [`05`](backlog/05-bring-up-on-a-real-zerops-account.md); one-command local registration is
-  [`78`](backlog/78-register-a-zerops-app-from-local-config-in-one-command.md).
-- **Domain audit delivery is best-effort today.** `IamRpc.audit` intentionally returns before the IAM
-  write is durable, which is the existing semantics followed by every Control mutation, including the
-  source-connection flow. Repository-wide stable event ids, idempotent IAM acknowledgement and
-  transactional producer outboxes are tracked in
-  [`71`](backlog/71-deliver-domain-audit-events-durably.md); this is not a blocker for the source
-  connection workflow.
-- **The session handoff is the ONLY way a browser gets a session for an app.** IAM
-  issues a browser-bound one-time code and the proxy on the app's own host redeems it
-  ([ADR-0023](decisions/0023-one-session-per-host.md); how it works is
-  [`reference/cross-host-sso.md`](reference/cross-host-sso.md)). The shared parent-domain
-  cookie is gone, both session cookies carry the `__Host-` prefix, and the control plane
-  projects an app's return origins into IAM on every deploy.
-- **Operations follow-up:** complete
-  [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
-  add [DNS-safe Operations egress](backlog/38-add-dns-safe-operations-egress.md),
-  and add [email as an Operations notification target](backlog/46-add-portable-email-alert-delivery.md).
-  The [broad target](ideas/operations-plane.md) and credentialed
-  [Poplach cutover](backlog/34-retire-standalone-poplach.md) remain separate.
+- **Auth has one enforcement point.** The proxy runs the only gate evaluator
+  ([ADR-0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md)); a browser gets an app
+  session only through the one-time handoff
+  ([ADR-0023](decisions/0023-one-session-per-host.md),
+  [`reference/cross-host-sso.md`](reference/cross-host-sso.md)).
+- **Zerops builds only uploaded, pinned sources.** Control streams an application's exact commit
+  through the operator's GitHub App ([ADR-0029](decisions/0029-github-app-sources.md)); installation
+  commands upload one `--source-dir` snapshot, and each namespace pins its proxy commit
+  ([ADR-0045](decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)). How it works:
+  [`reference/installing-on-zerops.md`](reference/installing-on-zerops.md) and
+  [`reference/provider-bundles.md`](reference/provider-bundles.md).
+- **A production Zerops release still needs three items:** automatic build source maps
+  ([36](backlog/36-complete-zerops-release-artifact-correlation.md)), DNS-safe Operations egress for
+  webhooks ([38](backlog/38-add-dns-safe-operations-egress.md)), and the production topology plus a
+  full release rehearsal ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).
+- **Releases are tokenless.** `release.yml` publishes every public `@fabrika` package through npm
+  trusted publishing with provenance ([`reference/release-process.md`](reference/release-process.md)).
+- **Domain audit delivery is best-effort.** `IamRpc.audit` returns before the IAM write is durable;
+  durable delivery is [71](backlog/71-deliver-domain-audit-events-durably.md).

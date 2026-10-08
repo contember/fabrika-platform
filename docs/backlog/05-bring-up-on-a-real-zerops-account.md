@@ -27,8 +27,11 @@ them.
    reaching IAM over its public origin.
 2. **Custom domains.** Bind them to each project's L7 balancer, proxy service only;
    the import format has no field for it, so it is manual by construction. A shared
-   IPv4 needs **both** A and AAAA records or routing fails silently — see
-   [`09`](./09-confirm-multi-domain-per-service.md).
+   IPv4 needs **both** A and AAAA records or routing fails silently. Upstream's custom-domain flow
+   takes several domains per service, which the one-proxy-fronts-many-apps topology needs; confirm it
+   on this account and record the result in the platform reference. A plain domain validates over
+   HTTP-01, so it must route to the service before its certificate issues; a wildcard needs DNS-01
+   (`CNAME _acme-challenge.<domain>` → `<domain>.zerops.zone`).
    Browser SSO no longer waits on this. It used to: the session cookie was shared
    across hosts through a parent-domain `Domain` attribute, and `*.zerops.app` is on
    the Public Suffix List, so a browser refuses a cookie scoped to `prg1.zerops.app`
@@ -67,6 +70,16 @@ them.
   still choose its own bucket, which is the case the limit must not be built on.
 - `GET /service-stack/{id}/app-version` list order. The client picks max `sequence`
   rather than trusting order; confirm `sequence` really is monotonic.
+
+5. **A full release rehearsal.** Before the first production release: clean install, repeated
+   upgrade, public and private app deploys at the current release, a keyed webhook, browser password
+   and OIDC sign-in, scoped authorization, revocation, SDK ingest and triage, and Operations outage
+   isolation. Test acknowledged-write survival on the selected HA PostgreSQL profile and restore into
+   an isolated project from a complete recovery set (IAM/Control/Operations SQL with migration ledgers
+   and queues, object payloads, and the matching vault, signing and configuration secrets). Restored
+   work must not duplicate occurrences or dispatch stale notifications. Recovery targets agreed with
+   the owner: survive a single database-node failure without losing acknowledged writes; after
+   project loss, restore within four hours from a verified backup no older than 24 hours.
 
 ## Acceptance
 

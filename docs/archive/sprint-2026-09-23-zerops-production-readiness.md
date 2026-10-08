@@ -1,3 +1,20 @@
+> **OUTCOME — closed 2026-10-08 without a release.** The delivery prerequisites shipped; the
+> remaining release work moved to the backlog because nothing in this sprint was being executed.
+>
+> - WU0 → ADR-0043, ADR-0044 and ADR-0045, with the live measurements in
+>   `reference/zerops-platform.md`.
+> - WU1 → replaced and shipped by the
+>   [simplification sprint](sprint-2026-10-07-simplify-delivery-and-providers.md) (WU3.2 `15964c0`,
+>   WU3.3 `6f89f2c`, `9c1e7f8`).
+> - WU2 → ADR-0045: installation commands upload one `--source-dir` snapshot, and each namespace pins
+>   its proxy commit (`6ac64f5`, `5c01205`). Backlog 65 deleted.
+> - WU3 → `c5e917a`; backlog 90 deleted.
+> - WU4 (paused by the owner) → [backlog 38](../backlog/38-add-dns-safe-operations-egress.md).
+> - WU5 → [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
+> - WU6 and the production topology → [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+>
+> No production topology was selected, no release was tagged, and no live rehearsal ran.
+
 # Sprint — Prepare a production-ready Zerops release (2026-09-23)
 
 **Goal.** Prepare a verified Fabrika release for a small internal application fleet on Zerops, with repeatable deployment, real authentication, and demonstrated recovery.

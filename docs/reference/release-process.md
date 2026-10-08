@@ -52,7 +52,7 @@ After publication, `release:registry-smoke` waits for the expected `latest` or `
 
 The wait is for npm's replication, not for the publish. A package has been observed reaching its dist-tag about five minutes after `npm publish` answered, so the smoke polls with backoff — 5 s, 10 s, 20 s, then 30 s steps — for up to ten minutes, printing the packages still missing between rounds and asking only about those. Past the deadline it fails with one line per package, naming what the registry answered. A release should no longer need a manual re-run of this step.
 
-The workflow refuses to start publication while any package name is absent from npm. The one-time external activation procedure is tracked in [backlog 25](../backlog/25-bootstrap-npm-trusted-publishing.md).
+The workflow refuses to start publication while any package name is absent from npm. npm trusted publishing cannot create a package name, so a new public package needs one interactive first publish and an `npm trust` binding to `release.yml` by an npm owner before CI can publish it.
 
 ## Pinning the standalone example
 

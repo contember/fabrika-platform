@@ -168,6 +168,170 @@ capability after restarts: polled when the build was requested, deleted when it
 was not. Control then records the terminal run and projects its terminal release
 state to Operations before releasing the run lease.
 
+### Zerops source transport
+
+No Zerops deploy uses `buildFromGit`: Zerops builds a revision-suffixed Git source from the default
+branch ([platform facts](zerops-platform.md)). Public and private GitHub repositories share one
+upload path, run in-process by control (`packages/control/src/source/`, ADR-0029): resolve the exact
+commit and the registered root `zerops.yaml` digest; create and record an application version; stream
+the repository tarball for that commit into the version's upload; call `build-and-deploy` with the
+validated, canonically rendered descriptor and selected setup. Namespace proxies use the same path
+with the commit pinned in the namespace
+([ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md)).
+
+The registered descriptor retains its original text and SHA-256. Validation accepts one mapping
+document with uniquely named setups and checks decoded keys and values across every setup for foreign
+service references. Multiple setups require an explicit selector. Tags, anchors/aliases, merge or
+duplicate keys, non-string keys, ambiguous plain scalars and unsupported raw Unicode are rejected;
+quoted equivalents of ambiguous scalars remain supported. The same canonicalization runs on recovered
+builds. See [ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md).
+
+The transport needs no `git` binary and no `run.prepareCommands`, which matters because package
+installation on a Zerops runtime requires `sudo`. App ids and private keys of every GitHub connection
+live in control's vault; a request that names no connection resolves no credential, and there is no
+credential search.
+
+Each connection has an independent webhook secret encrypted in Control's platform vault. Every Zerops
+App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and secret before
+reading and authenticating the bounded body, then requires the payload installation, repository and
+registered application pair to match it. A Zerops composition REFUSES the generic `/webhooks/github`
+route with 401 and never falls back to a keyed connection. Cloudflare keeps that generic route, on its
+static secret and installation-id path, because it has no source connection row at all.
+
+Production origins are fixed to `api.github.com` and `codeload.github.com`. There is no operator-facing
+GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected test seams only.
+Resolve reads two bounded REST responses: the commit for the requested ref, then the root `zerops.yaml`
+through `/contents` with `Accept: application/vnd.github.raw+json`, whose SHA-256 must equal the digest
+registered in the provider artifact.
+
+Archive and upload are one streamed operation. Control requests
+[`/repos/{owner}/{repo}/tarball/{sha}`](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-tar)
+with `redirect: 'manual'`, requires the `Location` origin to be exactly `https://codeload.github.com`,
+and fetches that URL without the installation Authorization header — the codeload URL carries its own
+short-lived token in its query and is treated as a credential in transit. The response is piped
+`gunzip → tar rewrite → gzip → PUT`, so no repository byte is staged on disk or buffered whole.
+
+The application tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
+the pax global header's `comment`, strips the single archive prefix, keeps regular files only and
+rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed mtime. The tarball's own
+directory entries are dropped; instead each parent directory is written once, outermost first, before
+the first file beneath it, because the platform's unpacker creates no directory it was not told about
+([platform facts](zerops-platform.md)). It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
+root `.gitmodules`, paths outside the prefix or containing `.`/`..`, duplicate paths, a pax `linkpath`
+record, a pax record over 64 KiB, and a truncated stream. It admits at most 50,000 files and 512 MiB of
+file content, counted incrementally. It hashes the root `zerops.yaml` as it passes: a missing or
+drifted descriptor fails the operation. Because the tarball is `git archive` output, `.gitattributes`
+`export-ignore` and `export-subst` apply. Archives are not byte-deterministic across runs and nothing
+depends on that.
+
+A public archive may be uploaded as kind `platform`, which takes no credential. Before downloading it,
+control checks the exact commit's Git tree: the commit and root tree identities must match, the tree
+must explicitly be complete, and gitlinks are refused even without `.gitmodules`. Metadata is bounded
+to 7 MiB and 50,000 entries; truncated or malformed trees fail before download or upload.
+
+Platform mode preserves relative symbolic links after validating the full archive namespace. It
+refuses escapes, cycles, dangling targets, path-type collisions, entries beneath symlinks in either
+order, and symlink descriptors. Hard links and special entries remain refused. Contents stay streamed;
+bounded path/link metadata supports the final verdict. A PUT response alone is not upload success:
+the archive's validation verdict must succeed too. The `application` kind keeps the strict behaviour,
+including rejection of symbolic links and PAX `linkpath` records.
+
+**Public platform archive witness, 2026-10-02.** Exact commit
+`9917992ad1a0a462e060064255d9a90a3a2ed968` passed live GitHub tree checks and streamed archive validation:
+1,394 entries, 9,202,153 expanded file bytes, descriptor SHA-256
+`12ea505cc6fe782871b350d5ac2e58d7bd1b2874ec7ee4da152b814f6a8c68b0`. Native tar inspection preserved
+both `packages/auth-core/AGENTS.md` and `packages/installation-init/AGENTS.md` as relative links to
+`CLAUDE.md`. The production-style gzip/native-fetch pipeline completed against a local HTTP sink.
+
+For local stream witnesses on Bun 1.3.14, consume the archive through a reader and incremental
+`FileSink`. `Bun.write(path, new Response(customStream))` stalled even for a network-free 2 KiB
+stream; an upstream HTTP abort did not unblock that consumer after download had completed.
+A native fetch consumer did not exhibit that failure. Bun's compression streams also ignore
+backpressure, so the pipe pulls through explicitly (`packages/control/src/source/streams.ts`).
+
+The transport accepts only the measured `prg1` upload destination: HTTPS host
+`proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, empty userinfo, no explicit
+port or fragment, and a non-empty signed query. It refuses redirects. The credential-bearing upload URL
+exists only in memory for the live PUT; it is never persisted or logged.
+
+Resolve is bounded to four minutes and upload to 15 minutes; the PUT itself is bounded to ten minutes,
+and that bound covers the whole download-rewrite-upload pipe
+(`packages/control/src/source/transport.ts`). Caller cancellation is propagated through GitHub REST,
+the tarball download, the rewrite and the upload.
+
+Validation happens while the PUT is in flight, so a rejected repository aborts the upload. The
+transport settles the archive verdict before it blames the network: the run sees `archive_rejected`,
+`descriptor_missing`, `descriptor_mismatch` or `commit_mismatch` rather than `upload_failed`. Every
+such failure is pre-trigger, and the provider deletes the app version on every pre-trigger failure.
+
+The same example commit reached `ACTIVE` through application-version upload while the repository was
+public and again after it became private. A later private push also completed the scoped webhook path
+end to end: verified event, webhook-triggered run, private source resolve and upload, Zerops build,
+active version and healthy app. The inspected application version used source `CLI` and carried no
+GitHub, GitLab or public-Git source.
+
+### Zerops GitHub source connections
+
+Normal GitHub App setup runs in the authenticated Control console at **Settings → Source**
+([ADR-0029](../decisions/0029-github-app-sources.md)). Fresh Zerops installations
+boot with anonymous source access. The page lists stable connections in bounded pages and presents the
+one global setup or repair workflow separately. A human principal holding `source.connection.manage`
+can add another private organization-owned App while stable rows remain. Only one nonterminal workflow
+may exist, and the same organization cannot be connected twice, but Fabrika imposes no total
+connection-count limit. Setup accepts an optional same-owner repository set. Control returns only a
+same-origin continuation path; no private key, webhook secret, manifest code or opaque state enters a
+browser DTO, URL log or error.
+
+The continuation submits a least-authority manifest directly to `github.com`. The callback requires
+the same authenticated human principal, exact Control origin and one-use encrypted state. It rejects
+unknown or duplicate query fields, bounds the GitHub response and redirects to a clean
+`/settings/source` URL. Before the browser can observe success, Control stores GitHub's one-time App id
+and private key in its encrypted platform vault, in the same transaction as the setup checkpoint. The
+setup state stores only nonsecret phases, hashes, verified identities and vault references.
+
+For every new connection, Control then (`packages/control/src/source-connection/`):
+
+1. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
+   `push` event with the vault key;
+2. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
+   verifies the returned URL, JSON content type and TLS setting;
+3. asks the administrator to install the App, then verifies the organization or every requested
+   repository through App-JWT endpoints before publishing the connection.
+
+GitHub masks the webhook secret, so the structural readback cannot compare that value. Control starts
+using the new vault-backed secret after structural webhook verification, including while installation
+is still pending.
+
+A stable connection can be reconciled from the same page. Reconciliation re-verifies the App identity
+with the vault key and reapplies the connection's exact stored webhook URL, content type, TLS setting
+and secret. It never changes the App, webhook secret, connection id or application binding. The
+generic webhook route is reserved for Cloudflare and refused here.
+
+A Zerops private application is registered against the connection whose canonical organization owns
+its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
+resolution and scoped webhooks require that exact pair. Changing the repository owner of an already
+bound application is refused; re-registration is required. Public Zerops repositories need no pair,
+and Cloudflare's installation-only rows remain valid.
+
+Verified live on 2026-08-20: after a webhook repair, the next private repository push reached that
+connection's scoped webhook route, passed HMAC verification and created run
+`01a01f7c-037b-702e-8ec8-b3f186144b22` for exact commit
+`0d608e0071119c85ac144f78c1ad1509f7a22ab7`. The run succeeded, Zerops version
+`haveZKs7So2jjGl00vhxGQ` reached `ACTIVE`, and the deployed `/healthz` answered `200`.
+
+`platform init` does not touch GitHub credentials: a private source is connected only through Control's
+**Settings → Source**, and source credentials never enter the sidecar checkout, repository or GitHub
+Environment. A `source` service left by an earlier layout is reported with one warning by
+`platform deploy` and never deleted (`packages/provider-zerops/src/installation/deploy.ts`); it may
+still hold App keys, so delete it by hand.
+
+One unavoidable orphan window remains after GitHub accepts manifest conversion but before the callback
+durably stores the response; such an App must be deleted and recreated. Multi-connection acceptance
+evidence is recorded by the archived
+[multi-connection sprint](../archive/sprint-2026-08-14-multiple-private-github-source-connections.md).
+The single-connection public/private deployment gate is recorded by the archived
+[application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
+
 ### Shared lifecycle ownership
 
 `@fabrika/platform` supplies the shared SQL lease implementation. Acquisition is non-reentrant;
