@@ -107,7 +107,7 @@ App at all.
 | `@fabrika/installation-init`   | The operator-side `init` mechanics both installations share.                                   |
 | `@fabrika/builder`             | Guided specification, review, and agent-assisted implementation loop.                          |
 | `@fabrika/cli`                 | The single public `fabrika` command and provider-aware command router.                         |
-| `@fabrika/check`               | The application checker (`fabrika-check`): syntactic rules over an application's source tree.  |
+| `@fabrika/check`               | The application checker (`fabrika-check`) and the static contract reader (`/contract`).        |
 | `@fabrika/dashboard`           | Unified Delivery, Access, and Operations console served by control.                            |
 | `@fabrika/runner-container`    | Plain-Bun process and container image that execute Cloudflare runner jobs.                     |
 | `@fabrika/runner-cloudflare`   | Out-of-band Cloudflare Worker that hosts and relays the deploy container.                      |

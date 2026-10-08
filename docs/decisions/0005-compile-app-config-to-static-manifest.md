@@ -66,7 +66,8 @@ The application's startup check is the backstop for the reader. The application
 compares its own contract digest with `FABRIKA_CONTRACT_DIGEST` and refuses to start
 on a mismatch ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 
-The code does not read the contract yet (part B, work unit B1).
+`readContractSource` in `@fabrika/check/contract` is the reader, and the application checker runs it in the
+build. Control does not call it yet (part B, work unit B6).
 
 ## Consequences
 
@@ -94,7 +95,8 @@ The code does not read the contract yet (part B, work unit B1).
 - **A reader refusal is the agent's feedback.** An agent over MCP sees only the
   build log, so each refusal is one short, actionable line.
 - The reader must run in Control on Bun and in a Worker within its size budget.
-  Which parser fits is open; the choice is made in work unit A7.
+  It parses with `@babel/parser` (chosen in work unit A7); a Worker bundle of the
+  reader is about 150 KiB gzip.
 
 ## Alternatives considered
 
