@@ -46,10 +46,11 @@ export function createFixtureTransports(
 	const readable = (source: FixtureTransportSource, authorization: string | null): boolean =>
 		source.visibility === 'public' || access?.canRead(authorization, source.repository) === true
 	// Codeload authorizes a private download by the one-time query token of the API's redirect, never by the installation token.
-	const codeloadGrants = new Set<string>()
+	// Each grant names the one repository and commit its redirect was issued for.
+	const codeloadGrants = new Map<string, string>()
 	const spendCodeloadGrant = (url: string, codeload: string): boolean => {
 		const grant = new URL(url).searchParams.get('token')
-		if (grant === null || url !== `${codeload}?token=${grant}`) return false
+		if (grant === null || url !== `${codeload}?token=${grant}` || codeloadGrants.get(grant) !== codeload) return false
 		return codeloadGrants.delete(grant)
 	}
 	return {
@@ -88,7 +89,7 @@ export function createFixtureTransports(
 				) {
 					if (source.visibility === 'public') return new Response(null, { status: 302, headers: { location: codeload } })
 					const grant = randomBytes(24).toString('base64url')
-					codeloadGrants.add(grant)
+					codeloadGrants.set(grant, codeload)
 					return new Response(null, { status: 302, headers: { location: `${codeload}?token=${grant}` } })
 				}
 				if (!url.startsWith(codeload) || init.redirect !== 'error' || authorization !== null) continue

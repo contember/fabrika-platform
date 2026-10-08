@@ -110,6 +110,26 @@ describe('a private fixture repository behind the double', () => {
 			.toThrow('needs an access check')
 	})
 
+	test("refuses one repository's codeload grant for another repository or commit", async () => {
+		const second = { owner: LOCAL_SOURCE_APPLICATION_REPOSITORY.owner, name: 'second-fixture' }
+		const secondFixture = { ...FIXTURE, commitSha: 'e'.repeat(40) }
+		const github = await createGitHubDouble({ apps: localGitHubDoubleApps(apps), privateRepositories: [LOCAL_SOURCE_APPLICATION_REPOSITORY, second] })
+		const { downloadFetch } = createFixtureTransports([
+			{ repository: LOCAL_SOURCE_APPLICATION_REPOSITORY, fixture: FIXTURE, archive: new Blob([new Uint8Array([1])]), visibility: 'private' },
+			{ repository: second, fixture: secondFixture, archive: new Blob([new Uint8Array([2])]), visibility: 'private' },
+		], { access: github })
+		const { token } = await mint(github)
+		const redirect = await downloadFetch(`${APPLICATION}/tarball/${FIXTURE.commitSha}`, { redirect: 'manual', ...withToken(token) })
+		const grant = new URL(redirect.headers.get('location') ?? '').searchParams.get('token')
+		const secondCodeload = `https://codeload.github.com/${second.owner}/${second.name}/legacy.tar.gz/${secondFixture.commitSha}`
+		expect((await downloadFetch(`${secondCodeload}?token=${grant}`, { redirect: 'error' })).status).toBe(404)
+		const otherCommit =
+			`https://codeload.github.com/${second.owner}/${LOCAL_SOURCE_APPLICATION_REPOSITORY.name}/legacy.tar.gz/${secondFixture.commitSha}`
+		expect((await downloadFetch(`${otherCommit}?token=${grant}`, { redirect: 'error' })).status).toBe(404)
+		const own = await downloadFetch(`${CODELOAD}?token=${grant}`, { redirect: 'error' })
+		expect(new Uint8Array(await own.arrayBuffer())).toEqual(new Uint8Array([1]))
+	})
+
 	test('serves the branch, the commit and a one-time codeload grant to a scoped installation token', async () => {
 		const { github, metadataFetch, downloadFetch } = await transports()
 		const { token } = await mint(github)
