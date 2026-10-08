@@ -77,7 +77,8 @@ The static contract reader (B1) must accept exactly what `rules/literal.ts` acce
   or re-export with a source.
 - **Builders:** `z` (named or namespace) from `zod/v4`; `defineContract` from `@fabrika/app/contract`, called once
   as `defineContract(vocabulary, (c) => ({ … }))`; `defineTables` from `@fabrika/db`, as
-  `defineTables<DB, typeof contract>()({ … })`.
+  `defineTables<DB, Action>(columns)({ … })`, with `columns` imported from the generated
+  `src/db/schema.generated.ts`.
 - **Functions:** an inline arrow with one parameter and an expression body, only as the second argument of
   `defineContract` and as `procedures` in the options of `c.link(path, { … })`. Its parameter is used only as
   `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `form`, `webhook`, `files`, `cron`, `export`.
@@ -92,6 +93,10 @@ The static contract reader (B1) must accept exactly what `rules/literal.ts` acce
   - refused by name: `z.object` (strips undeclared keys; use `z.strictObject`), and `transform`, `refine`,
     `superRefine`, `preprocess`, `overwrite`, `check`, `pipe`, `catch`, `custom`, `lazy`, `function`, `instanceof`,
     `codec`, `passthrough`, `loose`, `looseObject`, `catchall`. Anything else, `parse` included, is outside the subset.
+  - refused by combination, in one chain, because the artifact keeps a string's checks unordered: two formats
+    (`uuid`, `email`, `url`, `z.iso.*`); `url` with any other string check (it rewrites the value the later checks
+    see); `startsWith`, `endsWith` or `includes` with a format. `@fabrika/app`'s `compileContract` refuses the same
+    combinations, and also a `.default()` on a discriminated union's discriminator, which a chain cannot show.
 
 ## Documented escapes (D11)
 

@@ -158,6 +158,47 @@ const zodChainProblem = (root: AstNode, links: readonly Link[]): Problem | undef
 		const called = calledProblem(links[index + 1], method)
 		if (called !== undefined) return called
 	}
+	return stringOrderProblem(links, next)
+}
+
+const STRING_FACTORIES = new Set(['string', 'uuid', 'email', 'url', 'iso'])
+const FORMATS = new Set(['uuid', 'email', 'url', 'iso'])
+const AFFIXES = new Set(['startsWith', 'endsWith', 'includes'])
+const STRING_CHECKS = new Set(['min', 'max', 'length', 'nonempty', 'regex', ...AFFIXES])
+/** Methods after which the chain no longer checks the string itself. */
+const WRAPPERS = new Set(['optional', 'nullable', 'nullish', 'default', 'array', 'or'])
+
+/**
+ * The artifact keeps a string's checks unordered (`@fabrika/app`'s schema-shape.ts), so the chain may not depend on
+ * their order: `z.url()` rewrites the value the checks after it see, and an affix overlaps a format.
+ */
+const stringOrderProblem = (links: readonly Link[], firstMethod: number): Problem | undefined => {
+	const [factory] = links
+	if (factory?.kind !== 'member' || factory.name === undefined || !STRING_FACTORIES.has(factory.name)) return undefined
+	let formats = FORMATS.has(factory.name) ? 1 : 0
+	let url = factory.name === 'url'
+	let affix = false
+	let checks = false
+	for (let index = firstMethod; index < links.length; index += 2) {
+		const method = links[index]
+		const name = method?.kind === 'member' ? method.name : undefined
+		if (method === undefined || name === undefined || WRAPPERS.has(name)) return undefined
+		formats += FORMATS.has(name) ? 1 : 0
+		url ||= name === 'url'
+		affix ||= AFFIXES.has(name)
+		checks ||= STRING_CHECKS.has(name)
+		if (formats > 1) return { node: method.node, message: 'a string with two formats', allowed: 'one format per string' }
+		if (url && checks) {
+			return {
+				node: method.node,
+				message: 'z.url() rewrites the value, so another string check depends on its order',
+				allowed: 'z.url() with no other check',
+			}
+		}
+		if (formats > 0 && affix) {
+			return { node: method.node, message: '.startsWith(), .endsWith() and .includes() do not combine with a format', allowed: 'one or the other' }
+		}
+	}
 	return undefined
 }
 
@@ -181,7 +222,7 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 		case 'tables':
 			return calls === links.length && (calls === 1 || calls === 2)
 				? undefined
-				: { node: root, message: 'defineTables used other than as its call', allowed: 'defineTables<DB, typeof contract>()({ … })' }
+				: { node: root, message: 'defineTables used other than as its call', allowed: 'defineTables<DB, Action>(columns)({ … })' }
 	}
 }
 

@@ -34,10 +34,9 @@ export const CreateNote = z.strictObject({ workspaceId: z.uuid(), title: z.strin
 `
 
 export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db'
-import type { contract } from '../../fabrika.contract'
-import type { DB } from './schema.generated'
+import { columns, type DB } from './schema.generated'
 
-export const tables = defineTables<DB, typeof contract>()({
+export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 	notes: {
 		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
 		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.write' },
@@ -46,8 +45,19 @@ export const tables = defineTables<DB, typeof contract>()({
 })
 `
 
+/** What \`fabrika db codegen\` writes: the schema types and the column list \`defineTables\` checks policies against. */
+export const CLEAN_SCHEMA_GENERATED = `import type { ColumnList } from '@fabrika/db'
+
+export interface DB {
+	notes: { id: string; workspace_id: string; title: string }
+}
+
+export const columns = { notes: ['id', 'workspace_id', 'title'] } as const satisfies ColumnList<DB>
+`
+
 export const CLEAN_APPLICATION: Readonly<Record<string, string>> = {
 	'fabrika.contract.ts': CLEAN_CONTRACT,
 	'src/schemas/notes.ts': CLEAN_SCHEMAS,
 	'src/db/tables.ts': CLEAN_TABLES,
+	'src/db/schema.generated.ts': CLEAN_SCHEMA_GENERATED,
 }

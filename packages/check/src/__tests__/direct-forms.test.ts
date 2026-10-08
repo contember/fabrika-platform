@@ -35,6 +35,33 @@ const refused: readonly DirectForm[] = [
 		expected: ['fabrika.contract.ts:4:10', 'fabrika.contract.ts:4:19', 'src/schemas/extra.ts:3:24', 'src/schemas/extra.ts:4:24'],
 	},
 	{
+		name: 'string checks whose order changes what they admit',
+		rule: 'literal',
+		files: {
+			...CLEAN_APPLICATION,
+			'src/schemas/extra.ts': "import { z } from 'zod/v4'\n\n"
+				+ "export const UrlFirst = z.url().startsWith('https://example.com')\n"
+				+ 'export const UrlLast = z.string().max(80).url()\n'
+				+ "export const Affixed = z.uuid().startsWith('0')\n"
+				+ 'export const TwoFormats = z.string().email().uuid()\n',
+			'fabrika.contract.ts': contractWith(
+				"import { CreateNote, Note } from './src/schemas/notes'",
+				"import { CreateNote, Note } from './src/schemas/notes'\nimport { Affixed, TwoFormats, UrlFirst, UrlLast } from './src/schemas/extra'\n"
+					+ 'export const extra = [Affixed, TwoFormats, UrlFirst, UrlLast]',
+			),
+		},
+		expected: [
+			'fabrika.contract.ts:4:10',
+			'fabrika.contract.ts:4:19',
+			'fabrika.contract.ts:4:31',
+			'fabrika.contract.ts:4:41',
+			'src/schemas/extra.ts:3:25',
+			'src/schemas/extra.ts:4:24',
+			'src/schemas/extra.ts:5:24',
+			'src/schemas/extra.ts:6:27',
+		],
+	},
+	{
 		name: 'a function outside a builder-callback position',
 		rule: 'literal',
 		files: { 'fabrika.contract.ts': 'export const contract = { app: (value: string) => value.trim() }\n' },
@@ -273,6 +300,23 @@ describe('directly spelled forms are refused', () => {
 })
 
 describe('allowed forms the rules must not refuse', () => {
+	test('string checks whose order does not matter', async () => {
+		const files = {
+			...CLEAN_APPLICATION,
+			'src/schemas/extra.ts': "import { z } from 'zod/v4'\n\n"
+				+ 'export const Email = z.email().max(254)\n'
+				+ 'export const Link = z.url().optional()\n'
+				+ 'export const Links = z.url().array().min(1)\n'
+				+ "export const Slug = z.string().min(1).regex(/^[a-z]+$/).startsWith('a')\n",
+			'fabrika.contract.ts': contractWith(
+				"import { CreateNote, Note } from './src/schemas/notes'",
+				"import { CreateNote, Note } from './src/schemas/notes'\nimport { Email, Link, Links, Slug } from './src/schemas/extra'\n"
+					+ 'export const extra = [Email, Link, Links, Slug]',
+			),
+		}
+		expect(await check(files)).toEqual([])
+	})
+
 	test('a regex literal in .regex(), a const schedule, a const access, index and .mts modules, and export aliases', async () => {
 		const files = {
 			...CLEAN_APPLICATION,
