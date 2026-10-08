@@ -55,16 +55,6 @@ describe('the production proxy decision refuses before the application', () => {
 		expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'self'")
 	})
 
-	test('a key on a human-only mount is a login: the human gate reads the session only', async () => {
-		const alice = kit.testCaller([{ action: 'notes.read' }], { via: 'key' })
-		const bearer = { Authorization: `Bearer ${alice.key}` }
-		// A script sends no Sec-Fetch-Mode, which the proxy reads as a navigation.
-		expect((await kit.fetch('/api/me', post({}, bearer))).status).toBe(302)
-		const fetched = await kit.fetch('/api/me', post({}, { ...bearer, 'Sec-Fetch-Mode': 'cors' }))
-		expect(fetched.status).toBe(401)
-		expect(await fetched.json()).toMatchObject({ error: { type: 'auth' } })
-	})
-
 	test('no session on a human endpoint answers the login URL: 401 to a fetch, 302 to a navigation', async () => {
 		const fetched = await kit.browser()('/api/me', post({}))
 		expect(fetched.status).toBe(401)
@@ -82,53 +72,60 @@ describe('the production proxy decision refuses before the application', () => {
 	})
 })
 
-describe('what the gates admit, the application refuses', () => {
+describe('the proxy decides per endpoint, as in production', () => {
 	const kit = testKit(notesApp(seed()))
 
-	test('a key whose principal kind is not a caller of the mount passes the service gate and is 403 in the app', async () => {
+	test('a key whose principal kind is not a caller of the mount is 403 at the proxy', async () => {
 		const person = kit.testCaller([{ action: 'notes.write' }], { via: 'key' })
 		const link = kit.testCaller([{ action: 'notes.write' }], { kind: 'link' })
 		for (const caller of [person, link]) {
 			const response = await kit.fetch('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }, { Authorization: `Bearer ${caller.key}` }))
-			expect(response.status).toBe(403)
-			expect(await response.json()).toMatchObject({ error: { type: 'forbidden' } })
+			expect([response.status, await response.text()]).toEqual([403, 'forbidden'])
 		}
 	})
 
-	test('a session on a machine mount passes the SPA’s human gate and is 403 in the app', async () => {
+	test('a session on a machine mount is 401 at the proxy, never a login bounce', async () => {
 		const alice = kit.testCaller([{ action: 'notes.write' }])
 		const response = await kit.browser(alice)('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }))
-		expect(response.status).toBe(403)
+		expect([response.status, await response.text()]).toEqual([401, 'unauthorized'])
 	})
 
-	test('a path no endpoint serves is behind the SPA’s gate, and 404 in the app', async () => {
+	test('a path no endpoint serves is 403 at the proxy', async () => {
 		const member = kit.testCaller([{ action: 'notes.read', scope: W1 }])
-		expect((await kit.fetch('/nothing/here', post({}))).status).toBe(302)
-		expect((await kit.browser(member)('/nothing/here', post({}))).status).toBe(404)
+		expect([(await kit.fetch('/nothing/here', post({}))).status]).toEqual([403])
+		expect((await kit.browser(member)('/nothing/here', post({}))).status).toBe(403)
 	})
 
-	test('a caller without the required action is 403 in the app', async () => {
+	test('a caller without the required action, or with no permission at all, is 403 at the proxy', async () => {
 		const reader = kit.testCaller([{ action: 'notes.read', scope: W1 }])
-		const response = await kit.browser(reader)('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }))
-		expect(response.status).toBe(403)
-		expect(await response.json()).toMatchObject({ error: { type: 'forbidden' } })
-	})
-
-	test('a caller with no permission in the application is 403, even on a member endpoint', async () => {
+		const refused = await kit.browser(reader)('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }))
+		expect([refused.status, await refused.text()]).toEqual([403, 'forbidden'])
 		const stranger = kit.testCaller([])
 		expect((await kit.browser(stranger)('/api/me', post({}))).status).toBe(403)
 		expect((await kit.browser(stranger)('/')).status).toBe(403)
 	})
+
+	test('a human key reaches a human mount as that person', async () => {
+		const alice = kit.testCaller([{ action: 'notes.read', scope: W1 }], { via: 'key', id: 'alice', label: 'alice@notes.test' })
+		const api = createClient(contract, 'api', { fetch: kit.fetch, key: alice.key ?? '' })
+		expect(await api.me()).toEqual({ id: 'alice', label: 'alice@notes.test' })
+	})
+
+	test('the object an action is granted on is the application’s check: a writer in w2 reaches the proxy and is 403 in w1', async () => {
+		const writer = kit.testCaller([{ action: 'notes.write', scope: { type: 'workspace', value: 'w2' } }])
+		const response = await kit.browser(writer)('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }))
+		expect(response.status).toBe(403)
+		expect(await response.json()).toMatchObject({ error: { type: 'forbidden' } })
+	})
 })
 
 describe('a forwarded request reaches the real dispatcher', () => {
-	test('the application refuses what the proxy forwards: a cross-site POST with a session', async () => {
+	test('the proxy refuses a cross-site POST with a session before the application sees it', async () => {
 		const kit = testKit(notesApp(seed()))
 		const alice = kit.testCaller([{ role: 'editor', scope: W1 }])
 		const cookie = alice.cookie ?? ''
 		const response = await kit.fetch('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }, { Cookie: cookie, 'Sec-Fetch-Site': 'cross-site' }))
-		expect(response.status).toBe(403)
-		expect(await response.json()).toMatchObject({ error: { type: 'admission' } })
+		expect([response.status, await response.text()]).toEqual([403, 'forbidden'])
 	})
 
 	test('object access is the application’s: a note in another workspace is 404', async () => {
@@ -154,6 +151,7 @@ describe('a forwarded request reaches the real dispatcher', () => {
 				'X-Fabrika-Token': 'forged',
 				'X-Fabrika-Client-Ip': '203.0.113.9',
 				'X-Request-Id': 'chosen-by-client',
+				'X-Fabrika-Endpoint': 'api.me@forged',
 				'X-Forwarded-For': '203.0.113.9',
 				Cookie: 'theme=dark',
 			},
@@ -165,6 +163,8 @@ describe('a forwarded request reaches the real dispatcher', () => {
 		expect(headers?.get('X-Fabrika-Client-Ip')).toBeNull()
 		expect(headers?.get('X-Forwarded-For')).toBeNull()
 		expect(headers?.get('X-Request-Id')).not.toBe('chosen-by-client')
+		// The endpoint the proxy selected, with the digest of the rules it applied, as production sends it.
+		expect(headers?.get('X-Fabrika-Endpoint')).toMatch(/^spa@sha256:[0-9a-f]{64}$/)
 		expect(headers?.get('Cookie')).toBe('theme=dark')
 	})
 
@@ -185,32 +185,6 @@ describe('a forwarded request reaches the real dispatcher', () => {
 	test('an application that does not boot fails the kit like boot does', () => {
 		const app = notesApp(seed())
 		expect(() => testKit({ ...app, database: null })).toThrow("acts on a 'note'")
-	})
-})
-
-describe('the per-endpoint decision, opted into with proxy: endpoints', () => {
-	const kit = testKit(notesApp(seed()), { proxy: 'endpoints' })
-
-	test('a path no endpoint serves is 403 at the proxy', async () => {
-		const response = await kit.fetch('/nothing/here', post({}))
-		expect(response.status).toBe(403)
-		expect(await response.text()).toBe('forbidden')
-	})
-
-	test('a key of the wrong principal kind is 403, and a session on a machine mount 401, at the proxy', async () => {
-		const person = kit.testCaller([{ action: 'notes.write' }], { via: 'key' })
-		const keyed = await kit.fetch('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }, { Authorization: `Bearer ${person.key}` }))
-		expect([keyed.status, await keyed.text()]).toEqual([403, 'forbidden'])
-		const session = await kit.browser(kit.testCaller([{ action: 'notes.write' }]))('/machine/importNotes', post({ workspaceId: 'w1', titles: [] }))
-		expect([session.status, await session.text()]).toEqual([401, 'unauthorized'])
-	})
-
-	test('a human key reaches a human mount, and the requirement is checked at the proxy', async () => {
-		const alice = kit.testCaller([{ action: 'notes.read', scope: W1 }], { via: 'key', id: 'alice', label: 'alice@notes.test' })
-		const api = createClient(contract, 'api', { fetch: kit.fetch, key: alice.key ?? '' })
-		expect(await api.me()).toEqual({ id: 'alice', label: 'alice@notes.test' })
-		const refused = await kit.fetch('/api/notes.create', post({ workspaceId: 'w1', title: 'x' }, { Authorization: `Bearer ${alice.key}` }))
-		expect([refused.status, await refused.text()]).toEqual([403, 'forbidden'])
 	})
 })
 
@@ -280,8 +254,7 @@ describe('the browser and the hop stay on the application', () => {
 		const person = kit.testCaller([{ role: 'editor', scope: W1 }])
 		const crossSite = new Request('https://notes.test/api/notes.create', post({ workspaceId: 'w1', title: 'x' }, { 'Sec-Fetch-Site': 'cross-site' }))
 		const response = await kit.browser(person)(crossSite)
-		expect(response.status).toBe(403)
-		expect(await response.json()).toMatchObject({ error: { type: 'admission' } })
+		expect([response.status, await response.text()]).toEqual([403, 'forbidden'])
 	})
 })
 

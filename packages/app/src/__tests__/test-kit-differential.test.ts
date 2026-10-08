@@ -1,18 +1,31 @@
 // The kit decides as production does: every credential on every kind of path gets the same answer from the kit as
-// from proxy-core's `Authorizer` over the gates `gatesFromContract` generates, with the same test IAM behind both.
+// from proxy-core's `Authorizer` over the endpoint table `contractProxyTable` compiles, with the same test IAM
+// behind both.
 
-import { gatesFromContract } from '@fabrika/app/contract'
 import { TEST_ISSUER, testKit } from '@fabrika/app/testing'
-import { Authorizer, compileGates, type Decision } from '@fabrika/proxy-core'
+import { compileEndpointTable } from '@fabrika/auth-core'
+import { Authorizer, type Decision, type ResolvedApp } from '@fabrika/proxy-core'
+import { type ContractProxyApp, contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesApp } from './fixtures/implement/app'
 
 const kit = testKit(notesApp(new Map()))
 const authorizer = new Authorizer({ iam: kit.iam, issuer: TEST_ISSUER })
-const resolved = {
-	app: { id: kit.appId, hosts: [new URL(kit.origin).host], upstream: 'app', gates: gatesFromContract(kit.artifact), scheme: 'https' as const },
-	gates: compileGates(gatesFromContract(kit.artifact)),
+const app: ContractProxyApp = {
+	id: kit.appId,
+	hosts: [new URL(kit.origin).host],
+	upstream: 'app',
+	scheme: 'https',
+	...contractProxyTable(kit.artifact),
 }
+const resolved: ResolvedApp = { kind: 'endpoints', app, table: compileEndpointTable(app) }
+const forwarded = (method: string, path: string, headers: Headers) => ({
+	method,
+	url: new URL(path, kit.origin),
+	rawPath: path,
+	headers,
+	requestId: 'differential',
+})
 
 const person = kit.testCaller([{ action: 'notes.read' }])
 const personKey = kit.testCaller([{ action: 'notes.read' }], { via: 'key', id: 'keyed-person' })
@@ -76,27 +89,34 @@ describe('the kit and proxy-core decide alike', () => {
 		for (const [name, credential] of Object.entries(CREDENTIALS)) {
 			test(`${name} on ${method} ${path}`, async () => {
 				const headers = headersFor(credential, body)
-				const decision = await authorizer.authorize(resolved, { method, url: new URL(path, kit.origin), headers, requestId: 'differential' })
+				const decision = await authorizer.authorize(resolved, forwarded(method, path, headers))
 				const response = await kit.fetch(path, { method, headers, body: body === undefined ? null : JSON.stringify(body) })
 				expect(await answered(response)).toBe(expected(decision))
 			})
 		}
 	}
 
-	test('a key on a human-only mount is a login at both', async () => {
+	test("a person's key reaches a human mount as that person at both, and a machine mount at neither", async () => {
 		const headers = headersFor(CREDENTIALS['human key'] ?? {}, {})
-		const decision = await authorizer.authorize(resolved, { method: 'POST', url: new URL('/api/me', kit.origin), headers, requestId: 'differential' })
-		expect(decision).toMatchObject({ outcome: 'login', status: 401 })
+		expect(await authorizer.authorize(resolved, forwarded('POST', '/api/me', headers))).toMatchObject({ outcome: 'allow', subject: personKey.id })
 		const response = await kit.fetch('/api/me', { method: 'POST', headers, body: '{}' })
-		expect(response.status).toBe(401)
-		expect(await response.json()).toMatchObject({ error: { type: 'auth' } })
+		expect(await response.json()).toEqual({ result: { id: personKey.id, label: personKey.label } })
+		const machineHeaders = headersFor(CREDENTIALS['human key'] ?? {}, { workspaceId: 'w1', titles: [] })
+		expect(await authorizer.authorize(resolved, forwarded('POST', '/machine/importNotes', machineHeaders))).toMatchObject({
+			outcome: 'deny',
+			status: 403,
+		})
+		expect((await kit.fetch('/machine/importNotes', { method: 'POST', headers: machineHeaders, body: '{"workspaceId":"w1","titles":[]}' })).status)
+			.toBe(
+				403,
+			)
 	})
 
 	test('an allowed session reaches the application as the subject the proxy verified', async () => {
 		const headers = headersFor(CREDENTIALS['session'] ?? {}, {})
-		const decision = await authorizer.authorize(resolved, { method: 'POST', url: new URL('/api/me', kit.origin), headers, requestId: 'differential' })
+		const decision = await authorizer.authorize(resolved, forwarded('POST', '/api/me', headers))
 		const response = await kit.fetch('/api/me', { method: 'POST', headers, body: '{}' })
-		expect(decision).toMatchObject({ outcome: 'allow', gate: 'human', subject: person.id })
+		expect(decision).toMatchObject({ outcome: 'allow', gate: 'endpoint', subject: person.id })
 		expect(await response.json()).toEqual({ result: { id: person.id, label: person.label } })
 	})
 })

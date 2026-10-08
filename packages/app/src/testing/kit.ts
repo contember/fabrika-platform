@@ -1,13 +1,15 @@
-// The test kit of a contract application: the application booted in-process behind a stand-in for IAM and, by
-// default, the production proxy decision. A request takes the production path — proxy-core's verify service over
-// the generated gates, a token signed the way IAM signs it, the proxy's header stripping — into the real `boot` and
-// its dispatcher.
+// The test kit of a contract application: the application booted in-process behind a stand-in for IAM and the
+// production proxy decision. A request takes the production path — proxy-core's verify service over the contract's
+// endpoint table, a token signed the way IAM signs it, the proxy's header stripping, `X-Fabrika-Endpoint` — into the
+// real `boot` and its dispatcher.
 
 import {
 	API_KEY_PREFIX,
 	buildAccessClaims,
 	CLIENT_ADDRESS_HEADER,
 	type ContractArtifact,
+	contractDigest,
+	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	type Jwks,
@@ -18,7 +20,7 @@ import {
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
-import { type IamGateway, readBearer, readCookie, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
+import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
@@ -28,7 +30,7 @@ import type { SpaAssets } from '../implement/dispatch'
 import { headerPolicy, withHeaderPolicy } from '../implement/headers'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import { resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
-import { endpointsProxy, gatesProxy, type PresentedCredential, type TestProxy } from './proxy'
+import { endpointProxy } from './proxy'
 
 export const TEST_ISSUER = 'https://iam.test'
 export const TEST_ENVIRONMENT = 'test'
@@ -42,12 +44,6 @@ export interface TestKitOptions {
 	readonly assets?: SpaAssets
 	/** The connection a `scoped(tables)` database is bound to, as the runtime adapter supplies it to `boot`. */
 	readonly database?: Database
-	/**
-	 * The proxy decision in front of the application. `gates` (the default) is proxy-core's verify service over the
-	 * gates `gatesFromContract` generates, as production decides today; `endpoints` is ADR-0022's per-endpoint
-	 * decision, for tests written ahead of the proxy deciding per endpoint.
-	 */
-	readonly proxy?: 'gates' | 'endpoints'
 }
 
 export interface TestKit<C extends AnyContract> {
@@ -108,7 +104,8 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 	})
 	const application: ContractApp = boot(app, {
 		environment: {
-			framework: { [FABRIKA_IAM_APP_ID]: appId, [FABRIKA_IAM_ISSUER]: TEST_ISSUER },
+			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
+			framework: { [FABRIKA_IAM_APP_ID]: appId, [FABRIKA_IAM_ISSUER]: TEST_ISSUER, [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact) },
 			application: options.env ?? {},
 		},
 		iam: { getJwks: () => jwks },
@@ -181,18 +178,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		getJwks: () => jwks,
 	}
 
-	function credentialOf(headers: Headers): PresentedCredential | null {
-		const bearer = readBearer(headers.get('Authorization'))
-		if (bearer !== null) {
-			return { via: 'key', caller: byKey.get(bearer) ?? null }
-		}
-		const session = readCookie(headers.get('Cookie'), SESSION_COOKIE)
-		return session === null ? null : { via: 'session', caller: bySession.get(session) ?? null }
-	}
-
-	const proxy: TestProxy = options.proxy === 'endpoints'
-		? endpointsProxy({ artifact, issuer: TEST_ISSUER, credentialOf, mint: async (caller) => (await mint(caller))?.token ?? null })
-		: gatesProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER })
+	const proxy = endpointProxy({ artifact, appId, host, iam, issuer: TEST_ISSUER })
 
 	const kitFetch: RpcFetch = async (input, init) => {
 		const request = toRequest(origin, input, init)
@@ -209,11 +195,8 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		if (!outcome.keepsAuthorization) {
 			headers.delete('Authorization')
 		}
-		if (outcome.token !== null && outcome.token !== '') {
-			headers.set(PROXY_TOKEN_HEADER, outcome.token)
-		}
-		if (outcome.requestId !== null && outcome.requestId !== '') {
-			headers.set(REQUEST_ID_HEADER, outcome.requestId)
+		for (const [header, value] of outcome.asserted) {
+			headers.set(header, value)
 		}
 		return application.fetch(new Request(request, { headers }))
 	}
