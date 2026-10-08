@@ -64,14 +64,25 @@ function appSchemaError(issues: readonly z.ZodIssue[]): string {
 	// A wrong envelope is the more useful report than the first bad element inside it.
 	const issue = issues.find((candidate) => candidate.path.length === 1) ?? issues[0]
 	const [field, key] = issue?.path ?? []
+	// A cross-reference refusal names its own problem; only a malformed shape gets the generic message.
+	if (issue?.code === 'custom' && issue.path.length > 2) return issue.message
 	if (field === 'roles') {
 		if (typeof key !== 'string') return 'roles must be an object (role_key -> def)'
-		if (issue?.code === 'custom' && issue.path.length > 2) return issue.message
 		return `role '${key}' needs a non-empty name and a permissions array, and a usable key`
+	}
+	if (field === 'links') {
+		return typeof key === 'string'
+			? `link mount '${key}' needs a dimension, exact grants, an issuedBy action and maxDays from 1 to 365, and a usable key`
+			: 'links must be an object (mount -> def)'
+	}
+	if (field === 'delegations') {
+		return typeof key === 'string'
+			? `endpoint '${key}' needs an action, a dimension and a purpose of 'members' or 'creates', and a usable key`
+			: 'delegations must be an object (endpoint -> def)'
 	}
 	if (key === undefined) return 'scopes and actions must be arrays'
 	return field === 'scopes'
-		? 'each scope needs a non-empty `type` and, when present, a non-empty `label`'
+		? 'each scope needs a non-empty `type` and, when present, a non-empty `label`, `in`, `creator` and `members`'
 		: 'each action needs a non-empty `action` and, when present, a non-empty `description`'
 }
 
