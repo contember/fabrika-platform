@@ -107,7 +107,8 @@ have no public or link caller, `from` names a string field of the input, and loo
 objects do not type-check. `compileContract(contract, tables)` validates what the
 types cannot, applies every default, generates the endpoint rows and returns the
 normalized `ContractArtifact` of `@fabrika/auth-core`; `parseContractArtifact` reads
-one back from JSON. Schemas are the zod 4 subset that `@fabrika/check` accepts.
+one back from JSON. Both refuse a `*` in an action and a role named after one of IAM's
+own roles (`admin`); `creates` takes only a dimension that lies in no other. Schemas are the zod 4 subset that `@fabrika/check` accepts.
 
 Until the proxy reads endpoint tables (B2), the artifact compiles to what today's proxy
 and IAM consume, and `fabrika.config.ts` hands both to its provider: the Zerops

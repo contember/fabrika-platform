@@ -103,4 +103,41 @@ describe('parseContractArtifact', () => {
 		const { csp: _csp, ...withoutCsp } = artifact
 		expect(() => parseContractArtifact(withoutCsp)).toThrow()
 	})
+
+	test('refuses a wildcard wherever the artifact names an action', () => {
+		const owner = artifact.roles['owner']
+		const workspace = artifact.dimensions['workspace']
+		const shared = artifact.mounts['shared']
+		const index = artifact.endpoints.findIndex((row) => row.requirement?.kind === 'action')
+		const row = artifact.endpoints[index]
+		if (owner === undefined || workspace?.members == null || shared?.kind !== 'link' || row?.requirement?.kind !== 'action') {
+			throw new Error('the notes fixture changed')
+		}
+		const variants: unknown[] = [
+			{ ...artifact, actions: { ...artifact.actions, 'notes.*': 'Everything' } },
+			{ ...artifact, roles: { ...artifact.roles, owner: { ...owner, grants: [...owner.grants, '*'] } } },
+			{ ...artifact, dimensions: { ...artifact.dimensions, workspace: { ...workspace, members: { ...workspace.members, manage: 'notes.*' } } } },
+			{ ...artifact, mounts: { ...artifact.mounts, shared: { ...shared, grants: ['notes.*'] } } },
+			{
+				...artifact,
+				endpoints: artifact.endpoints.map((each, at) => (at === index ? { ...row, requirement: { ...row.requirement, action: 'notes.*' } } : each)),
+			},
+		]
+		for (const variant of variants) {
+			expect(() => parseContractArtifact(variant)).toThrow('an action is exact; * is not an action')
+		}
+	})
+
+	test("refuses one of IAM's own role keys as a role or an assigner", () => {
+		const owner = artifact.roles['owner']
+		if (owner?.member == null) {
+			throw new Error('the notes fixture changed')
+		}
+		const message = 'a built-in IAM role key is not a contract role name'
+		expect(() => parseContractArtifact({ ...artifact, roles: { ...artifact.roles, admin: { grants: ['notes.read'], member: null } } })).toThrow(message)
+		expect(() =>
+			parseContractArtifact({ ...artifact, roles: { ...artifact.roles, owner: { ...owner, member: { ...owner.member, assignableBy: ['admin'] } } } })
+		)
+			.toThrow(message)
+	})
 })

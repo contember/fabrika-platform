@@ -2,6 +2,7 @@ import { appSchemaSchema } from '@fabrika/auth'
 import {
 	type AppGates,
 	applicableGates,
+	BUILTIN_ROLE_KEYS,
 	compileEndpointTable,
 	compileGates,
 	type ContractArtifact,
@@ -243,9 +244,18 @@ describe('schemaFromContract', () => {
 	})
 
 	for (const [name, artifact] of [...FIXTURES, ['the members contract', members] as const]) {
-		test(`${name}: the auth SDK's parser accepts it unchanged, every name resolving`, () => {
+		test(`${name}: IAM's reconcile accepts it unchanged, every name resolving, with no reserved role and no wildcard`, () => {
 			const schema = schemaFromContract(artifact)
+			// `putAppSchema` validates the body with exactly this parser; the rest of its checks read IAM's database.
 			expect(appSchemaSchema.parse(schema)).toEqual(schema)
+			expect(Object.keys(schema.roles).filter((key) => BUILTIN_ROLE_KEYS.includes(key))).toEqual([])
+			const named = [
+				...schema.actions.map(({ action }) => action),
+				...Object.values(schema.roles).flatMap((role) => role.permissions),
+				...Object.values(schema.links ?? {}).flatMap((link) => [...link.grants, link.issuedBy]),
+				...Object.values(schema.delegations ?? {}).map((delegation) => delegation.action),
+			]
+			expect(named.filter((action) => action.includes('*'))).toEqual([])
 		})
 	}
 })

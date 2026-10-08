@@ -5,6 +5,7 @@ import {
 	type AccessForm,
 	assertNoAmbiguity,
 	type BodyAdmission,
+	BUILTIN_ROLE_KEYS,
 	type Caller,
 	canonicalizeArtifact,
 	type ContractArtifact,
@@ -211,6 +212,9 @@ class ArtifactBuilder {
 		for (const [name, role] of Object.entries(this.#contract.roles)) {
 			const where = `role '${name}'`
 			this.#name(where, name)
+			if (BUILTIN_ROLE_KEYS.includes(name)) {
+				this.#problem(where, `is a role IAM defines itself for every application (reserved: ${BUILTIN_ROLE_KEYS.join(', ')}); choose another name`)
+			}
 			if (role.grants.length === 0) {
 				this.#problem(where, 'grants nothing (allowed: grants: [<exact actions>])')
 			}
@@ -447,8 +451,15 @@ class ArtifactBuilder {
 			if (procedure.type !== 'mutation') {
 				this.#problem(where, `creates a '${form.access.dimension}' in a query (allowed: c.mutation)`)
 			}
-			if (this.#contract.dimensions[form.access.dimension]?.creator === undefined) {
+			const created = this.#contract.dimensions[form.access.dimension]
+			if (created?.creator === undefined) {
 				this.#problem(where, `creates a '${form.access.dimension}', which declares no creator role`)
+			}
+			if (created?.in !== undefined) {
+				this.#problem(
+					where,
+					`creates a '${form.access.dimension}', which lies in '${created.in}' (allowed: a dimension without in; a contained value is a row a store inserts)`,
+				)
 			}
 		}
 		return { kind: 'action', action: form.action, access: form.access }

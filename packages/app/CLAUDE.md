@@ -156,6 +156,10 @@ src/
   `planEndpoint` on the auth-core probe paths. `schemaFromContract` emits every
   field of A12's `AppSchema`, and its output must parse unchanged with
   `@fabrika/auth`'s `appSchemaSchema`, which resolves every name it carries.
+- **What IAM would refuse is refused at the source, not in the generator.** `buildArtifact`
+  and `contractArtifactSchema` both refuse a `*` in any action name and a role named after
+  `BUILTIN_ROLE_KEYS`; `buildArtifact` and the `CreatableDimension` type refuse `creates`
+  for a dimension with `in`, because IAM's `createScope` makes only top-level values.
 - Still to come: the typed client (A5).
 - Later (A12, A13): membership, scopes and share links are requests to IAM through
   `@fabrika/auth`. The framework writes no grant and mints no credential.

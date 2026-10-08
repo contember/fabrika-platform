@@ -292,12 +292,37 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 				shared: { ...shared, procedures: { note: { '~kind': 'procedure', type: 'query', input: null, output, access: { action: 'notes.write' } } } },
 			}),
 			actions: { ...base.actions, 'notes.*': 'Everything' },
-			roles: { ...base.roles, admin: { grants: ['*'] } },
+			roles: { ...base.roles, everything: { grants: ['*'] } },
 		})
 		expect(problems).toEqual([
 			"action 'notes.*': an action is exact, dot-separated words (allowed: 'notes.read'; no '*')",
-			"role 'admin': '*' is not an action of the contract",
+			"role 'everything': '*' is not an action of the contract",
 			"procedure 'shared.note': needs 'notes.write', which the link does not grant (grants: notes.read)",
+		])
+	})
+
+	test("a role named after one of IAM's own roles", () => {
+		const problems = build({ ...base, roles: { ...base.roles, admin: { grants: ['notes.read'] } } })
+		expect(problems).toEqual(["role 'admin': is a role IAM defines itself for every application (reserved: admin); choose another name"])
+	})
+
+	test('a create of a dimension that lies in another one', () => {
+		const problems = build({
+			...withMounts({
+				...base.mounts,
+				api: {
+					...api,
+					procedures: {
+						...api.procedures,
+						draft: { '~kind': 'procedure', type: 'mutation', input: null, output, access: { action: 'notes.write', creates: 'note' } },
+					},
+				},
+			}),
+			dimensions: { ...base.dimensions, note: { in: 'workspace', creator: 'author' } },
+			roles: { ...base.roles, author: { grants: ['notes.read', 'notes.write'], member: { scope: 'note', assignableBy: ['author'] } } },
+		})
+		expect(problems).toEqual([
+			"procedure 'api.draft': creates a 'note', which lies in 'workspace' (allowed: a dimension without in; a contained value is a row a store inserts)",
 		])
 	})
 

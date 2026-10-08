@@ -25,7 +25,7 @@ export const contract = defineContract({
 			member: { scope: 'workspace', assignableBy: ['owner'] },
 		},
 		// mistake: a wildcard role
-		admin: { grants: ['*'] },
+		everything: { grants: ['*'] },
 	},
 }, (c) => ({
 	api: c.rpc('/api', { callers: ['human'] }, {

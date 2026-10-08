@@ -1,16 +1,17 @@
 // The parser of a `ContractArtifact` read back as JSON (the build's own output, a file Control stored). Every
 // object is strict and every field required, so a value that is not exactly an artifact is refused, not coerced.
 
-import type {
-	ArrayShape,
-	ContractArtifact,
-	EndpointRow,
-	NumberShape,
-	RecordShape,
-	SchemaShape,
-	StringShape,
-	TablePolicyArtifact,
-	TupleShape,
+import {
+	type ArrayShape,
+	BUILTIN_ROLE_KEYS,
+	type ContractArtifact,
+	type EndpointRow,
+	type NumberShape,
+	type RecordShape,
+	type SchemaShape,
+	type StringShape,
+	type TablePolicyArtifact,
+	type TupleShape,
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 
@@ -18,6 +19,12 @@ const name = z.string().min(1)
 const nullableName = name.nullable()
 const names = z.array(name)
 const record = <T extends z.core.$ZodType>(value: T) => z.record(z.string().min(1), value)
+/** A contract's actions are exact: IAM treats `*` as a pattern, which would widen every grant naming it. */
+const action = name.refine((value) => !value.includes('*'), 'an action is exact; * is not an action')
+const nullableAction = action.nullable()
+const actions = z.array(action)
+/** IAM's own role keys win over an application role of the same key at resolution. */
+const roleKey = name.refine((key) => !BUILTIN_ROLE_KEYS.includes(key), 'a built-in IAM role key is not a contract role name')
 
 const stringShape: z.ZodType<StringShape> = z.strictObject({
 	type: z.literal('string'),
@@ -84,7 +91,7 @@ const accessForm = z.discriminatedUnion('form', [
 
 const requirement = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('member') }),
-	z.strictObject({ kind: z.literal('action'), action: name, access: accessForm }),
+	z.strictObject({ kind: z.literal('action'), action, access: accessForm }),
 ])
 
 const rowBase = {
@@ -124,14 +131,14 @@ const mount = z.discriminatedUnion('kind', [
 		prefix: name,
 		spa: name,
 		dimension: name,
-		grants: names,
-		issuedBy: name,
+		grants: actions,
+		issuedBy: action,
 		maxDays: z.int().positive(),
 	}),
 	z.strictObject({ kind: z.literal('spa'), prefix: name, dir: name }),
 	z.strictObject({ kind: z.literal('health'), path: name }),
 	z.strictObject({ kind: z.literal('form'), path: name, appendTo: name }),
-	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions: names }),
+	z.strictObject({ kind: z.literal('webhook'), path: name, scheme: z.literal('github-sha256'), boundTo: scopeBinding, actions }),
 ])
 
 const cspSource = z.strictObject({ origin: name, purpose: name })
@@ -148,12 +155,12 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 		z.strictObject({ mode: z.literal('inbox'), form: name }),
 		z.strictObject({ mode: z.literal('reference'), reason: name }),
 	]),
-	actions: z.strictObject({ read: name, insert: nullableName, update: nullableName, delete: nullableName }),
+	actions: z.strictObject({ read: action, insert: nullableAction, update: nullableAction, delete: nullableAction }),
 	insert: names,
 	update: names,
 	version: nullableName,
 	createdBy: nullableName,
-	columns: record(z.strictObject({ read: name })),
+	columns: record(z.strictObject({ read: action })),
 })
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObject({
@@ -161,19 +168,22 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	dimensions: record(z.strictObject({
 		in: nullableName,
 		creator: nullableName,
-		members: z.strictObject({ manage: name, list: name }).nullable(),
+		members: z.strictObject({ manage: action, list: action }).nullable(),
 	})),
-	actions: record(z.string()),
-	roles: record(z.strictObject({
-		grants: names,
-		member: z.strictObject({ scope: name, assignableBy: names }).nullable(),
-	})),
+	actions: z.record(action, z.string()),
+	roles: z.record(
+		roleKey,
+		z.strictObject({
+			grants: actions,
+			member: z.strictObject({ scope: name, assignableBy: z.array(roleKey) }).nullable(),
+		}),
+	),
 	mounts: record(mount),
 	files: record(z.strictObject({
 		owner: name,
-		read: name,
-		write: name,
-		delete: name,
+		read: action,
+		write: action,
+		delete: action,
 		maxBytes: z.int().positive(),
 		types: names,
 		maxPerOwner: z.int().positive().nullable(),
@@ -181,7 +191,7 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	})),
 	jobs: record(z.strictObject({
 		schedule: name,
-		actions: names,
+		actions,
 		scope: scopeBinding,
 		timeout: nullableName,
 		retries: z.int().nonnegative(),

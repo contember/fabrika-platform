@@ -71,8 +71,15 @@ export interface Vocabulary<A extends string, D extends string, R extends string
 	readonly roles: { readonly [K in R]: RoleDef<A, D, R> }
 }
 
-/** Dimensions that declare a `creator` role; only they can be the target of `creates`. */
-export type CreatableDimension<Dims> = { [K in keyof Dims]: Dims[K] extends { readonly creator: string } ? K : never }[keyof Dims] & string
+/**
+ * Top-level dimensions that declare a `creator` role; only they can be the target of `creates`. IAM creates a value
+ * with no container (`createScope`); a contained value is a row its container's members insert.
+ */
+export type CreatableDimension<Dims> =
+	& {
+		[K in keyof Dims]: Dims[K] extends { readonly creator: string } ? Dims[K] extends { readonly in: string } ? never : K : never
+	}[keyof Dims]
+	& string
 
 // ── Access requirements ─────────────────────────────────────────────────────────────────────────
 

@@ -103,7 +103,7 @@ const MISTAKES: Readonly<Record<string, string>> = {
 	'01-forgot-access.ts': 'fabrika.contract.ts:33:12 access is missing',
 	'02-rpc-with-public-caller.ts': "fabrika.contract.ts:30:32 'public' is not a caller of an RPC mount",
 	'03-action-typo.ts': "procedure 'api.notes.list': 'notes.raed' is not an action of the contract — did you mean 'notes.read'?",
-	'04-wildcard-role.ts': "role 'admin': '*' is not an action of the contract",
+	'04-wildcard-role.ts': "role 'everything': '*' is not an action of the contract",
 	'11-loose-input.ts': "fabrika.contract.ts:31:26 '.loose()' makes the schema unserializable",
 	'12-from-field-not-in-input.ts':
 		"procedure 'api.notes.remove': access.from 'noteId' is not a required string field of the input (allowed: a string, a string literal or an enum)",
@@ -114,6 +114,8 @@ const MISTAKES: Readonly<Record<string, string>> = {
 	'17-mutation-in-export.ts': 'fabrika.contract.ts:36:13 an export serves queries only',
 	'18-link-procedure-outside-grants.ts': "procedure 'shared.remove': needs 'notes.delete', which the link does not grant (grants: notes.read)",
 	'19-options-set-builder-fields.ts': "mount 'github': 'kind' is set by c.webhook itself and cannot be an option; remove it",
+	'20-creates-contained-dimension.ts':
+		"procedure 'api.workspaces.create': creates a 'note', which lies in 'workspace' (allowed: a dimension without in; a contained value is a row a store inserts)",
 }
 
 /** The first refusal, as a finding line without its rule id and allowed form, or as a compile problem. */
