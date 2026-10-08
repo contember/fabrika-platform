@@ -28,3 +28,16 @@ export const CLIENT_ADDRESS_HEADER = 'X-Fabrika-Client-Ip'
  * header with one meaning everywhere, supplied only by the enforcement point.
  */
 export const UNTRUSTED_FORWARD_HEADERS: readonly string[] = ['X-Forwarded-For', 'CF-Connecting-IP']
+
+/**
+ * Header carrying the endpoint the proxy selected and the digest of the rules it applied, `<id>@<digest>`
+ * (`formatEndpointHeader`). Set by the proxy on every allowed request to a contract application, after the strip of
+ * a client's own; the application serves only that endpoint and answers 503 when its digest differs.
+ */
+export const ENDPOINT_HEADER = 'X-Fabrika-Endpoint'
+
+/**
+ * Header carrying the single-use delegation grant the proxy obtained from IAM for a membership or scope-creating
+ * endpoint (ADR-0022 rule 6). The framework forwards it to IAM; nothing else reads it.
+ */
+export const DELEGATION_HEADER = 'X-Fabrika-Delegation'

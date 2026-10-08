@@ -11,22 +11,31 @@ type Segment = { readonly kind: 'literal'; readonly value: string } | { readonly
 
 type PatternResult = { readonly ok: true; readonly segments: readonly Segment[] } | { readonly ok: false; readonly problem: string }
 
-interface CompiledEndpoint {
-	readonly row: EndpointRow
+/** What selection reads of a row. The proxy's manifest rows carry these and the rules, not the schemas. */
+export type EndpointPattern = Pick<EndpointRow, 'id' | 'method' | 'path'>
+
+/** A table of any rows that carry an endpoint pattern; `EndpointTable` is the artifact's. */
+export interface EndpointPatternTable<Row extends EndpointPattern> {
+	readonly endpoints: readonly Row[]
+	readonly reservedPrefixes: readonly string[]
+}
+
+interface CompiledEndpoint<Row extends EndpointPattern> {
+	readonly row: Row
 	readonly segments: readonly Segment[]
 }
 
 /** An endpoint table that `assertNoAmbiguity` accepted, ready for `planEndpoint`. Only `compileEndpointTable` makes one. */
-class CompiledEndpointTable {
-	readonly #endpoints: readonly CompiledEndpoint[]
+class CompiledEndpointTable<Row extends EndpointPattern = EndpointRow> {
+	readonly #endpoints: readonly CompiledEndpoint<Row>[]
 	readonly #reservedPrefixes: readonly string[]
 
-	constructor(endpoints: readonly CompiledEndpoint[], reservedPrefixes: readonly string[]) {
+	constructor(endpoints: readonly CompiledEndpoint<Row>[], reservedPrefixes: readonly string[]) {
 		this.#endpoints = endpoints
 		this.#reservedPrefixes = reservedPrefixes
 	}
 
-	plan(method: string, rawPath: string): EndpointPlan {
+	plan(method: string, rawPath: string): EndpointPlan<Row> {
 		return select(this.#endpoints, this.#reservedPrefixes, method, rawPath)
 	}
 }
@@ -34,12 +43,12 @@ class CompiledEndpointTable {
 export type { CompiledEndpointTable }
 
 /** `no-endpoint` is a 403 at the proxy and a 404 in the framework; `non-canonical` is a 400 at both. */
-export type EndpointPlan =
+export type EndpointPlan<Row extends EndpointPattern = EndpointRow> =
 	| { readonly outcome: 'non-canonical' }
 	| { readonly outcome: 'no-endpoint' }
 	| {
 		readonly outcome: 'endpoint'
-		readonly endpoint: EndpointRow
+		readonly endpoint: Row
 		/** `:name` segments of the selected path, raw and still percent-encoded. */
 		readonly params: Readonly<Record<string, string>>
 	}
@@ -58,12 +67,12 @@ export class EndpointTableError extends Error {
  * Refuse a table in which a request could select an endpoint by accident: an invalid path or reserved prefix, a
  * duplicate id, or two endpoints of one method whose paths have the same shape, which no specificity orders.
  */
-export function assertNoAmbiguity(table: EndpointTable): void {
+export function assertNoAmbiguity<Row extends EndpointPattern>(table: EndpointPatternTable<Row>): void {
 	analyse(table)
 }
 
 /** Validate a table once, where it is loaded, so that `planEndpoint` never meets an invalid one. */
-export function compileEndpointTable(table: EndpointTable): CompiledEndpointTable {
+export function compileEndpointTable<Row extends EndpointPattern = EndpointRow>(table: EndpointPatternTable<Row>): CompiledEndpointTable<Row> {
 	return new CompiledEndpointTable(analyse(table), [...table.reservedPrefixes])
 }
 
@@ -71,7 +80,7 @@ export function compileEndpointTable(table: EndpointTable): CompiledEndpointTabl
  * Select the endpoint for a request: refuse a non-canonical raw path, then take the most specific endpoint of the
  * request's method. Under a reserved prefix only the endpoints declared under it compete. There is no fall-through.
  */
-export function planEndpoint(table: CompiledEndpointTable, method: string, rawPath: string): EndpointPlan {
+export function planEndpoint<Row extends EndpointPattern>(table: CompiledEndpointTable<Row>, method: string, rawPath: string): EndpointPlan<Row> {
 	return table.plan(method, rawPath)
 }
 
@@ -114,9 +123,9 @@ function patternOrThrow(path: string, id: string): readonly Segment[] {
 	return pattern.segments
 }
 
-function analyse(table: EndpointTable): CompiledEndpoint[] {
+function analyse<Row extends EndpointPattern>(table: EndpointPatternTable<Row>): CompiledEndpoint<Row>[] {
 	const problems: string[] = []
-	const endpoints: CompiledEndpoint[] = []
+	const endpoints: CompiledEndpoint<Row>[] = []
 	const ids = new Set<string>()
 	const shapes = new Map<string, string>()
 	for (const row of table.endpoints) {
@@ -152,13 +161,18 @@ function analyse(table: EndpointTable): CompiledEndpoint[] {
 	return endpoints
 }
 
-function select(endpoints: readonly CompiledEndpoint[], reservedPrefixes: readonly string[], method: string, rawPath: string): EndpointPlan {
+function select<Row extends EndpointPattern>(
+	endpoints: readonly CompiledEndpoint<Row>[],
+	reservedPrefixes: readonly string[],
+	method: string,
+	rawPath: string,
+): EndpointPlan<Row> {
 	if (!isCanonicalPath(rawPath)) {
 		return { outcome: 'non-canonical' }
 	}
 	const path = splitPath(rawPath)
 	const reserved = longestPrefixOf(rawPath, reservedPrefixes)
-	let best: { readonly endpoint: CompiledEndpoint; readonly params: Record<string, string> } | null = null
+	let best: { readonly endpoint: CompiledEndpoint<Row>; readonly params: Record<string, string> } | null = null
 	let tied = false
 	for (const endpoint of endpoints) {
 		if (endpoint.row.method !== method || (reserved !== null && !isUnder(endpoint.row.path, reserved))) {

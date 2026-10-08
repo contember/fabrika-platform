@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · endpoints · gate-parity · gates · permissions · requirement · token
+bun test               # app-environment · canonical-path · contract-canonical · endpoint-digest · endpoints · gate-parity · gates · permissions · requirement · sha256 · token
 ```
 
 | Module                  | What it owns                                                                                                                   |
@@ -18,16 +18,18 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `canonical-path.ts`     | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
 | `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
 | `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
+| `endpoint-digest.ts`    | `requirementDigest`, `contractDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                          |
 | `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`, `selectableRows`.              |
 | `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
 | `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
 | `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                                               |
-| `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions.                                                   |
+| `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.           |
+| `sha256.ts`             | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                            |
 | `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                           |
 | `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
 | `membership.ts`         | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
 | `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
-| `wire.ts`               | The proxy→app header names: the verified token, the client address, and what to strip.                                         |
+| `wire.ts`               | The proxy→app header names: the verified token, the endpoint, the delegation grant, the client address, and what to strip.     |
 | `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
 | `json.ts`               | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                  |
 
@@ -122,12 +124,20 @@ bun test               # app-environment · canonical-path · contract-canonical
 - **`planEndpoint` takes only a `compileEndpointTable` result.** Compiling runs `assertNoAmbiguity`
   — an invalid path or reserved prefix, a duplicate id, a parameter named `__proto__`,
   `constructor` or `prototype`, or two endpoints of one method and one path shape — so a request
-  never meets a tie. Compile once where the table is loaded; never bypass it.
+  never meets a tie. Compile once where the table is loaded; never bypass it. It is generic over the row:
+  selection reads only `id`, `method` and `path`, so the proxy compiles its manifest rows, which carry the rules
+  but no schemas, with the same code.
 - **The requirement check is authorization.** `satisfies(requirement, perms)` — `member` is any
   permission of the application; an action form is that action in some scope, including global,
   through `permits` over each entry's own scope. It never becomes a gate and never replaces one.
   Scopes stay flat here: the framework resolves a containment chain, and each link is checked as a
   flat scope.
+- **An endpoint digest covers exactly what the proxy applies.** `requirementDigest` hashes the canonical JSON of
+  the row's kind, method, path, callers, requirement and admission; callers and content types are sorted, and the
+  id, source and schemas are not part of it. The proxy sends `<id>@<digest>` and the application recomputes it, so a
+  new rule the proxy enforces must join the digest in the same change, or the two can disagree unnoticed.
+  `contractDigest` is the digest of `canonicalArtifactJson`. Both are synchronous on purpose (`sha256.ts`): the
+  manifest parser and `boot` check them, and neither can await WebCrypto.
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.

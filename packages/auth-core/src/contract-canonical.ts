@@ -39,14 +39,19 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 			frameAncestors: sortedSources(artifact.csp.frameAncestors),
 		},
 		tables: mapValues(artifact.tables, canonicalTable),
-		endpoints: artifact.endpoints.map(canonicalRow).sort((a, b) => compare(a.id, b.id)),
+		endpoints: artifact.endpoints.map(canonicalizeEndpoint).sort((a, b) => compare(a.id, b.id)),
 		reservedPrefixes: sorted(artifact.reservedPrefixes),
 	}
 }
 
 /** The canonical artifact as JSON with every object's keys sorted: the bytes a digest of the artifact is taken over. */
 export function canonicalArtifactJson(artifact: ContractArtifact): string {
-	return JSON.stringify(canonicalizeArtifact(artifact), sortKeys)
+	return canonicalJson(canonicalizeArtifact(artifact))
+}
+
+/** JSON with every object's keys sorted. Arrays keep their order; canonicalize them first. */
+export function canonicalJson(value: unknown): string {
+	return JSON.stringify(value, sortKeys)
 }
 
 function canonicalRole(role: RoleArtifact): RoleArtifact {
@@ -78,7 +83,7 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 	}
 }
 
-function canonicalRow(row: EndpointRow): EndpointRow {
+function canonicalizeEndpoint(row: EndpointRow): EndpointRow {
 	const shared = {
 		admission: row.admission === null ? null : canonicalAdmission(row.admission),
 		input: row.input === null ? null : canonicalShape(row.input),
@@ -90,7 +95,8 @@ function canonicalRow(row: EndpointRow): EndpointRow {
 	return { ...row, ...shared, callers: sortedTuple<Caller>(row.callers) }
 }
 
-function canonicalAdmission(admission: BodyAdmission): BodyAdmission {
+/** A body admission with its content types sorted. */
+export function canonicalAdmission(admission: BodyAdmission): BodyAdmission {
 	return { contentTypes: sortedTuple(admission.contentTypes), maxBytes: admission.maxBytes }
 }
 

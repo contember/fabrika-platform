@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { EndpointRequirement } from '../contract'
-import { satisfies } from '../requirement'
+import { callerOf, satisfies } from '../requirement'
 import type { PermissionEntry, Scope } from '../types'
 
 const grant = (action: string, scope: Scope | null = null): PermissionEntry => ({ action, scope, source: 'grant' })
@@ -35,5 +35,19 @@ describe('satisfies admits', () => {
 		['the universal wildcard', deleteNote, [grant('*')]],
 	])('%s', (_name, requirement, perms) => {
 		expect(satisfies(requirement, perms)).toBe(true)
+	})
+})
+
+describe('callerOf', () => {
+	const base = { iss: 'https://iam.test', aud: 'notes@prod', sub: 's', iat: 0, exp: 1, perms: [], label: null }
+
+	test('maps a principal type to its caller kind and an unbound token to a link', () => {
+		expect(callerOf({ ...base, ptype: 'user' })).toBe('human')
+		expect(callerOf({ ...base, ptype: 'service' })).toBe('machine')
+		expect(callerOf(base)).toBe('link')
+	})
+
+	test('an OAuth resource token is no caller', () => {
+		expect(callerOf({ ...base, ptype: 'user', oauth: { app: 'notes@prod', clientId: 'c', scopes: [], grantId: 'g', tokenId: 't' } })).toBeNull()
 	})
 })
