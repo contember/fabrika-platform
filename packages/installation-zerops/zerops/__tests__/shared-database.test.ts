@@ -90,12 +90,12 @@ describe('the light tier shares one database, so the three schemas must interlea
 
 	test('the two consumers poll DIFFERENT queue names, which is what makes one table correct', () => {
 		const read = (path: string): string => readFileSync(join(REPO_ROOT, path), 'utf8')
-		expect(read('packages/control/src/node/runtime.ts')).toContain(`DEPLOY_QUEUE_NAME = 'vozka-deploy'`)
+		expect(read('packages/control/src/zerops/runtime.ts')).toContain(`DEPLOY_QUEUE_NAME = 'vozka-deploy'`)
 		expect(read('packages/operations/src/node/consumer.ts')).toContain(`OPERATIONS_INGEST_QUEUE = 'operations-ingest'`)
 	})
 
 	test('each service owns a distinct migration ledger and advisory lock (ADR-0017)', () => {
-		const migrate = (service: string): string => readFileSync(join(REPO_ROOT, `packages/${service}/src/node/migrate.ts`), 'utf8')
+		const migrate = (root: string): string => readFileSync(join(REPO_ROOT, `packages/${root}/migrate.ts`), 'utf8')
 		const field = (source: string, name: string): string => {
 			const value = new RegExp(`${name}:\\s*'([^']+)'`).exec(source)?.[1]
 			if (value === undefined) throw new Error(`no ${name}`)
@@ -106,7 +106,7 @@ describe('the light tier shares one database, so the three schemas must interlea
 			if (value === undefined) throw new Error('no MIGRATION_LOCK_KEY')
 			return value
 		}
-		const sources = ['iam', 'control', 'operations'].map(migrate)
+		const sources = ['iam/src/node', 'control/src/zerops', 'operations/src/node'].map(migrate)
 		const ledgers = sources.map((source) => field(source, 'ledgerTable'))
 		const locks = sources.map(lock)
 		expect(ledgers).toEqual(['iam_schema_migrations', 'control_schema_migrations', 'operations_schema_migrations'])

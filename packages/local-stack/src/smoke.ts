@@ -440,7 +440,7 @@ const proveRestartReconciliation = async (
 	await poll(
 		'maintenance-cron reconciliation after the killed deploy lease expires',
 		async () => {
-			await compose(['exec', '-T', 'control', 'bun', 'packages/control/src/node/cron.ts'], true, false)
+			await compose(['exec', '-T', 'control', 'bun', 'packages/control/src/zerops/cron.ts'], true, false)
 			return runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
 		},
 		(value) => value.status === 'succeeded',

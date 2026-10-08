@@ -17,7 +17,7 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { forwardIamAdmin } from '@fabrika/control/iam-admin'
 import { describe, expect, test } from 'bun:test'
-import { HttpIamAdminGateway } from '../../control/src/node/iam-admin'
+import { HttpIamAdminGateway } from '../../control/src/zerops/iam-admin'
 import { createHarness, seedGrant, seedUser } from '../../iam/src/__tests__/helpers/harness'
 import { createIamApp } from '../../iam/src/app'
 import type { Env } from '../../iam/src/env'

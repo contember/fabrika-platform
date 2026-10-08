@@ -19,7 +19,7 @@ bun run seed                                       # register apps (single-accou
 
 # The Bun/Postgres target (see zerops.yaml)
 bun run migrate:postgres                           # apply migrations-postgres/ (FABRIKA_CONTROL_DATABASE_URL)
-bun run serve                                      # the long-running server (src/node/server.ts)
+bun run serve                                      # the long-running server (src/zerops/server.ts)
 bun run maintenance                                # the cron one-shot: repo poll + stale-run sweep
 ```
 
@@ -29,18 +29,18 @@ Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./D
 
 ## Two entrypoints, one body of code
 
-|              | Cloudflare                                     | Bun process (Zerops)                                                |
-| ------------ | ---------------------------------------------- | ------------------------------------------------------------------- |
-| entrypoint   | `src/index.ts` (`cloudflare:workers`)          | `src/node/server.ts` (`Bun.serve`)                                  |
-| HTTP         | `fetch()` → `controlApp`                       | `@fabrika/app/bun` → `controlApp`                                   |
-| job consumer | `queue()` → `runControlJob`                    | `PostgresJobConsumer` → `runControlJob`                             |
-| cron         | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
-| migrations   | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
-| provider     | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops`, deploying in-process                    |
+|              | Cloudflare                                     | Bun process (Zerops)                                                  |
+| ------------ | ---------------------------------------------- | --------------------------------------------------------------------- |
+| entrypoint   | `src/index.ts` (`cloudflare:workers`)          | `src/zerops/server.ts` (`Bun.serve`)                                  |
+| HTTP         | `fetch()` → `controlApp`                       | `@fabrika/app/bun` → `controlApp`                                     |
+| job consumer | `queue()` → `runControlJob`                    | `PostgresJobConsumer` → `runControlJob`                               |
+| cron         | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/zerops/cron.ts` → `runMaintenance`               |
+| migrations   | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/zerops/migrate.ts` (`migrations-postgres/`) |
+| provider     | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops`, deploying in-process                      |
 
 The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;
-`src/node/provider.ts` statically selects Zerops. `entrypoint-isolation.test.ts` proves that neither
+`src/zerops/provider.ts` statically selects Zerops. `entrypoint-isolation.test.ts` proves that neither
 entrypoint reaches the other provider or runtime.
 
 ## Architecture
@@ -125,7 +125,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   IAM-ISSUED SERVICE KEY, which is a real credential the proxy can exchange
   (`docs/reference/human-authentication.md`).
 - **`ENVIRONMENT=local` IS REFUSED WHEN `FABRIKA_CONTROL_DOMAIN` IS NOT A LOOPBACK ORIGIN**
-  (`readEnvironmentName`, `@fabrika/auth-core`; both roots — `node/runtime.ts` at boot and
+  (`readEnvironmentName`, `@fabrika/auth-core`; both roots — `zerops/runtime.ts` at boot and
   `controlEnv` on the Worker's first request). Control does not branch on the name today, which is
   exactly why it must not drift: on `fabrika-test` it carried `local` while serving a public
   `.zerops.app` host (backlog 59), so the next `=== 'local'` branch would inherit an installation

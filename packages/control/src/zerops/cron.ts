@@ -8,7 +8,7 @@
 // multiplies with horizontal scale) and its schedule silently resets on every redeploy. `allContainers:
 // false` in the crontab entry keeps a horizontally-scaled service polling once.
 //
-// Run it: `bun src/node/cron.ts`.
+// Run it: `bun src/zerops/cron.ts`.
 
 import { runMaintenance } from '../cron'
 import { reconcileProviderRuns } from '../provider-reconcile'

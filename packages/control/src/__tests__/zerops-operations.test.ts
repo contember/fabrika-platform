@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { HttpOperationsService } from '../node/operations'
+import { HttpOperationsService } from '../zerops/operations'
 
 describe('node Operations transport', () => {
 	test('rejects a stalled private request after the configured timeout', async () => {

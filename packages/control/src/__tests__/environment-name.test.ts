@@ -9,7 +9,7 @@
 
 import { EnvironmentNameError } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { createRuntime } from '../node/runtime'
+import { createRuntime } from '../zerops/runtime'
 
 const base = { FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:pw@127.0.0.1:1/none' }
 

@@ -28,12 +28,12 @@ import {
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
 } from '../github-connection-store'
-import { applyMigrations, postgresMigrations } from '../node/migrate'
-import { createFetchHandler } from '../node/server'
 import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { unavailableSourceConnection } from '../source/connections'
 import { Vault } from '../vault'
+import { applyMigrations, postgresMigrations } from '../zerops/migrate'
+import { createFetchHandler } from '../zerops/server'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
@@ -1149,7 +1149,7 @@ function decode(payload: unknown): DeployJobMessage {
 }
 
 /**
- * The `Env` `node/runtime.ts` would assemble from `process.env`, built by hand so it binds the
+ * The `Env` `zerops/runtime.ts` would assemble from `process.env`, built by hand so it binds the
  * SCHEMA-SCOPED pool this fixture owns instead of opening a second one. Everything else — the routing,
  * the consumer, the maintenance pass — is exactly what runs in production.
  *

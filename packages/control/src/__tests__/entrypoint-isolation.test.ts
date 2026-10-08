@@ -2,7 +2,7 @@
 // trusting it.
 //
 // Why it needs proving: nothing in the type system stops someone adding `import { X } from
-// 'cloudflare:workers'` to a file that `src/node/server.ts` reaches, or reaching for `node:fs` inside
+// 'cloudflare:workers'` to a file that `src/zerops/server.ts` reaches, or reaching for `node:fs` inside
 // `src/app.ts`. Both compile. Both typecheck. The first one fails at Bun startup with an
 // unresolvable module; the second fails on Workers — and neither failure shows up in any other test
 // here, because the suite runs under Bun and never loads the Worker entrypoint at all.
@@ -119,15 +119,15 @@ describe('entrypoint isolation', () => {
 	})
 
 	test('the Bun entrypoint reaches no Cloudflare-only module', () => {
-		const graph = walk('node/server.ts')
+		const graph = walk('zerops/server.ts')
 		expect([...graph.externals].filter(CLOUDFLARE_ONLY)).toEqual([])
 		// …and in particular it must never pull in `index.ts` (the only file importing the Worker API) or
 		// `platform-cf.ts` (whose Cloudflare coupling is ambient types, invisible to the specifier rule).
 		expect(graph.files).not.toContain('index.ts')
 		expect(graph.files).not.toContain('platform-cf.ts')
 		// Not vacuous: it walked the graph, it is the process side, and it shares the whole handler layer.
-		expect(graph.files).toContain('node/server.ts')
-		expect(graph.files).toContain('node/runtime.ts')
+		expect(graph.files).toContain('zerops/server.ts')
+		expect(graph.files).toContain('zerops/runtime.ts')
 		expect(graph.files).toContain('app.ts')
 		expect(graph.files).toContain('consumer.ts')
 		expect(graph.files).toContain('services.ts')
@@ -138,14 +138,14 @@ describe('entrypoint isolation', () => {
 	})
 
 	test('the cron command and the migration runner stay on the process side too', () => {
-		for (const entry of ['node/cron.ts', 'node/migrate.ts']) {
+		for (const entry of ['zerops/cron.ts', 'zerops/migrate.ts']) {
 			const graph = walk(entry)
 			expect([...graph.externals].filter(CLOUDFLARE_ONLY)).toEqual([])
 			expect(graph.files).not.toContain('index.ts')
 			expect(graph.files).not.toContain('platform-cf.ts')
 		}
 		// The maintenance work itself is shared — `scheduled()` on Workers calls the same function.
-		expect(walk('node/cron.ts').files).toContain('cron.ts')
+		expect(walk('zerops/cron.ts').files).toContain('cron.ts')
 		expect(walk('index.ts').files).toContain('cron.ts')
 	})
 
@@ -181,11 +181,11 @@ describe('entrypoint isolation', () => {
 		}
 		// Not vacuous: the shared workflows do reach the vault-backed connection port, and the process reaches the rest.
 		expect(walk('control-rpc.ts').files).toContain('source/connections.ts')
-		expect(walk('node/server.ts').files).toEqual(expect.arrayContaining(processOnly))
+		expect(walk('zerops/server.ts').files).toEqual(expect.arrayContaining(processOnly))
 	})
 
 	test('no source module names a provider package', () => {
-		const sourceFiles = walk('node/server.ts').files.filter((file) => file.startsWith('source/'))
+		const sourceFiles = walk('zerops/server.ts').files.filter((file) => file.startsWith('source/'))
 		expect(sourceFiles.length).toBeGreaterThan(5)
 		for (const file of sourceFiles) {
 			const named = specifiersOf(readFileSync(resolve(SRC, file), 'utf8')).map(packageOf).filter((name) => PROVIDERS.has(name))
@@ -194,7 +194,7 @@ describe('entrypoint isolation', () => {
 	})
 
 	test('the Zerops process graph does not read or expose GitHub App credentials', () => {
-		for (const file of walk('node/server.ts').files) {
+		for (const file of walk('zerops/server.ts').files) {
 			const source = readFileSync(resolve(SRC, file), 'utf8')
 			expect(`${file}: ${source.includes('GITHUB_APP_ID') || source.includes('GITHUB_APP_PRIVATE_KEY')}`).toBe(`${file}: false`)
 		}

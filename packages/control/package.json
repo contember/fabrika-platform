@@ -54,15 +54,15 @@
 			"types": "./src/source/index.ts",
 			"default": "./src/source/index.ts"
 		},
-		"./node/runtime": {
-			"bun": "./src/node/runtime.ts",
-			"types": "./src/node/runtime.ts",
-			"default": "./src/node/runtime.ts"
+		"./zerops/runtime": {
+			"bun": "./src/zerops/runtime.ts",
+			"types": "./src/zerops/runtime.ts",
+			"default": "./src/zerops/runtime.ts"
 		},
-		"./node/server": {
-			"bun": "./src/node/server.ts",
-			"types": "./src/node/server.ts",
-			"default": "./src/node/server.ts"
+		"./zerops/server": {
+			"bun": "./src/zerops/server.ts",
+			"types": "./src/zerops/server.ts",
+			"default": "./src/zerops/server.ts"
 		}
 	},
 	"scripts": {
@@ -72,9 +72,9 @@
 		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",
 		"bootstrap": "bun run scripts/bootstrap.ts",
 		"seed": "bun run scripts/seed.ts",
-		"serve": "bun src/node/server.ts",
-		"migrate:postgres": "bun src/node/migrate.ts",
-		"maintenance": "bun src/node/cron.ts"
+		"serve": "bun src/zerops/server.ts",
+		"migrate:postgres": "bun src/zerops/migrate.ts",
+		"maintenance": "bun src/zerops/cron.ts"
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",

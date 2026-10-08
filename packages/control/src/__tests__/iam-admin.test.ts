@@ -2,7 +2,7 @@ import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { HttpService } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { forwardIamAdmin } from '../iam-admin'
-import { HttpIamAdminGateway } from '../node/iam-admin'
+import { HttpIamAdminGateway } from '../zerops/iam-admin'
 
 class RecordingGateway implements HttpService {
 	requests: Request[] = []

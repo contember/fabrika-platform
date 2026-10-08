@@ -265,11 +265,11 @@ const control: ZeropsYamlSetupSpec = {
 	deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, ...READINESS_WITH_MIGRATIONS } },
 	run: {
 		base: 'alpine/bun@1.3',
-		initCommands: ['bun packages/control/src/node/migrate.ts'],
-		start: 'bun packages/control/src/node/server.ts',
+		initCommands: ['bun packages/control/src/zerops/migrate.ts'],
+		start: 'bun packages/control/src/zerops/server.ts',
 		ports: [{ port: 3000, httpSupport: true }],
 		healthCheck: { httpGet: { port: 3000, path: '/healthz' }, ...LIVENESS },
-		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/control/src/node/cron.ts', allContainers: false }],
+		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/control/src/zerops/cron.ts', allContainers: false }],
 		envVariables: {
 			PORT: '3000',
 			FABRIKA_CONTROL_ASSETS_DIR: 'packages/dashboard/dist',

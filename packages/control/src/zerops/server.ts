@@ -8,13 +8,13 @@
 //                                     `PostgresJobConsumer` polls a table and calls the same function.
 //                                     See below for the ack/retry mapping.
 //   runMaintenance(src/cron.ts)     — the `scheduled` handler's work. NOT scheduled from in here: the
-//                                     platform cron drives it (`run.crontab` → `node/cron.ts`), which
+//                                     platform cron drives it (`run.crontab` → `zerops/cron.ts`), which
 //                                     is the same shape as `triggers.crons` driving `scheduled`.
 //
 // The shared application owns route order, including process liveness before the SPA fallback.
 // `/api/health` remains available on both platforms for existing monitors.
 //
-// Run it: `bun src/node/server.ts` (see `zerops.yaml` → `run.start`).
+// Run it: `bun src/zerops/server.ts` (see `zerops.yaml` → `run.start`).
 
 import { type BunHandler, createBunHandler } from '@fabrika/app/bun'
 import { PostgresJobConsumer } from '@fabrika/platform-node'

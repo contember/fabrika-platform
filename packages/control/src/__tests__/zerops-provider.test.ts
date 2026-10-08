@@ -1,10 +1,10 @@
 import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import type { Env } from '../env'
-import { zeropsControlProvider, zeropsGitHubSource, zeropsNamespaceProcessConfig } from '../node/provider'
-import { createRuntime } from '../node/runtime'
 import { FakeRepoSource } from '../repo-source'
 import { buildControlRpcDeps } from '../services'
+import { zeropsControlProvider, zeropsGitHubSource, zeropsNamespaceProcessConfig } from '../zerops/provider'
+import { createRuntime } from '../zerops/runtime'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 

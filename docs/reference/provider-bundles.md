@@ -179,7 +179,7 @@ The detached runner/image precedes Control in an operator-owned rollout; see
 
 ### Zerops composition
 
-The Zerops installation starts at `packages/control/src/node/server.ts`.
+The Zerops installation starts at `packages/control/src/zerops/server.ts`.
 `node/provider.ts` composes `@fabrika/provider-zerops` with the neutral engine,
 Zerops credentials, and the proxy-manifest synchronization hook. Deploy
 execution stays in the Bun process. `createZeropsControlProvider` requires an

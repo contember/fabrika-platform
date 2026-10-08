@@ -113,7 +113,7 @@ services:
   control:
     <<: *bun
     # The production server with its GitHub and upload transports pointed at the local fixtures (ADR-0029).
-    command: [sh, -c, "bun packages/control/src/node/migrate.ts && bun packages/local-stack/src/source-connection-fixture-seed.ts && exec bun packages/local-stack/src/control-server.ts"]
+    command: [sh, -c, "bun packages/control/src/zerops/migrate.ts && bun packages/local-stack/src/source-connection-fixture-seed.ts && exec bun packages/local-stack/src/control-server.ts"]
     env_file: .state/control.env
     environment:
       PORT: "3000"

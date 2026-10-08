@@ -1,7 +1,7 @@
 // The local stack's Control process: the production entrypoint with the source transports pointed at the
 // local fixtures and the Zerops emulator. The origins Control addresses stay the production ones (ADR-0029).
-import { createRuntime } from '@fabrika/control/node/runtime'
-import { startControlServer } from '@fabrika/control/node/server'
+import { createRuntime } from '@fabrika/control/zerops/runtime'
+import { startControlServer } from '@fabrika/control/zerops/server'
 import { resolve } from 'node:path'
 import {
 	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,

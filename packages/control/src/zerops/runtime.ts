@@ -1,7 +1,7 @@
 // Runtime assembly for a LONG-RUNNING BUN PROCESS — the other half of what `wrangler` does for the
 // Worker: fill the `Env` ports, and hand back the queue consumer the platform cannot drive for us.
 //
-// Everything under `src/node/` is Bun/Node-only and is the ONLY part of this package allowed to be. It
+// Everything under `src/zerops/` is Bun/Node-only and is the ONLY part of this package allowed to be. It
 // imports `@fabrika/platform-node`; `src/index.ts` (the Worker) imports `cloudflare:workers`; the
 // shared layer between them (`app.ts`, `consumer.ts`, `cron.ts`, `services.ts`, everything they
 // reach) imports neither. `src/__tests__/entrypoint-isolation.test.ts` walks both graphs and fails if
