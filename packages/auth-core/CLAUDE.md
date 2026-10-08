@@ -9,25 +9,26 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # canonical-path · contract-canonical · endpoints · gate-parity · gates · permissions · requirement · token
+bun test               # app-environment · canonical-path · contract-canonical · endpoints · gate-parity · gates · permissions · requirement · token
 ```
 
-| Module                  | What it owns                                                                                       |
-| ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `canonical-path.ts`     | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers. |
-| `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.  |
-| `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.  |
-| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`.    |
-| `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                              |
-| `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.            |
-| `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                   |
-| `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions.                       |
-| `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.               |
-| `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                 |
-| `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                     |
-| `wire.ts`               | The proxy→app header names: the verified token, the client address, and what to strip.             |
-| `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.      |
-| `json.ts`               | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                      |
+| Module                  | What it owns                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `app-environment.ts`    | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` of one application environment. |
+| `canonical-path.ts`     | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.      |
+| `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.       |
+| `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.       |
+| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`.         |
+| `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                                   |
+| `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                 |
+| `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                        |
+| `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions.                            |
+| `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.                    |
+| `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                      |
+| `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                          |
+| `wire.ts`               | The proxy→app header names: the verified token, the client address, and what to strip.                  |
+| `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.           |
+| `json.ts`               | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                           |
 
 ## Invariants
 
