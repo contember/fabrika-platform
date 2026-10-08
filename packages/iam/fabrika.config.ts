@@ -19,7 +19,6 @@ type EnvironmentSource = Readonly<Record<string, string | undefined>>
 interface RemoteConfig {
 	domain: string
 	humanEmailDomains: string
-	adminOrigins: string
 	/** Absent when the deploy var is unset — IAM then defaults to the console's own app id. */
 	adminAudiences?: string
 	oidcEnabled: boolean
@@ -104,7 +103,6 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 	return {
 		domain: requiredDomain(domain),
 		humanEmailDomains: humanEmailDomains ?? '[]',
-		adminOrigins: source['FABRIKA_IAM_ADMIN_ORIGINS'] ?? '[]',
 		...(adminAudiences === undefined ? {} : { adminAudiences }),
 		oidcEnabled: authentication.oidcEnabled,
 		passwordEnabled: authentication.passwordEnabled,
@@ -125,9 +123,6 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
-			// The console's origin, which a local `wrangler dev` does not have. Empty = no browser may
-			// write to `/admin/*`; a machine bearer is unaffected.
-			ADMIN_ORIGINS: '[]',
 			ISSUER: 'http://localhost:18191',
 			// Password-only locally. OIDC is now FATAL when half-configured (one rule on both engines),
 			// and a `wrangler dev` has no client id or secret to give it.
@@ -144,7 +139,6 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
-		ADMIN_ORIGINS: config.adminOrigins,
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),
@@ -166,7 +160,6 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
 	return [
-		'FABRIKA_IAM_ADMIN_ORIGINS',
 		'FABRIKA_IAM_ADMIN_AUDIENCES',
 		'FABRIKA_IAM_OIDC_ENABLED',
 		'FABRIKA_IAM_PASSWORD_ENABLED',

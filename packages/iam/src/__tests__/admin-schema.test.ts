@@ -6,12 +6,11 @@ import { handleAdmin } from '../admin/router'
 import { createIamApp } from '../app'
 import type { Env, RequestContext } from '../env'
 import type { Services } from '../services'
-import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ADMIN_ENV: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'> = {
-	FABRIKA_IAM_SIGNING_KEYS: '',
+	...TEST_SIGNING_ENV,
 	FABRIKA_IAM_PROVISIONING_KEY: '',
-	ENVIRONMENT: 'stage',
 }
 
 // End-to-end admin tests for the app-vocabulary surfaces:
@@ -22,7 +21,7 @@ const ADMIN_ENV: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONIN
 //   - grant create enforces role XOR inline, validates inline against the catalog, and enforces
 //     both-or-neither scope.
 // Everything except the schema reconcile is `/admin/rpc`, which is the only transport that serves it.
-// Both are driven with a real native admin session (`px_session` cookie + real Db over bun:sqlite).
+// Both are driven with the console's bearer (the proxy token Control forwards + real Db over bun:sqlite).
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
@@ -36,7 +35,7 @@ class FakeRequestContext implements RequestContext {
 // The target app ('opice') registers itself by reconciling its schema (`PUT …/opice/schema`), which
 // is how it lands in the DB-derived `knownApps` registry — no static config list anymore.
 function adminServices(h: Harness): Services {
-	return h.makeServices({ environment: 'stage', issuer: ORIGIN, adminOrigins: [ORIGIN] })
+	return h.makeServices({ environment: 'stage', issuer: ORIGIN })
 }
 
 function env(h: Harness): Env {
@@ -46,10 +45,9 @@ function env(h: Harness): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: JSON.stringify([ORIGIN]),
 		ENVIRONMENT: 'stage',
 		ISSUER: ORIGIN,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -59,18 +57,16 @@ function env(h: Harness): Env {
 	}
 }
 
-// Seed a global admin user and open an SSO session so every request clears the gate.
+// Seed a global admin user and sign its console bearer so every request clears the gate.
 async function asAdmin(h: Harness): Promise<string> {
 	const id = seedUser(h.sqlite, { sub: 'sub-admin', email: 'admin@example.com' })
 	seedGrant(h.sqlite, id, 'admin', null) // built-in admin, global, cross-app
-	return h.signSession(id)
+	return h.adminToken(id, { issuer: ORIGIN })
 }
 
-function req(path: string, method: string, session: string, body?: unknown): Request {
-	const headers = new Headers({ Cookie: `__Host-px_session=${session}` })
-	const stateChanging = method !== 'GET'
-	if (stateChanging) {
-		headers.set('Origin', ORIGIN)
+function req(path: string, method: string, bearer: string, body?: unknown): Request {
+	const headers = new Headers({ Authorization: `Bearer ${bearer}` })
+	if (method !== 'GET') {
 		headers.set('Content-Type', 'application/json')
 	}
 	return new Request(`${ORIGIN}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
@@ -80,12 +76,12 @@ async function run(h: Harness, request: Request): Promise<Response> {
 	return handleAdmin(request, adminServices(h), ADMIN_ENV, new FakeRequestContext())
 }
 
-/** One `/admin/rpc` call as the session's admin; returns the status and the parsed envelope. */
-async function rpc(h: Harness, session: string, method: string, input: unknown): Promise<{ status: number; body: unknown }> {
+/** One `/admin/rpc` call as the bearer's admin; returns the status and the parsed envelope. */
+async function rpc(h: Harness, bearer: string, method: string, input: unknown): Promise<{ status: number; body: unknown }> {
 	const response = await createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
+			headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
 			body: JSON.stringify({ method, input }),
 		}),
 		env(h),
@@ -95,8 +91,8 @@ async function rpc(h: Harness, session: string, method: string, input: unknown):
 }
 
 /** The `result` of a call expected to succeed, narrowed by the caller's DTO type. */
-async function result<T>(h: Harness, session: string, method: string, input: unknown, narrow: (value: unknown) => T): Promise<T> {
-	const { status, body } = await rpc(h, session, method, input)
+async function result<T>(h: Harness, bearer: string, method: string, input: unknown, narrow: (value: unknown) => T): Promise<T> {
+	const { status, body } = await rpc(h, bearer, method, input)
 	expect(status).toBe(200)
 	if (body === null || typeof body !== 'object' || !('result' in body)) {
 		throw new Error(`expected a result envelope from ${method}`)
@@ -105,8 +101,8 @@ async function result<T>(h: Harness, session: string, method: string, input: unk
 }
 
 /** The error message of a call expected to fail with `status`. */
-async function failure(h: Harness, session: string, method: string, input: unknown, status: number): Promise<string> {
-	const response = await rpc(h, session, method, input)
+async function failure(h: Harness, bearer: string, method: string, input: unknown, status: number): Promise<string> {
+	const response = await rpc(h, bearer, method, input)
 	expect(response.status).toBe(status)
 	const body = response.body
 	if (body === null || typeof body !== 'object' || !('error' in body)) {

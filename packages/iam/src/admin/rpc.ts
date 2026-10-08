@@ -6,7 +6,7 @@ import type { IamAppContext } from '../app'
 import { logError } from '../log'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
-import { ADMIN_ACTION, extractCredentials, IAM_APP, rejectCrossOrigin, resolveAdmin } from './router'
+import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
 
 const t = initRpc<IamAppContext>()
 const nonEmpty = z.string().min(1)
@@ -59,10 +59,6 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ id: nonEmpty, disabled: z.boolean() }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.updatePrincipal(context(ctx), input)),
-		delete: t.procedure
-			.input(principalIdInput)
-			.require(ADMIN_ACTION)
-			.mutation(({ ctx, input }) => adminUseCases.deletePrincipal(context(ctx), input)),
 	}),
 	// Revoking a PARENT already cascades to every app session derived from it, so `revoke` is one
 	// call and never a sweep — see `SessionRepository.revokeSessionById`.
@@ -103,19 +99,10 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	apps: t.router({
 		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.listApps(context(ctx))),
 		getSchema: t.procedure.input(appInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getAppSchema(context(ctx), input)),
-		getReturnOrigins: t.procedure
-			.input(appInput)
-			.require(ADMIN_ACTION)
-			.query(({ ctx, input }) => adminUseCases.getReturnOrigins(context(ctx), input)),
 		setReturnOrigins: t.procedure
 			.input(z.object({ app: nonEmpty, origins: z.array(nonEmpty) }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.setReturnOrigins(context(ctx), input)),
-		// Clearing is its own call, never an empty `origins` array — see `clearReturnOriginsUseCase`.
-		clearReturnOrigins: t.procedure
-			.input(appInput)
-			.require(ADMIN_ACTION)
-			.mutation(({ ctx, input }) => adminUseCases.clearReturnOrigins(context(ctx), input)),
 	}),
 	roles: t.router({
 		list: t.procedure
@@ -196,10 +183,6 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 
 export const adminRpcAuth: Middleware<IamAppContext> = async (request, ctx, next) => {
 	try {
-		if (rejectCrossOrigin(request, ctx.services.config) !== null) {
-			return toErrorResponse(new ForbiddenError('cross-origin request rejected'))
-		}
-
 		const credentials = extractCredentials(request, ctx.requestId)
 		const resolution = await resolveAdmin(ctx.services, ctx.env, credentials)
 		if (!resolution.ok) {

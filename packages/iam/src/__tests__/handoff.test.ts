@@ -7,7 +7,6 @@
 import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
-import { resolveAdmin } from '../admin/router'
 import { createIamApp } from '../app'
 import { LOCAL_DEV_ADMIN_ID } from '../auth'
 import { handleAuth } from '../auth/routes'
@@ -18,7 +17,7 @@ import { pkceChallenge } from '../oidc'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
-import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
@@ -26,7 +25,6 @@ const HANDOFF_STATE = 'state-state-state1'
 const HANDOFF_VERIFIER = 'browser-held-verifier-browser-held-verifier-1'
 const HANDOFF_CHALLENGE = await pkceChallenge(HANDOFF_VERIFIER)
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
-const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 /** The admin surface reaches the database only through `REPOSITORIES`; this proves it. */
 class TestContext implements RequestContext {
 	readonly waiting: Promise<unknown>[] = []
@@ -395,23 +393,23 @@ describe('registering return origins', () => {
 		call(method: string, input: unknown): Promise<Response>
 	}
 
-	/** Drive the real admin RPC: an admin session, a registered app, and the shipped router. */
+	/** Drive the real admin RPC: an admin's console bearer, a registered app, and the shipped router. */
 	async function adminStack(): Promise<AdminStack> {
 		const harness = createHarness()
 		const adminId = seedUser(harness.sqlite, { sub: 'sub-admin', email: 'admin@contember.com' })
 		seedGrant(harness.sqlite, adminId, 'admin')
 		seedAppAction(harness.sqlite, 'notes', 'note.read')
 		const session = await harness.signSession(adminId, { email: 'admin@contember.com', idpSub: 'sub-admin' })
+		const bearer = await harness.adminToken(adminId, { issuer: ISSUER })
 		const env: Env = {
 			DB: unusedDatabase,
 			REPOSITORIES: harness.repositories,
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
-			ADMIN_ORIGINS: JSON.stringify([ISSUER]),
 			ENVIRONMENT: 'stage',
 			ISSUER: ISSUER,
-			FABRIKA_IAM_SIGNING_KEYS: '',
+			FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 			FABRIKA_IAM_PROVISIONING_KEY: '',
 			OIDC_ISSUER: 'https://idp.test',
 			OIDC_CLIENT_ID: 'client',
@@ -427,7 +425,7 @@ describe('registering return origins', () => {
 				return createIamApp().fetch(
 					new Request(`${ISSUER}/admin/rpc`, {
 						method: 'POST',
-						headers: { 'content-type': 'application/json', origin: ISSUER, cookie: `${SESSION_COOKIE}=${session}` },
+						headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
 						body: JSON.stringify({ method, input }),
 					}),
 					env,
@@ -612,11 +610,5 @@ describe('a session minted by the local-dev bypass', () => {
 		)
 		// The password form, not a 302 carrying a code.
 		expect(response.status).toBe(200)
-	})
-
-	test('stops opening the admin surface too', async () => {
-		const { services, token } = await bypassSession(false)
-		const resolution = await resolveAdmin(services, ADMIN_ENV, { bearer: null, session: token, requestId: 'r1' })
-		expect(resolution).toEqual({ ok: false, status: 401, reason: 'invalid_session' })
 	})
 })

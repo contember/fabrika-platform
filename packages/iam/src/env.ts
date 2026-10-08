@@ -27,25 +27,12 @@ export interface Env {
 	/** JSON array of bootstrap-admin emails (normally empty). Always admitted; resolution-time only. */
 	IAM_BOOTSTRAP_ADMINS: string
 	/**
-	 * JSON array of browser origins allowed to drive `/admin/*` with an ambient session cookie — the
-	 * unified console's public origin, and nothing else by default. Deploy var
-	 * `FABRIKA_IAM_ADMIN_ORIGINS`.
-	 *
-	 * It is a REGISTRY, not an inference. The console is fronted by the control plane's own domain and
-	 * IAM has no way to derive it; the previous code compared against IAM's issuer, which the browser
-	 * never sends, and the gateway rewrote the header to match — which both broke every console write
-	 * and hid the real requirement. Empty/unset means no browser may write, which is the fail-closed
-	 * default a machine caller (bearer, no cookie) is deliberately exempt from.
-	 */
-	ADMIN_ORIGINS: string
-	/**
 	 * Comma-separated app ids whose proxy-injected access token may administer `/admin/*` — the
 	 * console gateway, and nothing else. Deploy var `FABRIKA_IAM_ADMIN_AUDIENCES`. Unset means the
 	 * console's own app id; an explicitly empty value means no JWT may administer at all.
 	 *
-	 * A REGISTRY for the same reason `ADMIN_ORIGINS` is one: every application in the installation
-	 * receives the administrator's token in cleartext, so without a named audience any of them could
-	 * replay it here.
+	 * A REGISTRY because every application in the installation receives the administrator's token in
+	 * cleartext, so without a named audience any of them could replay it here.
 	 */
 	ADMIN_AUDIENCES?: string
 	/** `local` / `stage` / `prod`. */

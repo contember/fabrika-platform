@@ -13,7 +13,7 @@ call against one of them answers `400 id: Required`. Effort S.
 
 `grants.create` takes `CreateGrantRequest`, which keys on `principalId`
 (`packages/iam-contract/src/index.ts`, the `CreateGrantRequest` interface). `principals.get`,
-`principals.delete`, `sessions.revokeAll` and all three `passwords.*` procedures take
+`sessions.revokeAll` and all three `passwords.*` procedures take
 `PrincipalIdInput`, which keys on `id`. `apiKeys.*` takes `ApiKeyIdInput`, which keys on
 `principalId` again. Nothing in the contract says which spelling a given procedure wants, so a caller
 writing the natural sequence — create a grant for a principal, then issue that principal an

@@ -362,7 +362,7 @@ describe('what it writes', () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
 		expect(fixture.zerops.env('iam').get('ISSUER')).toBe(`https://${IAM_HOST}`)
-		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_ADMIN_ORIGINS')).toBe(JSON.stringify([`https://${CONSOLE_HOST}`]))
+		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_ADMIN_ORIGINS')).toBeUndefined()
 		expect(fixture.zerops.env('control').get('FABRIKA_CONTROL_DOMAIN')).toBe(CONSOLE_HOST)
 		expect(fixture.zerops.env('control').get('OPERATIONS_ARTIFACT_ORIGIN')).toBe(`https://${OPERATIONS_HOST}`)
 		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_PUBLIC_HOST')).toBe(OPERATIONS_HOST)

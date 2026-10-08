@@ -51,7 +51,6 @@ function env(h: Harness): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: '[]',
 		ENVIRONMENT: 'stage',
 		ISSUER: 'https://iam.example.com',
 		FABRIKA_IAM_SIGNING_KEYS: '',

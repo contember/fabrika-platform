@@ -6,10 +6,7 @@ import type { Config, Services } from './services'
 import { getSigner, verifyAccessToken } from './signing'
 import { resolveCredential } from './tokens'
 
-/**
- * Fixed identity for the local dev bypass below. A row with this id is seeded into
- * `principals` (see `seed.dev.sql`) so audit/auth-log foreign keys resolve.
- */
+/** Fixed identity of the local-dev login (`LOCAL_DEV_LOGIN`, `auth/login.ts`). */
 export const LOCAL_DEV_ADMIN_ID = 'local-dev-admin'
 export const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
 
@@ -70,19 +67,6 @@ export async function resolveCaller(
 	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	input: { app: string; credential: string | null; requestId: string },
 ): Promise<CallerResolution> {
-	// LOCAL DEV BYPASS. With NO durable signing keys configured (an ephemeral key ⇒ dev-only) AND no
-	// credential presented, resolve a fixed global-admin so the example app / admin scripts work
-	// against `lopata`/`wrangler dev`. A real deploy provisions FABRIKA_IAM_SIGNING_KEYS, so this branch
-	// is impossible there.
-	if (services.config.environment === 'local' && input.credential === null && (env.FABRIKA_IAM_SIGNING_KEYS ?? '').trim() === '') {
-		console.warn('local dev bypass active: resolving fixed global-admin caller (ENVIRONMENT=local, no signing keys configured)')
-		return {
-			ok: true,
-			caller: { id: LOCAL_DEV_ADMIN_ID, type: 'user', label: 'local-dev-admin', permissions: [{ action: '*', scope: null, source: 'bootstrap' }] },
-			verifiedApp: input.app,
-		}
-	}
-
 	if (input.credential === null) {
 		return { ok: false, reason: 'missing_token' }
 	}

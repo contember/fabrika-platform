@@ -81,8 +81,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   could be forgotten (SEC-11) or an internal message could leak (CORR-4). Adding a route back means
   showing no `/admin/rpc` procedure can serve the caller — otherwise "policy, audit and
   hidden-object behaviour must not diverge by transport" becomes a property somebody has to
-  maintain again. `extractCredentials`/`rejectCrossOrigin`/`resolveAdmin` live in `admin/router.ts`
-  and are shared by both, so admission is decided once.
+  maintain again. `extractCredentials`/`resolveAdmin` live in `admin/router.ts` and are shared by
+  both, so the caller is resolved once.
+- **`/admin/*` IS BEARER-ONLY.** `resolveAdmin` accepts a registered-audience proxy JWT (what
+  Control's console gateway forwards as a bearer) or a `px_` key, and reads no session cookie. With
+  no ambient credential there is nothing for a CSRF check to defend, so IAM keeps no admin-origin
+  registry; the console's admission is Control's gateway origin guard. A request with no bearer is
+  401 in every environment — there is no credential-less local caller.
 - **REVOKING AN IAM SESSION REVOKES EVERY APP SESSION DERIVED FROM IT, AND THAT IS A JOIN, NOT A
   SWEEP.** `getActiveSessionByHash`/`ById` join to `parent_session_id` on every lookup, so a child
   stops resolving the moment the parent carries `revoked_at` — its own row is never rewritten, which
@@ -90,29 +95,20 @@ fails if that stops being true — it is the guard, not documentation of one.
   while its parent is dead. Never "fix" that by walking children: IAM cannot set a cookie on the
   hosts they belong to, and the walk would be the thing that races.
 - **A SESSION IS USABLE ONLY WHILE THE INSTALLATION STILL ENABLES ITS METHOD.** `sessionUsable`
-  (`src/auth.ts`) is checked at USE — at mint, at `currentSession`, and at `resolveAdmin` — because
+  (`src/auth.ts`) is checked at USE — at mint and at `currentSession` — because
   turning OIDC or password off changes what the NEXT login may do and nothing about the thirty days
   already issued. The local-dev bypass carries its own `authentication_method` (`local_dev`, migration
   `0013`/`0007`) instead of an exemption inside the predicate: a local composition runs OIDC off, so
   "refuse an `oidc` session when OIDC is off" would have disabled the bypass itself. Anything that
   seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
   seeds `password` for exactly that reason.
-- **WHICH BROWSER ORIGINS MAY DRIVE `/admin/*` IS A REGISTRY, NOT AN INFERENCE.** `ADMIN_ORIGINS`
-  (deploy var `FABRIKA_IAM_ADMIN_ORIGINS`) holds the CONSOLE's public origin — the control plane's
-  domain, which IAM has no way to derive. It used to compare `Origin` against its own issuer, which a
-  console request never carries, and the gateway rewrote the header to compensate; every deployment
-  whose private RPC address differed from its public issuer answered 403 to the whole Access plane.
-  Empty means no browser may write, which is fail-closed. A caller presenting ONLY a bearer is exempt
-  (a browser never attaches one by itself), which is what keeps CI and the first-operator bootstrap
-  working. The method list in `rejectCrossOrigin` is an ALLOWLIST of safe methods, so a method
-  invented later is checked by default.
-- **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS THE SAME KIND OF REGISTRY.** `ADMIN_AUDIENCES` (deploy
+- **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS A REGISTRY.** `ADMIN_AUDIENCES` (deploy
   var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
   JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means
   no JWT may administer at all. It has to be registered because EVERY application receives the injected
   `X-Fabrika-Token` in cleartext, so an unpinned audience let any app replay an administrator's token
-  against `/admin/rpc` — and the bearer-only path is exempt from `rejectCrossOrigin`, so nothing else
-  stood in the way. A malformed entry is refused at boot, like `ADMIN_ORIGINS`.
+  against `/admin/rpc`, and nothing else stands in the way of a bearer. A malformed entry is refused
+  at boot.
 - **A `px_` CREDENTIAL IS BOUND TO AN APP.** `credentials.app` is what `resolveCredential` checks at
   every mint. It is REQUIRED on an anonymous credential (a share link): its inline grants are frozen
   at issue and were delegation-checked against one app, so without the binding authority granted at
@@ -160,8 +156,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   used to be derived from the issuer's scheme; `__Host-` removed the decision, because without
   `Secure` the browser stores nothing at all.
 - **`ENVIRONMENT=local` IS REFUSED WHEN `ISSUER` IS NOT A LOOPBACK ORIGIN** (`readEnvironmentName`,
-  `@fabrika/auth-core`). `local` is not a label — it is the one string `localDevLogin`, the ephemeral
-  signing key and the credential-less caller path are all gated on, and a live installation was
+  `@fabrika/auth-core`). `local` is not a label — it is the one string `localDevLogin` and the ephemeral
+  signing key are both gated on, and a live installation was
   measured carrying it (backlog 59). What proves a process is not local is the PUBLIC ORIGIN it serves
   on, because that value cannot be wrong quietly: it is the `iss` of every token it mints, the host
   its `__Host-` cookie belongs to, and the address a browser is sent back to. The COMPOSITION ROOT

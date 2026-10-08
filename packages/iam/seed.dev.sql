@@ -47,8 +47,8 @@ INSERT INTO roles (app, role_key, name, description, permissions, origin, create
   ON CONFLICT DO NOTHING;
 
 -- ── Principals ───────────────────────────────────────────────────────────────
--- `local-dev-admin` is the identity the worker's ENVIRONMENT=local bypass resolves
--- to (see src/auth.ts) — seeding it makes audit/auth-log foreign keys resolve.
+-- `local-dev-admin` is the identity the LOCAL_DEV_LOGIN login resolves to
+-- (see src/auth/login.ts) — seeding it makes audit/auth-log foreign keys resolve.
 INSERT INTO principals (id, type, external_id, email, label, disabled_at, activated_at, created_at) VALUES
   ('local-dev-admin', 'user',    'local-dev-admin', 'admin@local.test', 'local-dev-admin',  NULL,       1782810000, 1782810000),
   ('p-alice',         'user',    'sub-alice',       'alice@firma.cz',   'alice@firma.cz',   NULL,       1782824400, 1782824400),

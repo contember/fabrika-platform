@@ -53,7 +53,6 @@ beforeEach(async () => {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: '[]',
 		ENVIRONMENT: 'local',
 		ISSUER: services.config.issuer,
 		FABRIKA_IAM_SIGNING_KEYS: '',

@@ -25,7 +25,6 @@ function env(overrides: Partial<Env> = {}): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: '[]',
 		ENVIRONMENT: 'local',
 		ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: '',
@@ -85,8 +84,8 @@ describe('IAM runtime conformance', () => {
 	test('a credential-less POST to /admin/rpc answers with an identical structured 401', async () => {
 		const response = await assertAppRuntimeConformance({
 			app: createIamApp(),
-			// Off-local, so the ENVIRONMENT=local caller bypass cannot answer this instead of the 401.
-			createEnv: () => env({ ADMIN_ORIGINS: JSON.stringify([ISSUER]), ENVIRONMENT: 'stage' }),
+			// Local, and still a 401: no environment admits a credential-less admin caller.
+			createEnv: () => env(),
 			createRequest: () =>
 				new Request(`${ISSUER}/admin/rpc`, {
 					method: 'POST',

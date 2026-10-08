@@ -280,7 +280,6 @@ const desiredServiceEnv = (
 	proxySource: ZeropsNamespaceProxySource,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const iamOrigin = platformOrigin(placement.scheme, placement.hosts.iam)
-	const consoleOrigin = platformOrigin(placement.scheme, placement.hosts.control)
 	const operationsOrigin = platformOrigin(placement.scheme, placement.hosts.operations)
 	return new Map<PlatformDeployService, ReadonlyMap<string, string>>([
 		[
@@ -290,9 +289,6 @@ const desiredServiceEnv = (
 				// The `iss` of every minted token AND the OIDC redirect base, so it must be the address
 				// routed to the proxy in front of this service.
 				['ISSUER', iamOrigin],
-				// Which browser origins may drive `/admin/*`. IAM cannot derive the console's domain; an
-				// empty registry closes the console's whole Access plane.
-				['FABRIKA_IAM_ADMIN_ORIGINS', JSON.stringify([consoleOrigin])],
 			]),
 		],
 		[

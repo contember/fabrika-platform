@@ -1,19 +1,12 @@
 import { listApiKeysUseCase, parseProvisionApiKeyRequest, provisionApiKeyUseCase, revokeApiKeyUseCase, rotateApiKeyUseCase } from './api-keys'
-import {
-	clearReturnOriginsUseCase,
-	getAppSchemaUseCase,
-	getReturnOriginsUseCase,
-	listAppsUseCase,
-	listRolesUseCase,
-	setReturnOriginsUseCase,
-} from './app-schema'
+import { getAppSchemaUseCase, listAppsUseCase, listRolesUseCase, setReturnOriginsUseCase } from './app-schema'
 import { listAuditUseCase, listAuthLogUseCase } from './audit'
 import { type AdminContext } from './context'
 import { createGrantUseCase, deleteGrantUseCase } from './grants'
 import { json, readJson } from './http'
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
 import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePolicyUseCase } from './policies'
-import { deletePrincipalUseCase, getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, updatePrincipalUseCase } from './principals'
+import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, updatePrincipalUseCase } from './principals'
 import { listSessionsUseCase, revokeSessionsForPrincipalUseCase, revokeSessionUseCase } from './sessions'
 import { createShareLinkUseCase, listShareLinksUseCase, revokeShareLinkUseCase } from './share-links'
 
@@ -52,7 +45,6 @@ export const adminUseCases = {
 	getPrincipal: getPrincipalUseCase,
 	invitePrincipal: invitePrincipalUseCase,
 	updatePrincipal: updatePrincipalUseCase,
-	deletePrincipal: deletePrincipalUseCase,
 	listSessions: listSessionsUseCase,
 	revokeSession: revokeSessionUseCase,
 	revokeSessionsForPrincipal: revokeSessionsForPrincipalUseCase,
@@ -64,9 +56,7 @@ export const adminUseCases = {
 	listApps: listAppsUseCase,
 	listRoles: listRolesUseCase,
 	getAppSchema: getAppSchemaUseCase,
-	getReturnOrigins: getReturnOriginsUseCase,
 	setReturnOrigins: setReturnOriginsUseCase,
-	clearReturnOrigins: clearReturnOriginsUseCase,
 	listPolicies: listPoliciesUseCase,
 	createPolicy: createPolicyUseCase,
 	updatePolicy: updatePolicyUseCase,

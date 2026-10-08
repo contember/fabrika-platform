@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
-import { LOCAL_DEV_ADMIN_ID } from '../auth'
+import { PROVISIONING_ADMIN_ID } from '../auth'
 import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { pkceChallenge, randomToken } from '../oidc'
@@ -18,10 +18,9 @@ import { allMigrations } from './helpers/migrations'
 //      `iam.credential.*` audit events carry the grants but NEVER the plaintext token.
 //
 // We drive the real class against a real `Db(env.DB)` backed by an in-memory bun:sqlite
-// (the schema.test.ts pattern), seeding the `local-dev-admin` principal so auth-log /
-// audit FK lookups resolve. We only ever pass `credential: null`, and ENVIRONMENT='local'
-// + FABRIKA_IAM_SIGNING_KEYS='' lets the native local-dev bypass resolve the global-admin
-// caller (which now carries the SDK-passed app as its verified app).
+// (the schema.test.ts pattern). The caller presents the seeded provisioning key, which resolves
+// to the migration-seeded `provisioning-admin` global admin with the SDK-passed app as its
+// verified app, so auth-log / audit FK lookups resolve.
 
 // `Propustka` extends `WorkerEntrypoint` from 'cloudflare:workers', which bun's test
 // runtime cannot resolve. Stub it with a base class that just assigns ctx/env — exactly
@@ -138,14 +137,10 @@ function freshDb(): Database {
 	const db = new Database(':memory:')
 	db.exec('PRAGMA foreign_keys = ON')
 	db.exec(migration)
-	const now = Math.floor(Date.now() / 1000)
-	// Seed the local-dev-admin principal so auth_log / audit_events FK lookups resolve.
-	db.run(
-		"INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at) VALUES (?, 'user', ?, 'admin@local.test', 'local-dev-admin', ?, ?)",
-		[LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_ID, now, now],
-	)
 	return db
 }
+
+const PROVISIONING_KEY = 'px_index-test-provisioning'
 
 function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}): Env {
 	const sql = new SqliteD1(db)
@@ -155,11 +150,10 @@ function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}
 		HUMAN_EMAIL_DOMAINS: '["contember.com"]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: '[]',
 		ENVIRONMENT: overrides.ENVIRONMENT ?? 'local',
 		ISSUER: 'http://localhost:18191',
 		FABRIKA_IAM_SIGNING_KEYS: '',
-		FABRIKA_IAM_PROVISIONING_KEY: '',
+		FABRIKA_IAM_PROVISIONING_KEY: PROVISIONING_KEY,
 		OIDC_ENABLED: 'true',
 		PASSWORD_ENABLED: 'false',
 		OIDC_ISSUER: 'https://idp.test',
@@ -179,7 +173,6 @@ function workerBindings(db: Database) {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: '[]',
 		ENVIRONMENT: 'local',
 		ISSUER: 'http://localhost:18191',
 		OIDC_ENABLED: 'true',
@@ -321,7 +314,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 	})
 
 	test('issueKey happy path (anonymous share link): one iam.credential.create audit row carrying grants, never the plaintext token', async () => {
-		// Local bypass resolves the issuer to the global-admin (permissions: [{ action: '*' }]),
+		// The provisioning key resolves the issuer to a global admin (permissions: [{ action: '*' }]),
 		// so the requested grant is fully covered and a credential is issued.
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
@@ -329,7 +322,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		const permissions = [{ action: 'report.read', scope: null }]
 		const result = await worker.issueKey({
 			app: 'reports',
-			credential: null,
+			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions,
 		})
@@ -349,7 +342,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(row?.action).toBe('iam.credential.create')
 		expect(row?.resource_type).toBe('credential')
 		expect(row?.resource_id).toBe(result.id)
-		expect(row?.principal_id).toBe(LOCAL_DEV_ADMIN_ID)
+		expect(row?.principal_id).toBe(PROVISIONING_ADMIN_ID)
 
 		// metadata.grants must equal the requested grants (action + scope).
 		const metadata: unknown = JSON.parse(row?.metadata ?? 'null')
@@ -364,10 +357,10 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
 
-		// Issue an anonymous share link under the local-bypass admin so the grant is covered.
+		// Issue an anonymous share link under the provisioning admin so the grant is covered.
 		const issued = await worker.issueKey({
 			app: 'reports',
-			credential: null,
+			credential: PROVISIONING_KEY,
 			requestId: 'req-issue',
 			permissions: [{ action: 'report.read', scope: null }],
 		})
@@ -381,7 +374,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 		const revoked = await worker.revokeKey({
 			app: 'reports',
-			credential: null,
+			credential: PROVISIONING_KEY,
 			requestId: 'req-revoke',
 			id: issued.id,
 		})
@@ -394,7 +387,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		// A second revoke is idempotent.
 		const again = await worker.revokeKey({
 			app: 'reports',
-			credential: null,
+			credential: PROVISIONING_KEY,
 			requestId: 'req-revoke-2',
 			id: issued.id,
 		})
@@ -406,7 +399,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		const revokeRows = auditRows(db).filter((r) => r.action === 'iam.credential.revoke')
 		expect(revokeRows).toHaveLength(1)
 		expect(revokeRows[0]?.resource_id).toBe(issued.id)
-		expect(revokeRows[0]?.principal_id).toBe(LOCAL_DEV_ADMIN_ID)
+		expect(revokeRows[0]?.principal_id).toBe(PROVISIONING_ADMIN_ID)
 	})
 
 	test('revokeKey: unknown id → not_found', async () => {
@@ -414,20 +407,20 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		const worker = makeEntrypoint(ctx, makeEnv(db))
 		const result = await worker.revokeKey({
 			app: 'reports',
-			credential: null,
+			credential: PROVISIONING_KEY,
 			requestId: 'req-revoke-missing',
 			id: 'does-not-exist',
 		})
 		expect(result).toEqual({ ok: false, reason: 'not_found' })
 	})
 
-	test('listPrincipals: the local-dev bypass scopes the roster to the SDK-passed app', async () => {
+	test('listPrincipals: the provisioning caller is scoped to the SDK-passed app', async () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
-		// The native local-dev bypass resolves a global-admin caller whose verified app IS the
-		// SDK-passed `app` (unlike the old CF-Access bypass, which had no aud). So the read succeeds
-		// and is scoped to that app — here an empty roster (no users are seeded for 'poplach').
-		const result = await worker.listPrincipals({ app: 'poplach', credential: null, requestId: 'req-list-local' })
+		// The provisioning key resolves a global-admin caller whose verified app IS the SDK-passed
+		// `app`. So the read succeeds and is scoped to that app — here an empty roster (no users are
+		// seeded for 'poplach').
+		const result = await worker.listPrincipals({ app: 'poplach', credential: PROVISIONING_KEY, requestId: 'req-list-local' })
 		expect(result).toEqual({ ok: true, principals: [] })
 	})
 })

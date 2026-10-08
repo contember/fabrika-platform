@@ -71,7 +71,6 @@ export async function integrationFixture() {
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '["operator@example.test"]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
-			ADMIN_ORIGINS: '[]',
 			ENVIRONMENT: 'local',
 			ISSUER: issuer,
 			FABRIKA_IAM_SIGNING_KEYS: '',

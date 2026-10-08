@@ -76,7 +76,7 @@ describe('reconcileSchema', () => {
 		expect(req.headers.get('Authorization')).toBe('Bearer px_admin-key')
 	})
 
-	test('no admin key → no Authorization header (local-dev bypass path)', async () => {
+	test('no admin key → no Authorization header (IAM refuses it)', async () => {
 		const spy = stubFetch(200)
 		await reconcileSchema({ url: 'https://propustka.example.com', app: 'opice', schema: SCHEMA })
 		const req = captured(spy)

@@ -94,9 +94,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		HUMAN_EMAIL_DOMAINS: source['HUMAN_EMAIL_DOMAINS'] ?? '[]',
 		HUMAN_EMAILS: source['HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['IAM_BOOTSTRAP_ADMINS'] ?? '[]',
-		// Which browser origins may drive `/admin/*`. Empty means none, which is the fail-closed
-		// default — a console that is not registered cannot write, and says so.
-		ADMIN_ORIGINS: source['FABRIKA_IAM_ADMIN_ORIGINS'] ?? '[]',
 		// Which app's proxy token may administer. Passed through undefined so "unset" (the console
 		// gateway default) stays distinguishable from an explicit empty value (no JWT may administer).
 		ADMIN_AUDIENCES: source['FABRIKA_IAM_ADMIN_AUDIENCES'],

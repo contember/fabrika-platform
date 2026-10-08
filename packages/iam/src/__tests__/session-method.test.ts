@@ -3,7 +3,7 @@
 // about the sessions already issued, so an installation that moved to password-only kept honouring
 // every OIDC login for the rest of its 30-day life.
 //
-// `sessionUsable` is checked at all three USE sites, and there is one test per site here — twice, once
+// `sessionUsable` is checked at both USE sites, and there is one test per site here — twice, once
 // against SQLite and once against a real Postgres, because the two schemas carry the method column and
 // its CHECKs independently.
 //
@@ -15,7 +15,6 @@ import { Database } from 'bun:sqlite'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { resolveAdmin } from '../admin/router'
 import { LOCAL_DEV_ADMIN_ID, sessionUsable } from '../auth'
 import { handleAuth } from '../auth/routes'
 import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../db'
@@ -31,7 +30,6 @@ import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipRea
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
-const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 const HANDOFF_STATE = 'session-method-state'
 const HANDOFF_CHALLENGE = await pkceChallenge('session-method-verifier')
 
@@ -115,18 +113,6 @@ describe('a session whose method the installation has since disabled — SQLite'
 		const dead = await oidcSessionAfter(false)
 		expect(await handoffStatus(dead.services, dead.session)).toBe(200)
 	})
-
-	test('is refused at resolveAdmin', async () => {
-		const live = await oidcSessionAfter(true)
-		expect((await resolveAdmin(live.services, ADMIN_ENV, { bearer: null, session: live.session, requestId: 'r1' })).ok).toBe(true)
-
-		const dead = await oidcSessionAfter(false)
-		expect(await resolveAdmin(dead.services, ADMIN_ENV, { bearer: null, session: dead.session, requestId: 'r1' })).toEqual({
-			ok: false,
-			status: 401,
-			reason: 'invalid_session',
-		})
-	})
 })
 
 describe.skipIf(!hasPostgres)('a session whose method the installation has since disabled — Postgres', () => {
@@ -188,18 +174,6 @@ describe.skipIf(!hasPostgres)('a session whose method the installation has since
 
 		const dead = await scenario('oidc', { oidc: false })
 		expect(await handoffStatus(dead.services, dead.session)).toBe(200)
-	})
-
-	test('is refused at resolveAdmin', async () => {
-		const live = await scenario('oidc', { oidc: true })
-		expect((await resolveAdmin(live.services, ADMIN_ENV, { bearer: null, session: live.session, requestId: 'r1' })).ok).toBe(true)
-
-		const dead = await scenario('oidc', { oidc: false })
-		expect(await resolveAdmin(dead.services, ADMIN_ENV, { bearer: null, session: dead.session, requestId: 'r1' })).toEqual({
-			ok: false,
-			status: 401,
-			reason: 'invalid_session',
-		})
 	})
 
 	test('the local-dev bypass survives OIDC being off — the reason it has a method of its own', async () => {

@@ -20,7 +20,7 @@ import { adminRpcRouter } from '../admin/rpc'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
-import { createHarness, type Harness, seedGrant, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
@@ -31,10 +31,9 @@ function env(h: Harness): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: JSON.stringify([ORIGIN]),
 		ENVIRONMENT: 'stage',
 		ISSUER: ORIGIN,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -85,7 +84,6 @@ const INPUTS: Record<string, unknown> = {
 	'principals.get': { id: 'nobody' },
 	'principals.invite': { email: 'nobody@example.com' },
 	'principals.update': { id: 'nobody', disabled: true },
-	'principals.delete': { id: 'nobody' },
 	'sessions.list': { principalId: 'nobody' },
 	'sessions.revoke': { id: 'nobody' },
 	'sessions.revokeAll': { id: 'nobody' },
@@ -95,9 +93,7 @@ const INPUTS: Record<string, unknown> = {
 	'grants.create': { principalId: 'nobody', roleKey: 'admin' },
 	'grants.delete': { id: 'nobody' },
 	'apps.getSchema': { app: 'nowhere' },
-	'apps.getReturnOrigins': { app: 'nowhere' },
 	'apps.setReturnOrigins': { app: 'nowhere', origins: ['https://nowhere.example.com'] },
-	'apps.clearReturnOrigins': { app: 'nowhere' },
 	'roles.list': { app: null },
 	'policies.list': { app: 'nowhere' },
 	'policies.create': { app: 'nowhere', policy: { key: 'k', name: 'n', permissions: ['*'] } },
@@ -118,11 +114,11 @@ describe('every admin RPC procedure is gated', () => {
 
 	test('an authenticated NON-admin is refused by every method the contract declares', async () => {
 		const h = createHarness()
-		// A real, live session for a real principal with a real grant — just not an admin one. This is the
+		// A real console bearer for a real principal with a real grant — just not an admin one. This is the
 		// caller a gate has to stop, and the one a missing gate would let through.
 		const viewer = seedUser(h.sqlite, { sub: 'sub-viewer', email: 'viewer@example.com' })
 		seedGrant(h.sqlite, viewer, 'viewer', null, 'opice')
-		const session = await h.signSession(viewer)
+		const bearer = await h.adminToken(viewer, { issuer: ORIGIN })
 		const app = createIamApp()
 
 		const admitted: string[] = []
@@ -130,7 +126,7 @@ describe('every admin RPC procedure is gated', () => {
 			const response = await app.fetch(
 				new Request(`${ORIGIN}/admin/rpc`, {
 					method: 'POST',
-					headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
+					headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
 					body: JSON.stringify({ method, input: Object.hasOwn(INPUTS, method) ? INPUTS[method] : {} }),
 				}),
 				env(h),

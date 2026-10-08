@@ -148,9 +148,8 @@ Three consequences worth knowing:
   Configure `publicOrigin` before expecting a login to work.
 - The projection is authoritative: an origin added by hand through the admin surface is
   replaced by the next deploy. Configure `publicOrigin` instead.
-- `apps.setReturnOrigins` **replaces** the set and refuses an empty array — clearing a
-  registry is its own operation, `apps.clearReturnOrigins`, so an app is never
-  un-registered by a body that only looks empty.
+- `apps.setReturnOrigins` **replaces** the set and refuses an empty array, so an app is
+  never un-registered by a body that only looks empty.
 
 The local composition has no deploy of its own for the console, so
 `@fabrika/local-stack` makes the same `reconcileSchema` call after `local:up` brings the

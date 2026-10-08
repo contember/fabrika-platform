@@ -330,7 +330,7 @@ Three behaviours worth knowing before reading that file:
 Measured against the live `fabrika-test` on 2026-08-06 with `--dry-run` (reads only): of the
 per-installation variables the command derives, only `ENVIRONMENT` on `operations`, `control` and
 `proxy` and the proxy manifest differ from what was placed by hand. Every origin — `ISSUER`,
-`FABRIKA_IAM_ADMIN_ORIGINS`, `FABRIKA_CONTROL_DOMAIN`, `OPERATIONS_ARTIFACT_ORIGIN`,
+`FABRIKA_CONTROL_DOMAIN`, `OPERATIONS_ARTIFACT_ORIGIN`,
 `FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_ISSUER`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
 live value byte for byte, and the composed manifest reproduces `vozka`, `operations` and `notes`
 identically while replacing `iam-local` with `iam`.

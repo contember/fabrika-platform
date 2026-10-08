@@ -105,7 +105,7 @@ export async function createShareLinkUseCase(c: AdminContext, input: IssueShareL
 async function effectiveIssuerPermissions(c: AdminContext, app: string): Promise<PermissionEntry[]> {
 	const principal = await c.services.repositories.principals.getPrincipalById(c.admin.id)
 	if (!principal) {
-		// A synthetic caller (the provisioning key / the local-dev bypass) has no row; it already
+		// A synthetic caller (the provisioning key) has no row; it already
 		// carries its own resolved permission set, which is global by construction.
 		return c.admin.permissions
 	}

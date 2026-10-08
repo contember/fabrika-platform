@@ -185,39 +185,6 @@ export async function setReturnOriginsUseCase(c: AdminContext, input: SetReturnO
 	return { app: input.app, origins }
 }
 
-/**
- * Read an app's registered return origins. The registry was writable but never readable, so an
- * operator could only find out what a cross-host sign-in would accept by attempting one (COMP-4).
- */
-export async function getReturnOriginsUseCase(c: AdminContext, input: AppInput): Promise<ReturnOriginsDto> {
-	if (!(await knownApps(c)).includes(input.app)) {
-		return fail(404, 'unknown app')
-	}
-	return { app: input.app, origins: await c.services.repositories.handoff.listReturnOrigins(input.app) }
-}
-
-/**
- * Un-register every return origin for an app — an OPERATION, not an empty array.
- *
- * `setReturnOrigins` refuses an empty set (SEC-12) because an empty set is what an app that never
- * registered looks like, and reaching that state by accident strands every cross-host sign-in. But
- * refusing it also left an operator with no way back out through the API at all: clearing was
- * possible only by deleting rows. So clearing is its own named call, which cannot be arrived at by a
- * caller that meant to send one origin and sent none.
- */
-export async function clearReturnOriginsUseCase(c: AdminContext, input: AppInput): Promise<ReturnOriginsDto> {
-	if (!(await knownApps(c)).includes(input.app)) {
-		return fail(404, 'unknown app')
-	}
-	await c.services.repositories.handoff.setReturnOrigins(input.app, [])
-	await adminAudit(c, {
-		action: 'iam.app.return-origins.clear',
-		resourceType: 'app',
-		resourceId: input.app,
-	})
-	return { app: input.app, origins: [] }
-}
-
 export async function getAppSchemaUseCase(c: AdminContext, input: AppInput): Promise<AppSchemaDto> {
 	const app = input.app
 	if (!(await knownApps(c)).includes(app)) {

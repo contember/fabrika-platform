@@ -337,7 +337,7 @@ describe('what reaches which service', () => {
 		expect(fixture.zerops.env('control').get('FABRIKA_CONTROL_RUN_LOGS_ENDPOINT')).toBe('${storage_apiUrl}')
 
 		expect(fixture.zerops.env('iam').get('ISSUER')).toBe(`https://${IAM_HOST}`)
-		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_ADMIN_ORIGINS')).toBe(JSON.stringify([`https://${CONSOLE_HOST}`]))
+		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_ADMIN_ORIGINS')).toBeUndefined()
 		// A bare host, not an origin.
 		expect(fixture.zerops.env('control').get('FABRIKA_CONTROL_DOMAIN')).toBe(CONSOLE_HOST)
 		expect(fixture.zerops.env('control').get('OPERATIONS_ARTIFACT_ORIGIN')).toBe(`https://${OPERATIONS_HOST}`)
@@ -598,7 +598,7 @@ describe('every outward step is confirmed', () => {
 	})
 
 	test('declining after pass one reports unsupported partial bootstrap and refuses to reroll on retry', async () => {
-		const fixture = harness({ confirms: { 'Write 42 variables across 4 services?': false } })
+		const fixture = harness({ confirms: { 'Write 41 variables across 4 services?': false } })
 		await expect(fixture.run()).rejects.toThrow('Neither `platform deploy` nor `platform init` completes a partial bootstrap')
 		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
 		expect(key).toBeDefined()
@@ -626,7 +626,6 @@ describe('every outward step is confirmed', () => {
 			'env:iam:FABRIKA_IAM_DATABASE_URL',
 			'env:iam:ENVIRONMENT',
 			'env:iam:ISSUER',
-			'env:iam:FABRIKA_IAM_ADMIN_ORIGINS',
 			'env:iam:FABRIKA_IAM_OIDC_ENABLED',
 			'env:iam:FABRIKA_IAM_PASSWORD_ENABLED',
 			'env:iam:FABRIKA_IAM_SIGNING_KEYS',

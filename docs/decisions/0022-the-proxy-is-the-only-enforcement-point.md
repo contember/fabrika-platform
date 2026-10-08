@@ -139,9 +139,13 @@ resolved from validated request data. A gate never replaces that check, and the 
 gate. A share link is the one credential an app redeems itself, after a `public` or `service` gate.
 
 **Invariant: an application has no local authentication variant.** `createIam` requires the binding
-and the issuer everywhere. Every dev bypass belongs to IAM and requires `ENVIRONMENT=local`: the login
-bypass also requires `LOCAL_DEV_LOGIN=true`; the credential-less caller bypass also requires that no
-durable signing keys are configured.
+and the issuer everywhere. The one dev bypass belongs to IAM: a login that requires `ENVIRONMENT=local`
+and `LOCAL_DEV_LOGIN=true`. No environment admits a credential-less caller.
+
+**Invariant: IAM's `/admin/*` is bearer-only.** It accepts the proxy token Control's console gateway
+forwards as a bearer (its audience must be a registered admin gateway) or a `px_` key, and reads no
+session cookie. Admission for the console is Control's gateway origin guard; IAM keeps no origin
+registry of its own.
 
 ## Consequences
 

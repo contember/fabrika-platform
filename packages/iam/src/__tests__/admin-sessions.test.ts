@@ -16,7 +16,7 @@ import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { hashToken } from '../secret'
-import { createHarness, type Harness, seedGrant, seedRole, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedGrant, seedRole, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
 const IAM_APP = 'propustka'
@@ -29,10 +29,9 @@ function env(h: Harness): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: JSON.stringify([ORIGIN]),
 		ENVIRONMENT: 'stage',
 		ISSUER: ORIGIN,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -42,11 +41,11 @@ function env(h: Harness): Env {
 	}
 }
 
-function call(h: Harness, session: string, method: string, input: unknown): Promise<Response> {
+function call(h: Harness, bearer: string, method: string, input: unknown): Promise<Response> {
 	return createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
+			headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
 			body: JSON.stringify({ method, input }),
 		}),
 		env(h),
@@ -57,7 +56,7 @@ function call(h: Harness, session: string, method: string, input: unknown): Prom
 async function admin(h: Harness): Promise<string> {
 	const id = seedUser(h.sqlite, { sub: 'sub-admin', email: 'admin@example.com' })
 	seedGrant(h.sqlite, id, 'admin', null)
-	return h.signSession(id)
+	return h.adminToken(id, { issuer: ORIGIN })
 }
 
 /** An IAM session for `principalId`, returning both the row id and the cookie value. */
@@ -78,8 +77,8 @@ async function openSession(
 }
 
 /** The `result` of a successful RPC call. */
-async function ok(h: Harness, session: string, method: string, input: unknown): Promise<unknown> {
-	const response = await call(h, session, method, input)
+async function ok(h: Harness, bearer: string, method: string, input: unknown): Promise<unknown> {
+	const response = await call(h, bearer, method, input)
 	expect(response.status).toBe(200)
 	return prop(await response.json(), 'result')
 }
@@ -103,13 +102,13 @@ function sessionItems(result: unknown): SessionDto[] {
 describe('sessions.list', () => {
 	test("lists a principal's sessions newest first, with the method, the app binding and the parent", async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-user', email: 'user@example.com' })
 		const parent = await openSession(h, user, { token: 'iam-1' })
 		const child = await openSession(h, user, { token: 'app-1', app: 'opice', parentSessionId: parent })
 		await openSession(h, user, { token: 'pw-1', method: 'password' })
 
-		const items = sessionItems(await ok(h, session, 'sessions.list', { principalId: user }))
+		const items = sessionItems(await ok(h, bearer, 'sessions.list', { principalId: user }))
 
 		expect(items).toHaveLength(3)
 		// UUIDv7 is monotonic with creation, so newest-first is descending by id.
@@ -124,11 +123,11 @@ describe('sessions.list', () => {
 
 	test('never returns the cookie or its hash — a session is addressed by id', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-secret', email: 'secret@example.com' })
 		await openSession(h, user, { token: 'top-secret-cookie' })
 
-		const serialized = JSON.stringify(await ok(h, session, 'sessions.list', { principalId: user }))
+		const serialized = JSON.stringify(await ok(h, bearer, 'sessions.list', { principalId: user }))
 
 		expect(serialized).not.toContain('top-secret-cookie')
 		expect(serialized).not.toContain(await hashToken('top-secret-cookie'))
@@ -143,19 +142,19 @@ describe('sessions.list', () => {
 
 	test('pages with the same keyset cursor every other admin list uses', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-page', email: 'page@example.com' })
 		for (const token of ['a', 'b', 'c']) {
 			await openSession(h, user, { token })
 		}
 
-		const first = await ok(h, session, 'sessions.list', { principalId: user, limit: 2 })
+		const first = await ok(h, bearer, 'sessions.list', { principalId: user, limit: 2 })
 		const firstPage = sessionItems(first)
 		expect(firstPage).toHaveLength(2)
 		const cursor = prop(first, 'nextCursor')
 		expect(cursor).toBe(firstPage[1]?.id)
 
-		const second = sessionItems(await ok(h, session, 'sessions.list', { principalId: user, limit: 2, before: cursor }))
+		const second = sessionItems(await ok(h, bearer, 'sessions.list', { principalId: user, limit: 2, before: cursor }))
 		expect(second).toHaveLength(1)
 		expect(second[0]?.id).not.toBe(firstPage[0]?.id)
 	})
@@ -167,7 +166,7 @@ describe('sessions.revoke', () => {
 		// the derived session stops resolving the moment the parent carries `revoked_at`. That is what
 		// makes this one call instead of a walk over app sessions IAM cannot set a cookie for.
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-cascade', email: 'cascade@example.com' })
 		const parent = await openSession(h, user, { token: 'iam-cookie' })
 		const child = await openSession(h, user, { token: 'app-cookie', app: 'opice', parentSessionId: parent })
@@ -175,7 +174,7 @@ describe('sessions.revoke', () => {
 
 		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken('app-cookie'))).not.toBeNull()
 
-		expect(await ok(h, session, 'sessions.revoke', { id: parent })).toEqual({ revoked: 1 })
+		expect(await ok(h, bearer, 'sessions.revoke', { id: parent })).toEqual({ revoked: 1 })
 
 		// Both the parent and the session derived from it are dead at USE…
 		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken('iam-cookie'))).toBeNull()
@@ -189,12 +188,12 @@ describe('sessions.revoke', () => {
 
 	test('is idempotent — a second revoke reports zero rather than failing', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-twice', email: 'twice@example.com' })
 		const id = await openSession(h, user, { token: 'once' })
 
-		expect(await ok(h, session, 'sessions.revoke', { id })).toEqual({ revoked: 1 })
-		expect(await ok(h, session, 'sessions.revoke', { id })).toEqual({ revoked: 0 })
+		expect(await ok(h, bearer, 'sessions.revoke', { id })).toEqual({ revoked: 1 })
+		expect(await ok(h, bearer, 'sessions.revoke', { id })).toEqual({ revoked: 0 })
 	})
 
 	test('an unknown session id is a 404', async () => {
@@ -204,11 +203,11 @@ describe('sessions.revoke', () => {
 
 	test('writes an audit entry naming the principal whose session it was', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-audit', email: 'audited@example.com' })
 		const id = await openSession(h, user, { token: 'audited' })
 
-		await ok(h, session, 'sessions.revoke', { id })
+		await ok(h, bearer, 'sessions.revoke', { id })
 
 		const row = h.sqlite.query<{ resource_id: string; metadata: string | null }, []>(
 			"SELECT resource_id, metadata FROM audit_events WHERE action = 'iam.session.revoke'",
@@ -225,7 +224,7 @@ describe('sessions.revoke', () => {
 		const victim = seedUser(h.sqlite, { sub: 'sub-victim', email: 'victim@example.com' })
 		const id = await openSession(h, victim, { token: 'victim-cookie' })
 
-		const response = await call(h, await h.signSession(viewer), 'sessions.revoke', { id })
+		const response = await call(h, await h.adminToken(viewer, { issuer: ORIGIN }), 'sessions.revoke', { id })
 
 		expect(response.status).toBe(403)
 		expect((await h.repositories.sessions.getSessionById(id))?.revoked_at).toBeNull()
@@ -235,13 +234,13 @@ describe('sessions.revoke', () => {
 describe('sessions.revokeAll', () => {
 	test('ends every live session the principal holds and leaves the person able to sign in again', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'sub-all', email: 'all@example.com' })
 		const parent = await openSession(h, user, { token: 'all-1' })
 		await openSession(h, user, { token: 'all-2', app: 'opice', parentSessionId: parent })
 		await openSession(h, user, { token: 'all-3', method: 'password' })
 
-		expect(await ok(h, session, 'sessions.revokeAll', { id: user })).toEqual({ revoked: 3 })
+		expect(await ok(h, bearer, 'sessions.revokeAll', { id: user })).toEqual({ revoked: 3 })
 		for (const token of ['all-1', 'all-2', 'all-3']) {
 			expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(token))).toBeNull()
 		}
@@ -249,7 +248,7 @@ describe('sessions.revokeAll', () => {
 		expect((await h.repositories.principals.getPrincipalById(user))?.disabled_at).toBeNull()
 
 		// Already-revoked rows are not counted again.
-		expect(await ok(h, session, 'sessions.revokeAll', { id: user })).toEqual({ revoked: 0 })
+		expect(await ok(h, bearer, 'sessions.revokeAll', { id: user })).toEqual({ revoked: 0 })
 	})
 
 	test('an unknown principal is a 404', async () => {

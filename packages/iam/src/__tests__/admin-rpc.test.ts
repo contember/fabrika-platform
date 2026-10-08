@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
-import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
@@ -11,8 +11,6 @@ const exec = { waitUntil() {} }
 interface EnvOptions {
 	bootstrapAdmins?: string[]
 	provisioningKey?: string
-	/** Registered admin origins. Defaults to the console origin these tests drive from. */
-	adminOrigins?: string[]
 }
 
 function env(h: Harness, options: EnvOptions = {}): Env {
@@ -22,10 +20,9 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: JSON.stringify(options.bootstrapAdmins ?? []),
-		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins ?? [ORIGIN]),
 		ENVIRONMENT: 'stage',
 		ISSUER: ORIGIN,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: options.provisioningKey ?? '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -36,20 +33,15 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 }
 
 interface CallOptions {
-	session?: string
 	bearer?: string
-	origin?: string | null
 	requestId?: string
 	env?: EnvOptions
 }
 
 function rpcRequest(method: string, input: unknown, options: CallOptions = {}): Request {
 	const headers = new Headers({ 'content-type': 'application/json' })
-	if (options.session !== undefined) headers.set('cookie', `__Host-px_session=${options.session}`)
 	if (options.bearer !== undefined) headers.set('authorization', `Bearer ${options.bearer}`)
 	if (options.requestId !== undefined) headers.set('x-request-id', options.requestId)
-	const origin = options.origin === undefined ? ORIGIN : options.origin
-	if (origin !== null) headers.set('origin', origin)
 	return new Request(`${ORIGIN}/admin/rpc`, { method: 'POST', headers, body: JSON.stringify({ method, input }) })
 }
 
@@ -68,11 +60,11 @@ function call(h: Harness, method: string, input: unknown, options: CallOptions =
 async function admin(h: Harness, scoped = false): Promise<string> {
 	const id = seedUser(h.sqlite, { sub: `sub-${scoped ? 'scoped' : 'admin'}`, email: `${scoped ? 'scoped' : 'admin'}@example.com` })
 	seedGrant(h.sqlite, id, 'admin', scoped ? { type: 'team', value: 'acme' } : null)
-	return h.signSession(id)
+	return h.adminToken(id, { issuer: ORIGIN })
 }
 
 describe('POST /admin/rpc authentication', () => {
-	test('missing human session returns a structural auth error with loginUrl', async () => {
+	test('missing bearer returns a structural auth error with loginUrl', async () => {
 		const response = await call(createHarness(), 'me', null)
 		const body: unknown = await response.json()
 
@@ -83,18 +75,10 @@ describe('POST /admin/rpc authentication', () => {
 
 	test('a scope-bound admin grant does not satisfy the global admin gate', async () => {
 		const h = createHarness()
-		const response = await call(h, 'me', null, { session: await admin(h, true) })
+		const response = await call(h, 'me', null, { bearer: await admin(h, true) })
 
 		expect(response.status).toBe(403)
 		expect(prop(prop(await response.json(), 'error'), 'type')).toBe('forbidden')
-	})
-
-	test('cross-origin RPC is rejected before authentication', async () => {
-		const h = createHarness()
-		const response = await call(h, 'me', null, { session: await admin(h), origin: 'https://evil.example' })
-
-		expect(response.status).toBe(403)
-		expect(prop(prop(await response.json(), 'error'), 'message')).toBe('cross-origin request rejected')
 	})
 
 	test('accepts the seeded provisioning bearer', async () => {
@@ -112,8 +96,8 @@ describe('POST /admin/rpc authentication', () => {
 		const h = createHarness()
 		const email = 'bootstrap@example.com'
 		const id = seedUser(h.sqlite, { sub: 'sub-bootstrap', email })
-		const session = await h.signSession(id, { email })
-		const response = await call(h, 'me', null, { session, env: { bootstrapAdmins: [email] } })
+		const bearer = await h.adminToken(id, { issuer: ORIGIN })
+		const response = await call(h, 'me', null, { bearer, env: { bootstrapAdmins: [email] } })
 
 		expect(response.status).toBe(200)
 		expect(prop(prop(await response.json(), 'result'), 'id')).toBe(id)
@@ -132,8 +116,8 @@ describe('POST /admin/rpc authentication', () => {
 describe('POST /admin/rpc typed operations', () => {
 	test('serves queries and mutations through shared use cases', async () => {
 		const h = createHarness()
-		const session = await admin(h)
-		const invite = await call(h, 'principals.invite', { email: 'new@example.com' }, { session })
+		const bearer = await admin(h)
+		const invite = await call(h, 'principals.invite', { email: 'new@example.com' }, { bearer })
 		const invited = prop(await invite.json(), 'result')
 		const id = prop(invited, 'id')
 
@@ -141,52 +125,30 @@ describe('POST /admin/rpc typed operations', () => {
 		expect(typeof id).toBe('string')
 		if (typeof id !== 'string') throw new Error('expected principal id')
 
-		const update = await call(h, 'principals.update', { id, disabled: true }, { session })
+		const update = await call(h, 'principals.update', { id, disabled: true }, { bearer })
 		expect(prop(prop(await update.json(), 'result'), 'status')).toBe('disabled')
 
-		const list = await call(h, 'principals.list', { type: 'user', status: 'disabled' }, { session })
+		const list = await call(h, 'principals.list', { type: 'user', status: 'disabled' }, { bearer })
 		const items = prop(prop(await list.json(), 'result'), 'items')
 		expect(Array.isArray(items)).toBe(true)
 		expect(Array.isArray(items) ? items.some((item) => prop(item, 'id') === id) : false).toBe(true)
 	})
 
-	test('principals.delete cancels an unclaimed invite and disables a claimed principal', async () => {
-		// The one principal operation `update` cannot express, and the only reason it exists as its own
-		// procedure: an invite nobody claimed is removed, a claimed account is only soft-disabled because
-		// audit rows and grants point at it.
-		const h = createHarness()
-		const session = await admin(h)
-		const invite = await call(h, 'principals.invite', { email: 'cancel@example.com' }, { session })
-		const invitedId = prop(prop(await invite.json(), 'result'), 'id')
-		if (typeof invitedId !== 'string') throw new Error('expected principal id')
-
-		expect((await call(h, 'principals.delete', { id: invitedId }, { session })).status).toBe(200)
-		expect(await h.repositories.principals.getPrincipalById(invitedId)).toBeNull()
-
-		const claimed = seedUser(h.sqlite, { sub: 'sub-claimed', email: 'claimed@example.com' })
-		expect((await call(h, 'principals.delete', { id: claimed }, { session })).status).toBe(200)
-		const row = await h.repositories.principals.getPrincipalById(claimed)
-		expect(row).not.toBeNull()
-		expect(row?.disabled_at).not.toBeNull()
-
-		expect((await call(h, 'principals.delete', { id: 'missing' }, { session })).status).toBe(404)
-	})
-
 	test('returns API-key secrets once without exposing them from list queries', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		seedAppAction(h.sqlite, 'delivery', 'deploy.run')
 
 		const provision = await call(
 			h,
 			'apiKeys.provision',
 			{ label: 'delivery CI', type: 'service', permissions: ['deploy.run'], app: 'delivery' },
-			{ session },
+			{ bearer },
 		)
 		const secret = prop(prop(await provision.json(), 'result'), 'apiKey')
 		expect(typeof secret === 'string' && secret.startsWith('px_')).toBe(true)
 
-		const list = await call(h, 'apiKeys.list', null, { session })
+		const list = await call(h, 'apiKeys.list', null, { bearer })
 		const serialized = JSON.stringify(prop(await list.json(), 'result'))
 		expect(serialized).not.toContain(typeof secret === 'string' ? secret : 'unreachable-secret')
 		expect(serialized).not.toContain('apiKey')
@@ -194,9 +156,9 @@ describe('POST /admin/rpc typed operations', () => {
 
 	test('maps validation and use-case failures to structural RPC errors', async () => {
 		const h = createHarness()
-		const session = await admin(h)
-		const invalid = await call(h, 'principals.update', { id: '', disabled: 'yes' }, { session })
-		const missing = await call(h, 'principals.get', { id: 'missing' }, { session })
+		const bearer = await admin(h)
+		const invalid = await call(h, 'principals.update', { id: '', disabled: 'yes' }, { bearer })
+		const missing = await call(h, 'principals.get', { id: 'missing' }, { bearer })
 
 		expect(invalid.status).toBe(400)
 		expect(prop(prop(await invalid.json(), 'error'), 'type')).toBe('validation')
@@ -206,8 +168,8 @@ describe('POST /admin/rpc typed operations', () => {
 
 	test('uses the request id captured before authentication for audit writes', async () => {
 		const h = createHarness()
-		const session = await admin(h)
-		const request = rpcRequest('principals.invite', { email: 'correlated@example.com' }, { session, requestId: 'first-id' })
+		const bearer = await admin(h)
+		const request = rpcRequest('principals.invite', { email: 'correlated@example.com' }, { bearer, requestId: 'first-id' })
 		const getPrincipal = h.repositories.principals.getPrincipalById.bind(h.repositories.principals)
 		h.repositories.principals.getPrincipalById = async (id) => {
 			request.headers.set('x-request-id', 'changed-during-auth')
@@ -223,10 +185,10 @@ describe('POST /admin/rpc typed operations', () => {
 
 	test('maps unexpected authentication repository failures to an opaque internal error', async () => {
 		const h = createHarness()
-		const session = await admin(h)
-		h.repositories.sessions.getActiveSessionByHash = () => Promise.reject(new Error('secret session failure'))
+		const bearer = await admin(h)
+		h.repositories.principals.getPrincipalById = () => Promise.reject(new Error('secret principal failure'))
 
-		const response = await call(h, 'me', null, { session })
+		const response = await call(h, 'me', null, { bearer })
 		const body: unknown = await response.json()
 
 		expect(response.status).toBe(500)
@@ -235,10 +197,10 @@ describe('POST /admin/rpc typed operations', () => {
 
 	test('maps unexpected use-case repository failures to an opaque internal error', async () => {
 		const h = createHarness()
-		const session = await admin(h)
+		const bearer = await admin(h)
 		h.repositories.principals.listPrincipals = () => Promise.reject(new Error('secret principal failure'))
 
-		const response = await call(h, 'principals.list', {}, { session })
+		const response = await call(h, 'principals.list', {}, { bearer })
 		const body: unknown = await response.json()
 
 		expect(response.status).toBe(500)

@@ -5,9 +5,7 @@ import {
 	type InviteRequest,
 	type ListPrincipalsInput,
 	type MeDto,
-	type OkResponse,
 	type PrincipalDetail,
-	type PrincipalIdInput,
 	type PrincipalListItem,
 	type UpdatePrincipalInput,
 } from '@fabrika/iam-contract'
@@ -143,28 +141,6 @@ export async function invitePrincipalUseCase(c: AdminContext, input: InviteReque
 		metadata: { email },
 	})
 	return toPrincipalListItem(principal)
-}
-
-/**
- * Remove a principal — the only operation `principals.update` cannot express.
- *
- * An UNCLAIMED invite is cancelled by deleting the row: nothing references it yet, and leaving a
- * disabled placeholder would also keep its mailbox reserved. A CLAIMED principal is soft-disabled
- * instead, because audit history and grant rows point at it.
- */
-export async function deletePrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<OkResponse> {
-	const row = await c.services.repositories.principals.getPrincipalById(input.id)
-	if (!row) {
-		return fail(404, 'principal not found')
-	}
-	if (principalStatus(row) === 'invited') {
-		await c.services.repositories.principals.deletePrincipal(input.id)
-		await adminAudit(c, { action: 'iam.principal.invite_cancel', resourceType: 'principal', resourceId: input.id })
-		return { ok: true }
-	}
-	await c.services.repositories.principals.disablePrincipal(input.id)
-	await adminAudit(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: input.id })
-	return { ok: true }
 }
 
 export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrincipalInput): Promise<PrincipalListItem> {

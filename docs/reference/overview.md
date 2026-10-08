@@ -151,7 +151,10 @@ same control origin. Operations routes come from `@fabrika/operations-ui` and
 use `OperationsRpcContract` at `/operations/api/rpc`. Control transports the
 latter two requests to the corresponding private service. IAM and Operations
 retain authentication, authorization, domain-data, and audit ownership.
-Cross-origin mutations are rejected at both gateways.
+Cross-origin mutations are rejected at both gateways. The IAM gateway drops the
+console's cookies and forwards the proxy-injected token as a bearer: IAM's
+`/admin/*` is bearer-only and accepts that token or a `px_` key, never a session
+cookie.
 
 IAM has no standalone SPA or public admin origin. Its public HTTP surface is
 limited to native authentication and JWKS endpoints. Control-to-IAM RPC and admin
@@ -323,9 +326,10 @@ enforcement:
   `.require(action, scope)`, every `can()` call, and control's per-route
   `authorize` is this layer.
 - **Admission** — the confused-deputy guards in front of ambient credentials:
-  control's origin guard on `/api/*`, the same-origin checks on the IAM and
-  Operations console gateways, and IAM's registry of admin origins. They decide
-  whether a cookie-bearing request is considered at all. They resolve no
+  control's origin guard on `/api/*` and the same-origin checks on the IAM and
+  Operations console gateways. They decide whether a cookie-bearing request is
+  considered at all. IAM's own admin surface reads no cookie — it accepts only a
+  bearer — so it needs no admission check of its own. They resolve no
   principal and read no policy, so none of them is a second gate evaluator.
 
 A gate never replaces an authorization check, an authorization check never

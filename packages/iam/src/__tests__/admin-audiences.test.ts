@@ -18,7 +18,6 @@ function audiences(adminAudiences?: string): ReadonlySet<string> {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: '[]',
 		ADMIN_AUDIENCES: adminAudiences,
 		ENVIRONMENT: 'stage',
 		ISSUER,
@@ -45,8 +44,7 @@ describe('ADMIN_AUDIENCES', () => {
 	})
 
 	test('a value that is not an app id is REFUSED at boot rather than skipped', () => {
-		// A skipped entry silently narrows the registry, which locks the console out with no signal —
-		// and a JSON array copied from ADMIN_ORIGINS would parse into entries no `aud` can ever equal.
+		// A skipped entry silently narrows the registry, which locks the console out with no signal.
 		expect(() => audiences('vozka,,other')).toThrow('ADMIN_AUDIENCES')
 		expect(() => audiences('vozka other')).toThrow('ADMIN_AUDIENCES')
 		expect(() => audiences('["vozka"]')).toThrow('ADMIN_AUDIENCES')

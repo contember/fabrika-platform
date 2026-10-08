@@ -31,8 +31,7 @@ const ISSUER = 'https://iam.example.test'
 /**
  * A durable ES256 signing key, because this fixture is a LIVE installation and names itself one.
  * `ENVIRONMENT=stage` against a public issuer is the only self-consistent pair here — `local` is
- * refused off loopback (`readEnvironmentName`), and off-local an ephemeral key is refused too. It also
- * removes the credential-less local caller bypass as a possible explanation for anything below.
+ * refused off loopback (`readEnvironmentName`), and off-local an ephemeral key is refused too.
  */
 async function signingKeys(): Promise<string> {
 	const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
@@ -59,7 +58,7 @@ interface Stack {
 }
 
 /** Compose control's gateway in front of IAM over a real socket. */
-async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
+async function stack(): Promise<Stack> {
 	const harness = createHarness()
 	const adminId = seedUser(harness.sqlite, { sub: 'sub-console-admin', email: 'admin@contember.com' })
 	seedGrant(harness.sqlite, adminId, 'admin')
@@ -71,7 +70,6 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins),
 		ENVIRONMENT: 'stage',
 		ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: await signingKeys(),
@@ -82,7 +80,7 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 	}
-	const services = harness.makeServices({ environment: 'stage', issuer: ISSUER, adminOrigins: options.adminOrigins })
+	const services = harness.makeServices({ environment: 'stage', issuer: ISSUER })
 	const minted = await mintToken(services, env, { app: 'vozka', session, requestId: 'r1' })
 	if (!minted.result.ok) throw new Error(`proxy token mint failed: ${minted.result.reason}`)
 	const proxyToken = minted.result.token
@@ -111,8 +109,8 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
 }
 
 describe("the console's Access plane through the control-plane gateway", () => {
-	test('a registered console origin reaches IAM and is authorized as the BROWSER, not as control', async () => {
-		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
+	test('the console reaches IAM and is authorized as the BROWSER, not as control', async () => {
+		const { call, stop } = await stack()
 		try {
 			const response = await call('me', null)
 			expect(response.status).toBe(200)
@@ -126,7 +124,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	})
 
 	test('a state change survives the hop — the case that was 403 in production', async () => {
-		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack()
 		try {
 			const response = await call('principals.invite', { email: 'invited@contember.com' })
 			expect(response.status).toBe(200)
@@ -136,21 +134,11 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		}
 	})
 
-	test('IAM does not apply its cookie-origin registry to a proxy-authenticated private hop', async () => {
-		const { call, stop } = await stack({ adminOrigins: [] })
-		try {
-			const response = await call('principals.invite', { email: 'allowed@contember.com' })
-			expect(response.status).toBe(200)
-		} finally {
-			await stop()
-		}
-	})
-
 	test('a hostile cross-origin POST is stopped by the DEPUTY, before IAM is asked', async () => {
 		// The confused-deputy attack: a hostile page POSTs to the console's own origin and the browser
 		// attaches ambient cookies by itself. Control's own same-origin check refuses it, so the request
 		// never reaches the gateway — which is what makes the transport-only design safe.
-		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack()
 		try {
 			const response = await call('principals.invite', { email: 'evil@contember.com' }, {
 				cookie: 'console_state=ambient',
@@ -165,7 +153,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	})
 
 	test('a cookie-bearing POST with no Origin at all is refused by the deputy', async () => {
-		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack()
 		try {
 			const response = await call('principals.invite', { email: 'evil2@contember.com' }, {
 				cookie: 'console_state=ambient',
@@ -178,7 +166,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	})
 
 	test('IAM authority comes from the proxy token, not a forwarded app session', async () => {
-		const { call, stop } = await stack({ adminOrigins: ['http://somewhere.else.test'] })
+		const { call, stop } = await stack()
 		try {
 			const response = await call('principals.invite', { email: 'x@contember.com' }, { cookie: 'app_cookie=not-forwarded' })
 			expect(response.status).toBe(200)
@@ -187,8 +175,8 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		}
 	})
 
-	test('a machine caller needs no origin at all and is unaffected by the registry', async () => {
-		const { call, stop } = await stack({ adminOrigins: [] })
+	test('a machine caller needs no origin at all', async () => {
+		const { call, stop } = await stack()
 		try {
 			// No cookie, so no ambient authority and nothing for CSRF to defend. It fails on the credential
 			// (401), not on the origin (403) — which is the distinction that matters.

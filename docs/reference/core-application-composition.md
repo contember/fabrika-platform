@@ -54,13 +54,9 @@ That check is what stops a confused-deputy attack: a hostile page POSTing to the
 console's own origin with the victim's cookies is refused by the gateway before
 the downstream service is asked.
 
-IAM applies the same check independently. Which browser origins may drive
-`/admin/*` with an ambient session cookie is a **registry**,
-`FABRIKA_IAM_ADMIN_ORIGINS`, holding the console's public origin. IAM cannot
-derive it: the console is served from the control plane's domain, never from
-IAM's issuer. An unset or empty registry refuses every cookie-authenticated
-write, which is the fail-closed default; a machine caller presenting only a
-bearer is exempt, because a bearer is never attached by a browser on its own.
+IAM's `/admin/*` does not rely on that check: it accepts only a bearer — the
+console token the gateway forwards in place of the browser's cookie, or a `px_`
+key — and a browser never attaches a bearer on its own.
 
 ### The proxy's surface is not the management surface
 
@@ -86,8 +82,7 @@ exchange a session, or write a cookie. A procedure or shared use case then perfo
 the action and object-scope check that depends on validated application data.
 
 That object-scope check is **authorization**, a separate layer from enforcement, and
-the gateway same-origin checks and the `FABRIKA_IAM_ADMIN_ORIGINS` registry above
-are a third one, **admission** ([`overview.md`](overview.md) names all three). A
+the gateway same-origin checks above are a third one, **admission** ([`overview.md`](overview.md) names all three). A
 service that refuses a request is not thereby a second gate evaluator; only a
 component that evaluates the gate list would be, and only the proxy does.
 
@@ -96,8 +91,8 @@ callers before invoking the same typed RPC dispatcher. Every administration
 operation is a named `IamAdminRpcContract` procedure and has no second transport,
 so policy, audit, hidden-object behavior, and request correlation cannot diverge
 by transport for them. `/admin/*` REST retains four machine-provisioning
-operations only (below); they share the same use cases and the same admission and
-resolution code — `extractCredentials`, `rejectCrossOrigin`, `resolveAdmin`.
+operations only (below); they share the same use cases and the same credential
+resolution code — `extractCredentials`, `resolveAdmin`.
 
 On both providers, proxy gates run before application code and decide whether a
 request may reach a private service. Cloudflare authoring materializes a public
@@ -161,13 +156,8 @@ transport — the schema PUT stays REST because it is the operation that
 _registers_ an app, and return origins are an ordinary administration procedure
 that happens to have a machine caller.
 
-Every one of these calls presents a bearer and no cookie, so they are exempt from
-the `FABRIKA_IAM_ADMIN_ORIGINS` check by the same rule that exempts any
-bearer-only caller: a browser never attaches an `Authorization` header on its
-own. **A credential-less call is not exempt** — nothing stops a hostile page from
-making one, and IAM resolves "no credential presented" as the local-dev bypass, a
-synthetic global admin. A machine caller that writes to `/admin/*` presents a
-key, in every environment.
+Every one of these calls presents a bearer: `/admin/*` refuses any request without
+one, in every environment.
 
 ## Database and migration composition
 

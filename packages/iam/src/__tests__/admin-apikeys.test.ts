@@ -10,7 +10,7 @@ import { prop } from '../json'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
-import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 // End-to-end tests for the admin api-keys flow minting a propustka-NATIVE key: provision creates a
 // native service principal + grant and returns a `px_` key that `mintFromKey` resolves to the service
@@ -21,31 +21,28 @@ import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from 
 // bootstrap role, so it has no REST mirror to keep in step.
 
 const ISSUER = 'https://propustka.test'
-// The service's configured issuer IS the origin the console is served on; the CSRF guard compares
-// against it, so a test that posts from a different origin than it configures is testing nothing real.
 const ORIGIN = ISSUER
 const SIGN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'local' }
-// env slice handleAdmin needs; 'stage' keeps the local-dev bypass off so the session path runs.
-const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
+// env slice handleAdmin needs: a `stage` signer that verifies the console bearer `asAdmin` signs.
+const ADMIN_ENV = { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }
 
 class FakeRequestContext implements RequestContext {
 	waitUntil(_promise: Promise<unknown>): void {}
 }
 
 function services(h: Harness): Services {
-	return h.makeServices({ environment: 'stage', issuer: ISSUER, adminOrigins: [ISSUER] })
+	return h.makeServices({ environment: 'stage', issuer: ISSUER })
 }
 
 async function asAdmin(h: Harness): Promise<string> {
 	const id = seedUser(h.sqlite, { sub: 'sub-admin', email: 'admin@example.com' })
 	seedGrant(h.sqlite, id, 'admin', null)
-	return h.signSession(id)
+	return h.adminToken(id, { issuer: ISSUER })
 }
 
-function req(path: string, method: string, session: string, body?: unknown): Request {
-	const headers = new Headers({ Cookie: `__Host-px_session=${session}` })
+function req(path: string, method: string, bearer: string, body?: unknown): Request {
+	const headers = new Headers({ Authorization: `Bearer ${bearer}` })
 	if (method !== 'GET') {
-		headers.set('Origin', ORIGIN)
 		headers.set('Content-Type', 'application/json')
 	}
 	return new Request(`${ORIGIN}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
@@ -63,10 +60,9 @@ function env(h: Harness): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
-		ADMIN_ORIGINS: JSON.stringify([ORIGIN]),
 		ENVIRONMENT: 'stage',
 		ISSUER,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -77,11 +73,11 @@ function env(h: Harness): Env {
 }
 
 /** `apiKeys.rotate` over `/admin/rpc`, the only transport that serves it. */
-function rotate(h: Harness, session: string, principalId: string, expiresAt?: number): Promise<Response> {
+function rotate(h: Harness, bearer: string, principalId: string, expiresAt?: number): Promise<Response> {
 	return createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
+			headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
 			body: JSON.stringify({ method: 'apiKeys.rotate', input: { principalId, ...(expiresAt !== undefined ? { expiresAt } : {}) } }),
 		}),
 		env(h),
@@ -90,8 +86,8 @@ function rotate(h: Harness, session: string, principalId: string, expiresAt?: nu
 }
 
 /** The rotation result of a call expected to succeed. */
-async function rotated(h: Harness, session: string, principalId: string, expiresAt?: number): Promise<RotateApiKeyResponse> {
-	const response = await rotate(h, session, principalId, expiresAt)
+async function rotated(h: Harness, bearer: string, principalId: string, expiresAt?: number): Promise<RotateApiKeyResponse> {
+	const response = await rotate(h, bearer, principalId, expiresAt)
 	expect(response.status).toBe(200)
 	const result = prop(await response.json(), 'result')
 	const apiKey = prop(result, 'apiKey')

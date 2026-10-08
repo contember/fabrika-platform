@@ -54,7 +54,6 @@ const requireWorker = (worker: Worker | undefined): Worker => {
 describe('IAM resource graph', () => {
 	test('declares only canonical IAM pipeline inputs', () => {
 		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
-			'FABRIKA_IAM_ADMIN_ORIGINS',
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
@@ -148,7 +147,6 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('true')
 		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('')
 		expect(iamPipelineVars(source)).toEqual([
-			'FABRIKA_IAM_ADMIN_ORIGINS',
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',

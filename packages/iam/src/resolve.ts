@@ -196,7 +196,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 
 /**
  * Load the calling app's DB roles into a `RoleSource` (built-ins layered over them).
- * `app === null` (cross-app, e.g. the local-dev bypass / a NULL-app token) has no
+ * `app === null` (cross-app, e.g. the provisioning key / a NULL-app token) has no
  * per-app rows to load — only the built-in `admin` applies. Roles are fetched HERE,
  * up front, so `computePermissions` stays pure: its parsed permission arrays are
  * cached in the returned `RoleSource`'s map and never re-read from D1.

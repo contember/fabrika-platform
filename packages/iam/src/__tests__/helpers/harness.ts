@@ -1,12 +1,15 @@
+import { buildAccessClaims, TOKEN_ALG } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
+import { exportJWK, generateKeyPair } from 'jose'
 import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../../db'
 import { normalizeEmailIdentity } from '../../email-identity'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
 import { hashToken } from '../../secret'
 import { type Config, DEFAULT_ADMIN_AUDIENCES, type Services } from '../../services'
+import { getSigner } from '../../signing'
 import { allMigrations } from './migrations'
 
 /**
@@ -15,6 +18,7 @@ import { allMigrations } from './migrations'
  *     wrapped in a small `SqlDatabase` adapter so the repository capabilities run
  *     through the same port they use for D1 (mirrors the schema.test.ts pattern);
  *   - `signSession`, minting a real `px_session` SSO session for a seeded principal;
+ *   - `adminToken`, signing the proxy token Control's console gateway forwards to `/admin/*`;
  *   - `makeServices({ environment, human, bootstrapAdmins, oidc })` assembling a
  *     plain native `Services`.
  *
@@ -110,6 +114,17 @@ function toBinding(value: unknown): SQLQueryBindings {
 
 // ── DB + services assembly ────────────────────────────────────────────────────
 
+const { privateKey: testSigningKey } = await generateKeyPair(TOKEN_ALG, { extractable: true })
+
+/** A per-run durable signing key set, so a `stage` env can verify the bearer `adminToken` signs. */
+export const TEST_SIGNING_KEYS = JSON.stringify([await exportJWK(testSigningKey)])
+
+/** The signer half of a `stage` env that verifies `adminToken`. */
+export const TEST_SIGNING_ENV = { FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS, ENVIRONMENT: 'stage' }
+
+/** The console gateway's app id — the default admin audience (`DEFAULT_ADMIN_AUDIENCES`). */
+export const CONSOLE_APP = 'vozka'
+
 const migration = allMigrations()
 
 export interface Harness {
@@ -122,6 +137,11 @@ export interface Harness {
 	 * (the native admin/auth credential). Mirrors what `/auth/callback` does after a successful login.
 	 */
 	signSession(principalId: string, options?: SignSessionOptions): Promise<string>
+	/**
+	 * Sign the proxy token Control's console gateway forwards to `/admin/*` as a bearer, for a seeded
+	 * principal. It carries no `perms`: IAM resolves the admin's permissions live.
+	 */
+	adminToken(principalId: string, options?: AdminTokenOptions): Promise<string>
 	/** Build a native `Services` for the given environment + config. */
 	makeServices(options?: MakeServicesOptions): Services
 }
@@ -136,6 +156,13 @@ export interface SignSessionOptions {
 	authenticationMethod?: AuthenticationMethod
 }
 
+export interface AdminTokenOptions {
+	/** The `iss` the verifying IAM expects. Defaults to `makeServices`' default issuer. */
+	issuer?: string
+	/** The token's audience. Defaults to the console gateway. */
+	app?: string
+}
+
 export interface MakeServicesOptions {
 	/** ENVIRONMENT value (e.g. 'local', 'stage'). Defaults to 'local'. */
 	environment?: string
@@ -143,8 +170,6 @@ export interface MakeServicesOptions {
 	localDevLogin?: boolean
 	/** IAM_BOOTSTRAP_ADMINS emails. Defaults to empty. */
 	bootstrapAdmins?: ReadonlySet<string>
-	/** Browser origins allowed to drive `/admin/*` (`ADMIN_ORIGINS`). Defaults to none. */
-	adminOrigins?: readonly string[]
 	/** App ids whose proxy token may administer (`ADMIN_AUDIENCES`). Defaults to the console gateway. */
 	adminAudiences?: ReadonlySet<string>
 	/** Central human-admission allowlist. Defaults to `{ emailDomains: ['contember.com'], emails: [] }`. */
@@ -163,8 +188,10 @@ export interface MakeServicesOptions {
  * Assemble a native `Services` over ANY repository set — the same body `createHarness` uses, exposed
  * so a Postgres-backed suite can drive the same code paths against a real database.
  */
+const DEFAULT_ISSUER = 'http://localhost:18191'
+
 export function makeServicesFor(repositories: IamRepositories, options: MakeServicesOptions = {}): Services {
-	const issuer = options.issuer ?? 'http://localhost:18191'
+	const issuer = options.issuer ?? DEFAULT_ISSUER
 	const environment = options.environment ?? 'local'
 	const config: Config = {
 		human: {
@@ -172,7 +199,6 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 			emails: options.human?.emails ?? [],
 		},
 		bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
-		adminOrigins: options.adminOrigins ?? [],
 		adminAudiences: options.adminAudiences ?? DEFAULT_ADMIN_AUDIENCES,
 		environment,
 		localDevLogin: environment === 'local' && options.localDevLogin === true,
@@ -225,7 +251,26 @@ export function createHarness(): Harness {
 		return token
 	}
 
-	return { sqlite, repositories, signSession, makeServices }
+	async function adminToken(principalId: string, options: AdminTokenOptions = {}): Promise<string> {
+		const principal = await repositories.principals.getPrincipalById(principalId)
+		if (principal === null) {
+			throw new Error(`adminToken: no principal ${principalId}`)
+		}
+		const issuedAt = Math.floor(Date.now() / 1000)
+		const signer = await getSigner(TEST_SIGNING_ENV)
+		return signer.sign(buildAccessClaims({
+			iss: options.issuer ?? DEFAULT_ISSUER,
+			app: options.app ?? CONSOLE_APP,
+			subject: principal.id,
+			type: principal.type,
+			label: principal.label,
+			permissions: [],
+			issuedAt,
+			expiresAt: issuedAt + 300,
+		}))
+	}
+
+	return { sqlite, repositories, signSession, adminToken, makeServices }
 }
 
 // ── Seeding helpers (direct INSERTs against the real schema) ──────────────────

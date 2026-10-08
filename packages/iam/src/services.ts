@@ -5,7 +5,6 @@ import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
 import { OidcClient } from './oidc'
-import { normalizeOrigin } from './origin'
 import { type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 
 /**
@@ -35,11 +34,6 @@ export interface Config {
 	/** Bootstrap-admin emails (normally empty). Always admitted; resolve to the global `admin` role. */
 	readonly bootstrapAdmins: ReadonlySet<string>
 	/**
-	 * Canonical browser origins allowed to drive `/admin/*` with an ambient cookie (`ADMIN_ORIGINS`).
-	 * Empty = no browser may write; a machine caller presenting only a bearer is unaffected.
-	 */
-	readonly adminOrigins: readonly string[]
-	/**
 	 * App ids whose proxy-injected access token may administer `/admin/*` (`ADMIN_AUDIENCES`).
 	 * EMPTY means no JWT may administer at all, which is the fail-closed end of the same registry.
 	 */
@@ -57,25 +51,6 @@ export interface Config {
 }
 
 /**
- * Parse `ADMIN_ORIGINS` into canonical origins. A malformed entry is REFUSED rather than skipped:
- * this list is the only thing standing between the console and a hostile page, and an operator who
- * typo'd one entry must learn that at boot, not by having it silently do nothing.
- */
-function parseAdminOrigins(raw: string): string[] {
-	const origins: string[] = []
-	for (const value of parseJsonStringArray(raw)) {
-		const normalized = normalizeOrigin(value)
-		if (normalized === null) {
-			throw new Error(`ADMIN_ORIGINS holds a value that is not an absolute http(s) origin: ${value}`)
-		}
-		if (!origins.includes(normalized)) {
-			origins.push(normalized)
-		}
-	}
-	return origins
-}
-
-/**
  * The console gateway's app id — the only first-party holder of a JWT that administers IAM, and so
  * the audience an installation gets when it names none.
  */
@@ -86,9 +61,8 @@ const APP_ID = /^[a-z0-9][a-z0-9-]*$/
 
 /**
  * Parse `ADMIN_AUDIENCES` (comma-separated app ids). Unset = `DEFAULT_ADMIN_AUDIENCES`; explicitly
- * empty = no JWT may administer. A malformed entry is REFUSED rather than skipped, like
- * `ADMIN_ORIGINS`: an entry no `aud` can ever equal — a JSON array copied from `ADMIN_ORIGINS`, say —
- * would otherwise read as a registry while admitting nobody.
+ * empty = no JWT may administer. A malformed entry is REFUSED rather than skipped: an entry no `aud`
+ * can ever equal would otherwise read as a registry while admitting nobody.
  */
 function parseAdminAudiences(raw: string | undefined): ReadonlySet<string> {
 	if (raw === undefined) {
@@ -134,7 +108,6 @@ export function buildServices(env: Env): Services {
 				emails: parseJsonStringArray(env.HUMAN_EMAILS),
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
-			adminOrigins: parseAdminOrigins(env.ADMIN_ORIGINS),
 			adminAudiences: parseAdminAudiences(env.ADMIN_AUDIENCES),
 			environment,
 			localDevLogin: environment === LOCAL_ENVIRONMENT && env.LOCAL_DEV_LOGIN === 'true',

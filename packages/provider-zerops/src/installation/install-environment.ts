@@ -71,7 +71,6 @@ export interface InstallationEnvInput {
 export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const { secrets } = input
 	const iamOrigin = platformOrigin(input.scheme, input.hosts.iam)
-	const consoleOrigin = platformOrigin(input.scheme, input.hosts.control)
 	const operationsOrigin = platformOrigin(input.scheme, input.hosts.operations)
 	const control = new Map([
 		['FABRIKA_CONTROL_DATABASE_URL', POSTGRES_URL],
@@ -109,7 +108,6 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 				['FABRIKA_IAM_DATABASE_URL', POSTGRES_URL],
 				['ENVIRONMENT', input.environment],
 				['ISSUER', iamOrigin],
-				['FABRIKA_IAM_ADMIN_ORIGINS', JSON.stringify([consoleOrigin])],
 				// Password only, by decision: OIDC needs an identity provider the operator has not been
 				// asked for. Both are STATED because IAM's own defaults are the other way round — OIDC on,
 				// password off — and it refuses to boot with neither.

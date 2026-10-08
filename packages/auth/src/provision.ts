@@ -40,16 +40,13 @@ export interface ReconcileSchemaOptions {
 	 * Omit to leave the registry alone; a supplied set REPLACES it, so it must be the complete set for
 	 * the app and not just the environment being deployed. It is NEVER read off the `AppSchema`: an app
 	 * that could name its own return origin could name any origin, which is the thing the registry
-	 * exists to prevent. An empty array is a caller error — clearing the registry is its own admin
-	 * operation, not an accident of having nothing to send.
+	 * exists to prevent. An empty array is a caller error: an app is never un-registered by having
+	 * nothing to send.
 	 */
 	returnOrigins?: readonly string[]
 	/**
-	 * An IAM-issued `px_` ADMIN key, sent as `Authorization: Bearer`. Effectively required: IAM's CSRF
-	 * guard exempts BEARER-ONLY callers, and nothing else — a credential-less server-side call sends
-	 * neither `Origin` nor `Referer` and is refused whatever the admin-origin registry holds. The
-	 * exemption rests on one fact, that a browser never attaches `Authorization` by itself; no such
-	 * fact covers a credential-less request, and `resolveAdmin` would read it as a global admin.
+	 * An IAM-issued `px_` ADMIN key, sent as `Authorization: Bearer`. Effectively required: IAM's
+	 * `/admin/*` accepts only a bearer and refuses a credential-less call in every environment.
 	 */
 	adminKey?: string
 	/** Cancels the in-flight request when schema reconciliation belongs to a deploy lifecycle. */

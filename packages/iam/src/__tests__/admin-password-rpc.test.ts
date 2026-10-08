@@ -7,7 +7,8 @@ import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
 import type { Services } from '../services'
-import { createHarness, type Harness, seedGrant, seedService, seedUser } from './helpers/harness'
+import { mintToken } from '../tokens'
+import { CONSOLE_APP, createHarness, type Harness, seedGrant, seedService, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
@@ -18,8 +19,6 @@ interface EnvOptions {
 	provisioningKey?: string
 	email?: boolean
 	bootstrapAdmins?: string[]
-	/** Registered admin origins. Defaults to the console origin these tests drive from. */
-	adminOrigins?: string[]
 }
 
 function env(h: Harness, options: EnvOptions = {}): Env {
@@ -29,7 +28,6 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: JSON.stringify(options.bootstrapAdmins ?? []),
-		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins ?? [ORIGIN]),
 		ENVIRONMENT: 'stage',
 		OIDC_ENABLED: String(options.oidc ?? true),
 		PASSWORD_ENABLED: String(options.password ?? true),
@@ -37,7 +35,7 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		EMAIL_FROM: options.email === true ? 'auth@example.com' : undefined,
 		EMAIL_API_KEY: options.email === true ? 're_test_key' : undefined,
 		ISSUER: ORIGIN,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
 		FABRIKA_IAM_PROVISIONING_KEY: options.provisioningKey ?? '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -47,9 +45,8 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 	}
 }
 
-function rpcRequest(method: string, input: unknown, options: { session?: string; bearer?: string } = {}): Request {
-	const headers = new Headers({ 'content-type': 'application/json', origin: ORIGIN })
-	if (options.session !== undefined) headers.set('cookie', `__Host-px_session=${options.session}`)
+function rpcRequest(method: string, input: unknown, options: { bearer?: string } = {}): Request {
+	const headers = new Headers({ 'content-type': 'application/json' })
 	if (options.bearer !== undefined) headers.set('authorization', `Bearer ${options.bearer}`)
 	return new Request(`${ORIGIN}/admin/rpc`, { method: 'POST', headers, body: JSON.stringify({ method, input }) })
 }
@@ -70,15 +67,15 @@ function call(
 	h: Harness,
 	method: string,
 	input: unknown,
-	options: { session?: string; bearer?: string; env?: EnvOptions } = {},
+	options: { bearer?: string; env?: EnvOptions } = {},
 ): Promise<Response> {
 	return createIamApp().fetch(rpcRequest(method, input, options), env(h, options.env), exec)
 }
 
-async function admin(h: Harness): Promise<{ id: string; session: string }> {
+async function admin(h: Harness): Promise<{ id: string; bearer: string }> {
 	const id = seedUser(h.sqlite, { sub: 'sub-admin', email: 'admin@example.com' })
 	seedGrant(h.sqlite, id, 'admin', null)
-	return { id, session: await h.signSession(id) }
+	return { id, bearer: await h.adminToken(id, { issuer: ORIGIN }) }
 }
 
 function passwordServices(h: Harness, email: EmailSender | null = null, oidc: boolean = true): Services {
@@ -158,17 +155,21 @@ describe('password administration RPC', () => {
 		)
 		const session = cookieValue(enrollment, SESSION_COOKIE)
 		if (session === null) throw new Error('expected enrollment session')
-		const me = await call(h, 'me', null, { session, env: { bootstrapAdmins: [' First-Admin@Example.com '] } })
+		// The console reaches IAM admin with the token the proxy mints from that session.
+		const services = h.makeServices({ environment: 'stage', issuer: ORIGIN, authentication: { oidc: false, password: true } })
+		const minted = await mintToken(services, TEST_SIGNING_ENV, { app: CONSOLE_APP, session, requestId: 'r1' })
+		if (!minted.result.ok) throw new Error(`console token mint failed: ${minted.result.reason}`)
+		const me = await call(h, 'me', null, { bearer: minted.result.token, env: { bootstrapAdmins: [' First-Admin@Example.com '] } })
 		expect(me.status).toBe(200)
 		expect(prop(prop(await me.json(), 'result'), 'id')).toBe(principalId)
 	})
 
 	test('rejects case-variant admin invites, including concurrent attempts', async () => {
 		const h = createHarness()
-		const { session } = await admin(h)
+		const { bearer } = await admin(h)
 		const [first, second] = await Promise.all([
-			call(h, 'principals.invite', { email: 'Alice@example.com' }, { session }),
-			call(h, 'principals.invite', { email: 'alice@example.com' }, { session }),
+			call(h, 'principals.invite', { email: 'Alice@example.com' }, { bearer }),
+			call(h, 'principals.invite', { email: 'alice@example.com' }, { bearer }),
 		])
 
 		expect([first.status, second.status].sort()).toEqual([200, 409])
@@ -177,24 +178,24 @@ describe('password administration RPC', () => {
 
 	test('shows global and per-user method states and keeps reissued enrollment pending', async () => {
 		const h = createHarness()
-		const { session } = await admin(h)
+		const { bearer } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: null, email: 'pending@example.com' })
 
-		const before = await call(h, 'principals.get', { id: user }, { session })
+		const before = await call(h, 'principals.get', { id: user }, { bearer })
 		const beforeAuth = prop(prop(await before.json(), 'result'), 'authentication')
 		expect(prop(prop(beforeAuth, 'oidc'), 'state')).toBe('unlinked')
 		expect(prop(prop(beforeAuth, 'password'), 'state')).toBe('disabled')
 
-		const first = await call(h, 'passwords.issueEnrollment', { id: user }, { session })
+		const first = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer })
 		const firstUrl = prop(prop(await first.json(), 'result'), 'url')
-		const second = await call(h, 'passwords.issueEnrollment', { id: user }, { session })
+		const second = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer })
 		const secondUrl = prop(prop(await second.json(), 'result'), 'url')
 
 		expect(first.status).toBe(200)
 		expect(second.status).toBe(200)
 		expect(secondUrl).not.toBe(firstUrl)
 		expect((await h.repositories.passwords.getAccount(user))?.state).toBe('pending')
-		const after = await call(h, 'principals.get', { id: user }, { session })
+		const after = await call(h, 'principals.get', { id: user }, { bearer })
 		expect(prop(prop(prop(prop(await after.json(), 'result'), 'authentication'), 'password'), 'state')).toBe('pending')
 		const tokens = h.sqlite.query<{ consumed_at: number | null }, [string]>(
 			'SELECT consumed_at FROM password_action_tokens WHERE principal_id = ? ORDER BY created_at, id',
@@ -205,12 +206,10 @@ describe('password administration RPC', () => {
 
 	test('reports globally unavailable OIDC without linking or changing the stored identity', async () => {
 		const h = createHarness()
-		const { id } = await admin(h)
-		// OIDC is off below, so the admin's OWN session has to be one this installation still enables.
-		const session = await h.signSession(id, { idpSub: null, authenticationMethod: 'password' })
+		const { bearer } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: 'idp-subject', email: 'linked@example.com' })
 
-		const response = await call(h, 'principals.get', { id: user }, { session, env: { oidc: false } })
+		const response = await call(h, 'principals.get', { id: user }, { bearer, env: { oidc: false } })
 		const result = prop(await response.json(), 'result')
 
 		expect(prop(prop(prop(result, 'authentication'), 'oidc'), 'state')).toBe('unavailable')
@@ -219,12 +218,12 @@ describe('password administration RPC', () => {
 
 	test('rejects service principals and reset before password enrollment completes', async () => {
 		const h = createHarness()
-		const { session } = await admin(h)
+		const { bearer } = await admin(h)
 		const service = seedService(h.sqlite, { commonName: 'worker' })
 		const user = seedUser(h.sqlite, { sub: null, email: 'not-enabled@example.com' })
 
-		const serviceResponse = await call(h, 'passwords.issueEnrollment', { id: service }, { session })
-		const resetResponse = await call(h, 'passwords.issueReset', { id: user }, { session })
+		const serviceResponse = await call(h, 'passwords.issueEnrollment', { id: service }, { bearer })
+		const resetResponse = await call(h, 'passwords.issueReset', { id: user }, { bearer })
 
 		expect(serviceResponse.status).toBe(400)
 		expect(resetResponse.status).toBe(409)
@@ -232,7 +231,7 @@ describe('password administration RPC', () => {
 
 	test('returns email delivery without a URL through the typed RPC', async () => {
 		const h = createHarness()
-		const { session } = await admin(h)
+		const { bearer } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: null, email: 'rpc-mail@example.com' })
 		const originalFetch = globalThis.fetch
 		let requestBody = ''
@@ -246,7 +245,7 @@ describe('password administration RPC', () => {
 		)
 		let response: Response
 		try {
-			response = await call(h, 'passwords.issueEnrollment', { id: user }, { session, env: { email: true } })
+			response = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer, env: { email: true } })
 		} finally {
 			globalThis.fetch = originalFetch
 		}
@@ -261,7 +260,7 @@ describe('password administration RPC', () => {
 
 	test('maps failed email delivery to an opaque typed RPC error', async () => {
 		const h = createHarness()
-		const { session } = await admin(h)
+		const { bearer } = await admin(h)
 		const user = seedUser(h.sqlite, { sub: null, email: 'rpc-failure@example.com' })
 		const originalFetch = globalThis.fetch
 		const originalError = console.error
@@ -275,7 +274,7 @@ describe('password administration RPC', () => {
 		}
 		let response: Response
 		try {
-			response = await call(h, 'passwords.issueEnrollment', { id: user }, { session, env: { email: true } })
+			response = await call(h, 'passwords.issueEnrollment', { id: user }, { bearer, env: { email: true } })
 		} finally {
 			globalThis.fetch = originalFetch
 			console.error = originalError

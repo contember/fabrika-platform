@@ -1,10 +1,4 @@
-/**
- * One canonical spelling for an HTTP origin, shared by everything in IAM that compares one.
- *
- * It lives on its own so the admin-origin registry (`services.ts`) and the return-origin registry
- * (`handoff.ts`) cannot drift apart on what "the same origin" means — the two are configured by the
- * same operator and a difference between them would only ever be a trap.
- */
+/** One canonical spelling for an HTTP origin, shared by everything in IAM that compares one. */
 
 /**
  * Canonical origin: lower-cased scheme and host, explicit port only when non-default, no path. Both

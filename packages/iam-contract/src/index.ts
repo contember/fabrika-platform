@@ -439,8 +439,6 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
 		invite: RpcProcedure<InviteRequest, PrincipalListItem>
 		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
-		/** Cancel an unclaimed invite, or disable a claimed principal. */
-		delete: RpcProcedure<PrincipalIdInput, OkResponse>
 	}
 	/**
 	 * Sessions an operator no longer trusts. Revoking an IAM session also ends every app session
@@ -463,9 +461,7 @@ export interface IamAdminRpcContract {
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>
 		getSchema: RpcProcedure<AppInput, AppSchemaDto>
-		getReturnOrigins: RpcProcedure<AppInput, ReturnOriginsDto>
 		setReturnOrigins: RpcProcedure<SetReturnOriginsRequest, ReturnOriginsDto>
-		clearReturnOrigins: RpcProcedure<AppInput, ReturnOriginsDto>
 	}
 	roles: {
 		list: RpcProcedure<ListRolesInput, ListResponse<RoleDto>>
