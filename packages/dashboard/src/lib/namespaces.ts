@@ -4,8 +4,10 @@ import type {
 	DeploymentNamespaceDto,
 	DeploymentNamespaceFactDto,
 	DeploymentNamespaceState,
+	ProviderEnvelopeDto,
 	PutAppEnvRequest,
 } from './api'
+import { isJsonValue } from './json'
 
 /** The operator-visible failure: the class control recorded, its redacted message, and what to do next. */
 export interface NamespaceFailureView {
@@ -13,6 +15,14 @@ export interface NamespaceFailureView {
 	readonly code: string | null
 	readonly message: string
 	readonly hint: string | null
+}
+
+/** Control's code for an update whose live outcome is unknown; mirrors `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED`. */
+const NAMESPACE_UPDATE_UNCONFIRMED = 'namespaceUpdateUnconfirmed'
+
+/** A ready placement, or one whose last target change must be retried, accepts `namespaces.update`. */
+export function canUpdateNamespace(namespace: DeploymentNamespaceDto): boolean {
+	return namespace.state === 'ready' || (namespace.state === 'failed' && namespace.lastErrorCode === NAMESPACE_UPDATE_UNCONFIRMED)
 }
 
 /**
@@ -23,6 +33,8 @@ const NAMESPACE_FAILURE_HINTS: Readonly<Record<string, string>> = {
 	insufficientPermissions: "The platform token may not perform this operation. Check the integration token's grants before retrying.",
 	serviceStackIsNotHttp: 'The proxy has no deployed HTTP port yet. Reconcile once its first deploy has finished.',
 	internal: 'The provider reported no class for this failure. The control plane log holds the full, redacted cause.',
+	[NAMESPACE_UPDATE_UNCONFIRMED]:
+		'The live change may or may not have applied. Change the target again to the same value; the retry converges either way.',
 }
 
 /**
@@ -93,4 +105,37 @@ export function namespaceAssignmentRequest(environment: AppEnvDto, namespaceId: 
 		target: environment.target,
 		artifact: environment.artifact,
 	}
+}
+
+export type NamespaceTargetParse =
+	| { readonly ok: true; readonly target: ProviderEnvelopeDto }
+	| { readonly ok: false; readonly error: string }
+
+/**
+ * Read an operator-edited target envelope. Only its SHAPE is checked here: the provider decides what may
+ * change, and control answers a refused change with the supported path.
+ */
+export function parseNamespaceTarget(text: string, provider: string): NamespaceTargetParse {
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(text)
+	} catch {
+		return { ok: false, error: 'The target is not valid JSON.' }
+	}
+	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+		return { ok: false, error: 'The target must be a JSON object with provider, version and payload.' }
+	}
+	const envelopeProvider: unknown = Reflect.get(parsed, 'provider')
+	const version: unknown = Reflect.get(parsed, 'version')
+	const payload: unknown = Reflect.get(parsed, 'payload')
+	if (envelopeProvider !== provider) {
+		return { ok: false, error: `The target must stay on provider ${provider}.` }
+	}
+	if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+		return { ok: false, error: 'The target version must be a positive integer.' }
+	}
+	if (payload === undefined || !isJsonValue(payload)) {
+		return { ok: false, error: 'The target payload must be JSON.' }
+	}
+	return { ok: true, target: { provider, version, payload } }
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { AppEnvDto, JsonValue } from './api'
+import { isJsonValue } from './json'
 
 const manifestHeader = z.object({ manifestVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
 
@@ -34,12 +35,4 @@ export function cloudflareArtifactWithConfigPath(envelope: AppEnvDto['artifact']
 		|| typeof envelope.payload !== 'object' || envelope.payload === null || Array.isArray(envelope.payload)
 	) return envelope
 	return { ...envelope, payload: { ...envelope.payload, configPath } }
-}
-
-// Keep opaque JSON intact: schema object/record parsing would drop extension keys such as __proto__.
-function isJsonValue(value: unknown): value is JsonValue {
-	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true
-	if (Array.isArray(value)) return value.every(isJsonValue)
-	if (typeof value !== 'object') return false
-	return Object.values(value).every((entry) => entry !== undefined && isJsonValue(entry))
 }

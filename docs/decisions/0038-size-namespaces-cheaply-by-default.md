@@ -58,12 +58,12 @@ enforcement point ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)),
 short outage rather than a rolling one. It is taken because a second container is a whole core of idle
 floor on every namespace, and most namespaces hold one small app.
 
-An application that genuinely needs HA must say so when the namespace is created. A namespace's stored
-target is fixed at creation — `namespaces.reconcile` re-applies what is stored and takes no new target
-— so choosing wrong is not cheap to undo; that gap is tracked in
-[backlog 79](../backlog/79-a-namespace-target-cannot-be-changed-after-creation.md). Existing
-namespaces are not resized by deploying this; their target is whatever was written when they were
-provisioned.
+An application that genuinely needs HA must say so when the namespace is created. The PostgreSQL type
+is fixed at creation: moving to HA is `namespaces.remove` followed by `namespaces.create`. The profile
+is not fixed — `namespaces.update` moves a live namespace to another profile in place
+([deployment namespaces](../reference/deployment-namespaces.md#operator-interfaces)), so a floor chosen
+too low or too high is cheap to correct. Existing namespaces are not resized by deploying this; their
+target is whatever was written when they were provisioned.
 
 ## Alternatives considered
 

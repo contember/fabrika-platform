@@ -1,9 +1,11 @@
 import { describe, expect, jest, test } from 'bun:test'
 import type { AppEnvDto, DeploymentNamespaceDetailDto, DeploymentNamespaceDto, DeploymentNamespaceState } from '../lib/api'
 import {
+	canUpdateNamespace,
 	compatibleNamespaces,
 	namespaceAssignmentRequest,
 	namespaceFailure,
+	parseNamespaceTarget,
 	retainedNamespaceResources,
 	scheduleNamespacePoll,
 } from '../lib/namespaces'
@@ -177,5 +179,36 @@ describe('retainedNamespaceResources', () => {
 
 		expect(retainedNamespaceResources(unmarked)).toEqual([])
 		expect(retainedNamespaceResources(detail(null))).toEqual([])
+	})
+})
+
+describe('parseNamespaceTarget', () => {
+	test('returns the envelope an operator edited, on the namespace provider', () => {
+		const text = JSON.stringify({ provider: 'zerops', version: 1, payload: { postgres: { type: 'postgresql:single@18', profile: 'oltp-production' } } })
+
+		expect(parseNamespaceTarget(text, 'zerops')).toEqual({
+			ok: true,
+			target: { provider: 'zerops', version: 1, payload: { postgres: { type: 'postgresql:single@18', profile: 'oltp-production' } } },
+		})
+	})
+
+	test('refuses text that is not an envelope before it reaches the API', () => {
+		expect(parseNamespaceTarget('{', 'zerops')).toEqual({ ok: false, error: 'The target is not valid JSON.' })
+		expect(parseNamespaceTarget('[]', 'zerops').ok).toBe(false)
+		expect(parseNamespaceTarget(JSON.stringify({ provider: 'cloudflare', version: 1, payload: {} }), 'zerops')).toEqual({
+			ok: false,
+			error: 'The target must stay on provider zerops.',
+		})
+		expect(parseNamespaceTarget(JSON.stringify({ provider: 'zerops', version: 0, payload: {} }), 'zerops').ok).toBe(false)
+		expect(parseNamespaceTarget(JSON.stringify({ provider: 'zerops', version: 1 }), 'zerops').ok).toBe(false)
+	})
+})
+
+describe('canUpdateNamespace', () => {
+	test('offers a target change on a ready placement and after an unconfirmed update only', () => {
+		expect(canUpdateNamespace(namespace({ state: 'ready' }))).toBe(true)
+		expect(canUpdateNamespace(namespace({ state: 'failed', lastError: 'retry', lastErrorCode: 'namespaceUpdateUnconfirmed' }))).toBe(true)
+		expect(canUpdateNamespace(namespace({ state: 'failed', lastError: 'denied', lastErrorCode: 'insufficientPermissions' }))).toBe(false)
+		expect(canUpdateNamespace(namespace({ state: 'provisioning' }))).toBe(false)
 	})
 })

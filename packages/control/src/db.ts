@@ -9,7 +9,7 @@ export {
 } from './db/operations-catalog'
 export { OperationsReleaseRepository, type OperationsReleaseSyncRow, type TerminalOperationsReleaseRow } from './db/operations-releases'
 export { RepoPollingRepository, type RepoPollStateRow } from './db/polling'
-export { ControlRegistryRepository } from './db/registry'
+export { ControlRegistryRepository, isUnconfirmedNamespaceUpdate } from './db/registry'
 export {
 	type AppEnvInput,
 	type AppEnvRow,

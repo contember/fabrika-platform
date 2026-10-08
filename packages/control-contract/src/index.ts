@@ -256,6 +256,15 @@ export interface AdoptDeploymentNamespaceRequest {
 	target: ProviderEnvelopeDto
 }
 
+/**
+ * A namespace's new provider target. Its payload may name only what changes; the provider merges it over
+ * the stored one. Only what the provider can change in place is accepted — on Zerops the PostgreSQL
+ * profile — and anything else is refused with 409 naming `namespaces.remove` + `namespaces.create`.
+ */
+export interface UpdateDeploymentNamespaceRequest {
+	target: ProviderEnvelopeDto
+}
+
 export interface DeploymentNamespaceFactDto {
 	readonly label: string
 	readonly value: string
@@ -426,4 +435,5 @@ export type {
 	SecretValueInput,
 	SecretValueResponse,
 	TailRunInput,
+	UpdateNamespaceInput,
 } from './rpc.js'

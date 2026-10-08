@@ -6,7 +6,14 @@ import { NamespaceSignature } from '../../components/NamespaceSignature'
 import { Table } from '../../components/Table'
 import { api, ApiError } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
-import { isNamespaceSettling, namespaceFailure, retainedNamespaceResources, scheduleNamespacePoll } from '../../lib/namespaces'
+import {
+	canUpdateNamespace,
+	isNamespaceSettling,
+	namespaceFailure,
+	parseNamespaceTarget,
+	retainedNamespaceResources,
+	scheduleNamespacePoll,
+} from '../../lib/namespaces'
 
 // Provisioning runs behind the queue and takes minutes, so this page follows it rather than waiting on
 // a request: `reconcile` returns the moment the job is enqueued and the poll below reports the outcome.
@@ -20,6 +27,9 @@ export default createPage()
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
 		const [confirmingRemoval, setConfirmingRemoval] = useState(false)
+		const [editedTarget, setEditedTarget] = useState<string | null>(null)
+		const [updating, setUpdating] = useState(false)
+		const [updateError, setUpdateError] = useState<string | null>(null)
 		const navigate = useNavigate()
 		const settling = isNamespaceSettling(namespace.state)
 		const failure = namespaceFailure(namespace)
@@ -43,6 +53,29 @@ export default createPage()
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Namespace reconcile failed.')
 				setBusy(false)
+			}
+		}
+
+		// Synchronous, unlike reconcile: an in-place change is one provider call plus its read-back, so the
+		// answer — or the 409 naming the supported path — comes back in this request.
+		async function updateTarget(event: React.FormEvent) {
+			event.preventDefault()
+			if (editedTarget === null) return
+			const parsed = parseNamespaceTarget(editedTarget, namespace.target.provider)
+			if (!parsed.ok) {
+				setUpdateError(parsed.error)
+				return
+			}
+			setUpdating(true)
+			setUpdateError(null)
+			try {
+				await api.namespaces.update({ namespaceId: namespace.id, namespace: { target: parsed.target } })
+				setUpdating(false)
+				setEditedTarget(null)
+				invalidate()
+			} catch (cause) {
+				setUpdateError(cause instanceof ApiError ? cause.message : 'Namespace update failed.')
+				setUpdating(false)
 			}
 		}
 
@@ -146,6 +179,57 @@ export default createPage()
 					<span className="hint">Re-apply the provider-owned boundary and refresh its durable checkpoint.</span>
 				</div>
 				{error && <p className="error-text" role="alert">{error}</p>}
+
+				{canUpdateNamespace(namespace) && (
+					<section>
+						<div className="section-head">
+							<Icon name="schema" size={15} />
+							<h2>Provider target</h2>
+						</div>
+						{editedTarget === null
+							? (
+								<div className="toolbar">
+									<button type="button" onClick={() => setEditedTarget(JSON.stringify(namespace.target, null, 2))}>
+										Change target
+									</button>
+									<span className="hint">
+										Only what the provider changes in place is accepted — on Zerops, the PostgreSQL profile. A payload may name only what changes.
+									</span>
+								</div>
+							)
+							: (
+								<form onSubmit={updateTarget}>
+									<label>
+										Target envelope
+										<textarea
+											required
+											rows={12}
+											value={editedTarget}
+											onChange={(event) => setEditedTarget(event.target.value)}
+											autoComplete="off"
+											spellCheck={false}
+										/>
+										<span className="hint">A change the provider cannot apply in place is refused, and the refusal names the supported path.</span>
+									</label>
+									<div className="toolbar">
+										<button type="submit" disabled={updating}>{updating ? 'Applying…' : 'Apply target'}</button>
+										<button
+											type="button"
+											className="ghost"
+											disabled={updating}
+											onClick={() => {
+												setEditedTarget(null)
+												setUpdateError(null)
+											}}
+										>
+											Cancel
+										</button>
+									</div>
+								</form>
+							)}
+						{updateError && <p className="error-text" role="alert">{updateError}</p>}
+					</section>
+				)}
 
 				<div className="danger-zone">
 					<div className="danger-zone-copy">

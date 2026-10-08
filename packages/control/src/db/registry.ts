@@ -1,5 +1,5 @@
-import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
-import type { ProviderSourceBinding } from '@fabrika/provider-contract'
+import { type DeployLocks, type SqlDatabase, SqlDeployLocks, type SqlStatement } from '@fabrika/platform'
+import { PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED, type ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type LeaseFence, namespaceLeaseKey } from '../lease'
 import {
 	type AppEnvInput,
@@ -17,6 +17,19 @@ import {
 	SourceBindingError,
 } from './registry-types'
 import { firstRow } from './returning'
+
+/**
+ * The marker an in-flight or unconfirmed `namespaces.update` leaves on a row: state `failed` and a
+ * `last_error` coded `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED` (`<code>: <message>`).
+ */
+const UNCONFIRMED_UPDATE_PREFIX = `${PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED}: `
+
+/** The same rule in SQL, so a statement cannot touch a marked row its caller read before the mark. The code holds no LIKE wildcard. */
+const NOT_UNCONFIRMED_UPDATE = `NOT (state = 'failed' AND COALESCE(last_error, '') LIKE '${UNCONFIRMED_UPDATE_PREFIX}%')`
+
+export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, 'state' | 'last_error'>): boolean {
+	return row.state === 'failed' && row.last_error?.startsWith(UNCONFIRMED_UPDATE_PREFIX) === true
+}
 
 /** Portable registry persistence; a composition root may replace this complete capability. */
 export class ControlRegistryRepository {
@@ -239,6 +252,20 @@ export class ControlRegistryRepository {
 			)
 	}
 
+	/**
+	 * The lease store whose `deploy_locks` rows this repository's fenced namespace writes check, for a
+	 * request that takes a `namespace:<id>` lease itself.
+	 */
+	namespaceLocks(): DeployLocks {
+		return new SqlDeployLocks(this.d1)
+	}
+
+	/** Lock the holder's lease row for the batch it leads: an EXISTS alone races takeover on Postgres. */
+	private namespaceLeaseLockStatement(id: string, fence: LeaseFence): SqlStatement {
+		return this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?')
+			.bind(namespaceLeaseKey(id), fence.holder, fence.nowMs)
+	}
+
 	/** One namespace write by the holder of its `namespace:<id>` lease; `created_at` pins the row's identity. */
 	async writeDeploymentNamespace(input: {
 		id: string
@@ -251,10 +278,8 @@ export class ControlRegistryRepository {
 		claim: boolean
 	}): Promise<boolean> {
 		const key = namespaceLeaseKey(input.id)
-		// The lease row must stay locked through the mutation: an EXISTS alone races takeover on Postgres.
 		const results = await this.d1.batch<{ id: string }>([
-			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?')
-				.bind(key, input.fence.holder, input.fence.nowMs),
+			this.namespaceLeaseLockStatement(input.id, input.fence),
 			this.d1.prepare(`UPDATE deployment_namespaces
 				SET provider_target_json = ?, state = CASE WHEN state = 'pending' AND ? = 0 THEN 'pending' ELSE ? END, last_error = ?
 				WHERE id = ? AND created_at = ?
@@ -276,15 +301,52 @@ export class ControlRegistryRepository {
 	}
 
 	/**
+	 * Move one namespace from exactly the `state` and `last_error` its lease holder read, in one fenced
+	 * write. NULL = the row moved meanwhile, or the lease is gone; the caller must not assume it landed.
+	 * `COALESCE` compares a NULL `last_error` the same way on SQLite and Postgres.
+	 */
+	async transitionDeploymentNamespace(input: {
+		id: string
+		createdAt: number
+		fence: LeaseFence
+		from: { state: DeploymentNamespaceState; lastError: string | null }
+		to: { state: DeploymentNamespaceState; providerTargetJson: string; lastError: string | null }
+	}): Promise<DeploymentNamespaceRow | null> {
+		const results = await this.d1.batch<DeploymentNamespaceRow>([
+			this.namespaceLeaseLockStatement(input.id, input.fence),
+			this.d1.prepare(`UPDATE deployment_namespaces
+				SET state = ?, provider_target_json = ?, last_error = ?
+				WHERE id = ? AND created_at = ? AND state = ? AND COALESCE(last_error, '') = ?
+					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
+				RETURNING *`)
+				.bind(
+					input.to.state,
+					input.to.providerTargetJson,
+					input.to.lastError,
+					input.id,
+					input.createdAt,
+					input.from.state,
+					input.from.lastError ?? '',
+					namespaceLeaseKey(input.id),
+					input.fence.holder,
+					input.fence.nowMs,
+				),
+		])
+		return results[1]?.results[0] ?? null
+	}
+
+	/**
 	 * Queue a namespace for another provider mutation. It never writes `provider_target_json`, so a request
 	 * that arrives while a job is in flight cannot roll back a checkpoint the worker has just written; the
-	 * job keeps the `pending` state (only a claim moves it) and the queued job runs after it. NULL = already pending.
+	 * job keeps the `pending` state (only a claim moves it) and the queued job runs after it. A row an
+	 * update marked is never matched: re-applying its stored target would fight the live change it does
+	 * not describe yet. NULL = already pending, or marked.
 	 */
 	async requeueDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
 		return this.d1
 			.prepare(`UPDATE deployment_namespaces
 				SET state = 'pending', last_error = NULL
-				WHERE id = ? AND state IN ('ready', 'failed', 'provisioning') RETURNING *`)
+				WHERE id = ? AND state IN ('ready', 'failed', 'provisioning') AND ${NOT_UNCONFIRMED_UPDATE} RETURNING *`)
 			.bind(id)
 			.first<DeploymentNamespaceRow>()
 	}
@@ -294,10 +356,11 @@ export class ControlRegistryRepository {
 	 * (backlog 73). Claims go first because both foreign keys are `ON DELETE RESTRICT`, and BOTH
 	 * statements carry the SAME guard, so a removal refused between the caller's check and this write
 	 * cannot strip the claims of a namespace it then leaves in place. NULL = refused; the caller re-reads
-	 * the row to say why. It deletes no provider resource — that stays with the operator (ADR-0034).
+	 * the row to say why. It deletes no provider resource — that stays with the operator (ADR-0034). A row
+	 * an update marked is kept: the only way out of that state is the update's retry.
 	 */
 	async deleteDeploymentNamespaceWithResourceClaims(id: string): Promise<DeploymentNamespaceRow | null> {
-		const removable = `state <> 'provisioning' AND NOT EXISTS (SELECT 1 FROM app_envs WHERE namespace_id = ?)`
+		const removable = `state <> 'provisioning' AND ${NOT_UNCONFIRMED_UPDATE} AND NOT EXISTS (SELECT 1 FROM app_envs WHERE namespace_id = ?)`
 		const results = await this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>([
 			this.d1
 				.prepare(`DELETE FROM namespace_resource_claims

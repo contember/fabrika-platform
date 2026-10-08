@@ -40,6 +40,7 @@ import type {
 	StartGitHubSourceConnectionResponse,
 	TriggerDeployRequest,
 	UpdateAppRequest,
+	UpdateDeploymentNamespaceRequest,
 } from './index.js'
 
 type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
@@ -93,6 +94,10 @@ export interface NamespaceIdInput {
 
 export interface AdoptNamespaceInput extends NamespaceIdInput {
 	readonly namespace: AdoptDeploymentNamespaceRequest
+}
+
+export interface UpdateNamespaceInput extends NamespaceIdInput {
+	readonly namespace: UpdateDeploymentNamespaceRequest
 }
 
 export interface RunListInput {
@@ -172,6 +177,8 @@ export interface ControlRpcContract {
 		create: RpcProcedure<CreateDeploymentNamespaceRequest, DeploymentNamespaceDetailDto>
 		adopt: RpcProcedure<AdoptNamespaceInput, DeploymentNamespaceDetailDto>
 		reconcile: RpcProcedure<NamespaceIdInput, DeploymentNamespaceDetailDto>
+		/** Change a ready namespace in place, synchronously (backlog 79); also the retry after an unconfirmed update. */
+		update: RpcProcedure<UpdateNamespaceInput, DeploymentNamespaceDetailDto>
 		/** Free a namespace id. Refused while any app environment is registered in it (backlog 73). */
 		remove: RpcProcedure<NamespaceIdInput, RemoveDeploymentNamespaceResponse>
 	}

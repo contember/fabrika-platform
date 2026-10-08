@@ -29,6 +29,7 @@ import {
 	planNamespaceUseCase,
 	reconcileNamespaceUseCase,
 	removeNamespaceUseCase,
+	updateNamespaceUseCase,
 } from './api/namespaces'
 import { providerEnvelopeSchema } from './api/provider-envelope'
 import { createAppUseCase, deleteAppUseCase, getAppUseCase, listAppsUseCase, updateAppUseCase } from './api/registry/apps'
@@ -137,6 +138,7 @@ const secretValueInput = z.object({ appId: nonEmpty, name: nonEmpty, env: nullab
 const namespaceId = z.object({ namespaceId: nonEmpty })
 const namespaceBody = z.object({ id: nonEmpty, env: nonEmpty, exclusiveAppId: nullableString, target: providerEnvelopeSchema })
 const adoptNamespaceInput = z.object({ namespaceId: nonEmpty, namespace: namespaceBody.omit({ id: true }) })
+const updateNamespaceInput = z.object({ namespaceId: nonEmpty, namespace: z.object({ target: providerEnvelopeSchema }) })
 const planNamespaceInput = z.object({
 	id: nonEmpty,
 	env: nonEmpty,
@@ -288,6 +290,9 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			),
 			reconcile: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
 				controlCall(() => reconcileNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
+			),
+			update: rpc.procedure.input(updateNamespaceInput).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => updateNamespaceUseCase(namespaceContext(ctx), input.namespaceId, input.namespace))
 			),
 			remove: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
 				controlCall(() => removeNamespaceUseCase(namespaceContext(ctx), input.namespaceId))

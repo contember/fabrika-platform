@@ -73,6 +73,7 @@ describe('Delivery RPC client', () => {
 		await client.namespaces.plan({ id: 'apps-prod', env: 'prod', preset: 'shared' })
 		await client.namespaces.create({ id: 'apps-prod', env: 'prod', exclusiveAppId: null, target })
 		await client.namespaces.reconcile({ namespaceId: 'apps-prod' })
+		await client.namespaces.update({ namespaceId: 'apps-prod', namespace: { target } })
 
 		expect(calls).toEqual([
 			{ method: 'namespaces.list', input: null },
@@ -80,6 +81,7 @@ describe('Delivery RPC client', () => {
 			{ method: 'namespaces.plan', input: { id: 'apps-prod', env: 'prod', preset: 'shared' } },
 			{ method: 'namespaces.create', input: { id: 'apps-prod', env: 'prod', exclusiveAppId: null, target } },
 			{ method: 'namespaces.reconcile', input: { namespaceId: 'apps-prod' } },
+			{ method: 'namespaces.update', input: { namespaceId: 'apps-prod', namespace: { target } } },
 		])
 	})
 

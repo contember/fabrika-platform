@@ -242,7 +242,29 @@ All namespace RPC procedures at `/api/rpc` require the global `namespace.manage`
 | `namespaces.get`       | Read state, presentation, and served hosts         |
 | `namespaces.adopt`     | Adopt and reconcile an existing placement          |
 | `namespaces.reconcile` | Queue a reconcile of stored provider state         |
+| `namespaces.update`    | Change a ready placement's target in place         |
 | `namespaces.remove`    | Remove an unused placement and free its id         |
+
+Update is synchronous and accepts only what the provider can change in place. Its
+payload may name only what changes; the provider merges it over the stored
+target. On Zerops that is the PostgreSQL profile: the provider moves the live
+service through `PUT /service-stack/{id}/autoscaling`, because a re-import ignores
+a changed profile, and confirms the new profile by reading the service back,
+within about 90 s. Any other change — the PostgreSQL type included — is refused
+with 409 naming the supported path: `namespaces.remove`, then `namespaces.create`.
+A provider without an update capability refuses every update by name.
+
+Under the namespace lease, the row is first marked `failed` with the code
+`namespaceUpdateUnconfirmed`. While the lease is held, a second update answers
+409, and reconcile and removal answer 409 while the mark stands. Success stores
+the new target and `ready` in one fenced write; a definite failure restores the
+row as it was. An outcome the provider cannot confirm — the platform accepted the
+change and the read-back did not settle, or the request was cut off — leaves the
+mark in place. Reconcile and removal refuse a marked row in their SQL as well as
+in the request, so the only way out is to retry `namespaces.update` with the same
+target, which converges whether or not the live change applied. A marked
+namespace is `failed`, so deploys into it and proxy republishes are refused like
+for any failed namespace until the retry succeeds.
 
 Removal is the narrow case only. It is refused while any application environment
 is registered in the namespace, naming the applications, and while a worker is
