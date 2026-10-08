@@ -27,3 +27,5 @@ decided work or status.
   exports and imports between applications through the owner's proxy.
 - [Implementation plan](app-framework-implementation-plan.md) — decisions, part 0
   fixes, part A (framework) and part B (enforcement), milestones.
+- [Orchestration](app-framework-orchestration.md) — lanes by package ownership, the loop for
+  one work unit, gates and human checkpoints for executing the implementation plan.

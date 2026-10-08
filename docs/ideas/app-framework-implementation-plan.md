@@ -13,6 +13,8 @@ part 0 fixes holes in the current code and is independent of both.
 
 It is still an idea: nothing here is scheduled. When a milestone starts, its work units move into a sprint plan
 (`docs/sprints/`), and the ADR rewrites it lists come first.
+[Orchestration](app-framework-orchestration.md) describes how agents execute it: lanes, the work unit loop, gates
+and checkpoints.
 
 **Design rule:** no new services and no multi-step orchestration. Every step extends an existing component. Where a
 stronger guarantee would need more, the plan states what v1 gives up and names the later step.
