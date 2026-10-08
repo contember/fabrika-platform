@@ -25,7 +25,7 @@ about itself ([ADR-0050](0050-approved-access.md)).
 ## Decision
 
 **Invariant: a successful non-dry Cloudflare run uses one commit for its run identity, verified
-checkout, runtime release and source-map scope.** Unavailable or mismatched source fails before
+checkout, runtime release, source-map scope and contract snapshot.** Unavailable or mismatched source fails before
 dependency installation or any repository-controlled command. Nothing falls back to a branch tip.
 
 - The Cloudflare provider implements `resolveSource`. It resolves the run's source to a complete commit
@@ -57,7 +57,22 @@ Control does not negotiate a source protocol with them.
 - The application config is still imported inside the credentialed runner. The checker and the type
   checks therefore stay advisory on Cloudflare until the runner separates a credential-free step.
 
-The code does none of this yet (part B, work units B6 and B8).
+### Exposure is refused, with no approval path
+
+The provider refuses these on application Workers:
+
+- `routes`;
+- `preview_urls`;
+- any `workers_dev` other than `false`;
+- a binding to another application's resources: a binding whose name belongs to another application of
+  the installation, checked against Control's registry.
+
+An application Worker is therefore reachable only through its proxy Worker's service binding, and that
+binding is the authenticated hop ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). Only CSP
+extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
+
+The code does none of this yet (part B, work units B6 and B8). The refusals of `routes`, `preview_urls`
+and `workers_dev` are part 0, work unit P0.4.
 
 ## Consequences
 
@@ -85,6 +100,8 @@ Run ownership and how Control applies the runner's outcome follow the lease rule
 - **Keep the authored proxy Worker and check its gates against the contract.** Rejected: the check
   would run inside the build the agent controls, and a check that agrees with a widened contract proves
   nothing.
+- **An approval path for exposure.** Rejected: a route, a preview URL or a foreign binding reaches the
+  application past the proxy, so no contract could describe what it exposes.
 - **Make the checks binding on Cloudflare now.** Deferred: the config import holds the account token,
   so repository code could skip any check that runs beside it. A credential-free step comes first.
 - **Move Cloudflare onto the Zerops source transport.** It adds a transporter and changes the native
