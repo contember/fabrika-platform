@@ -4,7 +4,12 @@ import { FABRIKA_HOP_HEADERS, FABRIKA_PROXY_SECRET, proxySecretVariable } from '
 
 describe('the hop headers', () => {
 	test('list every X-Fabrika-* name the wire module defines, so a new one cannot miss the strip', () => {
-		const names = Object.values(wire).filter((value): value is string => typeof value === 'string' && value.startsWith('X-Fabrika-'))
+		const names: string[] = []
+		for (const value of Object.values(wire)) {
+			if (typeof value === 'string' && value.startsWith('X-Fabrika-')) {
+				names.push(value)
+			}
+		}
 		expect(names.length).toBeGreaterThan(0)
 		for (const name of names) {
 			expect(FABRIKA_HOP_HEADERS).toContain(name)
