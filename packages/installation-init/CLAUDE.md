@@ -7,11 +7,11 @@ IAM's admin RPC.
 
 It holds **no provider knowledge**. Which files a sidecar repository carries, what
 its Environment holds, and in which order an operator is asked — all of that is
-`@fabrika/installation-{cloudflare,zerops}`'s answer, and the two are deliberately
+`@fabrika/provider-{cloudflare,zerops}/installation`'s answer, and the two are deliberately
 not mirror images
 ([ADR-0027](../../docs/decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)).
 
-Public because both installation packages are, and
+Public because both provider packages are, and
 `scripts/release.ts validate` forbids a public package depending on a private one.
 
 ## Layout
@@ -67,6 +67,6 @@ Public because both installation packages are, and
   re-run change nothing — and every installation needs the same one, so duplicating it
   per provider would mean two places to get the cross-app grant wrong. What it does NOT
   know is where that IAM answers, which credential reaches it, or how an operator names
-  either: `installation-zerops`'s `admin.ts` supplies all three. The line is the
+  either: `provider-zerops/src/installation/admin.ts` supplies all three. The line is the
   coordinates, not the call count — a helper that branches on which provider is calling
   it belongs in that provider's package whatever its size.

@@ -106,9 +106,9 @@ const selectedAppProvider = async (parsed: ParsedCommand): Promise<string> => {
 
 const installationModule = async (provider: string): Promise<unknown> => {
 	const packageName = provider === 'cloudflare'
-		? '@fabrika/installation-cloudflare'
+		? '@fabrika/provider-cloudflare/installation'
 		: provider === 'zerops'
-		? '@fabrika/installation-zerops'
+		? '@fabrika/provider-zerops/installation'
 		: provider
 	return import(packageName)
 }

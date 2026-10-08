@@ -1,6 +1,6 @@
 # GENERATED FILE — DO NOT EDIT BY HAND.
 #
-# Source: packages/installation-zerops/src/topology/topology.ts
+# Source: packages/provider-zerops/src/installation/topology/topology.ts
 # Regenerate: bun run --filter @fabrika/platform-artifacts gen
 #
 # Apply with: POST /project/{projectId}/service-stack/import  { yaml }

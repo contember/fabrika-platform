@@ -1,6 +1,6 @@
 # GENERATED FILE — DO NOT EDIT BY HAND.
 #
-# Source: packages/installation-zerops/src/topology/setups.ts  (which is where the per-field commentary lives)
+# Source: packages/provider-zerops/src/installation/topology/setups.ts  (which is where the per-field commentary lives)
 # Regenerate: bun run --filter @fabrika/platform-artifacts gen
 #
 # Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's four deployable services share

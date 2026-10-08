@@ -287,6 +287,6 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   AND the surrounding source lines in the response body, so `createFetchHandler` wraps every request and
   `Bun.serve`'s `error()` backstops anything raised outside it. Both answer a bare `internal error`.
 - **The generated root `zerops.yaml` is the only platform build specification.**
-  `packages/installation-zerops/src/topology/setups.ts` owns the typed IAM, Operations,
+  `packages/provider-zerops/src/installation/topology/setups.ts` owns the typed IAM, Operations,
   control, and proxy setups; do not add per-package
   `zerops.yaml` files.

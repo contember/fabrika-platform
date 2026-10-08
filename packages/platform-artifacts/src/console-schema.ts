@@ -2,16 +2,16 @@
 //
 // `platform deploy` reconciles this schema into IAM — without it the console's return origin is never
 // registered and no browser can complete a login (ADR-0023). The declaration lives in the PRIVATE
-// `@fabrika/control`, and `@fabrika/installation-zerops` is PUBLISHED, so the deploy command cannot import
+// `@fabrika/control`, and `@fabrika/provider-zerops/installation` is PUBLISHED, so the deploy command cannot import
 // it: the same constraint that shaped `./proxy-manifest.ts`, answered the same way. `gen:check` in CI is
 // what makes the copy a fact.
 
 import type { AppSchema, RoleDef } from '@fabrika/auth-core'
 import { controlSchema } from '@fabrika/control/schema'
-import type { Artifact } from '../../installation-zerops/src/topology/artifacts'
+import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
 /** Repo-relative path of the committed schema. */
-export const PLATFORM_CONSOLE_SCHEMA_PATH = 'packages/installation-zerops/src/generated/platform-console-schema.ts'
+export const PLATFORM_CONSOLE_SCHEMA_PATH = 'packages/provider-zerops/src/installation/generated/platform-console-schema.ts'
 
 const HEADER = [
 	'// GENERATED FILE — DO NOT EDIT BY HAND.',

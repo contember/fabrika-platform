@@ -1,21 +1,20 @@
 // The deploy's own service list, pinned against the declarations that own those names.
 //
-// `PLATFORM_DEPLOY_ORDER` lives in `@fabrika/installation-zerops` so the published command never imports the dev-time
+// `PLATFORM_DEPLOY_ORDER` lives in `@fabrika/provider-zerops/installation` so the published command never imports the dev-time
 // generator, which means it restates four hostnames. This is the test that keeps the restatement
 // honest: each one has to be a service BOTH platform tiers create AND a setup name the repository-root
 // `zerops.yaml` declares, because `triggerPipeline` selects the setup by that name.
 
-import { describe, expect, test } from 'bun:test'
 import {
 	PLATFORM_CONCURRENT_DEPLOY,
 	PLATFORM_DEPLOY_ORDER,
+	PLATFORM_PROXY_MANIFEST_TEMPLATE,
 	PLATFORM_PROXY_SERVICE,
 	PLATFORM_SEQUENTIAL_DEPLOY,
-} from '../../../installation-zerops/src/deploy'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../../../installation-zerops/src/generated/platform-proxy-manifest'
-import { platformProxyAppFor } from '../../../installation-zerops/src/proxy-manifest'
-import { fabrikaZeropsYaml } from '../../../installation-zerops/src/topology/setups'
-import { compileTopology, platformTopology, PROXY_HOSTNAME } from '../../../installation-zerops/src/topology/topology'
+	platformProxyAppFor,
+} from '@fabrika/provider-zerops/installation'
+import { compileTopology, fabrikaZeropsYaml, platformTopology, PROXY_HOSTNAME } from '@fabrika/provider-zerops/installation/topology'
+import { describe, expect, test } from 'bun:test'
 import { PLATFORM_CONSOLE_APP_ID, PLATFORM_PROXY_APPS } from '../proxy-manifest'
 
 const services = (tier: 'standard' | 'light'): string[] =>

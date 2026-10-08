@@ -5,10 +5,10 @@
 // copy a fact rather than a hope is this test plus CI's `gen:check`.
 
 import { controlSchema } from '@fabrika/control/schema'
+import { PLATFORM_CONSOLE_APP_SCHEMA } from '@fabrika/provider-zerops/installation'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { PLATFORM_CONSOLE_APP_SCHEMA } from '../../../installation-zerops/src/generated/platform-console-schema'
 import { platformConsoleSchemaArtifact } from '../console-schema'
 import { REPO_ROOT } from '../render'
 

@@ -16,7 +16,7 @@ const PROCESS_POLL_ATTEMPTS = 150
 /**
  * Poll ONE process to completion.
  *
- * The same loop `installation-zerops`'s `deployService` runs over `/app-version`, run over `/process`
+ * The same loop `deployPlatformService` (`installation/deploy.ts`) runs over `/app-version`, run over `/process`
  * instead: read, decide ONLY on a status this build knows to be terminal, sleep, and give up on a deadline
  * of our own rather than on a coincidence. Returns the finished process so a caller can read
  * `actionName`/`appVersionId` off it.

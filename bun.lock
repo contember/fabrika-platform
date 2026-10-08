@@ -162,8 +162,6 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/builder": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
-        "@fabrika/installation-cloudflare": "workspace:*",
-        "@fabrika/installation-zerops": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
@@ -311,19 +309,6 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/installation-cloudflare": {
-      "name": "@fabrika/installation-cloudflare",
-      "version": "0.0.4",
-      "dependencies": {
-        "@fabrika/installation-init": "workspace:*",
-        "@fabrika/provider-cloudflare": "workspace:*",
-        "@fabrika/provider-contract": "workspace:*",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-      },
-    },
     "packages/installation-init": {
       "name": "@fabrika/installation-init",
       "version": "0.0.4",
@@ -334,23 +319,6 @@
         "zod": "^3.25.76",
       },
       "devDependencies": {
-        "@types/bun": "latest",
-      },
-    },
-    "packages/installation-zerops": {
-      "name": "@fabrika/installation-zerops",
-      "version": "0.0.4",
-      "dependencies": {
-        "@fabrika/auth": "workspace:*",
-        "@fabrika/auth-core": "workspace:*",
-        "@fabrika/installation-init": "workspace:*",
-        "@fabrika/provider-contract": "workspace:*",
-        "@fabrika/provider-zerops": "workspace:*",
-        "@fabrika/proxy-contract": "workspace:*",
-        "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@fabrika/iam-contract": "workspace:*",
         "@types/bun": "latest",
       },
     },
@@ -445,7 +413,6 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/control": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
-        "@fabrika/installation-zerops": "workspace:*",
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
@@ -474,6 +441,7 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
@@ -502,12 +470,14 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "yaml": "^2.9.1",
         "zod": "^3.25.76",
       },
       "devDependencies": {
+        "@fabrika/iam-contract": "workspace:*",
         "@types/bun": "latest",
       },
     },
@@ -774,11 +744,7 @@
 
     "@fabrika/iam-ui": ["@fabrika/iam-ui@workspace:packages/iam-ui"],
 
-    "@fabrika/installation-cloudflare": ["@fabrika/installation-cloudflare@workspace:packages/installation-cloudflare"],
-
     "@fabrika/installation-init": ["@fabrika/installation-init@workspace:packages/installation-init"],
-
-    "@fabrika/installation-zerops": ["@fabrika/installation-zerops@workspace:packages/installation-zerops"],
 
     "@fabrika/jwks": ["@fabrika/jwks@workspace:packages/jwks"],
 
@@ -1264,11 +1230,7 @@
 
     "@fabrika/iam/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
-    "@fabrika/installation-cloudflare/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
     "@fabrika/installation-init/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
-    "@fabrika/installation-zerops/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@fabrika/local-stack/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
@@ -1350,11 +1312,7 @@
 
     "@fabrika/iam/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
-    "@fabrika/installation-cloudflare/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
     "@fabrika/installation-init/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "@fabrika/installation-zerops/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/local-stack/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 

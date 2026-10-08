@@ -37,7 +37,7 @@ export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): Zerops
 	...(input.proxySource === undefined ? {} : { proxySource: decodeZeropsNamespaceProxySource(input.proxySource) }),
 	projectName: input.projectName,
 	// `LIGHT` on every environment. An APP namespace is not the platform project — the argument for
-	// `SERIOUS` in `installation-zerops` is that the platform repairs the apps project, which no app
+	// `SERIOUS` in the platform installation topology is that the platform repairs the apps project, which no app
 	// namespace does. `corePackage` is upgrade-only, so this stays the caller's explicit choice.
 	corePackage: input.corePackage ?? 'LIGHT',
 	publicAccess: input.publicAccess ?? 'custom-domain',

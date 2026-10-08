@@ -15,21 +15,24 @@ import {
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 	type ZeropsImportDocument,
 } from '@fabrika/provider-zerops'
-import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { type Artifact, generatedArtifacts } from '../../../installation-zerops/src/topology/artifacts'
-import { assertCorePackageIsExplicit, assertOnlyPublicService, assertZeropsHostnames } from '../../../installation-zerops/src/topology/invariants'
 import {
 	appsTopology,
+	type Artifact,
+	assertCorePackageIsExplicit,
+	assertOnlyPublicService,
+	assertZeropsHostnames,
 	type CompiledDocument,
 	type CompiledTopology,
 	compileTopology,
 	fabrikaTopologies,
+	generatedArtifacts,
 	platformTopology,
 	PROXY_HOSTNAME,
-} from '../../../installation-zerops/src/topology/topology'
-import { validateYaml } from '../../../installation-zerops/src/topology/validate'
+	validateYaml,
+} from '@fabrika/provider-zerops/installation/topology'
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { REPO_ROOT } from '../render'
 
 const compiled = fabrikaTopologies().map((topology) => compileTopology(topology, 'prod'))

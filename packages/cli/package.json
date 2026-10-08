@@ -34,8 +34,6 @@
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/builder": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
-		"@fabrika/installation-cloudflare": "workspace:*",
-		"@fabrika/installation-zerops": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*"

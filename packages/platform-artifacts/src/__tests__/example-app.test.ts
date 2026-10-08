@@ -28,14 +28,13 @@ import {
 	type ZeropsRuntimeTarget,
 	type ZeropsSourcePort,
 } from '@fabrika/provider-zerops'
+import { assertOnlyPublicService, assertZeropsHostnames, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { assertOnlyPublicService, assertZeropsHostnames } from '../../../installation-zerops/src/topology/invariants'
-import { validateYaml } from '../../../installation-zerops/src/topology/validate'
 import { parseZeropsDescriptor } from '../../../provider-zerops/src/descriptor'
 import { REPO_ROOT } from '../render'
 

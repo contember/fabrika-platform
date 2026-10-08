@@ -73,3 +73,53 @@ this one import.
   layer. Structured application logs remain enabled and redact request queries.
 - **Never log credentials or secret values** — including an error object from a failed `wrangler`
   invocation, whose output can quote a clone URL with an embedded token.
+
+## Platform installation (`./installation`, `src/installation/`)
+
+The Cloudflare implementation of `@fabrika/provider-contract/installation`; `@fabrika/cli` loads it.
+`fabrika platform init --provider=cloudflare <account>` stands up an account's platform base and
+scaffolds a workflow that deploys IAM, Operations, then the runner/control pair — every stage through
+`platform deploy`, because each names a platform resource. `plan` and `deploy` take either the
+runner/control pair (`--runner-config` + `--worker-config`) or one component (`--component-config`);
+the two forms are mutually exclusive. Each component deploys through `deployCloudflareConfig`.
+
+- `installation.ts` — `installationCli`: init, plan, and deploy dispatch. `index.ts` — the subpath surface.
+- `init.ts` — the orchestrator: CF token → account/zones → smart-default prompts → vault key → provisioning
+  key → GitHub App → scaffold repo → GitHub Environment → trigger.
+- `scaffold.ts` — which files `<org>/fabrika-platform` carries (`templates/`: `platform.yml`, `fabrika.ref`,
+  `README.md`, `gitignore`) and the legacy two-ref migration that must stop a refresh.
+- `cloudflare.ts` — CF API helpers and response schemas. `envfile.ts` — env-file resume.
+- Prompts, console formatting, child processes, `gh`, the GitHub Environment write, the repository
+  mechanics and the GitHub App manifest handshake live in `@fabrika/installation-init`. This code decides
+  only the Cloudflare-specific flow, homepage, webhook URL, visibility and installation prompt. The
+  Cloudflare and Zerops inits are not mirror images (ADR-0027).
+
+Invariants:
+
+- **NEVER print a secret VALUE.** The single intentional exception is the vault KEK, printed ONCE (the
+  operator must capture it — unrecoverable if lost). Secret values flow only into the env file, `gh`
+  over stdin, and the GitHub Environment.
+- **The env file lives at `$XDG_CONFIG_HOME/fabrika/cloudflare/<account>/.env`** (0700 directory, 0600
+  file), never in the cwd — it holds the account API token, the vault KEK and IAM's signing key, and the
+  cwd is routinely an unrelated repository. `envPath()` is the single source of that path and
+  `openEnvFile(account)` binds it, loads it into `process.env` (Bun no longer auto-loads it) and must run
+  before any `persistEnv`. Never claim the file is gitignored. A `$PWD/.env` is warned about, because Bun
+  loaded it first and its values outrank the per-account file.
+- **Idempotent + resumable.** Every captured value persists to that file; a re-run reuses external
+  resources (GitHub App, vault key) instead of orphaning them.
+- **App visibility is DERIVED:** public iff any install repo is in a different org than the App's owner org
+  (GitHub forbids a private App installing cross-org). Same-org stays private.
+- **The provisioning key is a SEEDED `px_` key:** the CLI generates one opaque `px_` bearer
+  (`FABRIKA_IAM_PROVISIONING_KEY`); IAM admits a bearer matching it as a synthetic admin (`resolveCaller`),
+  and fabrika reconciles its schema with it. No local IAM mint. Stage 1 deploys IAM from the shared
+  `contember/fabrika-platform` checkout and needs its OIDC and signing config in the Environment.
+- **Operations deploys between IAM and control.** Init records `OPERATIONS_HOSTNAME`, creates
+  `OPERATIONS_SYNC_KEY`, and supplies the public IAM issuer. The Operations hostname exposes only ingest
+  and source-map upload; control reaches catalog and operator surfaces through a private service binding.
+- **`platform init` triggers the scaffolded GitHub Actions pipeline; it does not deploy from the laptop.**
+  `platform plan` and `platform deploy` execute the runner and control configs and remain distinct from
+  app deployment.
+- **Runner images are account-owned.** Every scaffolded workflow run builds the image from the exact
+  `fabrika.ref` checkout into the target account. Upstream CI never publishes a shared runner image.
+- **Scaffold pushes never deploy.** Both initial and refresh commits use `[skip ci]`; init dispatches the
+  workflow explicitly only after it writes the target GitHub Environment.

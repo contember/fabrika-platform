@@ -98,3 +98,110 @@ bun test
   manifest (compiled from the members core passes, `src/namespace/manifest.ts`) and the IAM variables,
   records the version untriggered, uploads, records `triggered`, then sends the build on a signal that only
   a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for `reconcile`.
+
+## Platform installation (`./installation`, `src/installation/`)
+
+The Zerops implementation of `@fabrika/provider-contract/installation` plus the typed platform topology
+and the generated installation data; `@fabrika/cli` loads it. Six commands; the full surface is the
+`usage` string in `src/installation/index.ts`, which the generated sidecar workflow is written against:
+
+- `install` CREATES an installation, in an empty project (`--project-id`) or one it creates
+  (`--create-project`). It is the only command that creates one; `init` and `deploy` refuse to.
+- `init <installation>` creates and maintains the operator's sidecar repository.
+- `plan` validates the generated artifacts against the static installation schemas.
+- `deploy` brings an EXISTING installation to this checkout, unattended and idempotently.
+- `admin --email=<address>` admits the first human.
+- `upgrade --to=<tag>` is the roll: it checks the tag on the public repository, writes `fabrika.ref`,
+  commits it without `[skip ci]` (the push IS the trigger), pushes, prints the run URL and watches it.
+
+The bring-up is two passes, because `zeropsSubdomain` names nothing until the proxy has deployed HTTP
+ports while the manifest must be written before the proxy is built: pass 1 gives the proxy the legal
+EMPTY manifest and builds it; only then are the three public hosts READ off the subdomains it published.
+On Zerops `platform deploy` owns the WHOLE ordered sequence; on Cloudflare the scaffolded workflow keeps
+the order ([ADR-0027](../../docs/decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)).
+
+Layout (under `src/installation/`):
+
+- `index.ts` — `installationCli`, the `usage` text, the real collaborators, and the values
+  `@fabrika/platform-artifacts` renders from. `topology/index.ts` is the `./installation/topology` subpath.
+- `deploy.ts` + `deploy-options.ts` — the ordered deploy sequence and its flags.
+- `install.ts` — the two passes, prompts and stable exports. `install-environment.ts` — the environment
+  matrix and writes. `install-project.ts` — project creation. `install-provisioning.ts` — service
+  provisioning. `install-collaborators.ts`, `install-options.ts`, `secrets.ts` (the six generated values).
+- `init.ts` — the sidecar-repository flow. `sidecar.ts` + `templates/` — what the sidecar contains + the tag rule.
+- `admin.ts` + `admin-options.ts` — the first administrator. `machine-key.ts` — the block `admin` and `init` end with.
+- `manifest.ts` — composing platform apps with application entries. `hosts.ts` — where an installation
+  answers. `log.ts` — progress, with no secret-taking helper. `proxy-manifest.ts` — the manifest TEMPLATE
+  type and `resolvePlatformProxyManifest`.
+- `topology/` — `setups.ts` (typed setups), `topology.ts` + `invariants.ts`, `artifacts.ts` (every
+  generated artifact, as values), `installation-schemas.ts` + `validate.ts` (static schemas).
+- `generated/` — the proxy manifest template and the console schema, as DATA. Never hand-edit: the
+  private [`@fabrika/platform-artifacts`](../platform-artifacts/CLAUDE.md) writes them, the root
+  `zerops.yaml` and the import YAMLs (`gen`, `gen:check`, `check:schemas`).
+
+Invariants:
+
+- **Nothing here imports a private package, not even as a devDependency.** Generators that need
+  `@fabrika/control` live in `@fabrika/platform-artifacts`; their output arrives as DATA in `generated/`.
+  `release:smoke` imports `./installation` from the tarball, so a private import fails the release.
+- The generated root `zerops.yaml` is the only platform build specification. No per-package `zerops.yaml`.
+- **`--create-project` builds its project document from the SAME compiled topology as the services
+  import**, because `envIsolation` and `corePackage` are settable at project CREATION only — a `project:`
+  block with `services: []`, rendered by `renderYaml`. The id is printed BEFORE the wait for `ACTIVE`, so
+  an interrupted run resumes with `--project-id=<id>`.
+- Keep credentials out of generated artifacts. Do not claim real-account support from schema validation
+  or dry runs. Preserve the import-without-code → write service secrets → deploy order; `install` is it.
+- **`install` GENERATES credentials** (six secrets plus a minted Zerops integration token) and prints exactly
+  ONE value — the provisioning key, once, at the end, for `init`. IAM and Control keep remote copies.
+- **`install` refuses a non-terminal stdin unless `--yes` is passed** (`installPrompts`, before anything is
+  contacted). Every confirmation defaults to yes, so a pipe of blank lines would consent to everything.
+  `--yes` has no environment variable.
+- **`install` is a BRING-UP, never a reconcile.** It refuses a project that already carries its generated
+  secret KEYS (by key, never by value) — re-rolling the vault KEK is unrecoverable, re-rolling signing
+  keys logs everyone out — and skips the provisioning import when the services exist, because
+  `startWithoutCode` at a service carrying code activates an EMPTY app version. A partial set is refused.
+- **The import step WAITS on every process it is handed** before reading or writing anything: services
+  are created ~15 s apart and hold NO environment until they leave `NEW`. Never replace the wait with a
+  sleep or assume the process count (1 per managed, 2 per runtime service). A service already `NEW` at
+  start is refused.
+- **`install` never restates the deploy order.** Pass 2 is `deployPlatform`; pass 1 reuses
+  `deployPlatformService` for the proxy alone.
+- **`platform deploy` builds iam and operations AT ONCE, then proxy, then control — the proxy's position
+  is a SECURITY property.** The application enforces nothing (ADR-0022), so control at a new version
+  behind the previous manifest is an open `/api/*`. Operations owns `operationsdb` and
+  `operationsstorage`; only the proxy may expose its ingest and source-map paths.
+- **There is no `source` service (ADR-0029).** A leftover one is ignored with one warning and never deleted.
+- **`platform deploy` MERGES the proxy manifest, never replaces it.** An application on the light tier
+  shares the platform proxy's `FABRIKA_PROXY_MANIFEST_JSON`; an entry on a platform host is superseded and
+  reported.
+- **`platform deploy` writes no credential and reads every credential from the environment.** No `--token`,
+  no `--admin-key`; an unknown flag is an error.
+- **`platform init` keeps deployment credentials off disk and writes nothing to Zerops.** It reads
+  `control` and `proxy` only to print origins. GitHub App setup is the Control UI's; init never touches a
+  GitHub App key, webhook secret or XDG recovery file. It confirms before every step that leaves the disk;
+  declining a write stops and prints what to run.
+- **Keep the sidecar pin a published TAG** (`assertPinnedTag` and the workflow). Install and deploy require
+  `--source-dir`, the clean checkout containing the executing module (`installation-source.ts` resolves the
+  repository root from its own path). One committed archive is prepared before remote writes and shared by
+  both passes; mutable Git-source flags are refused; no fallback after an upload failure. Namespace proxy
+  source identity is a separate contract (ADR-0045).
+- **The sidecar Environment holds no admission list.** No bootstrap-admin variable is written.
+- **`platform admin` writes a CROSS-APP (`app: null`) `admin` grant and prints the enrollment URL ONCE.**
+  An app-scoped grant leaves the Access plane refusing while Delivery and Operations work. A re-run
+  changes nothing; an outstanding enrollment is REPORTED and only `--reissue` replaces it. The mechanics
+  are `@fabrika/installation-init`'s `ensureFirstAdministrator`; `admin.ts` holds only where IAM answers.
+- **`machine-key.ts` is built from an ORIGIN and variable NAMES only**, so no key can leak through it.
+  `init` prints no origin when `control`'s `FABRIKA_IAM_ISSUER` is absent or disagrees with the named
+  hosts. The block must survive being PASTED: the origin is an `export`, every other line a `#` comment.
+- **Every write is read-compare-write**, so a re-run changes nothing; `putServiceEnv` stays write-first
+  because it must work on a never-deployed service.
+- Every managed service names its `profile` explicitly (omitting it buys `oltp-production` on HA).
+- Every setup declares `run.healthCheck` and `deploy.readinessCheck`, every duration a quoted Go duration
+  in `[10s, 1h]` (`topology/installation-schemas.ts` declares the six probe fields as strings).
+- A PostgreSQL URL is always `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
+  port is the only one `postgresql:ha@18` offers, and it keeps the session state the migration lock needs.
+- **The proxy manifest is a committed template plus a deploy-time placement.** The template is
+  installation-independent and `gen:check` proves it matches the gate modules; hosts and scheme are
+  arguments. `parseProxyManifest` refuses an app with no hosts, hence a separate template type.
+- `enableSubdomainAccess` in a generated artifact is a DECLARATION, never a mechanism; the artifact's
+  header says so. Do not remove that note without removing the field.

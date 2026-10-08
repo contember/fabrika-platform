@@ -3,12 +3,10 @@
 
 import notesConfig from '@fabrika/example-zerops-app'
 import { useSharedPostgres } from '@fabrika/provider-zerops'
+import { compileTopology, fabrikaTopologies, generatedArtifacts, parseYaml, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { generatedArtifacts } from '../../../installation-zerops/src/topology/artifacts'
-import { compileTopology, fabrikaTopologies } from '../../../installation-zerops/src/topology/topology'
-import { parseYaml, validateYaml } from '../../../installation-zerops/src/topology/validate'
 import { REPO_ROOT } from '../render'
 
 const read = (path: string): string => readFileSync(resolve(REPO_ROOT, path), 'utf8')

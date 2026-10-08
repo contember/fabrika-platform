@@ -12,10 +12,9 @@
 // The proxy manifest template is not a Zerops document and is checked against the proxy's OWN parser
 // instead, by the generator that builds it.
 
+import { type Artifact, assertArtifactMatchesSchema, generatedArtifacts } from '@fabrika/provider-zerops/installation/topology'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { type Artifact, generatedArtifacts } from '../../installation-zerops/src/topology/artifacts'
-import { assertArtifactMatchesSchema } from '../../installation-zerops/src/topology/validate'
 import { platformConsoleSchemaArtifact } from './console-schema'
 import { platformProxyManifestArtifact } from './proxy-manifest'
 

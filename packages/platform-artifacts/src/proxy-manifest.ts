@@ -1,6 +1,6 @@
 // The three apps a platform installation's proxy fronts — the third manifest generator
 // [backlog 58](../../../docs/backlog/58-generate-the-platform-installations-proxy-manifest.md) asked
-// for, beside the topology `@fabrika/installation-zerops` owns.
+// for, beside the topology `@fabrika/provider-zerops/installation` owns.
 //
 // This is the ONE place the platform's app list is declared. The local composition builds its manifest
 // from it (`packages/local-stack/src/prepare.ts`) and the committed artifact is rendered from it, so a
@@ -9,18 +9,17 @@
 // `public` for two days while `CONTROL_PROXY_GATES` said otherwise, and nothing reported it.
 //
 // DEV-TIME ONLY: it imports `CONTROL_PROXY_GATES` from the PRIVATE `@fabrika/control`, which is why it
-// lives in this private package. What `@fabrika/installation-zerops` ships instead is its
-// `src/proxy-manifest.ts` (the types and `resolvePlatformProxyManifest`) plus
-// `src/generated/platform-proxy-manifest.ts` (the gates, as data) — a deploy command reads those two and
+// lives in this private package. What `@fabrika/provider-zerops/installation` ships instead is its
+// `src/installation/proxy-manifest.ts` (the types and `resolvePlatformProxyManifest`) plus
+// `src/installation/generated/platform-proxy-manifest.ts` (the gates, as data) — a deploy command reads those two and
 // never reaches this file.
 
 import type { AppGates, GateRule } from '@fabrika/auth-core'
 import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
-import type { PlatformProxyApp, PlatformProxyManifestTemplate } from '../../installation-zerops/src/proxy-manifest'
-import { resolvePlatformProxyManifest } from '../../installation-zerops/src/proxy-manifest'
-import type { Artifact } from '../../installation-zerops/src/topology/artifacts'
+import { type PlatformProxyApp, type PlatformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/provider-zerops/installation'
+import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
 export {
 	type PlatformProxyApp,
@@ -29,7 +28,7 @@ export {
 	type PlatformProxyPlacement,
 	type PlatformProxyService,
 	resolvePlatformProxyManifest,
-} from '../../installation-zerops/src/proxy-manifest'
+} from '@fabrika/provider-zerops/installation'
 
 /**
  * IAM's own app id.
@@ -60,7 +59,7 @@ const IAM_PROXY_GATES: AppGates = { rules: [{ path: '/*', kind: 'public' }] }
  * The apps, in manifest order.
  *
  * `port` is the public listener each answers on, and these three are the first three of
- * `PROXY_PUBLIC_PORTS` in `installation-zerops/src/topology/setups.ts` (8081 is the unpublished health
+ * `PROXY_PUBLIC_PORTS` in `provider-zerops/src/installation/topology/setups.ts` (8081 is the unpublished health
  * listener); the rest of that pool are application slots. Written out rather than sliced off that list on purpose: on the subdomain path
  * the port IS the hostname, so reassigning one must show up as a diff in the committed artifact instead
  * of silently moving IAM's public address.
@@ -75,7 +74,7 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 export const platformProxyManifestTemplate = (): PlatformProxyManifestTemplate => ({ apps: PLATFORM_PROXY_APPS })
 
 /** Repo-relative path of the committed template. */
-export const PLATFORM_PROXY_MANIFEST_PATH = 'packages/installation-zerops/src/generated/platform-proxy-manifest.ts'
+export const PLATFORM_PROXY_MANIFEST_PATH = 'packages/provider-zerops/src/installation/generated/platform-proxy-manifest.ts'
 
 /**
  * Distinct, legal stand-in hosts, used only to prove the template resolves. A failure under these is the

@@ -1,6 +1,6 @@
 // The first-administrator flow against the REAL IAM admin router.
 //
-// The admin tests in `@fabrika/installation-zerops` stand up a fake `/admin/rpc`, which proves the flow but not the
+// The admin tests in `@fabrika/provider-zerops/installation` stand up a fake `/admin/rpc`, which proves the flow but not the
 // CONTRACT: the input shapes are zod schemas in `packages/iam/src/admin/rpc.ts`, and the whole reason
 // this command exists is that two of them disagree about how a principal is named. So this one drives
 // `ensureFirstAdministrator` through `createIamApp` over the harness's in-memory SQLite, with the

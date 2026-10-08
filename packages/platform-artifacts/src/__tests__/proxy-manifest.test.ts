@@ -9,13 +9,18 @@
 import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
+import {
+	compileTopology,
+	fabrikaZeropsYaml,
+	platformTopology,
+	PROXY_HEALTH_PORT,
+	PROXY_PUBLIC_PORTS,
+} from '@fabrika/provider-zerops/installation/topology'
 import { encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../../../installation-zerops/src/generated/platform-proxy-manifest'
-import { fabrikaZeropsYaml, PROXY_HEALTH_PORT, PROXY_PUBLIC_PORTS } from '../../../installation-zerops/src/topology/setups'
-import { compileTopology, platformTopology } from '../../../installation-zerops/src/topology/topology'
 import {
 	PLATFORM_CONSOLE_APP_ID,
 	PLATFORM_IAM_APP_ID,

@@ -29,6 +29,11 @@
 			"bun": "./src/control.ts",
 			"types": "./src/control.ts",
 			"default": "./src/control.ts"
+		},
+		"./installation": {
+			"bun": "./src/installation/index.ts",
+			"types": "./src/installation/index.ts",
+			"default": "./src/installation/index.ts"
 		}
 	},
 	"scripts": {
@@ -39,6 +44,7 @@
 		"zod": "^3.25.76",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
