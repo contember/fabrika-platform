@@ -1,36 +1,56 @@
 /**
- * The Zerops deploy path of a contract application, in process: `fabrika.config.ts` hands its provider the gates
- * and the IAM schema the contract generates, the build compiles the Fabrika manifest, the namespace compiles its
- * proxy manifest from it, and the proxy's auth service decides each request that Caddy then forwards to `boot`.
- * The local composition runs this same chain with the real Caddy in front of it.
+ * The Zerops deploy path of a contract application, in process: `fabrika.config.ts` hands its provider the
+ * endpoint table and the IAM schema the contract compiles to, the build compiles the Fabrika manifest, the namespace
+ * compiles its proxy manifest from it, and the proxy's auth service decides each request that Caddy then forwards
+ * to `boot` with the headers Caddy copies — no harness adds the endpoint header on the way.
  */
 
-import { compileContract, gatesFromContract, schemaFromContract } from '@fabrika/app/contract'
+import { compileContract, schemaFromContract } from '@fabrika/app/contract'
+import { boot } from '@fabrika/app/implement'
 import { appSchemaSchema } from '@fabrika/auth'
-import { type MintFromKeyResult, type MintTokenResult, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import {
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
+	type MintFromKeyResult,
+	type MintTokenResult,
+	type PermissionEntry,
+	PROXY_TOKEN_HEADER,
+} from '@fabrika/auth-core'
 import { compileFabrikaManifest, defineApp, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { createVerifyService } from '@fabrika/proxy-core'
-import { parseProxyManifest } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, parseProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesApp } from '../../../app/src/__tests__/fixtures/implement/app'
 import { contract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
-import { bootApp, grant, ISSUER, keySource, token, type TokenKind } from '../../../app/src/__tests__/fixtures/implement/harness'
+import {
+	echoAssets,
+	environment,
+	frameworkEnvFor,
+	grant,
+	ISSUER,
+	keySource,
+	token,
+	type TokenKind,
+} from '../../../app/src/__tests__/fixtures/implement/harness'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { compileNamespaceProxyManifest } from '../../../provider-zerops/src/namespace/manifest'
 import { FakeIam, verifyRequest } from '../../../proxy-core/src/__tests__/helpers'
 
 const HOST = 'notes.example.com'
 const artifact = compileContract(contract, { notes: NOTE_TABLE })
+const table = contractProxyTable(artifact)
 
-const config = defineApp({
-	id: 'notes',
-	schema: schemaFromContract(artifact),
-	target: {
-		platform: 'zerops',
-		services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3', enableSubdomainAccess: false }],
-		proxy: { upstream: 'notesapi:3000', gates: gatesFromContract(artifact) },
-	},
-})
+const configWith = (proxy: { upstream: string } & ({ gates: { rules: [] } } | typeof table)) =>
+	defineApp({
+		id: 'notes',
+		schema: schemaFromContract(artifact),
+		target: {
+			platform: 'zerops',
+			services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3', enableSubdomainAccess: false }],
+			proxy,
+		},
+	})
+const config = configWith({ upstream: 'notesapi:3000', ...table })
 
 const contents = 'zerops:\n  - setup: notesapi\n'
 const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
@@ -87,12 +107,15 @@ async function throughTheProxy(caller: Caller, request: ProxiedRequest): Promise
 		return { status: decision.status, reachedApp: false, body: await decision.text() }
 	}
 	const forwarded = new Headers(headers)
-	const minted = decision.headers.get(PROXY_TOKEN_HEADER)
-	if (minted !== null) {
-		forwarded.set(PROXY_TOKEN_HEADER, minted)
+	for (const header of [PROXY_TOKEN_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]) {
+		const value = decision.headers.get(header)
+		if (value !== null && value !== '') forwarded.set(header, value)
 	}
+	if (!forwarded.has(PROXY_TOKEN_HEADER)) forwarded.delete('Authorization')
 	const body = request.body === undefined ? null : JSON.stringify(request.body)
-	const response = await bootApp(notesApp(new Map())).fetch(
+	const implementation = notesApp(new Map())
+	const app = boot(implementation, { environment: environment(frameworkEnvFor(implementation)), iam: keySource, assets: echoAssets })
+	const response = await app.fetch(
 		new Request(`https://${HOST}${request.path}`, { method: request.method, headers: forwarded, body }),
 	)
 	return { status: response.status, reachedApp: true, body: await response.text() }
@@ -101,11 +124,17 @@ async function throughTheProxy(caller: Caller, request: ProxiedRequest): Promise
 const SESSION = { Cookie: '__Host-px_session=session', 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' }
 const KEY = { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' }
 
-describe('a contract application deploys to Zerops with its generated gates and schema', () => {
-	test('the Fabrika manifest carries both, and the namespace proxy manifest the gates, verbatim', () => {
+describe('a contract application deploys to Zerops with its endpoint table and schema', () => {
+	test('the Fabrika manifest carries both, and the namespace proxy manifest the table, verbatim', () => {
 		expect(manifest.app.schema).toEqual(schemaFromContract(artifact))
-		expect(manifest.target.proxy).toMatchObject({ gates: gatesFromContract(artifact) })
-		expect(proxyManifest.apps).toMatchObject([{ id: 'notes@prod', gates: gatesFromContract(artifact) }])
+		expect(manifest.target.proxy).toEqual({ upstream: 'notesapi:3000', ...table })
+		expect(proxyManifest.apps).toEqual([{ id: 'notes@prod', hosts: [HOST], upstream: 'notesapi:3000', scheme: 'https', ...table }])
+	})
+
+	test('a contract application behind gates is refused at build', () => {
+		expect(() => compileFabrikaManifest(configWith({ upstream: 'notesapi:3000', gates: { rules: [] } }), 'prod', SOURCE_DESCRIPTOR)).toThrow(
+			'a contract application is protected by its endpoint table',
+		)
 	})
 
 	test('the schema the deploy reconciles is a contract schema IAM accepts', () => {
@@ -141,13 +170,23 @@ describe('a contract application deploys to Zerops with its generated gates and 
 		expect(sent).toMatchObject({ status: 401, reachedApp: false })
 	})
 
-	test('a session on the machine path passes the coarse gate and the framework refuses the caller kind', async () => {
+	test('a session on the machine path is 401 at the proxy: no fall-through to the SPA', async () => {
 		const sent = await throughTheProxy({ session: await minted('user', [inW1('notes.write')]) }, {
 			method: 'POST',
 			path: '/machine/importNotes',
 			headers: SESSION,
 			body: { workspaceId: 'w1', titles: ['a'] },
 		})
-		expect(sent).toMatchObject({ status: 403, reachedApp: true })
+		expect(sent).toMatchObject({ status: 401, reachedApp: false })
+	})
+
+	test('a reader on a write procedure is 403 at the proxy', async () => {
+		const sent = await throughTheProxy({ session: await minted('user', [inW1('notes.read')]) }, {
+			method: 'POST',
+			path: '/api/notes.create',
+			headers: SESSION,
+			body: { workspaceId: 'w1', title: 'x' },
+		})
+		expect(sent).toMatchObject({ status: 403, reachedApp: false })
 	})
 })

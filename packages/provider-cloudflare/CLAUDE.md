@@ -86,6 +86,10 @@ this one import.
   order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
+- **A contract application's proxy carries its endpoint table, never gates.** `createCloudflareProxyWorker`
+  takes `endpoints: contractProxyTable(artifact)` for a contract application and `gates` for an
+  installation service, never both; `assertAuthoredGraph` refuses a proxy with gates when the app's
+  schema says `contract: true`. Its `IAM` binding is also the delegation issuer the proxy asks for grants.
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.

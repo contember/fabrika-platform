@@ -288,6 +288,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		stateNamespace: stateNamespace(loaded.config, run),
 		platformResources,
 		iamAppId: appEnvironmentId(run.appId, run.env),
+		contract: loaded.config.schema?.contract === true,
 	})
 	const env: StepEnv = {
 		config: loaded.config,

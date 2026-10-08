@@ -52,6 +52,9 @@ export interface ContractProxyApp extends ProxyAppBase {
 	snapshot: string
 }
 
+/** What a producer adds to a contract app's placement: the output of `contractProxyTable`. */
+export type ContractProxyTable = Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot'>
+
 /** The manifest says which form an app is protected by: `endpoints` instead of `gates`. */
 export type ProxyApp = GateProxyApp | ContractProxyApp
 
@@ -225,7 +228,7 @@ export const proxyAppSchema = z.union([gateProxyAppSchema, contractProxyAppSchem
  * The manifest form of a compiled contract: every endpoint's rules with their digest and delegation, the reserved
  * prefixes, and the contract digest. Producers call this; they never assemble rows by hand.
  */
-export function contractProxyTable(artifact: ContractArtifact): Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot'> {
+export function contractProxyTable(artifact: ContractArtifact): ContractProxyTable {
 	return {
 		endpoints: artifact.endpoints.map((row): ProxyEndpointRow => {
 			const rules = { id: row.id, method: row.method, path: row.path, admission: row.admission }

@@ -1,4 +1,4 @@
-import { FABRIKA_PROXY_MANIFEST_JSON, isProxyHost, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { FABRIKA_PROXY_MANIFEST_JSON, isContractProxyApp, isProxyHost, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { Container, D1Database, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 import { CLOUDFLARE_PROXY_WORKER_DIR, CLOUDFLARE_PROXY_WORKER_MAIN, IAM_APPLICATION_ENTRYPOINT, IAM_SERVICE } from './proxy'
@@ -285,13 +285,16 @@ export interface AuthoredGraphLimits {
 	readonly platformResources: 'refuse' | 'allow'
 	/** The IAM application id `<app>@<env>` of the deployment, the only audience its proxy may mint for. */
 	readonly iamAppId: string
+	/** A contract application (its schema says `contract: true`) is served behind its endpoint table, never gates. */
+	readonly contract: boolean
 }
 
 /**
  * The proxy mints for the id its manifest names, so an authored manifest naming `notes@stage` or a
- * platform audience would carry another environment's grants, or cross-app ones, into this app.
+ * platform audience would carry another environment's grants, or cross-app ones, into this app. A contract
+ * application behind gates would be served with no endpoint decision, so it would answer 503 to everything.
  */
-const assertProxyAudience = (proxy: Worker, iamAppId: string): void => {
+const assertProxyAudience = (proxy: Worker, { iamAppId, contract }: AuthoredGraphLimits): void => {
 	const raw = proxy.options.vars?.[FABRIKA_PROXY_MANIFEST_JSON]
 	const manifest = typeof raw === 'string' ? parseProxyManifestJson(raw) : null
 	if (manifest === null) {
@@ -300,6 +303,11 @@ const assertProxyAudience = (proxy: Worker, iamAppId: string): void => {
 	for (const app of manifest.apps) {
 		if (app.id !== iamAppId) {
 			throw new Error(`cloudflare: proxy Worker \`${proxy.options.name}\` mints for \`${app.id}\`; this deployment is \`${iamAppId}\``)
+		}
+		if (contract && !isContractProxyApp(app)) {
+			throw new Error(
+				`cloudflare: proxy Worker \`${proxy.options.name}\` protects a contract application with gates; pass its endpoint table (\`contractProxyTable(artifact)\`)`,
+			)
 		}
 	}
 }
@@ -370,7 +378,7 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 	}
 	visit(root)
 	if (refuse && isProviderProxyWorker(root)) {
-		assertProxyAudience(root, limits.iamAppId)
+		assertProxyAudience(root, limits)
 	}
 }
 

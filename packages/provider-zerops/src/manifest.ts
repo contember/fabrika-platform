@@ -389,6 +389,10 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
 	selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
+	if (proxy !== undefined && schema?.contract === true && !('endpoints' in proxy)) {
+		// A contract application is served only behind its endpoint table; behind gates it would answer 503.
+		throw new Error('invalid fabrika manifest: a contract application is protected by its endpoint table (`contractProxyTable(artifact)`), not gates')
+	}
 	if (proxy !== undefined) {
 		const separator = proxy.upstream.indexOf(':')
 		const upstreamHostname = separator === -1 ? proxy.upstream : proxy.upstream.slice(0, separator)

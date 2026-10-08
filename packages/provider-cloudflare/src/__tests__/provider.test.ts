@@ -1,10 +1,11 @@
-import { encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, encodeProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type {
 	CloudflareAppConfig,
 	CloudflareAppConfigInput,
@@ -53,6 +54,9 @@ const INSTALLED_PROXY_DIR = '/repo/node_modules/@fabrika/provider-cloudflare/src
 
 /** The proxy root owns the public route; the application Worker is reached only through `APP`. */
 const proxyRouting = (app: Worker, routes: Worker['options']['routes'], iamAppId = 'demo@stage'): Worker =>
+	proxyRoutingWith(app, routes, proxyManifest(iamAppId))
+
+const proxyRoutingWith = (app: Worker, routes: Worker['options']['routes'], manifest: string): Worker =>
 	new Worker({
 		dir: INSTALLED_PROXY_DIR,
 		name: 'demo-proxy',
@@ -60,7 +64,7 @@ const proxyRouting = (app: Worker, routes: Worker['options']['routes'], iamAppId
 		bindings: { APP: app },
 		main: './proxy-worker.ts',
 		routes,
-		vars: { FABRIKA_PROXY_MANIFEST_JSON: proxyManifest(iamAppId) },
+		vars: { FABRIKA_PROXY_MANIFEST_JSON: manifest },
 	})
 
 const proxyManifest = (id: string): string =>
@@ -762,6 +766,29 @@ describe('Cloudflare provider', () => {
 		await expect(deploy(rec, config({ resources: () => unreadable }))).rejects.toThrow('carries no readable proxy manifest')
 		expect(rec.provisions).toHaveLength(0)
 		await expect(deploy(rec, config({ resources: () => proxyRouting(appWorker(), route) }))).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test('refuses a contract application behind gates and deploys it behind its endpoint table', async () => {
+		const route = [{ pattern: 'stage.example.com', custom_domain: true }]
+		const schema = { scopes: [], actions: [], roles: {}, contract: true }
+		await expect(deploy(rec, config({ schema, resources: () => proxyRouting(appWorker(), route) }))).rejects.toThrow(
+			'protects a contract application with gates',
+		)
+		expect(rec.provisions).toHaveLength(0)
+		const table = proxyRoutingWith(
+			appWorker(),
+			route,
+			encodeProxyManifestJson({
+				apps: [{
+					id: 'demo@stage',
+					hosts: ['stage.example.com'],
+					upstream: 'APP',
+					scheme: 'https',
+					...contractProxyTable(notesArtifact),
+				}],
+			}),
+		)
+		await expect(deploy(rec, config({ schema, resources: () => table }))).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('keeps the Worker options an application config legitimately sets', async () => {

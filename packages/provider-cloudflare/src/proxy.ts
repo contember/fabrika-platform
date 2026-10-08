@@ -1,8 +1,8 @@
 import type { AppGates } from '@fabrika/auth'
-import { encodeProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { type ContractProxyTable, encodeProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { ServiceReference, Worker } from 'oblaka-iac'
 
-export interface CloudflareProxyWorkerOptions {
+interface CloudflareProxyWorkerBase {
 	/** Name of the proxy Worker before the environment prefix is applied by oblaka. */
 	readonly name: string
 	/** The application Worker. It must not have a public route of its own. */
@@ -11,8 +11,6 @@ export interface CloudflareProxyWorkerOptions {
 	readonly appId: string
 	/** Host matched by the proxy manifest. Use the public custom domain when one exists. */
 	readonly appHost: string
-	/** Ordered gate rules evaluated by the shared proxy authorizer. */
-	readonly gates: AppGates
 	/** Optional Cloudflare custom domain for the proxy Worker. */
 	readonly domain?: string
 	/** IAM service name. The global default is the platform IAM Worker. */
@@ -20,6 +18,14 @@ export interface CloudflareProxyWorkerOptions {
 	/** IAM origin used for login redirects and token issuer validation. */
 	readonly iamUrl?: string
 }
+
+/**
+ * What the proxy enforces: a contract application's endpoint table (`contractProxyTable(artifact)`), or the ordered
+ * gates of an installation service. Never both.
+ */
+export type CloudflareProxyWorkerOptions =
+	| (CloudflareProxyWorkerBase & { readonly endpoints: ContractProxyTable; readonly gates?: never })
+	| (CloudflareProxyWorkerBase & { readonly gates: AppGates; readonly endpoints?: never })
 
 /** Where `createCloudflareProxyWorker` points its Worker; `assertAuthoredGraph` recognises the proxy by it. */
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
@@ -50,17 +56,15 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 	}
 
 	const local = options.appHost === 'localhost'
-	const manifest: ProxyManifest = {
-		apps: [{
-			id: options.appId,
-			hosts: local ? ['localhost', '127.0.0.1'] : [options.appHost],
-			upstream: 'APP',
-			gates: options.gates,
-			// Cloudflare terminates TLS at the edge and a route is always https; only a localhost
-			// binding is reached over plain HTTP.
-			scheme: local ? 'http' : 'https',
-		}],
-	}
+	const placement = {
+		id: options.appId,
+		hosts: local ? ['localhost', '127.0.0.1'] : [options.appHost],
+		upstream: 'APP',
+		// Cloudflare terminates TLS at the edge and a route is always https; only a localhost
+		// binding is reached over plain HTTP.
+		scheme: local ? 'http' : 'https',
+	} satisfies Omit<ProxyApp, 'gates' | 'endpoints'>
+	const manifest: ProxyManifest = { apps: [proxyApp(placement, options)] }
 	const domain = options.domain?.trim()
 
 	return new Worker({
@@ -80,4 +84,15 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 			APP: options.app,
 		},
 	})
+}
+
+function proxyApp(placement: Omit<ProxyApp, 'gates' | 'endpoints'>, options: CloudflareProxyWorkerOptions): ProxyApp {
+	if (options.endpoints !== undefined && options.gates !== undefined) {
+		throw new Error("cloudflare proxy carries a contract application's endpoint table or gates, never both")
+	}
+	if (options.endpoints !== undefined) {
+		const { endpoints, reservedPrefixes, snapshot } = options.endpoints
+		return { ...placement, endpoints, reservedPrefixes, snapshot }
+	}
+	return { ...placement, gates: options.gates }
 }

@@ -1,18 +1,29 @@
 /**
- * A contract application behind the Cloudflare proxy Worker that `fabrika.config.ts` builds with the gates
- * `gatesFromContract` generates: each request goes through the proxy decision into `boot`'s real pipeline. The
- * proxy admits a credential kind by path; the framework then refuses the caller kind the endpoint does not take.
+ * A contract application behind the Cloudflare proxy Worker that `fabrika.config.ts` builds with the contract's
+ * endpoint table: each request goes through the proxy's per-endpoint decision into `boot`'s real pipeline, with
+ * no harness adding the endpoint header on the way.
  */
 
-import { compileContract, gatesFromContract } from '@fabrika/app/contract'
+import { compileContract } from '@fabrika/app/contract'
+import { boot } from '@fabrika/app/implement'
 import type { MintFromKeyResult, MintTokenResult, PermissionEntry } from '@fabrika/auth-core'
 import { silentLogger } from '@fabrika/proxy-core'
-import { parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
 import { notesApp } from '../../../app/src/__tests__/fixtures/implement/app'
 import { contract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
-import { APP_ID, bootApp, grant, ISSUER, keySource, token, type TokenKind } from '../../../app/src/__tests__/fixtures/implement/harness'
+import {
+	APP_ID,
+	echoAssets,
+	environment,
+	frameworkEnvFor,
+	grant,
+	ISSUER,
+	keySource,
+	token,
+	type TokenKind,
+} from '../../../app/src/__tests__/fixtures/implement/harness'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { FakeIam } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker } from '../proxy'
@@ -20,7 +31,7 @@ import { createCloudflareProxyHandler } from '../proxy-worker'
 
 const HOST = 'notes.example.com'
 const artifact = compileContract(contract, { notes: NOTE_TABLE })
-const gates = gatesFromContract(artifact)
+const table = contractProxyTable(artifact)
 
 const proxyWorker = createCloudflareProxyWorker({
 	name: 'notes-proxy',
@@ -36,7 +47,7 @@ const proxyWorker = createCloudflareProxyWorker({
 	}),
 	appId: APP_ID,
 	appHost: HOST,
-	gates,
+	endpoints: table,
 	iamUrl: ISSUER,
 })
 
@@ -60,7 +71,8 @@ interface Caller {
 }
 
 async function proxyFor(caller: Caller) {
-	const app = bootApp(notesApp(new Map()))
+	const implementation = notesApp(new Map())
+	const app = boot(implementation, { environment: environment(frameworkEnvFor(implementation)), iam: keySource, assets: echoAssets })
 	const iam = new FakeIam({
 		jwks: await keySource.getJwks(),
 		...(caller.session === undefined ? {} : { mintToken: caller.session }),
@@ -91,9 +103,23 @@ function post(path: string, body: unknown, headers: Record<string, string>): Req
 
 const SESSION = { Cookie: '__Host-px_session=session', 'Sec-Fetch-Site': 'same-origin' }
 
-describe('a contract application behind its generated gates on Cloudflare', () => {
-	test('the proxy Worker bakes the generated gates into its manifest verbatim', () => {
-		expect(parseProxyManifestJson(bakedManifest())?.apps).toMatchObject([{ gates }])
+describe('a contract application behind its endpoint table on Cloudflare', () => {
+	test('the proxy Worker bakes the endpoint table into its manifest verbatim', () => {
+		expect(parseProxyManifestJson(bakedManifest())?.apps).toEqual([{ id: APP_ID, hosts: [HOST], upstream: 'APP', scheme: 'https', ...table }])
+	})
+
+	test('a proxy Worker given both a table and gates is refused', () => {
+		const app = new Worker({
+			dir: '.',
+			name: 'notes-app',
+			main: './src/index.ts',
+			compatibility_flags: [],
+			bindings: {},
+			workers_dev: false,
+			routes: [],
+		})
+		const both = { name: 'notes-proxy', app, appId: APP_ID, appHost: HOST, endpoints: table, gates: { rules: [] }, iamUrl: ISSUER }
+		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [both])).toThrow('endpoint table or gates, never both')
 	})
 
 	test('an anonymous health check reaches the application without a token', async () => {
@@ -123,10 +149,20 @@ describe('a contract application behind its generated gates on Cloudflare', () =
 		expect(reached()).toBe(0)
 	})
 
-	test('a session on the machine path falls through to the SPA gate, and the framework refuses the caller kind', async () => {
+	test('a session on the machine path is 401 at the proxy: no fall-through to the SPA', async () => {
 		const { handler, reached } = await proxyFor({ session: await minted('user', [inW1('notes.write')]) })
 		const response = await handler(post('/machine/importNotes', { workspaceId: 'w1', titles: ['a'] }, SESSION))
-		expect(reached()).toBe(1)
-		expect(response.status).toBe(403)
+		expect(reached()).toBe(0)
+		expect(response.status).toBe(401)
+	})
+
+	test('a person key on the machine path, and a reader on a write procedure, are 403 at the proxy', async () => {
+		const keyed = await proxyFor({ key: await minted('user', [inW1('notes.write')]) })
+		expect((await keyed.handler(post('/machine/importNotes', { workspaceId: 'w1', titles: ['a'] }, { Authorization: 'Bearer px_key' }))).status).toBe(
+			403,
+		)
+		const reader = await proxyFor({ session: await minted('user', [inW1('notes.read')]) })
+		expect((await reader.handler(post('/api/notes.create', { workspaceId: 'w1', title: 'x' }, SESSION))).status).toBe(403)
+		expect(keyed.reached() + reader.reached()).toBe(0)
 	})
 })

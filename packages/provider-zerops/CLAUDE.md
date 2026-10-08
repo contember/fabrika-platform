@@ -109,6 +109,10 @@ bun test
   `appVersionNotFound` counts as deleted). `triggered: true` → settle ONLY by polling, never by deletion;
   past run start + 75 min a non-terminal version is abandoned with a best-effort `cancelBuild`. A lost lease
   deletes and cancels nothing. Any other checkpoint shape fails the run without a platform call.
+- **A contract application's proxy target carries its endpoint table, never gates.** `target.proxy` is
+  `{ upstream, gates }` or `{ upstream, ...contractProxyTable(artifact) }`; the artifact parser refuses
+  both forms at once and a row whose digest does not describe its rules, and the manifest compiler refuses
+  gates when the schema says `contract: true`. `src/namespace/manifest.ts` passes the table through.
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
   refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with
