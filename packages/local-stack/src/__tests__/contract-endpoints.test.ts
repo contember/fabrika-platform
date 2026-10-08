@@ -47,6 +47,7 @@ const configWith = (proxy: { upstream: string } & ({ gates: { rules: [] } } | ty
 		target: {
 			platform: 'zerops',
 			services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3', enableSubdomainAccess: false }],
+			contract: artifact,
 			proxy,
 		},
 	})

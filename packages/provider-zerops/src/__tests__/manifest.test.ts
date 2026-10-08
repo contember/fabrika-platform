@@ -366,6 +366,8 @@ describe('application exposure refusals', () => {
 		['zeropsYaml', { zeropsYaml: { zerops: [{ setup: 'notesapi' }] } }, 'omit it'],
 		['mount', { mount: ['shared'] }, 'omit it'],
 		['enableCdn', { enableCdn: true }, 'omit it or set `false`'],
+		['startWithoutCode', { startWithoutCode: true }, 'omit it; the platform provisions a new service without code itself'],
+		['startWithoutCode', { startWithoutCode: false }, 'omit it; the platform provisions a new service without code itself'],
 	]
 
 	test('refuses each exposing field on an application service at compile time, naming the allowed form', async () => {

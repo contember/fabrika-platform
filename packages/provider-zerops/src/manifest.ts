@@ -202,6 +202,12 @@ const REFUSED_APPLICATION_SERVICE_FIELDS: readonly RefusedServiceField[] = [
 		allowedForm: 'omit it',
 	},
 	{
+		field: 'startWithoutCode',
+		accepts: refusedOutright,
+		reason: 'an import that carries it activates an empty version, replacing the running code before any read-back',
+		allowedForm: 'omit it; the platform provisions a new service without code itself',
+	},
+	{
 		field: 'enableCdn',
 		accepts: (value) => value === false,
 		reason: 'a CDN serves the service past the namespace proxy',
