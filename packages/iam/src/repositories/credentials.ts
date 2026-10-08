@@ -1,3 +1,4 @@
+import type { Scope } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 import { unixNow } from './sql'
@@ -20,6 +21,12 @@ export interface CredentialRow {
 	expires_at: number | null
 	revoked_at: number | null
 	created_at: number
+	/** The link mount of a share link; NULL on every other credential. */
+	link_mount: string | null
+	/** The dimension of the object the link is bound to, as the mount declared it at issue. */
+	link_dimension: string | null
+	/** JSON array of the link's containment chain (`{type, value}`, the object first). */
+	link_chain: string | null
 }
 
 /** One inline grant on a credential (the `credential_grants` table). Matched by `permits`. */
@@ -46,12 +53,16 @@ export class CredentialRepository {
 		issuedBy: string
 		expiresAt?: number | null
 		grants: { action: string; scopeType?: string | null; scopeValue?: string | null }[]
+		/** A share link's mount and chain; only on an anonymous credential. */
+		link?: { mount: string; chain: Scope[] }
 	}): Promise<string> {
 		const id = uuidv7()
 		const statements: SqlStatement[] = [
 			this.db
-				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+				.prepare(
+					`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at, link_mount, link_dimension, link_chain)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
 				.bind(
 					id,
 					input.tokenHash,
@@ -61,6 +72,9 @@ export class CredentialRepository {
 					input.issuedBy,
 					input.expiresAt ?? null,
 					unixNow(),
+					input.link?.mount ?? null,
+					input.link?.chain[0]?.type ?? null,
+					input.link === undefined ? null : JSON.stringify(input.link.chain),
 				),
 		]
 		for (const grant of input.grants) {

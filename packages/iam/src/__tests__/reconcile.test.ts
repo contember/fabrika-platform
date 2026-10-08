@@ -177,3 +177,74 @@ describe('Db.reconcileAppSchema', () => {
 		expect((await h.repositories.appSchema.getRole('poplach', 'editor'))?.permissions).toBe(JSON.stringify(['b.read']))
 	})
 })
+
+describe('Db.reconcileAppSchema — membership metadata and link mounts', () => {
+	const app = 'notes@prod'
+	const vocabulary = {
+		app,
+		scopes: [
+			{ scopeType: 'workspace', creatorRole: 'owner', members: { manage: 'notes.admin', list: 'notes.read' } },
+			{ scopeType: 'note', parentScope: 'workspace' },
+		],
+		actions: [{ action: 'notes.read' }, { action: 'notes.admin' }, { action: 'notes.share' }],
+		roles: [{ roleKey: 'owner', name: 'Owner', permissions: ['notes.read', 'notes.admin'], memberScope: 'workspace', assignableBy: ['owner'] }],
+		links: [{ mount: 'shared', dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 }],
+		delegations: [{ endpoint: 'api.invite', action: 'notes.admin', dimension: 'workspace', purpose: 'members' as const }],
+	}
+
+	test('stores what IAM acts on and clears it with the next reconcile', async () => {
+		const h = createHarness()
+		await h.repositories.appSchema.reconcileAppSchema(vocabulary)
+
+		expect(await h.repositories.appSchema.getScope(app, 'workspace')).toMatchObject({
+			creator_role: 'owner',
+			members_manage: 'notes.admin',
+			members_list: 'notes.read',
+			parent_scope: null,
+		})
+		expect((await h.repositories.appSchema.getScope(app, 'note'))?.parent_scope).toBe('workspace')
+		expect((await h.repositories.appSchema.getRole(app, 'owner'))?.assignable_by).toBe('["owner"]')
+		expect(await h.repositories.appSchema.getLinkMount(app, 'shared')).toMatchObject({ dimension: 'note', issued_by: 'notes.share', max_days: 30 })
+		expect(await h.repositories.appSchema.getDelegatedEndpoint(app, 'api.invite')).toMatchObject({ action: 'notes.admin', purpose: 'members' })
+
+		await h.repositories.appSchema.reconcileAppSchema({ ...vocabulary, links: [], delegations: [] })
+		expect(await h.repositories.appSchema.getLinkMount(app, 'shared')).toBeNull()
+		expect(await h.repositories.appSchema.getDelegatedEndpoint(app, 'api.invite')).toBeNull()
+	})
+
+	test('removing a link mount, or moving it to another dimension, revokes its keys and nothing else', async () => {
+		const h = createHarness()
+		await h.repositories.appSchema.reconcileAppSchema(vocabulary)
+		const issuer = 'provisioning-admin'
+		const chain = [{ type: 'note', value: 'n1' }, { type: 'workspace', value: 'w1' }]
+		const link = await h.repositories.credentials.createCredential({
+			tokenHash: 'h-link',
+			app,
+			issuedBy: issuer,
+			grants: [],
+			link: { mount: 'shared', chain },
+		})
+		const plain = await h.repositories.credentials.createCredential({ tokenHash: 'h-plain', app, issuedBy: issuer, grants: [] })
+
+		await h.repositories.appSchema.reconcileAppSchema(vocabulary)
+		expect((await h.repositories.credentials.getCredentialById(link))?.revoked_at).toBeNull()
+
+		await h.repositories.appSchema.reconcileAppSchema({
+			...vocabulary,
+			links: [{ mount: 'shared', dimension: 'workspace', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 }],
+		})
+		expect((await h.repositories.credentials.getCredentialById(link))?.revoked_at).not.toBeNull()
+		expect((await h.repositories.credentials.getCredentialById(plain))?.revoked_at).toBeNull()
+
+		const second = await h.repositories.credentials.createCredential({
+			tokenHash: 'h-link-2',
+			app,
+			issuedBy: issuer,
+			grants: [],
+			link: { mount: 'shared', chain: [{ type: 'workspace', value: 'w1' }] },
+		})
+		await h.repositories.appSchema.reconcileAppSchema({ ...vocabulary, links: [] })
+		expect((await h.repositories.credentials.getCredentialById(second))?.revoked_at).not.toBeNull()
+		expect((await h.repositories.credentials.getCredentialById(link))?.link_chain).toBe(JSON.stringify(chain))
+	})
+})

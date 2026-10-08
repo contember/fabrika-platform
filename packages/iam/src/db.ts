@@ -6,16 +6,25 @@ import { CredentialRepository } from './repositories/credentials'
 import { DeviceAuthorizationRepository } from './repositories/device'
 import { GrantRepository } from './repositories/grants'
 import { HandoffRepository } from './repositories/handoff'
+import { MembershipRepository } from './repositories/membership'
 import { OAuthRepository } from './repositories/oauth'
 import { PrincipalRepository } from './repositories/principals'
 import { SessionRepository } from './repositories/sessions'
 
-export { type AppActionRow, AppSchemaRepository, type AppScopeRow, type RoleRow } from './repositories/app-schema'
+export {
+	type AppActionRow,
+	AppSchemaRepository,
+	type AppScopeRow,
+	type DelegatedEndpointRow,
+	type LinkMountRow,
+	type RoleRow,
+} from './repositories/app-schema'
 export { type AuditEventInput, type AuditEventRow, AuditRepository, type AuthLogInput, type AuthLogRow } from './repositories/audit'
 export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { GrantRepository, type GrantRow } from './repositories/grants'
 export { type AuthCodeRow, HandoffRepository } from './repositories/handoff'
+export { type DelegationGrantRow, type InvitationRow, type MemberGrantRow, MembershipRepository } from './repositories/membership'
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
@@ -30,6 +39,7 @@ export interface IamRepositories {
 	sessions: SessionRepository
 	passwords: PasswordRepository
 	handoff: HandoffRepository
+	membership: MembershipRepository
 	oauth: OAuthRepository
 	audit: AuditRepository
 }
@@ -45,6 +55,7 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		sessions: replacements.sessions ?? new SessionRepository(db),
 		passwords: replacements.passwords ?? new PasswordRepository(db),
 		handoff: replacements.handoff ?? new HandoffRepository(db),
+		membership: replacements.membership ?? new MembershipRepository(db),
 		oauth: replacements.oauth ?? new OAuthRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
 	}

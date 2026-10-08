@@ -1,4 +1,4 @@
-import { isActionAllowed, type RoleDef } from '@fabrika/auth-core'
+import { isActionAllowed, parseJsonStringArray, type RoleDef } from '@fabrika/auth-core'
 import { type CreateGrantRequest, type GrantDto } from '@fabrika/iam-contract'
 import { type GrantRow, type RoleRow } from '../db'
 import { BUILTIN_ROLES, isKnownRole } from '../roles'
@@ -90,7 +90,9 @@ export function dbRoleToDef(row: RoleRow): RoleDef {
 		name: row.name,
 		...(row.description !== null ? { description: row.description } : {}),
 		permissions: rolePermissions(row.permissions),
-		...(row.member_scope !== null ? { member: { scope: row.member_scope } } : {}),
+		...(row.member_scope !== null
+			? { member: { scope: row.member_scope, ...(row.assignable_by === null ? {} : { assignableBy: parseJsonStringArray(row.assignable_by) }) } }
+			: {}),
 	}
 }
 

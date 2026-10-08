@@ -14,6 +14,8 @@ export interface RoleRow {
 	origin: 'app' | 'custom'
 	/** The scope dimension a membership role is granted in; NULL for every other role. */
 	member_scope: string | null
+	/** JSON array of the membership roles whose holders may assign this one; NULL = only an administrator. */
+	assignable_by: string | null
 	created_at: number
 }
 
@@ -22,6 +24,31 @@ export interface AppScopeRow {
 	app: string
 	scope_type: string
 	label: string | null
+	/** The dimension containing every value of this one. */
+	parent_scope: string | null
+	/** The membership role `createScope` grants in a new value. */
+	creator_role: string | null
+	members_manage: string | null
+	members_list: string | null
+}
+
+/** A share-link mount (the `app_link_mounts` table). `grants` is a JSON array of exact actions. */
+export interface LinkMountRow {
+	app: string
+	mount: string
+	dimension: string
+	grants: string
+	issued_by: string
+	max_days: number
+}
+
+/** An endpoint that may spend membership authority (the `app_delegated_endpoints` table). */
+export interface DelegatedEndpointRow {
+	app: string
+	endpoint: string
+	action: string
+	dimension: string
+	purpose: 'members' | 'creates'
 }
 
 /** An action-catalog row (the `app_actions` table). */
@@ -128,6 +155,34 @@ export class AppSchemaRepository {
 		return results.map((r) => r.action)
 	}
 
+	async getScope(app: string, scopeType: string): Promise<AppScopeRow | null> {
+		return this.db.prepare('SELECT * FROM app_scopes WHERE app = ? AND scope_type = ?').bind(app, scopeType).first<AppScopeRow>()
+	}
+
+	async getLinkMount(app: string, mount: string): Promise<LinkMountRow | null> {
+		return this.db.prepare('SELECT * FROM app_link_mounts WHERE app = ? AND mount = ?').bind(app, mount).first<LinkMountRow>()
+	}
+
+	async listLinkMounts(app: string): Promise<LinkMountRow[]> {
+		const { results } = await this.db.prepare('SELECT * FROM app_link_mounts WHERE app = ? ORDER BY mount').bind(app).all<LinkMountRow>()
+		return results
+	}
+
+	async getDelegatedEndpoint(app: string, endpoint: string): Promise<DelegatedEndpointRow | null> {
+		return this.db
+			.prepare('SELECT * FROM app_delegated_endpoints WHERE app = ? AND endpoint = ?')
+			.bind(app, endpoint)
+			.first<DelegatedEndpointRow>()
+	}
+
+	async listDelegatedEndpoints(app: string): Promise<DelegatedEndpointRow[]> {
+		const { results } = await this.db
+			.prepare('SELECT * FROM app_delegated_endpoints WHERE app = ? ORDER BY endpoint')
+			.bind(app)
+			.all<DelegatedEndpointRow>()
+		return results
+	}
+
 	async listAppScopes(app: string): Promise<AppScopeRow[]> {
 		const { results } = await this.db
 			.prepare('SELECT * FROM app_scopes WHERE app = ? ORDER BY scope_type')
@@ -163,11 +218,26 @@ export class AppSchemaRepository {
 	 */
 	async reconcileAppSchema(input: {
 		app: string
-		scopes: { scopeType: string; label?: string | null }[]
+		scopes: {
+			scopeType: string
+			label?: string | null
+			parentScope?: string | null
+			creatorRole?: string | null
+			members?: { manage: string; list: string } | null
+		}[]
 		actions: { action: string; description?: string | null }[]
-		roles: { roleKey: string; name: string; description?: string | null; permissions: string[]; memberScope?: string | null }[]
+		roles: {
+			roleKey: string
+			name: string
+			description?: string | null
+			permissions: string[]
+			memberScope?: string | null
+			assignableBy?: string[] | null
+		}[]
 		/** The contract flag is part of the vocabulary: written in the same batch, so it never outlives the roles it constrains. */
 		contract?: boolean
+		links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
+		delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
 	}): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -175,6 +245,8 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM app_actions WHERE app = ?').bind(app),
 			this.db.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app'`).bind(app),
 			this.db.prepare('DELETE FROM contract_apps WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_link_mounts WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_delegated_endpoints WHERE app = ?').bind(app),
 		]
 		if (input.contract === true) {
 			statements.push(this.db.prepare('INSERT INTO contract_apps (app, created_at) VALUES (?, ?)').bind(app, unixNow()))
@@ -194,9 +266,23 @@ export class AppSchemaRepository {
 		for (const scope of input.scopes) {
 			statements.push(
 				this.db
-					.prepare(`INSERT INTO app_scopes (app, scope_type, label) VALUES (?, ?, ?)
-						ON CONFLICT (app, scope_type) DO UPDATE SET label = excluded.label`)
-					.bind(app, scope.scopeType, scope.label ?? null),
+					.prepare(`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list)
+						VALUES (?, ?, ?, ?, ?, ?, ?)
+						ON CONFLICT (app, scope_type) DO UPDATE SET
+							label = excluded.label,
+							parent_scope = excluded.parent_scope,
+							creator_role = excluded.creator_role,
+							members_manage = excluded.members_manage,
+							members_list = excluded.members_list`)
+					.bind(
+						app,
+						scope.scopeType,
+						scope.label ?? null,
+						scope.parentScope ?? null,
+						scope.creatorRole ?? null,
+						scope.members?.manage ?? null,
+						scope.members?.list ?? null,
+					),
 			)
 		}
 
@@ -212,18 +298,52 @@ export class AppSchemaRepository {
 		for (const role of input.roles) {
 			statements.push(
 				this.db
-					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, created_at)
-						VALUES (?, ?, ?, ?, ?, 'app', ?, ?)
+					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, assignable_by, created_at)
+						VALUES (?, ?, ?, ?, ?, 'app', ?, ?, ?)
 						ON CONFLICT (app, role_key) DO UPDATE SET
 							name = excluded.name,
 							description = excluded.description,
 							permissions = excluded.permissions,
 							member_scope = excluded.member_scope,
+							assignable_by = excluded.assignable_by,
 							origin = 'app'
 						WHERE roles.origin = 'app'`)
-					.bind(app, role.roleKey, role.name, role.description ?? null, JSON.stringify(role.permissions), role.memberScope ?? null, unixNow()),
+					.bind(
+						app,
+						role.roleKey,
+						role.name,
+						role.description ?? null,
+						JSON.stringify(role.permissions),
+						role.memberScope ?? null,
+						role.assignableBy == null ? null : JSON.stringify(role.assignableBy),
+						unixNow(),
+					),
 			)
 		}
+
+		for (const link of input.links ?? []) {
+			statements.push(
+				this.db
+					.prepare('INSERT INTO app_link_mounts (app, mount, dimension, grants, issued_by, max_days) VALUES (?, ?, ?, ?, ?, ?)')
+					.bind(app, link.mount, link.dimension, JSON.stringify(link.grants), link.issuedBy, link.maxDays),
+			)
+		}
+		for (const delegation of input.delegations ?? []) {
+			statements.push(
+				this.db
+					.prepare('INSERT INTO app_delegated_endpoints (app, endpoint, action, dimension, purpose) VALUES (?, ?, ?, ?, ?)')
+					.bind(app, delegation.endpoint, delegation.action, delegation.dimension, delegation.purpose),
+			)
+		}
+		// Removing a link mount, or moving it to another dimension, revokes its keys in the same transaction.
+		statements.push(
+			this.db
+				.prepare(`UPDATE credentials SET revoked_at = ?
+					WHERE app = ? AND link_mount IS NOT NULL AND revoked_at IS NULL AND NOT EXISTS (
+						SELECT 1 FROM app_link_mounts m
+						WHERE m.app = credentials.app AND m.mount = credentials.link_mount AND m.dimension = credentials.link_dimension)`)
+				.bind(unixNow(), app),
+		)
 
 		await this.db.batch(statements)
 	}

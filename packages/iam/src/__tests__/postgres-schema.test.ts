@@ -69,6 +69,11 @@ async function reset(): Promise<void> {
 			'app_actions',
 			'app_scopes',
 			'contract_apps',
+			'app_link_mounts',
+			'app_delegated_endpoints',
+			'membership_scopes',
+			'delegation_grants',
+			'membership_invitations',
 		]
 	) {
 		await raw.prepare(`DELETE FROM ${table}`).run()
@@ -91,6 +96,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0001_init.sql' },
 			{ bundle: 'iam', name: '0002_oauth.sql' },
 			{ bundle: 'iam', name: '0003_contract_apps.sql' },
+			{ bundle: 'iam', name: '0004_membership.sql' },
 		])
 	})
 
@@ -130,6 +136,11 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'oauth_codes',
 				'oauth_refresh_tokens',
 				'contract_apps',
+				'app_link_mounts',
+				'app_delegated_endpoints',
+				'membership_scopes',
+				'delegation_grants',
+				'membership_invitations',
 			]
 		) {
 			expect(names).toContain(table)

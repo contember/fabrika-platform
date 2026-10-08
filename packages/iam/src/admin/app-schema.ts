@@ -1,5 +1,5 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import type { RoleDef } from '@fabrika/auth-core'
+import type { AppDelegationDef, AppLinkMountDef, RoleDef } from '@fabrika/auth-core'
 
 import {
 	type AppDto,
@@ -13,6 +13,7 @@ import {
 import type { z } from 'zod'
 import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
+import { parseStoredPermissions } from '../stored-permissions'
 import { adminAudit, type AdminContext, fail } from './context'
 import { dbRoleToDef, knownApps, rolePermissions } from './grant-support'
 import { error, json, readJson } from './http'
@@ -137,7 +138,13 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 	}
 	await c.services.repositories.appSchema.reconcileAppSchema({
 		app,
-		scopes: schema.scopes.map((s) => ({ scopeType: s.type, label: s.label ?? null })),
+		scopes: schema.scopes.map((s) => ({
+			scopeType: s.type,
+			label: s.label ?? null,
+			parentScope: s.in ?? null,
+			creatorRole: s.creator ?? null,
+			members: s.members ?? null,
+		})),
 		actions: schema.actions.map((a) => ({ action: a.action, description: a.description ?? null })),
 		roles: Object.entries(schema.roles).map(([roleKey, def]) => ({
 			roleKey,
@@ -145,8 +152,11 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			description: def.description ?? null,
 			permissions: def.permissions,
 			memberScope: def.member?.scope ?? null,
+			assignableBy: def.member?.assignableBy ?? null,
 		})),
 		contract: schema.contract === true,
+		links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),
+		delegations: Object.entries(schema.delegations ?? {}).map(([endpoint, delegation]) => ({ endpoint, ...delegation })),
 	})
 	await adminAudit(c, {
 		action: 'iam.app.schema.reconcile',
@@ -157,6 +167,8 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			actions: schema.actions.length,
 			roles: Object.keys(schema.roles),
 			contract: schema.contract === true,
+			links: Object.keys(schema.links ?? {}),
+			delegations: Object.keys(schema.delegations ?? {}),
 		},
 	})
 	return json(await readAppSchemaDto(c, app))
@@ -171,11 +183,27 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 	for (const row of roleRows) {
 		roles[row.role_key] = dbRoleToDef(row)
 	}
+	const links: Record<string, AppLinkMountDef> = {}
+	for (const row of await c.services.repositories.appSchema.listLinkMounts(app)) {
+		links[row.mount] = { dimension: row.dimension, grants: parseStoredPermissions(row.grants), issuedBy: row.issued_by, maxDays: row.max_days }
+	}
+	const delegations: Record<string, AppDelegationDef> = {}
+	for (const row of await c.services.repositories.appSchema.listDelegatedEndpoints(app)) {
+		delegations[row.endpoint] = { action: row.action, dimension: row.dimension, purpose: row.purpose }
+	}
 	return {
 		app,
-		scopes: scopeRows.map((r) => ({ type: r.scope_type, ...(r.label !== null ? { label: r.label } : {}) })),
+		scopes: scopeRows.map((r) => ({
+			type: r.scope_type,
+			...(r.label !== null ? { label: r.label } : {}),
+			...(r.parent_scope !== null ? { in: r.parent_scope } : {}),
+			...(r.creator_role !== null ? { creator: r.creator_role } : {}),
+			...(r.members_manage !== null && r.members_list !== null ? { members: { manage: r.members_manage, list: r.members_list } } : {}),
+		})),
 		actions: actionRows.map((r) => ({ action: r.action, ...(r.description !== null ? { description: r.description } : {}) })),
 		roles,
+		...(Object.keys(links).length > 0 ? { links } : {}),
+		...(Object.keys(delegations).length > 0 ? { delegations } : {}),
 	}
 }
 

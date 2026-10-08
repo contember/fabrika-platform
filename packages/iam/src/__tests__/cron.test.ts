@@ -12,7 +12,7 @@
 
 import type { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
-import { AUTH_LOG_RETENTION_SECONDS, PASSWORD_TRANSIENT_RETENTION_SECONDS, runIamMaintenance } from '../cron'
+import { AUTH_LOG_RETENTION_SECONDS, INVITATION_RETENTION_SECONDS, PASSWORD_TRANSIENT_RETENTION_SECONDS, runIamMaintenance } from '../cron'
 import { createIamRepositories } from '../db'
 import type { Env } from '../env'
 import { hashToken } from '../secret'
@@ -33,6 +33,8 @@ const SWEPT_TABLES = [
 	'oauth_grants',
 	'oauth_codes',
 	'oauth_refresh_tokens',
+	'delegation_grants',
+	'membership_invitations',
 ] as const
 
 function counts(sqlite: Database): Record<string, number> {
@@ -125,6 +127,24 @@ async function seedBothSides(h: Harness): Promise<string> {
 		[tokenCutoff + DAY, tokenCutoff + DAY],
 	)
 
+	// delegation_grants — a spent or expired grant goes at once; a live unspent one stays.
+	for (const [id, expiresAt] of [['dg-old', NOW - 1], ['dg-live', NOW + 60]] as const) {
+		h.sqlite.run(
+			`INSERT INTO delegation_grants (id, grant_hash, app, principal_id, endpoint, request_id, expires_at, created_at)
+				VALUES (?, ?, 'notes@prod', ?, 'api.invite', 'req', ?, ?)`,
+			[id, await hashToken(id), principal, expiresAt, NOW - 60],
+		)
+	}
+
+	// membership_invitations — cutoff is `expires_at < now - 7d`, whatever the state.
+	for (const [id, expiresAt] of [['inv-old', NOW - INVITATION_RETENTION_SECONDS - DAY], ['inv-live', NOW + DAY]] as const) {
+		h.sqlite.run(
+			`INSERT INTO membership_invitations (id, token_hash, app, scope_type, scope_value, role_key, email, invited_by, expires_at, created_at)
+				VALUES (?, ?, 'notes@prod', 'workspace', ?, 'editor', 'invitee@example.com', ?, ?, ?)`,
+			[id, await hashToken(id), id, principal, expiresAt, NOW - 10 * DAY],
+		)
+	}
+
 	// auth_codes — a spent or expired code goes at once; a live unconsumed one stays.
 	h.sqlite.run(
 		`INSERT INTO auth_codes (id, code_hash, app, parent_session_id, return_url, expires_at, consumed_at, created_at) VALUES
@@ -210,6 +230,8 @@ describe('runIamMaintenance', () => {
 			oauth_grants: 2,
 			oauth_codes: 3,
 			oauth_refresh_tokens: 2,
+			delegation_grants: 2,
+			membership_invitations: 2,
 		})
 
 		const settled: Promise<unknown>[] = []
@@ -229,6 +251,8 @@ describe('runIamMaintenance', () => {
 			oauth_grants: 1,
 			oauth_codes: 1,
 			oauth_refresh_tokens: 1,
+			delegation_grants: 1,
+			membership_invitations: 1,
 		})
 	})
 
@@ -252,6 +276,8 @@ describe('runIamMaintenance', () => {
 			oauth_grants: 1,
 			oauth_codes: 1,
 			oauth_refresh_tokens: 1,
+			delegation_grants: 1,
+			membership_invitations: 1,
 		})
 	})
 })

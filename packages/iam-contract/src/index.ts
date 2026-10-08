@@ -9,7 +9,17 @@
 // where they fit. Keep these clean and complete: they are the admin API contract.
 
 import type { RpcProcedureContract } from '@fabrika/app'
-import type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalType, RoleDef } from '@fabrika/auth-core'
+import type {
+	AppActionDef,
+	AppDelegationDef,
+	AppLinkMountDef,
+	AppSchema,
+	AppScopeDef,
+	PermissionEntry,
+	PermissionSource,
+	PrincipalType,
+	RoleDef,
+} from '@fabrika/auth-core'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
 
@@ -156,6 +166,10 @@ export interface AppSchemaDto {
 	actions: AppActionDef[]
 	/** role_key -> def, origin='app' only (reconciled from code). */
 	roles: Record<string, RoleDef>
+	/** Share-link mounts; absent when the app declares none. */
+	links?: Record<string, AppLinkMountDef>
+	/** Endpoints that may spend membership authority; absent when the app declares none. */
+	delegations?: Record<string, AppDelegationDef>
 }
 
 // ── Policies (origin='custom' roles, admin-composed) ──────────────────────────
