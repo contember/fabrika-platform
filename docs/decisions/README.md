@@ -18,7 +18,8 @@ a commit message suffices.
   installation; the provider owns its deploy; one public package per cloud.
 - **Authentication and authorization:** [0022](0022-the-proxy-is-the-only-enforcement-point.md) —
   the proxy is the only enforcement point; then [0023](0023-one-session-per-host.md) for the
-  browser-bound session handoff.
+  browser-bound session handoff, and [0050](0050-approved-access.md) for how access changes are
+  approved and published.
 - **Zerops delivery:** [0003](0003-no-deploy-runner-on-zerops.md) (Control drives Zerops over HTTP),
   [0029](0029-github-app-sources.md) (GitHub App sources, multiple connections),
   [0044](0044-zerops-delivery-ownership-and-recovery.md) (release binding, recovery, one lease).
@@ -65,3 +66,4 @@ a commit message suffices.
 | [0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)   | Upload immutable installation and namespace proxy sources                               |
 | [0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)         | Bind Cloudflare delivery to the recorded application commit                             |
 | [0049](0049-author-applications-through-mcp-in-control.md)              | Author applications through an MCP endpoint in Control over Git workspaces              |
+| [0050](0050-approved-access.md)                                         | Publish only approved access; a human approves widenings on protected environments      |
