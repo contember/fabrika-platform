@@ -13,7 +13,7 @@
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { type OperationsReleaseReconcileRequestV1, parseOperationsReleaseRequest } from '@fabrika/operations-contract/releases'
+import { type OperationsReleaseReconcileRequest, parseOperationsReleaseRequest } from '@fabrika/operations-contract/releases'
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -32,7 +32,7 @@ import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { unavailableSourceConnection } from '../source/connections'
 import { Vault } from '../vault'
-import { applyMigrations, postgresMigrations } from '../zerops/migrate'
+import { applyMigrations } from '../zerops/migrate'
 import { createFetchHandler } from '../zerops/server'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
@@ -689,127 +689,6 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 })
 
 describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres', () => {
-	test('drops every pre-vault connection, setup and GitHub vault entry, leaving a legacy-bound app closed', async () => {
-		if (postgresUrl === null) throw new Error('Postgres fixture is unavailable')
-		const schema = `github_upgrade_${Math.random().toString(36).slice(2, 10)}`
-		const admin = PostgresDatabase.connect(postgresUrl, { max: 1 })
-		let upgrade: PostgresDatabase | null = null
-		try {
-			await admin.prepare(`CREATE SCHEMA ${schema}`).run()
-			upgrade = PostgresDatabase.connect(postgresUrl, { connection: { search_path: schema }, max: 1 })
-			const upgradeDatabase = upgrade
-			const migrations = postgresMigrations()
-			// Anchored by NAME, not by an offset: `slice(0, -1)` silently stops exercising the real upgrade
-			// plan the moment another migration is added (which `65bc44b` already had to fix once).
-			const keyedIndex = migrations.findIndex((migration) => migration.name.startsWith('0017_'))
-			expect(keyedIndex).toBeGreaterThan(0)
-			await applyMigrations(upgrade, migrations.slice(0, keyedIndex))
-			await upgrade.prepare(`INSERT INTO github_source_connections (
-				singleton, connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-				credential_sha256, webhook_url, webhook_secret_ref, installation_id,
-				installation_account_login, installation_selection, verified_repositories_json,
-				requested_repositories_json, connected_by, connected_at, verified_at, version
-			) VALUES (1, 'legacy-connection', '123', 'legacy-app', 'https://github.com/apps/legacy-app', 'Acme', 'legacy-app', 0,
-				?, 'https://control.example/webhooks/github', 'vault:legacy-webhook', 45,
-				'acme', 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 3)`)
-				.bind('c'.repeat(64))
-				.run()
-			for (const [id, installationId] of [['zerops-match', 45], ['cloudflare-only', 45]] as const) {
-				await upgradeDatabase.prepare('INSERT INTO apps (id, repo_url, github_installation_id) VALUES (?, ?, ?)')
-					.bind(id, `github.com/acme/${id}`, installationId)
-					.run()
-			}
-			for (const [id, provider] of [['zerops-match', 'zerops'], ['cloudflare-only', 'cloudflare']] as const) {
-				await upgradeDatabase.prepare(`INSERT INTO app_envs (
-					app_id, env, provider, provider_target_json, provider_artifact_json
-				) VALUES (?, 'prod', ?, '{}', '{}')`).bind(id, provider).run()
-			}
-			await upgrade.prepare(`INSERT INTO github_source_setup_attempts (
-				id, status, phase, version, initiated_by, expected_origin, desired_owner, desired_app_name,
-				desired_public, requested_repositories_json, created_at, updated_at, expires_at
-			) VALUES ('repair', 'repair_required', 'awaiting_manifest_callback', 1, 'principal-1',
-				'https://control.example', 'repair-owner', 'repair-app', 0, '[]', 1, 1, 2)`)
-				.run()
-			const masterKey = kek()
-			const preVault = await Vault.create(upgrade, masterKey)
-			await preVault.putSecret('platform', 'platform:github-source:repair:recovery', 'one-time-bundle')
-			const unrelated = await preVault.putSecret('platform', 'platform:other', 'kept')
-
-			await applyMigrations(upgrade, migrations)
-
-			expect(await upgrade.prepare(`SELECT to_regclass('github_source_connections')::text AS relation`).first<{ relation: string | null }>())
-				.toEqual({ relation: null })
-			const { results: keyed } = await upgrade.prepare('SELECT connection_id FROM github_source_connections_keyed')
-				.all<{ connection_id: string }>()
-			expect(keyed).toEqual([])
-			const upgraded = createControlRepositories(upgrade)
-			// The 0017 backfill still ran, so the row keeps naming a connection that is gone. It fails
-			// closed rather than resolving to another organization's credential.
-			const { results: apps } = await upgrade.prepare('SELECT id, github_connection_id FROM apps ORDER BY id')
-				.all<{ id: string; github_connection_id: string | null }>()
-			expect(apps).toEqual([
-				{ id: 'cloudflare-only', github_connection_id: null },
-				{ id: 'zerops-match', github_connection_id: 'legacy-connection' },
-			])
-			await expect(upgraded.registry.getSourceBinding('zerops-match', 'connection')).rejects.toThrow('incomplete')
-			expect(await upgraded.registry.getSourceBinding('cloudflare-only', 'installation')).toEqual({ installationId: 45 })
-			// 0020 (ADR-0029, D2): no setup and no GitHub key from the source-service layout survives.
-			expect(await upgraded.githubConnections.getWorkflowAttempt()).toBeNull()
-			const { results: vaultLabels } = await upgrade.prepare('SELECT label FROM vault ORDER BY label').all<{ label: string }>()
-			expect(vaultLabels).toEqual([{ label: 'platform:other' }])
-			const vault = await Vault.create(upgrade, masterKey)
-			expect(await vault.getSecret(unrelated)).toBe('kept')
-			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('after-upgrade'), 'opaque-state')
-			await expect(upgraded.githubConnections.beginAttemptWithManifestState({
-				id: 'after-upgrade',
-				stateHash: 'a'.repeat(64),
-				initiatedBy: 'principal-1',
-				expectedOrigin: 'https://control.example',
-				desiredOwner: 'other',
-				desiredAppName: 'other',
-				desiredPublic: false,
-				requestedRepositories: [],
-				expiresAt: now() + 60,
-			}, manifestState)).resolves.toMatchObject({ id: 'after-upgrade', phase: 'awaiting_manifest_callback' })
-
-			const insertKeyedConnection = (connectionId: string, owner: string, installationId: number) =>
-				upgradeDatabase.prepare(`INSERT INTO github_source_connections_keyed (
-					connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-					app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
-					installation_account_login, installation_selection, verified_repositories_json,
-					requested_repositories_json, connected_by, connected_at, verified_at, version
-				) VALUES (?, '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 1)`)
-					.bind(
-						connectionId,
-						`${connectionId}-app`,
-						`https://github.com/apps/${connectionId}-app`,
-						owner,
-						`${connectionId}-app`,
-						`vault:${connectionId}-credential`,
-						`https://control.example/webhooks/github/${connectionId}`,
-						`vault:${connectionId}-webhook`,
-						installationId,
-						owner.toLowerCase(),
-					)
-					.run()
-			await insertKeyedConnection('keyed-beta', 'Beta', 46)
-			await insertKeyedConnection('keyed-gamma', 'Gamma', 47)
-			await expect(insertKeyedConnection('keyed-beta-duplicate', 'beta', 48)).rejects.toThrow()
-			const firstPage = await upgraded.githubConnections.listConnections({ limit: 1 })
-			expect(firstPage.items.map((connection) => connection.connectionId)).toEqual(['keyed-beta'])
-			expect(firstPage.nextCursor).toBe('keyed-beta')
-			expect((await upgraded.githubConnections.listConnections({ cursor: firstPage.nextCursor ?? '', limit: 2 })).items
-				.map((connection) => connection.connectionId)).toEqual(['keyed-gamma'])
-			expect(
-				await upgraded.registry.replaceAppGitHubSourceBinding('cloudflare-only', { connectionId: null, installationId: 45 }),
-			).toMatchObject({ github_connection_id: null, github_installation_id: 45 })
-		} finally {
-			await upgrade?.close()
-			await admin.prepare(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).run()
-			await admin.close()
-		}
-	})
-
 	test('uses the same callback CAS and atomic platform-secret checkpoint', async () => {
 		await reset()
 		const vault = await Vault.create(raw, kek())
@@ -1118,7 +997,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		await db.operationsReleases.markApplied(stale.id, 1)
 		const absent = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
 		await fixtureRuns(db.runs, new SqlDeployLocks(raw)).finish(absent.id, 'succeeded', 0)
-		const requests: OperationsReleaseReconcileRequestV1[] = []
+		const requests: OperationsReleaseReconcileRequest[] = []
 		const summary = await runMaintenance({
 			...env(),
 			OPERATIONS_SYNC_KEY: 'maintenance-release-key-with-at-least-32-bytes',
@@ -1127,7 +1006,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 					const decoded: unknown = await request.json()
 					const payload = parseOperationsReleaseRequest(decoded)
 					requests.push(payload)
-					return Response.json({ protocolVersion: 1, revision: payload.revision, outcome: 'applied' })
+					return Response.json({ revision: payload.revision, outcome: 'applied' })
 				},
 			},
 		}, { operations: async () => ({ outcome: 'disabled', revision: null }) })

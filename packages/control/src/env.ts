@@ -44,8 +44,11 @@ export interface Env {
 	DEPLOY_QUEUE: JobQueue<ControlJobMessage>
 	/** Runtime-specific supervised background work (`ctx.waitUntil` or the Bun task tracker). */
 	WAIT_UNTIL: WaitUntil
-	/** Verified GitHub push events and installation lookup, composed per provider/runtime. */
-	REPO_EVENTS: RepoEvents
+	/**
+	 * The installation's single GitHub App: verified push events and installation lookup. Cloudflare only;
+	 * a `connection`-mode composition verifies each route with its connection's vault secret (ADR-0029).
+	 */
+	REPO_EVENTS?: RepoEvents
 	/**
 	 * IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
 	 * (`@fabrika/auth`) over the project's private network in a process. Required in practice —

@@ -22,7 +22,6 @@ import { z } from 'zod'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
-import { LocalGitHubRepoEvents } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
 import { createSourceConnections, type SourceConnectionPort } from '../source/connections'
@@ -119,10 +118,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
-		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], {
-			// Zerops selects a GitHub credential by connection, never by installation id (ADR-0029).
-			resolveInstallationId: () => Promise.reject(new Error('Zerops does not resolve GitHub installation ids; pass connectionId and installationId')),
-		}),
 		IAM: iamRpc(source),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,

@@ -14,7 +14,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
-import { LocalGitHubRepoEvents, type RepoEvents } from './repo-source'
+import { ConnectionWebhookVerifier, type PushWebhookVerifier, type RepoEvents } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
@@ -63,13 +63,8 @@ export function replayOperationsCatalogProjection(env: Env): Promise<OperationsC
 	return replayOperationsCatalog(operationsCatalogDeps(env))
 }
 
-/** Installation lookup only — webhook verification is resolved per route, never from this instance. */
-export function repoEvents(env: Env): RepoEvents {
-	return env.REPO_EVENTS
-}
-
 export interface WebhookRoute {
-	readonly repoSource: RepoEvents
+	readonly repoSource: PushWebhookVerifier
 	readonly binding: WebhookBinding
 }
 
@@ -82,12 +77,13 @@ export interface WebhookRoute {
  */
 export function webhookRoute(env: Env, provider: ControlProvider, connectionId?: string): WebhookRoute | null {
 	if (provider.source?.binding !== 'connection') {
-		return connectionId === undefined ? { repoSource: env.REPO_EVENTS, binding: { kind: 'installation-only' } } : null
+		if (connectionId !== undefined || env.REPO_EVENTS === undefined) return null
+		return { repoSource: env.REPO_EVENTS, binding: { kind: 'installation-only' } }
 	}
 	if (connectionId === undefined) return null
 	const secrets = new GitHubConnectionWebhookSecretProvider(env.REPOSITORIES.githubConnections, () => vault(env), connectionId)
 	return {
-		repoSource: new LocalGitHubRepoEvents(secrets, env.REPO_EVENTS),
+		repoSource: new ConnectionWebhookVerifier(secrets),
 		binding: { kind: 'connection', connectionId },
 	}
 }
@@ -126,7 +122,8 @@ export interface ControlRpcDeps {
 	auth: AuthContext
 	queue: DeployQueue
 	logs: LogReader
-	repoSource: RepoEvents
+	/** Absent in a `connection`-mode composition, which never resolves an installation id. */
+	repoSource?: RepoEvents
 	provider: ControlProvider
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
@@ -141,7 +138,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		auth,
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
-		repoSource: repoEvents(env),
+		...(env.REPO_EVENTS === undefined ? {} : { repoSource: env.REPO_EVENTS }),
 		provider,
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),

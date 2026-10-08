@@ -1,8 +1,8 @@
 import type { HttpService } from '@fabrika/platform'
 import { error } from './http'
+import { isStateChanging, sameOrigin } from './origin-guard'
 
 const RPC_PATH = '/operations/api/rpc'
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 export interface OperationsGatewayOptions {
 	gateway: HttpService
@@ -26,7 +26,8 @@ export async function forwardOperationsApi(request: Request, options: Operations
 	if (url.pathname !== RPC_PATH) {
 		return error(404, 'not found')
 	}
-	if (!sameOriginRequest(request, options.publicOrigin)) {
+	// The deputy's half of the confused-deputy defense: a hostile page POSTing with the victim's cookies stops here.
+	if (isStateChanging(request) && !sameOrigin(request, options.publicOrigin)) {
 		return error(403, 'cross-origin request rejected')
 	}
 
@@ -48,33 +49,4 @@ export async function forwardOperationsApi(request: Request, options: Operations
 		{ error: { type: 'auth', message: 'authentication required', loginUrl: login.toString() } },
 		{ status: 401, headers: { 'cache-control': 'no-store' } },
 	)
-}
-
-/**
- * The gateway's own CSRF check — the deputy's half of the confused-deputy defense. It is what stops a
- * hostile page POSTing to the console's own origin with the victim's cookies, before any of it
- * reaches Operations.
- */
-function sameOriginRequest(request: Request, publicOrigin: string | undefined): boolean {
-	if (SAFE_METHODS.has(request.method)) {
-		return true
-	}
-	const expected = originOf(publicOrigin ?? '')
-	if (expected === null) {
-		return false
-	}
-	const origin = request.headers.get('origin')
-	if (origin !== null) {
-		return origin === expected
-	}
-	const referer = request.headers.get('referer')
-	return referer === null ? false : originOf(referer) === expected
-}
-
-function originOf(value: string): string | null {
-	try {
-		return new URL(value).origin
-	} catch {
-		return null
-	}
 }

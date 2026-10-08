@@ -92,6 +92,19 @@ describe('Operations console gateway', () => {
 		expect(unconfigured.status).toBe(403)
 	})
 
+	test('applies the shared same-origin rule: Sec-Fetch-Site, Origin: null and the Referer fallback', async () => {
+		const send = (headers: Record<string, string>) =>
+			forwardOperationsApi(
+				new Request('http://console.test/operations/api/rpc', { method: 'POST', headers, body: '{}' }),
+				{ gateway: new RecordingGateway(), publicOrigin: CONSOLE },
+			)
+		expect((await send({ origin: CONSOLE, 'sec-fetch-site': 'cross-site' })).status).toBe(403)
+		expect((await send({ origin: 'null' })).status).toBe(403)
+		expect((await send({ origin: 'null', 'sec-fetch-site': 'same-origin' })).status).toBe(200)
+		expect((await send({ referer: `${CONSOLE}/operations/issues` })).status).toBe(200)
+		expect((await send({ referer: 'https://attacker.test/' })).status).toBe(403)
+	})
+
 	test('never transports removed operator REST, direct ingest, or artifact paths', async () => {
 		const gateway = new RecordingGateway()
 		for (

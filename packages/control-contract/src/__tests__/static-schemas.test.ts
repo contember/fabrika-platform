@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { parseBuilderApprovalState, parseBuilderInstallationDiscovery } from '../builder-bootstrap'
 import { parseBuilderConnectionReceipt } from '../builder-connections'
-import { decodeGitHubSourceConnectionListInput } from '../source-connection-list'
 
 const receipt = {
 	version: 1,
@@ -70,15 +69,4 @@ test('approval parser remains independently embeddable', () => {
 		approvalVerifier: 'a'.repeat(43),
 		expiresAt: 600,
 	})
-})
-
-test('source collection input omits undefined, preserves bounds, and keeps safe error precedence', () => {
-	expect(Object.keys(decodeGitHubSourceConnectionListInput({ cursor: undefined, limit: undefined }))).toEqual([])
-	expect(decodeGitHubSourceConnectionListInput({ limit: 100, cursor: 'x'.repeat(512) })).toEqual({ cursor: 'x'.repeat(512), limit: 100 })
-	for (const value of [null, [], '']) expect(() => decodeGitHubSourceConnectionListInput(value)).toThrow('must be an object')
-	expect(() => decodeGitHubSourceConnectionListInput({ credential: true, cursor: '', limit: 0 })).toThrow('contains an unknown field')
-	expect(() => decodeGitHubSourceConnectionListInput({ cursor: '', limit: 0 })).toThrow('cursor must be a non-empty string')
-	for (const limit of [null, 0, 101, 1.5, '1', Number.NaN, Infinity]) {
-		expect(() => decodeGitHubSourceConnectionListInput({ limit })).toThrow('limit must be an integer from 1 to 100')
-	}
 })

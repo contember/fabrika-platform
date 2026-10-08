@@ -3,6 +3,7 @@ import type { exchangeGitHubAppManifestCode, GitHubAppFetch } from '@fabrika/git
 import { ACTIONS } from '../actions'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
+import { sameOrigin } from '../origin-guard'
 import type { SourceConnectionPort } from '../source/connections'
 import { SourceConnectionWorkflowError } from './errors'
 
@@ -25,8 +26,7 @@ export function requireHuman(auth: AuthContext): string {
 
 export function requireSameOrigin(env: Env, request: Request): string {
 	const expected = requireControlOrigin(env)
-	const origin = request.headers.get('origin')
-	if (origin !== expected) throw new SourceConnectionWorkflowError(403)
+	if (!sameOrigin(request, expected)) throw new SourceConnectionWorkflowError(403)
 	return expected
 }
 

@@ -161,4 +161,34 @@ describe('the gateway CSRF guard', () => {
 	test('fails closed when no public origin is configured', async () => {
 		expect((await forward({ origin: 'https://console.test' }, null)).status).toBe(403)
 	})
+
+	test('refuses a cross-site Sec-Fetch-Site even with a matching Origin', async () => {
+		expect((await forward({ origin: 'https://console.test', 'sec-fetch-site': 'cross-site' })).status).toBe(403)
+		expect((await forward({ origin: 'https://console.test', 'sec-fetch-site': 'same-site' })).status).toBe(403)
+	})
+
+	test('refuses Origin: null unless Sec-Fetch-Site proves same-origin', async () => {
+		expect((await forward({ origin: 'null' })).status).toBe(403)
+		expect((await forward({ origin: 'null', 'sec-fetch-site': 'same-origin' })).status).toBe(200)
+	})
+
+	test('falls back to the Referer when Origin is absent', async () => {
+		expect((await forward({ referer: 'https://console.test/access/keys' })).status).toBe(200)
+		expect((await forward({ referer: 'https://evil.test/page' })).status).toBe(403)
+		expect((await forward({})).status).toBe(403)
+	})
+
+	test('treats PUT as state-changing and leaves only safe methods unchecked', async () => {
+		const send = (method: string) =>
+			forwardIamAdmin(
+				new Request('https://console.test/iam/admin/apps/notes/schema', {
+					method,
+					headers: { origin: 'https://evil.test' },
+					...(method === 'GET' || method === 'HEAD' ? {} : { body: '{}' }),
+				}),
+				{ gateway: new RecordingGateway(Response.json({ ok: true })), publicOrigin: 'https://console.test' },
+			)
+		expect((await send('PUT')).status).toBe(403)
+		expect((await send('GET')).status).toBe(200)
+	})
 })

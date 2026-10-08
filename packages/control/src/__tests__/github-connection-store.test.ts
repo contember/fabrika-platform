@@ -613,7 +613,7 @@ describe('GitHubConnectionStore', () => {
 		expect(await flow.store.publishConnection({ ...base, webhookUrl: 'https://evil.example/webhooks/github' })).toBeNull()
 		expect(await flow.store.publishConnection({ ...base, installationAccountLogin: 'other' })).toBeNull()
 		expect(await flow.store.publishConnection({ ...base, verifiedRepositories: ['acme/a'] })).toBeNull()
-		expect(await flow.store.getConnection()).toBeNull()
+		expect((await flow.store.listConnections({ limit: 1 })).items).toEqual([])
 	})
 
 	test('a stale CAS does not leave ciphertext behind', async () => {
@@ -683,7 +683,7 @@ describe('GitHubConnectionStore', () => {
 		const outcomes = await Promise.allSettled([left.publishConnection(input), right.publishConnection(input)])
 		expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 		expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
-		expect(await flow.store.getConnection()).not.toBeNull()
+		expect((await flow.store.listConnections({ limit: 1 })).items).toHaveLength(1)
 		expect((await flow.store.getAttempt(flow.started.id))?.status).toBe('completed')
 	})
 
@@ -739,7 +739,7 @@ describe('GitHubConnectionStore', () => {
 			verifiedAt: 1_000,
 		})).rejects.toBeInstanceOf(GitHubConnectionCasError)
 		expect((await flow.store.getAttempt(flow.started.id))?.phase).toBe('installation_required')
-		expect(await flow.store.getConnection()).toBeNull()
+		expect((await flow.store.listConnections({ limit: 1 })).items).toEqual([])
 	})
 
 	test('requires repair state instead of hiding a vault-held App credential in a failed row', async () => {

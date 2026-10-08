@@ -18,23 +18,16 @@ export interface ControlRepositories {
 	githubConnections: GitHubConnectionStore
 }
 
-/** The portable repository bundle. A composition root may replace one complete capability. */
-export function createControlRepositories(
-	db: SqlDatabase,
-	options: {
-		now?: () => number
-		replacements?: Partial<ControlRepositories>
-	} = {},
-): ControlRepositories {
+/** The portable repository bundle. */
+export function createControlRepositories(db: SqlDatabase, options: { now?: () => number } = {}): ControlRepositories {
 	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
-	const replacements = options.replacements ?? {}
 	return {
-		builderConnections: replacements.builderConnections ?? new BuilderConnectionRepository(db, now),
-		registry: replacements.registry ?? new ControlRegistryRepository(db, now),
-		runs: replacements.runs ?? new RunRepository(db, now),
-		polling: replacements.polling ?? new RepoPollingRepository(db),
-		operationsCatalog: replacements.operationsCatalog ?? new OperationsCatalogRepository(db, now),
-		operationsReleases: replacements.operationsReleases ?? new OperationsReleaseRepository(db, now),
-		githubConnections: replacements.githubConnections ?? new GitHubConnectionStore(db, now),
+		builderConnections: new BuilderConnectionRepository(db, now),
+		registry: new ControlRegistryRepository(db, now),
+		runs: new RunRepository(db, now),
+		polling: new RepoPollingRepository(db),
+		operationsCatalog: new OperationsCatalogRepository(db, now),
+		operationsReleases: new OperationsReleaseRepository(db, now),
+		githubConnections: new GitHubConnectionStore(db, now),
 	}
 }

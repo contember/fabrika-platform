@@ -15,7 +15,6 @@ import {
 	reconcileSourceConnection,
 	repairSourceConnection,
 	sourceConnectionList,
-	sourceConnectionStatus,
 	startSourceConnection,
 	verifySourceInstallation,
 } from '../source-connection'
@@ -188,7 +187,7 @@ describe('GitHub source connection workflow', () => {
 		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
 		expect(attempt?.stateHash).toMatch(/^[0-9a-f]{64}$/)
 		expect(attempt?.manifestStateSecretRef).toStartWith('vault:')
-		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({
+		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({
 			state: 'setup-pending',
 			continuePath: started.continuePath,
 		})
@@ -230,7 +229,7 @@ describe('GitHub source connection workflow', () => {
 			deps(env, source, mutationRequest('/api/rpc'), auth('user', true, true)),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
 		)).rejects.toThrow('audit unavailable')
-		const status = await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))
+		const status = (await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow
 		expect(status).toMatchObject({ state: 'setup-pending', continuePath: expect.stringContaining('/api/source/github/manifest/') })
 		expect(JSON.stringify(status)).not.toContain(token(32))
 		expect((await queryRowsFromEnv(env, 'SELECT * FROM vault')).length).toBe(1)
@@ -297,8 +296,8 @@ describe('GitHub source connection workflow', () => {
 				})
 			},
 		})).rejects.toMatchObject({ name: 'AbortError' })
-		const state = await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`), caller))
-		expect(state.state).toBe('repair-required')
+		const state = (await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`), caller), {})).workflow
+		expect(state?.state).toBe('repair-required')
 		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
 		expect(attempt?.stateHash).toBeNull()
 		expect(attempt?.manifestStateSecretRef).toBeNull()
@@ -377,7 +376,7 @@ describe('GitHub source connection workflow', () => {
 		)).rejects.toMatchObject({ httpStatus: 400 })
 		expect(source.calls).toEqual([])
 		expect(await env.REPOSITORIES.githubConnections.getWorkflowAttempt()).toBeNull()
-		expect(await env.REPOSITORIES.githubConnections.getConnection()).toBeNull()
+		expect((await env.REPOSITORIES.githubConnections.listConnections({ limit: 1 })).items).toEqual([])
 		expect((await queryRowsFromEnv(env, 'SELECT * FROM vault')).length).toBe(0)
 	})
 
@@ -455,7 +454,7 @@ describe('GitHub source connection workflow', () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		source.available = false
-		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
+		expect((await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({ state: 'unavailable' })
 		await expect(startSourceConnection(
 			deps(env, source, mutationRequest('/api/rpc')),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
@@ -463,25 +462,17 @@ describe('GitHub source connection workflow', () => {
 
 		const { FABRIKA_CONTROL_VAULT_KEY: _vaultKey, ...withoutVault } = environment()
 		const available = new FakeSourceConnection()
-		expect(await sourceConnectionStatus(deps(withoutVault, available, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
+		expect((await sourceConnectionList(deps(withoutVault, available, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({
+			state: 'unavailable',
+		})
 		await expect(startSourceConnection(
 			deps(withoutVault, available, mutationRequest('/api/rpc')),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
 		)).rejects.toMatchObject({ httpStatus: 503 })
-		expect(await sourceConnectionStatus(deps(environment(), available, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'anonymous' })
+		expect((await sourceConnectionList(deps(environment(), available, new Request(`${ORIGIN}/api/rpc`)), {})).workflow).toMatchObject({
+			state: 'anonymous',
+		})
 		expect(available.calls).toEqual([])
-	})
-
-	test('reports connected from the vault-held key without calling GitHub, and unavailable once it cannot be read', async () => {
-		const env = environment()
-		const source = new FakeSourceConnection()
-		const connectionId = await connectKeyed(env, source)
-		source.calls.splice(0)
-		const connected = await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))
-		expect(connected).toMatchObject({ state: 'connected', connectionId })
-		expect(source.calls).toEqual([])
-		await env.DB.prepare(`UPDATE vault SET label = 'platform:github-source:other:app-credential' WHERE label LIKE '%:app-credential'`).run()
-		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
 	})
 
 	test('refuses an installation owned by another account', async () => {
@@ -570,10 +561,6 @@ describe('GitHub source connection workflow', () => {
 		const interleavedPage = await sourceConnectionList(deps(interleavedEnv, source, new Request(`${ORIGIN}/api/rpc`)), { limit: 10 })
 		expect(interleavedPage.items).toEqual([])
 		expect(interleavedPage.workflow).toBeNull()
-		expect(await sourceConnectionStatus(deps(interleavedEnv, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({
-			state: 'connected',
-			connectionId: started.connectionId,
-		})
 
 		const first = await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), { limit: 1 })
 		const second = await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {
@@ -743,6 +730,23 @@ describe('GitHub source connection workflow', () => {
 		expect(await queryRowsFromEnv(env, `SELECT id FROM github_source_setup_attempts WHERE status IN ('active','repair_required')`)).toEqual([])
 	})
 
+	test('applies the shared same-origin rule to source connection mutations', async () => {
+		const start = (headers: Record<string, string>) =>
+			startSourceConnection(
+				deps(environment(), new FakeSourceConnection(), new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers })),
+				{ organization: 'acme', appName: 'source', visibility: 'private', repositories: [] },
+			)
+		await expect(start({ origin: ORIGIN, 'sec-fetch-site': 'cross-site' })).rejects.toMatchObject({ httpStatus: 403 })
+		await expect(start({ origin: 'null' })).rejects.toMatchObject({ httpStatus: 403 })
+		await expect(start({ referer: 'https://evil.example/page' })).rejects.toMatchObject({ httpStatus: 403 })
+		await expect(start({ referer: `${ORIGIN}/settings/source` })).resolves.toMatchObject({
+			continuePath: expect.stringContaining('/api/source/github/manifest/'),
+		})
+		await expect(start({ origin: 'null', 'sec-fetch-site': 'same-origin' })).resolves.toMatchObject({
+			continuePath: expect.stringContaining('/api/source/github/manifest/'),
+		})
+	})
+
 	test('requires a same-origin human for every privileged entrypoint', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
@@ -750,7 +754,7 @@ describe('GitHub source connection workflow', () => {
 			deps(env, source, new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { origin: 'https://evil.example' } })),
 			{ organization: 'acme', appName: 'source', visibility: 'private', repositories: [] },
 		)).rejects.toThrow('source connection request failed')
-		await expect(sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`), auth('service')))).rejects.toThrow(
+		await expect(sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`), auth('service')), {})).rejects.toThrow(
 			'source connection request failed',
 		)
 	})

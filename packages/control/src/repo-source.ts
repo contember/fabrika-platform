@@ -36,14 +36,11 @@ export interface CloneTarget {
 	ref: string
 }
 
-/**
- * How the control plane sources a repo. v1 is `GitHubAppRepoSource`; tests use `FakeRepoSource`.
- *  - `clone(repoUrl, ref, installationId?)` → a clonable URL (mints a short-lived token for the
- *    install when one is given; otherwise returns the bare URL for a public repo).
- *  - `verifyWebhook(req)` → the decoded `PushEvent` iff the HMAC signature checks out, else null.
- */
-export interface RepoEvents {
+export interface PushWebhookVerifier {
 	verifyWebhook(request: Request): Promise<PushEvent | null>
+}
+
+export interface RepoEvents extends PushWebhookVerifier {
 	/**
 	 * Resolve the GitHub App installation id that grants access to `repoUrl` (so onboarding a private
 	 * repo can auto-fill it instead of pasting the number by hand). Returns null when the App isn't
@@ -53,26 +50,19 @@ export interface RepoEvents {
 	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null>
 }
 
+/**
+ * How the control plane sources a repo. v1 is `GitHubAppRepoSource`; tests use `FakeRepoSource`.
+ *  - `clone(repoUrl, ref, installationId?)` → a clonable URL (mints a short-lived token for the
+ *    install when one is given; otherwise returns the bare URL for a public repo).
+ *  - `verifyWebhook(req)` → the decoded `PushEvent` iff the HMAC signature checks out, else null.
+ */
 export interface RepoSource extends RepoEvents {
 	clone(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<CloneTarget>
-}
-
-export interface RepoInstallationLookup {
-	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null>
 }
 
 /** Supplies the current webhook HMAC secret without exposing it through connection state. */
 export interface WebhookSecretProvider {
 	getSecret(signal?: AbortSignal): Promise<string | null>
-}
-
-export class StaticWebhookSecretProvider implements WebhookSecretProvider {
-	constructor(private readonly value: string | undefined) {}
-
-	getSecret(signal?: AbortSignal): Promise<string | null> {
-		if (signal?.aborted) return Promise.reject(new DOMException('The operation was aborted', 'AbortError'))
-		return Promise.resolve(this.value === undefined || this.value === '' ? null : this.value)
-	}
 }
 
 // ── HMAC-SHA256 webhook signature verification (shared by real + fake) ─────────
@@ -101,20 +91,9 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
 	return crypto.subtle.verify('HMAC', key, provided, utf8(rawBody))
 }
 
-/** Keep webhook authentication local while delegating installation lookup to the composition. */
-export class LocalGitHubRepoEvents implements RepoEvents {
-	private readonly webhookSecrets: WebhookSecretProvider
-
-	constructor(
-		webhookSecret: string | undefined | WebhookSecretProvider,
-		private readonly installations: RepoInstallationLookup,
-	) {
-		this.webhookSecrets = typeof webhookSecret === 'object' ? webhookSecret : new StaticWebhookSecretProvider(webhookSecret)
-	}
-
-	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null> {
-		return this.installations.resolveInstallationId(repoUrl, signal)
-	}
+/** Verify a push against one connection's webhook secret, read per delivery. */
+export class ConnectionWebhookVerifier implements PushWebhookVerifier {
+	constructor(private readonly webhookSecrets: WebhookSecretProvider) {}
 
 	async verifyWebhook(request: Request): Promise<PushEvent | null> {
 		const secret = await this.webhookSecrets.getSecret(request.signal)

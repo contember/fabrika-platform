@@ -223,10 +223,6 @@ describe('controlApp', () => {
 	test('keeps manifest and callback paths human-only and returns a browser-safe unavailable status', async () => {
 		const fetch = application({ FABRIKA_CONTROL_DOMAIN: 'https://control.test' })
 		const service = await testToken({ label: 'automation', type: 'service', actions: [ACTIONS.SOURCE_CONNECTION_MANAGE] })
-		const status = await fetch(rpcRequest('sourceConnection.status', null, adminToken))
-		expect(status.status).toBe(200)
-		const statusBody: unknown = await status.json()
-		expect(statusBody).toEqual({ result: { provider: 'harbor', kind: 'github-app', state: 'unavailable' } })
 		const list = await fetch(rpcRequest('sourceConnection.list', {}, adminToken))
 		expect(list.status).toBe(200)
 		const listBody: unknown = await list.json()

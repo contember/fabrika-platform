@@ -4,39 +4,11 @@ import type {
 	GitHubSourceConnectionListInput,
 	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionSetupPendingDto,
-	GitHubSourceConnectionStatusDto,
 	GitHubSourceConnectionWorkflowDto,
 } from '@fabrika/control-contract'
 import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from '../github-connection-store'
-import { vault } from '../services'
-import { readGitHubAppCredential } from '../source/credentials'
 import { requireHuman, type SourceConnectionWorkflowDeps } from './context'
 import { SourceConnectionWorkflowError } from './errors'
-
-export async function sourceConnectionStatus(deps: SourceConnectionWorkflowDeps): Promise<GitHubSourceConnectionStatusDto> {
-	requireHuman(deps.auth)
-	const [firstConnection, workflow] = await Promise.all([
-		deps.env.REPOSITORIES.githubConnections.getConnection(),
-		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
-	])
-	let connection = firstConnection
-	if (workflow !== null) {
-		const published = await deps.env.REPOSITORIES.githubConnections.getConnectionById(workflow.id)
-		if (published === null) return workflowDto(deps.source.provider, workflow)
-		connection = published
-	}
-	if (connection !== null) {
-		// The status is the vault's word, not GitHub's: the key decrypts under its purpose and names the stored App.
-		try {
-			const credential = await readGitHubAppCredential(await vault(deps.env), connection.appCredentialRef, connection.connectionId)
-			if (credential.appId !== connection.appId) return baseStatus(deps.source.provider, 'unavailable')
-		} catch {
-			return baseStatus(deps.source.provider, 'unavailable')
-		}
-		return connectionDto(deps.source.provider, connection)
-	}
-	return emptySourceStatus(deps)
-}
 
 export async function sourceConnectionList(
 	deps: SourceConnectionWorkflowDeps,

@@ -60,14 +60,16 @@ that trusted token to `Authorization` and removes every console cookie before th
 verifies the signed calling-app audience and resolves IAM permissions live. Rewriting `Origin` to the
 private upstream's address is exactly the bug that answered 403 to the console's whole Access plane:
 the browser's origin is the console's, never the upstream's, so no rewriting scheme could make an
-issuer comparison correct. Each gateway performs its OWN same-origin check first, against
-`FABRIKA_CONTROL_DOMAIN` (`controlPublicOrigin`) rather than the reconstructed request URL, which is
-plain HTTP behind a TLS-terminating balancer. That check is the confused-deputy defense: a hostile
-page POSTing to the console's own origin with the victim's cookies is refused here, before the
-upstream is asked. Absent configuration fails CLOSED. The `/api/*` surface carries the same check
-(`controlOriginGuard`, `src/origin-guard.ts`, mounted after auth): an unsafe-method request from a
-cookie-borne person is refused unless same-origin, a bearer or a machine principal is exempt, and it is
-ADMISSION — not enforcement, not authorization (`docs/reference/overview.md` names all three). A trigger
+issuer comparison correct. Control has ONE same-origin rule, `sameOrigin` in `src/origin-guard.ts`
+(`Sec-Fetch-Site`, `Origin: null`, the `Referer` fallback), compared against `FABRIKA_CONTROL_DOMAIN`
+(`controlPublicOrigin`) rather than the reconstructed request URL, which is plain HTTP behind a
+TLS-terminating balancer. Absent configuration fails CLOSED. Every state-changing request (anything but
+GET/HEAD/OPTIONS — an allowlist) passes it first: on `/api/*` (`controlOriginGuard`, mounted after auth;
+a bearer or a machine principal is exempt), in both gateways (the IAM gateway exempts only a bearer with
+no cookie), and in every source connection mutation. That check is the confused-deputy defense: a hostile
+page POSTing to the console's own origin with the victim's cookies is refused before the upstream is
+asked. Never add a second same-origin check. It is ADMISSION — not enforcement, not authorization
+(`docs/reference/overview.md` names all three). A trigger
 writes a `pending` run to the
 database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
 namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.

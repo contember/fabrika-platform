@@ -86,7 +86,6 @@ describe('Delivery RPC client', () => {
 	test('maps source connection procedures without browser-side credential fields', async () => {
 		const calls: RpcCall[] = []
 		const client = createControlClient(recordingFetch(calls, { provider: 'zerops', kind: 'github-app', state: 'anonymous' }))
-		await client.sourceConnection.status()
 		await client.sourceConnection.list({ cursor: 'page-2', limit: 50 })
 		await client.sourceConnection.start({
 			organization: 'acme',
@@ -98,7 +97,6 @@ describe('Delivery RPC client', () => {
 		await client.sourceConnection.repair({ connectionId: 'connection-1' })
 		await client.sourceConnection.reconcile({ connectionId: 'connection-1' })
 		expect(calls).toEqual([
-			{ method: 'sourceConnection.status', input: null },
 			{ method: 'sourceConnection.list', input: { cursor: 'page-2', limit: 50 } },
 			{
 				method: 'sourceConnection.start',

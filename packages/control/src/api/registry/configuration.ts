@@ -1,5 +1,5 @@
-import type { ControlProvider } from '@fabrika/provider-contract'
 import type { AppSecretDto, AppVarDto, ListResponse, OkResponse, PutAppVarRequest } from '@fabrika/control-contract'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { type AppSecretRow, type AppVarRow } from '../../db'
 import { parseVaultRef } from '../../vault'
 import { fail } from '../domain'

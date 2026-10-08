@@ -10,12 +10,12 @@ import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
 import { error, json } from './http'
 import { refMatches } from './ref-match'
-import { normalizeRepoUrl, parseGitHubRepo, type PushEvent, type RepoEvents } from './repo-source'
+import { normalizeRepoUrl, parseGitHubRepo, type PushEvent, type PushWebhookVerifier } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface WebhookDeps {
 	repositories: ControlRepositories
-	repoSource: RepoEvents
+	repoSource: PushWebhookVerifier
 	queue: JobQueue<DeployJobMessage>
 	binding: WebhookBinding
 }

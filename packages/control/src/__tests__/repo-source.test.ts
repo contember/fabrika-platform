@@ -4,11 +4,11 @@ import { describe, expect, test } from 'bun:test'
 import { createHmac, generateKeyPairSync } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import {
+	ConnectionWebhookVerifier,
 	decodePushEvent,
 	GITHUB_WEBHOOK_MAX_BYTES,
 	type GitHubAppConfig,
 	GitHubAppRepoSource,
-	LocalGitHubRepoEvents,
 	normalizeRepoUrl,
 	parseGitHubRepo,
 	pemToPkcs8,
@@ -54,21 +54,12 @@ describe('verifyWebhookSignature (HMAC-SHA256)', () => {
 	})
 })
 
-describe('LocalGitHubRepoEvents', () => {
+describe('ConnectionWebhookVerifier', () => {
 	const body = JSON.stringify({ ref: 'refs/heads/main', repository: { clone_url: 'https://github.com/acme/app.git' } })
+	const staticSecret = (secret: string | null) => ({ getSecret: () => Promise.resolve(secret) })
 
-	test('keeps webhook HMAC local and delegates installation lookup with the caller signal', async () => {
-		const calls: Array<{ repoUrl: string; signal?: AbortSignal }> = []
-		const events = new LocalGitHubRepoEvents('hook-secret', {
-			resolveInstallationId(repoUrl, signal) {
-				calls.push({ repoUrl, ...(signal === undefined ? {} : { signal }) })
-				return Promise.resolve(73)
-			},
-		})
-		const signal = new AbortController().signal
-		await expect(events.resolveInstallationId('github.com/acme/app', signal)).resolves.toBe(73)
-		expect(calls).toEqual([{ repoUrl: 'github.com/acme/app', signal }])
-
+	test('verifies a push signed with the connection secret', async () => {
+		const events = new ConnectionWebhookVerifier(staticSecret('hook-secret'))
 		const signature = await signWebhook(body, 'hook-secret')
 		const event = await events.verifyWebhook(
 			new Request('https://control.test/webhooks/github', {
@@ -80,14 +71,8 @@ describe('LocalGitHubRepoEvents', () => {
 		expect(event?.repoUrl).toBe('https://github.com/acme/app.git')
 	})
 
-	test.each([undefined, ''])('fails closed when the webhook secret is %s', async (secret) => {
-		let lookups = 0
-		const events = new LocalGitHubRepoEvents(secret, {
-			resolveInstallationId() {
-				lookups += 1
-				return Promise.resolve(null)
-			},
-		})
+	test.each([null, ''])('fails closed when the webhook secret is %p', async (secret) => {
+		const events = new ConnectionWebhookVerifier(staticSecret(secret))
 		const emptyKeySignature = `sha256=${createHmac('sha256', '').update(body).digest('hex')}`
 		const request = new Request('https://control.test/webhooks/github', {
 			method: 'POST',
@@ -95,12 +80,11 @@ describe('LocalGitHubRepoEvents', () => {
 			headers: { 'X-Hub-Signature-256': emptyKeySignature },
 		})
 		await expect(events.verifyWebhook(request)).resolves.toBeNull()
-		expect(lookups).toBe(0)
 		expect(request.bodyUsed).toBe(false)
 	})
 
 	test('rejects an oversized body before HMAC or JSON decoding', async () => {
-		const events = new LocalGitHubRepoEvents('hook-secret', { resolveInstallationId: () => Promise.resolve(null) })
+		const events = new ConnectionWebhookVerifier(staticSecret('hook-secret'))
 		const oversized = 'x'.repeat(GITHUB_WEBHOOK_MAX_BYTES + 1)
 		await expect(events.verifyWebhook(
 			new Request('https://control.test/webhooks/github', {
@@ -114,12 +98,12 @@ describe('LocalGitHubRepoEvents', () => {
 	test('reads a dynamic secret for every delivery', async () => {
 		let secret = 'first'
 		let reads = 0
-		const events = new LocalGitHubRepoEvents({
+		const events = new ConnectionWebhookVerifier({
 			getSecret() {
 				reads += 1
 				return Promise.resolve(secret)
 			},
-		}, { resolveInstallationId: () => Promise.resolve(null) })
+		})
 		const first = await signWebhook(body, secret)
 		expect(
 			await events.verifyWebhook(
@@ -142,15 +126,6 @@ describe('LocalGitHubRepoEvents', () => {
 			),
 		).not.toBeNull()
 		expect(reads).toBe(2)
-	})
-
-	test('a missing dynamic secret fails before reading the unauthenticated body', async () => {
-		const events = new LocalGitHubRepoEvents({ getSecret: () => Promise.resolve(null) }, {
-			resolveInstallationId: () => Promise.resolve(null),
-		})
-		const request = new Request('https://control.test/webhooks/github', { method: 'POST', body })
-		await expect(events.verifyWebhook(request)).resolves.toBeNull()
-		expect(request.bodyUsed).toBe(false)
 	})
 })
 

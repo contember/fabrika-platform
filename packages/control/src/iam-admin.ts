@@ -2,9 +2,9 @@ import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
 import { error } from './http'
+import { isStateChanging, sameOrigin } from './origin-guard'
 
 const PREFIX = '/iam/admin'
-const STATE_CHANGING_METHODS = new Set(['POST', 'PATCH', 'DELETE'])
 
 export interface IamAdminGatewayOptions {
 	gateway: HttpService
@@ -23,7 +23,7 @@ export async function forwardIamAdmin(request: Request, options: IamAdminGateway
 	if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
 		return error(404, 'not found')
 	}
-	if (!sameOriginMutation(request, options.publicOrigin)) {
+	if (isStateChanging(request) && !bearerOnly(request) && !sameOrigin(request, options.publicOrigin)) {
 		return error(403, 'cross-origin request rejected')
 	}
 
@@ -75,38 +75,11 @@ const rpcErrorSchema = z.object({
 })
 
 /**
- * The gateway's own CSRF check, mirroring IAM's (`packages/iam/src/admin/router.ts`).
- *
- * A request authenticated solely by `Authorization` is exempt for the same reason: a bearer is never
- * attached by the browser on its own, so the check protects nothing there and would block every
- * machine caller. Anything carrying the console's session cookie is checked.
+ * A request with NO ambient credential at all — a bearer and not one cookie — is exempt from the
+ * same-origin check: the browser never attaches a bearer on its own, so the check protects nothing there
+ * and would block every machine caller. Testing for any cookie, not a named one, keeps this correct
+ * without the gateway knowing which cookie authenticates the console.
  */
-function sameOriginMutation(request: Request, publicOrigin: string | undefined): boolean {
-	if (!STATE_CHANGING_METHODS.has(request.method)) {
-		return true
-	}
-	// Exempt only a request with NO ambient credential at all: a bearer and not one cookie. Testing for
-	// the absence of any cookie rather than for a named one keeps this correct without the gateway
-	// having to know which cookie authenticates the console.
-	if (request.headers.get('authorization') !== null && request.headers.get('cookie') === null) {
-		return true
-	}
-	const expected = originOf(publicOrigin ?? '')
-	if (expected === null) {
-		return false
-	}
-	const origin = request.headers.get('origin')
-	if (origin !== null) {
-		return origin === expected
-	}
-	const referer = request.headers.get('referer')
-	return referer === null ? false : originOf(referer) === expected
-}
-
-function originOf(value: string): string | null {
-	try {
-		return new URL(value).origin
-	} catch {
-		return null
-	}
+function bearerOnly(request: Request): boolean {
+	return request.headers.get('authorization') !== null && request.headers.get('cookie') === null
 }

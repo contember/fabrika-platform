@@ -17,7 +17,7 @@ export function controlOriginGuard<Ctx extends AuthCarrier>(env: Pick<IamEnv, 'F
 	const expected = controlPublicOrigin(env)
 	return (request, ctx, next) => {
 		const path = canonicalPath(request.url)
-		if (!guarded(path) || SAFE_METHODS.has(request.method)) return next()
+		if (!guarded(path) || !isStateChanging(request)) return next()
 		if (exempt(request, ctx.auth)) return next()
 		return sameOrigin(request, expected) ? next() : Promise.resolve(refusal(path))
 	}
@@ -48,12 +48,17 @@ function exempt(request: Request, auth: AuthContext | null | undefined): boolean
 	return principal !== null && principal.type !== 'user'
 }
 
+export function isStateChanging(request: Request): boolean {
+	return !SAFE_METHODS.has(request.method)
+}
+
 /**
- * The same rule as IAM's `sameOrigin` (`packages/iam/src/auth/routes.ts`), compared against the
- * CONFIGURED public origin: behind a TLS-terminating balancer `new URL(request.url).origin` is
- * `http://host` while the browser truthfully sent `https://host` (backlog 50).
+ * Control's ONE same-origin rule, shared by this guard, the IAM and Operations gateways and the source
+ * connection workflow. The same rule as IAM's `sameOrigin` (`packages/iam/src/auth/routes.ts`), compared
+ * against the CONFIGURED public origin: behind a TLS-terminating balancer `new URL(request.url).origin` is
+ * `http://host` while the browser truthfully sent `https://host` (backlog 50). Absent configuration fails closed.
  */
-function sameOrigin(request: Request, expected: string | undefined): boolean {
+export function sameOrigin(request: Request, expected: string | undefined): boolean {
 	const fetchSite = request.headers.get('Sec-Fetch-Site')
 	if (fetchSite !== null && fetchSite !== 'same-origin') return false
 	if (expected === undefined) return false

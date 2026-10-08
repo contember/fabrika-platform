@@ -106,6 +106,7 @@ export async function sourceBindingFields(
 		if (input.githubInstallationId === undefined && input.resolveInstallationId !== true) return {}
 		if (mode === undefined) fail(409, `provider ${c.provider.id} deploys public sources only`)
 		if (input.githubInstallationId !== undefined) return { githubInstallationId: input.githubInstallationId }
+		if (c.repoSource === undefined) return { githubInstallationId: null }
 		return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
 	}
 	if (existing?.github_connection_id !== null && existing?.github_connection_id !== undefined) {

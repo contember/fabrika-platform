@@ -77,7 +77,6 @@ import {
 	reconcileSourceConnection,
 	repairSourceConnection,
 	sourceConnectionList,
-	sourceConnectionStatus,
 	startSourceConnection,
 	verifySourceInstallation,
 } from './source-connection'
@@ -211,9 +210,6 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			),
 		}),
 		sourceConnection: rpc.router({
-			status: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx }) =>
-				controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
-			),
 			list: rpc.procedure.input(sourceConnectionListInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx, input }) =>
 				controlCall(() => sourceConnectionList(sourceConnectionContext(ctx), input))
 			),
@@ -336,7 +332,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
 		return {
 			repositories: deps.repositories,
-			repoSource: deps.repoSource,
+			...(deps.repoSource === undefined ? {} : { repoSource: deps.repoSource }),
 			provider: deps.provider,
 			auth: ctx.auth,
 			signal: ctx.request.signal,

@@ -131,11 +131,6 @@ export class GitHubConnectionStore {
 		return row === null ? null : decodeAttempt(row)
 	}
 
-	async getConnection(): Promise<GitHubSourceConnection | null> {
-		const page = await this.listConnections({ limit: 1 })
-		return page.items[0] ?? null
-	}
-
 	async getConnectionById(connectionId: string): Promise<GitHubSourceConnection | null> {
 		validateConnectionId(connectionId)
 		const row = await this.db.prepare('SELECT * FROM github_source_connections_keyed WHERE connection_id = ?')

@@ -6,7 +6,7 @@ import { type NamespaceProxyChanged } from '../namespaces'
 
 export interface RegistryUseCaseContext {
 	readonly repositories: ControlRepositories
-	readonly repoSource: RepoEvents
+	readonly repoSource?: RepoEvents
 	readonly provider: ControlProvider
 	readonly auth: AuthContext
 	readonly signal: AbortSignal

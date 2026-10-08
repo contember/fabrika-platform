@@ -117,7 +117,6 @@ export interface GitHubSourceConnectionInput {
 
 /** Provider-neutral admin seam. A statically composed provider implements these GitHub operations. */
 export interface GitHubSourceConnectionRpcContract {
-	status: RpcProcedure<void, GitHubSourceConnectionStatusDto>
 	list: RpcProcedure<GitHubSourceConnectionListInput, GitHubSourceConnectionListResponse>
 	start: RpcProcedure<StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse>
 	verifyInstallation: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
