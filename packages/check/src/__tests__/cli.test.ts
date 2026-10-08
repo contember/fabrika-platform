@@ -28,6 +28,22 @@ afterEach(async () => {
 })
 
 describe('fabrika-check', () => {
+	test('refuses an application that stands in for @fabrika/app by self-reference, which Bun resolves', async () => {
+		const root = await application({
+			...CLEAN_APPLICATION,
+			'package.json': '{ "name": "@fabrika/app", "type": "module", "exports": { "./build": "./dist/build.js" } }\n',
+			'dist/build.js': "export const origin = 'the application'\n",
+			'probe.mjs': "const build = await import('@fabrika/app/build')\nconsole.log(build.origin)\n",
+		})
+		const probe = Bun.spawn(['bun', join(root, 'probe.mjs')], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+		expect((await new Response(probe.stdout).text()).trim()).toBe('the application')
+
+		const result = await run(root)
+
+		expect(result.stdout).toContain('package.json:1:3 package-replacement the package is named @fabrika/app')
+		expect(result.stdout).toContain('package.json:1:45 package-replacement an exports map')
+	})
+
 	test('reads the root .npmrc and bun.lock from disk, and still no other dot entry', async () => {
 		const root = await application({
 			...CLEAN_APPLICATION,

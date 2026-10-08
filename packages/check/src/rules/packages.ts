@@ -58,6 +58,19 @@ type Finder = (file: string, needle: string, message: string, allowed: string) =
 function checkManifest(path: string, text: string, finding: Finder): void {
 	const manifest = parseJsonc(text)
 	if (!isRecord(manifest)) return
+	// Bun resolves a package's own name to itself: an application named `@fabrika/app` imports its own files as it.
+	const name = manifest['name']
+	if (typeof name === 'string' && isTrustedSpecifier(name)) {
+		finding(
+			path,
+			'"name"',
+			`the package is named ${name}, so an import of ${name} loads the application's own files`,
+			'a name outside @fabrika/* and zod',
+		)
+	}
+	if (path === 'package.json' && manifest['exports'] !== undefined) {
+		finding(path, '"exports"', 'an exports map lets the application stand in for a package by self-reference', 'no exports in the root package.json')
+	}
 	for (const field of REPLACEMENT_FIELDS) {
 		if (manifest[field] !== undefined) {
 			finding(path, `"${field}"`, `${field} can replace any package, the ones the platform trusts by name included`, `no ${field} in package.json`)
@@ -69,7 +82,7 @@ function checkManifest(path: string, text: string, finding: Finder): void {
 		for (const [name, specifier] of Object.entries(dependencies)) {
 			if (!isTrustedSpecifier(name)) continue
 			if (typeof specifier !== 'string' || !REGISTRY_RANGE.test(specifier)) {
-				finding(path, `"${name}"`, `${field} names ${name} as '${String(specifier)}', which is not a registry version`, REGISTRY_ALLOWED)
+				finding(path, `"${name}":`, `${field} names ${name} as '${String(specifier)}', which is not a registry version`, REGISTRY_ALLOWED)
 			}
 		}
 	}

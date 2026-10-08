@@ -349,6 +349,8 @@ const cases: readonly RuleCase[] = [
 		bad: {
 			'package.json': [
 				'{',
+				'\t"name": "@fabrika/app",',
+				'\t"exports": { "./build": "./dist/build.js" },',
 				'\t"dependencies": {',
 				'\t\t"@fabrika/app": "workspace:*",',
 				'\t\t"zod": "^3.25.76"',
@@ -371,10 +373,22 @@ const cases: readonly RuleCase[] = [
 			'bunfig.toml': '[install]\nregistry = "https://registry.example.test"\n',
 			'.npmrc': '@fabrika:registry=https://registry.example.test\n',
 			'src/types.d.ts': "declare module '@fabrika/app' {\n\texport const app: number\n}\n",
+			'packages/web/package.json': '{ "name": "zod" }\n',
 		},
-		expected: ['.npmrc:1:1', 'bun.lock:4:5', 'bunfig.toml:2:1', 'package.json:3:3', 'package.json:6:2', 'src/types.d.ts:1:1'],
+		expected: [
+			'.npmrc:1:1',
+			'bun.lock:4:5',
+			'bunfig.toml:2:1',
+			'package.json:2:2',
+			'package.json:3:2',
+			'package.json:5:3',
+			'package.json:8:2',
+			'packages/web/package.json:1:3',
+			'src/types.d.ts:1:1',
+		],
 		good: {
-			'package.json': '{\n\t"dependencies": { "@fabrika/app": "^0.0.4", "zod": "3.25.76" }\n}\n',
+			'package.json': '{\n\t"name": "notes",\n\t"dependencies": { "@fabrika/app": "^0.0.4", "zod": "3.25.76" }\n}\n',
+			'packages/web/package.json': '{ "name": "notes-web", "exports": { ".": "./src/index.ts" } }\n',
 			'bun.lock': '{\n  "lockfileVersion": 1,\n  "packages": {\n    "@fabrika/app": ["@fabrika/app@0.0.4", "", {}, "sha512-AAAA"],\n  },\n}\n',
 			'bunfig.toml': '[install]\nexact = true\n',
 			'.npmrc': 'save-exact=true\n',
