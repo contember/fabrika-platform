@@ -1,6 +1,4 @@
-import { APP_ENVIRONMENT_SEPARATOR, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, isAppEnvironmentPart } from '@fabrika/auth-core'
-import { operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
-import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
+import { APP_ENVIRONMENT_SEPARATOR, isAppEnvironmentPart, isFrameworkVariableName } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../../public-origin'
 import { fail } from '../domain'
@@ -16,11 +14,9 @@ export const APP_VAR_VALUE_MAX_LENGTH = 4096
 const isControlCharacter = (code: number): boolean =>
 	(code < 0x20 && code !== 0x09) || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029
 
-/** Refuse a name the platform assigns itself, whichever surface writes it (ADR-0035). */
+/** Refuse a name the platform assigns itself, whichever surface writes it (ADR-0035, ADR-0043). */
 export function assertUnmanagedName(kind: 'variable' | 'secret', name: string): void {
-	if (
-		name === FABRIKA_RELEASE || name === FABRIKA_IAM_ISSUER || name === FABRIKA_IAM_APP_ID || operationsManagedEnvironmentCollisions([name]).length > 0
-	) {
+	if (isFrameworkVariableName(name)) {
 		fail(400, `application ${kind} "${name}" is managed by Fabrika`)
 	}
 }

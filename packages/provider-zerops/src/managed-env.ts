@@ -1,9 +1,12 @@
+import { type FrameworkVariableName, isFrameworkVariableName } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { renderYaml } from './compile'
 import { parseZeropsDescriptor, type PreparedZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
 
-export type ManagedKey =
+/** The framework-only names Control hands every Zerops deploy; the rest of the list is the provider's own. */
+export type ManagedKey = Extract<
+	FrameworkVariableName,
 	| 'FABRIKA_RELEASE'
 	| 'FABRIKA_OPERATIONS_DSN'
 	| 'FABRIKA_IAM_ISSUER'
@@ -11,6 +14,7 @@ export type ManagedKey =
 	| 'FABRIKA_APP_ID'
 	| 'FABRIKA_ENVIRONMENT'
 	| 'FABRIKA_SERVICE_KEY'
+>
 
 export const MANAGED_KEYS: readonly ManagedKey[] = [
 	'FABRIKA_RELEASE',
@@ -50,14 +54,13 @@ export function parseManagedValues(value: unknown): ManagedValues {
 	return result.data
 }
 
-const isManagedKey = (name: string): boolean => MANAGED_KEYS.some((key) => key === name)
-
 const refuse = (): never => {
 	throw new Error('zerops: application configuration uses a Fabrika-managed environment name')
 }
 
+/** Refuse every framework-only name (ADR-0043), not only the ones a deploy writes today. */
 export function assertAuthoredManagedName(name: string): void {
-	if (isManagedKey(name)) refuse()
+	if (isFrameworkVariableName(name)) refuse()
 }
 
 type AuthoredDocumentValue = string | number | boolean | null | readonly AuthoredDocumentValue[] | { readonly [key: string]: AuthoredDocumentValue }

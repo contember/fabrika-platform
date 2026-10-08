@@ -1,5 +1,5 @@
 import { ConflictError } from '@fabrika/app'
-import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName } from '@fabrika/auth-core'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import { uuidv7 } from '@fabrika/platform'
@@ -711,12 +711,18 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 
 	test('a reserved name is refused on the SECRET surface, exactly as it is on the variable surface', async () => {
 		const { deps } = await seededApp()
-		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
+		for (const name of FRAMEWORK_VARIABLE_NAMES) {
 			const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name, value: 'x' } }), deps)
 			expect(`${name}: ${refused.status}`).toBe(`${name}: 400`)
 			expect(((await refused.json()) as { error: string }).error).toContain('managed by Fabrika')
 		}
 		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	})
+
+	test('every name a deploy writes into the managed environment is in the one framework-only list', () => {
+		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
+			expect(`${name}: ${isFrameworkVariableName(name)}`).toBe(`${name}: true`)
+		}
 	})
 
 	test('a written value is sealed in the vault — the row holds only its ref, even when the value looks like a ref', async () => {

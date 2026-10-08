@@ -1,10 +1,6 @@
-import { appEnvironmentId, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { appEnvironmentId, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, isFrameworkVariableName } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
-import {
-	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
-	operationsManagedEnvironment,
-	operationsManagedEnvironmentCollisions,
-} from '@fabrika/operations-contract/ingest'
+import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
 import {
@@ -301,16 +297,9 @@ const resolveSecrets = async (
 
 /** Refuse a platform-owned name before any provider effect, whichever surface let it in. */
 const assertUnmanagedNames = (kind: 'variable' | 'secret', names: readonly string[]): void => {
-	const collisions = operationsManagedEnvironmentCollisions(names)
-	if (collisions.length > 0) {
-		throw new Error(`application ${kind} "${collisions[0]}" is managed by Fabrika`)
-	}
-	// `FABRIKA_RELEASE` is only caught by the release-context loop below, and only when Operations is
-	// configured — an installation without it had no deploy-time guard at all.
-	for (const reserved of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE]) {
-		if (names.includes(reserved)) {
-			throw new Error(`application ${kind} "${reserved}" is managed by Fabrika`)
-		}
+	const reserved = names.find(isFrameworkVariableName)
+	if (reserved !== undefined) {
+		throw new Error(`application ${kind} "${reserved}" is managed by Fabrika`)
 	}
 }
 
