@@ -6,6 +6,60 @@ On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
 > <ids deleted/rescoped>. Deferred: <honest notes>.
 -->
 
+> **OUTCOME — shipped 2026-10-08.** Four defects fixed and the stack cut further, with the feature
+> set unchanged (builder, Cloudflare as a platform host, Operations, repo polling, share links):
+>
+> - App secrets are vault-only; `literal:` refs no longer store plaintext.
+> - The builder's daemon lifecycle no longer signals an unchecked PID.
+> - Operations telemetry health can now report healthy.
+> - Builder phases name only skills that exist.
+> - One UUIDv7, one same-origin rule, and one GitHub connection model on both clouds.
+> - IAM `/admin` is bearer-only; app-side credential issuance and the passthrough JWT are gone.
+> - `proxy-contract`, `iam-ui` and `operations-ui` are folded in; `@fabrika/operations` is private.
+> - Migrations are squashed to one `0001_init.sql` per bundle and dialect (80 → 8 files), with
+>   identical schema dumps before and after.
+> - Biome enforces no unused imports, no unused variables and no explicit `any`.
+>
+> Packages 33 → 30, public 23 → 21. Production TypeScript 97,527 → 93,909 lines (−3.6k), tests
+> 85,752 → 81,743 (−4.0k), against `902fb08`.
+>
+> Commit map:
+>
+> | Units     | Commits                                               |
+> | --------- | ----------------------------------------------------- |
+> | WU0.1     | `05bc9d2`                                             |
+> | WU1.1–1.5 | `e4397c3`, `def37c9`, `9b9aa3e`, `3386ed9`, `d966520` |
+> | WU2.1–2.4 | `bdd7890`, `c84c2a6`, `1a38d70`, `09b12c5`            |
+> | WU3.1–3.2 | `fb4e2cb`, `e314b93`                                  |
+> | WU4.1     | `b639797`                                             |
+> | WU5.1–5.2 | `53ae939`, `92e06e0`                                  |
+> | WU6.1     | `a8cf47e`                                             |
+> | WU7.1     | `1d55bd6`                                             |
+>
+> Verification at `1d55bd6`:
+>
+> - typecheck;
+> - `bun run test` with Postgres: 3867 + 317 + 180 pass, 0 fail;
+> - lint and `format:check`;
+> - `gen:check` and `release:validate`;
+> - `release:pack` and `release:smoke` (21 packages);
+> - `local:reset && local:smoke`;
+> - `test:browser`: 10 pass.
+>
+> Every unit except WU0.1 and WU5.1 (mechanical) had an independent review.
+>
+> Not run: the S3 suites, the live Zerops platform-facts suite, a Docker build of the runner image,
+> and real `platform deploy` runs on either cloud.
+>
+> Owner action: reinstall the live test installations (squashed migrations, the new GitHub model,
+> stale `GITHUB_APP_*` Worker secrets on Cloudflare).
+>
+> Deferred:
+>
+> - Typing `PlanResponse.value` per response type in canvas-kernel.
+> - Removing `IamRpc.issueKey`: `fabrika control key issue` uses it.
+> - The review "maybe" items listed under Out of scope.
+
 # Sprint — Second simplification pass (2026-10-08)
 
 **Goal.** Fix four defects found by a six-area review, then remove the dead code, duplicate models and
@@ -419,3 +473,4 @@ whenever the package set changes.
 - Wave 5 → `53ae939` (WU5.1), `92e06e0` (WU5.2). Gates: typecheck, `bun run test` with Postgres 3891 + 317 + 180 pass / 0 fail, lint, format, `gen:check`, `release:validate`, `local:reset && local:smoke`, `test:browser` 10 pass.
 - WU5.2 visible changes: Operations times use the console's local-time formatters (no longer UTC), Access dates show seconds, Access error pages use the console's `RouteError` text. `fmtAgo` no longer prints "0m ago" between 45 and 59 seconds.
 - WU5.1 kept Control's export names (`./github-connection-store`, `./repo-source`, `./source`) and pointed them at the new files; `local-stack` imports them.
+- Wave 6–7 → `a8cf47e` (WU6.1; the `platform-node` bundle keeps its two files because Operations composes only the first), `1d55bd6` (WU7.1, 61 hits fixed). Final gates are in the OUTCOME block.

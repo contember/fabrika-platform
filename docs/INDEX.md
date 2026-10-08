@@ -19,16 +19,17 @@ fabrika-platform is and how the pieces fit — then skim
 
 ## Active sprints
 
-- [Second simplification pass](sprints/sprint-2026-10-08-second-simplification-pass.md) — fixes
-  vault-only secrets, the builder's unchecked PID signal, Operations telemetry health and phantom
-  builder skills, then removes dead API, duplicate models and single-consumer packages, and squashes
-  migrations.
+None. The [second simplification pass](archive/sprint-2026-10-08-second-simplification-pass.md)
+shipped on 2026-10-08.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
+- **Live test installations must be reinstalled.** Migrations are squashed to one initial file per
+  bundle ([ADR-0017](decisions/0017-service-owned-postgres-migrations.md)) and both clouds use
+  vault-backed GitHub connections ([ADR-0029](decisions/0029-github-app-sources.md)).
 - **Auth has one enforcement point.** The proxy runs the only gate evaluator
   ([ADR-0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md)); a browser gets an app
   session only through the one-time handoff

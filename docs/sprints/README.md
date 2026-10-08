@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [Second simplification pass](sprint-2026-10-08-second-simplification-pass.md) — four defect fixes, then dead API, duplicate models and single-consumer packages removed, and migrations squashed.
+None.

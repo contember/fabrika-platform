@@ -29,9 +29,9 @@ teach the row shapes to normalise (the `auth_log.id` pattern generalises), or mo
 to a native timestamp type and change the row shapes wholesale. The second is
 cleaner and larger.
 
-The migration squash in the
-[second simplification pass](../sprints/sprint-2026-10-08-second-simplification-pass.md) (WU6.1)
-rewrites every initial schema, which makes it the cheapest moment to decide.
+The [second simplification pass](../archive/sprint-2026-10-08-second-simplification-pass.md) squashed
+every bundle to one initial schema without deciding this; until 1.0, a change here can again rewrite
+those initial schemas instead of adding a migration.
 
 ## Acceptance
 

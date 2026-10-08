@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Second simplification pass (2026-10-08)](sprint-2026-10-08-second-simplification-pass.md)
+  — vault-only secrets, bearer-only IAM admin, one GitHub connection model on both clouds, console in one package, migrations squashed; packages 33 → 30.
+
 - [Simplify delivery and provider packaging (2026-10-07)](sprint-2026-10-07-simplify-delivery-and-providers.md)
   — engine deleted, one shared lease, `source` merged into Control, one `provider-<cloud>` package per cloud; ADRs consolidated to 31.
 
