@@ -1,0 +1,63 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { ById, CreateNote, Deleted, Note, NoteList } from './src/schemas/notes'
+import { readRoles } from './src/roles'
+
+type Access = { member: true }
+let mutablePrefix = '/api'
+const base = { 'notes.read': 'Read notes' }
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: {
+		workspace: {
+			creator: 'owner',
+			members: { manage: 'notes.admin', list: 'notes.read' },
+		},
+		note: { in: 'workspace' },
+	},
+	actions: {
+		...base,
+		'notes.write': 'Create and edit notes',
+		'notes.delete': 'Delete notes',
+		[`notes.${'admin'}`]: 'Manage the workspace',
+		'workspaces.create': 'Start a workspace',
+	} satisfies Record<string, string>,
+	roles: {
+		starter: { grants: ['workspaces.create'] },
+		editor: {
+			grants: ['notes.read', 'notes.write'] as const,
+			member: { scope: 'workspace', assignableBy: ['owner'] },
+		},
+		owner: readRoles('owner'),
+	},
+	limits: { maxDays: 30, ratio: -0.5, enabled: !0, built: Date.now() },
+}, (c) => ({
+	api: c.rpc(mutablePrefix, { callers: ['human'] }, {
+		me: c.query({ output: z.strictObject({ id: z.uuid() }), access: { member: true } as Access }),
+		notes: {
+			list: c.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } }),
+			create: c.mutation({
+				input: CreateNote,
+				output: Note,
+				access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' },
+			}),
+			remove: c.mutation({
+				input: ById,
+				output: Deleted,
+				access: { action: process.env.DELETE_ACTION ?? 'notes.delete', on: 'note', from: 'id' },
+			}),
+		},
+	}),
+	shared: c.link('/s', {
+		spa: 'dist/share',
+		dimension: 'note',
+		grants: ['notes.read'],
+		issuedBy: 'notes.share',
+		maxDays: 30 * 24,
+		procedures: (l) => ({ note: l.query({ output: Note }) }),
+	}),
+	health: c.health('/healthz'),
+	spa: c.spa(`/`, { dir: 'dist/app', access: { member: true } }),
+	debug: c.rpc('/debug', { callers: ['human'] }, (() => ({}))()),
+}))

@@ -1,0 +1,15 @@
+import { defineTables } from '@fabrika/app/contract'
+import type { contract } from '../../fabrika.contract'
+import type { DB } from './schema.generated'
+
+export const tables = defineTables<DB, typeof contract>()({
+	notes: {
+		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
+		insert: ['title', 'body'],
+		update: ['title', 'body'],
+		version: 'version',
+		createdBy: 'created_by',
+	},
+	contact_messages: { scope: { inbox: 'contact', read: 'notes.admin' } },
+})

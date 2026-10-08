@@ -1,0 +1,3 @@
+export function readRoles(name: string) {
+	return { grants: [`${name}.read`] }
+}

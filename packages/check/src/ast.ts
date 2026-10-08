@@ -1,0 +1,196 @@
+import { parse, type ParserPlugin } from '@babel/parser'
+
+/** An ESTree node as `@babel/parser` returns it with the `estree` plugin, read structurally. */
+export interface AstNode {
+	readonly type: string
+	readonly [key: string]: unknown
+}
+
+export interface Position {
+	readonly line: number
+	readonly column: number
+}
+
+export interface Comment {
+	readonly text: string
+	readonly position: Position
+}
+
+export interface ParsedModule {
+	readonly file: string
+	readonly program: AstNode
+	readonly comments: readonly Comment[]
+}
+
+export type ParseResult = { readonly ok: true; readonly module: ParsedModule } | {
+	readonly ok: false
+	readonly message: string
+	readonly position: Position
+}
+
+const NON_CHILD_KEYS = new Set(['loc', 'range', 'start', 'end', 'extra', 'leadingComments', 'trailingComments', 'innerComments'])
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null
+
+export const isNode = (value: unknown): value is AstNode => isRecord(value) && typeof value['type'] === 'string'
+
+export const child = (node: AstNode, key: string): AstNode | undefined => {
+	const value = node[key]
+	return isNode(value) ? value : undefined
+}
+
+/** The nodes of an array property; holes (`[a, , b]`) come back as `null`. */
+export const children = (node: AstNode, key: string): readonly (AstNode | null)[] => {
+	const value = node[key]
+	return Array.isArray(value) ? value.map((item) => (isNode(item) ? item : null)) : []
+}
+
+export const stringField = (node: AstNode, key: string): string | undefined => {
+	const value = node[key]
+	return typeof value === 'string' ? value : undefined
+}
+
+/** The name of an `Identifier`, or `undefined` for any other node. */
+export const identifierName = (node: AstNode | undefined): string | undefined => (node?.type === 'Identifier' ? stringField(node, 'name') : undefined)
+
+/** The value of a string `Literal`, or `undefined` for any other node. */
+export const stringLiteral = (node: AstNode | undefined): string | undefined => {
+	if (node?.type !== 'Literal') return undefined
+	const value = node['value']
+	return typeof value === 'string' ? value : undefined
+}
+
+/** A property or member key read statically: `a.b`, `a['b']`, `{ b: … }`, `{ 'b': … }`. */
+export const staticKey = (node: AstNode, keyField: 'property' | 'key'): string | undefined => {
+	const key = child(node, keyField)
+	if (node['computed'] === true) return stringLiteral(key)
+	return identifierName(key) ?? stringLiteral(key)
+}
+
+/** Strips the wrappers that do not change which value an expression denotes. */
+export const unwrap = (node: AstNode): AstNode => {
+	let current = node
+	while (current.type === 'ChainExpression' || current.type === 'TSNonNullExpression' || current.type === 'ParenthesizedExpression') {
+		const inner = child(current, 'expression')
+		if (inner === undefined) return current
+		current = inner
+	}
+	return current
+}
+
+/** `a.b.c` as `['a', 'b', 'c']`; `undefined` when a link is computed or the root is not an identifier. */
+export const memberPath = (node: AstNode): readonly string[] | undefined => {
+	const current = unwrap(node)
+	const root = identifierName(current)
+	if (root !== undefined) return [root]
+	if (current.type === 'MetaProperty') return ['import.meta']
+	if (current.type !== 'MemberExpression') return undefined
+	const object = child(current, 'object')
+	const property = staticKey(current, 'property')
+	if (object === undefined || property === undefined) return undefined
+	const base = memberPath(object)
+	return base === undefined ? undefined : [...base, property]
+}
+
+const TYPE_POSITION_EXCEPTIONS = new Set([
+	'TSAsExpression',
+	'TSSatisfiesExpression',
+	'TSNonNullExpression',
+	'TSTypeAssertion',
+	'TSInstantiationExpression',
+])
+
+/** Whether an `Identifier` denotes a runtime value here, rather than a property name, a key, a label or a type. */
+export const isValueReference = (node: AstNode, parent: AstNode | undefined): boolean => {
+	if (parent === undefined) return true
+	const computed = parent['computed'] === true
+	switch (parent.type) {
+		case 'MemberExpression':
+			return parent['object'] === node || computed
+		case 'Property':
+			return parent['value'] === node || computed || parent['shorthand'] === true
+		case 'PropertyDefinition':
+		case 'MethodDefinition':
+		case 'TSPropertySignature':
+			return parent['value'] === node || computed
+		case 'ImportSpecifier':
+		case 'ImportDefaultSpecifier':
+		case 'ImportNamespaceSpecifier':
+		case 'ExportSpecifier':
+		case 'LabeledStatement':
+		case 'BreakStatement':
+		case 'ContinueStatement':
+		case 'MetaProperty':
+			return false
+		default:
+			return !parent.type.startsWith('TS') || TYPE_POSITION_EXCEPTIONS.has(parent.type)
+	}
+}
+
+export const positionOf = (node: AstNode): Position => {
+	const loc = node['loc']
+	if (isRecord(loc)) {
+		const start = loc['start']
+		if (isRecord(start) && typeof start['line'] === 'number' && typeof start['column'] === 'number') {
+			return { line: start['line'], column: start['column'] + 1 }
+		}
+	}
+	return { line: 1, column: 1 }
+}
+
+/** Visits every node below `root`, depth first, with the chain of its ancestors (nearest last). */
+export const walk = (root: AstNode, visit: (node: AstNode, ancestors: readonly AstNode[]) => void): void => {
+	const ancestors: AstNode[] = []
+	const enter = (node: AstNode): void => {
+		visit(node, ancestors)
+		ancestors.push(node)
+		for (const [key, value] of Object.entries(node)) {
+			if (NON_CHILD_KEYS.has(key)) continue
+			if (isNode(value)) enter(value)
+			else if (Array.isArray(value)) {
+				for (const item of value) if (isNode(item)) enter(item)
+			}
+		}
+		ancestors.pop()
+	}
+	enter(root)
+}
+
+const pluginsFor = (file: string): ParserPlugin[] => {
+	if (file.endsWith('.d.ts') || file.endsWith('.d.mts') || file.endsWith('.d.cts')) return [['typescript', { dts: true }], 'estree']
+	if (file.endsWith('.tsx')) return ['typescript', 'jsx', 'estree']
+	if (file.endsWith('.jsx')) return ['jsx', 'estree']
+	if (/\.[mc]?ts$/.test(file)) return ['typescript', 'estree']
+	return ['estree']
+}
+
+const readComments = (value: unknown): Comment[] => {
+	if (!Array.isArray(value)) return []
+	const comments: Comment[] = []
+	for (const item of value) {
+		if (!isNode(item)) continue
+		const text = stringField(item, 'value')
+		if (text !== undefined) comments.push({ text, position: positionOf(item) })
+	}
+	return comments
+}
+
+const syntaxErrorPosition = (error: unknown): Position => {
+	if (isRecord(error)) {
+		const loc = error['loc']
+		if (isRecord(loc) && typeof loc['line'] === 'number' && typeof loc['column'] === 'number') return { line: loc['line'], column: loc['column'] + 1 }
+	}
+	return { line: 1, column: 1 }
+}
+
+export const parseModule = (file: string, text: string): ParseResult => {
+	try {
+		const ast = parse(text, { sourceType: 'module', sourceFilename: file, plugins: pluginsFor(file) })
+		const program: unknown = ast.program
+		if (!isNode(program)) return { ok: false, message: 'the parser returned no program', position: { line: 1, column: 1 } }
+		return { ok: true, module: { file, program, comments: readComments(ast.comments) } }
+	} catch (error) {
+		const message = error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : 'unparseable source'
+		return { ok: false, message, position: syntaxErrorPosition(error) }
+	}
+}

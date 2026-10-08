@@ -17,6 +17,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/auth-core',
 	'@fabrika/builder',
 	'@fabrika/canvas-kernel',
+	'@fabrika/check',
 	'@fabrika/cli',
 	'@fabrika/control-contract',
 	'@fabrika/daemon-kit',
