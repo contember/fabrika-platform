@@ -175,13 +175,15 @@ describe('entrypoint isolation', () => {
 	})
 
 	test('the Worker and the shared layer never reach the process-only source modules', () => {
-		const processOnly = ['source/archive.ts', 'source/repository.ts', 'source/transport.ts', 'source/metadata.ts', 'source/index.ts']
+		const processOnly = ['source/archive.ts', 'source/repository.ts', 'source/transport.ts', 'source/index.ts']
 		for (const entry of ['index.ts', ...SHARED]) {
 			expect(`${entry} → ${walk(entry).files.filter((file) => processOnly.includes(file)).join(',')}`).toBe(`${entry} → `)
 		}
 		// Not vacuous: the shared workflows do reach the vault-backed connection port, and the process reaches the rest.
 		expect(walk('control-rpc.ts').files).toContain('source/connections.ts')
 		expect(walk('zerops/server.ts').files).toEqual(expect.arrayContaining(processOnly))
+		// The Worker resolves commits through the runtime-neutral metadata client.
+		expect(walk('index.ts').files).toEqual(expect.arrayContaining(['source/metadata.ts', 'source/tree.ts']))
 	})
 
 	test('no source module names a provider package', () => {

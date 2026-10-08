@@ -33,10 +33,7 @@ export interface GitHubSource {
 
 /** Control's in-process GitHub source (ADR-0029): exact-commit resolution and a streamed upload. */
 export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
-	const metadata = new GitHubMetadataClient({
-		descriptor: options.descriptor,
-		...(options.metadataFetch === undefined ? {} : { fetch: options.metadataFetch }),
-	})
+	const metadata = new GitHubMetadataClient(options.metadataFetch === undefined ? {} : { fetch: options.metadataFetch })
 	const repository = new TarballRepositorySource({
 		credentials: options.credentials,
 		metadata,

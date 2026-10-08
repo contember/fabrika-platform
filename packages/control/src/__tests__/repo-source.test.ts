@@ -14,6 +14,7 @@ import {
 	pemToPkcs8,
 	verifyWebhookSignature,
 } from '../repo-source'
+import { SourceFailure } from '../source/failure'
 import { signWebhook } from './helpers/harness'
 
 // Primitive-level unit tests for the control-owned RepoSource logic: HMAC-SHA256 webhook
@@ -348,259 +349,60 @@ function expectNoAbortListeners(signal: AbortSignal | null | undefined): void {
 }
 
 const SOURCE_COMMIT = 'a'.repeat(40)
-const OTHER_COMMIT = 'b'.repeat(40)
-const TAG_OBJECT = 'c'.repeat(40)
-const NESTED_TAG_OBJECT = 'd'.repeat(40)
 const SOURCE_REPO = 'github.com/acme/app'
-const GIT_DATA_URL = 'https://api.github.com/repos/acme/app/git/'
+const COMMITS_URL = 'https://api.github.com/repos/acme/app/commits/'
 const sourceCommitResponse = (sha = SOURCE_COMMIT): Response => Response.json({ sha })
-const sourceRefResponse = (ref: string, sha = SOURCE_COMMIT, type = 'commit'): Response => Response.json({ ref, object: { type, sha } })
-const sourceTagResponse = (sha: string, target = SOURCE_COMMIT, type = 'commit'): Response => Response.json({ sha, object: { type, sha: target } })
+
+function abortRejectingFetch(started?: () => void): GitHubAppFetch {
+	return (_input, init) => {
+		started?.()
+		return new Promise<Response>((_resolve, reject) =>
+			init?.signal?.addEventListener('abort', () => reject(new Error('private transport reason')), { once: true })
+		)
+	}
+}
 
 describe('GitHubAppRepoSource.resolveCommit (native HTTP stubs, not live GitHub)', () => {
-	test.each([undefined, null])('resolves public refs without constructing an App client (installation %s)', async (installationId) => {
-		const http = sourceHttpStub([sourceRefResponse('refs/heads/main'), sourceCommitResponse()])
-		expect(await publicSource(http.fetch).resolveCommit(`${SOURCE_REPO}.git`, 'refs/heads/main', installationId)).toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests.map((request) => request.url)).toEqual([`${GIT_DATA_URL}ref/heads/main`, `${GIT_DATA_URL}commits/${SOURCE_COMMIT}`])
-		for (const request of http.requests) {
-			expect(request.headers.has('authorization')).toBe(false)
-			expect(request.headers.get('accept')).toBe('application/vnd.github+json')
-			expect(request.headers.get('x-github-api-version')).toBe('2022-11-28')
-			expect(request.redirect).toBe('error')
-			expect(request.signal).toBeInstanceOf(AbortSignal)
-		}
+	// GitHub peels an annotated tag itself, so every ref kind is one `GET /commits/{ref}`.
+	test.each([
+		{ kind: 'a branch', ref: 'main' },
+		{ kind: 'a qualified branch', ref: 'refs/heads/deploy/prod' },
+		{ kind: 'a lightweight tag', ref: 'v1' },
+		{ kind: 'an annotated tag', ref: 'refs/tags/v1-annotated' },
+		{ kind: 'a full SHA', ref: SOURCE_COMMIT },
+	])('resolves $kind to its commit with one anonymous public request', async ({ ref }) => {
+		const http = sourceHttpStub([sourceCommitResponse()])
+		expect(await publicSource(http.fetch).resolveCommit(`${SOURCE_REPO}.git`, ref)).toEqual({ commitSha: SOURCE_COMMIT })
+		expect(http.requests.map((request) => request.url)).toEqual([`${COMMITS_URL}${encodeURIComponent(ref)}`])
+		const [request] = http.requests
+		expect(request?.headers.has('authorization')).toBe(false)
+		expect(request?.headers.get('accept')).toBe('application/vnd.github+json')
+		expect(request?.redirect).toBe('error')
 	})
 
-	test('verifies a recorded complete SHA directly, normalizing case without looking up a mutable ref', async () => {
-		const http = sourceHttpStub([sourceCommitResponse(SOURCE_COMMIT.toUpperCase())])
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT.toUpperCase())).toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests.map((request) => request.url)).toEqual([`${GIT_DATA_URL}commits/${SOURCE_COMMIT}`])
-	})
-
-	test('rejects a missing recorded non-commit object without peeling or ref fallback', async () => {
+	test('a missing ref fails as ref_not_found without exposing the upstream body', async () => {
 		const http = sourceHttpStub([new Response('private response body', { status: 404 })])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, TAG_OBJECT)).rejects.toThrow('GitHub source request failed')
-		expect(http.requests.map((request) => request.url)).toEqual([`${GIT_DATA_URL}commits/${TAG_OBJECT}`])
+		const error = await publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'missing').catch((cause: unknown) => cause)
+		expect(error).toBeInstanceOf(SourceFailure)
+		expect(error).toMatchObject({ code: 'ref_not_found', stage: 'resolve' })
+		expect(JSON.stringify(error)).not.toContain('private')
 	})
 
-	test.each([{}, null, [], { sha: OTHER_COMMIT }, { sha: 'abc' }, { sha: 'a'.repeat(64) }, { sha: 3 }].map((body) => ({ body })))(
-		'rejects invalid commit identity %j',
-		async ({ body }) => {
-			const http = sourceHttpStub([Response.json(body)])
-			await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow('GitHub source response is invalid')
-			expect(http.requests).toHaveLength(1)
-		},
-	)
-
-	test.each(['heads', 'tags'])('keeps the qualified %s namespace for a shared short name', async (namespace) => {
-		const ref = `refs/${namespace}/shared`
-		const http = sourceHttpStub([sourceRefResponse(ref), sourceCommitResponse()])
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, ref)).toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests[0]?.url).toBe(`${GIT_DATA_URL}ref/${namespace}/shared`)
+	test('a request past the configured timeout fails as an internal source failure', async () => {
+		const error = await publicSource(abortRejectingFetch(), { timeoutMs: 10 }).resolveCommit(SOURCE_REPO, 'main').catch((cause: unknown) => cause)
+		expect(error).toBeInstanceOf(SourceFailure)
+		expect(error).toMatchObject({ code: 'internal', stage: 'resolve' })
 	})
 
-	test('bare names select the exact branch first without consulting a same-name tag', async () => {
-		const http = sourceHttpStub([sourceRefResponse('refs/heads/shared'), sourceCommitResponse()])
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'shared')).toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests.map((request) => request.url)).toEqual([`${GIT_DATA_URL}ref/heads/shared`, `${GIT_DATA_URL}commits/${SOURCE_COMMIT}`])
+	test('redacts ordinary transport errors', async () => {
+		const failure = await publicSource(() => Promise.reject(new Error('https://token@github.com/private')))
+			.resolveCommit(SOURCE_REPO, 'main')
+			.catch((cause: unknown) => cause)
+		expect(failure).toMatchObject({ code: 'internal', stage: 'resolve' })
+		expect(failure instanceof Error ? failure.message : '').not.toContain('token')
 	})
 
-	test('only a bare-name heads 404 permits exact tag fallback', async () => {
-		const http = sourceHttpStub([new Response('not JSON', { status: 404 }), sourceRefResponse('refs/tags/v1'), sourceCommitResponse()])
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'v1')).toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests.map((request) => request.url)).toEqual([
-			`${GIT_DATA_URL}ref/heads/v1`,
-			`${GIT_DATA_URL}ref/tags/v1`,
-			`${GIT_DATA_URL}commits/${SOURCE_COMMIT}`,
-		])
-	})
-
-	test.each([401, 403, 422, 429, 500, 302])('does not fall back from a bare head on HTTP %s', async (status) => {
-		const http = sourceHttpStub([new Response('private body', { status })])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'v1')).rejects.toThrow('GitHub source request failed')
-		expect(http.requests).toHaveLength(1)
-	})
-
-	test.each(['refs/heads/missing', 'refs/tags/missing'])('qualified 404 does not consult another namespace: %s', async (ref) => {
-		const http = sourceHttpStub([new Response(null, { status: 404 })])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, ref)).rejects.toThrow('GitHub source request failed')
-		expect(http.requests).toHaveLength(1)
-	})
-
-	test.each([
-		{},
-		[],
-		{ ref: 'refs/heads/main-other', object: { type: 'commit', sha: SOURCE_COMMIT } },
-		{ ref: 'refs/tags/main', object: { type: 'commit', sha: SOURCE_COMMIT } },
-		{ ref: 'refs/heads/main', object: { type: 'tag', sha: TAG_OBJECT } },
-		{ ref: 'refs/heads/main', object: { type: 'tree', sha: TAG_OBJECT } },
-		{ ref: 'refs/heads/main', object: { type: 'commit', sha: 'abc' } },
-		{ ref: 'refs/heads/main', object: { sha: SOURCE_COMMIT } },
-	].map((body) => ({ body })))('binds a head response to its exact ref and typed object: %j', async ({ body }) => {
-		const http = sourceHttpStub([Response.json(body)])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'main')).rejects.toThrow('GitHub source response is invalid')
-		expect(http.requests).toHaveLength(1)
-	})
-
-	test('encodes untrusted ref path components and treats abbreviated IDs as exact names', async () => {
-		for (const name of ['features/a#b%é😀]x', 'abc1234']) {
-			const http = sourceHttpStub([sourceRefResponse(`refs/heads/${name}`), sourceCommitResponse()])
-			expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, name)).toEqual({ commitSha: SOURCE_COMMIT })
-			expect(http.requests[0]?.url).toBe(`${GIT_DATA_URL}ref/heads/${name.split('/').map(encodeURIComponent).join('/')}`)
-		}
-	})
-
-	test('allows intermediate trailing dots in bare, qualified head and qualified tag names', async () => {
-		for (const ref of ['topic./part', 'refs/heads/topic./part', 'refs/tags/topic./part']) {
-			const expectedRef = ref === 'topic./part' ? 'refs/heads/topic./part' : ref
-			const http = sourceHttpStub([sourceRefResponse(expectedRef), sourceCommitResponse()])
-			expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, ref)).toEqual({ commitSha: SOURCE_COMMIT })
-			expect(http.requests.map((request) => request.url)).toEqual([
-				`${GIT_DATA_URL}ref/${expectedRef.slice('refs/'.length)}`,
-				`${GIT_DATA_URL}commits/${SOURCE_COMMIT}`,
-			])
-		}
-	})
-
-	test.each([
-		'',
-		'-main',
-		'refs/heads/-main',
-		'refs/heads/',
-		'refs/tags/',
-		'refs/pull/1/head',
-		'refs/notes/main',
-		'main~1',
-		'HEAD^{commit}',
-		'main@{1}',
-		'v*',
-		'a?b',
-		'a[b',
-		'a\\b',
-		'a:b',
-		'a b',
-		'a\nb',
-		'a\0b',
-		'a\u007fb',
-		'a\u0085b',
-		'a\u2028b',
-		'a\ud800b',
-		'../main',
-		'.hidden',
-		'a..b',
-		'a//b',
-		'a/.b',
-		'a.lock',
-		'a/b.lock',
-		'a/',
-		'/a',
-		'a.',
-		'@',
-		'a'.repeat(1025),
-	])('refuses unsafe or non-concrete refs before HTTP: %j', async (ref) => {
-		const http = sourceHttpStub([])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, ref, 7)).rejects.toThrow('invalid GitHub source ref')
-		expect(http.requests).toHaveLength(0)
-	})
-
-	test('explicitly refuses a complete SHA-256 input', async () => {
-		const http = sourceHttpStub([])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'a'.repeat(64))).rejects.toThrow('does not support 64-hex commit IDs')
-		expect(http.requests).toHaveLength(0)
-	})
-
-	test.each(['https://github.com/acme/app', 'github.com/acme/app?secret', 'github.com/acme/app/extra', 'github.com/../app', 'gitlab.com/acme/app'])(
-		'refuses noncanonical repository %s',
-		async (repo) => {
-			const http = sourceHttpStub([])
-			await expect(publicSource(http.fetch).resolveCommit(repo, SOURCE_COMMIT, 7)).rejects.toThrow('invalid canonical GitHub repository')
-			expect(http.requests).toHaveLength(0)
-		},
-	)
-
-	test('peels nested annotated tags and verifies the final commit independently', async () => {
-		const http = sourceHttpStub([
-			sourceRefResponse('refs/tags/v1', TAG_OBJECT.toUpperCase(), 'tag'),
-			sourceTagResponse(TAG_OBJECT.toUpperCase(), NESTED_TAG_OBJECT, 'tag'),
-			sourceTagResponse(NESTED_TAG_OBJECT),
-			sourceCommitResponse(),
-		])
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'refs/tags/v1')).toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests.map((request) => request.url)).toEqual([
-			`${GIT_DATA_URL}ref/tags/v1`,
-			`${GIT_DATA_URL}tags/${TAG_OBJECT}`,
-			`${GIT_DATA_URL}tags/${NESTED_TAG_OBJECT}`,
-			`${GIT_DATA_URL}commits/${SOURCE_COMMIT}`,
-		])
-	})
-
-	test.each(['tree', 'blob', 'unknown'])('refuses non-commit terminal tag object %s', async (type) => {
-		for (
-			const responses of [
-				[sourceRefResponse('refs/tags/v1', TAG_OBJECT, type)],
-				[sourceRefResponse('refs/tags/v1', TAG_OBJECT, 'tag'), sourceTagResponse(TAG_OBJECT, SOURCE_COMMIT, type)],
-			]
-		) {
-			const http = sourceHttpStub(responses)
-			await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'refs/tags/v1')).rejects.toThrow('GitHub source response is invalid')
-			expect(http.requests.some((request) => request.url.includes('/commits/'))).toBe(false)
-		}
-	})
-
-	test.each([
-		{ sha: NESTED_TAG_OBJECT, object: { type: 'commit', sha: SOURCE_COMMIT } },
-		{ sha: TAG_OBJECT },
-		{ sha: TAG_OBJECT, object: { type: 'commit', sha: 'bad' } },
-		{ sha: TAG_OBJECT, object: { sha: SOURCE_COMMIT } },
-	])('binds annotated tag identity and target: %j', async (body) => {
-		const http = sourceHttpStub([sourceRefResponse('refs/tags/v1', TAG_OBJECT, 'tag'), Response.json(body)])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'refs/tags/v1')).rejects.toThrow('GitHub source response is invalid')
-		expect(http.requests).toHaveLength(2)
-	})
-
-	test('refuses annotated tag cycles before repeating an object request', async () => {
-		const http = sourceHttpStub([
-			sourceRefResponse('refs/tags/v1', TAG_OBJECT, 'tag'),
-			sourceTagResponse(TAG_OBJECT, NESTED_TAG_OBJECT, 'tag'),
-			sourceTagResponse(NESTED_TAG_OBJECT, TAG_OBJECT.toUpperCase(), 'tag'),
-		])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'refs/tags/v1')).rejects.toThrow('GitHub source response is invalid')
-		expect(http.requests).toHaveLength(3)
-	})
-
-	test.each([8, 9])('annotated tag peeling is bounded at eight objects (chain %s)', async (count) => {
-		const ids = Array.from({ length: count }, (_, index) => index.toString(16).padStart(40, '0'))
-		const responses = [sourceRefResponse('refs/tags/v1', ids[0], 'tag')]
-		for (const [index, id] of ids.entries()) {
-			const next = ids[index + 1]
-			responses.push(sourceTagResponse(id, next ?? SOURCE_COMMIT, next === undefined ? 'commit' : 'tag'))
-		}
-		responses.push(sourceCommitResponse())
-		const http = sourceHttpStub(responses)
-		const pending = publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'refs/tags/v1')
-		if (count === 8) {
-			expect(await pending).toEqual({ commitSha: SOURCE_COMMIT })
-			expect(http.requests).toHaveLength(10)
-		} else {
-			await expect(pending).rejects.toThrow('GitHub source response is invalid')
-			expect(http.requests).toHaveLength(9)
-		}
-	})
-
-	test('verifies a lightweight or peeled commit instead of trusting the tag response', async () => {
-		for (
-			const initial of [
-				[sourceRefResponse('refs/tags/v1')],
-				[sourceRefResponse('refs/tags/v1', TAG_OBJECT, 'tag'), sourceTagResponse(TAG_OBJECT)],
-			]
-		) {
-			const http = sourceHttpStub([...initial, sourceCommitResponse(OTHER_COMMIT)])
-			await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, 'refs/tags/v1')).rejects.toThrow('GitHub source response is invalid')
-			expect(http.requests.at(-1)?.url).toBe(`${GIT_DATA_URL}commits/${SOURCE_COMMIT}`)
-		}
-	})
-
-	test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 120001])('validates the reused timeout seam before HTTP (%s)', async (timeoutMs) => {
+	test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 120001])('validates the timeout seam before HTTP (%s)', async (timeoutMs) => {
 		const http = sourceHttpStub([])
 		await expect(publicSource(http.fetch, { timeoutMs }).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow(
 			'GitHub source configuration is invalid',
@@ -608,189 +410,24 @@ describe('GitHubAppRepoSource.resolveCommit (native HTTP stubs, not live GitHub)
 		expect(http.requests).toHaveLength(0)
 	})
 
-	test('accepts the maximum timeout and the existing HTTPS API-base override', async () => {
-		const http = sourceHttpStub([sourceCommitResponse()])
-		expect(await publicSource(http.fetch, { timeoutMs: 120000, apiBaseUrl: 'https://github.test/api/v3/' }).resolveCommit(SOURCE_REPO, SOURCE_COMMIT))
-			.toEqual({ commitSha: SOURCE_COMMIT })
-		expect(http.requests[0]?.url).toBe(`https://github.test/api/v3/repos/acme/app/git/commits/${SOURCE_COMMIT}`)
-	})
+	test.each(['lease_lost', 'cancel_requested'])(
+		'preserves the exact %s reason before and during the request',
+		async (kind: 'lease_lost' | 'cancel_requested') => {
+			const reason = new ProviderInvocationAbort(kind)
+			const before = new AbortController()
+			before.abort(reason)
+			const idle = sourceHttpStub([])
+			expect(await publicSource(idle.fetch).resolveCommit(SOURCE_REPO, 'main', null, before.signal).catch((cause: unknown) => cause)).toBe(reason)
+			expect(idle.requests).toHaveLength(0)
 
-	test.each(['http://github.test', 'https://token@github.test', 'https://github.test?token', 'https://github.test#token', 'not a URL'])(
-		'refuses unsafe API-base configuration: %s',
-		async (apiBaseUrl) => {
-			const http = sourceHttpStub([])
-			await expect(publicSource(http.fetch, { apiBaseUrl }).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow(
-				'GitHub source configuration is invalid',
-			)
-			expect(http.requests).toHaveLength(0)
+			const during = new AbortController()
+			const started = Promise.withResolvers<void>()
+			const pending = publicSource(abortRejectingFetch(() => started.resolve())).resolveCommit(SOURCE_REPO, 'main', null, during.signal)
+			await started.promise
+			during.abort(reason)
+			expect(await pending.catch((cause: unknown) => cause)).toBe(reason)
 		},
 	)
-
-	test.each(['not JSON with a private token', '', '{"sha":'])('refuses malformed JSON without including its body: %s', async (body) => {
-		const http = sourceHttpStub([new Response(body)])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow('GitHub source request failed')
-	})
-
-	test('refuses invalid UTF-8 and redacts body-reader exceptions', async () => {
-		for (
-			const body of [
-				new ReadableStream<Uint8Array>({
-					start(controller) {
-						controller.enqueue(new Uint8Array([0xff]))
-						controller.close()
-					},
-				}),
-				new ReadableStream<Uint8Array>({
-					start(controller) {
-						controller.error(new Error('token in stream failure'))
-					},
-				}),
-			]
-		) {
-			const http = sourceHttpStub([new Response(body)])
-			await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow('GitHub source request failed')
-		}
-	})
-
-	test('enforces the 64 KiB bound on declared and streamed bytes and cancels failed bodies', async () => {
-		for (const declared of [true, false]) {
-			let cancelled = false
-			const stream = new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(new Uint8Array(32 * 1024))
-					controller.enqueue(new Uint8Array(32 * 1024 + 1))
-				},
-				cancel() {
-					cancelled = true
-				},
-			})
-			const http = sourceHttpStub([new Response(stream, { headers: { 'content-length': declared ? '65537' : '1' } })])
-			await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow('GitHub source request failed')
-			expect(cancelled).toBe(true)
-		}
-	})
-
-	test('accepts a valid exactly-64-KiB response assembled from chunks', async () => {
-		const json = JSON.stringify({ sha: SOURCE_COMMIT })
-		const bytes = new TextEncoder().encode(json.padEnd(64 * 1024, ' '))
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				controller.enqueue(bytes.slice(0, 10))
-				controller.enqueue(bytes.slice(10))
-				controller.close()
-			},
-		})
-		const http = sourceHttpStub([new Response(stream)])
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).toEqual({ commitSha: SOURCE_COMMIT })
-	})
-
-	test('bounds a fetch which ignores abort and redacts ordinary transport errors', async () => {
-		const timedOut = await publicSource(() => new Promise<Response>(() => {}), { timeoutMs: 10 }).resolveCommit(SOURCE_REPO, SOURCE_COMMIT).catch((
-			error: unknown,
-		) => error)
-		expect(timedOut).toBeInstanceOf(DOMException)
-		expect(timedOut instanceof Error ? timedOut.name : '').toBe('TimeoutError')
-		const failure = await publicSource(() => Promise.reject(new Error('https://token@github.com/private'))).resolveCommit(SOURCE_REPO, 'main').catch((
-			error: unknown,
-		) => error)
-		expect(failure instanceof Error ? failure.message : '').toBe('GitHub source request failed')
-	})
-
-	test('preserves cancellation while fetch ignores abort and closes a late response', async () => {
-		const controller = new AbortController()
-		const reason = new ProviderInvocationAbort('lease_lost')
-		const response = Promise.withResolvers<Response>()
-		let cancelled = false
-		const source = publicSource(() => response.promise)
-		const pending = source.resolveCommit(SOURCE_REPO, SOURCE_COMMIT, null, controller.signal)
-		controller.abort(reason)
-		expect(await pending.catch((error: unknown) => error)).toBe(reason)
-		response.resolve(
-			new Response(
-				new ReadableStream<Uint8Array>({
-					cancel() {
-						cancelled = true
-					},
-				}),
-			),
-		)
-		await response.promise
-		expect(cancelled).toBe(true)
-	})
-
-	test('refuses a redirected success response before parsing its commit', async () => {
-		class RedirectedResponse extends Response {
-			override get redirected(): boolean {
-				return true
-			}
-		}
-		const http = sourceHttpStub([new RedirectedResponse(JSON.stringify({ sha: SOURCE_COMMIT }))])
-		await expect(publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT)).rejects.toThrow('GitHub source request failed')
-		expect(http.requests).toHaveLength(1)
-	})
-
-	test('keeps the request deadline active through a stalled body read, including stalled cancellation', async () => {
-		let cancelled = false
-		const http = sourceHttpStub([
-			new Response(
-				new ReadableStream<Uint8Array>({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode('{"sha":'))
-					},
-					cancel() {
-						cancelled = true
-						return new Promise<void>(() => {})
-					},
-				}),
-			),
-		])
-		const error = await publicSource(http.fetch, { timeoutMs: 10 }).resolveCommit(SOURCE_REPO, SOURCE_COMMIT).catch((error: unknown) => error)
-		expect(error).toBeInstanceOf(DOMException)
-		expect(error instanceof Error ? error.name : '').toBe('TimeoutError')
-		expect(cancelled).toBe(true)
-		expect(http.requests[0]?.signal?.aborted).toBe(true)
-	})
-
-	test.each(['lease_lost', 'cancel_requested'])('preserves exact %s identity during body reads', async (kind: 'lease_lost' | 'cancel_requested') => {
-		const controller = new AbortController()
-		const reason = new ProviderInvocationAbort(kind)
-		const started = Promise.withResolvers<void>()
-		let cancelled = false
-		const http = sourceHttpStub([
-			new Response(
-				new ReadableStream<Uint8Array>({
-					pull() {
-						started.resolve()
-					},
-					cancel() {
-						cancelled = true
-					},
-				}, { highWaterMark: 0 }),
-			),
-		])
-		const pending = publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT, null, controller.signal)
-		await started.promise
-		controller.abort(reason)
-		expect(await pending.catch((error: unknown) => error)).toBe(reason)
-		expect(cancelled).toBe(true)
-	})
-
-	test('checks caller cancellation before public access and after HTTP completion', async () => {
-		const controller = new AbortController()
-		const reason = new ProviderInvocationAbort('lease_lost')
-		const http = sourceHttpStub([])
-		controller.abort(reason)
-		expect(await publicSource(http.fetch).resolveCommit(SOURCE_REPO, SOURCE_COMMIT, null, controller.signal).catch((error: unknown) => error)).toBe(
-			reason,
-		)
-		expect(http.requests).toHaveLength(0)
-		const late = new AbortController()
-		const lateSource = publicSource(() => {
-			late.abort(reason)
-			return Promise.resolve(sourceCommitResponse())
-		})
-		expect(await lateSource.resolveCommit(SOURCE_REPO, SOURCE_COMMIT, null, late.signal).catch((error: unknown) => error)).toBe(reason)
-	})
 })
 
 describe('GitHubAppRepoSource deployment token authority (native HTTP stubs, not live GitHub)', () => {
@@ -816,7 +453,7 @@ describe('GitHubAppRepoSource deployment token authority (native HTTP stubs, not
 	}
 
 	test('uses only the recorded installation, canonical repository scope, and read-only token for resolution and clone', async () => {
-		const http = sourceHttpStub([tokenResponse(), sourceRefResponse('refs/heads/main'), sourceCommitResponse(), tokenResponse()])
+		const http = sourceHttpStub([tokenResponse(), sourceCommitResponse(), tokenResponse()])
 		const source = publicSource(http.fetch, credentials)
 		const caller = new AbortController()
 		expect(await source.resolveCommit(`${SOURCE_REPO}.git`, 'main', 73, caller.signal)).toEqual({ commitSha: SOURCE_COMMIT })
@@ -832,7 +469,7 @@ describe('GitHubAppRepoSource deployment token authority (native HTTP stubs, not
 			expectNoAbortListeners(request.signal)
 		}
 		for (const request of http.requests.filter((request) => request.method !== 'POST')) {
-			expect(request.url).toStartWith(GIT_DATA_URL)
+			expect(request.url).toStartWith(COMMITS_URL)
 			expect(request.url).not.toContain('test-installation-token')
 			expect(request.headers.get('authorization')).toBe('Bearer test-installation-token')
 		}
@@ -854,9 +491,12 @@ describe('GitHubAppRepoSource deployment token authority (native HTTP stubs, not
 		}
 	})
 
-	test('does not fall back after an authorized Git-data request fails', async () => {
+	test('does not fall back after an authorized commit request fails', async () => {
 		const http = sourceHttpStub([tokenResponse(), new Response('test-installation-token', { status: 403 })])
-		await expect(publicSource(http.fetch, credentials).resolveCommit(SOURCE_REPO, 'main', 73)).rejects.toThrow('GitHub source request failed')
+		await expect(publicSource(http.fetch, credentials).resolveCommit(SOURCE_REPO, 'main', 73)).rejects.toMatchObject({
+			code: 'internal',
+			stage: 'resolve',
+		})
 		expect(http.requests).toHaveLength(2)
 		expect(http.requests[1]?.headers.get('authorization')).toBe('Bearer test-installation-token')
 	})

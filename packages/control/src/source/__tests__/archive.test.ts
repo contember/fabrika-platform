@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createTarRewrite, SOURCE_MAX_EXPANDED_BYTES, SOURCE_MAX_TREE_ENTRIES, type SourceBytes } from '../archive'
+import { createTarRewrite, SOURCE_MAX_EXPANDED_BYTES, type SourceBytes } from '../archive'
+import { SOURCE_MAX_TREE_ENTRIES } from '../tree'
 import {
 	bytes,
 	concat,

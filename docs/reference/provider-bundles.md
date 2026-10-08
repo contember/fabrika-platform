@@ -128,11 +128,10 @@ Custom compositions use `CloudflareCloneSource` for clone authorization. The
 `resolveSource` option selects source identity; it does not return a clone URL.
 `startRun`, cancellation and recovery retain their separate execution roles.
 
-The GitHub composition verifies a recorded commit directly. Without one, it
-resolves the requested concrete ref once. Qualified heads and tags preserve their
-namespaces; bare names try the exact branch first and the exact tag only after
-404. Ref-selected annotated tags peel to commits. Recorded non-commit objects
-fail. Public resolution uses anonymous GitHub data requests; private resolution
+The GitHub composition resolves the requested ref, or a recorded commit, with one
+`GET /commits/{ref}`; GitHub resolves branch-versus-tag names and peels annotated
+tags.
+Public resolution uses anonymous GitHub data requests; private resolution
 uses the recorded installation's repository-scoped read-only token.
 
 Control persists the selected commit under its ownership fence before creating

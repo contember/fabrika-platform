@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { SOURCE_MAX_TREE_ENTRIES } from '../archive'
 import { GitHubMetadataClient } from '../metadata'
+import { SOURCE_MAX_TREE_ENTRIES } from '../tree'
 
 const DESCRIPTOR = { path: 'zerops.yaml', maxBytes: 256 * 1024 }
 
@@ -31,7 +31,6 @@ describe('platform Git tree preflight', () => {
 	test('binds a complete recursive tree to the exact commit and accepts symlink blobs', async () => {
 		const calls: string[] = []
 		const client = new GitHubMetadataClient({
-			descriptor: DESCRIPTOR,
 			fetch: async (input, init) => {
 				calls.push(input.toString())
 				expect(new Headers(init?.headers).get('authorization')).toBeNull()
@@ -55,7 +54,6 @@ describe('platform Git tree preflight', () => {
 	])('rejects $name before requesting a tree', async ({ body, code }) => {
 		let calls = 0
 		const client = new GitHubMetadataClient({
-			descriptor: DESCRIPTOR,
 			fetch: async () => {
 				calls++
 				return Response.json(body)
@@ -112,7 +110,6 @@ describe('platform Git tree preflight', () => {
 
 function platformClient(tree: () => Response): GitHubMetadataClient {
 	return new GitHubMetadataClient({
-		descriptor: DESCRIPTOR,
 		fetch: async (input) =>
 			input.toString().includes('/commits/')
 				? Response.json({ sha: commitSha, commit: { tree: { sha: treeSha } } })
@@ -133,7 +130,6 @@ describe('GitHub repository metadata', () => {
 		'resolves the commit while tolerating unusable optional tree metadata: $name',
 		async ({ commit }) => {
 			const client = new GitHubMetadataClient({
-				descriptor: DESCRIPTOR,
 				fetch: async () => Response.json({ sha: commitSha, commit, extension: 'ignored' }),
 			})
 			expect(await client.commit(repository, 'main', undefined, new AbortController().signal, 'resolve')).toBe(commitSha)
@@ -152,7 +148,6 @@ describe('GitHub repository metadata', () => {
 		async ({ token, authorization }) => {
 			const calls: Array<{ url: string; accept: string | null; authorization: string | null; signal: AbortSignal | null }> = []
 			const client = new GitHubMetadataClient({
-				descriptor: DESCRIPTOR,
 				fetch: async (input, init) => {
 					const url = input.toString()
 					const headers = new Headers(init?.headers)
@@ -168,7 +163,7 @@ describe('GitHub repository metadata', () => {
 			const signal = new AbortController().signal
 
 			expect(await client.commit(repository, 'refs/heads/main', token, signal, 'resolve')).toBe(commitSha)
-			expect(new TextDecoder().decode(await client.descriptor(repository, commitSha, token, signal, 'resolve'))).toBe(descriptor)
+			expect(new TextDecoder().decode(await client.descriptor(repository, DESCRIPTOR, commitSha, token, signal, 'resolve'))).toBe(descriptor)
 			expect(calls.map((call) => call.url)).toEqual([
 				'https://api.github.com/repos/contember/fabrika-platform/commits/refs%2Fheads%2Fmain',
 				`https://api.github.com/repos/contember/fabrika-platform/contents/zerops.yaml?ref=${commitSha}`,
@@ -188,27 +183,27 @@ describe('GitHub repository metadata', () => {
 		{ name: 'an object id that is not hex', body: JSON.stringify({ sha: 'refs/heads/main' }) },
 		{ name: 'a body that is not JSON', body: 'not json' },
 	])('rejects $name from the commit endpoint', async ({ body }) => {
-		const client = new GitHubMetadataClient({ descriptor: DESCRIPTOR, fetch: async () => new Response(body) })
+		const client = new GitHubMetadataClient({ fetch: async () => new Response(body) })
 		await expect(
 			client.commit(repository, 'main', undefined, new AbortController().signal, 'archive'),
 		).rejects.toMatchObject({ code: 'archive_rejected', stage: 'archive' })
 	})
 
 	test('maps an unknown ref to ref_not_found and an absent descriptor to descriptor_missing', async () => {
-		const missing = new GitHubMetadataClient({ descriptor: DESCRIPTOR, fetch: async () => new Response(null, { status: 404 }) })
+		const missing = new GitHubMetadataClient({ fetch: async () => new Response(null, { status: 404 }) })
 		await expect(
 			missing.commit(repository, 'main', undefined, new AbortController().signal, 'resolve'),
 		).rejects.toMatchObject({ code: 'ref_not_found', stage: 'resolve' })
 		await expect(
-			missing.descriptor(repository, commitSha, undefined, new AbortController().signal, 'resolve'),
+			missing.descriptor(repository, DESCRIPTOR, commitSha, undefined, new AbortController().signal, 'resolve'),
 		).rejects.toMatchObject({ code: 'descriptor_missing', stage: 'resolve' })
 	})
 
 	test('refuses a descriptor larger than the registered bound without exposing it', async () => {
 		const secret = 'x'.repeat(300 * 1024)
-		const client = new GitHubMetadataClient({ descriptor: DESCRIPTOR, fetch: async () => new Response(secret) })
+		const client = new GitHubMetadataClient({ fetch: async () => new Response(secret) })
 		const raised = await client
-			.descriptor(repository, commitSha, undefined, new AbortController().signal, 'archive')
+			.descriptor(repository, DESCRIPTOR, commitSha, undefined, new AbortController().signal, 'archive')
 			.then(() => undefined, (error: unknown) => error)
 
 		expect(raised).toMatchObject({ code: 'archive_rejected', stage: 'archive' })
@@ -220,7 +215,6 @@ describe('GitHub repository metadata', () => {
 		async (name) => {
 			const controller = new AbortController()
 			const client = new GitHubMetadataClient({
-				descriptor: DESCRIPTOR,
 				timeoutMs: name === 'timeout' ? 10 : 5_000,
 				fetch: async (_input, init) =>
 					await new Promise<Response>((_resolve, reject) => {
@@ -239,7 +233,6 @@ describe('GitHub repository metadata', () => {
 
 	test('bounds successful commit bodies without exposing them', async () => {
 		const client = new GitHubMetadataClient({
-			descriptor: DESCRIPTOR,
 			fetch: async () => new Response(`{"sha":"${commitSha}","secret":"${'x'.repeat(2 * 1024 * 1024)}"}`),
 		})
 		await expect(

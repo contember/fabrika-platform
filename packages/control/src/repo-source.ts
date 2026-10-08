@@ -11,6 +11,7 @@
 
 import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, pemToPkcs8 } from '@fabrika/github-app'
 import { z } from 'zod'
+import { GitHubMetadataClient } from './source/metadata'
 
 export { pemToPkcs8 }
 
@@ -240,40 +241,25 @@ export class GitHubAppRepoSource implements RepoSource {
 		signal?.throwIfAborted()
 		const repository = parseCanonicalGitHubRepository(repoUrl)
 		if (repository === null) throw new Error('invalid canonical GitHub repository')
-		const selected = parseGitHubSourceRef(ref)
-		const transport = sourceTransport(this.config)
 		const token = installationId === undefined || installationId === null ? undefined : await this.repositoryToken(repository, installationId, signal)
-		const baseUrl = `${transport.apiBaseUrl}/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/git`
-		const request: GitHubSourceRequest = (path, allowNotFound = false) =>
-			requestGitHubSourceJson(`${baseUrl}/${path}`, transport, token, signal, allowNotFound)
-		let commitSha: string
-		if (selected.kind === 'commit') {
-			commitSha = await verifyGitHubCommit(request, selected.sha)
-		} else {
-			let namespace = selected.kind === 'bare' ? 'heads' : selected.namespace
-			const name = selected.name.split('/').map(encodeURIComponent).join('/')
-			let body = await request(`ref/${namespace}/${name}`, selected.kind === 'bare')
-			if (body === SOURCE_NOT_FOUND) {
-				namespace = 'tags'
-				body = await request(`ref/tags/${name}`)
-			}
-			const resolvedRef = gitHubRefSchema.safeParse(body)
-			if (!resolvedRef.success || resolvedRef.data.ref !== `refs/${namespace}/${selected.name}`) throw invalidSourceResponse()
-			let object = resolvedRef.data.object
-			if (namespace === 'heads' && object.type !== 'commit') throw invalidSourceResponse()
-			const seen = new Set<string>()
-			while (object.type === 'tag') {
-				if (seen.size >= 8 || seen.has(object.sha)) throw invalidSourceResponse()
-				seen.add(object.sha)
-				const tag = await request(`tags/${object.sha}`)
-				const resolvedTag = gitHubTagSchema.safeParse(tag)
-				if (!resolvedTag.success || resolvedTag.data.sha !== object.sha) throw invalidSourceResponse()
-				object = resolvedTag.data.object
-			}
-			commitSha = await verifyGitHubCommit(request, object.sha)
+		const metadata = new GitHubMetadataClient({
+			timeoutMs: sourceTimeoutMs(this.config),
+			...(this.config.fetch === undefined ? {} : { fetch: this.config.fetch }),
+		})
+		try {
+			const commitSha = await metadata.commit(
+				{ owner: repository.owner, name: repository.repo },
+				ref,
+				token,
+				signal ?? new AbortController().signal,
+				'resolve',
+			)
+			return { commitSha }
+		} catch (error) {
+			// The deployment's own abort reason (lease lost, cancel requested) outranks the source's `cancelled`.
+			signal?.throwIfAborted()
+			throw error
 		}
-		signal?.throwIfAborted()
-		return { commitSha }
 	}
 
 	/**
@@ -376,83 +362,10 @@ export class GitHubAppRepoSource implements RepoSource {
 	}
 }
 
-const SOURCE_NOT_FOUND = Symbol('source-not-found')
-const SOURCE_MAX_RESPONSE_BYTES = 64 * 1024
-
-type GitHubSourceRef = { kind: 'commit'; sha: string } | { kind: 'ref'; namespace: 'heads' | 'tags'; name: string } | { kind: 'bare'; name: string }
-type GitHubSourceRequest = (path: string, allowNotFound?: boolean) => Promise<unknown>
-
-interface GitHubSourceTransport {
-	apiBaseUrl: string
-	fetch: GitHubAppFetch
-	timeoutMs: number
-}
-
-function parseGitHubSourceRef(ref: string): GitHubSourceRef {
-	if (/^[0-9a-f]{64}$/i.test(ref)) throw new Error('GitHub source does not support 64-hex commit IDs')
-	if (/^[0-9a-f]{40}$/i.test(ref)) return { kind: 'commit', sha: ref.toLowerCase() }
-	let namespace: 'heads' | 'tags' | undefined
-	let name = ref
-	if (ref.startsWith('refs/heads/')) {
-		namespace = 'heads'
-		name = ref.slice('refs/heads/'.length)
-	} else if (ref.startsWith('refs/tags/')) {
-		namespace = 'tags'
-		name = ref.slice('refs/tags/'.length)
-	} else if (ref.startsWith('refs/')) {
-		throw new Error('invalid GitHub source ref')
-	}
-	if (
-		name.length === 0 || name.length > 1024 || name.startsWith('-') || name.endsWith('.') || name === '@' || name.includes('..') || name.includes('@{')
-		|| /[\s\p{Cc}\p{Cs}~^:?*[\\]/u.test(name)
-		|| name.split('/').some((part) => part === '' || part.startsWith('.') || part.endsWith('.lock'))
-	) {
-		throw new Error('invalid GitHub source ref')
-	}
-	return namespace === undefined ? { kind: 'bare', name } : { kind: 'ref', namespace, name }
-}
-
-function parseGitHubObjectSha(body: unknown): string {
-	const parsed = gitHubObjectSchema.safeParse(body)
-	if (!parsed.success) throw invalidSourceResponse()
-	return parsed.data.sha
-}
-
-const gitHubObjectSchema = z.object({ sha: z.string().regex(/^[0-9a-f]{40}$/i).transform(value => value.toLowerCase()) })
-const gitHubSourceObjectSchema = gitHubObjectSchema.extend({ type: z.enum(['commit', 'tag']) })
-const gitHubRefSchema = z.object({ ref: z.string(), object: gitHubSourceObjectSchema })
-const gitHubTagSchema = gitHubObjectSchema.extend({ object: gitHubSourceObjectSchema })
-
-async function verifyGitHubCommit(request: GitHubSourceRequest, expectedSha: string): Promise<string> {
-	const sha = parseGitHubObjectSha(await request(`commits/${expectedSha}`))
-	if (sha !== expectedSha) throw invalidSourceResponse()
-	return sha
-}
-
-function invalidSourceResponse(): Error {
-	return new Error('GitHub source response is invalid')
-}
-
 function sourceTimeoutMs(config: GitHubAppConfig): number {
 	const timeoutMs = config.timeoutMs ?? 15_000
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) throw new Error('GitHub source configuration is invalid')
 	return timeoutMs
-}
-
-function sourceTransport(config: GitHubAppConfig): GitHubSourceTransport {
-	const timeoutMs = sourceTimeoutMs(config)
-	let apiBaseUrl: URL
-	try {
-		apiBaseUrl = new URL(config.apiBaseUrl ?? 'https://api.github.com')
-	} catch {
-		throw new Error('GitHub source configuration is invalid')
-	}
-	if (
-		apiBaseUrl.protocol !== 'https:' || apiBaseUrl.username !== '' || apiBaseUrl.password !== '' || apiBaseUrl.search !== '' || apiBaseUrl.hash !== ''
-	) {
-		throw new Error('GitHub source configuration is invalid')
-	}
-	return { apiBaseUrl: apiBaseUrl.toString().replace(/\/$/, ''), fetch: config.fetch ?? fetch, timeoutMs }
 }
 
 function createSourceDeadline(callerSignal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose(): void } {
@@ -468,79 +381,6 @@ function createSourceDeadline(callerSignal: AbortSignal | undefined, timeoutMs: 
 			callerSignal?.removeEventListener('abort', abortFromCaller)
 		},
 	}
-}
-
-async function requestGitHubSourceJson(
-	url: string,
-	transport: GitHubSourceTransport,
-	token: string | undefined,
-	callerSignal: AbortSignal | undefined,
-	allowNotFound: boolean,
-): Promise<unknown> {
-	const deadline = createSourceDeadline(callerSignal, transport.timeoutMs)
-	const signal = deadline.signal
-	let response: Response | undefined
-	try {
-		signal.throwIfAborted()
-		const headers = new Headers({ accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'vozka' })
-		if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
-		const receivedResponse = await awaitSourceOperation(
-			transport.fetch(url, { headers, redirect: 'error', signal }).then((received) => {
-				if (signal.aborted) {
-					void received.body?.cancel().catch(() => {})
-					signal.throwIfAborted()
-				}
-				return received
-			}),
-			signal,
-		)
-		response = receivedResponse
-		if (receivedResponse.redirected || (receivedResponse.status >= 300 && receivedResponse.status < 400)) throw invalidSourceResponse()
-		if (allowNotFound && receivedResponse.status === 404) return SOURCE_NOT_FOUND
-		if (!receivedResponse.ok) throw invalidSourceResponse()
-		return await readSourceJson(receivedResponse, signal)
-	} catch {
-		callerSignal?.throwIfAborted()
-		deadline.signal.throwIfAborted()
-		throw new Error('GitHub source request failed')
-	} finally {
-		deadline.dispose()
-		void response?.body?.cancel().catch(() => {})
-	}
-}
-
-async function readSourceJson(response: Response, signal: AbortSignal): Promise<unknown> {
-	const declaredLength = response.headers.get('content-length')
-	if (declaredLength !== null && /^[0-9]+$/.test(declaredLength) && Number(declaredLength) > SOURCE_MAX_RESPONSE_BYTES) throw invalidSourceResponse()
-	const reader = response.body?.getReader()
-	if (reader === undefined) throw invalidSourceResponse()
-	const chunks: Uint8Array[] = []
-	let length = 0
-	try {
-		while (true) {
-			signal.throwIfAborted()
-			const result = await awaitSourceOperation(reader.read(), signal)
-			if (result.done) break
-			length += result.value.byteLength
-			if (length > SOURCE_MAX_RESPONSE_BYTES) throw invalidSourceResponse()
-			chunks.push(result.value)
-		}
-	} catch (error) {
-		void reader.cancel().catch(() => {})
-		throw error
-	} finally {
-		reader.releaseLock()
-	}
-	const bytes = new Uint8Array(length)
-	let offset = 0
-	for (const chunk of chunks) {
-		bytes.set(chunk, offset)
-		offset += chunk.byteLength
-	}
-	signal.throwIfAborted()
-	const body: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-	signal.throwIfAborted()
-	return body
 }
 
 function awaitSourceOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

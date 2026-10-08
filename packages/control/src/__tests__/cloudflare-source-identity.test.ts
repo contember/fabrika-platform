@@ -136,19 +136,16 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 				const url = new URL(input instanceof Request ? input.url : String(input))
 				if (url.origin !== 'https://api.github.com') throw new Error('unexpected source API origin')
 				sourceRequests.push(url.pathname)
-				const prefix = '/repos/acme/source-identity/git/'
-				if (url.pathname === `${prefix}ref/heads/main`) {
-					const sha = await requireGit(origin, ['show-ref', '--verify', '--hash', '--', REQUESTED_REF])
-					const type = await requireGit(origin, ['cat-file', '-t', '--', sha])
-					return Response.json({ ref: REQUESTED_REF, object: { type, sha } })
+				const prefix = '/repos/acme/source-identity/commits/'
+				if (!url.pathname.startsWith(prefix)) throw new Error('unexpected source API path')
+				const requested = decodeURIComponent(url.pathname.slice(prefix.length))
+				if (requested === REQUESTED_REF) {
+					return Response.json({ sha: await requireGit(origin, ['show-ref', '--verify', '--hash', '--', REQUESTED_REF]) })
 				}
-				const requestedObject = url.pathname.slice(`${prefix}commits/`.length)
-				if (!url.pathname.startsWith(`${prefix}commits/`) || !/^[0-9a-f]{40}$/.test(requestedObject)) {
-					throw new Error('unexpected source API path')
-				}
-				const objectType = await git(origin, ['cat-file', '-t', '--', requestedObject])
+				if (!/^[0-9a-f]{40}$/.test(requested)) throw new Error('unexpected source ref')
+				const objectType = await git(origin, ['cat-file', '-t', '--', requested])
 				if (objectType.exitCode !== 0 || objectType.stdout.trim() !== 'commit') return Response.json({}, { status: 404 })
-				const sha = await requireGit(origin, ['log', '-1', '--format=%H', requestedObject, '--'])
+				const sha = await requireGit(origin, ['log', '-1', '--format=%H', requested, '--'])
 				return Response.json({ sha })
 			},
 		})
@@ -263,8 +260,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		expect(commitB).toMatch(/^[0-9a-f]{40}$/)
 		expect(commitB).not.toBe(commitA)
 		expect(sourceRequests).toEqual([
-			...(trigger === 'manual' ? ['/repos/acme/source-identity/git/ref/heads/main'] : []),
-			`/repos/acme/source-identity/git/commits/${commitA}`,
+			`/repos/acme/source-identity/commits/${trigger === 'manual' ? encodeURIComponent(REQUESTED_REF) : commitA}`,
 		])
 		expect(phasesAtRunnerStart).toEqual(['started', 'provider_accepted'])
 		expect(persistedCommitAtRunnerStart).toBe(commitA)

@@ -140,8 +140,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   transaction and read per operation; nothing caches them. A private operation names `(connectionId,
   installationId)` and never falls back to another connection. Origins are fixed; `createRuntime` takes
   transport seams only from code (the local stack's `control-server.ts`), never from env. `archive.ts`,
-  `repository.ts`, `transport.ts`, `metadata.ts` are process-only; the shared layer reaches only
-  `connections.ts` and `credentials.ts`. Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
+  `repository.ts`, `transport.ts` are process-only; the shared layer reaches `connections.ts`,
+  `credentials.ts`, and `metadata.ts` (commit resolution on Cloudflare). Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
 - **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
   plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.

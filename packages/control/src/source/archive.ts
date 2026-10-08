@@ -1,8 +1,8 @@
 import { createHash, type Hash } from 'node:crypto'
 import { SourceFailure } from './failure'
+import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './tree'
 import type { SourceDescriptorRule } from './types'
 
-export const SOURCE_MAX_TREE_ENTRIES = 50_000
 export const SOURCE_MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 /** The tar-only application path detects submodules by this marker; platform mode also checks the native Git tree. */
 export const SOURCE_SUBMODULE_MARKER = '.gitmodules'
@@ -585,22 +585,6 @@ function skipPhase(size: number): Phase {
 
 function paddingFor(size: number): number {
 	return (BLOCK_BYTES - (size % BLOCK_BYTES)) % BLOCK_BYTES
-}
-
-export function safeRepositoryPath(path: string): boolean {
-	if (
-		path === ''
-		|| path.startsWith('/')
-		|| path.includes('\\')
-		|| [...path].some(
-			(character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f,
-		)
-	) {
-		return false
-	}
-	return path
-		.split('/')
-		.every((segment) => segment !== '' && segment !== '.' && segment !== '..')
 }
 
 function safeLinkTarget(target: string): boolean {

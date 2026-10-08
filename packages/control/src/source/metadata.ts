@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './archive'
 import { cancelled, SourceFailure } from './failure'
+import { safeRepositoryPath, SOURCE_MAX_TREE_ENTRIES } from './tree'
 import type { SourceDescriptorRule, SourceRepository } from './types'
 
 const GITHUB_COMMIT_MAX_RESPONSE_BYTES = 1024 * 1024
@@ -38,19 +38,16 @@ export type GitHubMetadataFetch = (
 export type GitHubMetadataStage = 'resolve' | 'archive'
 
 export interface GitHubMetadataClientOptions {
-	descriptor: SourceDescriptorRule
 	/** Tests and the local stack inject the transport; the origin stays fixed. */
 	fetch?: GitHubMetadataFetch
 	timeoutMs?: number
 }
 
 export class GitHubMetadataClient {
-	private readonly descriptorRule: SourceDescriptorRule
 	private readonly fetchImplementation: GitHubMetadataFetch
 	private readonly timeoutMs: number
 
 	constructor(options: GitHubMetadataClientOptions) {
-		this.descriptorRule = options.descriptor
 		this.fetchImplementation = options.fetch ?? fetch
 		const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 		if (
@@ -152,18 +149,19 @@ export class GitHubMetadataClient {
 	/** Read the repository-root descriptor at an exact commit, bounded, without any other repository content. */
 	async descriptor(
 		repository: SourceRepository,
+		rule: SourceDescriptorRule,
 		commitSha: string,
 		token: string | undefined,
 		signal: AbortSignal,
 		stage: GitHubMetadataStage,
 	): Promise<Uint8Array> {
 		return await this.request(
-			`${prefix(repository)}/contents/${this.descriptorRule.path}?ref=${encodeURIComponent(commitSha)}`,
+			`${prefix(repository)}/contents/${rule.path}?ref=${encodeURIComponent(commitSha)}`,
 			GITHUB_RAW_ACCEPT,
 			token,
 			signal,
 			stage,
-			this.descriptorRule.maxBytes,
+			rule.maxBytes,
 			() => new SourceFailure('archive_rejected', stage),
 			() => new SourceFailure('descriptor_missing', stage),
 		)

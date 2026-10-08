@@ -83,6 +83,7 @@ export class TarballRepositorySource {
 		}
 		const descriptor = await this.metadata.descriptor(
 			input.repository,
+			this.options.descriptor,
 			commitSha,
 			token,
 			input.signal,

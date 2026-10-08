@@ -191,7 +191,6 @@ export function sourceFor(fixture: Fixture, options: SourceOptions = {}): Tarbal
 		credentials: options.credentials ?? { repositoryToken: () => Promise.reject(new Error('no credential expected')) },
 		descriptor: DESCRIPTOR,
 		metadata: new GitHubMetadataClient({
-			descriptor: DESCRIPTOR,
 			fetch: async (input, init) => {
 				const url = input.toString()
 				options.onMetadataRequest?.(url)
