@@ -8,6 +8,9 @@ const string = (constraints: Partial<Omit<StringShape, 'type'>> = {}): StringSha
 	minLength: null,
 	maxLength: null,
 	pattern: null,
+	startsWith: null,
+	endsWith: null,
+	includes: null,
 	...constraints,
 })
 const number = (constraints: Partial<Omit<NumberShape, 'type'>> = {}): NumberShape => ({
@@ -17,6 +20,7 @@ const number = (constraints: Partial<Omit<NumberShape, 'type'>> = {}): NumberSha
 	exclusiveMin: false,
 	max: null,
 	exclusiveMax: false,
+	multipleOf: null,
 	...constraints,
 })
 const array = (items: SchemaShape, constraints: Partial<Omit<ArrayShape, 'type' | 'items'>> = {}): ArrayShape => ({
@@ -201,7 +205,10 @@ const endpoints: EndpointRow[] = [
 	},
 ]
 
-/** The framework document's notes contract with one of each companion, as `compileContract` would emit it. */
+/**
+ * The framework document's notes contract with one of each companion, as `compileContract` emits it (`@fabrika/app`'s
+ * `compile.test.ts`). An inbox is read with an action that no membership role grants.
+ */
 export const notesArtifact: ContractArtifact = {
 	app: 'notes',
 	dimensions: {
@@ -216,9 +223,11 @@ export const notesArtifact: ContractArtifact = {
 		'notes.share': 'Create share links for a note',
 		'notes.admin': 'Manage the workspace and its members',
 		'workspaces.create': 'Start a workspace',
+		'contacts.read': 'Read contact messages',
 	},
 	roles: {
 		starter: { grants: ['workspaces.create'], member: null },
+		support: { grants: ['contacts.read'], member: null },
 		editor: { grants: ['notes.read', 'notes.write', 'notes.share'], member: { scope: 'workspace', assignableBy: ['owner'] } },
 		owner: {
 			grants: ['notes.read', 'notes.write', 'notes.delete', 'notes.share', 'notes.admin'],
@@ -291,12 +300,12 @@ export const notesArtifact: ContractArtifact = {
 		},
 		contact_messages: {
 			scope: { mode: 'inbox', form: 'contact' },
-			actions: { read: 'notes.admin', insert: null, update: null, delete: null },
+			actions: { read: 'contacts.read', insert: null, update: null, delete: null },
 			insert: [],
 			update: [],
 			version: null,
 			createdBy: null,
-			columns: { email: { read: 'notes.admin' } },
+			columns: { email: { read: 'contacts.read' } },
 		},
 		countries: {
 			scope: { mode: 'reference', reason: 'read-only lookup data' },

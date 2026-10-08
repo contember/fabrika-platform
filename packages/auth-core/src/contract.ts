@@ -117,7 +117,8 @@ export type AccessForm =
 
 /**
  * The structure and constraints of an input or output schema. Objects are always strict: a contract admits no other.
- * The union is closed; a schema form it cannot represent is refused where the contract is compiled or read.
+ * The union is closed; a schema form it cannot represent is refused where the contract is compiled or read. A
+ * default makes a value optional to the caller, so it is `optional`; a discriminated union is a `union`.
  */
 export type SchemaShape =
 	| StringShape
@@ -126,6 +127,8 @@ export type SchemaShape =
 	| { readonly type: 'literal'; readonly value: string | number | boolean | null }
 	| { readonly type: 'enum'; readonly values: readonly string[] }
 	| ArrayShape
+	| TupleShape
+	| RecordShape
 	| { readonly type: 'object'; readonly fields: Readonly<Record<string, SchemaShape>> }
 	| { readonly type: 'optional'; readonly inner: SchemaShape }
 	| { readonly type: 'nullable'; readonly inner: SchemaShape }
@@ -133,11 +136,15 @@ export type SchemaShape =
 
 export interface StringShape {
 	readonly type: 'string'
-	readonly format: 'uuid' | 'email' | 'url' | 'datetime' | null
+	/** `datetime`, `date`, `time` and `duration` are the ISO 8601 forms of `z.iso`. */
+	readonly format: 'uuid' | 'email' | 'url' | 'datetime' | 'date' | 'time' | 'duration' | null
 	readonly minLength: number | null
 	readonly maxLength: number | null
 	/** The regular expression's source, without flags. */
 	readonly pattern: string | null
+	readonly startsWith: string | null
+	readonly endsWith: string | null
+	readonly includes: string | null
 }
 
 /** `exclusiveMin` and `exclusiveMax` are `false` when their bound is `null`. */
@@ -148,6 +155,20 @@ export interface NumberShape {
 	readonly exclusiveMin: boolean
 	readonly max: number | null
 	readonly exclusiveMax: boolean
+	readonly multipleOf: number | null
+}
+
+/** Fixed positions, then any number of `rest` values when it is not `null`. */
+export interface TupleShape {
+	readonly type: 'tuple'
+	readonly items: readonly SchemaShape[]
+	readonly rest: SchemaShape | null
+}
+
+export interface RecordShape {
+	readonly type: 'record'
+	readonly key: SchemaShape
+	readonly value: SchemaShape
 }
 
 export interface ArrayShape {
