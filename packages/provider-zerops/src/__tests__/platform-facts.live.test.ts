@@ -82,7 +82,7 @@ function present(value: string | undefined): boolean {
 const account = readLiveAccount(process.env)
 const hasLiveAccount = account !== null
 
-export const skipReason = `skipped: set ${TOKEN_VAR} and ${PROJECT_VAR} (plus ${SLOW_VAR}=1 for the two build-length rows) to run `
+export const skipReason = `skipped: set ${TOKEN_VAR} and ${PROJECT_VAR} (plus ${SLOW_VAR}=1 for the build-length rows) to run `
 	+ `the platform-facts table against a real Zerops account — it imports four throwaway ${RUN_PREFIX}* services into that `
 	+ `project, writes and deletes their variables, and deletes every service it created again`
 

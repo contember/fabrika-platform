@@ -17,7 +17,7 @@ code, and the section here it came from. Two consumers run that ONE table:
   change.
 - `packages/provider-zerops/src/__tests__/platform-facts.live.test.ts` runs every row that is not
   `not-probed` against a real account, behind `FABRIKA_LIVE_ZEROPS_TOKEN` and
-  `FABRIKA_LIVE_ZEROPS_PROJECT_ID` (plus `FABRIKA_LIVE_ZEROPS_SLOW=1` for the one build-length probe).
+  `FABRIKA_LIVE_ZEROPS_PROJECT_ID` (plus `FABRIKA_LIVE_ZEROPS_SLOW=1` for the build-length rows).
   It creates throwaway services named with a run id and deletes them again.
 
 **Adding a fact means adding a row**, not only a line in a table here. A row marked `live:

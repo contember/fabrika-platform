@@ -111,7 +111,7 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
 		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change autoscaling')),
 		getService: ({ serviceId }) => Promise.resolve(record('getService', { id: serviceId, name: NOTES_SERVICE })),
-		findService: ({ hostname }) => Promise.resolve(record('findService', { id: 'svc-api', name: hostname })),
+		findService: ({ hostname }) => Promise.resolve(record('findService', { id: 'svc-api', name: hostname, subdomainAccess: false })),
 		getProject: ({ projectId }) => Promise.resolve(record('getProject', { id: projectId, name: 'apps-prod' })),
 		listProjects: () => Promise.resolve(record('listProjects', [])),
 		findProjects: () => Promise.resolve(record('findProjects', [])),
@@ -159,6 +159,10 @@ const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[], so
 	reconcileSchema: (input) => {
 		rec.calls.push('reconcileSchema')
 		rec.schemas.push({ url: input.url, app: input.app })
+		return Promise.resolve()
+	},
+	alertExposure: () => {
+		rec.calls.push('alertExposure')
 		return Promise.resolve()
 	},
 	sleep: () => {
@@ -330,6 +334,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual([
 			'apply-import',
+			'verify-exposure',
 			'write-service-env',
 			'reserve-version',
 			'upload-source',
@@ -351,6 +356,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		const narrative = rec.logs.filter((line) => line.includes('[dry-run]')).map((line) => line.trim())
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
+			'[dry-run] would read back subdomain access and bucket provenance of every declared service',
 			`[dry-run] would write service variables on ${TARGET.serviceId}: (none)`,
 			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
@@ -386,13 +392,16 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			'sourceResolve',
 			// 2. apply the import (`override: true` makes re-applying safe).
 			'importServices',
-			// 3. write the managed service variables, read once.
+			// 3. read back that neither service has a subdomain before any version exists.
+			'findService',
+			'findService',
+			// 4. write the managed service variables, read once.
 			'listServiceEnv',
-			// 4. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
+			// 5. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
 			'createAppVersion',
 			'sourceUpload',
 			'buildAndDeployAppVersion',
-			// 5-N. Watch it. Build and deploy are ONE platform-side operation.
+			// 6-N. Watch it. Build and deploy are ONE platform-side operation.
 			'getLogAccess',
 			'getProcess',
 			'getAppVersion',
