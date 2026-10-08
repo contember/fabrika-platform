@@ -407,3 +407,7 @@ whenever the package set changes.
 - WU1.4 review: removing `apps.clearReturnOrigins` (no caller) leaves no API to clear a return-origin registry; `setReturnOrigins` refuses an empty set. Accepted.
 - Wave 0–1 → `05bc9d2` (WU0.1), `def37c9` (WU1.2), `9b9aa3e` (WU1.3), `e4397c3` (WU1.1), `3386ed9` (WU1.4), `d966520` (WU1.5). Gates: typecheck, `bun run test` with Postgres 4094 + 317 + 180 pass / 0 fail, `gen:check`, `local:reset && local:smoke`, `test:browser` 10 pass.
 - WU1.1: on an installation whose provider manages secrets, `apps.secrets.put` hands the value to the provider; the secrets list shows a ref only for vault rows (the provider contract cannot recognise its own refs). ADR-0004 retitled.
+- Wave 2 → `c84c2a6` (WU2.2), `09b12c5` (WU2.4), `bdd7890` (WU2.1, release protocol included), `1a38d70` (WU2.3). Gates: typecheck, `bun run test` with Postgres 4068 + 317 + 180 pass / 0 fail, lint, format, `gen:check`, `release:validate`, `local:reset && local:smoke`, `test:browser` 10 pass.
+- WU2.2 keeps `IamRpc.issueKey`: `fabrika control key issue` bootstraps machine keys through `/rpc/issueKey`.
+- WU2.1 review: the release projection hash no longer matches rows stored before the change (a replayed revision would answer 409). Accepted under D2; WU6.1 and the reinstall reset the data.
+- Left for WU5.1: `projectSingletonSourceConnectionPage` in `control-rpc.ts` is test-only.
