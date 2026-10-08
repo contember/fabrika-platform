@@ -228,6 +228,7 @@ export async function exchangeDeviceAuthorization(services: Services, raw: unkno
 		: []
 	if (
 		!principal || !services.config.adminAudiences.has(row.app) || !consent.permissions.every((action) => permits(permissions, action, consent.scope))
+		|| await contractPatternsProblem(services.repositories.appSchema, row.app, consent.permissions) !== null
 	) {
 		await services.repositories.device.terminate(row.id, 'authority_lost')
 		const recovered = await services.repositories.device.get(row.id)

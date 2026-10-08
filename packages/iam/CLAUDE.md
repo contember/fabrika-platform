@@ -161,8 +161,10 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A CONTRACT APPLICATION LISTS EXACT ACTIONS ON EVERY WRITE PATH (`src/contract-rules.ts`).** A
   schema reconciled with `contract: true` (`contract_apps`, written in the reconcile's own batch) makes
   IAM refuse a wildcard in its roles (`appSchemaSchema`), custom policies, grants — inline or through a
-  role, the built-in `admin` included — provisioned keys and device approvals. The device exchange
-  writes its grant by raw SQL (`repositories/device.ts`), so the approval is where it is checked. A
+  role, the built-in `admin` included — provisioned keys and device keys. The device exchange
+  writes its grant by raw SQL (`repositories/device.ts`), so the rule is checked at approval, again
+  at exchange, and inside the issuing batch's claim, which matches no row for a wildcard key of a
+  contract application. A
   role declared with `member.scope` (`roles.member_scope`) is granted only in a value of that scope
   dimension, never globally — in EVERY app, contract or not. A cross-app grant is not checked: it
   reaches no application. Declaring a role a membership role while it has a grant outside its

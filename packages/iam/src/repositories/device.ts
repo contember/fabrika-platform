@@ -90,9 +90,12 @@ export class DeviceAuthorizationRepository {
 		const now = unixNow()
 		// Every insert depends on this batch's fresh claim, including the final RETURNING witness.
 		const results = await this.db.batch<DeviceAuthorizationRow>([
+			// The grant below is raw SQL, so the contract rule (no wildcard) is part of the claim itself.
 			this.db.prepare(`UPDATE device_authorizations SET claim_id = ?
 				WHERE id = ? AND consent_id = ? AND status = 'approved' AND claim_id IS NULL
-				AND expires_at > ? AND key_expires_at > ?`).bind(claimId, input.attemptId, input.consentId, now, now),
+				AND expires_at > ? AND key_expires_at > ?
+				AND NOT (permissions LIKE '%*%' AND EXISTS (SELECT 1 FROM contract_apps c WHERE c.app = device_authorizations.app))`)
+				.bind(claimId, input.attemptId, input.consentId, now, now),
 			this.db.prepare(`INSERT INTO principals (id, type, label, created_at)
 				SELECT ?, 'service', label, ? FROM device_authorizations WHERE claim_id = ?`).bind(principalId, now, claimId),
 			this.db.prepare(`INSERT INTO grants (id, principal_id, app, permissions, scope_type, scope_value, granted_by, expires_at, created_at)

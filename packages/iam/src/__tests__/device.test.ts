@@ -133,6 +133,52 @@ describe('device authorization', () => {
 		expect(count('grants')).toBe(2)
 	})
 
+	test('approve, then mark the app a contract application, then exchange: no wildcard key is issued', async () => {
+		seedInlineGrant(h.sqlite, principalId, ['*'], scope, 'vozka')
+		const approvalVerifier = randomToken(32)
+		const redemptionVerifier = randomToken(32)
+		const started = await startDeviceAuthorization(services, {
+			app: 'vozka',
+			label: 'Wildcard builder',
+			permissions: ['deploy.*'],
+			keyLifetimeSeconds: 600,
+			approvalChallenge: await pkceChallenge(approvalVerifier),
+			redemptionChallenge: await pkceChallenge(redemptionVerifier),
+		}, null)
+		if (!started.ok) throw new Error('start failed')
+		const approval = await approveDeviceAuthorization(services, env, {
+			app: 'vozka',
+			credential,
+			requestId: 'device-contract-later',
+			attemptId: started.attemptId,
+			approvalVerifier,
+			scope,
+		})
+		if (!approval.ok) throw new Error(`approval failed: ${approval.reason}`)
+		await h.repositories.appSchema.reconcileAppSchema({ app: 'vozka', scopes: [], actions: [], roles: [], contract: true })
+		const grants = count('grants')
+
+		// The issuing transaction refuses on its own, so a contract flag set after the recheck still holds.
+		const raced = await h.repositories.device.issue({
+			attemptId: started.attemptId,
+			consentId: approval.consent.consentId,
+			tokenHash: await hashToken('px_raced'),
+			requestId: 'device-contract-raced',
+			approverLabel: 'Pairing test',
+		})
+		expect(raced).toBeNull()
+		expect(count('grants')).toBe(grants)
+
+		const exchanged = await exchangeDeviceAuthorization(services, {
+			attemptId: started.attemptId,
+			redemptionVerifier,
+			consentId: approval.consent.consentId,
+		}, 'device-contract-exchange')
+		expect(exchanged).toEqual({ ok: false, reason: 'authority_lost' })
+		expect(count('grants')).toBe(grants)
+		expect(count('credentials')).toBe(0)
+	})
+
 	test('stored requests use the canonical permission parser and reject corrupted permissions', async () => {
 		const setup = await attempt()
 		h.sqlite.run('UPDATE device_authorizations SET permissions = ? WHERE id = ?', ['["app.manage",1]', setup.started.attemptId])

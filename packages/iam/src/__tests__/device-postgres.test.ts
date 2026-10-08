@@ -23,12 +23,12 @@ afterAll(async () => {
 	await fixture?.close()
 })
 
-async function approved() {
+async function approved(permissions: string[] = ['app.manage']) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
 	const input = {
 		app: 'vozka',
 		label: 'Postgres pairing',
-		permissions: ['app.manage'],
+		permissions,
 		keyLifetimeSeconds: 2592000,
 		approvalChallenge: await pkceChallenge(randomToken(32)),
 		redemptionChallenge: await pkceChallenge(randomToken(32)),
@@ -65,6 +65,18 @@ describe.skipIf(!hasPostgres)('device repository on real Postgres', () => {
 		const credential = receipt?.credential_id ? await repositories.credentials.getCredentialById(receipt.credential_id) : null
 		expect(credential?.token_hash).toBe(input.tokenHash)
 		expect(await repositories.device.issue(input)).toBeNull()
+	})
+
+	test('the claim refuses a wildcard key once the app is a contract application', async () => {
+		const input = await approved(['deploy.*'])
+		await repositories.appSchema.reconcileAppSchema({ app: 'vozka', scopes: [], actions: [], roles: [], contract: true })
+		try {
+			expect(await repositories.device.issue(input)).toBeNull()
+			expect((await repositories.device.get(input.attemptId))?.claim_id).toBeNull()
+		} finally {
+			await repositories.appSchema.reconcileAppSchema({ app: 'vozka', scopes: [], actions: [], roles: [] })
+		}
+		expect((await repositories.device.issue(input))?.status).toBe('issued')
 	})
 
 	test('a late audit constraint failure rolls back all prior writes and permits a clean retry', async () => {
