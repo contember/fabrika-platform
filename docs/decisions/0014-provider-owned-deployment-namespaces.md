@@ -2,7 +2,7 @@
 id: 0014
 title: Model deployment namespaces as provider-owned placement boundaries
 status: accepted
-date: 2026-07-29
+date: 2026-10-08
 ---
 
 # 0014 — Model deployment namespaces as provider-owned placement boundaries
@@ -30,6 +30,14 @@ Some shared projects also need one PostgreSQL service. Zerops supplies its
 connection credential through a service-variable reference. Fabrika can safely
 let apps consume that reference, but it cannot claim per-app database isolation
 unless it also brokers databases, users, credentials, rotation, and deletion.
+
+Applications on the contract framework ([ADR-0012](0012-fabrika-app-runtime.md))
+keep their tables in this database and run their migrations from their own
+container, because Control cannot reach a namespace's Postgres: Zerops projects
+share no private network. The framework's data layer scopes every query an
+application makes, but it runs inside the application process. It does not stop
+one application from reading another application's tables with the shared
+credential.
 
 ## Decision
 
@@ -76,12 +84,19 @@ reserved `proxy` service.
 **Invariant:** an app import must not declare or override a namespace-owned
 service or a provider resource claimed by another app environment.
 
-For the cheap preset, all assigned apps share the physical PostgreSQL service
-and its platform-issued connection credential. They form one database trust
-domain. Fabrika does not create per-app databases, users, or credentials and
-does not promise schema-level isolation. Apps consume
-`${postgres_connectionString}` directly through Zerops service-variable
-resolution.
+**A cheap namespace is one trust boundary between its applications.** All
+assigned apps share the physical PostgreSQL service and its platform-issued
+connection credential, so one application can read another's tables. Fabrika
+does not create per-app databases, users, or credentials and does not promise
+schema-level isolation. Apps consume `${postgres_connectionString}` directly
+through Zerops service-variable resolution. Migrations run with the same
+credential as the runtime, through `fabrika db migrate` in the application's
+`run.initCommands` ([ADR-0017](0017-service-owned-postgres-migrations.md)).
+
+**An application that must be isolated from other applications goes to an
+exclusive namespace.** Per-application Postgres roles and row-level security are
+the later hardening step; this decision does not take it. The code does not
+generate the migration command yet (part A, work unit A9; part B, work unit B7).
 
 **Invariant:** Fabrika never resolves, persists, or logs the shared PostgreSQL
 connection value, and never copies it into project-level environment variables.
@@ -116,7 +131,12 @@ reconciliation.
 - Shared-project deploys can validate resource ownership before an import with
   `override: true` reaches Zerops.
 - Cheap is materially cheaper but intentionally has the broadest network,
-  proxy, database, and credential blast radius.
+  proxy, database, and credential blast radius. Its applications trust each
+  other with their data, and the namespace choice must say so to the operator.
+- HTTP between applications still passes the proxy: the proxy secret per
+  application and environment refuses a direct dial
+  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). The shared
+  boundary is the database and the network, not the application's endpoints.
 - Mid isolates physical database services, but does not create a network
   boundary between apps in the shared project.
 - Full has the clearest isolation and simplest ownership rules, at the cost of a
@@ -147,6 +167,12 @@ reconciliation.
   because safe provisioning also requires credential storage, rotation,
   backup/restore, and deletion semantics. Cheap instead names its shared
   credential trust boundary explicitly.
+- **Separate migration and runtime credentials, or row-level security, in a
+  cheap namespace.** Deferred with per-app roles. Both need brokered Postgres
+  roles, and an exclusive namespace already gives isolation to the applications
+  that need it.
+- **Run application migrations from Control.** Rejected: Control cannot reach a
+  namespace's Postgres, because Zerops projects share no private network.
 - **Copy the shared connection string through Fabrika.** Rejected because Zerops
   already resolves service-variable references and ADR-0004 forbids Fabrika
   from becoming a second store for platform-managed secret values.
