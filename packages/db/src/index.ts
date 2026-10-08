@@ -39,6 +39,7 @@ export {
 	type AggregateSpec,
 	type ChildListScope,
 	ChildTable,
+	type DataLayer,
 	type DataLayerRuntime,
 	DimensionTable,
 	scoped,

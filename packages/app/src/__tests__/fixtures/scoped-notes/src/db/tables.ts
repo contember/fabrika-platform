@@ -1,4 +1,4 @@
-import { defineTables } from '@fabrika/db'
+import { defineTables } from '@fabrika/db/tables'
 import { columns, type DB } from './schema.generated'
 
 export const tables = defineTables<DB, 'notes.read' | 'notes.write' | 'notes.delete'>(columns)({

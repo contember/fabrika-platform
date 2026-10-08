@@ -197,14 +197,19 @@ src/
   changes a returned chain changes only their copy; the data layer's next
   resolution still carries the chain that was checked. Never hand out the stored
   chain itself (`capability-chain.test.ts`).
-- **`@fabrika/db` is connected by `boot`, once.** An application passes
-  `scoped(tables)` as `implement({ database })`; it is a `ContractDatabase` whose
-  `connect` `boot` calls with the adapter's connection and `requestCapabilities`.
+- **`@fabrika/db` is bound by `boot`, once.** An application passes `scoped(tables)`
+  as `implement({ database })`. `boot` binds only an object `scoped` created
+  (`@fabrika/db/framework`'s `bindScopedDatabase`), with the adapter's connection and
+  `requestCapabilities`, and keeps the locator the bind answers for `on` and `in`. The
+  application never receives the connection or the locator; a copy or a wrapper of
+  the layer does not boot. A `ContractDatabase` (`tables` and `locate`) of the
+  application's own is served as it is and gets no connection.
   `serveContract` imports `@fabrika/db` before the application (it captures its
   built-ins and freezes the Kysely compiler at load) and opens `Database.postgres` on
   `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
-  or a layer the application connected itself is a `BootError`. `boot.ts` imports
-  `@fabrika/db` for types only, because the Worker adapter imports `boot`.
+  or a layer bound before boot is a `BootError`. `boot.ts` imports only
+  `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter
+  imports `boot`.
 - **`on` needs a table that owns its dimension** (`ContractDatabase.tables`); `boot`
   refuses the contract otherwise. `on` checks the action on the object or any
   container of its chain and answers 404 for both "missing" and "not yours"; `in`

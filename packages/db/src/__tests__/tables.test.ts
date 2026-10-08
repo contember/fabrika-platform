@@ -1,11 +1,12 @@
-// The table policies as data (`@fabrika/db/tables`), the connection the framework makes at boot, and the generated
-// locator. The policy parse is one: `readTables` over unchecked values refuses what `defineTables` refuses.
+// The table policies as data (`@fabrika/db/tables`), the binding only the framework makes at boot, and the generated
+// locator only the binder receives. The policy parse is one: `readTables` over unchecked values refuses what `defineTables` refuses.
 
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { applicationDatabaseSchema } from '../../../platform-node/src/application-postgres-migrations'
 import { applicationSchema, Database } from '../database'
 import { CapabilityError, PolicyError, QueryRefusedError } from '../errors'
+import { bindScopedDatabase, isScopedDatabase } from '../framework'
 import { scoped } from '../store'
 import { isTables, readTables, tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
@@ -111,29 +112,47 @@ describe('readTables refuses what nobody type-checked', () => {
 	})
 })
 
-describe('the framework connects the layer once', () => {
+describe('only the framework binds the layer, once', () => {
 	const authority = new TestAuthority()
+	const runtime = (dialect = new RecordingDialect()) => ({ database: Database.fromDialect(dialect), capabilities: authority })
 
-	test('a store and the locator refuse before the framework connected the layer', async () => {
+	test('a store refuses before the framework bound the layer', async () => {
 		const database = scoped(tables)
 		const notesTable = database.defineStore('notes', (t) => t)
 		await expect(notesTable.get(authority.ref('note', 'notes.read', 'n1', { workspace: 'w1', organization: 'o1' }))).rejects.toThrow(
 			'the data layer is not connected',
 		)
-		await expect(database.locate('note', 'n1')).rejects.toThrow('the data layer is not connected')
 	})
 
-	test('a second connect is refused, so a module that connected first makes boot fail', () => {
+	test('the application-facing object has no connect and no locator, and takes no new member', () => {
 		const database = scoped(tables)
-		database.connect({ database: Database.fromDialect(new RecordingDialect()), capabilities: authority })
-		expect(() => database.connect({ database: Database.fromDialect(new RecordingDialect()), capabilities: authority })).toThrow(CapabilityError)
+		expect(Object.keys(database).sort()).toEqual(['defineChildStore', 'defineStore', 'tables'])
+		expect('connect' in database).toBe(false)
+		expect('locate' in database).toBe(false)
+		expect(Object.isFrozen(database)).toBe(true)
 	})
 
-	test('the locator selects the containment columns of one object by key, guarded', async () => {
+	test('a second bind is refused, so a module that bound the layer first makes boot fail', () => {
+		const database = scoped(tables)
+		bindScopedDatabase(database, runtime())
+		expect(() => bindScopedDatabase(database, runtime())).toThrow(CapabilityError)
+	})
+
+	test('a structural look-alike is not bound, and is no scoped database', () => {
+		const real = scoped(tables)
+		const copy = { ...real }
+		const wrapper = Object.create(real)
+		for (const value of [copy, wrapper, { tables: real.tables }, null, 'notes']) {
+			expect(isScopedDatabase(value)).toBe(false)
+			expect(() => bindScopedDatabase(value, runtime())).toThrow('not a data layer scoped(tables) created')
+		}
+		expect(isScopedDatabase(real)).toBe(true)
+	})
+
+	test('the locator, which only the binder receives, selects the containment columns of one object by key, guarded', async () => {
 		const dialect = new RecordingDialect()
-		const database = scoped(tables)
-		database.connect({ database: Database.fromDialect(dialect), capabilities: authority })
-		expect(await database.locate('note', 'n1')).toBeNull()
+		const locate = bindScopedDatabase(scoped(tables), runtime(dialect))
+		expect(await locate('note', 'n1')).toBeNull()
 		expect(dialect.log.map((statement) => statement.sql)).toEqual([
 			'select "notes"."id", "notes"."workspace_id", "notes"."organization_id" from "notes" where "notes"."id" = $1 limit $2',
 		])
@@ -142,15 +161,22 @@ describe('the framework connects the layer once', () => {
 
 	test('the locator refuses a dimension no table owns and an empty id, before any statement', async () => {
 		const dialect = new RecordingDialect()
-		const database = scoped(tables)
-		database.connect({ database: Database.fromDialect(dialect), capabilities: authority })
-		await expect(database.locate('project', 'p1')).rejects.toBeInstanceOf(QueryRefusedError)
-		await expect(database.locate('note', '')).rejects.toBeInstanceOf(QueryRefusedError)
+		const locate = bindScopedDatabase(scoped(tables), runtime(dialect))
+		await expect(locate('project', 'p1')).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(locate('note', '')).rejects.toBeInstanceOf(QueryRefusedError)
 		expect(dialect.log).toEqual([])
 	})
 
 	test('the tables it carries are the artifact form of its policies', () => {
 		expect(scoped(tables).tables).toEqual(tablePolicies(tables))
+	})
+
+	test('@fabrika/db/framework bundles for a browser, as the Worker adapter needs', async () => {
+		const built = await Bun.build({ entrypoints: [join(import.meta.dir, '..', 'framework.ts')], target: 'browser' })
+		expect(built.success).toBe(true)
+		const text = built.outputs[0] === undefined ? '' : await built.outputs[0].text()
+		expect(text).not.toContain('kysely')
+		expect(text).not.toMatch(/from ['"]bun['"]/)
 	})
 })
 

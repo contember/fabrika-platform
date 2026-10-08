@@ -8,6 +8,7 @@
 import { rawRequestTarget } from '@fabrika/auth-core'
 import type * as DataLayer from '@fabrika/db'
 import type { Database } from '@fabrika/db'
+import { isScopedDatabase } from '@fabrika/db/framework'
 import { parseJwks } from '@fabrika/jwks'
 import { join, resolve, sep } from 'node:path'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
@@ -159,7 +160,7 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const data = await import('@fabrika/db')
 	const { default: app } = await load()
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
-	const database = app.database?.connect === undefined ? undefined : openApplicationDatabase(data, environment.framework)
+	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
 	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
 	const stop = async (): Promise<void> => {

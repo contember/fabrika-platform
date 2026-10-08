@@ -17,11 +17,18 @@ declare const workspaceWrite: Ref<'workspace', 'notes.write'>
 declare const workspaceAdmin: Ref<'workspace', 'workspaces.admin'>
 declare const organizationCreate: Ref<'organization', 'organizations.create'>
 
-const { defineStore, defineChildStore } = scoped(tables)
+const database = scoped(tables)
+const { defineStore, defineChildStore } = database
 const notes = defineStore('notes', (t) => t)
 const comments = defineChildStore('note_comments', (t) => t)
 const workspaces = defineStore('workspaces', (t) => t)
 const organizations = defineStore('organizations', (t) => t)
+
+// attack: the locator from the application-facing object, which reads existence without a capability
+database.locate('note', 'n2')
+
+// attack: connecting the layer from application code
+database.connect({ database: null, capabilities: { resolve: () => null } })
 
 // attack: where(sql`true or 1=1`)
 notes.select(read, (q) => q.where(sql`true or 1=1`))

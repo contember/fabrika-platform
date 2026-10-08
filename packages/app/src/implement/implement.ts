@@ -2,7 +2,7 @@
 // mirror the contract's procedure tree exactly; there is no slot for routes, middleware, authentication or a server.
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
-import type { DataLayerRuntime } from '@fabrika/db'
+import type { DataLayer } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import type { AnyContract } from '../contract/define'
 import type { ExactHandlers, HandlersOf } from './types'
@@ -10,15 +10,16 @@ import type { ExactHandlers, HandlersOf } from './types'
 /**
  * What the framework reads from the application's tables before a handler runs. The table policies are what
  * `compileContract` takes; `locate` resolves an object's containment chain for `on` and checks that an `in` scope
- * exists. `@fabrika/db`'s `scoped(tables)` is one, with the locator it generates from `src/db/tables.ts`.
+ * exists. For `@fabrika/db`'s `scoped(tables)`, `boot` builds one from the locator only it receives when it binds.
  */
 export interface ContractDatabase {
 	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
 	/** The containers an object lies in, by dimension, or `null` when the table that owns `dimension` has no such row. */
 	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
-	/** `@fabrika/db`'s data layer: `boot` connects it, once, to the runtime adapter's connection and `requestCapabilities`. */
-	readonly connect?: (runtime: DataLayerRuntime) => void
 }
+
+/** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */
+export type ImplementationDatabase = DataLayer | ContractDatabase
 
 /**
  * The application's own variables: everything the platform and the operator set except the framework's. Values are
@@ -34,7 +35,7 @@ export interface DepsRuntime {
 /** A contract with its handlers, ready for `boot`. Only `implement` makes one. */
 export interface ContractImplementation<C extends AnyContract = AnyContract> {
 	readonly contract: C
-	readonly database: ContractDatabase | null
+	readonly database: ImplementationDatabase | null
 	/** Runs `deps`, then `handlers` over its result. The tree is checked by the types of `implement`, and again by `boot`. */
 	readonly handlers: (env: ApplicationEnvironment, runtime: DepsRuntime) => unknown
 }
@@ -46,7 +47,7 @@ export interface ContractImplementation<C extends AnyContract = AnyContract> {
 export function implement<const C extends AnyContract, Deps, H extends HandlersOf<C>>(
 	contract: C,
 	implementation: {
-		readonly database: ContractDatabase | null
+		readonly database: ImplementationDatabase | null
 		readonly deps: (env: ApplicationEnvironment, runtime: DepsRuntime) => Deps
 		readonly handlers: (deps: Deps) => H & ExactHandlers<H, C>
 	},

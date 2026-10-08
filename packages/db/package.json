@@ -30,6 +30,11 @@
 			"types": "./src/tables.ts",
 			"default": "./src/tables.ts"
 		},
+		"./framework": {
+			"bun": "./src/framework.ts",
+			"types": "./src/framework.ts",
+			"default": "./src/framework.ts"
+		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",

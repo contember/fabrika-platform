@@ -4,7 +4,7 @@ export { boot, BootError, type BootOptions, type ContractApp, type IamKeySource 
 export { CapabilityRefusedError, Ref, requestCapabilities, Within } from './capability'
 export type { SpaAssets } from './dispatch'
 export { type CapturedEnvironment, captureEnvironment } from './environment'
-export type { ApplicationEnvironment, ContractDatabase, ContractImplementation, DepsRuntime } from './implement'
+export type { ApplicationEnvironment, ContractDatabase, ContractImplementation, DepsRuntime, ImplementationDatabase } from './implement'
 export { implement } from './implement'
 export type { AppPrincipal, LinkHolder, Principal, PrincipalOf, ServicePrincipal, UserPrincipal } from './principal'
 export type { AccessContext, ExactHandlers, Handler, HandlerInput, HandlersOf, RequestContext } from './types'

@@ -1,7 +1,7 @@
 // The application: handlers reach rows only through the stores, with the capabilities `ctx` hands them.
 
 import { implement } from '@fabrika/app/implement'
-import type { Ref } from '@fabrika/db'
+import type { DataLayer, Ref } from '@fabrika/db'
 import { contract } from '../fabrika.contract'
 import { database as applicationDatabase } from './db/database'
 import { notes } from './db/stores/notes'
@@ -15,7 +15,7 @@ export interface Hooks {
 /** The edit the data layer must refuse: capabilities cached in a module, to serve the next caller faster. */
 const kept: Ref<'note', 'notes.read'>[] = []
 
-export function scopedNotesApp(hooks: Hooks, database: typeof applicationDatabase = applicationDatabase) {
+export function scopedNotesApp(hooks: Hooks, database: DataLayer = applicationDatabase) {
 	return implement(contract, {
 		database,
 		deps: () => ({}),

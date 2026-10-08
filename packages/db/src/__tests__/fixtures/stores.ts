@@ -1,13 +1,13 @@
 import type { Ref, Within } from '../../capability'
+import { bindScopedDatabase, type Locator } from '../../framework'
 import type { Tables } from '../../policy'
 import { type DataLayerRuntime, scoped, type ScopedDatabase } from '../../store'
 import { tables } from './tables'
 
-/** `scoped(tables)` already connected, as the framework leaves it after boot. */
-export function connected<DB, P>(policies: Tables<DB, P>, runtime: DataLayerRuntime): ScopedDatabase<DB, P> {
+/** `scoped(tables)` already bound, as `boot` leaves it, with the locator only the framework holds. */
+export function connected<DB, P>(policies: Tables<DB, P>, runtime: DataLayerRuntime): { database: ScopedDatabase<DB, P>; locate: Locator } {
 	const database = scoped(policies)
-	database.connect(runtime)
-	return database
+	return { database, locate: bindScopedDatabase(database, runtime) }
 }
 
 export interface Page {
@@ -17,7 +17,7 @@ export interface Page {
 
 /** The application's stores, as `src/db/stores/*.ts` would define them. */
 export function defineStores(runtime: DataLayerRuntime) {
-	const database = connected(tables, runtime)
+	const { database, locate } = connected(tables, runtime)
 	const { defineStore, defineChildStore } = database
 
 	const organizations = defineStore('organizations', (t) => ({
@@ -68,5 +68,5 @@ export function defineStores(runtime: DataLayerRuntime) {
 		remove: (note: Ref<'note', 'notes.write'>, id: string) => t.remove(note, id),
 	}))
 
-	return { organizations, workspaces, notes, comments, defineStore, defineChildStore, locate: database.locate }
+	return { organizations, workspaces, notes, comments, defineStore, defineChildStore, locate }
 }

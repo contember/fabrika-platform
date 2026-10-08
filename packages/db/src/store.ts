@@ -75,6 +75,7 @@ import {
 	type UpdateValues,
 	type VersionArguments,
 } from './policy'
+import { type Locator, register } from './registry'
 import { type TablePolicies, tablePolicies } from './tables'
 
 export interface DataLayerRuntime {
@@ -758,17 +759,17 @@ function joinShapes(models: TableModels, parent: TableModel): Readonly<Record<st
 	return freeze(joinable)
 }
 
-/** What `scoped` returns: the store builders for application modules, and what the framework reads and connects. */
-export interface ScopedDatabase<DB, P> {
+/** What `implement({ database })` takes: the policies as data. `boot` binds only an object `scoped` created. */
+export interface DataLayer {
 	/** Every table's policy as data, for the contract compiler. */
 	readonly tables: TablePolicies
-	/**
-	 * The containers of the object `id` of `dimension`, by dimension, read from the table that owns the dimension;
-	 * `null` when that table has no such row. The framework's access check calls it before it mints a `Ref`.
-	 */
-	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
-	/** Called by the framework once, at boot, with its connection and its capability authority; a second call throws. */
-	connect(runtime: DataLayerRuntime): void
+}
+
+/**
+ * What `scoped` returns: the policies and the store builders for application modules. It has no connection and no
+ * locator of its own; `boot` binds them through `@fabrika/db/framework`, which only `@fabrika/app` imports.
+ */
+export interface ScopedDatabase<DB, P> extends DataLayer {
 	defineStore<const T extends DimensionTableName<P>, S>(table: T, build: (t: DimensionTable<DB, P, T>) => S): S
 	defineChildStore<const T extends ChildTableName<P>, S>(table: T, build: (t: ChildTable<DB, P, T>) => S): S
 }
@@ -776,7 +777,7 @@ export interface ScopedDatabase<DB, P> {
 /**
  * Binds the table policies to the data layer. An application calls it once, in a module of its own, and passes the
  * result to `implement({ database })`; its store modules use the `defineStore` and `defineChildStore` it carries.
- * Nothing reaches the database until the framework connects it at boot.
+ * Nothing reaches the database until `boot` binds that one object; another `scoped` result never gets a connection.
  */
 export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	const models = tableModels(tables)
@@ -802,15 +803,8 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		return freeze({ model, parent, destination: destinationOf(models, model, parent), shape, joins: freeze(joins), connection })
 	}
 
-	return Object.freeze({
+	const database: ScopedDatabase<DB, P> = Object.freeze({
 		tables: tablePolicies(tables),
-		locate: async (dimension: string, id: string) => locateObject(models, runtimeOf(connection), dimension, id),
-		connect(runtime: DataLayerRuntime): void {
-			if (connection.runtime !== undefined) {
-				throw new CapabilityError('the data layer is already connected; only the framework connects it, once, at boot')
-			}
-			connection.runtime = freeze({ database: runtime.database, capabilities: runtime.capabilities })
-		},
 		defineStore<const T extends DimensionTableName<P>, S>(table: T, build: (t: DimensionTable<DB, P, T>) => S): S {
 			return build(new DimensionTable(contextFor(table, 'dimension')))
 		},
@@ -818,6 +812,17 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			return build(new ChildTable(contextFor(table, 'child')))
 		},
 	})
+	register(database, {
+		bind(runtime: DataLayerRuntime): Locator {
+			if (connection.runtime !== undefined) {
+				throw new CapabilityError('the data layer is already connected; only the framework connects it, once, at boot')
+			}
+			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities })
+			connection.runtime = bound
+			return async (dimension, id) => locateObject(models, bound, dimension, id)
+		},
+	})
+	return database
 }
 
 /** The table that owns `dimension`: the one dimension table scoped by it (`defineTables` refuses a second). */

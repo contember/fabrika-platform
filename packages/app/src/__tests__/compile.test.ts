@@ -75,12 +75,20 @@ describe('compileContract over defineTables output', () => {
 		})
 	})
 
-	test('@fabrika/app/contract still bundles for a browser: no Bun API, no driver', async () => {
-		const built = await Bun.build({ entrypoints: [join(import.meta.dir, '..', 'contract', 'index.ts')], target: 'browser' })
+	test("@fabrika/app/contract and an application's src/db/tables.ts on @fabrika/db/tables bundle for a browser", async () => {
+		// One build for both: a second Bun.build in the same process fails to re-read a file the first one read.
+		const entrypoints = [
+			join(import.meta.dir, '..', 'contract', 'index.ts'),
+			join(import.meta.dir, 'fixtures', 'scoped-notes', 'src', 'db', 'tables.ts'),
+		]
+		const built = await Bun.build({ entrypoints, target: 'browser' })
 		expect(built.success).toBe(true)
-		const text = built.outputs[0] === undefined ? '' : await built.outputs[0].text()
-		expect(text).not.toContain('kysely')
-		expect(text).not.toMatch(/from ['"]bun['"]/)
+		expect(built.outputs.length).toBe(2)
+		for (const output of built.outputs) {
+			const text = await output.text()
+			expect(text).not.toContain('kysely')
+			expect(text).not.toMatch(/from ['"]bun['"]/)
+		}
 	})
 })
 

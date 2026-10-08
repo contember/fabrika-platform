@@ -175,7 +175,7 @@ declare, and a `Ref` passed to an operation of another action are type errors.
 `deps` runs once at boot with the application's own variables and the capability
 authority; `handlers` receives what it returned. Stores are defined in modules of their
 own, on the `scoped(tables)` result of `@fabrika/db`; nothing reaches the database until
-`boot` connects that layer.
+`boot` binds that layer. That result has no connection and no locator of its own.
 
 `fabrika app build` writes `fabrika/entry.generated.ts` for an application with a
 `fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
@@ -185,9 +185,11 @@ the application, so no module of it can copy one, and calls
 `boot(app, { environment, iam, assets, database })`. For an application on `@fabrika/db`,
 `serveContract` loads the data layer before the application and opens its connection on
 `FABRIKA_APP_DATABASE_URL`, in the schema `app_<FABRIKA_APP_ID>` its migrations created;
-`boot` connects the layer to it and to `requestCapabilities`, once. Without a connection
-(the data layer runs on Bun with Postgres only, so on Cloudflare) or with a layer the
-application connected itself, `boot` refuses to start. `boot` verifies tokens for the audience
+`boot` binds the layer to it and to `requestCapabilities`, once, and keeps the locator the
+bind answers; the application receives neither. Only an object `scoped` created is bound.
+Without a connection (the data layer runs on Bun with Postgres only, so on Cloudflare),
+with a copy or a wrapper of the layer, or with a layer bound before boot, `boot` refuses
+to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
 `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when the contract
 declares something this version cannot serve yet (link, form and webhook mounts,

@@ -13,27 +13,30 @@ bun run typecheck
 bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
-| Module           | What it owns                                                                                               |
-| ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.          |
-| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`; `@fabrika/db/capability`, no Bun.   |
-| `policy.ts`      | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.   |
-| `tables.ts`      | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.      |
-| `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                    |
-| `nodes.ts`       | Kysely operation nodes built from a description and a scope predicate.                                     |
-| `guard.ts`       | The allowlist over the final operation tree, run immediately before compiling.                             |
-| `database.ts`    | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).    |
-| `store.ts`       | `scoped(tables)` → `ScopedDatabase`: the stores, `connect`, the generated locator; every capability check. |
-| `codegen.ts`     | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.     |
+| Module           | What it owns                                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.         |
+| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`; `@fabrika/db/capability`, no Bun.  |
+| `policy.ts`      | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.  |
+| `tables.ts`      | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.     |
+| `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                   |
+| `nodes.ts`       | Kysely operation nodes built from a description and a scope predicate.                                    |
+| `guard.ts`       | The allowlist over the final operation tree, run immediately before compiling.                            |
+| `database.ts`    | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).   |
+| `store.ts`       | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.          |
+| `registry.ts`    | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.  |
+| `framework.ts`   | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`; browser-safe. |
+| `codegen.ts`     | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.    |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
 
 An application calls `scoped(tables)` once (its own `src/db/database.ts`), defines its stores with the
 `defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
-`Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` connects the layer to it and to
-`requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request. `locate` is
-the locator `on` and `in` use: one guarded select by key of the owning table's containment columns. Not built yet:
+`Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
+`requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request, through
+`@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
+table's containment columns. Not built yet:
 `@fabrika/db/testing`, and stores for `reference` and `inbox` tables (`defineTables` accepts their policies; no store
 reaches them).
 
@@ -44,9 +47,13 @@ reaches them).
 - **`defineTables` and `readTables` are one parse** (`parseTables`), over values nobody type-checked: plain objects
   and arrays only, read through own data properties, unknown fields refused. The static reader reads
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.
-- **The layer is connected once, by the framework, at boot.** Until then every store and `locate` throw; a second
-  `connect` throws, so an application module that connected the layer first makes `boot` fail. Never add another way
-  to set the runtime of a `scoped` result.
+- **Only the framework binds a layer, once, and only one `scoped` created.** The object `scoped` returns has no
+  `connect` and no locator; `registry.ts` keeps its framework side in a module-private `WeakMap`, so a structural copy
+  or a wrapper is no layer and gets no connection. `bindScopedDatabase` is the only path to the connection and answers
+  the locator, which reads existence without a capability and so stays with the framework's access check. A second
+  bind throws. Until then every store throws. The checker refuses an application import of `@fabrika/db/framework`.
+  Never add another way to set the runtime of a `scoped` result, nor an application-facing locator.
+- **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);
   `tables.test.ts` compares them. Change both together.
 

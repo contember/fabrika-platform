@@ -362,7 +362,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 		expect(() => define({ ...extra, tenant_items: { ...tenantItems, version: 'tenant_id' } })).toThrow(
 			'tenant_items: tenant_id is both the tenant containment column and the version',
 		)
-		const honest = connected(define(extra), { database, capabilities: alice })
+		const honest = connected(define(extra), { database, capabilities: alice }).database
 		const top = honest.defineStore('tops', (t) => ({ create: (ref: Ref<'top', 'write'>) => t.insert(ref, {}) }))
 		expect(await top.create(alice.ref('top', 'write', 'authorized-top'))).toEqual({ id: 'authorized-top' })
 		const [stored] = await admin((sql) => sql.unsafe(`select id, created_by from ${schema}.tops`))
@@ -399,9 +399,12 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 	})
 
 	test('a version column that is not INTEGER is refused at the first mutation, and nothing is written', async () => {
-		const ledger = connected(defineTables<Extra, string>(extraColumns)(extra), { database, capabilities: alice }).defineStore('ledgers', (t) => ({
-			open: (ref: Ref<'ledger', 'write'>) => t.insert(ref, {}),
-		}))
+		const ledger = connected(defineTables<Extra, string>(extraColumns)(extra), { database, capabilities: alice }).database.defineStore(
+			'ledgers',
+			(t) => ({
+				open: (ref: Ref<'ledger', 'write'>) => t.insert(ref, {}),
+			}),
+		)
 		await expect(ledger.open(alice.ref('ledger', 'write', 'l1'))).rejects.toThrow(
 			'ledgers.version came back as string; a version column must be INTEGER (int4)',
 		)

@@ -12,6 +12,7 @@ import {
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
+import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
 import { TokenVerifier } from '@fabrika/jwks'
 import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
@@ -20,7 +21,7 @@ import { requestCapabilities } from './capability'
 import { ContractRuntime, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { headerPolicy } from './headers'
-import type { ContractDatabase, ContractImplementation } from './implement'
+import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
 export interface IamKeySource {
@@ -164,19 +165,30 @@ function undeclaredHandlers(node: unknown, declared: ReadonlySet<string>, path: 
 	}
 }
 
-/** Connects `@fabrika/db`'s data layer to the adapter's connection and to the authority that binds capabilities to requests. */
-function connectDatabase(database: ContractDatabase | null, connection: Database | undefined, problems: string[]): void {
-	if (database?.connect === undefined) {
-		return
+/**
+ * The database `dispatch` reads. A `scoped(tables)` result is bound here, once, to the adapter's connection and the
+ * authority that binds capabilities to requests; the application never receives either, nor the locator.
+ */
+function contractDatabase(database: ImplementationDatabase | null, connection: Database | undefined, problems: string[]): ContractDatabase | null {
+	if (database === null) {
+		return null
+	}
+	if (!isScopedDatabase(database)) {
+		if ('locate' in database) {
+			return database
+		}
+		problems.push('implement({ database }) takes the scoped(tables) result of @fabrika/db itself, not a copy or a wrapper of it')
+		return null
 	}
 	if (connection === undefined) {
 		problems.push('the application uses @fabrika/db, which runs on Bun with Postgres, and the runtime adapter supplies no database connection')
-		return
+		return null
 	}
 	try {
-		database.connect({ database: connection, capabilities: requestCapabilities })
+		return { tables: database.tables, locate: bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities }) }
 	} catch {
-		problems.push('the data layer was connected before boot; only the framework connects it, so remove the connect call from the application')
+		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
+		return null
 	}
 }
 
@@ -190,7 +202,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	unservable(artifact, options.assets, owned, problems)
-	connectDatabase(app.database, options.database, problems)
+	const database = contractDatabase(app.database, options.database, problems)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -245,7 +257,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: framework.issuer }),
 		audience: framework.iamAppId,
 		policy: headerPolicy(artifact.csp, framework.operationsOrigin),
-		database: app.database,
+		database,
 		ownedDimensions: owned,
 		assets: options.assets ?? null,
 	})

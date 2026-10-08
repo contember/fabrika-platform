@@ -8,11 +8,13 @@
 // The file gets its own application schema `app_<id>`. The URL is a credential: it is never logged.
 
 import { serveContract } from '@fabrika/app/bun'
-import { BootError, type ContractApp } from '@fabrika/app/implement'
-import { applicationSchema, Database, scoped } from '@fabrika/db'
+import { BootError, type ContractApp, implement, requestCapabilities } from '@fabrika/app/implement'
+import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped } from '@fabrika/db'
+import { bindScopedDatabase } from '@fabrika/db/framework'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { bootApp, errorType, FRAMEWORK_ENV, grant, keepingProcessEnvironment, resultOf, send, token } from './fixtures/implement/harness'
+import { contract } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { type Hooks, scopedNotesApp } from './fixtures/scoped-notes/src/app'
 import { tables } from './fixtures/scoped-notes/src/db/tables'
@@ -167,24 +169,79 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 		expect(resultOf(await send(app, '/api/notes.get', { token: await editorOf(W2), body: { id } }))).toEqual({ id, title: 'moving' })
 		expect((await send(app, '/api/notes.get', { token: await editorOf(W1), body: { id } })).status).toBe(404)
 	})
+
+	test('a wrapper around the database gets no connection, so a second layer the application creates stays unconnected', async () => {
+		const foreign = await seedNote('w2', 'foreign')
+		const rogue = scoped(tables)
+		const rogueNotes = rogue.defineStore('notes', (t) => ({ get: (note: Ref<'note', 'notes.read'>) => t.get(note) }))
+		// An authority of the application's own: every Ref it is handed lies in w2.
+		const everyWorkspace: CapabilityAuthority = {
+			resolve: (capability) => {
+				const grant = requestCapabilities.resolve(capability)
+				return grant.kind === 'ref' ? { ...grant, chain: new Map([['workspace', 'w2']]) } : grant
+			},
+		}
+		const received: unknown[] = []
+		// The reviewed bypass: a connect callback that receives the framework's connection and connects the second layer.
+		const connect = (runtime: { readonly database: unknown }): void => {
+			received.push(runtime)
+			const connectRogue: unknown = Reflect.get(rogue, 'connect')
+			if (typeof connectRogue === 'function') {
+				Reflect.apply(connectRogue, rogue, [{ database: runtime.database, capabilities: everyWorkspace }])
+			}
+		}
+		const wrapper = { tables: rogue.tables, locate: () => Promise.resolve(new Map([['workspace', 'w1']])), connect }
+		const wrapped = bootApp(
+			implement(contract, {
+				database: wrapper,
+				deps: () => ({}),
+				handlers: () => ({
+					api: {
+						notes: {
+							list: () => ({ items: [] }),
+							get: async ({ ctx }) => {
+								const note = await rogueNotes.get(ctx.target)
+								return { id: note.id, title: note.title }
+							},
+							create: () => ({ id: foreign }),
+							keep: () => ({ kept: false }),
+							reuse: () => ({ id: foreign, title: '' }),
+						},
+					},
+				}),
+			}),
+			{ database },
+		)
+		const log = await refusedCapability(async () => send(wrapped, '/api/notes.get', { token: await editorOf(W1), body: { id: foreign } }))
+		expect(received).toEqual([])
+		expect(log).toContain('CapabilityError')
+	})
 })
 
-describe('boot connects the data layer once', () => {
+describe('boot binds the data layer once', () => {
 	test('without a database connection, an application on @fabrika/db does not boot', () => {
 		expect(() => bootApp(scopedNotesApp(hooks, scoped(tables)))).toThrow(
 			'the application uses @fabrika/db, which runs on Bun with Postgres, and the runtime adapter supplies no database connection',
 		)
 	})
 
-	test('a layer the application connected itself makes boot fail', () => {
+	test('a layer bound before boot (an application import of @fabrika/db/framework) makes boot fail', () => {
 		const connection = Database.postgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
 		const early = scoped(tables)
-		early.connect({
+		bindScopedDatabase(early, {
 			database: connection,
 			capabilities: { resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all' }) },
 		})
 		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow(BootError)
-		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow('the data layer was connected before boot')
+		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow('the data layer was bound before boot')
+	})
+
+	test('a structural copy of scoped(tables) is not bound and does not boot', () => {
+		const connection = Database.postgres({ url: 'postgres://user:secret@127.0.0.1:1/none', schema: 'app_notes' })
+		const real = scoped(tables)
+		for (const copy of [{ ...real }, { tables: real.tables }]) {
+			expect(() => bootApp(scopedNotesApp(hooks, copy), { database: connection })).toThrow('not a copy or a wrapper of it')
+		}
 	})
 
 	test('serveContract refuses without FABRIKA_APP_DATABASE_URL and names no value', async () => {
@@ -202,7 +259,7 @@ describe('boot connects the data layer once', () => {
 			const server = await serveContract(() => Promise.resolve({ default: scopedNotesApp(hooks, served) }), env)
 			try {
 				expect((await fetch(`http://localhost:${server.port}/healthz`)).status).toBe(200)
-				expect(await served.locate('note', Bun.randomUUIDv7())).toBeNull()
+				expect(() => bindScopedDatabase(served, { database, capabilities: requestCapabilities })).toThrow('already connected')
 			} finally {
 				await server.stop()
 			}
