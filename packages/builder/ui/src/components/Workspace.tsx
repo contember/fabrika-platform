@@ -1,8 +1,9 @@
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
+import { PHASE_COUNT, phaseById } from '../../../shared/phases'
 import { daemon } from '../lib/daemonClient'
 import { PlanRenderer } from '../lib/kernel'
-import { PHASE_COUNT, phaseById, phaseIndex, statusOf } from '../lib/phases'
+import { statusOf } from '../lib/phases'
 import type { BuildEvent, CanvasFileInfo, PhaseId, PhaseState, Skeleton } from '../lib/types'
 import { MarkdownLite } from './MarkdownLite'
 
@@ -20,18 +21,17 @@ function PacketHeader({
 	focused: PhaseId
 	isCurrentGate: boolean
 }): JSX.Element {
-	const p = phaseById(focused)!
-	const idx = phaseIndex(focused)
+	const p = phaseById(focused)
 	const status = statusOf(focused, state.completed, state.current)
 	const isCurrent = status === 'current'
-	const reads = isCurrent && state.reads.length ? state.reads.join(', ') : p.reads
-	const produces = isCurrent && state.produces.length ? state.produces.join(', ') : p.produces
+	const reads = isCurrent && state.reads.length ? state.reads.join(', ') : p.reads.join(', ')
+	const produces = isCurrent && state.produces.length ? state.produces.join(', ') : p.produces.join(', ')
 
 	return (
 		<div className="border-b border-border-subtle px-6 py-4">
 			<div className="flex items-center gap-3">
 				<h1 className="font-heading text-section text-text-primary">
-					Phase {idx + 1}/{PHASE_COUNT} — {p.title}
+					Phase {p.number}/{PHASE_COUNT} — {p.label}
 				</h1>
 				<span
 					className={[

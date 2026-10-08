@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { join } from 'path'
+import { phaseById } from '../../shared/phases'
 import { derivePhase, isNonEmptyFile, matchGlob, producesSatisfied } from '../src/derive'
-import { phaseById } from '../src/phases'
 import { type Fixture, makeFixture } from './helpers'
 
 let fx: Fixture | null = null

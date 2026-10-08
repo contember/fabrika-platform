@@ -1,20 +1,6 @@
-export type PhaseId =
-	| 'intake'
-	| 'vision'
-	| 'flows'
-	| 'tech'
-	| 'design'
-	| 'skeletons'
-	| 'issues'
-	| 'build'
+import type { PhaseId } from '../../../shared/phases'
 
-export interface PhaseDescriptor {
-	id: PhaseId
-	title: string
-	reads: string
-	produces: string
-	gate: boolean
-}
+export type { PhaseId } from '../../../shared/phases'
 
 export interface PhaseState {
 	current: PhaseId

@@ -1,9 +1,10 @@
+import { WaitError } from '@fabrika/daemon-kit'
 import { existsSync, statSync } from 'fs'
 import { extname, resolve } from 'path'
 import { parseArgs } from 'util'
 import { BASE_URL, TIMEOUT_MS } from '../config'
 import { resolveContext } from '../context'
-import { isDaemonRunning, peekFeedback, pushPlan, waitForFeedback } from '../daemon-client'
+import { pushPlan, waitForFeedback } from '../daemon-client'
 import { ensureDaemon, openBrowser } from '../daemon-lifecycle'
 
 export async function cmdGate(argv: string[]): Promise<number> {
@@ -143,22 +144,15 @@ async function gateWait(argv: string[]): Promise<number> {
 		return 1
 	}
 
-	const pending = await peekFeedback(ctx.sessionId)
-	if (pending !== null) {
-		process.stdout.write(pending)
-		return 0
-	}
-
 	try {
 		const feedback = await waitForFeedback(ctx.sessionId, timeoutMs)
 		process.stdout.write(feedback)
 		return 0
 	} catch (error: unknown) {
-		const reason = error instanceof Error ? error.message : String(error)
-		if (reason === 'timeout') {
+		if (error instanceof WaitError && error.reason === 'timeout') {
 			console.error('[fabrika] timeout waiting for gate feedback.')
 		} else {
-			console.error(`[fabrika] gate wait failed: ${reason}`)
+			console.error(`[fabrika] gate wait failed: ${error instanceof Error ? error.message : String(error)}`)
 		}
 		return 1
 	}

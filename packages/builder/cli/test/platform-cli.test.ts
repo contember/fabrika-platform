@@ -57,7 +57,7 @@ function setup() {
 		hostname: 'localhost',
 		async fetch(request) {
 			const path = new URL(request.url).pathname
-			if (path === '/health') return Response.json({ ok: true, sessionsDir: join(fx.root, 'data', 'sessions') })
+			if (path === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(fx.root, 'data', 'sessions') })
 			const body = await request.text()
 			requests.push({ path, method: request.method, body: body ? JSON.parse(body) : null })
 			if (path.endsWith('/platform')) onPlatform?.()

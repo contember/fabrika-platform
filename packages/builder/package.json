@@ -17,6 +17,7 @@
 		"cli/src",
 		"daemon/src",
 		"shared/index.ts",
+		"shared/phases.ts",
 		"shared/urls.ts",
 		"ui/dist",
 		"skill",

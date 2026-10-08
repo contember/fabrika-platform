@@ -9,9 +9,9 @@ import { BuilderPlatform, type BuilderPlatformOptions } from './platform'
 import { createPlatformRoutes } from './platform-routes'
 import { createStaticHandlers } from './static'
 
+export { type Phase, type PhaseId, PHASES } from '../../shared/phases'
 export type { BuildEvent } from './build-stream'
-export { derivePhaseState, PHASES } from './phases'
-export type { Phase, PhaseId, PhaseState } from './phases'
+export { derivePhaseState, type PhaseState } from './phases'
 
 export interface GateRecord {
 	name: string

@@ -1,9 +1,10 @@
 import { parseArgs } from 'util'
+import { PHASE_COUNT, phaseById, phaseIndex, PHASES } from '../../../shared/phases'
 import { resolveContext } from '../context'
-import { consumeFeedback, isDaemonRunning } from '../daemon-client'
+import { consumeFeedback } from '../daemon-client'
+import { isDaemonRunning } from '../daemon-lifecycle'
 import { isNonEmptyFile, matchGlob, producesSatisfied } from '../derive'
 import { resolvePhaseState } from '../phase-state'
-import { PHASE_COUNT, phaseById, phaseIndex, PHASES } from '../phases'
 
 export async function cmdAdvance(argv: string[]): Promise<number> {
 	const { values } = parseArgs({

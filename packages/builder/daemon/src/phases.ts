@@ -1,99 +1,6 @@
 import { existsSync, readdirSync, statSync } from 'fs'
 import { basename, dirname, join } from 'path'
-
-export type PhaseId =
-	| 'intake'
-	| 'vision'
-	| 'flows'
-	| 'tech'
-	| 'design'
-	| 'skeletons'
-	| 'issues'
-	| 'build'
-
-export interface Phase {
-	id: PhaseId
-	index: number
-	title: string
-	reads: string[]
-	produces: string[]
-	gate: boolean
-	gateName?: string
-}
-
-export const PHASES: Phase[] = [
-	{
-		id: 'intake',
-		index: 1,
-		title: 'Intake (brief → classification)',
-		reads: ['intent/brief.md'],
-		produces: ['intent/brief.md'],
-		gate: true,
-		gateName: 'intake',
-	},
-	{
-		id: 'vision',
-		index: 2,
-		title: 'Vision + scope + principles',
-		reads: ['intent/brief.md'],
-		produces: ['intent/glossary.md', 'principles/principles.md'],
-		gate: true,
-		gateName: 'vision',
-	},
-	{
-		id: 'flows',
-		index: 3,
-		title: 'User flows',
-		reads: ['intent/*', 'principles/*'],
-		produces: ['architecture/flows/*.flow.md'],
-		gate: true,
-		gateName: 'flows',
-	},
-	{
-		id: 'tech',
-		index: 4,
-		title: 'Tech + scaffold decision',
-		reads: ['architecture/flows/*'],
-		produces: ['architecture/tech.md'],
-		gate: true,
-		gateName: 'tech',
-	},
-	{
-		id: 'design',
-		index: 5,
-		title: 'Design tokens + mockups',
-		reads: ['architecture/flows/*', 'architecture/tech.md'],
-		produces: ['architecture/design.md', 'pages/*.jsx'],
-		gate: true,
-		gateName: 'design',
-	},
-	{
-		id: 'skeletons',
-		index: 6,
-		title: 'Opice skeletons',
-		reads: ['architecture/flows/*', 'architecture/spec/*'],
-		produces: ['../tests/browser/*.test.ts'],
-		gate: true,
-		gateName: 'skeletons',
-	},
-	{
-		id: 'issues',
-		index: 7,
-		title: 'Induce issues (compile step, not a real phase — SPEC §6.4)',
-		reads: ['../tests/browser/*'],
-		produces: ['issues/ISSUE-*.md'],
-		gate: false,
-	},
-	{
-		id: 'build',
-		index: 8,
-		title: 'Build (agent-assisted, supervised subagents)',
-		reads: ['issues/*'],
-		produces: [],
-		gate: true,
-		gateName: 'build',
-	},
-]
+import { isPhaseHint, type Phase, phaseById, type PhaseId, PHASES } from '../../shared/phases'
 
 export interface PhaseState {
 	current: PhaseId
@@ -111,8 +18,8 @@ export interface GateOracle {
 	hasGateRevision?(sessionId: string, gateName: string): boolean
 }
 
-function expandGlob(fabrikaDir: string, glob: string): string[] {
-	const abs = join(fabrikaDir, glob)
+function expandGlob(repoRoot: string, glob: string): string[] {
+	const abs = join(repoRoot, glob)
 	if (!abs.includes('*')) {
 		return existsSync(abs) ? [abs] : []
 	}
@@ -144,10 +51,10 @@ function isNonEmptyFile(p: string): boolean {
 	}
 }
 
-export function producesSatisfied(phase: Phase, fabrikaDir: string): boolean {
-	if (phase.produces.length === 0) return false
+export function producesSatisfied(phase: Phase, repoRoot: string): boolean {
 	for (const glob of phase.produces) {
-		const matches = expandGlob(fabrikaDir, glob).filter(isNonEmptyFile)
+		if (isPhaseHint(glob)) return false
+		const matches = expandGlob(repoRoot, glob).filter(isNonEmptyFile)
 		if (matches.length === 0) return false
 	}
 	return true
@@ -161,17 +68,14 @@ export function gateSatisfied(
 	if (!phase.gate) return true
 	if (!oracle) return true
 	if (oracle.getLatestUnconsumedFeedback(sessionId) !== null) return false
-	if (oracle.hasGateRevision && phase.gateName) {
-		return oracle.hasGateRevision(sessionId, phase.gateName)
-	}
-	return true
+	return oracle.hasGateRevision?.(sessionId, phase.id) ?? true
 }
 
-function resolveReads(phase: Phase, fabrikaDir: string): string[] {
+function resolveReads(phase: Phase, repoRoot: string): string[] {
 	const out: string[] = []
-	for (const glob of phase.reads) {
+	for (const glob of phase.reads.filter((read) => !isPhaseHint(read))) {
 		out.push(
-			...expandGlob(fabrikaDir, glob).filter(p => {
+			...expandGlob(repoRoot, glob).filter(p => {
 				try {
 					return statSync(p).size > 0 || statSync(p).isDirectory()
 				} catch {
@@ -188,34 +92,31 @@ export function derivePhaseState(
 	sessionId = '',
 	oracle?: GateOracle,
 ): PhaseState {
+	const repoRoot = dirname(fabrikaDir)
 	const completed: PhaseId[] = []
 
 	for (const phase of PHASES) {
-		if (producesSatisfied(phase, fabrikaDir) && gateSatisfied(phase, sessionId, oracle)) {
+		const satisfied = producesSatisfied(phase, repoRoot)
+		if (satisfied && gateSatisfied(phase, sessionId, oracle)) {
 			completed.push(phase.id)
 			continue
 		}
-		return {
-			current: phase.id,
-			index: phase.index,
-			completed,
-			reads: resolveReads(phase, fabrikaDir),
-			produces: phase.produces,
-			gate: phase.gate,
-			...(phase.gateName ? { gateName: phase.gateName } : {}),
-			satisfied: producesSatisfied(phase, fabrikaDir),
-		}
+		return toState(phase, repoRoot, completed, satisfied)
 	}
 
-	const build = PHASES[PHASES.length - 1]!
+	const build = phaseById('build')
+	return toState(build, repoRoot, completed.filter(id => id !== build.id), false)
+}
+
+function toState(phase: Phase, repoRoot: string, completed: PhaseId[], satisfied: boolean): PhaseState {
 	return {
-		current: build.id,
-		index: build.index,
-		completed: completed.filter(id => id !== build.id),
-		reads: resolveReads(build, fabrikaDir),
-		produces: build.produces,
-		gate: build.gate,
-		...(build.gateName ? { gateName: build.gateName } : {}),
-		satisfied: false,
+		current: phase.id,
+		index: phase.number,
+		completed,
+		reads: resolveReads(phase, repoRoot),
+		produces: phase.produces,
+		gate: phase.gate,
+		...(phase.gate ? { gateName: phase.id } : {}),
+		satisfied,
 	}
 }

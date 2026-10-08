@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from 'fs'
 import { basename, dirname, join, resolve } from 'path'
-import { type Phase, type PhaseId, PHASES } from './phases'
+import { isPhaseHint, type Phase, type PhaseId, phaseIndex, PHASES } from '../../shared/phases'
 
 export interface PhaseState {
 	current: PhaseId
@@ -51,7 +51,7 @@ export function isNonEmptyFile(p: string): boolean {
 
 export function producesSatisfied(repoRoot: string, phase: Phase): boolean {
 	for (const glob of phase.produces) {
-		if (isPlaceholder(glob)) return false
+		if (isPhaseHint(glob)) return false
 		const matches = matchGlob(repoRoot, glob).filter(isNonEmptyFile)
 		if (matches.length === 0) return false
 	}
@@ -61,7 +61,7 @@ export function producesSatisfied(repoRoot: string, phase: Phase): boolean {
 export function resolveReads(repoRoot: string, phase: Phase): string[] {
 	const out: string[] = []
 	for (const glob of phase.reads) {
-		if (isPlaceholder(glob)) {
+		if (isPhaseHint(glob)) {
 			out.push(glob) // keep the human hint, e.g. "<init brief>"
 			continue
 		}
@@ -71,10 +71,6 @@ export function resolveReads(repoRoot: string, phase: Phase): string[] {
 		}
 	}
 	return out
-}
-
-function isPlaceholder(glob: string): boolean {
-	return glob.startsWith('<')
 }
 
 export function derivePhase(repoRoot: string, gateProbe: GateProbe = offlineGateProbe): PhaseState {
@@ -99,7 +95,7 @@ export function derivePhase(repoRoot: string, gateProbe: GateProbe = offlineGate
 function toState(repoRoot: string, phase: Phase, completed: PhaseId[], satisfied: boolean): PhaseState {
 	return {
 		current: phase.id,
-		index: PHASES.findIndex((p) => p.id === phase.id),
+		index: phaseIndex(phase.id),
 		completed,
 		reads: resolveReads(repoRoot, phase),
 		produces: phase.produces,

@@ -1,50 +1,16 @@
-import { resolve } from 'path'
+import { waitForEvent } from '@fabrika/daemon-kit'
 import {
 	consumedFeedbackSchema,
 	feedbackMetaSchema,
 	feedbackTextSchema,
-	healthInfoSchema,
 	phaseStateSchema,
 	planResultSchema,
 	submitFeedbackSchema,
 } from '../../shared'
-import { BASE_URL, SESSIONS_DIR, TIMEOUT_MS, WS_URL } from './config'
+import { BASE_URL, TIMEOUT_MS, WS_URL } from './config'
 import type { PhaseState } from './derive'
 
 const HEALTH_TIMEOUT_MS = 1000
-
-export interface HealthInfo {
-	ok: boolean
-	version?: string
-	pid?: number
-	dataDir?: string
-	sessionsDir: string
-	sessions?: number | string[]
-}
-
-export async function health(): Promise<HealthInfo | null> {
-	try {
-		const res = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
-		const result = healthInfoSchema.safeParse(await res.json())
-		return result.success ? result.data : null
-	} catch {
-		return null
-	}
-}
-
-export async function isDaemonRunning(): Promise<boolean> {
-	const info = await health()
-	return info !== null && healthMatchesDataRoot(info)
-}
-
-export function healthMatchesDataRoot(info: HealthInfo, expectedSessionsDir: string = SESSIONS_DIR): boolean {
-	return comparablePath(info.sessionsDir) === comparablePath(expectedSessionsDir)
-}
-
-function comparablePath(path: string): string {
-	const absolute = resolve(path)
-	return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
 
 export async function fetchPhase(fabrikaDir: string, sessionId?: string): Promise<PhaseState | null> {
 	try {
@@ -150,43 +116,16 @@ export async function postBuildEvent(event: BuildEvent): Promise<boolean> {
 }
 
 export function waitForFeedback(sessionId: string, timeoutMs: number = TIMEOUT_MS): Promise<string> {
-	return new Promise((resolveP, rejectP) => {
-		let settled = false
-		const ws = new WebSocket(`${WS_URL}/ws/wait/${sessionId}`)
-		const timer = setTimeout(() => {
-			if (settled) return
-			settled = true
-			try {
-				ws.close()
-			} catch {}
-			rejectP(new Error('timeout'))
-		}, timeoutMs)
-		ws.onmessage = (event: MessageEvent) => {
-			try {
-				const raw = typeof event.data === 'string' ? event.data : ''
-				const result = submitFeedbackSchema.safeParse(JSON.parse(raw))
-				if (result.success) {
-					if (settled) return
-					settled = true
-					clearTimeout(timer)
-					try {
-						ws.close()
-					} catch {}
-					resolveP(result.data.feedback)
-				}
-			} catch {}
-		}
-		ws.onerror = () => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			rejectP(new Error('connection-failed'))
-		}
-		ws.onclose = () => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			rejectP(new Error('closed'))
-		}
+	return waitForEvent({
+		url: `${WS_URL}/ws/wait/${sessionId}`,
+		timeoutMs,
+		onFrame: (frame) => {
+			const result = submitFeedbackSchema.safeParse(frame)
+			return result.success ? { type: 'settle', value: result.data.feedback } : undefined
+		},
+		probe: async () => {
+			const feedback = await peekFeedback(sessionId)
+			return feedback === null ? undefined : { value: feedback }
+		},
 	})
 }

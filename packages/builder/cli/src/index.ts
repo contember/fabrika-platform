@@ -1,3 +1,4 @@
+export { type Phase, PHASE_COUNT, PHASE_IDS, phaseById, type PhaseId, phaseIndex, PHASES } from '../../shared/phases'
 export { resolveCatalogRoot, resolveStackPointer, type StackPointer } from './catalog'
 export {
 	BASE_URL,
@@ -33,5 +34,4 @@ export {
 	readConfig,
 	scaffold,
 } from './layout'
-export { type PacketJson, packetJson, PHASE_IDS, type RenderOpts, renderPacket } from './packet'
-export { type Phase, PHASE_COUNT, phaseById, type PhaseId, phaseIndex, PHASES } from './phases'
+export { type PacketJson, packetJson, type RenderOpts, renderPacket } from './packet'

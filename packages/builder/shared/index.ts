@@ -1,5 +1,6 @@
 import { type BuilderConnectionReceiptDto, builderConnectionReceiptSchema } from '@fabrika/control-contract'
 import { z } from 'zod'
+import { PHASE_IDS } from './phases'
 import { parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
 
 export { parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
@@ -66,7 +67,7 @@ export interface BuilderErrorResponse {
 // These legacy daemon projections deliberately recover malformed optional fields.
 const wireNumberSchema = z.union([z.number(), z.nan()])
 const optionalTextSchema = z.string().optional().catch(undefined)
-const phaseIdSchema = z.enum(['intake', 'vision', 'flows', 'tech', 'design', 'skeletons', 'issues', 'build'])
+const phaseIdSchema = z.enum(PHASE_IDS)
 export const phaseStateSchema = z.object({
 	current: phaseIdSchema,
 	index: wireNumberSchema,

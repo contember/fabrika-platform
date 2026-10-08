@@ -1,158 +1,78 @@
+import { createDaemonLifecycle, type DaemonLifecycleConfig, DaemonStartError } from '@fabrika/daemon-kit'
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './config'
-import { health, type HealthInfo, healthMatchesDataRoot, isDaemonRunning } from './daemon-client'
+import type { z } from 'zod'
+import { healthInfoSchema } from '../../shared'
+import { BASE_URL, DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './config'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
+export type DaemonHealthInfo = z.output<typeof healthInfoSchema> & { pid: number }
 
-export function resolveDaemonServer(): string | null {
-	const candidates = [
-		resolve(HERE, '../../daemon/src/bin.ts'),
-	]
-	for (const c of candidates) {
-		if (existsSync(c)) return c
-	}
-	return null
+function parseDaemonHealth(body: unknown): DaemonHealthInfo | undefined {
+	const result = healthInfoSchema.safeParse(body)
+	if (!result.success) return undefined
+	const { pid } = result.data
+	return pid !== undefined && Number.isInteger(pid) ? { ...result.data, pid } : undefined
 }
 
-export class DaemonUnavailableError extends Error {
-	constructor(message: string) {
-		super(message)
-		this.name = 'DaemonUnavailableError'
-	}
+function comparablePath(path: string): string {
+	const absolute = resolve(path)
+	return process.platform === 'win32' ? absolute.toLowerCase() : absolute
 }
 
-export async function startDaemon(): Promise<void> {
-	const server = resolveDaemonServer()
-	if (!server) {
-		throw new DaemonUnavailableError(
-			'fabrika builder daemon not found. '
-				+ 'Build/start it manually, or run the CLI in offline mode.',
-		)
-	}
-
-	mkdirSync(TEMP_DIR, { recursive: true })
-	const startupLog = join(TEMP_DIR, 'daemon-startup.log')
-	const fd = openSync(startupLog, 'w')
-
-	const child = spawn('bun', ['run', server], {
-		detached: true,
-		stdio: ['ignore', 'ignore', fd],
-		cwd: dirname(dirname(server)),
-		env: daemonSpawnEnvironment(),
-	})
-	child.unref()
-	closeSync(fd)
-
-	for (let i = 0; i < 30; i++) {
-		await new Promise((r) => setTimeout(r, 100))
-		if (await isDaemonRunning()) return
-	}
-
-	let detail = ''
-	if (existsSync(startupLog)) {
-		const log = readFileSync(startupLog, 'utf-8').trim()
-		if (log) detail = '\nDaemon stderr:\n' + log
-	}
-	throw new DaemonUnavailableError('Daemon failed to start within 3 seconds.' + detail)
+export function healthMatchesDataRoot(info: { sessionsDir: string }, expectedSessionsDir: string = SESSIONS_DIR): boolean {
+	return comparablePath(info.sessionsDir) === comparablePath(expectedSessionsDir)
 }
 
-export function daemonSpawnEnvironment(
-	base: NodeJS.ProcessEnv = process.env,
-	dataDir: string = DATA_DIR,
-): NodeJS.ProcessEnv {
-	return { ...base, FABRIKA_DATA_DIR: resolve(dataDir) }
+const DAEMON_BIN = fileURLToPath(new URL('../../daemon/src/bin.ts', import.meta.url))
+
+export const daemonLifecycleConfig: DaemonLifecycleConfig<DaemonHealthInfo> = {
+	baseUrl: BASE_URL,
+	parseHealth: parseDaemonHealth,
+	pidFile: PID_FILE,
+	command: [process.execPath, DAEMON_BIN, '--data-dir', DATA_DIR],
+	// Never the caller's project: its bunfig.toml preloads must not load into the daemon.
+	cwd: dirname(dirname(DAEMON_BIN)),
+	logFile: join(TEMP_DIR, 'daemon.log'),
+	// A daemon serving another data root is restarted, like one of another version.
+	versionCheck: {
+		expected: comparablePath(SESSIONS_DIR),
+		of: (health) => comparablePath(health.sessionsDir),
+	},
 }
+
+export const daemon = createDaemonLifecycle(daemonLifecycleConfig)
 
 export async function ensureDaemon(opts: { quiet?: boolean } = {}): Promise<boolean> {
-	const active = await health()
-	if (active && healthMatchesDataRoot(active)) return true
-
-	if (active) {
-		const stopped = await stopMismatchedManagedDaemon(active, opts.quiet ?? false)
-		if (!stopped) return false
+	const report = (message: string) => {
+		if (!opts.quiet) console.error(`[fabrika] ${message}`)
 	}
-
-	if (existsSync(PID_FILE)) {
-		const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10)
-		if (!isAlive(pid)) {
-			try {
-				unlinkSync(PID_FILE)
-			} catch {}
-		}
-	}
-
+	const lifecycle = createDaemonLifecycle({
+		...daemonLifecycleConfig,
+		onEvent: (event) => {
+			if (event.type === 'version-mismatch') {
+				report(`daemon data-root mismatch: active ${event.running}, requested ${event.expected}; restarting the daemon.`)
+			}
+		},
+	})
 	try {
-		await startDaemon()
-		return true
+		const health = await lifecycle.ensure()
+		if (healthMatchesDataRoot(health)) return true
+		report(`daemon data-root mismatch: active ${health.sessionsDir}, requested ${SESSIONS_DIR}`)
+		return false
 	} catch (error: unknown) {
-		if (!opts.quiet) {
-			console.error(`[fabrika] ${error instanceof Error ? error.message : String(error)}`)
+		if (error instanceof DaemonStartError) {
+			report(error.logTail ? `${error.message}\nDaemon log (${error.logFile}):\n${error.logTail}` : error.message)
+		} else {
+			report(error instanceof Error ? error.message : String(error))
 		}
 		return false
 	}
 }
 
-async function stopMismatchedManagedDaemon(info: HealthInfo, quiet: boolean): Promise<boolean> {
-	const mismatch = `daemon data-root mismatch: active ${info.sessionsDir}, requested ${SESSIONS_DIR}`
-	if (!existsSync(PID_FILE)) {
-		if (!quiet) console.error(`[fabrika] ${mismatch}; no managed PID file, refusing to stop it.`)
-		return false
-	}
-
-	const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10)
-	if (!isAlive(pid) || info.pid === undefined || info.pid !== pid) {
-		if (!quiet) console.error(`[fabrika] ${mismatch}; daemon PID ownership could not be verified.`)
-		return false
-	}
-
-	if (!quiet) console.error(`[fabrika] ${mismatch}; restarting managed daemon ${pid}.`)
-	try {
-		process.kill(pid, 'SIGTERM')
-	} catch {
-		return false
-	}
-
-	for (let attempt = 0; attempt < 30; attempt++) {
-		await new Promise((resolveP) => setTimeout(resolveP, 100))
-		if ((await health()) === null) {
-			try {
-				unlinkSync(PID_FILE)
-			} catch {}
-			return true
-		}
-	}
-	if (!quiet) console.error(`[fabrika] mismatched daemon did not stop within 3 seconds.`)
-	return false
-}
-
-export function stopDaemon(): boolean {
-	if (!existsSync(PID_FILE)) return false
-	const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10)
-	try {
-		process.kill(pid, 'SIGTERM')
-		try {
-			unlinkSync(PID_FILE)
-		} catch {}
-		return true
-	} catch {
-		try {
-			unlinkSync(PID_FILE)
-		} catch {}
-		return false
-	}
-}
-
-function isAlive(pid: number): boolean {
-	if (!Number.isFinite(pid) || pid <= 0) return false
-	try {
-		process.kill(pid, 0)
-		return true
-	} catch {
-		return false
-	}
+export async function isDaemonRunning(): Promise<boolean> {
+	const health = await daemon.health()
+	return health.status === 'up' && healthMatchesDataRoot(health)
 }
 
 export function openBrowser(url: string, fallbackUrl: string = url): void {

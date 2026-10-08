@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
-import { PHASE_COUNT, PHASES, statusOf } from '../lib/phases'
+import { PHASE_COUNT, PHASES } from '../../../shared/phases'
+import { statusOf } from '../lib/phases'
 import type { PhaseId, PhaseState } from '../lib/types'
 
 function Marker({ status }: { status: 'done' | 'current' | 'upcoming' }): JSX.Element {
@@ -48,7 +49,7 @@ export function PhaseRail({
 				</p>
 			</div>
 			<ol className="flex-1 overflow-y-auto py-2">
-				{PHASES.map((p, idx) => {
+				{PHASES.map((p) => {
 					const status = statusOf(p.id, state.completed, state.current)
 					const isFocused = focused === p.id
 					const clickable = status !== 'upcoming'
@@ -69,7 +70,7 @@ export function PhaseRail({
 								<div className="min-w-0">
 									<div className="flex items-center gap-1.5">
 										<span className="text-tiny tabular-nums text-text-tertiary">
-											{idx + 1}/{PHASE_COUNT}
+											{p.number}/{PHASE_COUNT}
 										</span>
 										{p.gate && (
 											<span
@@ -90,7 +91,7 @@ export function PhaseRail({
 												: 'text-text-tertiary',
 										].join(' ')}
 									>
-										{p.title}
+										{p.label}
 									</div>
 								</div>
 							</button>

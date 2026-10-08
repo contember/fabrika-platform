@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
+import { PHASE_COUNT, PHASES } from '../../shared/phases'
 import { derivePhase } from '../src/derive'
 import { packetJson, renderPacket } from '../src/packet'
-import { PHASE_COUNT } from '../src/phases'
 import { type Fixture, makeFixture } from './helpers'
 
 let fx: Fixture | null = null
@@ -14,7 +14,7 @@ test('packet for intake has the expected sections', () => {
 	expect(packet).toContain(`## Phase 1/${PHASE_COUNT} - Intake`)
 	expect(packet).toContain('Read:')
 	expect(packet).toContain('Goal:')
-	expect(packet).toContain('Skills:')
+	expect(packet).not.toContain('Skills:')
 	expect(packet).toContain('Gate:')
 	expect(packet).toContain('After OK:')
 	expect(packet).toContain('fabrika builder gate open intake --view brief.jsx && fabrika builder gate wait')
@@ -117,5 +117,13 @@ test('build phase packet uses the build After-OK line', () => {
 	fx.write('.fabrika/issues/ISSUE-001.md')
 	const packet = renderPacket(derivePhase(fx.root))
 	expect(packet).toContain(`## Phase 8/${PHASE_COUNT} - Build`)
+	expect(packet).toContain('Skills:  fabrika, opice-author')
 	expect(packet).toContain('fabrika builder build')
+})
+
+test('phases name only skills the builder ships or installs alongside opice', () => {
+	const known = new Set(['fabrika', 'opice-plan', 'opice-author'])
+	for (const phase of PHASES) {
+		for (const skill of phase.skills ?? []) expect(known.has(skill), `${phase.id} names unknown skill ${skill}`).toBe(true)
+	}
 })

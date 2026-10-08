@@ -1,23 +1,12 @@
 import { join } from 'node:path'
 import type { BuilderProjectConnection } from '../../shared'
+import { PHASE_COUNT, phaseById, type PhaseId, phaseIndex } from '../../shared/phases'
 import { resolveStackPointer, type StackPointer } from './catalog'
 import type { PhaseState } from './derive'
-import { PHASE_COUNT, phaseById, type PhaseId, phaseIndex, PHASES } from './phases'
 
 export interface RenderOpts {
 	profile?: string
 	connection?: BuilderProjectConnection
-}
-
-const SHORT_LABEL: Record<PhaseId, string> = {
-	intake: 'intake',
-	vision: 'vision',
-	flows: 'flows',
-	tech: 'tech',
-	design: 'design',
-	skeletons: 'skeletons',
-	issues: 'issues',
-	build: 'build',
 }
 
 const CHECK = '✓' // ✓
@@ -27,7 +16,7 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 	const lines: string[] = []
 	if (opts.connection) lines.push(`Platform: ${JSON.stringify(connectionContext(opts.connection))}`)
 
-	const done = state.completed.map((id) => `${SHORT_LABEL[id]} ${CHECK}`).join(', ')
+	const done = state.completed.map((id) => `${id} ${CHECK}`).join(', ')
 	const completedSuffix = done ? `   (${done})` : ''
 	lines.push(`## Phase ${phase.number}/${PHASE_COUNT} - ${phase.title}${completedSuffix}`)
 
@@ -40,7 +29,7 @@ export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 
 	lines.push(`Goal:    ${phase.goal}`)
 
-	lines.push(`Skills:  ${phase.skills.join(', ')}`)
+	if (phase.skills) lines.push(`Skills:  ${phase.skills.join(', ')}`)
 
 	if (phase.gate) {
 		const view = phase.gateView ?? `${phase.id}.jsx`
@@ -103,14 +92,12 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 		produces: state.produces,
 		gate: phase.gate,
 		gateView: phase.gateView ?? null,
-		skills: phase.skills,
+		skills: phase.skills ?? [],
 		completed: state.completed,
 		satisfied: state.satisfied,
 		stack: phase.catalog && opts.profile ? resolveStackPointer(opts.profile) : null,
 	}
 }
-
-export const PHASE_IDS: PhaseId[] = PHASES.map((p) => p.id)
 
 function connectionContext(connection: BuilderProjectConnection) {
 	return {

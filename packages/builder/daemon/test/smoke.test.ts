@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
+import { PHASES } from '../../shared/phases'
 import { type RunningDaemon, startDaemon } from '../src/index'
-import { derivePhaseState, PHASES } from '../src/phases'
+import { derivePhaseState } from '../src/phases'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -350,15 +351,14 @@ describe('daemon http endpoints', () => {
 
 describe('derivePhaseState (filesystem fixture)', () => {
 	function freshFabrika(): string {
-		const dir = mkdtempSync(join(tmpdir(), 'fabrika-derive-'))
-		return dir
+		return join(mkdtempSync(join(tmpdir(), 'fabrika-derive-')), '.fabrika')
 	}
 
 	test('empty → intake', () => {
 		const dir = freshFabrika()
 		const state = derivePhaseState(dir)
 		expect(state.current).toBe('intake')
-		rmSync(dir, { recursive: true, force: true })
+		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
 	test('brief present (no oracle) → advances past intake to vision', () => {
@@ -368,7 +368,7 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		const state = derivePhaseState(dir)
 		expect(state.completed).toContain('intake')
 		expect(state.current).toBe('vision')
-		rmSync(dir, { recursive: true, force: true })
+		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
 	test('empty file does not satisfy produces', () => {
@@ -377,7 +377,7 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		writeFileSync(join(dir, 'intent', 'brief.md'), '') // empty → not satisfied
 		const state = derivePhaseState(dir)
 		expect(state.current).toBe('intake')
-		rmSync(dir, { recursive: true, force: true })
+		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
 	test('gate oracle blocks completion when feedback is unconsumed', () => {
@@ -391,12 +391,12 @@ describe('derivePhaseState (filesystem fixture)', () => {
 		const state = derivePhaseState(dir, 'sess', oracle)
 		expect(state.current).toBe('intake')
 		expect(state.satisfied).toBe(true)
-		rmSync(dir, { recursive: true, force: true })
+		rmSync(dirname(dir), { recursive: true, force: true })
 	})
 
 	test('PHASES table has 8 ordered phases', () => {
 		expect(PHASES.length).toBe(8)
-		expect(PHASES.map((p) => p.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+		expect(PHASES.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
 		expect(PHASES[0]!.id).toBe('intake')
 		expect(PHASES[7]!.id).toBe('build')
 	})

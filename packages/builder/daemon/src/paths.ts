@@ -4,8 +4,10 @@ import { join, resolve } from 'path'
 
 export const NEUTRAL_DATA_DIR = join(homedir(), '.fabrika')
 
-export function resolveDataDir(): string {
-	const explicit = process.env['FABRIKA_DATA_DIR']
+// The CLI passes `--data-dir`; a daemon started by hand falls back to FABRIKA_DATA_DIR.
+export function resolveDataDir(argv: readonly string[] = process.argv, env: NodeJS.ProcessEnv = process.env): string {
+	const flag = argv.indexOf('--data-dir')
+	const explicit = (flag === -1 ? undefined : argv[flag + 1]) ?? env['FABRIKA_DATA_DIR']
 	if (explicit) return resolve(explicit)
 	return NEUTRAL_DATA_DIR
 }
