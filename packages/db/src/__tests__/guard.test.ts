@@ -34,7 +34,7 @@ import {
 import { finishSelect, startSelect, type TableShape } from '../description'
 import { QueryRefusedError } from '../errors'
 import { assertAllowedTree, type GuardContext } from '../guard'
-import { column, deleteNode, inList, insertNode, scopedWhere, selectNode, updateNode } from '../nodes'
+import { acknowledgement, column, deleteNode, existsNode, inList, insertNode, lockNode, scopedWhere, selectNode, updateNode } from '../nodes'
 
 interface AttackDB {
 	notes: { id: string; workspace_id: string; title: string; body: string | null; word_count: number; data: { a: string } }
@@ -93,7 +93,7 @@ function refuses(node: OperationNode, context: GuardContext, message?: string): 
 const updateScope = BinaryOperationNode.create(column('notes', 'id'), OperatorNode.create('='), ValueNode.create('n1'))
 const updateContext: GuardContext = { root: 'UpdateQueryNode', table: 'notes', joins: {}, scope: updateScope }
 const legitUpdate = (properties: Partial<UpdateQueryNode> = {}): UpdateQueryNode => ({
-	...updateNode('notes', new Map([['title', 'x']]), 'version', scopedWhere(undefined, updateScope), ['id', 'title']),
+	...updateNode('notes', new Map([['title', 'x']]), 'version', scopedWhere(undefined, updateScope), acknowledgement('notes', 'id', 'version')),
 	...properties,
 })
 const deleteContext: GuardContext = { root: 'DeleteQueryNode', table: 'notes', joins: {}, scope: updateScope }
@@ -103,7 +103,7 @@ const legitDelete = (properties: Partial<DeleteQueryNode> = {}): DeleteQueryNode
 })
 const insertContext: GuardContext = { root: 'InsertQueryNode', table: 'notes', joins: {}, scope: undefined }
 const legitInsert = (properties: Partial<InsertQueryNode> = {}): InsertQueryNode => ({
-	...insertNode('notes', new Map([['title', 'x']]), ['id', 'title']),
+	...insertNode('notes', new Map([['title', 'x']]), acknowledgement('notes', 'id', 'version')),
 	...properties,
 })
 
@@ -263,6 +263,24 @@ describe('tables, joins and selections', () => {
 
 	test('orderBy with a raw direction', () => {
 		refuses(select({ orderBy: k.selectFrom('notes').orderBy(sql`notes.id; drop table notes`).toOperationNode().orderBy }), selectContext, 'raw SQL')
+	})
+})
+
+describe('row locks', () => {
+	const lockContext: GuardContext = { ...selectContext, joins: {}, lock: true }
+
+	test("the layer's destination check passes with the lock flag, and compiles to for share", () => {
+		const node = lockNode('notes', 'id', scope)
+		expect(() => assertAllowedTree(node, lockContext)).not.toThrow()
+		expect(compiler.compileQuery(node, { queryId: 'q' }).sql).toEndWith('limit $2 for share')
+	})
+
+	test('a lock without the flag, and any other modifier with it, is refused', () => {
+		refuses(lockNode('notes', 'id', scope), selectContext, 'is not allowed')
+		const forUpdate = { ...existsNode('notes', 'id', scope), endModifiers: base().forUpdate().toOperationNode().endModifiers }
+		refuses(forUpdate, lockContext, 'row locks are not allowed')
+		const rawModifier = { ...existsNode('notes', 'id', scope), endModifiers: base().modifyEnd(sql`for share`).toOperationNode().endModifiers }
+		refuses(rawModifier, lockContext)
 	})
 })
 

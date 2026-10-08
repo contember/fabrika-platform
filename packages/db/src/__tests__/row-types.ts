@@ -29,10 +29,21 @@ export type RowTypes = [
 	Expect<
 		Equal<
 			keyof Awaited<ReturnType<Stores['notes']['get']>>,
-			'id' | 'workspace_id' | 'title' | 'body' | 'word_count' | 'created_by' | 'version' | 'created_at'
+			'id' | 'workspace_id' | 'organization_id' | 'title' | 'body' | 'word_count' | 'created_by' | 'version' | 'created_at'
 		>
 	>,
 	Expect<Equal<Awaited<ReturnType<Stores['notes']['get']>>['version'], number>>,
+	// A mutation answers an acknowledgement, never row data.
+	Expect<Equal<Awaited<ReturnType<Stores['notes']['create']>>, { readonly id: string; readonly version: number }>>,
+	Expect<Equal<Awaited<ReturnType<Stores['notes']['update']>>, { readonly id: string; readonly version: number }>>,
+	Expect<
+		Equal<
+			Flat<Awaited<ReturnType<Stores['notes']['move']>>>,
+			{ readonly id: string; readonly version: number; readonly chain: Readonly<Record<string, string>> }
+		>
+	>,
+	Expect<Equal<Awaited<ReturnType<Stores['workspaces']['rename']>>, { readonly id: string }>>,
+	Expect<Equal<Awaited<ReturnType<Stores['comments']['add']>>, { readonly id: string }>>,
 	Expect<Equal<Ref<'note', 'notes.read'> extends Ref<'note', 'notes.delete'> ? true : false, false>>,
 	Expect<Equal<Ref<'note', 'notes.read'> extends Ref<'workspace', 'notes.read'> ? true : false, false>>,
 ]

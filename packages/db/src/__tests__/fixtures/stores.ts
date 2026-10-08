@@ -11,10 +11,17 @@ export interface Page {
 export function defineStores(runtime: DataLayerRuntime) {
 	const { defineStore, defineChildStore } = scoped(tables, runtime)
 
+	const organizations = defineStore('organizations', (t) => ({
+		list: (within: Within<'organization', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'name']).orderBy('id')),
+		create: (created: Ref<'organization', 'organizations.create'>, name: string) => t.insert(created, { name }),
+	}))
+
 	const workspaces = defineStore('workspaces', (t) => ({
-		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'name']).orderBy('name')),
-		create: (created: Ref<'workspace', 'workspaces.create'>, name: string) => t.insert(created, { name }),
+		list: (within: Within<'organization', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'name']).orderBy('name')),
+		get: (workspace: Ref<'workspace', 'notes.read'>) => t.get(workspace),
+		create: (organization: Ref<'organization', 'workspaces.create'>, name: string) => t.insert(organization, { name }),
 		rename: (workspace: Ref<'workspace', 'workspaces.admin'>, name: string) => t.update(workspace, { name }),
+		move: (workspace: Ref<'workspace', 'workspaces.admin'>, to: Ref<'organization', 'workspaces.create'>) => t.move(workspace, to),
 	}))
 
 	const notes = defineStore('notes', (t) => ({
@@ -52,5 +59,5 @@ export function defineStores(runtime: DataLayerRuntime) {
 		remove: (note: Ref<'note', 'notes.write'>, id: string) => t.remove(note, id),
 	}))
 
-	return { workspaces, notes, comments, defineStore, defineChildStore }
+	return { organizations, workspaces, notes, comments, defineStore, defineChildStore }
 }

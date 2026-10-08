@@ -24,6 +24,8 @@ export interface GuardContext {
 	readonly joins: Readonly<Record<string, readonly ForeignKeyPair[]>>
 	/** The scope predicate; it must be the WHERE itself or its top-level right conjunct. Absent for an insert only. */
 	readonly scope: OperationNode | undefined
+	/** A select that locks its rows `FOR SHARE`: the layer's check of a mutation's destination. */
+	readonly lock?: true
 }
 
 type Lookup = Readonly<Record<string, true>>
@@ -82,6 +84,8 @@ const NODE_KINDS = lookup(
 	'ReturningNode',
 	// Only as an orderBy direction; checked below.
 	'RawNode',
+	// Only as the FOR SHARE of a destination check; checked below.
+	'SelectModifierNode',
 )
 
 const COMPARISON_OPERATORS = lookup('=', '<>', '<', '<=', '>', '>=', 'like', 'ilike', 'not like', 'not ilike', 'in', 'not in', 'is', 'is not')
@@ -103,7 +107,8 @@ export function assertAllowedTree(root: OperationNode, context: GuardContext): v
 	const keys = ownKeys(root)
 	for (let index = 0; index < keys.length; index++) {
 		const key = keys[index] ?? ''
-		if (read(root, key) !== undefined && !has(allowed, key)) {
+		const lockModifier = key === 'endModifiers' && context.lock === true && context.root === 'SelectQueryNode'
+		if (read(root, key) !== undefined && !has(allowed, key) && !lockModifier) {
 			throw new QueryRefusedError(`${context.root}.${key} is not allowed`)
 		}
 	}
@@ -177,6 +182,8 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 	switch (node.kind) {
 		case 'RawNode':
 			return checkRaw(node, parent)
+		case 'SelectModifierNode':
+			return checkLock(node, parent, context)
 		case 'SchemableIdentifierNode':
 			if (read(node, 'schema') !== undefined) {
 				throw new QueryRefusedError('schema-qualified tables are not allowed')
@@ -250,6 +257,15 @@ function checkValue(node: OperationNode): void {
 	if (!plain) {
 		// Bun.SQL mis-binds a JS array and stores a bound JSON string as a JSON string, so only scalars are bound.
 		throw new QueryRefusedError('only plain values are bound as parameters')
+	}
+}
+
+function checkLock(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
+	const modifiers = parent === undefined ? undefined : read(parent.node, 'endModifiers')
+	const onRoot = parent !== undefined && parent.up === undefined && parent.key === 'endModifiers' && isArray(modifiers) && modifiers.length === 1
+	const plain = read(node, 'modifier') === 'ForShare' && read(node, 'of') === undefined && read(node, 'rawModifier') === undefined
+	if (context.lock !== true || !onRoot || !plain) {
+		throw new QueryRefusedError('row locks are not allowed')
 	}
 }
 

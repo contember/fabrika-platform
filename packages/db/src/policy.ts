@@ -120,7 +120,14 @@ export interface TableModel {
 	readonly update: ReadonlySet<string>
 	readonly version: string | undefined
 	readonly createdBy: string | undefined
+	/**
+	 * The containment links this table carries a column for, nearest first: a dimension table's container and
+	 * the container's own chain; a child's parent and the parent's chain. Every predicate of a Ref covers all.
+	 */
+	readonly chain: readonly Container[]
 }
+
+type ParsedTable = Omit<TableModel, 'chain'>
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => ReadonlyMap<string, TableModel>
 
@@ -156,7 +163,7 @@ function parseTables(
 	columns: Readonly<Record<string, readonly string[]>>,
 	policies: Readonly<Record<string, AnyPolicy>>,
 ): ReadonlyMap<string, TableModel> {
-	const models = new Map<string, TableModel>()
+	const parsed = new Map<string, ParsedTable>()
 	for (const table of Object.keys(policies)) {
 		if (!Object.hasOwn(columns, table)) {
 			throw new PolicyError(`${table}: no such table in the column list (tables: ${Object.keys(columns).join(', ')})`)
@@ -167,13 +174,12 @@ function parseTables(
 		if (policy === undefined) {
 			throw new PolicyError(`${table}: every table needs a policy in tables.ts`)
 		}
-		models.set(table, parseTable(table, tableColumns, policy))
+		parsed.set(table, parseTable(table, tableColumns, policy))
 	}
-	checkRelations(models)
-	return models
+	return linkTables(parsed)
 }
 
-function parseTable(table: string, columnNames: readonly string[], policy: AnyPolicy): TableModel {
+function parseTable(table: string, columnNames: readonly string[], policy: AnyPolicy): ParsedTable {
 	if (!isPlainIdentifier(table)) {
 		throw new PolicyError(`${table}: a table name must match ^[a-z_][a-z0-9_]*$`)
 	}
@@ -294,34 +300,84 @@ function stampedColumns(scope: ScopeModel): Set<string> {
 	}
 }
 
-function checkRelations(models: ReadonlyMap<string, TableModel>): void {
-	const owners = new Map<string, string>()
-	for (const model of models.values()) {
-		const scope = model.scope
-		if (scope.mode === 'dimension') {
-			const owner = owners.get(scope.dimension)
-			if (owner !== undefined) {
-				throw new PolicyError(`${model.name}: dimension ${scope.dimension} is already owned by ${owner}`)
-			}
-			owners.set(scope.dimension, model.name)
-		}
-		if (scope.mode !== 'child') {
+/** Resolves every table's containment chain and refuses a shape the layer cannot enforce. */
+function linkTables(parsed: ReadonlyMap<string, ParsedTable>): ReadonlyMap<string, TableModel> {
+	const owners = new Map<string, ParsedTable>()
+	for (const table of parsed.values()) {
+		if (table.scope.mode !== 'dimension') {
 			continue
 		}
-		const parent = models.get(scope.parent)
-		if (parent === undefined || parent.scope.mode !== 'dimension') {
-			throw new PolicyError(`${model.name}: the parent ${scope.parent} must be a dimension table`)
+		const owner = owners.get(table.scope.dimension)
+		if (owner !== undefined) {
+			throw new PolicyError(`${table.name}: dimension ${table.scope.dimension} is already owned by ${owner.name}`)
 		}
-		const container = parent.scope.container
-		if (container !== undefined && !scope.inherit.includes(container.column)) {
-			throw new PolicyError(`${model.name}: must inherit ${container.column} from ${scope.parent}, so a composite foreign key keeps it in scope`)
+		owners.set(table.scope.dimension, table)
+	}
+
+	const chains = new Map<string, readonly Container[]>()
+	const chainOf = (table: ParsedTable, visiting: readonly string[]): readonly Container[] => {
+		const known = chains.get(table.name)
+		if (known !== undefined) {
+			return known
 		}
-		for (const inherited of scope.inherit) {
-			if (!parent.columns.has(inherited)) {
-				throw new PolicyError(`${model.name}: inherits ${inherited}, which is not a column of ${scope.parent}`)
+		if (visiting.includes(table.name)) {
+			throw new PolicyError(`${table.name}: its containment is a cycle (${[...visiting, table.name].join(' → ')})`)
+		}
+		const chain = resolveChain(table, parsed, owners, (next) => chainOf(next, [...visiting, table.name]))
+		for (const link of chain) {
+			if (!table.columns.has(link.column)) {
+				throw new PolicyError(
+					`${table.name}: must carry ${link.column}, because it lies in ${link.dimension}; a row carries its whole containment chain`,
+				)
+			}
+			if (table.insert.has(link.column) || table.update.has(link.column)) {
+				throw new PolicyError(`${table.name}: ${link.column} is stamped by the layer; remove it from insert and update`)
 			}
 		}
+		chains.set(table.name, chain)
+		return chain
 	}
+
+	const models = new Map<string, TableModel>()
+	for (const table of parsed.values()) {
+		models.set(table.name, { ...table, chain: chainOf(table, []) })
+	}
+	return models
+}
+
+function resolveChain(
+	table: ParsedTable,
+	parsed: ReadonlyMap<string, ParsedTable>,
+	owners: ReadonlyMap<string, ParsedTable>,
+	chainOf: (table: ParsedTable) => readonly Container[],
+): readonly Container[] {
+	const scope = table.scope
+	if (scope.mode === 'dimension') {
+		if (scope.container === undefined) {
+			return []
+		}
+		const owner = owners.get(scope.container.dimension)
+		// An ancestor carries its column under the same name as in the table that owns its dimension.
+		return [scope.container, ...(owner === undefined ? [] : chainOf(owner))]
+	}
+	if (scope.mode !== 'child') {
+		return []
+	}
+	const parent = parsed.get(scope.parent)
+	if (parent === undefined || parent.scope.mode !== 'dimension') {
+		throw new PolicyError(`${table.name}: the parent ${scope.parent} must be a dimension table`)
+	}
+	const parentChain = chainOf(parent)
+	const expected = parentChain.map((link) => link.column)
+	const inherited = new Set(scope.inherit)
+	if (inherited.size !== expected.length || !expected.every((name) => inherited.has(name))) {
+		throw new PolicyError(
+			`${table.name}: must inherit exactly the containment columns of ${scope.parent} (${
+				expected.join(', ') || 'none'
+			}), so a composite foreign key keeps it in scope`,
+		)
+	}
+	return [{ dimension: parent.scope.dimension, column: scope.column }, ...parentChain]
 }
 
 type PolicyOf<P, T> = T extends keyof P ? P[T] : never
@@ -362,6 +418,13 @@ export type InsertValues<DB, P, T> = T extends keyof DB ? Flat<Pick<Insertable<D
 	: never
 export type UpdateValues<DB, P, T> = T extends keyof DB ? Flat<Pick<Updateable<DB[T]>, ListedColumns<P, T, 'update'> & keyof Updateable<DB[T]>>>
 	: never
+
+/** What a mutation answers: the key, and the new version of a versioned table. It returns no row data. */
+export type Acknowledgement<P, T> = PolicyOf<P, T> extends { readonly version: string } ? { readonly id: string; readonly version: number }
+	: { readonly id: string }
+
+/** A move also answers the object's new containment chain, by dimension. */
+export type MoveAcknowledgement<P, T> = Acknowledgement<P, T> & { readonly chain: Readonly<Record<string, string>> }
 
 /** A table with a version column takes `{ expectVersion }` on update; one without takes nothing. */
 export type VersionArguments<P, T> = PolicyOf<P, T> extends { readonly version: string } ? [options: { readonly expectVersion: number }] : []

@@ -76,7 +76,9 @@ describe('defineTables refuses a policy it cannot enforce', () => {
 
 	test("a child that does not inherit its parent's container column", () => {
 		const orphan = { ...comments, scope: { ...comments.scope, inherit: [] } }
-		expect(() => defineTables<DB, string>(columns)({ notes, note_comments: orphan, countries })).toThrow('must inherit workspace_id from notes')
+		expect(() => defineTables<DB, string>(columns)({ notes, note_comments: orphan, countries })).toThrow(
+			'must inherit exactly the containment columns of notes (workspace_id)',
+		)
 	})
 
 	test('a child of a table that is not a dimension table', () => {
@@ -108,10 +110,75 @@ describe('defineTables refuses a policy it cannot enforce', () => {
 	})
 })
 
+describe('every row carries its whole containment chain', () => {
+	interface Organizations {
+		id: string
+	}
+	interface Workspaces {
+		id: string
+		organization_id: string
+	}
+	interface Deep {
+		organizations: Organizations
+		workspaces: Workspaces
+		notes: Notes & { organization_id: string }
+		note_comments: Comments & { organization_id: string }
+		countries: Countries
+	}
+	const deepColumns = {
+		organizations: ['id'],
+		workspaces: ['id', 'organization_id'],
+		notes: ['id', 'workspace_id', 'organization_id', 'title', 'version', 'created_by'],
+		note_comments: ['id', 'note_id', 'workspace_id', 'organization_id', 'body'],
+		countries: ['code', 'name'],
+	} as const
+	const organizations = { scope: { dimension: 'organization', key: 'id' }, actions: { read: 'notes.read' } } as const
+	const workspaces = {
+		scope: { dimension: 'workspace', key: 'id', in: { dimension: 'organization', column: 'organization_id' } },
+		actions: { read: 'notes.read' },
+	} as const
+	const deepComments = { ...comments, scope: { ...comments.scope, inherit: ['workspace_id', 'organization_id'] } } as const
+	const deep = { organizations, workspaces, notes, note_comments: deepComments, countries }
+
+	test('the chains are resolved through the tables that own each dimension', () => {
+		const models = tableModels(defineTables<Deep, string>(deepColumns)(deep))
+		expect(models.get('notes')?.chain).toEqual([
+			{ dimension: 'workspace', column: 'workspace_id' },
+			{ dimension: 'organization', column: 'organization_id' },
+		])
+		expect(models.get('note_comments')?.chain).toEqual([
+			{ dimension: 'note', column: 'note_id' },
+			{ dimension: 'workspace', column: 'workspace_id' },
+			{ dimension: 'organization', column: 'organization_id' },
+		])
+	})
+
+	test('a table without a column for an ancestor is refused', () => {
+		const shallow = { ...deepColumns, notes: ['id', 'workspace_id', 'title', 'version', 'created_by'] as const }
+		expect(() => defineTables<Deep, string>(shallow)(deep)).toThrow('notes: must carry organization_id, because it lies in organization')
+	})
+
+	test('a child that inherits only part of its parent chain is refused', () => {
+		expect(() => defineTables<Deep, string>(deepColumns)({ ...deep, note_comments: comments })).toThrow(
+			'must inherit exactly the containment columns of notes (workspace_id, organization_id)',
+		)
+	})
+
+	test('an ancestor column is stamped and cannot be written', () => {
+		const writable = { ...notes, update: ['organization_id'] } as const
+		expect(() => defineTables<Deep, string>(deepColumns)({ ...deep, notes: writable })).toThrow('organization_id is stamped by the layer')
+	})
+
+	test('a containment cycle is refused', () => {
+		const looping = { ...organizations, scope: { dimension: 'organization', key: 'id', in: { dimension: 'workspace', column: 'id' } } } as const
+		expect(() => defineTables<Deep, string>(deepColumns)({ ...deep, organizations: looping })).toThrow('its containment is a cycle')
+	})
+})
+
 describe('the parsed model', () => {
 	test('a column with its own read action is left out; one with the table read action stays', () => {
 		const notesModel = tableModels(tables).get('notes')
-		expect(notesModel?.visible).toEqual(['id', 'workspace_id', 'title', 'body', 'word_count', 'created_by', 'version', 'created_at'])
+		expect(notesModel?.visible).toEqual(['id', 'workspace_id', 'organization_id', 'title', 'body', 'word_count', 'created_by', 'version', 'created_at'])
 		expect(notesModel?.scope).toEqual({
 			mode: 'dimension',
 			dimension: 'note',

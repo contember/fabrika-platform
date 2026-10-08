@@ -26,73 +26,88 @@ describe('every statement carries its scope predicate', () => {
 		expect(outcome.statements[0]?.parameters).toEqual(['%x%', '%x%', 'w1', 'w2', 50])
 	})
 
-	test('an object is addressed by its key and every container of its chain', async () => {
+	test('an object is addressed by its key and every link of its chain', async () => {
 		const layer = recordingLayer()
-		const note = layer.noteRef('notes.read', 'n1', 'w1')
+		const note = layer.noteRef('notes.read', 'n1', 'w1', 'o1')
 		const outcome = await layer.attempt(() => layer.stores.notes.get(note))
 		expect(outcome.error).toBeInstanceOf(NotFoundError)
-		expect(outcome.statements[0]?.sql).toEndWith('from "notes" where "notes"."id" = $1 and "notes"."workspace_id" = $2')
-		expect(outcome.statements[0]?.parameters).toEqual(['n1', 'w1'])
+		expect(outcome.statements[0]?.sql).toEndWith(
+			'from "notes" where "notes"."id" = $1 and "notes"."workspace_id" = $2 and "notes"."organization_id" = $3',
+		)
+		expect(outcome.statements[0]?.parameters).toEqual(['n1', 'w1', 'o1'])
 	})
 
 	test('get, update, remove and move each include the whole chain', async () => {
 		const layer = recordingLayer()
-		const scope = '"notes"."id" = $'
-		const container = '"notes"."workspace_id" = $'
+		const links = ['"notes"."id" = $', '"notes"."workspace_id" = $', '"notes"."organization_id" = $']
 		const outcomes = [
 			await layer.attempt(() => layer.stores.notes.get(layer.noteRef('notes.read'))),
 			await layer.attempt(() => layer.stores.notes.update(layer.noteRef('notes.write'), { title: 'x' }, 1)),
 			await layer.attempt(() => layer.stores.notes.remove(layer.noteRef('notes.delete'))),
-			await layer.attempt(() => layer.stores.notes.move(layer.noteRef('notes.delete'), layer.workspaceRef('notes.write', 'w2'))),
 		]
 		const statements = outcomes.flatMap((outcome) => outcome.statements)
-		expect(statements.length).toBe(5)
+		expect(statements.length).toBe(4)
 		for (const statement of statements) {
-			expect(statement.sql).toContain(scope)
-			expect(statement.sql).toContain(container)
-			expect(statement.parameters).toContain('n1')
-			expect(statement.parameters).toContain('w1')
+			for (const link of links) {
+				expect(statement.sql).toContain(link)
+			}
+			expect(statement.parameters).toEqual(expect.arrayContaining(['n1', 'w1', 'o1']))
 		}
 	})
 
-	test('a versioned update checks the version inside parentheses, then reads once to tell 404 from 409', async () => {
+	test('a chain entry the table carries no column for is refused, not ignored', async () => {
+		const layer = recordingLayer()
+		const deeper = layer.capabilities.ref('note', 'notes.read', 'n1', { workspace: 'w1', organization: 'o1', region: 'eu' })
+		refused(await layer.attempt(() => layer.stores.notes.get(deeper)), CapabilityError, 'lies in region, which notes carries no column for')
+		const shallow = layer.capabilities.ref('note', 'notes.read', 'n1', { workspace: 'w1' })
+		refused(await layer.attempt(() => layer.stores.notes.get(shallow)), CapabilityError, 'carries no organization')
+	})
+
+	test('a versioned update checks the version inside parentheses, answers id and version, then reads once to tell 404 from 409', async () => {
 		const layer = recordingLayer()
 		const outcome = await layer.attempt(() => layer.stores.notes.update(layer.noteRef('notes.write'), { title: 'x' }, 3))
 		expect(outcome.error).toBeInstanceOf(NotFoundError)
 		expect(outcome.statements.map((statement) => statement.sql)).toEqual([
-			'update "notes" set "title" = $1, "version" = "notes"."version" + $2 where ("notes"."version" = $3) and "notes"."id" = $4 and "notes"."workspace_id" = $5 returning "notes"."id", "notes"."workspace_id", "notes"."title", "notes"."body", "notes"."word_count", "notes"."created_by", "notes"."version", "notes"."created_at"',
-			'select "notes"."id" from "notes" where "notes"."id" = $1 and "notes"."workspace_id" = $2 limit $3',
+			'update "notes" set "title" = $1, "version" = "notes"."version" + $2 where ("notes"."version" = $3) and "notes"."id" = $4 and "notes"."workspace_id" = $5 and "notes"."organization_id" = $6 returning "notes"."id" as "id", "notes"."version" as "version"',
+			'select "notes"."id" from "notes" where "notes"."id" = $1 and "notes"."workspace_id" = $2 and "notes"."organization_id" = $3 limit $4',
 		])
 	})
 
-	test('an insert stamps the key, the container, the version and the principal', async () => {
+	test("an insert first locks its destination with the destination Ref's whole chain, and inserts nothing when it is gone", async () => {
 		const layer = recordingLayer()
-		const outcome = await layer.attempt(() => layer.stores.notes.create(layer.workspaceRef('notes.write', 'w2'), { title: 't', body: null }))
-		const [statement] = outcome.statements
-		expect(statement?.sql).toStartWith(
-			'insert into "notes" ("title", "body", "id", "version", "created_by", "workspace_id") values ($1, $2, $3, $4, $5, $6)',
-		)
-		expect(statement?.parameters.slice(3)).toEqual([1, 'user:alice', 'w2'])
-		expect(String(statement?.parameters[2])).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/)
+		const outcome = await layer.attempt(() => layer.stores.notes.create(layer.workspaceRef('notes.write', 'w2', 'o1'), { title: 't', body: null }))
+		expect(outcome.error).toBeInstanceOf(NotFoundError)
+		expect(outcome.statements.map((statement) => statement.sql)).toEqual([
+			'select "workspaces"."id" from "workspaces" where "workspaces"."id" = $1 and "workspaces"."organization_id" = $2 limit $3 for share',
+		])
+		expect(outcome.statements[0]?.parameters).toEqual(['w2', 'o1', 1])
+	})
+
+	test('a child insert and a move lock their destination the same way', async () => {
+		const layer = recordingLayer()
+		const add = await layer.attempt(() => layer.stores.comments.add(layer.noteRef('notes.write', 'n1', 'w1', 'o1'), 'new'))
+		expect(add.statements.map((statement) => statement.sql)).toEqual([
+			'select "notes"."id" from "notes" where "notes"."id" = $1 and "notes"."workspace_id" = $2 and "notes"."organization_id" = $3 limit $4 for share',
+		])
+		const move = await layer.attempt(() => layer.stores.notes.move(layer.noteRef('notes.delete'), layer.workspaceRef('notes.write', 'w2', 'o2')))
+		expect(move.statements[0]?.sql).toEndWith('limit $3 for share')
+		expect(move.statements[0]?.parameters).toEqual(['w2', 'o2', 1])
+		expect(move.statements.length).toBe(1)
 	})
 
 	test('a child row is addressed by its key and its parent chain', async () => {
 		const layer = recordingLayer()
-		const note = layer.noteRef('notes.write', 'n1', 'w1')
-		const edit = await layer.attempt(() => layer.stores.comments.edit(note, 'c1', 'changed'))
-		const add = await layer.attempt(() => layer.stores.comments.add(note, 'new'))
+		const edit = await layer.attempt(() => layer.stores.comments.edit(layer.noteRef('notes.write', 'n1', 'w1', 'o1'), 'c1', 'changed'))
 		expect(edit.statements[0]?.sql).toContain(
-			'where "note_comments"."id" = $2 and "note_comments"."note_id" = $3 and "note_comments"."workspace_id" = $4',
+			'where "note_comments"."id" = $2 and "note_comments"."note_id" = $3 and "note_comments"."workspace_id" = $4 and "note_comments"."organization_id" = $5',
 		)
-		expect(add.statements[0]?.sql).toStartWith('insert into "note_comments" ("body", "id", "note_id", "workspace_id")')
-		expect(add.statements[0]?.parameters.slice(2)).toEqual(['n1', 'w1'])
 	})
 
 	test('a join is ON the composite foreign key, and its columns come back prefixed', async () => {
 		const layer = recordingLayer()
 		const outcome = await layer.attempt(() => layer.stores.notes.withComments(layer.within('notes.read'), ['n1']))
 		expect(outcome.statements[0]?.sql).toBe(
-			'select "notes"."id", "notes"."title", "note_comments"."id" as "note_comments.id", "note_comments"."body" as "note_comments.body" from "notes" inner join "note_comments" on "note_comments"."note_id" = "notes"."id" and "note_comments"."workspace_id" = "notes"."workspace_id" where ("notes"."id" in ($1)) and "notes"."workspace_id" in ($2) order by "notes"."id" asc',
+			'select "notes"."id", "notes"."title", "note_comments"."id" as "note_comments.id", "note_comments"."body" as "note_comments.body" from "notes" inner join "note_comments" on "note_comments"."note_id" = "notes"."id" and "note_comments"."workspace_id" = "notes"."workspace_id" and "note_comments"."organization_id" = "notes"."organization_id" where ("notes"."id" in ($1)) and "notes"."workspace_id" in ($2) order by "notes"."id" asc',
 		)
 	})
 
@@ -104,12 +119,20 @@ describe('every statement carries its scope predicate', () => {
 		)
 	})
 
-	test('a top-level table lists by its own key and inserts the object the Ref names', async () => {
+	test('a top-level table lists by its own key and inserts the object the Ref names, answering only its key', async () => {
 		const layer = recordingLayer()
-		const list = await layer.attempt(() => layer.stores.workspaces.list(layer.within('notes.read', ['w1', 'w2'])))
-		const create = await layer.attempt(() => layer.stores.workspaces.create(layer.workspaceRef('workspaces.create', 'w9'), 'Nine'))
-		expect(list.statements[0]?.sql).toContain('where "workspaces"."id" in ($1, $2)')
-		expect(create.statements[0]?.parameters).toEqual(['Nine', 'w9', 'user:alice'])
+		const organizations = layer.capabilities.within('organization', 'notes.read', ['o1', 'o2'])
+		const list = await layer.attempt(() => layer.stores.organizations.list(organizations))
+		const create = await layer.attempt(() =>
+			layer.stores.organizations.create(layer.capabilities.ref('organization', 'organizations.create', 'o9'), 'Nine')
+		)
+		expect(list.statements[0]?.sql).toContain('where "organizations"."id" in ($1, $2)')
+		expect(create.statements.map((statement) => statement.sql)).toEqual([
+			'insert into "organizations" ("name", "id") values ($1, $2) returning "organizations"."id" as "id"',
+		])
+		expect(create.statements[0]?.parameters).toEqual(['Nine', 'o9'])
+		const chained = layer.capabilities.ref('organization', 'organizations.create', 'o9', { region: 'eu' })
+		refused(await layer.attempt(() => layer.stores.organizations.create(chained, 'Nine')), CapabilityError, 'lies in region')
 	})
 
 	test('an empty Within answers [] without a query; Within.all scopes to true', async () => {
@@ -324,6 +347,79 @@ describe('the query description cannot express anything but scoped reads (types 
 })
 
 describe('writes take declared columns and plain values only', () => {
+	describe('insert and update data are read through their own property descriptors', () => {
+		const target = (layer: ReturnType<typeof recordingLayer>) => layer.workspaceRef('notes.write')
+
+		test('an inherited key is refused: only a plain or null-prototype object is accepted', async () => {
+			const layer = recordingLayer()
+			const values: unknown = Object.assign(Object.create({ workspace_id: 'w9' }), { title: 'x', body: null })
+			refused(await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), values)), QueryRefusedError, 'plain object literal')
+		})
+
+		test('a class instance is refused', async () => {
+			const layer = recordingLayer()
+			class Values {
+				title = 'x'
+				body = null
+			}
+			refused(await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), new Values())), QueryRefusedError, 'plain object literal')
+		})
+
+		test('a non-enumerable key is seen and refused', async () => {
+			const layer = recordingLayer()
+			const values = Object.defineProperty({ title: 'x', body: null }, 'workspace_id', { value: 'w9', enumerable: false })
+			refused(
+				await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), values)),
+				QueryRefusedError,
+				'workspace_id is not an insert column',
+			)
+		})
+
+		test('a key on a null-prototype object is checked like any other', async () => {
+			const layer = recordingLayer()
+			const values: unknown = Object.assign(Object.create(null), { title: 'x', workspace_id: 'w9' })
+			refused(
+				await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), values)),
+				QueryRefusedError,
+				'workspace_id is not an insert column',
+			)
+		})
+
+		test('an accessor is refused before any value is read, so its getter never runs', async () => {
+			const layer = recordingLayer()
+			let ran = false
+			const values: Record<string, unknown> = { body: null, workspace_id: 'w9' }
+			Object.defineProperty(values, 'title', {
+				enumerable: true,
+				get: () => {
+					ran = true
+					delete values['workspace_id']
+					return 'x'
+				},
+			})
+			refused(await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), values)), QueryRefusedError)
+			expect(ran).toBe(false)
+			const onlyAccessor = Object.defineProperty({ body: null }, 'title', { enumerable: true, get: () => 'x' })
+			refused(await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), onlyAccessor)), QueryRefusedError, 'is an accessor')
+		})
+
+		test('a symbol key is refused', async () => {
+			const layer = recordingLayer()
+			const values = { title: 'x', body: null, [Symbol('workspace_id')]: 'w9' }
+			refused(await layer.attempt(() => call(layer.raw.notes, 'insert', target(layer), values)), QueryRefusedError, 'not symbols')
+		})
+
+		test('update data is read the same way', async () => {
+			const layer = recordingLayer()
+			const values = Object.defineProperty({ title: 'x' }, 'version', { value: 9, enumerable: false })
+			refused(
+				await layer.attempt(() => call(layer.raw.notes, 'update', layer.noteRef('notes.write'), values, { expectVersion: 1 })),
+				QueryRefusedError,
+				'version is not',
+			)
+		})
+	})
+
 	test('an unknown key is refused, not dropped, even from a variable the types let through', async () => {
 		const layer = recordingLayer()
 		const values = { title: 'x', body: null, workspace_id: 'w9' }

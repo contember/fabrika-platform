@@ -25,6 +25,7 @@ import {
 	ReturningNode,
 	SelectAllNode,
 	SelectionNode,
+	SelectModifierNode,
 	type SelectQueryNode,
 	TableNode,
 	type UpdateQueryNode,
@@ -116,8 +117,10 @@ function selection(table: string, name: string): SelectionNode {
 	return SelectionNode.create(column(table, name))
 }
 
-export function returning(table: string, columns: readonly string[]): ReturningNode {
-	return ReturningNode.create(columns.map((name) => selection(table, name)))
+/** `returning key as id[, version as version]`: a mutation's acknowledgement, never row data. */
+export function acknowledgement(table: string, key: string, version: string | undefined): ReturningNode {
+	const fields: [string, string][] = version === undefined ? [[key, 'id']] : [[key, 'id'], [version, 'version']]
+	return ReturningNode.create(fields.map(([name, alias]) => SelectionNode.create(AliasNode.create(column(table, name), IdentifierNode.create(alias)))))
 }
 
 function joinNode(parent: string, join: JoinState): JoinNode {
@@ -185,14 +188,14 @@ export function aggregateNode(table: string, columns: AggregateColumns, conditio
 	return Object.freeze(node)
 }
 
-export function insertNode(table: string, values: ReadonlyMap<string, Primitive | null>, visible: readonly string[]): InsertQueryNode {
+export function insertNode(table: string, values: ReadonlyMap<string, Primitive | null>, answer: ReturningNode): InsertQueryNode {
 	const names = [...values.keys()]
 	const node: InsertQueryNode = {
 		kind: 'InsertQueryNode',
 		into: TableNode.create(table),
 		columns: names.map((name) => ColumnNode.create(name)),
 		values: ValuesNode.create([ValueListNode.create(names.map((name) => ValueNode.create(values.get(name) ?? null)))]),
-		returning: returning(table, visible),
+		returning: answer,
 	}
 	return Object.freeze(node)
 }
@@ -202,7 +205,7 @@ export function updateNode(
 	values: ReadonlyMap<string, Primitive | null>,
 	bump: string | undefined,
 	where: WhereNode,
-	visible: readonly string[],
+	answer: ReturningNode,
 ): UpdateQueryNode {
 	const updates = [...values].map(([name, value]) => ColumnUpdateNode.create(ColumnNode.create(name), ValueNode.create(value)))
 	if (bump !== undefined) {
@@ -212,7 +215,7 @@ export function updateNode(
 	if (updates.length === 0) {
 		throw new QueryRefusedError('nothing to update')
 	}
-	const node: UpdateQueryNode = { kind: 'UpdateQueryNode', table: TableNode.create(table), updates, where, returning: returning(table, visible) }
+	const node: UpdateQueryNode = { kind: 'UpdateQueryNode', table: TableNode.create(table), updates, where, returning: answer }
 	return Object.freeze(node)
 }
 
@@ -221,7 +224,7 @@ export function deleteNode(table: string, where: WhereNode, key: string): Delete
 		kind: 'DeleteQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
 		where,
-		returning: returning(table, [key]),
+		returning: acknowledgement(table, key, undefined),
 	}
 	return Object.freeze(node)
 }
@@ -236,4 +239,9 @@ export function existsNode(table: string, key: string, scope: OperationNode): Se
 		limit: LimitNode.create(ValueNode.create(1)),
 	}
 	return Object.freeze(node)
+}
+
+/** The same check `for share`: the row cannot move until the transaction that checked it ends. */
+export function lockNode(table: string, key: string, scope: OperationNode): SelectQueryNode {
+	return Object.freeze({ ...existsNode(table, key, scope), endModifiers: [SelectModifierNode.create('ForShare')] })
 }

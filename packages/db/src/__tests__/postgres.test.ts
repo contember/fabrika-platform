@@ -44,7 +44,8 @@ beforeAll(async () => {
 	await admin(async (sql) => {
 		await sql.unsafe(`create schema ${schema}`)
 		await sql.unsafe(`set search_path to ${schema}; ${migration}`)
-		await sql.unsafe(`insert into ${schema}.workspaces (id, name, created_by) values ('w1', 'One', 'user:alice'), ('w2', 'Two', 'user:alice')`)
+		await sql.unsafe(`insert into ${schema}.organizations (id, name) values ('o1', 'One'), ('o2', 'Two')`)
+		await addWorkspaces(sql, ['w1', 'w2', 'w3', 'w4'])
 	})
 	database = Database.postgres({ url: url ?? '', schema, max: 2 })
 	stores = defineStores({ database, capabilities: alice })
@@ -58,22 +59,55 @@ afterAll(async () => {
 	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
 })
 
-const read = (values: readonly string[] | 'all' = ['w1']) => alice.within('workspace', 'notes.read', values)
-const into = (workspace: string) => alice.ref('workspace', 'notes.write', workspace)
-const note = <const A extends string>(action: A, id: string, workspace: string) => alice.ref('note', action, id, { workspace })
+async function addWorkspaces(sql: SQL, ids: readonly string[], organization = 'o1'): Promise<void> {
+	for (const id of ids) {
+		await sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ($1, $2, $1, 'user:alice')`, [id, organization])
+	}
+}
 
-async function createNote(workspace: string, title: string, body: string | null = null): Promise<string> {
-	const created = await stores.notes.create(into(workspace), { title, body })
+async function count(table: string): Promise<number> {
+	const [row] = await admin((sql) => sql.unsafe(`select count(*)::int as n from ${schema}.${table}`))
+	return Number(row?.n)
+}
+
+const read = (values: readonly string[] | 'all' = ['w1']) => alice.within('workspace', 'notes.read', values)
+const into = (workspace: string, organization = 'o1') => alice.ref('workspace', 'notes.write', workspace, { organization })
+const note = <const A extends string>(action: A, id: string, workspace: string, organization = 'o1') =>
+	alice.ref('note', action, id, { workspace, organization })
+const workspaceAdmin = (workspace: string, organization: string) => alice.ref('workspace', 'workspaces.admin', workspace, { organization })
+const intoOrganization = (organization: string) => alice.ref('organization', 'workspaces.create', organization)
+
+async function createNote(workspace: string, title: string, body: string | null = null, organization = 'o1'): Promise<string> {
+	const created = await stores.notes.create(into(workspace, organization), { title, body })
 	return created.id
 }
 
 describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
-	test('an insert stamps the key, the container, the version and the principal, and returns no restricted column', async () => {
-		const row = await stores.notes.create(into('w1'), { title: 'Hello', body: 'World', word_count: 2 })
-		expect(row).toMatchObject({ workspace_id: 'w1', title: 'Hello', body: 'World', word_count: 2, created_by: 'user:alice', version: 1 })
-		expect(row.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/)
+	test('an insert answers its key and version only; it stamps the key, the whole chain, the version and the principal', async () => {
+		const acknowledged = await stores.notes.create(into('w1'), { title: 'Hello', body: 'World', word_count: 2, internal: 'x' })
+		expect(Object.keys(acknowledged).sort()).toEqual(['id', 'version'])
+		expect(acknowledged.version).toBe(1)
+		expect(acknowledged.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/)
+		const row = await stores.notes.get(note('notes.read', acknowledged.id, 'w1'))
+		expect(row).toMatchObject({
+			workspace_id: 'w1',
+			organization_id: 'o1',
+			title: 'Hello',
+			body: 'World',
+			word_count: 2,
+			created_by: 'user:alice',
+			version: 1,
+		})
 		expect(row.created_at).toBeInstanceOf(Date)
 		expect(Object.keys(row)).not.toContain('internal')
+	})
+
+	test('a write-only caller learns nothing it could not read: update answers id and version, not the stored body', async () => {
+		const id = await createNote('w1', 'private', 'the body a writer never supplied')
+		const acknowledged = await stores.notes.update(note('notes.write', id, 'w1'), { title: 'renamed' }, 1)
+		expect(acknowledged).toEqual({ id, version: 2 })
+		const moved = await stores.notes.move(note('notes.delete', id, 'w1'), into('w2'))
+		expect(moved).toEqual({ id, version: 3, chain: { workspace: 'w2', organization: 'o1' } })
 	})
 
 	test('a list sees only the scope values of its Within', async () => {
@@ -90,12 +124,63 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 		expect(await stores.notes.list(read([]), { limit: 10, offset: 0 })).toEqual([])
 	})
 
-	test('a Ref whose chain names another workspace reaches nothing: 404 on get, update and remove', async () => {
+	test('a Ref whose chain names another workspace or organization reaches nothing: 404 on get, update and remove', async () => {
 		const id = await createNote('w1', 'isolated')
-		await expect(stores.notes.get(note('notes.read', id, 'w2'))).rejects.toBeInstanceOf(NotFoundError)
+		for (const stray of [note('notes.read', id, 'w2'), note('notes.read', id, 'w1', 'o2')]) {
+			await expect(stores.notes.get(stray)).rejects.toBeInstanceOf(NotFoundError)
+		}
 		await expect(stores.notes.update(note('notes.write', id, 'w2'), { title: 'stolen' }, 1)).rejects.toBeInstanceOf(NotFoundError)
-		await expect(stores.notes.remove(note('notes.delete', id, 'w2'))).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.notes.update(note('notes.write', id, 'w1', 'o2'), { title: 'stolen' }, 1)).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.notes.remove(note('notes.delete', id, 'w1', 'o2'))).rejects.toBeInstanceOf(NotFoundError)
 		expect((await stores.notes.get(note('notes.read', id, 'w1'))).title).toBe('isolated')
+	})
+
+	test('after an ancestor moves, a Ref minted before the move reaches nothing, the 409 check included', async () => {
+		await admin((sql) => addWorkspaces(sql, ['moving-ws']))
+		const id = await createNote('moving-ws', 'in a moving workspace')
+		const comment = await stores.comments.add(note('notes.write', id, 'moving-ws'), 'along for the ride')
+		const moved = await stores.workspaces.move(workspaceAdmin('moving-ws', 'o1'), intoOrganization('o2'))
+		expect(moved.chain).toEqual({ organization: 'o2' })
+
+		const stale = <const A extends string>(action: A) => note(action, id, 'moving-ws', 'o1')
+		await expect(stores.notes.get(stale('notes.read'))).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.notes.update(stale('notes.write'), { title: 'x' }, 1)).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.notes.update(stale('notes.write'), { title: 'x' }, 99)).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.notes.remove(stale('notes.delete'))).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.comments.get(stale('notes.read'), comment.id)).rejects.toBeInstanceOf(NotFoundError)
+		await expect(stores.comments.edit(stale('notes.write'), comment.id, 'x')).rejects.toBeInstanceOf(NotFoundError)
+		expect(await stores.comments.ofNote(stale('notes.read'))).toEqual([])
+
+		const current = note('notes.read', id, 'moving-ws', 'o2')
+		expect((await stores.notes.get(current)).organization_id).toBe('o2')
+		expect((await stores.comments.get(current, comment.id)).organization_id).toBe('o2')
+		await expect(stores.notes.update(note('notes.write', id, 'moving-ws', 'o2'), { title: 'x' }, 99)).rejects.toBeInstanceOf(ConflictError)
+	})
+
+	test('a stale destination Ref inserts nothing and moves nothing', async () => {
+		await admin((sql) => addWorkspaces(sql, ['stale-ws', 'source-ws']))
+		const staleTarget = into('stale-ws', 'o1')
+		const id = await createNote('source-ws', 'stays put')
+		const parent = note('notes.write', id, 'source-ws')
+		await stores.workspaces.move(workspaceAdmin('stale-ws', 'o1'), intoOrganization('o2'))
+
+		const notesBefore = await count('notes')
+		await expect(stores.notes.create(staleTarget, { title: 'lost', body: null })).rejects.toBeInstanceOf(NotFoundError)
+		expect(await count('notes')).toBe(notesBefore)
+
+		await expect(stores.notes.move(note('notes.delete', id, 'source-ws'), staleTarget)).rejects.toBeInstanceOf(NotFoundError)
+		expect(await stores.notes.get(note('notes.read', id, 'source-ws'))).toMatchObject({ workspace_id: 'source-ws', organization_id: 'o1', version: 1 })
+
+		await stores.workspaces.move(workspaceAdmin('source-ws', 'o1'), intoOrganization('o2'))
+		const commentsBefore = await count('note_comments')
+		await expect(stores.comments.add(parent, 'lost')).rejects.toBeInstanceOf(NotFoundError)
+		expect(await count('note_comments')).toBe(commentsBefore)
+	})
+
+	test('a destination that does not exist at all inserts nothing', async () => {
+		const before = await count('notes')
+		await expect(stores.notes.create(into('no-such-workspace'), { title: 'lost', body: null })).rejects.toBeInstanceOf(NotFoundError)
+		expect(await count('notes')).toBe(before)
 	})
 
 	test('a read Ref cannot remove, even through a widened handle', async () => {
@@ -107,8 +192,7 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 
 	test('optimistic concurrency: the expected version wins, a stale one is 409, a missing object 404', async () => {
 		const id = await createNote('w1', 'v1')
-		const updated = await stores.notes.update(note('notes.write', id, 'w1'), { title: 'v2' }, 1)
-		expect(updated).toMatchObject({ title: 'v2', version: 2 })
+		expect(await stores.notes.update(note('notes.write', id, 'w1'), { title: 'v2' }, 1)).toEqual({ id, version: 2 })
 		await expect(stores.notes.update(note('notes.write', id, 'w1'), { title: 'v3' }, 1)).rejects.toBeInstanceOf(ConflictError)
 		await expect(stores.notes.update(note('notes.write', Bun.randomUUIDv7(), 'w1'), { title: 'x' }, 1)).rejects.toBeInstanceOf(NotFoundError)
 		expect((await stores.notes.get(note('notes.read', id, 'w1'))).title).toBe('v2')
@@ -124,7 +208,7 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 		const id = await createNote('w1', 'moving')
 		await stores.comments.add(note('notes.write', id, 'w1'), 'first')
 		const moved = await stores.notes.move(note('notes.delete', id, 'w1'), into('w2'))
-		expect(moved).toMatchObject({ workspace_id: 'w2', version: 2 })
+		expect(moved).toEqual({ id, version: 2, chain: { workspace: 'w2', organization: 'o1' } })
 		await expect(stores.notes.get(note('notes.read', id, 'w1'))).rejects.toBeInstanceOf(NotFoundError)
 		expect(await stores.comments.ofNote(note('notes.read', id, 'w1'))).toEqual([])
 		const comments = await stores.comments.ofNote(note('notes.read', id, 'w2'))
@@ -136,12 +220,18 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 	test('child rows: add, get, edit and remove through the parent Ref only', async () => {
 		const id = await createNote('w1', 'with comments')
 		const added = await stores.comments.add(note('notes.write', id, 'w1'), 'hello')
-		expect(added).toMatchObject({ note_id: id, workspace_id: 'w1', body: 'hello' })
-		expect((await stores.comments.get(note('notes.read', id, 'w1'), added.id)).body).toBe('hello')
+		expect(Object.keys(added)).toEqual(['id'])
+		expect(await stores.comments.get(note('notes.read', id, 'w1'), added.id)).toMatchObject({
+			note_id: id,
+			workspace_id: 'w1',
+			organization_id: 'o1',
+			body: 'hello',
+		})
 		await expect(stores.comments.get(note('notes.read', id, 'w2'), added.id)).rejects.toBeInstanceOf(NotFoundError)
 		const otherNote = await createNote('w1', 'other')
 		await expect(stores.comments.edit(note('notes.write', otherNote, 'w1'), added.id, 'hijacked')).rejects.toBeInstanceOf(NotFoundError)
-		expect((await stores.comments.edit(note('notes.write', id, 'w1'), added.id, 'edited')).body).toBe('edited')
+		expect(await stores.comments.edit(note('notes.write', id, 'w1'), added.id, 'edited')).toEqual({ id: added.id })
+		expect((await stores.comments.get(note('notes.read', id, 'w1'), added.id)).body).toBe('edited')
 		await stores.comments.remove(note('notes.write', id, 'w1'), added.id)
 		await expect(stores.comments.remove(note('notes.write', id, 'w1'), added.id)).rejects.toBeInstanceOf(NotFoundError)
 	})
@@ -156,7 +246,6 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 	})
 
 	test('aggregates: count is a string, an integer sum a string, min and max keep the column type', async () => {
-		await admin((sql) => sql.unsafe(`insert into ${schema}.workspaces (id, name, created_by) values ('w3', 'Three', 'user:alice')`))
 		await stores.notes.create(into('w3'), { title: 'a', body: null, word_count: 3 })
 		await stores.notes.create(into('w3'), { title: 'b', body: null, word_count: 5 })
 		expect(await stores.notes.countPerWorkspace(read(['w3']))).toEqual([{ workspace_id: 'w3', count: '2' }])
@@ -167,7 +256,6 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 	})
 
 	test('contains matches % and _ literally, case-insensitively', async () => {
-		await admin((sql) => sql.unsafe(`insert into ${schema}.workspaces (id, name, created_by) values ('w4', 'Four', 'user:alice')`))
 		await createNote('w4', '50% OFF')
 		await createNote('w4', '500 off')
 		await createNote('w4', 'a_b')
@@ -184,17 +272,22 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 		expect(rows.length).toBe(1)
 	})
 
-	test('a top-level table: insert the object the Ref names, list by its key, update without a version', async () => {
-		const created = await stores.workspaces.create(alice.ref('workspace', 'workspaces.create', 'w9'), 'Nine')
-		expect(created).toEqual({ id: 'w9', name: 'Nine', created_by: 'user:alice' })
-		expect(await stores.workspaces.list(read(['w9', 'w2']))).toEqual([{ id: 'w9', name: 'Nine' }, { id: 'w2', name: 'Two' }])
-		expect((await stores.workspaces.rename(alice.ref('workspace', 'workspaces.admin', 'w9'), 'Renamed')).name).toBe('Renamed')
+	test('a top-level table inserts the object the Ref names; a contained one lists by its container', async () => {
+		expect(await stores.organizations.create(alice.ref('organization', 'organizations.create', 'o9'), 'Nine')).toEqual({ id: 'o9' })
+		expect(await stores.organizations.list(alice.within('organization', 'notes.read', ['o9', 'o2']))).toEqual([{ id: 'o2', name: 'Two' }, {
+			id: 'o9',
+			name: 'Nine',
+		}])
+		const created = await stores.workspaces.create(alice.ref('organization', 'workspaces.create', 'o9'), 'Nine one')
+		expect(await stores.workspaces.list(alice.within('organization', 'notes.read', ['o9']))).toEqual([{ id: created.id, name: 'Nine one' }])
+		expect(await stores.workspaces.rename(workspaceAdmin(created.id, 'o9'), 'Renamed')).toEqual({ id: created.id })
+		expect((await stores.workspaces.get(alice.ref('workspace', 'notes.read', created.id, { organization: 'o9' }))).name).toBe('Renamed')
 	})
 
 	test('the restricted column is written but never read back', async () => {
-		const row = await stores.notes.create(into('w1'), { title: 'secretive', body: null, internal: 'only for admins' })
-		expect(Object.keys(row)).not.toContain('internal')
-		const stored = await admin((sql) => sql.unsafe(`select internal from ${schema}.notes where id = $1`, [row.id]))
+		const { id } = await stores.notes.create(into('w1'), { title: 'secretive', body: null, internal: 'only for admins' })
+		expect(Object.keys(await stores.notes.get(note('notes.read', id, 'w1')))).not.toContain('internal')
+		const stored = await admin((sql) => sql.unsafe(`select internal from ${schema}.notes where id = $1`, [id]))
 		expect(stored[0]?.internal).toBe('only for admins')
 	})
 })

@@ -28,6 +28,7 @@ export function recordingLayer() {
 	const stores = defineStores({ database: Database.fromDialect(dialect), capabilities })
 	const raw = {
 		notes: stores.defineStore('notes', (t) => ({ t })).t,
+		organizations: stores.defineStore('organizations', (t) => ({ t })).t,
 		workspaces: stores.defineStore('workspaces', (t) => ({ t })).t,
 		secrets: stores.defineStore('secrets', (t) => ({ t })).t,
 		comments: stores.defineChildStore('note_comments', (t) => ({ t })).t,
@@ -44,9 +45,10 @@ export function recordingLayer() {
 		return { error, statements: dialect.log.slice(before) }
 	}
 
-	const noteRef = <const A extends string>(action: A, id = 'n1', workspace = 'w1'): Ref<'note', A> =>
-		capabilities.ref('note', action, id, { workspace })
-	const workspaceRef = <const A extends string>(action: A, id = 'w1'): Ref<'workspace', A> => capabilities.ref('workspace', action, id)
+	const noteRef = <const A extends string>(action: A, id = 'n1', workspace = 'w1', organization = 'o1'): Ref<'note', A> =>
+		capabilities.ref('note', action, id, { workspace, organization })
+	const workspaceRef = <const A extends string>(action: A, id = 'w1', organization = 'o1'): Ref<'workspace', A> =>
+		capabilities.ref('workspace', action, id, { organization })
 	const within = <const A extends string>(action: A, values: readonly string[] | 'all' = ['w1']): Within<'workspace', A> =>
 		capabilities.within('workspace', action, values)
 

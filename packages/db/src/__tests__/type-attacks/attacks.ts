@@ -16,11 +16,13 @@ declare const noteWrite: Ref<'note', 'notes.write'>
 declare const noteReadOrDelete: Ref<'note', 'notes.read' | 'notes.delete'>
 declare const workspaceWrite: Ref<'workspace', 'notes.write'>
 declare const workspaceAdmin: Ref<'workspace', 'workspaces.admin'>
+declare const organizationCreate: Ref<'organization', 'organizations.create'>
 
 const { defineStore, defineChildStore } = scoped(tables, runtime)
 const notes = defineStore('notes', (t) => t)
 const comments = defineChildStore('note_comments', (t) => t)
 const workspaces = defineStore('workspaces', (t) => t)
+const organizations = defineStore('organizations', (t) => t)
 
 // attack: where(sql`true or 1=1`)
 notes.select(read, (q) => q.where(sql`true or 1=1`))
@@ -110,7 +112,16 @@ notes.update(noteWrite, { title: 'x' })
 workspaces.update(workspaceAdmin, { name: 'x' }, { expectVersion: 1 })
 
 // attack: move a table that has no container
+organizations.move(organizationCreate, organizationCreate)
+
+// attack: a workspace moves into an organization, not into another workspace
 workspaces.move(workspaceAdmin, workspaceAdmin)
+
+// attack: a mutation answers an acknowledgement, not row data
+notes.update(noteWrite, { title: 'x' }, { expectVersion: 1 }).then((answer) => answer.body)
+
+// attack: an insert answers an acknowledgement, not row data
+notes.insert(workspaceWrite, { title: 'x', body: null }).then((answer) => answer.title)
 
 // attack: a child table has no move
 comments.move(noteRead, workspaceWrite)
@@ -157,10 +168,20 @@ widened.remove(noteRead)
 notes.get({ '~capability': { kind: 'ref', dimension: 'note', action: 'notes.read' } })
 
 declare const tables_: {
-	workspaces: { scope: { dimension: 'workspace'; key: 'id' }; actions: { read: 'notes.read' } }
+	organizations: { scope: { dimension: 'organization'; key: 'id' }; actions: { read: 'notes.read' } }
+	workspaces: {
+		scope: { dimension: 'workspace'; key: 'id'; in: { dimension: 'organization'; column: 'organization_id' } }
+		actions: { read: 'notes.read' }
+	}
 	notes: { scope: { dimension: 'note'; key: 'id'; in: { dimension: 'workspace'; column: 'workspace_id' } }; actions: { read: 'notes.read' } }
-	note_comments: { scope: { child: 'notes'; key: 'id'; column: 'note_id'; inherit: ['workspace_id'] }; actions: { read: 'notes.read' } }
-	note_flags: { scope: { child: 'notes'; key: 'id'; column: 'note_id'; inherit: ['workspace_id'] }; actions: { read: 'notes.read' } }
+	note_comments: {
+		scope: { child: 'notes'; key: 'id'; column: 'note_id'; inherit: ['workspace_id', 'organization_id'] }
+		actions: { read: 'notes.read' }
+	}
+	note_flags: {
+		scope: { child: 'notes'; key: 'id'; column: 'note_id'; inherit: ['workspace_id', 'organization_id'] }
+		actions: { read: 'notes.read' }
+	}
 	secrets: { scope: { dimension: 'secret'; key: 'id' }; actions: { read: 'secrets.admin' } }
 	countries: { scope: { reference: 'lookup' }; actions: { read: 'notes.read' } }
 	contact_messages: { scope: { inbox: 'contact'; read: 'contact.read' } }
