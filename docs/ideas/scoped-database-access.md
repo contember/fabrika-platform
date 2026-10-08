@@ -1,18 +1,18 @@
 # Scoped database access
 
 A proposal for one recommended way for Fabrika applications to talk to their database: a `@fabrika/db`
-package over [Kysely](https://kysely.dev). It shares the goal of
-[secure-by-default application runtime](secure-by-default-app-runtime.md): an agent steered by an
-inexperienced person must not be able to read or change rows the caller may not touch.
+package over [Kysely](https://kysely.dev). It is part of the [opinionated application framework](opinionated-app-framework.md):
+an agent steered by an inexperienced person must not be able to read or change rows the caller may not touch.
 
 The contract says **who** may call an endpoint and hands the handler a `Ref<dim, action>` (one authorized
 object, for one action) or a `Within<dim, action>` (the scope values the caller holds the action in). This
 layer makes those the only way to reach scoped rows, and only for the operation the action allows.
 
 **What this layer is and is not.** It runs inside the application process. It stops honest mistakes and makes
-a bypass conspicuous, but code in the same process with the same credentials can go around it. Credential
-custody, the lint rules and the platform-owned check make the bypass hard; row-level security (below) is the
-second layer; a platform data executor is the long-term hard boundary.
+a bypass conspicuous, but code in the same process with the same credentials can go around it. The checker and,
+with [platform enforcement](platform-enforcement.md), the platform-owned build make the bypass hard; per-application
+database roles with row-level security are a later hardening step; a platform data executor is the long-term hard
+boundary.
 
 ## Scope of v1
 
@@ -22,27 +22,28 @@ second layer; a platform data executor is the long-term hard boundary.
   differences are not only textual. [`portability-surface.md`](../reference/portability-surface.md) rejects
   Kysely for the platform's own dual-dialect services; that reasoning does not carry over to applications,
   and the document should say so.
-- **Prerequisite: database isolation per application** (core proposal, section 8). In a cheap Zerops
-  namespace every application shares one Postgres credential today, and `${postgres_connectionString}` is an
-  allowed reference. Without a per-application role and the removal of that reference, this layer protects
-  rows from the wrong user but not from the wrong application.
+- **The namespace is the boundary between applications.** A cheap Zerops namespace has one Postgres service and
+  one credential, shared by every application in it ([ADR-0014](../decisions/0014-provider-owned-deployment-namespaces.md)).
+  v1 keeps this: the applications of a cheap namespace trust each other. An application that must be isolated from
+  other applications goes to an exclusive namespace. This layer protects rows from the wrong **user**, which is the
+  main threat; it does not protect them from another application in the same namespace.
 
 ## Schema source of truth
 
 **SQL migration files are the only DDL. Types are generated from a migrated database. The access policy of
-each table is declared in `src/db/tables.ts` and approved with the contract.**
+each table is declared in `src/db/tables.ts`.**
 
 ```
 db/migrations/20261008120000_init.sql    # frozen once merged; plain SQL
 db/seeds/example.sql                     # local and test only
 src/db/schema.generated.ts               # kysely-codegen output; committed; never hand-edited
-src/db/tables.ts                         # the access policy of every application table
+src/db/tables.ts                         # the access policy of every application table; a literal
 src/db/stores/*.ts                       # the application's queries, written against the scoped API
 ```
 
 - Types come from [`kysely-codegen`](https://github.com/RobinBlomberg/kysely-codegen) with
   `--default-schema app_<id>` and `--exclude-pattern` for framework tables (`fabrika_*`: the migration
-  ledger, files, job leases, webhook bindings). `--verify` runs in the platform check against a throwaway
+  ledger, files, job leases, webhook deliveries). `--verify` runs in the checker's build step against a throwaway
   Postgres and fails when the committed types are stale.
 - The driver is [`kysely-postgres-js`](https://github.com/kysely-org/kysely-postgres-js) over `Bun.SQL`. Only
   the framework creates the connection, from a credential it removes from `process.env`.
@@ -55,7 +56,9 @@ about expand/contract).
 ## Every table declares its access policy
 
 `tables.ts` is a mapped type over the application's tables; a table without a policy does not compile. The
-policy names the action each operation requires.
+policy names the action each operation requires. **The file is a literal** (object and array literals, strings,
+the `defineTables` call), like the contract, so that Control can read it from the commit without executing it once
+[platform enforcement](platform-enforcement.md) exists.
 
 ```ts
 export const tables = defineTables<DB, typeof contract>()({
@@ -107,14 +110,15 @@ export const tables = defineTables<DB, typeof contract>()({
 | `{ inbox: form, read: action }` | append by the named form only; reads with `Within` of the read action                       |
 | `{ reference: reason }`         | reads with any `Ref`/`Within` of its read action; never written by a handler                |
 
-- **The policy is part of the approved revision.** Every change — a new table, a different scope mode, a
-  changed action — is a widening, so moving a table to `reference` to "fix an empty list" waits for a human.
 - **Locators are generated from the policy.** The core's `on: 'note'` resolves `note → workspace` with a query
   the framework generates from `scope.in`; there is no hand-written locator to "fix". The resulting `Ref` carries
   the whole chain (`note:n1`, `workspace:w1`), and every statement for that `Ref` includes every chain column in
   its predicate.
 - **Membership needs no mode of its own.** IAM holds scoped grants (`editor @ workspace:w1`), so a
   `Within<'workspace', 'notes.read'>` contains exactly the workspaces where the caller holds the action.
+- **A policy change is an access change.** A new table, a different scope mode or a changed action changes who can
+  reach which rows. With platform enforcement, every such change waits for approval on a protected environment, so
+  moving a table to `reference` to "fix an empty list" waits for a human.
 
 ## The store API
 
@@ -144,10 +148,10 @@ export const notes = defineStore('notes', (t) => ({
   `delete` action. The types catch the honest mistake, but **not every widening**: TypeScript checks method
   parameters bivariantly, so assigning the table handle to a variable typed `{ remove(ref: Ref<string, string>) }`
   compiles without a cast and passes a read `Ref` to `remove` (shown by the spike). The runtime check is therefore
-  required, and lint refuses `Ref<string, …>` and `Within<string, …>` in application code.
+  required, and the checker refuses `Ref<string, …>` and `Within<string, …>` in application code.
 - **Every entry point takes a `Ref` or a `Within`.** The table handle has no method that takes a bare id or no
-  scope. Lint refuses an exported store function with a plain `string` id parameter. Child tables get their own
-  entry point, `defineChildStore`, where one row is addressed by `(parentRef, childKey)` and a list by the parent
+  scope. The checker refuses an exported store function with a plain `string` id parameter. Child tables get their
+  own entry point, `defineChildStore`, where one row is addressed by `(parentRef, childKey)` and a list by the parent
   `Ref` or by a `Within` of the parent's container.
 - **The callback receives a frozen query description, not a Kysely builder.** Its methods are `columns`,
   `where` (this table's columns, an operator from a literal allowlist, plain values only), `whereAny` (one OR
@@ -170,7 +174,7 @@ export const notes = defineStore('notes', (t) => ({
 - **The process limit is concrete.** The spike's only two successful attacks patched globals in the same process:
   the Kysely compiler prototype after the guard ran, and `Set.prototype.has` (which disabled the allowlists). At
   boot the framework captures the built-ins it relies on and freezes the Kysely compiler prototypes before
-  application modules load; lint refuses assignments to prototypes. RLS is what backstops this.
+  application modules load; the checker refuses assignments to prototypes.
 - An empty `Within` returns `[]` without a query.
 - `get`, `update` and `remove` on an object that no longer exists answer `NotFoundError` (404).
 - **Column allowlists at runtime,** from a column list generated next to the types. Unknown keys in insert and
@@ -188,9 +192,8 @@ export const notes = defineStore('notes', (t) => ({
 ### No unscoped access in v1
 
 There is no importable unscoped database, and v1 has no unscoped capability either: a raw handle in a job cannot
-be fenced (a long statement commits after its lease expired), and routine reports would make approving it a
-habit. Data repairs are an operator workflow outside the application: a reviewed SQL file run by Control, like a
-migration.
+be fenced (a long statement commits after its lease expired), and routine reports would make granting it a
+habit. Data repairs are an operator task outside the application: a reviewed SQL migration.
 
 **Reports** use the scoped aggregate API instead of an escape hatch. The spike showed that the five most common
 queries of a notes app fit (paginated list, search, count per workspace, comments of a note, latest N), and that
@@ -199,19 +202,6 @@ or `NOT EXISTS`), nested AND/OR groups, SQL functions (`lower`, `date_trunc`), f
 Those are the first requests that will push against the builder; the next design step is to add the most common
 of them as declared, scoped report kinds rather than to open raw access.
 
-## Row-level security (v1.x)
-
-The second layer, after per-application roles exist:
-
-- `fabrika db policies` compiles Postgres RLS policies from `tables.ts`. The table owner is the migration role;
-  the runtime role has DML only, no `BYPASSRLS`, and the tables use `FORCE ROW LEVEL SECURITY`.
-- The framework sets the scope values of the current `Ref`/`Within` per transaction with
-  `set_config(…, true)`.
-- RLS is meaningful only because the migration (owner) credential never enters the application container (see
-  Migrations); otherwise code holding it could drop the policies. Application code could still forge the
-  `set_config` value with raw SQL, which the platform-owned build refuses, so RLS backstops bugs in the layer and
-  in generated predicates. It does not stop deliberate raw access; only a data executor does.
-
 ## Migrations
 
 **Runner.** Reuse the [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md) runner in
@@ -219,46 +209,43 @@ The second layer, after per-application roles exist:
 for every user, and throws `corrupted migrations` when the database is ahead of the code — exactly the state
 after a rollback. The ADR-0017 runner tolerates that. For applications it needs:
 
-- a checksum column in **the application ledger only** (the platform services' ledgers stay as they are);
+- a ledger in the application's schema with a checksum column (the platform services' ledgers stay as they are);
 - `SET lock_timeout` and `SET statement_timeout`, so a blocked `ALTER` fails the deploy instead of stalling the
-  live old version.
+  live old version;
+- a lock key derived from `fabrika-db:<appId>`.
 
 `CREATE INDEX CONCURRENTLY` cannot run inside the per-file transaction ADR-0017 requires; v1 does not support it.
 
 **Identity.** Each application gets its own schema `app_<id>`, its own ledger
-`app_<id>.fabrika_migrations (bundle, filename, checksum, applied_at)` with bundle `app`, and an advisory lock key
-derived from `fabrika-db:<appId>`.
+`app_<id>.fabrika_migrations (bundle, filename, checksum, applied_at)` with bundle `app`, and its own lock key. The
+schema separates names, not access: in a cheap namespace every application uses the same credential.
 
-**Who runs them.** Control runs an application's migrations, from the SQL files in the deployed commit's tarball,
-with a migration credential held in its vault, before the new version starts. SQL files are data, so ADR-0005
-holds; the migration credential never enters the application container, and `/proc/self/environ` of the serving
-process holds only the runtime role. Framework tables (`fabrika_*`) belong to a framework role the application's
-migration role cannot alter.
+**Who runs them.** The application container, before the new version serves: `fabrika db migrate` in
+`run.initCommands`. In part A the template's `zerops.yaml` carries the command and the checker verifies it; with
+platform enforcement the provider generates it. Control cannot run them: a namespace is its own Zerops project,
+and projects share no private network.
 
-**File names** are `YYYYMMDDHHMMSS_slug.sql` from `fabrika db new <slug>`, so parallel agent worktrees do not
-collide.
+**File names** are `YYYYMMDDHHMMSS_slug.sql`, so parallel agent worktrees do not collide. `fabrika db new <slug>`
+writes one; because an agent authoring over MCP has no local CLI, the checker refuses any other name.
 
 **Expand only.** The previous release keeps serving while a migration runs, and a rollback starts old code on
 the new schema. A drop, rename or type change ships in a later release than the one that stopped using it.
 
-**Migrations are part of the approved revision.** Two classes need more than a lint:
-
-- **DDL outside an allowlist** (`CREATE TABLE`, `ADD COLUMN`, `CREATE INDEX`, `ADD CONSTRAINT`, and the
-  destructive statements below) is refused. Views, triggers, functions, `GRANT`, `SECURITY DEFINER` and changes to
-  RLS policies are not application DDL.
-- **DML on scoped tables** (a backfill, `UPDATE notes SET workspace_id = …`) is a **security migration**: it can
-  move rows between scopes without any policy change. It is shown in the approval prompt with the statement and
-  classified as a widening. Moving an object between scopes has a supported operation instead
-  (`t.move(ref, toWithin)`, requiring the delete action at the source and the insert action at the target).
-
-**Destructive-change protection,** in the platform check:
+**Destructive-change protection,** in the checker:
 
 1. [`squawk`](https://squawkhq.com/docs/rules) with `ban-drop-column`, `ban-drop-table`, `renaming-column`,
    `renaming-table`, `changing-column-type`, `adding-required-field`, `require-lock-timeout` and
    `require-statement-timeout`.
 2. A destructive statement requires `-- fabrika:contract` naming the earlier release that stopped using the
-   object; the check verifies that the named release is deployed and does not reference it.
+   object.
 3. A merged migration that changed or was deleted is refused.
+4. Views, triggers, functions, `GRANT`, `SECURITY DEFINER` and policy statements are refused; they are not
+   application DDL.
+
+**Migrations are access changes.** A backfill can move rows between scopes without any policy change
+(`UPDATE notes SET workspace_id = …`). With platform enforcement, every new or changed migration file is a change
+that waits for approval on a protected environment, with the file shown in the prompt. Moving an object between
+scopes has a supported operation instead (`t.move(ref, toRef)`).
 
 ## Drift checks
 
@@ -273,26 +260,41 @@ the new schema. A drop, rename or type change ships in a later release than the 
 
 - `@fabrika/db/testing` creates a random schema, applies migrations through the real runner, and skips with the
   standard message when `FABRIKA_TEST_POSTGRES_URL` is unset (`FABRIKA_TEST_POSTGRES_REQUIRED=1` turns the skip
-  into a failure; the platform check sets it). It refuses to load when `FABRIKA_RELEASE` is set, so test helpers
-  cannot ship.
+  into a failure; the build sets it). It refuses to load when `FABRIKA_RELEASE` is set, so test helpers cannot ship.
 - `testCaller(grants)` builds a caller with `@fabrika/auth-core`'s `permits`, so test semantics equal production.
 - **Generated isolation tests:** for every scoped table, `fabrika db test-scaffold` writes tests in which a caller
   of workspace `w1` gets 404 on get, update and delete of a `w2` row, an empty list, and 403 on create in `w2`; and
-  in which a `Ref` for the read action is refused by update and delete. The platform check verifies their content
-  hash, so they can be neither deleted nor weakened.
+  in which a `Ref` for the read action is refused by update and delete. The checker verifies their content hash, so
+  they can be neither deleted nor weakened.
 
-## Three levels
+## Framework (part A)
 
-- **Platform:** table policies in the approved revision; per-application roles; credential custody; the check
-  that runs `tsc`, lint, squawk, codegen verification and the isolation tests.
-- **In-process framework:** action-bound `Ref`/`Within`; generated locators; the allowlisted, non-executable
-  builder with a runtime tree check; runtime column allowlists; unscoped access only as a declared capability;
-  RLS in v1.x.
-- **Lint:** no database driver or `Bun.sql` in application code; no `sql` anywhere; store functions take no bare
-  ids.
-- **Agent skill:** `fabrika db new` for schema changes; every table gets a policy; children carry the parent's
-  scope column and a composite foreign key; expand, switch, contract; never change a table's scope mode without
-  asking the human.
+What the framework gives on today's platform:
+
+- action-bound, request-bound `Ref`/`Within`; generated locators; the allowlisted, non-executable query
+  description with a runtime operation-tree check; runtime column allowlists; refusal of unknown keys;
+- the migration runner with checksums and timeouts, run by `fabrika db migrate` from the template's
+  `initCommands`;
+- the checker: no database driver or `Bun.sql` in application code, no `sql` anywhere, store functions take no
+  bare ids, `tables.ts` is a literal, migration file names, squawk rules, isolation-test hashes;
+- the agent skill: `fabrika db new` for schema changes (or the file-name rule over MCP); every table gets a
+  policy; children carry the parent's scope column and a composite foreign key; expand, switch, contract; never
+  change a table's scope mode without asking the human.
+
+## Platform enforcement (part B)
+
+What [platform enforcement](platform-enforcement.md) adds:
+
+- Control reads `tables.ts` and the migration list from the commit; a changed policy or a new or changed
+  migration waits for approval on a protected environment;
+- the generated run section owns `fabrika db migrate`; the platform-owned build runs the checker, `tsc`, codegen
+  verification and the isolation tests, so the agent cannot drop them;
+- credential custody: the database credential arrives under a framework-only name.
+
+Later hardening, not in v1: a Postgres role per application with a separate owner role, then row-level security
+compiled from `tables.ts` (`FORCE ROW LEVEL SECURITY`, scope values set per transaction with
+`set_config(…, true)`). RLS is meaningful only when the owner credential never enters the application container,
+which needs those roles first.
 
 ## Risks
 
@@ -301,10 +303,11 @@ the new schema. A drop, rename or type change ships in a later release than the 
   over `DB` and the policy. The cost is two store entry points and one place where row types are trusted
   (`CompiledQuery<O>`), as Kysely itself does.
 - **Expressiveness.** Reports are the first place an agent will want more than the builder allows; if the gap is
-  too wide, agents will ask for `unscoped` jobs, and approvals will turn into routine.
+  too wide, agents will ask for raw access.
+- **Shared credential in a cheap namespace.** A copied migration or a hand-written query can touch another
+  application's schema. The namespace choice must say so.
 - **Cloudflare applications get no recommended path** in v1.
 
 ## Open questions
 
 - Soft delete (`deleted_at` with partial unique indexes) as a policy field, or left to the application?
-- Should destructive migrations require Control approval in addition to the check?
