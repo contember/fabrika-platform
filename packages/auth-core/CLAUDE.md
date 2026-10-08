@@ -9,24 +9,25 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # canonical-path · endpoints · gate-parity · gates · permissions · requirement · token
+bun test               # canonical-path · contract-canonical · endpoints · gate-parity · gates · permissions · requirement · token
 ```
 
-| Module              | What it owns                                                                                       |
-| ------------------- | -------------------------------------------------------------------------------------------------- |
-| `canonical-path.ts` | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers. |
-| `contract.ts`       | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.  |
-| `endpoints.ts`      | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`.    |
-| `gates.ts`          | The canonical gate path matcher — `compileGates` / `applicableGates`.                              |
-| `path-segment.ts`   | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.            |
-| `permissions.ts`    | `matchAction` and `permits` — the authorization decision itself.                                   |
-| `requirement.ts`    | `satisfies` — an endpoint requirement checked against a token's permissions.                       |
-| `token.ts`          | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.               |
-| `rpc.ts`            | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                 |
-| `types.ts`          | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                     |
-| `wire.ts`           | The proxy→app header names: the verified token, the client address, and what to strip.             |
-| `environment.ts`    | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.      |
-| `json.ts`           | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                      |
+| Module                  | What it owns                                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `canonical-path.ts`     | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers. |
+| `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.  |
+| `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.  |
+| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`.    |
+| `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                              |
+| `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.            |
+| `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                   |
+| `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions.                       |
+| `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.               |
+| `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                 |
+| `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                     |
+| `wire.ts`               | The proxy→app header names: the verified token, the client address, and what to strip.             |
+| `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.      |
+| `json.ts`               | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                      |
 
 ## Invariants
 
@@ -85,6 +86,14 @@ bun test               # canonical-path · endpoints · gate-parity · gates · 
   module and the static reader over source — must emit the same artifact. Keep new fields that way.
   `SchemaShape` represents exactly the zod subset of `packages/check/CLAUDE.md`; extend the two together
   (`@fabrika/app`'s `schema-shape.ts` reads one into the other).
+- **An artifact is canonical: declaration order never reaches it.** `canonicalizeArtifact` sorts every array
+  whose order carries no meaning — `endpoints` by id, `reservedPrefixes`, role `grants` and `assignableBy`, RPC
+  and endpoint `callers`, link `grants`, webhook and job `actions`, export `consumers`, import `procedures` and
+  `usedBy`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
+  `inherit`, enum `values` — by code unit. Only two arrays are ordered, because the order changes what a schema
+  admits: tuple `items` and union `options`. `canonicalArtifactJson` also sorts object keys; it is the only
+  serialization a digest of an artifact may be taken over. A new array field is unordered unless it is added to
+  that list of two.
 - **The contract matcher is a router, not a gate evaluator.** `planEndpoint` refuses a non-canonical
   raw path, then selects the most specific endpoint of the request's method: per segment, left to
   right, a literal beats a parameter and a parameter beats a terminal `*`. Under a reserved prefix
