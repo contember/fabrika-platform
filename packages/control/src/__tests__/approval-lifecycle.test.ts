@@ -15,7 +15,7 @@ import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentPro
 import { parseClassification } from '../approval/publish'
 import type { ControlRepositories, RunRow } from '../db'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
+import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
@@ -219,6 +219,16 @@ describe('approved access through the run lifecycle', () => {
 		await republishNamespace({ ...deps(w), queue: { send: () => Promise.resolve() } }, 'apps-prod', { wait: 'started' })
 		expect(w.republished.at(-1)?.members.map((member) => member.access)).toEqual([undefined])
 		expect(w.deploys).toEqual([])
+	})
+
+	test('a parked run can be cancelled; it fails without reaching the provider', async () => {
+		const w = world()
+		await seed(w)
+		const parked = await deploy(w, 'prod')
+		await cancelDeploy(deps(w), await run(w, parked.runId))
+		expect((await run(w, parked.runId)).status).toBe('failed')
+		expect(w.deploys).toEqual([])
+		expect(await published(w, 'prod')).toEqual({ runId: null, generation: 0 })
 	})
 
 	test('a person in the console approves; the run classifies again, publishes and deploys with the approved access', async () => {

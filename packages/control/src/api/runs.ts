@@ -93,7 +93,7 @@ export async function getRunUseCase(c: RunReadContext, id: string): Promise<RunD
  */
 export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
 	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_TRIGGER)
-	if (run.status !== 'pending' && run.status !== 'running') {
+	if (run.status !== 'pending' && run.status !== 'running' && run.status !== 'awaiting_approval') {
 		fail(409, 'run already finished')
 	}
 	await c.cancel(run)
@@ -136,7 +136,8 @@ export async function tailRunLogUseCase(c: RunsUseCaseContext, id: string, after
 	return {
 		lines,
 		cursor: all.length,
-		done: run.status === 'succeeded' || run.status === 'failed',
+		// A parked run writes no more lines until a person decides; the approval re-queues it as a fresh tail.
+		done: run.status === 'succeeded' || run.status === 'failed' || run.status === 'awaiting_approval',
 		status: run.status,
 	}
 }
