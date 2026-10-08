@@ -11,8 +11,10 @@ import {
 	type EndpointRow,
 	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
+	FABRIKA_PROXY_SECRET,
 	type Jwks,
 	parseAppEnvironmentId,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
@@ -39,6 +41,12 @@ export interface BootOptions {
 	readonly assets?: SpaAssets
 	/** The application's Postgres connection, which the Bun adapter opens. Without it, an application on `@fabrika/db` does not boot. */
 	readonly database?: Database
+	/**
+	 * The proxy authenticates itself with `FABRIKA_PROXY_SECRET`, and the application does not boot without it. The Bun
+	 * adapter sets it: on Zerops a namespace is one private network. On Cloudflare the service binding is the
+	 * authenticated hop (ADR-0022 rule 1). A secret that is set is checked either way.
+	 */
+	readonly requireProxySecret?: boolean
 }
 
 export interface ContractApp {
@@ -122,6 +130,25 @@ function containersOf(artifact: ContractArtifact): ReadonlyMap<string, readonly 
 		containers.set(dimension, chain)
 	}
 	return containers
+}
+
+/** The shortest secret accepted; Control generates 32 random bytes. */
+const MIN_PROXY_SECRET_LENGTH = 32
+
+/** The digest of the proxy secret the application compares every request's with, or `null` when it has none. */
+function proxySecretDigest(framework: Readonly<Record<string, string>>, required: boolean, problems: string[]): string | null {
+	const secret = framework[FABRIKA_PROXY_SECRET] ?? ''
+	if (secret === '') {
+		if (required) {
+			problems.push(`${FABRIKA_PROXY_SECRET} is not set; the proxy authenticates itself to the application with it`)
+		}
+		return null
+	}
+	if (secret.length < MIN_PROXY_SECRET_LENGTH) {
+		problems.push(`${FABRIKA_PROXY_SECRET} is shorter than ${MIN_PROXY_SECRET_LENGTH} characters`)
+		return null
+	}
+	return sha256Hex(secret)
 }
 
 /** What this version cannot serve yet; a contract that declares it does not boot rather than answer nothing. */
@@ -254,6 +281,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const framework = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
+	const proxySecret = proxySecretDigest(options.environment.framework, options.requireProxySecret === true, problems)
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	const containers = containersOf(artifact)
 	unservable(artifact, options.assets, owned, containers, problems)
@@ -312,6 +340,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		digests: new Map(artifact.endpoints.map((row) => [row.id, endpointDigest(artifact, row)])),
 		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: framework.issuer }),
 		audience: framework.iamAppId,
+		proxySecretDigest: proxySecret,
 		policy: headerPolicy(artifact.csp, framework.operationsOrigin),
 		database,
 		ownedDimensions: owned,

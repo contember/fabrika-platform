@@ -8,7 +8,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesApp } from './fixtures/implement/app'
-import { endpointHeaderFor, frameworkEnvFor, grant, keepingProcessEnvironment, keySource, ORIGIN, token } from './fixtures/implement/harness'
+import {
+	endpointHeaderFor,
+	frameworkEnvFor,
+	grant,
+	keepingProcessEnvironment,
+	keySource,
+	ORIGIN,
+	PROXY_SECRET,
+	token,
+} from './fixtures/implement/harness'
 
 const FRAMEWORK_ENV = frameworkEnvFor(notesApp(new Map()))
 const endpointOf = (method: string, path: string): string => endpointHeaderFor(notesApp(new Map()), method, path) ?? ''
@@ -51,7 +60,7 @@ describe('serveContract', () => {
 	test('imports the application only after the framework variables left the process', async () => {
 		await keepingProcessEnvironment(async () => {
 			const port = process.env['PORT']
-			Object.assign(process.env, { ...FRAMEWORK_ENV, FABRIKA_TEST_SECRET: 'database-password', PORT: '0' })
+			Object.assign(process.env, { ...FRAMEWORK_ENV, FABRIKA_PROXY_SECRET: PROXY_SECRET, FABRIKA_TEST_SECRET: 'database-password', PORT: '0' })
 			let loaded: readonly string[] = []
 			const server = await serveContract(async () => {
 				const module = await import('./fixtures/implement/snapshot-app')
@@ -70,6 +79,15 @@ describe('serveContract', () => {
 					process.env['PORT'] = port
 				}
 			}
+		})
+	})
+})
+
+describe('serveContract on Zerops', () => {
+	test('does not start without the proxy secret: a namespace is one private network', async () => {
+		await keepingProcessEnvironment(async () => {
+			const served = serveContract(() => Promise.resolve({ default: notesApp(new Map()) }), { ...FRAMEWORK_ENV, PORT: '0' })
+			await expect(served).rejects.toThrow('FABRIKA_PROXY_SECRET is not set')
 		})
 	})
 })

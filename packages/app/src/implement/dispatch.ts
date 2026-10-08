@@ -13,10 +13,12 @@ import {
 	type PermissionEntry,
 	permits,
 	planEndpoint,
+	PROXY_SECRET_HEADER,
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
 	satisfies,
 	scopedValues,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import { type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { TokenVerifier } from '@fabrika/jwks'
@@ -62,6 +64,8 @@ export interface RuntimeParts {
 	readonly verifier: TokenVerifier
 	/** The token audience: this application's IAM id in this environment, `<app>@<env>`. */
 	readonly audience: string
+	/** `sha256Hex` of the proxy secret every request must carry; `null` where the hop is a service binding. */
+	readonly proxySecretDigest: string | null
 	readonly policy: HeaderPolicy
 	readonly database: ContractDatabase | null
 	/** Dimensions a table owns, so `in` and `on` must find the object. */
@@ -112,10 +116,14 @@ export class ContractRuntime {
 		let where = 'request'
 		try {
 			const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
+			const served = plan.outcome === 'endpoint' ? this.#parts.endpoints.get(plan.endpoint.id) : undefined
+			// Before any other answer: a direct dial learns nothing, not even whether its path exists.
+			if (served?.kind !== 'health' && !this.#throughProxy(request)) {
+				throw new ForbiddenError('This application answers only its proxy')
+			}
 			if (plan.outcome === 'non-canonical') {
 				throw new BadRequestError('The request path is not canonical')
 			}
-			const served = plan.outcome === 'endpoint' ? this.#parts.endpoints.get(plan.endpoint.id) : undefined
 			if (served === undefined) {
 				throw new NotFoundError(`No endpoint serves ${request.method} ${rawRequestTarget(request.url).pathname}`)
 			}
@@ -138,6 +146,19 @@ export class ContractRuntime {
 		} catch (error) {
 			return errorResponse(error, where)
 		}
+	}
+
+	/**
+	 * The proxy proves it sent the request with the secret of this application environment (ADR-0022 rule 5). The
+	 * digests are compared, so the comparison's timing says nothing about the secret.
+	 */
+	#throughProxy(request: Request): boolean {
+		const expected = this.#parts.proxySecretDigest
+		if (expected === null) {
+			return true
+		}
+		const presented = request.headers.get(PROXY_SECRET_HEADER) ?? ''
+		return presented !== '' && sha256Hex(presented) === expected
 	}
 
 	/**

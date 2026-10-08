@@ -13,7 +13,17 @@ import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped
 import { bindScopedDatabase } from '@fabrika/db/framework'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
-import { bootApp, errorType, frameworkEnvFor, grant, keepingProcessEnvironment, resultOf, send, token } from './fixtures/implement/harness'
+import {
+	bootApp,
+	errorType,
+	frameworkEnvFor,
+	grant,
+	keepingProcessEnvironment,
+	PROXY_SECRET,
+	resultOf,
+	send,
+	token,
+} from './fixtures/implement/harness'
 import { contract } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { type Hooks, scopedNotesApp } from './fixtures/scoped-notes/src/app'
@@ -257,7 +267,13 @@ describe('boot binds the data layer once', () => {
 		await keepingProcessEnvironment(async () => {
 			const served = scoped(tables)
 			const application = scopedNotesApp(hooks, served)
-			const env = { ...frameworkEnvFor(application), FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: url, PORT: '0' }
+			const env = {
+				...frameworkEnvFor(application),
+				FABRIKA_APP_ID: appId,
+				FABRIKA_APP_DATABASE_URL: url,
+				FABRIKA_PROXY_SECRET: PROXY_SECRET,
+				PORT: '0',
+			}
 			const server = await serveContract(() => Promise.resolve({ default: application }), env)
 			try {
 				expect((await fetch(`http://localhost:${server.port}/healthz`)).status).toBe(200)

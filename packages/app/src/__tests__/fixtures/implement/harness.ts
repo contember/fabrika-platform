@@ -42,6 +42,9 @@ export const unreachableIam: IamKeySource = { getJwks: () => Promise.reject(new 
 
 export const FRAMEWORK_ENV = { FABRIKA_IAM_APP_ID: APP_ID, FABRIKA_IAM_ISSUER: ISSUER }
 
+/** A proxy secret of the length Control generates, for the Bun adapter, which requires one. */
+export const PROXY_SECRET = 'proxy-secret-for-the-bun-adapter-0123456789'
+
 function artifactOf(app: ContractImplementation) {
 	return compileContract(app.contract, app.database?.tables ?? {})
 }

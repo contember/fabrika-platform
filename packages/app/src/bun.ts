@@ -161,7 +161,8 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const { default: app } = await load()
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
-	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database })
+	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
+	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, requireProxySecret: true })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
 	const stop = async (): Promise<void> => {
 		await server.stop(false)
