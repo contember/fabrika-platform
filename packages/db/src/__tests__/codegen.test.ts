@@ -5,7 +5,10 @@
 import { checkApplication, formatFinding } from '@fabrika/check'
 import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import ts from 'typescript'
 import { type CatalogColumn, CodegenError, generateSchema, introspectSchema, renderSchema } from '../codegen'
 import { migration } from './fixtures/schema'
 
@@ -63,7 +66,7 @@ describe('renderSchema', () => {
 		expect(source).not.toContain('fabrika_migrations')
 		expect(source).not.toContain("from 'kysely'")
 		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
-		expect(source).toContain("export const columns = {\n\tnotes: [\n\t\t'id',\n\t],\n} as const satisfies ColumnList<DB>\n")
+		expect(source).toContain("export const columns = {\n\t'notes': [\n\t\t'id',\n\t],\n} as const satisfies ColumnList<DB>\n")
 	})
 
 	test('orders tables by name and keeps column order', () => {
@@ -94,6 +97,61 @@ describe('renderSchema', () => {
 		expect(() => renderSchema([column('a_b', 'id', 'text'), column('a__b', 'id', 'text')])).toThrow(
 			'tables a__b and a_b would both generate ABTable',
 		)
+	})
+})
+
+/** Type-checks `source` as if it were a module of this package, with the package's compiler options. */
+function typeErrors(source: string): string[] {
+	const packageDir = join(import.meta.dir, '..', '..')
+	const config = ts.readConfigFile(join(packageDir, 'tsconfig.json'), ts.sys.readFile)
+	const options = { ...ts.parseJsonConfigFileContent(config.config, ts.sys, packageDir).options, noEmit: true }
+	const file = join(import.meta.dir, 'generated-under-test.ts')
+	const host = ts.createCompilerHost(options)
+	const getSourceFile = host.getSourceFile.bind(host)
+	host.getSourceFile = (name, version, ...rest) => name === file ? ts.createSourceFile(name, source, version) : getSourceFile(name, version, ...rest)
+	const fileExists = host.fileExists.bind(host)
+	host.fileExists = (name) => name === file || fileExists(name)
+	const program = ts.createProgram([file], options, host)
+	return ts.getPreEmitDiagnostics(program, program.getSourceFile(file)).map((diagnostic) =>
+		ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+	)
+}
+
+describe('generated names', () => {
+	const catalog = [column('_123', 'id', 'text'), column('_9_lives', 'id', 'text'), column('notes', 'id', 'text')]
+
+	test('a table name that does not start with a letter still gives a TypeScript identifier', () => {
+		const source = renderSchema(catalog)
+		expect(source).toContain('export interface T123Table {')
+		expect(source).toContain('export interface T9LivesTable {')
+		expect(typeErrors(source)).toEqual([])
+		expect(typeErrors('export interface 123Table {}\n')).not.toEqual([])
+	})
+
+	test('a prefixed name that collides with another table is refused', () => {
+		expect(() => renderSchema([column('_123', 'id', 'text'), column('t123', 'id', 'text')])).toThrow(
+			'tables _123 and t123 would both generate T123Table',
+		)
+	})
+
+	test('a reserved JavaScript name is refused', () => {
+		for (const table of ['__proto__', 'constructor', 'prototype']) {
+			expect(() => renderSchema([column(table, 'id', 'text')])).toThrow(`table ${table} has a reserved JavaScript name`)
+		}
+	})
+
+	test('the evaluated column map has every table as an own entry', async () => {
+		const directory = mkdtempSync(join(tmpdir(), 'fabrika-codegen-'))
+		try {
+			const module = join(directory, 'schema.generated.js')
+			writeFileSync(module, new Bun.Transpiler({ loader: 'ts' }).transformSync(renderSchema(catalog)))
+			const loaded: unknown = await import(module)
+			const columns: unknown = typeof loaded === 'object' && loaded !== null ? Reflect.get(loaded, 'columns') : undefined
+			expect(typeof columns === 'object' && columns !== null ? Object.keys(columns) : []).toEqual(['_123', '_9_lives', 'notes'])
+			expect(Object.getPrototypeOf(columns)).toBe(Object.prototype)
+		} finally {
+			rmSync(directory, { recursive: true, force: true })
+		}
 	})
 })
 

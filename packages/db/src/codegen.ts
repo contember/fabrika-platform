@@ -101,11 +101,18 @@ export async function introspectSchema(url: string, schema: string): Promise<Cat
 	}
 }
 
-/** `note_comments` → `NoteCommentsTable`; the suffix keeps every name clear of `DB` and the imported type names. */
+/**
+ * `note_comments` → `NoteCommentsTable`; the suffix keeps every name clear of `DB` and the imported type names. A
+ * name that would not start with a letter (`_123`) gets a `T` prefix, so it stays a TypeScript identifier.
+ */
 function interfaceName(table: string): string {
 	const words = table.split('_').filter((word) => word !== '')
-	return `${words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join('')}Table`
+	const pascal = words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join('')
+	return `${/^[A-Z]/.test(pascal) ? pascal : `T${pascal}`}Table`
 }
+
+/** As keys of the generated object literal these would set or shadow the prototype instead of naming a table. */
+const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
 
 function quote(value: string): string {
 	return `'${JSON.stringify(value).slice(1, -1).replaceAll('\\"', '"').replaceAll("'", "\\'")}'`
@@ -156,6 +163,9 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 		for (const name of [column.table_name, column.column_name]) {
 			if (!isPlainIdentifier(name)) throw new CodegenError(`${name} is not a plain identifier (^[a-z_][a-z0-9_]*$), which the data layer requires`)
 		}
+		if (RESERVED_TABLE_NAMES.has(column.table_name)) {
+			throw new CodegenError(`table ${column.table_name} has a reserved JavaScript name; rename it in a migration`)
+		}
 		const columns = tables.get(column.table_name) ?? []
 		columns.push(column)
 		tables.set(column.table_name, columns)
@@ -183,7 +193,7 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 	]
 	const db = names.map((table) => `\t${table}: ${interfaceName(table)}\n`).join('')
 	const columns = names
-		.map((table) => `\t${table}: [\n${(tables.get(table) ?? []).map((column) => `\t\t'${column.column_name}',\n`).join('')}\t],\n`)
+		.map((table) => `\t'${table}': [\n${(tables.get(table) ?? []).map((column) => `\t\t'${column.column_name}',\n`).join('')}\t],\n`)
 		.join('')
 	return [
 		`${HEADER}\n`,

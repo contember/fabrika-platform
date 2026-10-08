@@ -72,30 +72,30 @@ export interface DB {
 }
 
 export const columns = {
-	contact_messages: [
+	'contact_messages': [
 		'id',
 		'email',
 		'body',
 	],
-	countries: [
+	'countries': [
 		'code',
 		'name',
 	],
-	note_comments: [
+	'note_comments': [
 		'id',
 		'note_id',
 		'workspace_id',
 		'organization_id',
 		'body',
 	],
-	note_flags: [
+	'note_flags': [
 		'id',
 		'note_id',
 		'workspace_id',
 		'organization_id',
 		'reason',
 	],
-	notes: [
+	'notes': [
 		'id',
 		'workspace_id',
 		'organization_id',
@@ -107,15 +107,15 @@ export const columns = {
 		'version',
 		'created_at',
 	],
-	organizations: [
+	'organizations': [
 		'id',
 		'name',
 	],
-	secrets: [
+	'secrets': [
 		'id',
 		'value',
 	],
-	workspaces: [
+	'workspaces': [
 		'id',
 		'organization_id',
 		'name',
