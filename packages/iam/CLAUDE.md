@@ -158,6 +158,15 @@ fails if that stops being true — it is the guard, not documentation of one.
   caller whose verified app is not a platform audience, the provisioning key included, on the binding
   and over `/rpc/*` alike (one `createIamRpc` object serves both). `listPrincipals` for an application
   lists only holders of a grant in that app id, never a cross-app holder.
+- **A CONTRACT APPLICATION LISTS EXACT ACTIONS ON EVERY WRITE PATH (`src/contract-rules.ts`).** A
+  schema reconciled with `contract: true` (`contract_apps`, written in the reconcile's own batch) makes
+  IAM refuse a wildcard in its roles (`appSchemaSchema`), custom policies, grants — inline or through a
+  role, the built-in `admin` included — provisioned keys and device approvals. The device exchange
+  writes its grant by raw SQL (`repositories/device.ts`), so the approval is where it is checked. A
+  role declared with `member.scope` (`roles.member_scope`) is granted only in a value of that scope
+  dimension, never globally, in every app. A cross-app grant is not checked: it reaches no application.
+- **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
+  `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.
 - **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, `src/tokens.ts`).** The proxy
   forwards the token as one header and Bun, the application runtime on Zerops, refuses more than
   16 KiB of headers per request. Both mint fronts answer `token_too_large`, a decided refusal the

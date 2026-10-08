@@ -11,6 +11,7 @@ import {
 	type RotateApiKeyResponse,
 } from '@fabrika/iam-contract'
 import { z } from 'zod'
+import { contractGrantProblem } from '../contract-rules'
 import { principalStatus } from '../db'
 import { generateToken, hashToken } from '../secret'
 import { adminAudit, type AdminContext, fail } from './context'
@@ -59,6 +60,10 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 	const scope = parseScope(input)
 	if (!scope.ok) {
 		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
+	}
+	const contractProblem = await contractGrantProblem(c.services.repositories.appSchema, app, { ...roleOrInline, scopeType: scope.scopeType })
+	if (contractProblem !== null) {
+		return fail(400, contractProblem)
 	}
 	const expiresAt = Number.isFinite(input.expiresAt) ? input.expiresAt ?? null : null
 	const nowSeconds = Math.floor(Date.now() / 1000)

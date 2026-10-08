@@ -117,7 +117,9 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			name: def.name,
 			description: def.description ?? null,
 			permissions: def.permissions,
+			memberScope: def.member?.scope ?? null,
 		})),
+		contract: schema.contract === true,
 	})
 	await adminAudit(c, {
 		action: 'iam.app.schema.reconcile',
@@ -127,6 +129,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			scopes: schema.scopes.length,
 			actions: schema.actions.length,
 			roles: Object.keys(schema.roles),
+			contract: schema.contract === true,
 		},
 	})
 	return json(await readAppSchemaDto(c, app))

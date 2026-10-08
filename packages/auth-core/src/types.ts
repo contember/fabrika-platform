@@ -45,6 +45,8 @@ export interface RoleDef {
 	name: string
 	description?: string
 	permissions: string[]
+	/** A membership role is granted only in a value of this scope dimension, never globally. */
+	member?: { scope: string }
 }
 
 /** One scope dimension an app exposes (flat, independent). */
@@ -65,6 +67,8 @@ export interface AppSchema {
 	actions: AppActionDef[]
 	/** role_key -> def; these are origin='app' roles. */
 	roles: Record<string, RoleDef>
+	/** Compiled from a contract (`schemaFromContract`): IAM then refuses every wildcard action written for the app. */
+	contract?: boolean
 }
 
 // ── Per-path access gates (the propustka-native front door, enforced by the proxy) ──

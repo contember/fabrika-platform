@@ -25,6 +25,7 @@ import {
 	type StartDeviceAuthorizationResult,
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
+import { contractPatternsProblem } from './contract-rules'
 import type { Env } from './env'
 import { pkceChallenge } from './oidc'
 import type { DeviceAuthorizationRow, DeviceReceiptRow } from './repositories/device'
@@ -163,6 +164,10 @@ export async function approveDeviceAuthorization(services: Services, env: Env, r
 	const permissions = await resolvePermissionsAt(services, principal, row.app)
 	const request = requestFromRow(row)
 	if (!request.permissions.every((action) => permits(permissions, action, input.scope))) return { ok: false, reason: 'not_allowed' }
+	// The key's grant is written by raw SQL at exchange (`repositories/device.ts`), so the write rule is checked here.
+	if (await contractPatternsProblem(services.repositories.appSchema, row.app, request.permissions) !== null) {
+		return { ok: false, reason: 'not_allowed' }
+	}
 	const consent: DeviceAuthorizationConsent = {
 		consentId: uuidv7(),
 		app: row.app,

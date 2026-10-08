@@ -108,6 +108,31 @@ function count(table: string) {
 }
 
 describe('device authorization', () => {
+	test('a contract application refuses to approve a wildcard key, whose grant the exchange writes by raw SQL', async () => {
+		seedInlineGrant(h.sqlite, principalId, ['*'], scope, 'vozka')
+		await h.repositories.appSchema.reconcileAppSchema({ app: 'vozka', scopes: [], actions: [], roles: [], contract: true })
+		const approvalVerifier = randomToken(32)
+		const started = await startDeviceAuthorization(services, {
+			app: 'vozka',
+			label: 'Wildcard builder',
+			permissions: ['deploy.*'],
+			keyLifetimeSeconds: 600,
+			approvalChallenge: await pkceChallenge(approvalVerifier),
+			redemptionChallenge: await pkceChallenge(randomToken(32)),
+		}, null)
+		if (!started.ok) throw new Error('start failed')
+		const approval = await approveDeviceAuthorization(services, env, {
+			app: 'vozka',
+			credential,
+			requestId: 'device-contract',
+			attemptId: started.attemptId,
+			approvalVerifier,
+			scope,
+		})
+		expect(approval).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(count('grants')).toBe(2)
+	})
+
 	test('stored requests use the canonical permission parser and reject corrupted permissions', async () => {
 		const setup = await attempt()
 		h.sqlite.run('UPDATE device_authorizations SET permissions = ? WHERE id = ?', ['["app.manage",1]', setup.started.attemptId])

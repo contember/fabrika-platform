@@ -189,7 +189,10 @@ export async function handleAdmin(
  */
 async function dispatch(c: AdminContext): Promise<Response> {
 	const method = c.request.method
-	const segments = c.url.pathname.replace(/^\/admin\/?/, '').split('/').filter(Boolean)
+	const segments = decodedSegments(c.url.pathname.replace(/^\/admin\/?/, ''))
+	if (segments === null) {
+		return error(404, 'not found')
+	}
 	const [resource, idOrSub, action] = segments
 
 	switch (resource) {
@@ -218,6 +221,15 @@ async function dispatch(c: AdminContext): Promise<Response> {
 
 		default:
 			return error(404, 'not found')
+	}
+}
+
+/** The path's segments, percent-decoded: an app id `notes@prod` arrives as `notes%40prod`. Null for a malformed escape. */
+function decodedSegments(path: string): string[] | null {
+	try {
+		return path.split('/').filter(Boolean).map((segment) => decodeURIComponent(segment))
+	} catch {
+		return null
 	}
 }
 

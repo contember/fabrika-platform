@@ -1,4 +1,5 @@
 import { type CreateGrantRequest, type GrantDto, type OkResponse } from '@fabrika/iam-contract'
+import { contractGrantProblem } from '../contract-rules'
 import { type GrantRow } from '../db'
 import { adminAudit, type AdminContext, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
@@ -18,6 +19,10 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	const scope = parseScope(input)
 	if (!scope.ok) {
 		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
+	}
+	const contractProblem = await contractGrantProblem(c.services.repositories.appSchema, app, { ...roleOrInline, scopeType: scope.scopeType })
+	if (contractProblem !== null) {
+		return fail(400, contractProblem)
 	}
 	const expiresAt = Number.isFinite(input.expiresAt) ? input.expiresAt ?? null : null
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)

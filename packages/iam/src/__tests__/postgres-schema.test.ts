@@ -68,6 +68,7 @@ async function reset(): Promise<void> {
 			'roles',
 			'app_actions',
 			'app_scopes',
+			'contract_apps',
 		]
 	) {
 		await raw.prepare(`DELETE FROM ${table}`).run()
@@ -89,6 +90,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		expect(results).toEqual([
 			{ bundle: 'iam', name: '0001_init.sql' },
 			{ bundle: 'iam', name: '0002_oauth.sql' },
+			{ bundle: 'iam', name: '0003_contract_apps.sql' },
 		])
 	})
 
@@ -127,6 +129,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'oauth_grants',
 				'oauth_codes',
 				'oauth_refresh_tokens',
+				'contract_apps',
 			]
 		) {
 			expect(names).toContain(table)
@@ -413,6 +416,21 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(roster.map((p) => p.email)).toEqual(['alice@x.cz', 'bob@x.cz'])
 		const ownApp = await db.principals.getPrincipalsForApp('opice', { includeCrossApp: false })
 		expect(ownApp.map((p) => p.email)).toEqual(['alice@x.cz'])
+	})
+
+	test('app vocabulary: the contract flag and a membership role travel with the reconcile', async () => {
+		await reset()
+		await db.appSchema.reconcileAppSchema({
+			app: 'notes@prod',
+			scopes: [{ scopeType: 'workspace' }],
+			actions: [{ action: 'note.read' }],
+			roles: [{ roleKey: 'owner', name: 'Owner', permissions: ['note.read'], memberScope: 'workspace' }],
+			contract: true,
+		})
+		expect(await db.appSchema.isContractApp('notes@prod')).toBe(true)
+		expect((await db.appSchema.getRole('notes@prod', 'owner'))?.member_scope).toBe('workspace')
+		await db.appSchema.reconcileAppSchema({ app: 'notes@prod', scopes: [], actions: [{ action: 'note.read' }], roles: [] })
+		expect(await db.appSchema.isContractApp('notes@prod')).toBe(false)
 	})
 
 	test('app vocabulary: reconcile is atomic, prunes app-origin rows and preserves custom ones', async () => {

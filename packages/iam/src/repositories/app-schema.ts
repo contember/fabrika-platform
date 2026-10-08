@@ -12,6 +12,8 @@ export interface RoleRow {
 	permissions: string
 	/** 'app' = reconciled from code, 'custom' = admin-composed. */
 	origin: 'app' | 'custom'
+	/** The scope dimension a membership role is granted in; NULL for every other role. */
+	member_scope: string | null
 	created_at: number
 }
 
@@ -45,6 +47,11 @@ export class AppSchemaRepository {
 				ORDER BY app`)
 			.all<{ app: string }>()
 		return results.map((r) => r.app)
+	}
+
+	/** True when the app's schema was compiled from a contract (ADR-0022 rule 6). */
+	async isContractApp(app: string): Promise<boolean> {
+		return (await this.db.prepare('SELECT app FROM contract_apps WHERE app = ?').bind(app).first<{ app: string }>()) !== null
 	}
 
 	// ── App-declared vocabulary (roles, scopes, actions) ──────────────────────
@@ -158,14 +165,20 @@ export class AppSchemaRepository {
 		app: string
 		scopes: { scopeType: string; label?: string | null }[]
 		actions: { action: string; description?: string | null }[]
-		roles: { roleKey: string; name: string; description?: string | null; permissions: string[] }[]
+		roles: { roleKey: string; name: string; description?: string | null; permissions: string[]; memberScope?: string | null }[]
+		/** The contract flag is part of the vocabulary: written in the same batch, so it never outlives the roles it constrains. */
+		contract?: boolean
 	}): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
 			this.db.prepare('DELETE FROM app_scopes WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_actions WHERE app = ?').bind(app),
 			this.db.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app'`).bind(app),
+			this.db.prepare('DELETE FROM contract_apps WHERE app = ?').bind(app),
 		]
+		if (input.contract === true) {
+			statements.push(this.db.prepare('INSERT INTO contract_apps (app, created_at) VALUES (?, ?)').bind(app, unixNow()))
+		}
 
 		for (const scope of input.scopes) {
 			statements.push(
@@ -188,15 +201,16 @@ export class AppSchemaRepository {
 		for (const role of input.roles) {
 			statements.push(
 				this.db
-					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, created_at)
-						VALUES (?, ?, ?, ?, ?, 'app', ?)
+					.prepare(`INSERT INTO roles (app, role_key, name, description, permissions, origin, member_scope, created_at)
+						VALUES (?, ?, ?, ?, ?, 'app', ?, ?)
 						ON CONFLICT (app, role_key) DO UPDATE SET
 							name = excluded.name,
 							description = excluded.description,
 							permissions = excluded.permissions,
+							member_scope = excluded.member_scope,
 							origin = 'app'
 						WHERE roles.origin = 'app'`)
-					.bind(app, role.roleKey, role.name, role.description ?? null, JSON.stringify(role.permissions), unixNow()),
+					.bind(app, role.roleKey, role.name, role.description ?? null, JSON.stringify(role.permissions), role.memberScope ?? null, unixNow()),
 			)
 		}
 

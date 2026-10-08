@@ -1,6 +1,7 @@
 import { isActionAllowed } from '@fabrika/auth-core'
 
 import { type AppInput, type CreatePolicyInput, type OkResponse, type PolicyDto, type UpdatePolicyInput } from '@fabrika/iam-contract'
+import { contractPatternsProblem } from '../contract-rules'
 import { type RoleRow } from '../db'
 import { BUILTIN_ROLES } from '../roles'
 import { adminAudit, type AdminContext, fail } from './context'
@@ -53,6 +54,10 @@ async function parsePolicyBody(
 		if (!isActionAllowed(pattern, catalog)) {
 			return { ok: false, message: `unknown action pattern: ${pattern}` }
 		}
+	}
+	const contractProblem = await contractPatternsProblem(c.services.repositories.appSchema, app, permissions)
+	if (contractProblem !== null) {
+		return { ok: false, message: contractProblem }
 	}
 	const description = body.description ?? null
 	return { ok: true, key, name, description, permissions }

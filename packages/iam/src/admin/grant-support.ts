@@ -90,6 +90,7 @@ export function dbRoleToDef(row: RoleRow): RoleDef {
 		name: row.name,
 		...(row.description !== null ? { description: row.description } : {}),
 		permissions: rolePermissions(row.permissions),
+		...(row.member_scope !== null ? { member: { scope: row.member_scope } } : {}),
 	}
 }
 
