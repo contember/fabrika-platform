@@ -243,7 +243,8 @@ export default implement(contract, {
   `boot(app, { env, iam, origin })`, which reads the framework's variables, deletes them from `process.env`, and
   serves.
 - **Per request**, in this order:
-  1. refuse a non-canonical path (an empty segment, `.` or `..`, an encoded `/` or `\`, a trailing `/`);
+  1. refuse a non-canonical path (an empty segment, `.` or `..`, an encoded `/` or `\`); a trailing `/` is
+     significant and matched literally;
   2. select the endpoint with `planEndpoint`, the matcher in `@fabrika/auth-core`; an unknown procedure under an RPC
      prefix is 404, never served by the SPA;
   3. verify the proxy-injected token with the existing verifier and check that its principal kind is one of the

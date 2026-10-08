@@ -54,7 +54,8 @@ installation's own services, chosen by Control's metadata.
 
 **The decision**, one pass over the selected endpoint:
 
-1. The raw path must be canonical (no empty segment, `.`, `..`, encoded `/` or `\`, trailing `/`); otherwise 400.
+1. The raw path must be canonical (no empty segment, `.`, `..`, encoded `/` or `\`); otherwise 400. A trailing `/`
+   is significant and matched literally.
 2. `planEndpoint` selects the most specific endpoint: a literal segment beats a parameter, which beats a wildcard.
    No endpoint is 403. An RPC prefix is reserved.
 3. A `px_` key is present → mint from it; the key's principal kind must be one of the endpoint's callers; terminal.

@@ -173,7 +173,8 @@ Independent of everything else. They close holes that exist today.
 **P0.1 — Canonical paths (S)**
 
 - One `isCanonicalPath` in `packages/auth-core`: refuse an empty segment, `.` or `..`, an encoded `/` or `\`, and a
-  trailing `/`.
+  literal `\`. A trailing `/` is significant and matched literally; the router keeps it, so `/a/` and `/a` are
+  different routes (Sentry's `/api/<id>/envelope/` depends on it).
 - Router: answer 400 for a non-canonical path (`packages/app/src/router.ts`).
 - Proxy: check the raw `X-Forwarded-Uri` before `new URL()` (`packages/proxy-core/src/service.ts`); on Cloudflare,
   check the raw request URL before `proxy-worker.ts:111`. Deny a request without a method header.
@@ -223,8 +224,8 @@ platform already consumes; the application runtime enforces the rest in-process.
   (exact actions, `member` scope, `assignableBy`, creator), mounts with callers, endpoint rows
   `{ id, kind, method, path, callers, requirement }`, files, jobs, webhooks, link mounts, exports, imports, CSP
   extensions, table policies.
-- `planEndpoint(table, method, rawPath)`: canonical check (P0.1), then the most specific endpoint; an RPC prefix is
-  reserved. `assertNoAmbiguity(table)`.
+- `planEndpoint(table, method, rawPath)`: canonical check (P0.1; a trailing `/` is matched literally), then the most
+  specific endpoint; an RPC prefix is reserved. `assertNoAmbiguity(table)`.
 - `satisfies(requirement, perms)`: `member` is any permission of the application; an action form is the action in
   some scope, including global.
 - Witness: table-driven tests for specificity, ambiguity, canonical refusal and satisfaction.

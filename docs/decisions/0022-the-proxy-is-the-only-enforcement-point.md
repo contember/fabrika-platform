@@ -168,7 +168,8 @@ snapshot }` per application. Each endpoint row is `{ id, kind, method, path, cal
 digest }`. Array order has no meaning here. The proxy makes one pass over one selected endpoint:
 
 1. **Canonical path.** The raw path must have no empty segment, no `.` or `..`, no encoded `/` or `\`
-   and no trailing `/`. Otherwise the answer is 400. A request without a method is denied.
+   and no literal `\`. Otherwise the answer is 400. A request without a method is denied. A trailing
+   `/` is significant and matched literally: `/a/` and `/a` are different paths.
 2. **Selection.** `planEndpoint` selects the most specific endpoint: a literal segment beats a
    parameter, and a parameter beats a wildcard. An RPC prefix is reserved for its procedures. No
    endpoint is a 403. There is no fall-through to another endpoint.
