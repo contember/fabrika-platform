@@ -150,8 +150,11 @@ session from a `px_` key; the framework checks which kind of key it is.
 The framework requests a new scope value, a membership change or a share link from IAM on the
 caller's behalf, with the caller's token as proof. IAM evaluates each request against the caller's
 live permissions, does the write and issues every key. The application supplies no actor, writes no
-grant and mints no credential. IAM gains these operations and the membership metadata on roles;
-today it has neither.
+grant and mints no credential. IAM has these operations (`IamMembershipRpc`) and reads the membership
+metadata from the application's schema: containment, the creator role, the members actions,
+`assignableBy`, link mounts and the endpoints that may spend a delegation grant. An invitation by
+email is accepted on IAM's own page by the principal that owns the invited mailbox, proven by the
+one-time link IAM mails; without an email service there are no invitations.
 
 ### 7. Where the contract becomes binding
 

@@ -268,9 +268,11 @@ application-owned object, resolved from validated request data. The framework of
 the caller-kind and requirement checks. These checks are authorization. They never replace the proxy's
 decision, and the proxy's decision never replaces them.
 
-**Invariant: an application issues no credentials.** `@fabrika/auth` has no issuing or redeeming
-method. IAM issues every `px_` credential: share links and API keys from its admin surface, machine
-keys through `fabrika control key issue`, builder credentials through device authorization
+**Invariant: an application issues no credentials.** `@fabrika/auth` issues and redeems nothing.
+IAM issues every `px_` credential: share links on an application's request, checked against its
+caller's live permissions ([ADR-0012](0012-fabrika-app-runtime.md)), share links and API keys from
+its admin surface, machine keys through `fabrika control key issue`, builder credentials through
+device authorization
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)
 or a `px_` credential (`mintFromKey`); there is no free-standing signed token to present.
 
@@ -293,10 +295,13 @@ registry of its own.
   the bootstrap `admin` grant reach only a registry of platform audiences, separate from
   `adminAudiences`.
 - **An application token cannot call `issueKey`, `revokeKey` or `listPrincipals`**, on any transport.
-- **Delegation grants.** For an endpoint whose action is a dimension's `members.manage`, the proxy
-  obtains a single-use grant bound to the endpoint and the request. IAM requires it for membership
-  operations, so a handler on another endpoint cannot spend the caller's authority. The proxy obtains
-  a fresh grant for every such request, also when the token cache is warm.
+- **Delegation grants.** For an endpoint whose action is a dimension's `members.manage`, or that
+  creates a value of a dimension, the proxy obtains a single-use grant bound to the endpoint and the
+  request. IAM requires it for scope creation, assignment and revocation, so a handler on another
+  endpoint cannot spend the caller's authority. The proxy obtains a fresh grant for every such
+  request, also when the token cache is warm. IAM issues a grant only for an endpoint the
+  application's schema lists under `delegations`, to a user principal, and consumes it like a handoff
+  code: once, before its binding to the caller, the endpoint and the request id is compared.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
   every write path. In every application, contract or not, IAM refuses a global grant of a role
   declared with `member.scope`, and such a grant resolves to no permission.
@@ -307,12 +312,14 @@ registry of its own.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
   share links included. Membership operations are checked live at IAM.
 
-Work unit B5 built rule 6 except delegation grants, which need the membership operations of work
-unit A12 at IAM and the endpoint tables of B2 at the proxy. The platform audiences are IAM
+Work units B5 and A12 built rule 6 at IAM. The proxy side of delegation grants needs the endpoint
+tables of B2; until then the framework obtains a grant from IAM in-process with the caller's token, so
+the binding to the endpoint holds only as far as the framework holds. The platform audiences are IAM
 (`propustka`), the console (`vozka`), Operations and every admin audience. A contract application is
-one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. Until A12 replaces it with
-the membership operations, `listPrincipals` is narrowed for an application token rather than refused: it
-lists only holders of a grant in the caller's application id.
+one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. `listPrincipals` is
+refused for an application token; an application lists the members of a value with IAM's
+`listMembers`, which checks the dimension's `members.list` action there. A share-link key has the
+principal kind `link`: its token carries no `ptype` and names its link mount and containment chain.
 
 ## Consequences
 

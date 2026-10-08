@@ -36,7 +36,7 @@ fails if that stops being true — it is the guard, not documentation of one.
 
 - **AN APPLICATION BINDS `PropustkaApplication`, NOT THE DEFAULT EXPORT** (`src/index.ts`). It carries
   what an application's Workers call — the proxy's `mintToken`/`mintFromKey`/`exchangeAuthCode`, the
-  SDK's `getJwks`/`listPrincipals`/`audit` — and nothing else. The default `Propustka` extends it with
+  SDK's `getJwks`/`listPrincipals`/`audit`, and the `IamMembershipRpc` operations — and nothing else. The default `Propustka` extends it with
   `issueKey`, `revokeKey`, device approval, `fetch` and the cron, for platform components only;
   `@fabrika/provider-cloudflare` refuses an application binding to it. Adding a method to the narrow
   class gives it to every application on the installation.
@@ -156,8 +156,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   hand-rolled grant query — the admin views and the delegation checks call the same function.
 - **AN APPLICATION ISSUES NO CREDENTIALS.** `issueKey` and `revokeKey` answer `not_allowed` to every
   caller whose verified app is not a platform audience, the provisioning key included, on the binding
-  and over `/rpc/*` alike (one `createIamRpc` object serves both). `listPrincipals` for an application
-  lists only holders of a grant in that app id, never a cross-app holder.
+  and over `/rpc/*` alike (one `createIamRpc` object serves both). So does `listPrincipals`: an
+  application lists the members of one value with `listMembers`.
 - **A CONTRACT APPLICATION LISTS EXACT ACTIONS ON EVERY WRITE PATH (`src/contract-rules.ts`).** A
   schema reconciled with `contract: true` (`contract_apps`, written in the reconcile's own batch) makes
   IAM refuse a wildcard in its roles (`appSchemaSchema`), custom policies, grants — inline or through a
@@ -170,6 +170,42 @@ fails if that stops being true — it is the guard, not documentation of one.
   reaches no application. Declaring a role a membership role while it has a grant outside its
   dimension is a 409 naming the grants, and a guard statement in the reconcile batch rolls it back if
   one was written after the check. Resolution is the third lock: such a grant contributes nothing.
+- **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
+  Every `IamMembershipRpc` operation resolves the caller from its own credential and re-resolves a
+  token's permissions with `resolvePermissionsAt` — a token's `perms` are up to five minutes old. An
+  anonymous credential, a share link included, is never a member caller; a service principal creates
+  no scope and manages no member (`userOnly`), which closes "a form plus a job that invites the
+  submitted email". Membership is ordinary role grants scoped to a value (compatible with backlog 91);
+  a value is checked as itself, flat — "there" means that exact `(type, value)`, global grants included.
+  Assigning needs the dimension's `members.manage` there, a role there that the target role's
+  `assignableBy` names, and every action of the target role there; revoking needs the same for every
+  role it removes. Repeating an assign or a revoke answers the same result (backlog 82's 409 stays for
+  the admin grant API).
+- **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
+  one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
+  caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE
+  its binding is compared, like a handoff code, and the endpoint's purpose and dimension are read from
+  the schema again at use. One grant serves one operation, so a request makes one membership write.
+  `listMembers` and the link operations take none: they spend no membership authority.
+- **THE LAST CREATOR STAYS.** `createScope` records the value in `membership_scopes` and grants the
+  creator role in one batch; a revoke removes a creator grant only while another principal holds the
+  role there, and its first statement locks the value's `membership_scopes` row so two concurrent
+  revokes of the last two holders serialize (`membership-postgres.test.ts` fails without the lock).
+  A value an administrator granted without `createScope` has no row to lock.
+- **AN INVITATION IS ACCEPTED ONLY BY THE OWNER OF THE INVITED MAILBOX.** Assigning by email always
+  opens an invitation, also for an address a principal already has; IAM mails a one-time link
+  (`#token=`, never in a log) and stores its hash. `/auth/invitations/accept` accepts it, same-origin,
+  for the principal signed in on IAM's host whose normalized `email` equals the invitation's — the
+  token proves the mailbox, the session the principal. The inviter's authority is checked again at
+  acceptance. Without an email service, an invitation is `invitations_disabled`; assigning an existing
+  principal by id still works. Invitations live `INVITATION_TTL_SECONDS` (7 days).
+- **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,
+  `link_chain`). `issueLink` checks the chain against the schema's containment, requires an expiry of
+  at most the mount's `maxDays`, and requires the issuer to hold `issuedBy` and every granted action on
+  some link of the chain; the grants are frozen on the object. Its token carries `link: { mount, chain }`
+  and no `ptype`, and the framework re-checks the chain per request. The issuer or a holder of
+  `members.manage` on a value of the chain revokes it; a reconcile that removes the mount, or moves it
+  to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
   `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.
 - **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, `src/tokens.ts`).** The proxy

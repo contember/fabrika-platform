@@ -108,6 +108,25 @@ stream limit, safe redirect
 validation, no-referrer and no-store headers, a restrictive CSP, and
 frame-ancestor protection.
 
+## Membership invitations
+
+An application invites an address to a membership role through IAM's
+`assignMember` (ADR-0012 §6). The address is verified by the invitation itself:
+
+1. IAM stores a random token's hash with the application, the value, the role
+   and the normalized mailbox, and mails a one-time link to
+   `/auth/invitations/accept#token=…`. Repeating the invitation answers the open
+   one and sends nothing. It expires after 7 days.
+2. Without an email sender there are no invitations (`invitations_disabled`).
+   Assigning an existing principal by id still works.
+3. A `GET` renders the form without consuming anything; the page copies the
+   fragment into the same-origin `POST` form.
+4. The `POST` needs an IAM session on IAM's host. Without one the page asks the
+   person to sign in and open the link again. With one, IAM accepts only when the
+   signed-in principal's mailbox is the invited one, checks again that the
+   inviter can still give the role, and then marks the invitation accepted and
+   writes the grant in one transaction.
+
 ## First administrator
 
 `IAM_BOOTSTRAP_ADMINS` authorizes an email only after identity is proven. It is
