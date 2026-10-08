@@ -44,7 +44,18 @@ import {
 	type ProcedureTreeDeclaration,
 	type SpaAccessDeclaration,
 } from './declaration'
-import { CONNECT_PREFIX, CONTRACT_DEFAULTS, FILES_PREFIX, joinPath, JSON_ADMISSION, LINK_API_SEGMENT, WEBHOOK_BINDING_PARAMETER } from './defaults'
+import {
+	CONNECT_PREFIX,
+	CONTRACT_DEFAULTS,
+	FILES_PREFIX,
+	joinPath,
+	JSON_ADMISSION,
+	LINK_API_SEGMENT,
+	WEBHOOK_ACCOUNT_PATTERN,
+	WEBHOOK_BINDING_PARAMETER,
+	WEBHOOK_SCOPE_FIELD,
+	WEBHOOKS_PREFIX,
+} from './defaults'
 import { ContractError, Problems } from './problems'
 
 const APP_ID = /^[a-z0-9][a-z0-9-]*$/
@@ -75,6 +86,16 @@ const UUID: SchemaShape = {
 	includes: null,
 }
 const ID_OBJECT: SchemaShape = { type: 'object', fields: { id: UUID } }
+const TEXT: SchemaShape = { ...UUID, format: null, minLength: 1 }
+
+/** The shapes of the generated webhook binding endpoints; `@fabrika/app/implement` parses with the same schemas. */
+export const WEBHOOK_BIND_INPUT: SchemaShape = {
+	type: 'object',
+	fields: { [WEBHOOK_SCOPE_FIELD]: TEXT, account: { ...UUID, format: null, pattern: WEBHOOK_ACCOUNT_PATTERN } },
+}
+export const WEBHOOK_BIND_OUTPUT: SchemaShape = { type: 'object', fields: { id: UUID, url: TEXT, secret: TEXT } }
+export const WEBHOOK_UNBIND_INPUT: SchemaShape = { type: 'object', fields: { [WEBHOOK_SCOPE_FIELD]: TEXT, id: UUID } }
+export const WEBHOOK_UNBIND_OUTPUT: SchemaShape = ID_OBJECT
 
 /** Validates a described contract against its table policies and normalizes it; throws `ContractError` with every problem. */
 export function buildArtifact(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
@@ -296,18 +317,42 @@ class ArtifactBuilder {
 				this.#prefix(where, mount.path)
 				this.#objectSchema(`${where} input`, mount.input)
 				const boundTo = this.#scopeBinding(where, 'boundTo', mount.boundTo)
-				if (boundTo?.kind === 'dimension' && this.#contract.dimensions[boundTo.dimension]?.members === undefined) {
+				const members = boundTo?.kind === 'dimension' ? this.#contract.dimensions[boundTo.dimension]?.members : undefined
+				if (boundTo?.kind === 'dimension' && members === undefined) {
 					this.#problem(where, `is bound to '${boundTo.dimension}', which declares no members: { manage, list } to create bindings with`)
 				}
 				this.#actionList(where, mount.actions)
 				const path = joinPath(mount.path, `:${WEBHOOK_BINDING_PARAMETER}`)
 				this.#anonymous(name, 'webhook', 'POST', path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.webhookMaxBytes), mount.input)
+				if (boundTo?.kind === 'dimension' && members !== undefined) {
+					this.#webhookBindings(name, boundTo.dimension, members.manage)
+				}
 				return boundTo === null ? null : { kind: 'webhook', path: mount.path, scheme: mount.scheme, boundTo, actions: [...mount.actions] }
 			}
 			default:
 				this.#problem(where, 'is not a mount (allowed: c.rpc, c.link, c.spa, c.health, c.form or c.webhook)')
 				return null
 		}
+	}
+
+	/** A holder of the dimension's `members.manage` there binds a provider account to one value, and unbinds it. */
+	#webhookBindings(name: string, dimension: string, manage: string): void {
+		const access: AccessForm = { form: 'in', dimension, from: WEBHOOK_SCOPE_FIELD }
+		const binding = (operation: 'bind' | 'unbind', input: SchemaShape, output: SchemaShape): EndpointRow => ({
+			id: `webhooks.${name}.${operation}`,
+			source: { kind: 'mount', name },
+			kind: 'mutation',
+			method: 'POST',
+			path: joinPath(WEBHOOKS_PREFIX, `webhooks.${name}.${operation}`),
+			callers: ['human'],
+			requirement: { kind: 'action', action: manage, access },
+			admission: JSON_ADMISSION,
+			input,
+			output,
+		})
+		this.#row(binding('bind', WEBHOOK_BIND_INPUT, WEBHOOK_BIND_OUTPUT))
+		this.#row(binding('unbind', WEBHOOK_UNBIND_INPUT, WEBHOOK_UNBIND_OUTPUT))
+		this.#reserve(WEBHOOKS_PREFIX)
 	}
 
 	#link(name: string, mount: LinkMountDeclaration<SchemaShape>): MountArtifact {

@@ -94,6 +94,8 @@ describe('schemaFromContract', () => {
 			links: { shared: { dimension: 'note', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 } },
 			delegations: {
 				'api.workspaces.create': { action: 'workspaces.create', dimension: 'workspace', purpose: 'creates' },
+				'webhooks.github.bind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
+				'webhooks.github.unbind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
 			},
 		})
 	})

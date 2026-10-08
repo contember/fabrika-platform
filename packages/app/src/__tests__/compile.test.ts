@@ -11,6 +11,8 @@ import { tables as scopedTables } from './fixtures/scoped-notes/src/db/tables'
 
 /** The generated file endpoints `notesArtifact` does not list. */
 const UNLISTED_FILE_ROWS = new Set(['files.attachments.upload', 'files.attachments.remove'])
+/** The generated webhook binding endpoints `notesArtifact` does not list. */
+const UNLISTED_WEBHOOK_ROWS = new Set(['webhooks.github.bind', 'webhooks.github.unbind'])
 
 describe('compileContract', () => {
 	const artifact = compileContract(contract, notesArtifact.tables)
@@ -19,8 +21,35 @@ describe('compileContract', () => {
 		const { endpoints, reservedPrefixes, ...rest } = artifact
 		const { endpoints: expectedEndpoints, reservedPrefixes: expectedPrefixes, ...expectedRest } = canonicalizeArtifact(notesArtifact)
 		expect(rest).toEqual(expectedRest)
-		expect(endpoints.filter((row) => !UNLISTED_FILE_ROWS.has(row.id))).toEqual([...expectedEndpoints])
+		expect(endpoints.filter((row) => !UNLISTED_FILE_ROWS.has(row.id) && !UNLISTED_WEBHOOK_ROWS.has(row.id))).toEqual([...expectedEndpoints])
 		expect(reservedPrefixes).toEqual(expectedPrefixes)
+	})
+
+	test("generates a webhook's bind and unbind endpoints for a holder of its dimension's members.manage", () => {
+		const rows = artifact.endpoints.filter((row) => UNLISTED_WEBHOOK_ROWS.has(row.id))
+		const access = { form: 'in', dimension: 'workspace', from: 'scope' } as const
+		expect(rows.map(({ id, kind, method, path, callers, requirement, source }) => ({ id, kind, method, path, callers, requirement, source })))
+			.toEqual([
+				{
+					id: 'webhooks.github.bind',
+					kind: 'mutation',
+					method: 'POST',
+					path: '/api/webhooks.github.bind',
+					callers: ['human'],
+					requirement: { kind: 'action', action: 'notes.admin', access },
+					source: { kind: 'mount', name: 'github' },
+				},
+				{
+					id: 'webhooks.github.unbind',
+					kind: 'mutation',
+					method: 'POST',
+					path: '/api/webhooks.github.unbind',
+					callers: ['human'],
+					requirement: { kind: 'action', action: 'notes.admin', access },
+					source: { kind: 'mount', name: 'github' },
+				},
+			])
+		expect(artifact.reservedPrefixes).toContain('/api')
 	})
 
 	test('generates the upload and remove endpoints of a file collection', () => {
