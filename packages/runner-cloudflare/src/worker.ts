@@ -18,7 +18,8 @@ import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, type RunnerStatus 
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
 import { readTerminalStatus } from './run-outcome'
-import { assertRunnerKey } from './runner-key'
+import { assertRunnerKey, runnerInstanceId } from './runner-key'
+import type { RunnerContainer } from './RunnerContainer'
 import type { Env } from './worker-env'
 
 export { RunnerContainer } from './RunnerContainer'
@@ -26,9 +27,13 @@ export { RunnerContainer } from './RunnerContainer'
 /** The same run-id shape `cloudflareRunnerJobSchema` enforces — a cancel addresses a container by it too. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// A module function, not a method: workerd's RPC reaches every method of an entrypoint, private ones included.
+const runContainer = async (env: Env, runId: string): Promise<DurableObjectStub<RunnerContainer>> =>
+	env.RUNNER.get(await runnerInstanceId(env.RUNNER, env.FABRIKA_RUNNER_KEY, runId))
+
 export class VozkaRunner extends WorkerEntrypoint<Env> {
 	/**
-	 * Execute one deploy run: address a fresh container instance for this `runId`, wait for its server
+	 * Execute one deploy run: address the container instance keyed to this `runId`, wait for its server
 	 * to come up, relay the job through it (logs + status → R2), and return the terminal status. The
 	 * caller may have been reset mid-deploy; the persisted status and the container's backstop are what
 	 * let the control plane settle the run on its next reconcile.
@@ -49,8 +54,7 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 		}
 		await assertRunnerKey(this.env.FABRIKA_RUNNER_KEY, job.runnerKey)
 
-		const id = this.env.RUNNER.idFromName(job.runId)
-		const container = this.env.RUNNER.get(id)
+		const container = await runContainer(this.env, job.runId)
 		await container.startDeploy(job.runId, job.dryRun === true)
 		const relayable: ContainerLike = {
 			containerFetch: (input, init) => container.deployFetch(input, init),
@@ -70,7 +74,7 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 			throw new Error('runner: invalid run id')
 		}
 
-		const container = this.env.RUNNER.get(this.env.RUNNER.idFromName(runId))
+		const container = await runContainer(this.env, runId)
 		await container.cancelDeploy()
 	}
 
@@ -84,7 +88,7 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 		if (typeof runId !== 'string' || !UUID.test(runId)) throw new Error('runner: invalid run id')
 		const persisted = await readTerminalStatus(this.env.RUN_LOGS, runId, Date.now())
 		if (persisted !== null) return persisted
-		return this.env.RUNNER.get(this.env.RUNNER.idFromName(runId)).recoverDeploy(runId)
+		return (await runContainer(this.env, runId)).recoverDeploy(runId)
 	}
 
 	// vozka-runner is RPC-only (invoked via the RUNNER_SVC service binding). It has no public route;

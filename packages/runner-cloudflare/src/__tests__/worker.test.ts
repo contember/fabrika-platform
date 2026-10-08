@@ -22,6 +22,7 @@ mock.module('cloudflare:workers', () => ({
 }))
 
 const { VozkaRunner } = await import('../worker')
+const { runnerInstanceName } = await import('../runner-key')
 
 const RUNNER_KEY = 'test-runner-key'
 const RUN_ID = '0198c0de-0000-7000-8000-000000000001'
@@ -153,7 +154,7 @@ describe('VozkaRunner.startRun', () => {
 	test("the right key proceeds to the run's container", async () => {
 		const { worker, touched } = harness(RUNNER_KEY)
 		await expect(worker.startRun(job)).rejects.toThrow(REACHED_CONTAINER)
-		expect(touched).toEqual([`idFromName:${RUN_ID}`])
+		expect(touched).toEqual([`idFromName:${await runnerInstanceName(RUNNER_KEY, RUN_ID)}`])
 	})
 })
 
@@ -232,7 +233,7 @@ describe('VozkaRunner.cancelRun', () => {
 	test("the right key proceeds to the run's container", async () => {
 		const { worker, touched } = harness(RUNNER_KEY)
 		await expect(worker.cancelRun(RUN_ID, RUNNER_KEY)).rejects.toThrow(REACHED_CONTAINER)
-		expect(touched).toEqual([`idFromName:${RUN_ID}`])
+		expect(touched).toEqual([`idFromName:${await runnerInstanceName(RUNNER_KEY, RUN_ID)}`])
 	})
 })
 
@@ -265,5 +266,43 @@ describe('VozkaRunner.recoverRun', () => {
 		const { worker, paths } = relayHarness({ recovery: settled })
 		expect(await worker.recoverRun(RUN_ID, RUNNER_KEY)).toEqual(settled)
 		expect(paths).toEqual([`recover:${RUN_ID}`])
+	})
+})
+
+/** A namespace whose ids are real enough to follow: `get` records the name it was given, then stops the call. */
+function addressingNamespace(touched: string[]): Env['RUNNER'] {
+	const refuse = (label: string) => (): never => {
+		touched.push(label)
+		throw new Error(REACHED_CONTAINER)
+	}
+	const id = (name: string): DurableObjectId => ({ name, toString: () => name, equals: (other) => other.name === name })
+	return {
+		idFromName: (name: string) => id(name),
+		newUniqueId: refuse('newUniqueId'),
+		idFromString: refuse('idFromString'),
+		get(target: DurableObjectId): never {
+			touched.push(`get:${target.name ?? ''}`)
+			throw new Error(REACHED_CONTAINER)
+		},
+		getByName: refuse('getByName'),
+		jurisdiction: refuse('jurisdiction'),
+	}
+}
+
+describe("a run's container is addressed by a keyed name", () => {
+	test('startRun, cancelRun and recoverRun reach the same instance, and none names it by the run id', async () => {
+		const touched: string[] = []
+		const noPersistedStatus: Pick<Env['RUN_LOGS'], 'get'> = { get: async () => null }
+		const env = { RUNNER: addressingNamespace(touched), RUN_LOGS: noPersistedStatus, ENVIRONMENT: 'stage', FABRIKA_RUNNER_KEY: RUNNER_KEY }
+		const worker: unknown = Reflect.construct(VozkaRunner, [{ waitUntil: () => {} }, env])
+		if (!(worker instanceof VozkaRunner)) throw new Error('failed to construct the mocked Worker entrypoint')
+
+		await expect(worker.startRun(job)).rejects.toThrow(REACHED_CONTAINER)
+		await expect(worker.cancelRun(RUN_ID, RUNNER_KEY)).rejects.toThrow(REACHED_CONTAINER)
+		await expect(worker.recoverRun(RUN_ID, RUNNER_KEY)).rejects.toThrow(REACHED_CONTAINER)
+
+		const keyed = `get:${await runnerInstanceName(RUNNER_KEY, RUN_ID)}`
+		expect(touched).toEqual([keyed, keyed, keyed])
+		expect(keyed).not.toContain(RUN_ID)
 	})
 })

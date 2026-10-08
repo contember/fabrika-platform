@@ -1,9 +1,10 @@
-// The per-run container Durable Object. Mirrors the preventado pattern: a subclass of
-// `@cloudflare/containers` `Container` whose `defaultPort` matches the in-container server, with a
-// generous `sleepAfter` so a long clone + install + provider deploy is never reaped mid-run.
+// The per-run container Durable Object: a subclass of `@cloudflare/containers` `Container` whose
+// `defaultPort` matches the in-container server, with a generous `sleepAfter` so a long clone + install +
+// provider deploy is never reaped mid-run.
 //
-// One DO instance == one container == one run. The vozka-runner Worker addresses a fresh instance per
-// run (`idFromName(runId)`), `startAndWaitForPorts()`, then relays the job through it. This DO lives in
+// One DO instance == one container == one run. The vozka-runner Worker addresses the instance by a KEYED
+// name (`runnerInstanceName`, an HMAC of the run id) that no other Worker can compute,
+// `startAndWaitForPorts()`, then relays the job through it. This DO lives in
 // vozka-runner (NOT the fabrika control plane) so a deploy of fabrika never resets the container that is
 // running that very deploy — the self-reset that previously orphaned fabrika's own runs.
 
@@ -22,6 +23,7 @@ import {
 	type RunSettlementPorts,
 	settleRun,
 } from './run-outcome'
+import { assertRunnerInstance } from './runner-key'
 import type { Env } from './worker-env'
 
 const DISPATCHED_AT = 'dispatchedAt'
@@ -33,7 +35,14 @@ export class RunnerContainer extends Container<Env> {
 		write: () => this.ctx.storage.put('runCancelled', true),
 	})
 
+	// Every method that names a run checks it first: another Worker can bind this class and start an
+	// instance under a name of its own, but must not persist a real run's status (and IAM reconcile) from it.
+	private ownRun(runId: string): Promise<void> {
+		return assertRunnerInstance(this.env.RUNNER, this.ctx.id, this.env.FABRIKA_RUNNER_KEY, runId)
+	}
+
 	async startDeploy(runId: string, dryRun: boolean): Promise<void> {
+		await this.ownRun(runId)
 		await this.runGate.run(async () => {
 			await this.ctx.storage.put(DRY_RUN, dryRun)
 			await this.startAndWaitForPorts()
@@ -50,6 +59,7 @@ export class RunnerContainer extends Container<Env> {
 
 	/** The run's terminal status once known (persisting it if needed), or null while it is in flight. */
 	async recoverDeploy(runId: string): Promise<RunnerStatus | null> {
+		await this.ownRun(runId)
 		const gate = await this.runGate.recover(async () => (await this.dispatchedAt()) !== null, () => this.destroy())
 		return recoverDispatched(await this.settlementPorts(runId), gate === 'running' ? await this.dispatchedAt() : null)
 	}
@@ -130,6 +140,7 @@ export class RunnerContainer extends Container<Env> {
 	 * override — the base class owns the alarm).
 	 */
 	async armBackstop(runId: string): Promise<void> {
+		await this.ownRun(runId)
 		await this.schedule(BACKSTOP_FIRST_DELAY_S, 'backstopCheck', { runId, deadline: Date.now() + RUN_DEADLINE_MS })
 	}
 
@@ -138,6 +149,7 @@ export class RunnerContainer extends Container<Env> {
 		const parsed = backstopPayloadSchema.safeParse(payload)
 		if (!parsed.success) throw new Error('runner: invalid backstop payload')
 		const { runId, deadline } = parsed.data
+		await this.ownRun(runId)
 		await backstopTick(
 			async () => settleRun(await this.settlementPorts(runId), deadline),
 			async () => {

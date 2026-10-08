@@ -89,6 +89,11 @@ reverse order: an outdated runner may ignore the expected commit
 With matching components, a non-dry job fetches the exact commit, compares the
 detached HEAD, and only then installs dependencies.
 
+The runner addresses each run's container by a name keyed with `FABRIKA_RUNNER_KEY`. A runner upgrade
+from a version that named containers by the run id, or a key rotation, no longer reaches a run already
+in flight: deploy it with no Cloudflare run in flight. The transition is described in
+[backlog 89](../backlog/89-another-worker-can-still-start-its-own-runner-containers.md).
+
 Local Git and package checks verify offline source identity and consumer contracts.
 Live GitHub authorization, Cloudflare RPC/image exchange and account rollout
 require separate operator-owned acceptance evidence.
