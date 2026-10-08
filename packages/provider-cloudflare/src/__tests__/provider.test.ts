@@ -28,11 +28,18 @@ interface Recorded {
 const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAppConfig =>
 	defineApp({
 		id: 'demo',
-		resources: () => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		...overrides,
 	})
 
-const appWorker = (): Worker => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
+/** An application Worker is reachable only through its proxy, so every fixture app turns both URLs off. */
+const PRIVATE: { readonly workers_dev: false; readonly preview_urls: false } = { workers_dev: false, preview_urls: false }
+
+const appWorker = (): Worker => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
+
+/** The proxy root owns the public route; the application Worker is reached only through `APP`. */
+const proxyRouting = (app: Worker, routes: Worker['options']['routes']): Worker =>
+	new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts', routes })
 
 /** A checkout is plain JavaScript: its options object carries whatever raw wrangler keys it likes. */
 const withRawOptions = (worker: Worker, raw: Record<string, unknown>): Worker => {
@@ -172,6 +179,7 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'demo',
 					compatibility_flags: [],
 					bindings: {},
@@ -186,7 +194,7 @@ describe('Cloudflare provider', () => {
 	})
 
 	test('targets platform-managed values at the private application Worker', async () => {
-		const app = new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
+		const app = new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
 		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
 		const authored = config({ resources: () => proxy })
 		const dsn = 'https://operations-public-key@errors.test/1'
@@ -198,6 +206,7 @@ describe('Cloudflare provider', () => {
 	test('plans nested D1 migration and deploys every generated Worker config', async () => {
 		const app = new Worker({
 			dir: '.',
+			...PRIVATE,
 			name: 'demo',
 			compatibility_flags: [],
 			bindings: { DB: new D1Database({ name: 'main', migrationsDir: './migrations' }) },
@@ -228,6 +237,7 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'demo',
 					compatibility_flags: [],
 					main: 'src/index.ts',
@@ -375,7 +385,7 @@ describe('Cloudflare provider', () => {
 
 	test('refuses a config that names a platform resource, before any provisioning', async () => {
 		const platformWorker = config({
-			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
 		await expect(deploy(rec, platformWorker)).rejects.toThrow(
 			'Worker `vozka` becomes `stage-vozka` on Cloudflare, which would take over the Fabrika platform resource `vozka`',
@@ -385,6 +395,7 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'demo',
 					compatibility_flags: [],
 					bindings: { LOGS: new R2Bucket({ name: 'vozka-run-logs' }), QUEUE: new Queue({ name: 'vozka-deploy' }) },
@@ -399,7 +410,7 @@ describe('Cloudflare provider', () => {
 
 	test('lets fabrika deploy its own components under the explicit platform policy', async () => {
 		const platformWorker = config({
-			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
 		const result = await deploy(rec, platformWorker, { platformResources: 'allow' })
 		expect(result.steps[0]?.id).toBe('provision-resources')
@@ -407,31 +418,56 @@ describe('Cloudflare provider', () => {
 	})
 
 	test('refuses a route on a host this environment does not own', async () => {
-		const foreign = config({
-			resources: () =>
-				new Worker({
-					dir: '.',
-					name: 'demo',
-					compatibility_flags: [],
-					bindings: {},
-					main: 'src/index.ts',
-					routes: [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }],
-				}),
-		})
+		const foreign = config({ resources: () => proxyRouting(appWorker(), [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }]) })
 		await expect(deploy(rec, foreign)).rejects.toThrow("routes `other-app.example.com`, which is not this environment's domain")
 
-		const own = config({
+		const own = config({ resources: () => proxyRouting(appWorker(), [{ pattern: 'stage.example.com', custom_domain: true }]) })
+		await expect(deploy(rec, own)).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test('refuses a route, workers.dev or preview URLs on an application Worker, proxied or not', async () => {
+		const ownRoute = [{ pattern: 'stage.example.com', custom_domain: true }]
+		const exposed: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
+			['routes', { routes: ownRoute }, 'application Worker `demo` declares `routes`; only its proxy Worker is routed (omit it or set `[]`)'],
+			['routes', { routes: 'stage.example.com' }, 'application Worker `demo` declares `routes`'],
+			[
+				'workers_dev',
+				{ workers_dev: true },
+				'application Worker `demo` leaves `workers_dev` on; it would be public on workers.dev (set `workers_dev: false`)',
+			],
+			['workers_dev', { workers_dev: undefined }, 'application Worker `demo` leaves `workers_dev` on'],
+			[
+				'preview_urls',
+				{ preview_urls: true },
+				'application Worker `demo` leaves `preview_urls` on; every version would be public on workers.dev (set `preview_urls: false`)',
+			],
+			['preview_urls', { preview_urls: undefined }, 'application Worker `demo` leaves `preview_urls` on'],
+		]
+		for (const [, raw, message] of exposed) {
+			const alone = config({ resources: () => withRawOptions(appWorker(), raw) })
+			await expect(deploy(rec, alone)).rejects.toThrow(message)
+			const proxied = config({ resources: () => proxyRouting(withRawOptions(appWorker(), raw), ownRoute) })
+			await expect(deploy(rec, proxied)).rejects.toThrow(message)
+		}
+		expect(rec.provisions).toHaveLength(0)
+
+		const unrouted = config({ resources: () => proxyRouting(withRawOptions(appWorker(), { routes: [] }), ownRoute) })
+		await expect(deploy(rec, unrouted)).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test('leaves a platform component its own route and URLs under the platform policy', async () => {
+		const component = config({
 			resources: () =>
 				new Worker({
 					dir: '.',
-					name: 'demo',
+					name: 'propustka-worker',
 					compatibility_flags: [],
 					bindings: {},
 					main: 'src/index.ts',
 					routes: [{ pattern: 'stage.example.com', custom_domain: true }],
 				}),
 		})
-		await expect(deploy(rec, own)).resolves.toMatchObject({ status: 'succeeded' })
+		await expect(deploy(rec, component, { platformResources: 'allow' })).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('refuses a service binding to a platform service, but not the IAM front door every app binds', async () => {
@@ -439,6 +475,7 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'demo',
 					compatibility_flags: [],
 					bindings: { RUNNER_SVC: new ServiceReference('vozka-runner') },
@@ -453,6 +490,7 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'demo',
 					compatibility_flags: [],
 					bindings: { IAM: new ServiceReference('propustka-worker') },
@@ -491,9 +529,10 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'demo',
 					compatibility_flags: [],
-					bindings: { SIDECAR: new Worker({ dir: '.', name: 'demo-sidecar', compatibility_flags: [], bindings: {}, main: 'src/other.ts' }) },
+					bindings: { SIDECAR: new Worker({ dir: '.', ...PRIVATE, name: 'demo-sidecar', compatibility_flags: [], bindings: {}, main: 'src/other.ts' }) },
 					main: 'src/index.ts',
 				}),
 		})
@@ -529,30 +568,28 @@ describe('Cloudflare provider', () => {
 	})
 
 	test('keeps the Worker options an application config legitimately sets', async () => {
-		const authored = config({
-			resources: () =>
-				new Worker({
-					dir: '.',
-					name: 'demo',
-					main: 'src/index.ts',
-					compatibility_flags: ['nodejs_compat_v2'],
-					compatibility_date: '2025-10-01',
-					workers_dev: false,
-					preview_urls: false,
-					observability: { enabled: true },
-					triggers: { crons: ['0 3 * * *'] },
-					assets: { binding: 'ASSETS', directory: 'dist', not_found_handling: 'single-page-application' },
-					vars: { ENVIRONMENT: 'stage' },
-					routes: [{ pattern: 'stage.example.com', custom_domain: true }],
-					bindings: { DB: new D1Database({ name: 'notes' }) },
-				}),
+		const app = new Worker({
+			dir: '.',
+			name: 'demo',
+			main: 'src/index.ts',
+			compatibility_flags: ['nodejs_compat_v2'],
+			compatibility_date: '2025-10-01',
+			workers_dev: false,
+			preview_urls: false,
+			observability: { enabled: true },
+			triggers: { crons: ['0 3 * * *'] },
+			assets: { binding: 'ASSETS', directory: 'dist', not_found_handling: 'single-page-application' },
+			vars: { ENVIRONMENT: 'stage' },
+			routes: [],
+			bindings: { DB: new D1Database({ name: 'notes' }) },
 		})
+		const authored = config({ resources: () => proxyRouting(app, [{ pattern: 'stage.example.com', custom_domain: true }]) })
 		await expect(deploy(rec, authored)).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('bounds the name oblaka adopts, so an env name cannot split the platform prefix', async () => {
 		const worker = config({
-			resources: () => new Worker({ dir: '.', name: 'worker', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'worker', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
 		await expect(deploy(rec, worker, { env: 'prod-propustka' })).rejects.toThrow(
 			'Worker `worker` becomes `prod-propustka-worker` on Cloudflare, which would take over the Fabrika platform resource `propustka-worker`',
@@ -564,7 +601,9 @@ describe('Cloudflare provider', () => {
 			['prod-vozka', 'R2 bucket `run-logs`', { FILES: new R2Bucket({ name: 'run-logs' }) }, 'vozka-run-logs'],
 		]
 		for (const [env, described, bindings, platform] of split) {
-			const authored = config({ resources: () => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings, main: 'src/index.ts' }) })
+			const authored = config({
+				resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: 'src/index.ts' }),
+			})
 			await expect(deploy(rec, authored, { env })).rejects.toThrow(`${described} becomes \`${env}-`)
 			await expect(deploy(rec, authored, { env })).rejects.toThrow(`would take over the Fabrika platform resource \`${platform}\``)
 		}
@@ -671,6 +710,7 @@ describe('Cloudflare provider', () => {
 			resources: () =>
 				new Worker({
 					dir: '.',
+					...PRIVATE,
 					name: 'notes',
 					compatibility_flags: [],
 					bindings: { DB: new D1Database({ name: 'notes' }), FILES: new R2Bucket({ name: 'notes-uploads' }) },

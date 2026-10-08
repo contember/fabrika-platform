@@ -32,6 +32,8 @@ export default defineApp({
 			name: 'smoke-app',
 			main: 'src/index.ts',
 			compatibility_flags: ['nodejs_compat'],
+			workers_dev: false,
+			preview_urls: false,
 			bindings: {},
 			vars: { ENVIRONMENT: env },
 		}),

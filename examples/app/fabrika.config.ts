@@ -11,6 +11,7 @@ export const buildExampleWorker = (): Worker =>
 		compatibility_date: '2025-10-01',
 		observability: { enabled: true },
 		workers_dev: false,
+		preview_urls: false,
 		// Public routing belongs to the proxy Worker. The application is reached through its APP service binding.
 		routes: [],
 		bindings: {

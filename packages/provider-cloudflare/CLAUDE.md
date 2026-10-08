@@ -44,6 +44,12 @@ this one import.
   config, so a raw `services`, `durable_objects`, `r2_buckets` or `build` key would bind or run what the
   typed `bindings` walk never sees. Adding a key to the allowlist is a security decision: it must not be
   able to name a resource, run a command, or publish a directory. Only `platformResources: 'allow'` skips it.
+- **An application Worker is reachable only through its proxy's `APP` binding (ADR-0048).**
+  `assertUnexposedApplication` (`src/plan.ts`) refuses a non-empty `routes`, and any `workers_dev` or
+  `preview_urls` other than `false` — Cloudflare turns both URLs on by default. A root that binds `APP` is
+  the proxy and keeps its route; a root that binds nothing IS the application. `platformResources: 'allow'`
+  skips it (IAM routes its own Worker). Repository code holds the account token, so on Cloudflare this is a
+  strong default, not a boundary (backlog 86).
 - **`assets` is ALLOWED but BOUNDED** (`assertBoundedAssets`). Its `directory` is resolved against the
   generated `wrangler.jsonc`'s own directory and uploaded publicly, and wrangler's walk ignores only
   `.assetsignore`/`_redirects`/`_headers` — no dotfile or `.git` skip — so `.` on a root `workerDir` would

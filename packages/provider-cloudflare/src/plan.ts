@@ -108,6 +108,35 @@ const applicationChain = (root: Worker): ReadonlySet<Worker> => {
 }
 
 /**
+ * The Workers that run the app's own code. A root that binds `APP` is the proxy and owns the public route;
+ * a root that binds nothing is itself the application, so it may not be public either.
+ */
+const applicationWorkers = (root: Worker, chain: ReadonlySet<Worker>): ReadonlySet<Worker> =>
+	root.options.bindings?.['APP'] instanceof Worker ? new Set([...chain].filter((worker) => worker !== root)) : chain
+
+/**
+ * An application Worker is reachable only through its proxy's service binding (ADR-0048), so nothing may
+ * route it, and `workers.dev` and preview URLs must be off: Cloudflare enables both by default.
+ */
+const assertUnexposedApplication = (worker: Worker): void => {
+	const name = worker.options.name
+	const routes: unknown = worker.options.routes
+	if (routes !== undefined && !(Array.isArray(routes) && routes.length === 0)) {
+		throw new Error(`cloudflare: application Worker \`${name}\` declares \`routes\`; only its proxy Worker is routed (omit it or set \`[]\`)`)
+	}
+	if (worker.options.workers_dev !== false) {
+		throw new Error(
+			`cloudflare: application Worker \`${name}\` leaves \`workers_dev\` on; it would be public on workers.dev (set \`workers_dev: false\`)`,
+		)
+	}
+	if (worker.options.preview_urls !== false) {
+		throw new Error(
+			`cloudflare: application Worker \`${name}\` leaves \`preview_urls\` on; every version would be public on workers.dev (set \`preview_urls: false\`)`,
+		)
+	}
+}
+
+/**
  * The only `Worker` options an app may set. oblaka's `ResourceProcessor` spreads everything but
  * `dir`/`bindings`/`deleteDurableObjectsOnRemoval` verbatim into the generated wrangler config, so any
  * other key — `services`, `durable_objects`, `r2_buckets`, `build` — binds or runs something the typed
@@ -205,6 +234,7 @@ export interface AuthoredGraphLimits {
  */
 export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): void => {
 	const deployable = applicationChain(root)
+	const applications = applicationWorkers(root, deployable)
 	const refuse = limits.platformResources === 'refuse'
 	const assertAdoptable = (kind: string, name: string): void => {
 		const adoption = refuse ? platformAdoption(limits.env, name) : null
@@ -224,6 +254,9 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 		}
 		if (refuse) {
 			assertBoundedAssets(worker)
+		}
+		if (refuse && applications.has(worker)) {
+			assertUnexposedApplication(worker)
 		}
 		for (const route of worker.options.routes ?? []) {
 			const host = routeHostname(route)

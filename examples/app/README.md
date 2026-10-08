@@ -36,8 +36,8 @@ Location: http://localhost:18191/auth/login?redirect=...
 The first response proves that the public gate passed through the proxy and reached the private app
 Worker. The second proves that an unauthenticated protected request stopped in the proxy and bounced
 to IAM. The Lopata log must show `APP -> propustka-example-app` and `IAM -> propustka-worker` service
-bindings. The app Worker has no public route and disables `workers_dev`, so calling its Worker
-directly is not a bypass path.
+bindings. The app Worker has no public route and disables `workers_dev` and `preview_urls`, so calling
+its Worker directly is not a bypass path.
 
 The Cloudflare proxy uses the same TypeScript authorizer as the Zerops Caddy stack. Unit conformance
 tests cover verified token injection, invalid credentials, login redirects, body streaming, and

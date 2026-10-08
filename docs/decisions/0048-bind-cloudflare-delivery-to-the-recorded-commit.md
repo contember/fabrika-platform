@@ -62,7 +62,7 @@ Control does not negotiate a source protocol with them.
 The provider refuses these on application Workers:
 
 - `routes`;
-- `preview_urls`;
+- any `preview_urls` other than `false`, because Cloudflare enables preview URLs by default;
 - any `workers_dev` other than `false`;
 - a binding to another application's resources: a binding whose name belongs to another application of
   the installation, checked against Control's registry.
@@ -71,8 +71,9 @@ An application Worker is therefore reachable only through its proxy Worker's ser
 binding is the authenticated hop ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). Only CSP
 extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
 
-The code does none of this yet (part B, work units B6 and B8). The refusals of `routes`, `preview_urls`
-and `workers_dev` are part 0, work unit P0.4.
+The code does none of this yet (part B, work units B6 and B8), except the refusals of `routes`,
+`preview_urls` and `workers_dev`, which `assertAuthoredGraph` applies to every application Worker. A
+config with no proxy root is itself the application Worker.
 
 ### On Cloudflare these are a strong default, not a security boundary
 
