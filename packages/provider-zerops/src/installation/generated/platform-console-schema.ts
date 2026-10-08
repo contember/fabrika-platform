@@ -25,6 +25,7 @@ export const PLATFORM_CONSOLE_APP_SCHEMA: AppSchema = {
 		{ action: 'source.workspace.read', description: 'Read own Git workspaces on an authoring target' },
 		{ action: 'source.workspace.write', description: 'Create and commit to own Git workspaces on an authoring target' },
 		{ action: 'source.pull-request.create', description: 'Open a pull request from an own Git workspace' },
+		{ action: 'access.approve', description: 'Approve an access change and protect an environment (a person in the console only)' },
 		{ action: 'operations.read', description: 'Read Operations errors and activity' },
 		{ action: 'operations.triage', description: 'Triage Operations errors' },
 		{ action: 'operations.manage', description: 'Manage Operations sources, alerts, and retention' },
