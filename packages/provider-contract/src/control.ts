@@ -1,3 +1,4 @@
+import type { AppSchema, ContractArtifact } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from './json'
 
 /** Events whose persistence and presentation belong to the control plane. */
@@ -40,6 +41,18 @@ export interface ProviderDeploymentNamespace {
 	readonly target: ProviderEnvelope
 }
 
+/**
+ * The access Control approved for one application environment (ADR-0050): the contract the proxy enforces and the
+ * IAM vocabulary compiled from it. A provider publishes a contract application's endpoint table and reconciles its
+ * IAM schema from this, never from the artifact or a runner's report.
+ */
+export interface ProviderApprovedAccess {
+	readonly contract: ContractArtifact
+	/** `contractDigest(contract)`, which the application compares with `FABRIKA_CONTRACT_DIGEST` at startup. */
+	readonly contractDigest: string
+	readonly schema: AppSchema
+}
+
 /** Persisted deploy data for one app environment. */
 export interface ProviderEnvironment {
 	readonly appId: string
@@ -50,6 +63,12 @@ export interface ProviderEnvironment {
 	readonly namespace?: ProviderDeploymentNamespace
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope
+	/**
+	 * The environment's approved access, from Control's `approvedSnapshot`. Absent when the published commit has no
+	 * `fabrika.contract.ts` or nothing is published yet: a contract application then has no endpoint table and no IAM
+	 * schema to publish.
+	 */
+	readonly access?: ProviderApprovedAccess
 }
 
 /** Raw registration data passed to provider-owned validation and normalization. */
@@ -277,6 +296,8 @@ export interface ProviderNamespaceMember {
 	 * Control generates it once and keeps it in its vault; absent when Control has no vault.
 	 */
 	readonly proxySecret?: string
+	/** See `ProviderEnvironment.access`: the proxy table of a contract application comes only from here. */
+	readonly access?: ProviderApprovedAccess
 }
 
 /** One idempotent namespace lifecycle invocation. */
