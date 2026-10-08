@@ -1,3 +1,10 @@
+> **OUTCOME — shipped 2026-10-08.** Part 0 is on `main`: canonical paths everywhere a path is matched, bounded IAM
+> key issuing tied to the verified app, a narrow `PropustkaApplication` IAM entrypoint for Cloudflare applications,
+> and provider exposure refusals on both clouds. Each work unit had an independent review and one or two fix rounds.
+> Verification: per work unit typecheck, lint, format and the touched packages' tests with Postgres and S3 set (last
+> gate: 2154 pass, 0 fail). Deferred: audit actor fields are still self-asserted; admin `apiKeys.provision` has no
+> expiry rule; on Cloudflare the checks are a strong default until backlog 86.
+
 # Sprint — M0: close the current holes (2026-10-08)
 
 **Goal.** Part 0 of the [implementation plan](../ideas/app-framework-implementation-plan.md): canonical paths, IAM key issuing, a narrow IAM entrypoint on
@@ -47,3 +54,7 @@ P0.1, P0.2, P0.4 in parallel; P0.3 after P0.2 and P0.4.
 - 2026-10-08: P0.2 found that IAM has no caller identity on the binding; `audit` now takes the forwarded credential
   like `issueKey`. Not covered: the audit actor fields are still the caller's word; admin `apiKeys.provision` has
   no expiry rule.
+- 2026-10-08: P0.3 found that workerd RPC exposes prototype getters: every Worker holding the IAM binding could reach
+  `issueKey` and the signing keys through `env.IAM.rpc`. Fixed by removing the getters; a test forbids accessors on
+  the entrypoint classes. The review found a custom `Bindable` bypass; the check now reads the emitted `services`
+  entries, at graph validation and again before each `wrangler deploy`.
