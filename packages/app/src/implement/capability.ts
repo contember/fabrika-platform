@@ -45,20 +45,60 @@ export function runInRequest<T>(frame: RequestFrame, work: () => Promise<T>): Pr
 /** The module-private token that makes a `Ref` or a `Within` constructible by the framework only. */
 const MINT: unique symbol = Symbol('fabrika.capability.mint')
 
-interface Bound<G extends CapabilityGrant> {
-	readonly grant: G
+// Captured when the module loads, before application code: a later patch to Map, Object or Reflect does not change
+// how a chain is copied.
+const CapturedMap = Map
+const mapSet = Map.prototype.set
+const mapForEach: (this: ReadonlyMap<string, string>, callback: (value: string, key: string) => void) => void = Map.prototype.forEach
+const apply = Reflect.apply
+const freeze = Object.freeze
+
+type Chain = readonly (readonly [dimension: string, value: string])[]
+
+function chainOf(map: ReadonlyMap<string, string>): Chain {
+	const links: (readonly [string, string])[] = []
+	apply(mapForEach, map, [
+		(value: string, key: string) => {
+			links[links.length] = freeze([key, value])
+		},
+	])
+	return freeze(links)
+}
+
+/** A fresh Map of the chain: whoever holds it may change it, and the next resolution is a new copy again. */
+function mapOf(chain: Chain): Map<string, string> {
+	const map = new CapturedMap<string, string>()
+	for (let index = 0; index < chain.length; index++) {
+		const link = chain[index]
+		if (link !== undefined) {
+			apply(mapSet, map, [link[0], link[1]])
+		}
+	}
+	return map
+}
+
+interface RefFacts {
+	readonly dimension: string
+	readonly action: string
+	readonly principal: string
+	readonly id: string
+	readonly chain: Chain
+}
+
+interface Bound {
+	readonly grant: CapabilityGrant
 	readonly frame: RequestFrame
 }
 
-let readRef: (value: unknown) => Bound<RefGrant> | undefined = () => undefined
-let readWithin: (value: unknown) => Bound<WithinGrant> | undefined = () => undefined
+let readRef: (value: unknown) => Bound | undefined = () => undefined
+let readWithin: (value: unknown) => Bound | undefined = () => undefined
 
 /** One authorized object for one action, in one request. `chain` holds the containers the object lies in. */
 export class Ref<D extends string, A extends string> implements RefCapability<D, A> {
 	declare readonly '~capability': { readonly kind: 'ref'; readonly dimension: D; readonly action: A }
 	readonly #dimension: D
 	readonly #action: A
-	readonly #grant: RefGrant
+	readonly #facts: RefFacts
 	readonly #frame: RequestFrame
 
 	constructor(token: typeof MINT, frame: RequestFrame, dimension: D, action: A, principal: string, id: string, chain: ReadonlyMap<string, string>) {
@@ -67,7 +107,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#grant = Object.freeze({ kind: 'ref', dimension, action, principal, id, chain: new Map(chain) })
+		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain) })
 		this.#frame = frame
 	}
 
@@ -81,16 +121,30 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 
 	/** The object's id: the value of its dimension. */
 	get value(): string {
-		return this.#grant.id
+		return this.#facts.id
 	}
 
-	/** The containers of the object, by dimension (`workspace → w1` for a note). */
+	/** The containers of the object, by dimension (`workspace → w1` for a note); a copy. */
 	get chain(): ReadonlyMap<string, string> {
-		return new Map(this.#grant.chain)
+		return mapOf(this.#facts.chain)
 	}
 
 	static {
-		readRef = (value) => typeof value === 'object' && value !== null && #grant in value ? { grant: value.#grant, frame: value.#frame } : undefined
+		readRef = (value) => {
+			if (typeof value !== 'object' || value === null || !(#facts in value)) {
+				return undefined
+			}
+			const facts = value.#facts
+			const grant: RefGrant = freeze({
+				kind: 'ref',
+				dimension: facts.dimension,
+				action: facts.action,
+				principal: facts.principal,
+				id: facts.id,
+				chain: mapOf(facts.chain),
+			})
+			return { grant, frame: value.#frame }
+		}
 	}
 }
 
@@ -108,7 +162,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		}
 		this.#dimension = dimension
 		this.#action = action
-		this.#grant = Object.freeze({ kind: 'within', dimension, action, principal, values: values === 'all' ? 'all' : Object.freeze([...values]) })
+		this.#grant = freeze({ kind: 'within', dimension, action, principal, values: values === 'all' ? 'all' : freeze([...values]) })
 		this.#frame = frame
 	}
 
@@ -128,6 +182,10 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 		readWithin = (value) => typeof value === 'object' && value !== null && #grant in value ? { grant: value.#grant, frame: value.#frame } : undefined
 	}
 }
+
+// Application code could otherwise redefine a getter that the framework or a handler reads.
+freeze(Ref.prototype)
+freeze(Within.prototype)
 
 export function mintRef<D extends string, A extends string>(
 	frame: RequestFrame,
