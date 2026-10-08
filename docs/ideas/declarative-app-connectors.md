@@ -68,11 +68,15 @@ fabrika connect add catalog/products@1   # writes fabrika/connect/catalog.produc
 ```ts
 // shop's contract
 imports: {
-	catalog: catalogProductsV1.use({
+	catalog: {
+		app: 'catalog',
+		export: 'products',
+		version: 1,
+		digest: catalogProductsV1Digest, // a const of the vendored snapshot
 		procedures: ['get', 'list'],
 		usedBy: ['api.products.show', 'api.products.search'], // only these endpoints may call it
 		timeoutMs: 3000,
-	}),
+	},
 },
 
 // in a shop handler — the shop endpoint's own access was checked first

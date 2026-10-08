@@ -83,6 +83,8 @@ bun test               # canonical-path · endpoints · gate-parity · gates · 
   `proxy-core/manifest` for the proxy), as gate rules are parsed today. Every optional field is
   normalized to `null`, `[]` or `{}`, because two producers — `compileContract` over the evaluated
   module and the static reader over source — must emit the same artifact. Keep new fields that way.
+  `SchemaShape` represents exactly the zod subset of `packages/check/CLAUDE.md`; extend the two together
+  (`@fabrika/app`'s `schema-shape.ts` reads one into the other).
 - **The contract matcher is a router, not a gate evaluator.** `planEndpoint` refuses a non-canonical
   raw path, then selects the most specific endpoint of the request's method: per segment, left to
   right, a literal beats a parameter and a parameter beats a terminal `*`. Under a reserved prefix

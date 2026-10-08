@@ -6,9 +6,11 @@ HTTP routing, middleware, typed RPC, structural errors, and a typed browser clie
 [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md) makes the contract the
 target: an application declares `fabrika.contract.ts` and serves it through
 `implement`. That surface is the A-M1 work of the
-[implementation plan](../../docs/ideas/app-framework-implementation-plan.md) and is
-not built yet. Today the package exposes only `defineApp()`, which stays for the
-installation's own services (IAM, Control, Operations).
+[implementation plan](../../docs/ideas/app-framework-implementation-plan.md).
+`@fabrika/app/contract` (`defineContract`, `compileContract`) is built; `implement`,
+`boot` and dispatch (A3) are not. Until then the package serves only through
+`defineApp()`, which stays for the installation's own services (IAM, Control,
+Operations).
 
 ## Commands
 
@@ -16,6 +18,7 @@ installation's own services (IAM, Control, Operations).
 bun run typecheck
 bun test
 bun test src/__tests__/rpc.test.ts
+bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compiled by tsc
 ```
 
 ## Structure
@@ -32,6 +35,14 @@ src/
   errors.ts           structural HTTP error mapping
   client.ts           typed browser RPC client
   rpc/                procedure builder, types, and dispatcher
+  contract/           @fabrika/app/contract — browser-safe
+    define.ts         defineContract, the c.* kit and every type an agent meets
+    declaration.ts    the contract as plain data, generic over its schema type
+    schema-shape.ts   a zod 4 schema of the subset → SchemaShape
+    compile.ts        compileContract / describeContract
+    build.ts          buildArtifact: every check, default and generated endpoint
+    defaults.ts       the defaults and generated paths, in one place
+    artifact-schema.ts  parseContractArtifact, the zod parser of the artifact
 ```
 
 ## Invariants
@@ -68,20 +79,53 @@ src/
 - Contract schemas are zod 4 (`zod/v4`), restricted to a serializable subset:
   strict objects, no transforms, no `passthrough` (ADR-0012). `defineApp()`
   procedures and validation inside a handler stay library-neutral (Standard Schema).
-  Zod is a dev dependency today.
+  `zod` is a peer dependency, so an application and the framework share one copy.
 - Never log credentials, secret values, or request headers.
 - No casts, `any`, `@ts-ignore`, or `@ts-expect-error`.
 
-## Contract framework (target of A-M1, not built yet)
+## Contract framework
 
-- `@fabrika/app/contract` is browser-safe: `defineContract` and `compileContract`.
-  The contract is a literal; the checker enforces it.
-- The router and the generated gates come from one endpoint table.
-  `gatesFromContract` and `schemaFromContract` feed today's proxy and IAM through
-  `fabrika.config.ts`. Dispatch uses `planEndpoint` from `@fabrika/auth-core`.
-- `boot` is called only by the generated entrypoint. Per request: canonical path →
-  `planEndpoint` → token verification → caller kind → requirement → admission →
-  strict input → access form → handler → output projection → response headers.
-- One path per procedure: `POST <mount>/<procedure>`.
+- `@fabrika/app/contract` is browser-safe: it imports `@fabrika/auth-core` and
+  `zod/v4` only. The SPA imports `fabrika.contract.ts` for the typed client, so
+  never import a server runtime, `@fabrika/db` or a Node/Bun API there.
+- `defineContract(vocabulary, (c) => surface)` builds plain data and validates
+  nothing at runtime. The surface holds mounts by name plus the sections
+  `files`, `jobs`, `exports`, `imports`, `csp` (`SURFACE_SECTIONS`); a mount may
+  not take one of those names.
+- **`buildArtifact` is the one normalization.** `compileContract(contract, tables)`
+  = `describeContract` (zod → `SchemaShape`) + `buildArtifact`. The static reader
+  (B1) must produce the same `ContractDeclaration<SchemaShape>` from source and
+  call `buildArtifact`, never a copy. Every default and generated path is in
+  `defaults.ts`; add new ones there, nowhere else.
+- **The schema subset is `@fabrika/check`'s.** `schema-shape.test.ts` covers each
+  factory and method `packages/check/CLAUDE.md` lists, and `contract-check.test.ts`
+  runs the checker over the fixtures. Change the checker, `schema-shape.ts` and
+  `SchemaShape` together. A default becomes `optional`, a discriminated union a
+  `union`; `.describe()` adds nothing.
+- zod 4's types cannot tell `z.object` from `z.strictObject` (`$strip` and
+  `$strict` are the same type), so the types refuse only loose objects;
+  `compileContract` and the checker refuse `z.object`. Compose schemas through
+  factories (`z.nullable(Note)`, `z.array(Note)`): the checker refuses a method
+  call on a schema const.
+- The type witnesses live in `src/__tests__/contract-mistakes/`, excluded from the
+  package typecheck and compiled by `contract-types.test.ts`, which asserts the
+  diagnostic text on the line after each `// mistake:` marker. A new rule the
+  types enforce gets a fixture there. `contract-scale.test.ts` keeps 200
+  procedures under its instantiation budget.
+- `tables` is the artifact form of each table policy (`TablePolicyArtifact`).
+  `@fabrika/db`'s `Tables` keeps its policies private and imports `bun`, so A8b
+  exposes them as data; until then the caller passes artifacts.
+- Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; a link mount
+  serves `GET <prefix>/*` (anonymous) and its procedures at
+  `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
+  exports under `/__fabrika/connect/<export>.v<version>.<procedure>`; a webhook
+  appends `/:bindingId`. No authored path may lie under `/__fabrika`.
+- Still to come: `implement`, `boot` and dispatch (A3), `gatesFromContract` and
+  `schemaFromContract` (A4), the typed client (A5). The router and the generated
+  gates both come from the artifact's one endpoint table; dispatch uses
+  `planEndpoint`. `boot` is called only by the generated entrypoint. Per request:
+  canonical path → `planEndpoint` → token verification → caller kind →
+  requirement → admission → strict input → access form → handler → output
+  projection → response headers.
 - Later (A12, A13): membership, scopes and share links are requests to IAM through
   `@fabrika/auth`. The framework writes no grant and mints no credential.

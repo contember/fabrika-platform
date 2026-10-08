@@ -151,7 +151,9 @@ export const contract = defineContract({
 		grants: ['notes.read'],
 		issuedBy: 'notes.share',
 		maxDays: 30,
-		procedures: (l) => ({ note: l.query({ output: SharedNote }) }), // served at POST /s/api/note
+		procedures: (l) => ({
+			note: l.query({ output: SharedNote, access: { action: 'notes.read' } }),
+		}), // POST /s/api/note
 	}),
 	health: c.health('/healthz'),
 	github: c.webhook('/hooks/github', {

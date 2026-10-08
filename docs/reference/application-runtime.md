@@ -95,6 +95,20 @@ importing a server runtime. `RpcRouterFor<Context, Contract>` checks the server
 implementation against that contract, and `createRpcClient<Contract>()` derives
 the browser call surface from it. No code generation is required.
 
+## Contracts
+
+`@fabrika/app/contract` is the browser-safe declaration of an application's whole
+access surface ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)).
+`defineContract(vocabulary, (c) => surface)` types it: actions come from the
+vocabulary, roles list exact actions, every procedure declares `access`, RPC mounts
+have no public or link caller, `from` names a string field of the input, and loose
+objects do not type-check. `compileContract(contract, tables)` validates what the
+types cannot, applies every default, generates the endpoint rows and returns the
+normalized `ContractArtifact` of `@fabrika/auth-core`; `parseContractArtifact` reads
+one back from JSON. Schemas are the zod 4 subset that `@fabrika/check` accepts.
+Serving a contract (`implement`, `boot`) is not built yet; applications cannot use
+contracts at runtime until it is.
+
 ## Runtime boundary
 
 Routing, middleware, RPC, validation, and the client use Web Fetch API types.
