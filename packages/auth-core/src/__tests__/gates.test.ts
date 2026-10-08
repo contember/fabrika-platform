@@ -39,6 +39,20 @@ describe('gate path contract from ADR-0022', () => {
 		expect(applicableGates(compileGates(gates), '/api/items').map(({ rule }) => rule.kind)).toEqual(['service', 'human', 'public'])
 	})
 
+	test('a whole :name segment matches exactly one non-empty segment', () => {
+		const gates: AppGates = { rules: [{ path: '/files/:id', kind: 'human' }] }
+		expect(matchingPaths(gates, '/files/a')).toEqual(['/files/:id'])
+		expect(matchingPaths(gates, '/files/')).toEqual([])
+		expect(matchingPaths(gates, '/files/a/b')).toEqual([])
+		expect(matchingPaths(gates, '/files')).toEqual([])
+	})
+
+	test('a colon that does not start a whole parameter segment stays literal', () => {
+		const gates: AppGates = { rules: [{ path: '/a:b/:1x/x:y', kind: 'public' }] }
+		expect(matchingPaths(gates, '/a:b/:1x/x:y')).toEqual(['/a:b/:1x/x:y'])
+		expect(matchingPaths(gates, '/a:b/zz/x:y')).toEqual([])
+	})
+
 	test('regex punctuation in a gate path stays literal', () => {
 		const gates: AppGates = { rules: [{ path: '/v1/items.+/*', kind: 'public' }] }
 		expect(matchingPaths(gates, '/v1/items.+/one')).toEqual(['/v1/items.+/*'])

@@ -3,6 +3,7 @@
 
 import { isCanonicalPath } from './canonical-path'
 import type { EndpointRow, EndpointTable } from './contract'
+import { parameterName } from './path-segment'
 
 type Segment = { readonly kind: 'literal'; readonly value: string } | { readonly kind: 'param'; readonly name: string } | {
 	readonly kind: 'wildcard'
@@ -72,6 +73,21 @@ export function compileEndpointTable(table: EndpointTable): CompiledEndpointTabl
  */
 export function planEndpoint(table: CompiledEndpointTable, method: string, rawPath: string): EndpointPlan {
 	return table.plan(method, rawPath)
+}
+
+/**
+ * The rows, most specific first, in the order `planEndpoint` prefers them. For rows of one method, the first row
+ * whose path matches is the one `planEndpoint` selects, so gates emitted in this order agree with the table.
+ */
+export function orderBySpecificity(rows: readonly EndpointRow[]): EndpointRow[] {
+	const compiled = rows.map((row) => {
+		const pattern = parsePattern(row.path)
+		if (!pattern.ok) {
+			throw new EndpointTableError([`endpoint '${row.id}' has path '${row.path}': ${pattern.problem}`])
+		}
+		return { row, segments: pattern.segments }
+	})
+	return compiled.sort((a, b) => compareSpecificity(a.segments, b.segments)).map(({ row }) => row)
 }
 
 function analyse(table: EndpointTable): CompiledEndpoint[] {
@@ -148,7 +164,8 @@ function splitPath(path: string): string[] {
 	return path === '/' ? [] : path.slice(1).split('/')
 }
 
-const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+/** Names that would reach `Object.prototype` instead of a parameter wherever the parameters land in a plain object. */
+const PROTOTYPE_NAMES: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
 
 function parsePattern(path: string): PatternResult {
 	if (!isCanonicalPath(path)) {
@@ -166,9 +183,12 @@ function parsePattern(path: string): PatternResult {
 		} else if (segment.includes('*')) {
 			return { ok: false, problem: "'*' must be a whole segment" }
 		} else if (segment.startsWith(':')) {
-			const name = segment.slice(1)
-			if (!PARAM_NAME.test(name)) {
+			const name = parameterName(segment)
+			if (name === null) {
 				return { ok: false, problem: "':' must start a parameter name of letters, digits and '_'" }
+			}
+			if (PROTOTYPE_NAMES.has(name)) {
+				return { ok: false, problem: `'${name}' is not allowed as a parameter name` }
 			}
 			if (names.has(name)) {
 				return { ok: false, problem: `parameter '${name}' is declared twice` }
@@ -207,11 +227,11 @@ function shapeOf(segment: Segment): string {
 }
 
 function matchSegments(segments: readonly Segment[], path: readonly string[]): Record<string, string> | null {
-	const params: Record<string, string> = {}
+	const params: [string, string][] = []
 	for (const [index, segment] of segments.entries()) {
 		if (segment.kind === 'wildcard') {
 			// Like the gate glob `/x/*`, a non-root wildcard needs the `/` before it: `/x/` matches, `/x` does not.
-			return index === 0 || path.length > index ? params : null
+			return index === 0 || path.length > index ? Object.fromEntries(params) : null
 		}
 		const value = path[index]
 		if (value === undefined) {
@@ -222,19 +242,20 @@ function matchSegments(segments: readonly Segment[], path: readonly string[]): R
 			if (value === '') {
 				return null
 			}
-			params[segment.name] = value
+			params.push([segment.name, value])
 		} else if (segment.value !== value) {
 			return null
 		}
 	}
-	return segments.length === path.length ? params : null
+	// `fromEntries` defines own properties, so no name reaches a prototype setter.
+	return segments.length === path.length ? Object.fromEntries(params) : null
 }
 
 const RANK: Readonly<Record<Segment['kind'], number>> = { literal: 0, param: 1, wildcard: 2 }
 
 /**
- * Negative when `a` is more specific. Both match the same path, so the first segment whose kind differs decides; a
- * pattern that ends where the other has its wildcard is the more specific one.
+ * Negative when `a` is more specific: the first segment whose kind differs decides, and a pattern that ends where
+ * the other continues is the more specific one. Lexicographic, so it also orders patterns that never overlap.
  */
 function compareSpecificity(a: readonly Segment[], b: readonly Segment[]): number {
 	const shared = Math.min(a.length, b.length)

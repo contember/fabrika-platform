@@ -1,3 +1,4 @@
+import { parameterName } from './path-segment'
 import type { AppGates, GateRule } from './types'
 
 /** A gate rule with its path glob precompiled. */
@@ -19,9 +20,10 @@ export function applicableGates(compiled: readonly CompiledGate[], pathname: str
 	return compiled.filter((gate) => gate.matches(pathname))
 }
 
-/** Glob where `*` crosses path separators; all other characters are literal. */
+/** Glob where `*` crosses path separators and a whole `:name` segment is one non-empty segment; the rest is literal. */
 function globToRegExp(pattern: string): RegExp {
-	return new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`)
+	const segments = pattern.split('/').map((segment) => parameterName(segment) === null ? segment.split('*').map(escapeRegExp).join('.*') : '[^/]+')
+	return new RegExp(`^${segments.join('/')}$`)
 }
 
 function escapeRegExp(literal: string): string {

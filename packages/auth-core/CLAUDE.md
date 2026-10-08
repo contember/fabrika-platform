@@ -9,15 +9,16 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # canonical-path · endpoints · gates · permissions · requirement · token (src/__tests__/)
+bun test               # canonical-path · endpoints · gate-parity · gates · permissions · requirement · token
 ```
 
 | Module              | What it owns                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------- |
 | `canonical-path.ts` | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers. |
 | `contract.ts`       | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.  |
-| `endpoints.ts`      | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                |
+| `endpoints.ts`      | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`.    |
 | `gates.ts`          | The canonical gate path matcher — `compileGates` / `applicableGates`.                              |
+| `path-segment.ts`   | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.            |
 | `permissions.ts`    | `matchAction` and `permits` — the authorization decision itself.                                   |
 | `requirement.ts`    | `satisfies` — an endpoint requirement checked against a token's permissions.                       |
 | `token.ts`          | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.               |
@@ -52,18 +53,21 @@ bun test               # canonical-path · endpoints · gates · permissions · 
   through the browser-facing login flow, then submits the verifier privately with the one-time code.
   Keep `state`, the challenge, the dynamic cookie prefix, and their TTL in this shared wire contract.
 - **The gate matcher here is CANONICAL, and there must never be a second one.** `compileGates`
-  compiles `*` to `.*` — it crosses `/` — matches case-sensitively, and matches the raw pathname
-  with no normalization. Those are exactly the three properties Caddy's path matcher does not share,
-  which is why gate rules are never compiled into routes
-  ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)). A second
-  evaluator anywhere gates a slightly different set of requests than the app declared, silently, in
-  the permissive direction.
+  compiles `*` to `.*` — it crosses `/` — and a whole `:name` segment to exactly one non-empty
+  segment (`path-segment.ts`, the rule endpoint tables use), matches case-sensitively, and matches
+  the raw pathname with no normalization. Caddy's path matcher shares none of the glob's three
+  properties (`*` across `/`, case, no normalization), which is why gate rules are never compiled
+  into routes ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)). A
+  second evaluator anywhere gates a slightly different set of requests than the app declared,
+  silently, in the permissive direction.
 - **A non-canonical path never reaches a matcher.** `isCanonicalPath` refuses an empty segment, `.`
-  or `..` (also encoded), an encoded `/` or `\` and a literal `\`. The proxy and the application
-  router both run it on the RAW path — before `new URL()`, which resolves dot segments — and answer
-  400. A trailing `/` is allowed and matched literally by every matcher (Sentry's
-  `/api/<id>/envelope/` needs it); a router that dropped it would serve `/a` for a `/a/` that a gate
-  `/a/*` admitted. Widening the rule, or normalizing a path anywhere, breaks that agreement.
+  or `..` (also encoded), an encoded `/` or `\`, a literal `\` and a percent escape that
+  `decodeURIComponent` cannot decode, which one reader would decode and another refuse. The proxy
+  and the application router both run it on the RAW path — before `new URL()`, which resolves dot
+  segments — and answer 400. A trailing `/` is allowed and matched literally by every matcher
+  (Sentry's `/api/<id>/envelope/` needs it); a router that dropped it would serve `/a` for a `/a/`
+  that a gate `/a/*` admitted. Widening the rule, or normalizing a path anywhere, breaks that
+  agreement.
 - **`applicableGates` returns every match in declaration order; it does not decide.** Precedence,
   fall-through, and terminality belong to the caller (`@fabrika/proxy`). Keep the matcher a pure
   filter so the authorization truth table lives in one place with one test suite.
@@ -86,10 +90,17 @@ bun test               # canonical-path · endpoints · gates · permissions · 
   is no fall-through, and parameters come back raw. It evaluates no gate rule. Segments match like
   the gate glob: raw, case-sensitive, a trailing `/` literal, a non-root `*` only after its slash.
   Until the proxy reads endpoint tables, it evaluates the gates generated from the same table with
-  `compileGates` / `applicableGates`, and the two must agree on every path, which a property test checks.
+  `compileGates` / `applicableGates`, one per path in `orderBySpecificity` order; the first matching
+  gate and `planEndpoint` name the same row on every path (`gate-parity.test.ts`).
+- **Part A only: under a reserved prefix the gates are coarser than the table.** Gates know no
+  reservation, so an unknown procedure (`GET /api/notes.export`) is admitted with the SPA's gate kind
+  and then refused by `planEndpoint` in the application with 404. The parity test asserts exactly this
+  case and excludes reserved-prefix paths from strict parity. B2 closes it: the proxy selects by the
+  table itself. Never widen this to paths outside a reserved prefix.
 - **`planEndpoint` takes only a `compileEndpointTable` result.** Compiling runs `assertNoAmbiguity`
-  — an invalid path or reserved prefix, a duplicate id, or two endpoints of one method and one path
-  shape — so a request never meets a tie. Compile once where the table is loaded; never bypass it.
+  — an invalid path or reserved prefix, a duplicate id, a parameter named `__proto__`,
+  `constructor` or `prototype`, or two endpoints of one method and one path shape — so a request
+  never meets a tie. Compile once where the table is loaded; never bypass it.
 - **The requirement check is authorization.** `satisfies(requirement, perms)` — `member` is any
   permission of the application; an action form is that action in some scope, including global,
   through `permits` over each entry's own scope. It never becomes a gate and never replaces one.

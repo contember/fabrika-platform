@@ -9,9 +9,10 @@ const ENCODED_DOT = /%2e/gi
 
 /**
  * A raw pathname is canonical when it starts with `/` and has no empty segment, no `.` or `..` (also
- * encoded), no encoded `/` or `\` and no literal `\`. Each refused form is one some hop rewrites, so the
- * gate matcher and the application would otherwise read different paths. A trailing `/` is allowed and
- * significant: every matcher compares it literally, so `/a/` and `/a` are different paths.
+ * encoded), no encoded `/` or `\`, no literal `\` and no malformed percent escape. Each refused form is one
+ * some hop rewrites or rejects, so the gate matcher and the application would otherwise read different
+ * paths. A trailing `/` is allowed and significant: every matcher compares it literally, so `/a/` and `/a`
+ * are different paths.
  */
 export function isCanonicalPath(pathname: string): boolean {
 	if (pathname === '/') {
@@ -22,7 +23,7 @@ export function isCanonicalPath(pathname: string): boolean {
 	}
 	const segments = pathname.slice(1).split('/')
 	const last = segments.length - 1
-	return segments.every((segment, index) => (segment !== '' || index === last) && !isDotSegment(segment))
+	return segments.every((segment, index) => (segment !== '' || index === last) && !isDotSegment(segment) && isDecodable(segment))
 }
 
 /** Split an origin-form request target (`/path?query`) at its first `?`. */
@@ -47,6 +48,16 @@ export function rawRequestTarget(url: string): RequestTarget {
 	}
 	const target = splitRequestTarget(withoutFragment.slice(authorityEnd))
 	return target.pathname === '' ? { pathname: '/', search: target.search } : target
+}
+
+/** A segment one reader decodes and another refuses would route differently, so a malformed escape is refused. */
+function isDecodable(segment: string): boolean {
+	try {
+		decodeURIComponent(segment)
+		return true
+	} catch {
+		return false
+	}
 }
 
 function isDotSegment(segment: string): boolean {

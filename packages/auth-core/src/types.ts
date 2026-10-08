@@ -111,7 +111,8 @@ export type GateKind =
  * One per-path gate rule. The array order on `AppGates.rules` is the PRECEDENCE: the first rule whose
  * `path` matches AND whose required credential is present is enforced. A matching rule whose credential
  * is ABSENT falls through to the next matching rule; a request matching NO rule is denied (fail-closed).
- * `path` is a glob where `*` matches any run of chars (e.g. `/api/v1/*`); anchored.
+ * `path` is a glob where `*` matches any run of chars (e.g. `/api/v1/*`) and a whole `:name` segment
+ * matches exactly one non-empty segment (e.g. `/files/:id`); anchored.
  */
 export type GateRule = { path: string } & GateKind
 

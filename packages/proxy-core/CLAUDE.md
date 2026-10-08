@@ -52,10 +52,12 @@ bun test   # deny-matrix.test.ts is the authorization truth table — keep it ex
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
   stateless, so never make it shared or persistent.
-- **There is exactly one gate evaluator, in `@fabrika/auth-core`.** This package composes it; it does
-  not reimplement or extend gate semantics. Array order is precedence for installation gates only; a
-  contract application's endpoint table selects the most specific endpoint with `planEndpoint`, also
-  from `@fabrika/auth-core` (ADR-0022; decided, not built yet — B2).
+- **There is exactly one gate evaluator, in `@fabrika/auth-core`.** This package composes it; it
+  does not reimplement or extend gate semantics. A gate path is a glob: `*` crosses `/`, and a whole
+  `:name` segment matches exactly one non-empty segment, the rule endpoint tables use. Array order
+  is precedence for installation gates only; a contract application's endpoint table selects the
+  most specific endpoint with `planEndpoint`, also from `@fabrika/auth-core` (ADR-0022; decided, not
+  built yet — B2).
 - **Test helpers are imported across packages.** `src/__tests__/helpers.ts` fakes IAM at the
   `IamGateway` seam and signs real ES256 tokens; `provider-cloudflare` and `local-stack` import it by
   relative path so the two enforcement points are tested against the same doubles. It is excluded

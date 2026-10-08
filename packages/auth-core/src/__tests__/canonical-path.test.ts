@@ -18,6 +18,10 @@ describe('isCanonicalPath', () => {
 		['a lower-case encoded slash', '/x%2fy'],
 		['an encoded backslash', '/x%5Cy'],
 		['a literal backslash, which a URL parser reads as a separator', '/a\\..\\admin'],
+		['a percent escape of a byte that is not UTF-8', '/files/%FF'],
+		['a lone percent sign', '/files/%'],
+		['a percent sign without hex digits', '/files/%zz'],
+		['a truncated multi-byte escape', '/files/%E0%A4%A'],
 		['an empty path', ''],
 		['a relative path', 'admin'],
 	])('refuses %s', (_name, path) => {
@@ -34,6 +38,7 @@ describe('isCanonicalPath', () => {
 		['a segment made of three dots', '/a/.../b'],
 		['a double-encoded dot-dot segment, which decodes once to a literal name', '/a/%252e%252e/b'],
 		['an encoded character that is not a separator', '/files/a%20b'],
+		['an encoded multi-byte character', '/files/caf%C3%A9'],
 	])('accepts %s', (_name, path) => {
 		expect(isCanonicalPath(path)).toBe(true)
 	})

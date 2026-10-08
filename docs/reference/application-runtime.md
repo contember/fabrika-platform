@@ -9,7 +9,8 @@ error handling, object-level authorization, and a typed browser client.
 `defineApp()` builds the runtime-neutral request application. For each request it:
 
 1. answers 400 for a non-canonical raw path (`isCanonicalPath` from `@fabrika/auth-core`: an
-   empty segment, `.` or `..`, an encoded `/` or `\`), before anything else runs;
+   empty segment, `.` or `..`, an encoded `/` or `\`, a malformed percent escape), before anything
+   else runs;
 2. builds the caller-owned context;
 3. runs global middleware in declaration order;
 4. matches an HTTP or RPC route;

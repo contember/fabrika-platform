@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { EndpointRow, EndpointTable } from '../contract'
-import { assertNoAmbiguity, compileEndpointTable, EndpointTableError, planEndpoint } from '../endpoints'
+import { assertNoAmbiguity, compileEndpointTable, EndpointTableError, orderBySpecificity, planEndpoint } from '../endpoints'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 const row = (id: string, method: 'GET' | 'POST', path: string): EndpointRow => ({
@@ -38,6 +38,8 @@ describe('planEndpoint refuses a non-canonical path before selecting', () => {
 		['/api\\notes.list'],
 		['api/notes.list'],
 		[''],
+		['/api/files.attachments/%FF'],
+		['/api/files.attachments/%'],
 	])('%p', (path) => {
 		expect(plan('POST', path)).toBe('non-canonical')
 	})
@@ -94,6 +96,11 @@ describe('planEndpoint selects the declared endpoint', () => {
 	test('parameters are returned raw, still percent-encoded', () => {
 		const result = planEndpoint(notes, 'GET', '/api/files.attachments/a%20b')
 		expect(result.outcome === 'endpoint' && result.params).toEqual({ fileId: 'a%20b' })
+	})
+
+	test('parameters are own data properties', () => {
+		const result = planEndpoint(compileEndpointTable(table([row('p', 'GET', '/x/:hasOwnProperty/:toString')])), 'GET', '/x/a/b')
+		expect(result.outcome === 'endpoint' && Object.entries(result.params)).toEqual([['hasOwnProperty', 'a'], ['toString', 'b']])
 	})
 
 	test('a wildcard binds no parameter', () => {
@@ -210,6 +217,10 @@ describe('assertNoAmbiguity', () => {
 		['/a/:1x', "endpoint 'e' has path '/a/:1x': ':' must start a parameter name of letters, digits and '_'"],
 		['/a/:x-y', "endpoint 'e' has path '/a/:x-y': ':' must start a parameter name of letters, digits and '_'"],
 		['/:x/:x', "endpoint 'e' has path '/:x/:x': parameter 'x' is declared twice"],
+		['/a/:__proto__', "endpoint 'e' has path '/a/:__proto__': '__proto__' is not allowed as a parameter name"],
+		['/a/:constructor', "endpoint 'e' has path '/a/:constructor': 'constructor' is not allowed as a parameter name"],
+		['/a/:prototype', "endpoint 'e' has path '/a/:prototype': 'prototype' is not allowed as a parameter name"],
+		['/a/%FF', "endpoint 'e' has path '/a/%FF': not a canonical path"],
 	])('refuses the path %p', (path, problem) => {
 		expect(problems(table([row('e', 'GET', path)]))).toEqual([problem])
 	})
@@ -235,5 +246,23 @@ describe('assertNoAmbiguity', () => {
 
 	test('compileEndpointTable refuses the same tables', () => {
 		expect(() => compileEndpointTable(table([row('a', 'GET', '/x/:a'), row('b', 'GET', '/x/:b')]))).toThrow(EndpointTableError)
+	})
+})
+
+describe('orderBySpecificity', () => {
+	test('orders most specific first, keeping declaration order between paths that never overlap', () => {
+		const rows = [
+			row('root', 'GET', '/*'),
+			row('w', 'GET', '/a/*'),
+			row('p', 'GET', '/a/:x'),
+			row('b', 'GET', '/b'),
+			row('l', 'GET', '/a/l'),
+			row('i', 'GET', '/'),
+		]
+		expect(orderBySpecificity(rows).map(({ id }) => id)).toEqual(['i', 'b', 'l', 'p', 'w', 'root'])
+	})
+
+	test('refuses an invalid path', () => {
+		expect(() => orderBySpecificity([row('e', 'GET', '/a/*/b')])).toThrow(EndpointTableError)
 	})
 })

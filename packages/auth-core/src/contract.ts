@@ -115,16 +115,47 @@ export type AccessForm =
 	| { readonly form: 'on'; readonly dimension: string; readonly from: string | null }
 	| { readonly form: 'creates'; readonly dimension: string }
 
-/** The structure of an input or output schema. Objects are always strict: a contract admits no other. */
+/**
+ * The structure and constraints of an input or output schema. Objects are always strict: a contract admits no other.
+ * The union is closed; a schema form it cannot represent is refused where the contract is compiled or read.
+ */
 export type SchemaShape =
-	| { readonly type: 'string' | 'number' | 'boolean' | 'null' }
+	| StringShape
+	| NumberShape
+	| { readonly type: 'boolean' | 'null' }
 	| { readonly type: 'literal'; readonly value: string | number | boolean | null }
 	| { readonly type: 'enum'; readonly values: readonly string[] }
-	| { readonly type: 'array'; readonly items: SchemaShape }
+	| ArrayShape
 	| { readonly type: 'object'; readonly fields: Readonly<Record<string, SchemaShape>> }
 	| { readonly type: 'optional'; readonly inner: SchemaShape }
 	| { readonly type: 'nullable'; readonly inner: SchemaShape }
 	| { readonly type: 'union'; readonly options: readonly SchemaShape[] }
+
+export interface StringShape {
+	readonly type: 'string'
+	readonly format: 'uuid' | 'email' | 'url' | 'datetime' | null
+	readonly minLength: number | null
+	readonly maxLength: number | null
+	/** The regular expression's source, without flags. */
+	readonly pattern: string | null
+}
+
+/** `exclusiveMin` and `exclusiveMax` are `false` when their bound is `null`. */
+export interface NumberShape {
+	readonly type: 'number'
+	readonly int: boolean
+	readonly min: number | null
+	readonly exclusiveMin: boolean
+	readonly max: number | null
+	readonly exclusiveMax: boolean
+}
+
+export interface ArrayShape {
+	readonly type: 'array'
+	readonly items: SchemaShape
+	readonly minItems: number | null
+	readonly maxItems: number | null
+}
 
 // ── The vocabulary ──────────────────────────────────────────────────────────────────────────────
 

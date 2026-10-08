@@ -1,10 +1,45 @@
-import type { BodyAdmission, ContractArtifact, EndpointRow, SchemaShape } from '../../contract'
+import type { ArrayShape, BodyAdmission, ContractArtifact, EndpointRow, NumberShape, SchemaShape, StringShape } from '../../contract'
 
 const json: BodyAdmission = { contentTypes: ['application/json'], maxBytes: null }
-const id: SchemaShape = { type: 'object', fields: { id: { type: 'string' } } }
+
+const string = (constraints: Partial<Omit<StringShape, 'type'>> = {}): StringShape => ({
+	type: 'string',
+	format: null,
+	minLength: null,
+	maxLength: null,
+	pattern: null,
+	...constraints,
+})
+const number = (constraints: Partial<Omit<NumberShape, 'type'>> = {}): NumberShape => ({
+	type: 'number',
+	int: false,
+	min: null,
+	exclusiveMin: false,
+	max: null,
+	exclusiveMax: false,
+	...constraints,
+})
+const array = (items: SchemaShape, constraints: Partial<Omit<ArrayShape, 'type' | 'items'>> = {}): ArrayShape => ({
+	type: 'array',
+	items,
+	minItems: null,
+	maxItems: null,
+	...constraints,
+})
+
+/** `z.uuid()`, `z.string().min(1).max(200)`, `z.int().nonnegative()`, `.positive()`, `.regex()`, `.max()` on arrays. */
+const id: SchemaShape = { type: 'object', fields: { id: string({ format: 'uuid' }) } }
 const note: SchemaShape = {
 	type: 'object',
-	fields: { id: { type: 'string' }, title: { type: 'string' }, body: { type: 'nullable', inner: { type: 'string' } } },
+	fields: {
+		id: string({ format: 'uuid' }),
+		title: string({ minLength: 1, maxLength: 200 }),
+		body: { type: 'nullable', inner: string({ maxLength: 100000 }) },
+		version: number({ int: true, min: 0 }),
+		rating: { type: 'optional', inner: number({ min: 0, exclusiveMin: true, max: 5 }) },
+		sku: string({ pattern: '^[A-Z0-9-]+$' }),
+		updatedAt: string({ format: 'datetime' }),
+	},
 }
 
 const endpoints: EndpointRow[] = [
@@ -18,7 +53,7 @@ const endpoints: EndpointRow[] = [
 		requirement: { kind: 'member' },
 		admission: json,
 		input: null,
-		output: { type: 'object', fields: { email: { type: 'string' } } },
+		output: { type: 'object', fields: { email: string({ format: 'email' }) } },
 	},
 	{
 		id: 'api.notes.list',
@@ -30,7 +65,7 @@ const endpoints: EndpointRow[] = [
 		requirement: { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } },
 		admission: json,
 		input: null,
-		output: { type: 'array', items: note },
+		output: array(note, { maxItems: 500 }),
 	},
 	{
 		id: 'api.notes.remove',
@@ -42,7 +77,7 @@ const endpoints: EndpointRow[] = [
 		requirement: { kind: 'action', action: 'notes.delete', access: { form: 'on', dimension: 'note', from: 'id' } },
 		admission: json,
 		input: id,
-		output: { type: 'object', fields: { deleted: { type: 'string' } } },
+		output: { type: 'object', fields: { deleted: string({ format: 'uuid' }) } },
 	},
 	{
 		id: 'api.workspaces.create',
@@ -53,7 +88,7 @@ const endpoints: EndpointRow[] = [
 		callers: ['human'],
 		requirement: { kind: 'action', action: 'workspaces.create', access: { form: 'creates', dimension: 'workspace' } },
 		admission: json,
-		input: { type: 'object', fields: { name: { type: 'string' } } },
+		input: { type: 'object', fields: { name: string({ minLength: 1, maxLength: 80 }) } },
 		output: id,
 	},
 	{
@@ -65,8 +100,8 @@ const endpoints: EndpointRow[] = [
 		callers: ['machine'],
 		requirement: { kind: 'action', action: 'notes.write', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
 		admission: json,
-		input: { type: 'object', fields: { workspaceId: { type: 'string' }, notes: { type: 'array', items: note } } },
-		output: { type: 'object', fields: { imported: { type: 'number' } } },
+		input: { type: 'object', fields: { workspaceId: string({ format: 'uuid' }), notes: array(note, { minItems: 1, maxItems: 1000 }) } },
+		output: { type: 'object', fields: { imported: number({ int: true, min: 0 }) } },
 	},
 	{
 		id: 'files.attachments.download',
@@ -125,7 +160,7 @@ const endpoints: EndpointRow[] = [
 		callers: [],
 		requirement: null,
 		admission: { contentTypes: ['application/json'], maxBytes: 1048576 },
-		input: { type: 'object', fields: { ref: { type: 'string' } } },
+		input: { type: 'object', fields: { ref: string(), compare: string({ format: 'url' }) } },
 		output: null,
 	},
 	{
@@ -137,7 +172,7 @@ const endpoints: EndpointRow[] = [
 		callers: [],
 		requirement: null,
 		admission: { contentTypes: ['application/json'], maxBytes: 16384 },
-		input: { type: 'object', fields: { email: { type: 'string' }, message: { type: 'string' } } },
+		input: { type: 'object', fields: { email: string({ format: 'email' }), message: string({ maxLength: 5000 }) } },
 		output: null,
 	},
 	{

@@ -167,6 +167,7 @@ describe('defineApp — a non-canonical path is a 400 before routing', () => {
 		['a dot segment', 'https://x/admin/./users'],
 		['an empty segment before a trailing slash', 'https://x/admin/users//'],
 		['a repeated slash before an RPC mount', 'https://x//api/rpc'],
+		['a malformed percent escape in a parameter', 'https://x/api/%FF/envelope'],
 	])('%s', async (_name, url) => {
 		reached = 0
 		const response = await app.fetch(new RawUrlRequest(url), {}, fakeExec())
