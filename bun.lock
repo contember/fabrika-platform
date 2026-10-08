@@ -270,6 +270,7 @@
       "name": "@fabrika/db",
       "version": "0.0.4",
       "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
         "kysely": "0.29.6",
         "kysely-postgres-js": "5.0.1",
         "zod": "^3.25.76",

@@ -1,5 +1,22 @@
 import type { Insertable, Selectable, SelectType, Updateable } from 'kysely'
-import { freeze, hasOwn, inSet, type NameSet, nameSet, namesOf, ownEntry, ownKeys, parseList, setOwn } from './builtins'
+import {
+	freeze,
+	hasOwn,
+	inSet,
+	isArray,
+	type NameSet,
+	nameSet,
+	namesOf,
+	OBJECT_PROTOTYPE,
+	ownDescriptor,
+	ownEntry,
+	ownKeys,
+	ownNames,
+	ownSymbols,
+	parseList,
+	prototypeOf,
+	setOwn,
+} from './builtins'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 
@@ -92,8 +109,6 @@ export type PolicyMap<DB, A extends string> = {
 /** The column names of every table, generated next to the schema types. */
 export type ColumnList<DB> = { readonly [T in keyof DB & string]: readonly (keyof DB[T] & string)[] }
 
-type AnyPolicy = TablePolicy<string, string, string>
-
 export interface Container {
 	readonly dimension: string
 	readonly column: string
@@ -125,6 +140,8 @@ export interface TableModel {
 	readonly update: NameSet
 	readonly version: string | undefined
 	readonly createdBy: string | undefined
+	/** The columns that declare their own read action, as declared (also those equal to the table's). */
+	readonly columnReads: Readonly<Record<string, string>>
 	/**
 	 * The containment links this table carries a column for, nearest first: a dimension table's container and
 	 * the container's own chain; a child's parent and the parent's chain. Every predicate of a Ref covers all.
@@ -135,6 +152,7 @@ export interface TableModel {
 type ParsedTable = Omit<TableModel, 'chain'>
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
+let hasModels: (value: object) => boolean = () => false
 
 /** Every table's model by name; read it through `modelOf`, never by a plain property access. */
 export type TableModels = Readonly<Record<string, TableModel>>
@@ -150,12 +168,18 @@ export class Tables<DB, P> {
 
 	static {
 		readModels = (tables) => tables.#models
+		hasModels = (value) => #models in value
 	}
 }
 Object.freeze(Tables.prototype)
 
 export function tableModels<DB, P>(tables: Tables<DB, P>): TableModels {
 	return readModels(tables)
+}
+
+/** Whether `value` is what `defineTables` returned, rather than another form of the same policies. */
+export function isTables<DB, P, Other extends object>(value: Tables<DB, P> | Other): value is Tables<DB, P> {
+	return hasModels(value)
 }
 
 export function modelOf(models: TableModels, table: string): TableModel | undefined {
@@ -171,10 +195,56 @@ export function defineTables<DB, A extends string>(columns: ColumnList<DB>) {
 		new Tables(parseTables(columns, policies))
 }
 
-function parseTables(
-	columns: Readonly<Record<string, readonly string[]>>,
-	policies: Readonly<Record<string, AnyPolicy>>,
-): TableModels {
+/**
+ * The same policies read from values nobody type-checked: `src/db/tables.ts` as the static reader has it from a
+ * commit. Every shape `defineTables` refuses at runtime is refused here, through the same parse.
+ */
+export function readTables(columns: unknown, policies: unknown): Tables<unknown, unknown> {
+	return new Tables(parseTables(columns, policies))
+}
+
+const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
+const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete'])
+const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
+const CONTAINER_FIELDS = nameSet(['dimension', 'column'])
+const CHILD_FIELDS = nameSet(['child', 'key', 'column', 'inherit'])
+const REFERENCE_FIELDS = nameSet(['reference'])
+const INBOX_FIELDS = nameSet(['inbox', 'read'])
+const COLUMN_FIELDS = nameSet(['read'])
+
+/** A copy of a plain object's own data properties; anything else (an instance, a symbol key, an accessor) is refused. */
+function plainRecord(value: unknown, what: string): Readonly<Record<string, unknown>> {
+	const prototype: unknown = typeof value === 'object' && value !== null && !isArray(value) ? prototypeOf(value) : undefined
+	if ((prototype !== OBJECT_PROTOTYPE && prototype !== null) || typeof value !== 'object' || value === null || ownSymbols(value).length > 0) {
+		throw new PolicyError(`${what} must be a plain object`)
+	}
+	const copy: Record<string, unknown> = {}
+	const keys = ownNames(value)
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index] ?? ''
+		const descriptor = ownDescriptor(value, key)
+		if (descriptor === undefined || !hasOwn(descriptor, 'value')) {
+			throw new PolicyError(`${what}: ${key} is an accessor; a policy holds plain values`)
+		}
+		setOwn(copy, key, descriptor.value)
+	}
+	return freeze(copy)
+}
+
+/** Unknown keys are refused, not dropped: a misspelt `insrt` would otherwise leave the table without its column list. */
+function onlyFields(record: Readonly<Record<string, unknown>>, allowed: NameSet, what: string): void {
+	const keys = ownKeys(record)
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index] ?? ''
+		if (!inSet(allowed, key)) {
+			throw new PolicyError(`${what}: ${key} is not a field here (allowed: ${namesOf(allowed).join(', ')})`)
+		}
+	}
+}
+
+function parseTables(columnsInput: unknown, policiesInput: unknown): TableModels {
+	const columns = plainRecord(columnsInput, 'the column list')
+	const policies = plainRecord(policiesInput, 'the table policies')
 	const tables = ownKeys(columns)
 	const policyTables = ownKeys(policies)
 	for (let index = 0; index < policyTables.length; index++) {
@@ -195,10 +265,12 @@ function parseTables(
 	return linkTables(parsed)
 }
 
-function parseTable(table: string, columnList: unknown, policy: AnyPolicy): ParsedTable {
+function parseTable(table: string, columnList: unknown, policyInput: unknown): ParsedTable {
 	if (!isPlainIdentifier(table)) {
 		throw new PolicyError(`${table}: a table name must match ^[a-z_][a-z0-9_]*$`)
 	}
+	const policy = plainRecord(policyInput, `${table}: the policy`)
+	onlyFields(policy, POLICY_FIELDS, `${table}: the policy`)
 	const columnNames = parseList(columnList, (name) => {
 		if (!isPlainIdentifier(name)) {
 			throw new PolicyError(`${table}.${String(name)}: a column name must match ^[a-z_][a-z0-9_]*$`)
@@ -225,19 +297,27 @@ function parseTable(table: string, columnList: unknown, policy: AnyPolicy): Pars
 		}
 		return names
 	}
-	const scope = parseScope(table, policy, column, columnsOf)
-	const actions = parseActions(table, policy)
-	const insert = nameSet(columnsOf(policy.insert, 'insert'))
-	const update = nameSet(columnsOf(policy.update, 'update'))
-	const version = policy.version === undefined ? undefined : column(policy.version, 'version')
-	const createdBy = policy.createdBy === undefined ? undefined : column(policy.createdBy, 'createdBy')
+	const scopeInput = plainRecord(ownEntry(policy, 'scope'), `${table}: scope`)
+	const scope = parseScope(table, scopeInput, column, columnsOf)
+	const actions = parseActions(table, scopeInput, ownEntry(policy, 'actions'))
+	const insert = nameSet(columnsOf(ownEntry(policy, 'insert'), 'insert'))
+	const update = nameSet(columnsOf(ownEntry(policy, 'update'), 'update'))
+	const versionInput = ownEntry(policy, 'version')
+	const createdByInput = ownEntry(policy, 'createdBy')
+	const version = versionInput === undefined ? undefined : column(versionInput, 'version')
+	const createdBy = createdByInput === undefined ? undefined : column(createdByInput, 'createdBy')
 	const restricted: string[] = []
-	const columnPolicies: Readonly<Record<string, { readonly read: string } | undefined>> = policy.columns ?? {}
+	const columnReads: Record<string, string> = {}
+	const columnsInput = ownEntry(policy, 'columns')
+	const columnPolicies = columnsInput === undefined ? freeze({}) : plainRecord(columnsInput, `${table}: columns`)
 	const restrictable = ownKeys(columnPolicies)
 	for (let index = 0; index < restrictable.length; index++) {
 		const name = column(restrictable[index], 'columns')
-		const columnPolicy = ownEntry(columnPolicies, name)
-		if (columnPolicy !== undefined && nonEmpty(table, columnPolicy.read, `columns.${name}.read`) !== actions.read) {
+		const columnPolicy = plainRecord(ownEntry(columnPolicies, name), `${table}: columns.${name}`)
+		onlyFields(columnPolicy, COLUMN_FIELDS, `${table}: columns.${name}`)
+		const read = nonEmpty(table, ownEntry(columnPolicy, 'read'), `columns.${name}.read`)
+		setOwn(columnReads, name, read)
+		if (read !== actions.read) {
 			restricted[restricted.length] = name
 		}
 	}
@@ -257,56 +337,80 @@ function parseTable(table: string, columnList: unknown, policy: AnyPolicy): Pars
 			visible[visible.length] = name
 		}
 	}
-	return { name: table, scope, actions, columns, visible: freeze(visible), insert, update, version, createdBy }
+	return { name: table, scope, actions, columns, visible: freeze(visible), insert, update, version, createdBy, columnReads: freeze(columnReads) }
 }
 
 function parseScope(
 	table: string,
-	policy: AnyPolicy,
+	scope: Readonly<Record<string, unknown>>,
 	column: (name: unknown, field: string) => string,
 	columnsOf: (value: unknown, field: string) => string[],
 ): ScopeModel {
-	const scope = policy.scope
-	if ('dimension' in scope) {
-		const container = scope.in === undefined
-			? undefined
-			: freeze({ dimension: nonEmpty(table, scope.in.dimension, 'scope.in.dimension'), column: column(scope.in.column, 'scope.in.column') })
+	const what = `${table}: scope`
+	if (hasOwn(scope, 'dimension')) {
+		onlyFields(scope, DIMENSION_FIELDS, what)
+		const inInput = ownEntry(scope, 'in')
+		const containerInput = inInput === undefined ? undefined : plainRecord(inInput, `${table}: scope.in`)
+		if (containerInput !== undefined) {
+			onlyFields(containerInput, CONTAINER_FIELDS, `${table}: scope.in`)
+		}
+		const container = containerInput === undefined ? undefined : freeze({
+			dimension: nonEmpty(table, ownEntry(containerInput, 'dimension'), 'scope.in.dimension'),
+			column: column(ownEntry(containerInput, 'column'), 'scope.in.column'),
+		})
 		return freeze({
 			mode: 'dimension',
-			dimension: nonEmpty(table, scope.dimension, 'scope.dimension'),
-			key: column(scope.key, 'scope.key'),
+			dimension: nonEmpty(table, ownEntry(scope, 'dimension'), 'scope.dimension'),
+			key: column(ownEntry(scope, 'key'), 'scope.key'),
 			container,
 		})
 	}
-	if ('child' in scope) {
+	if (hasOwn(scope, 'child')) {
+		onlyFields(scope, CHILD_FIELDS, what)
+		const inherit = ownEntry(scope, 'inherit')
+		if (inherit === undefined) {
+			throw new PolicyError(`${table}: scope.inherit takes the containment columns of the parent ([] when it has none)`)
+		}
 		return freeze({
 			mode: 'child',
-			parent: scope.child,
-			key: column(scope.key, 'scope.key'),
-			column: column(scope.column, 'scope.column'),
-			inherit: freeze(columnsOf(scope.inherit, 'scope.inherit')),
+			parent: nonEmpty(table, ownEntry(scope, 'child'), 'scope.child'),
+			key: column(ownEntry(scope, 'key'), 'scope.key'),
+			column: column(ownEntry(scope, 'column'), 'scope.column'),
+			inherit: freeze(columnsOf(inherit, 'scope.inherit')),
 		})
 	}
-	if ('reference' in scope) {
-		return freeze({ mode: 'reference', reason: nonEmpty(table, scope.reference, 'scope.reference') })
+	if (hasOwn(scope, 'reference')) {
+		onlyFields(scope, REFERENCE_FIELDS, what)
+		return freeze({ mode: 'reference', reason: nonEmpty(table, ownEntry(scope, 'reference'), 'scope.reference') })
 	}
-	return freeze({ mode: 'inbox', form: nonEmpty(table, scope.inbox, 'scope.inbox') })
+	if (hasOwn(scope, 'inbox')) {
+		onlyFields(scope, INBOX_FIELDS, what)
+		return freeze({ mode: 'inbox', form: nonEmpty(table, ownEntry(scope, 'inbox'), 'scope.inbox') })
+	}
+	throw new PolicyError(`${what} takes one mode: { dimension, key, in? }, { child, key, column, inherit }, { reference } or { inbox, read }`)
 }
 
-function parseActions(table: string, policy: AnyPolicy): ActionModel {
-	if ('inbox' in policy.scope) {
-		return freeze({ read: nonEmpty(table, policy.scope.read, 'scope.read'), insert: undefined, update: undefined, delete: undefined })
+function parseActions(table: string, scope: Readonly<Record<string, unknown>>, actionsInput: unknown): ActionModel {
+	if (hasOwn(scope, 'inbox')) {
+		if (actionsInput !== undefined) {
+			throw new PolicyError(`${table}: an inbox table takes its read action as scope.read and no actions; only its form appends`)
+		}
+		return freeze({ read: nonEmpty(table, ownEntry(scope, 'read'), 'scope.read'), insert: undefined, update: undefined, delete: undefined })
 	}
-	if (policy.actions === undefined) {
+	if (actionsInput === undefined) {
 		throw new PolicyError(`${table}: the policy needs actions`)
 	}
-	const actions: TableActions<string> = policy.actions
-	const optional = (value: string | undefined, field: string) => value === undefined ? undefined : nonEmpty(table, value, field)
+	const actions = plainRecord(actionsInput, `${table}: actions`)
+	onlyFields(actions, ACTION_FIELDS, `${table}: actions`)
+	const optional = (field: 'insert' | 'update' | 'delete') => {
+		const value = ownEntry(actions, field)
+		return value === undefined ? undefined : nonEmpty(table, value, `actions.${field}`)
+	}
 	return freeze({
-		read: nonEmpty(table, actions.read, 'actions.read'),
-		insert: optional(actions.insert, 'actions.insert'),
-		update: optional(actions.update, 'actions.update'),
-		delete: optional(actions.delete, 'actions.delete'),
+		read: nonEmpty(table, ownEntry(actions, 'read'), 'actions.read'),
+		insert: optional('insert'),
+		update: optional('update'),
+		delete: optional('delete'),
 	})
 }
 

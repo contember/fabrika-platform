@@ -242,6 +242,18 @@ export function existsNode(table: string, key: string, scope: OperationNode): Se
 	return Object.freeze(node)
 }
 
+/** `select columns from table where scope limit 1`: the containment columns of one object, for the framework's locator. */
+export function locateNode(table: string, columns: readonly string[], scope: OperationNode): SelectQueryNode {
+	const node: SelectQueryNode = {
+		kind: 'SelectQueryNode',
+		from: FromNode.create([TableNode.create(table)]),
+		selections: columns.map((name) => selection(table, name)),
+		where: scopedWhere(undefined, scope),
+		limit: LimitNode.create(ValueNode.create(1)),
+	}
+	return Object.freeze(node)
+}
+
 /** The same check `for share`: the row cannot move until the transaction that checked it ends. */
 export function lockNode(table: string, key: string, scope: OperationNode): SelectQueryNode {
 	return Object.freeze({ ...existsNode(table, key, scope), endModifiers: [SelectModifierNode.create('ForShare')] })

@@ -46,6 +46,7 @@ import {
 	existsNode,
 	inList,
 	insertNode,
+	locateNode,
 	lockNode,
 	scopedWhere,
 	selectNode,
@@ -74,10 +75,16 @@ import {
 	type UpdateValues,
 	type VersionArguments,
 } from './policy'
+import { type TablePolicies, tablePolicies } from './tables'
 
 export interface DataLayerRuntime {
 	readonly database: Database
 	readonly capabilities: CapabilityAuthority
+}
+
+/** Empty until the framework connects the layer at boot; every table handle of one `scoped` call shares it. */
+interface Connection {
+	runtime: DataLayerRuntime | undefined
 }
 
 interface TableContext {
@@ -87,7 +94,17 @@ interface TableContext {
 	readonly destination: TableModel | undefined
 	readonly shape: TableShape
 	readonly joins: Readonly<Record<string, readonly ForeignKeyPair[]>>
-	readonly runtime: DataLayerRuntime
+	readonly connection: Connection
+}
+
+function runtimeOf(connection: Connection): DataLayerRuntime {
+	const runtime = connection.runtime
+	if (runtime === undefined) {
+		throw new CapabilityError(
+			'the data layer is not connected: the framework connects it at boot, so a store runs inside a handler, never while a module loads',
+		)
+	}
+	return runtime
 }
 
 interface DimensionScopeModel {
@@ -135,7 +152,7 @@ function checkGrant(context: TableContext, grant: RefGrant | WithinGrant, dimens
 }
 
 function refGrant(context: TableContext, capability: unknown, dimension: string, operation: Operation): RefGrant {
-	const grant = context.runtime.capabilities.resolve(capability)
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind !== 'ref') {
 		throw new CapabilityError(`${operation} on ${context.model.name} needs a Ref of ${dimension}, got a Within`)
 	}
@@ -144,7 +161,7 @@ function refGrant(context: TableContext, capability: unknown, dimension: string,
 }
 
 function withinGrant(context: TableContext, capability: unknown, dimension: string, operation: Operation): WithinGrant {
-	const grant = context.runtime.capabilities.resolve(capability)
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind !== 'within') {
 		throw new CapabilityError(`${operation} on ${context.model.name} needs a Within of ${dimension}, got a Ref`)
 	}
@@ -236,7 +253,7 @@ function parentPredicate(context: TableContext, grant: RefGrant): OperationNode 
 
 function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
 	const scope = childScope(context)
-	const grant = context.runtime.capabilities.resolve(capability)
+	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind === 'ref') {
 		checkGrant(context, grant, scope.parent.dimension, operation)
 		return parentPredicate(context, grant)
@@ -259,7 +276,7 @@ function guard(context: TableContext, root: RootKind, scope: OperationNode | und
 }
 
 function session(context: TableContext): Session {
-	return sessionOf(context.runtime.database)
+	return sessionOf(runtimeOf(context.connection).database)
 }
 
 /**
@@ -741,12 +758,29 @@ function joinShapes(models: TableModels, parent: TableModel): Readonly<Record<st
 	return freeze(joinable)
 }
 
+/** What `scoped` returns: the store builders for application modules, and what the framework reads and connects. */
+export interface ScopedDatabase<DB, P> {
+	/** Every table's policy as data, for the contract compiler. */
+	readonly tables: TablePolicies
+	/**
+	 * The containers of the object `id` of `dimension`, by dimension, read from the table that owns the dimension;
+	 * `null` when that table has no such row. The framework's access check calls it before it mints a `Ref`.
+	 */
+	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
+	/** Called by the framework once, at boot, with its connection and its capability authority; a second call throws. */
+	connect(runtime: DataLayerRuntime): void
+	defineStore<const T extends DimensionTableName<P>, S>(table: T, build: (t: DimensionTable<DB, P, T>) => S): S
+	defineChildStore<const T extends ChildTableName<P>, S>(table: T, build: (t: ChildTable<DB, P, T>) => S): S
+}
+
 /**
- * Binds the table policies to a database and a capability authority. The framework calls it once; application
- * modules import the `defineStore` and `defineChildStore` it returns.
+ * Binds the table policies to the data layer. An application calls it once, in a module of its own, and passes the
+ * result to `implement({ database })`; its store modules use the `defineStore` and `defineChildStore` it carries.
+ * Nothing reaches the database until the framework connects it at boot.
  */
-export function scoped<DB, P>(tables: Tables<DB, P>, runtime: DataLayerRuntime) {
+export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 	const models = tableModels(tables)
+	const connection: Connection = { runtime: undefined }
 
 	function contextFor(table: string, mode: 'dimension' | 'child'): TableContext {
 		const model = typeof table === 'string' ? modelOf(models, table) : undefined
@@ -765,10 +799,18 @@ export function scoped<DB, P>(tables: Tables<DB, P>, runtime: DataLayerRuntime) 
 			}
 		}
 		const shape = shapeOf(model, joinable)
-		return freeze({ model, parent, destination: destinationOf(models, model, parent), shape, joins: freeze(joins), runtime })
+		return freeze({ model, parent, destination: destinationOf(models, model, parent), shape, joins: freeze(joins), connection })
 	}
 
 	return Object.freeze({
+		tables: tablePolicies(tables),
+		locate: async (dimension: string, id: string) => locateObject(models, runtimeOf(connection), dimension, id),
+		connect(runtime: DataLayerRuntime): void {
+			if (connection.runtime !== undefined) {
+				throw new CapabilityError('the data layer is already connected; only the framework connects it, once, at boot')
+			}
+			connection.runtime = freeze({ database: runtime.database, capabilities: runtime.capabilities })
+		},
 		defineStore<const T extends DimensionTableName<P>, S>(table: T, build: (t: DimensionTable<DB, P, T>) => S): S {
 			return build(new DimensionTable(contextFor(table, 'dimension')))
 		},
@@ -776,4 +818,53 @@ export function scoped<DB, P>(tables: Tables<DB, P>, runtime: DataLayerRuntime) 
 			return build(new ChildTable(contextFor(table, 'child')))
 		},
 	})
+}
+
+/** The table that owns `dimension`: the one dimension table scoped by it (`defineTables` refuses a second). */
+function ownerOf(models: TableModels, dimension: string): TableModel | undefined {
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model?.scope.mode === 'dimension' && model.scope.dimension === dimension) {
+			return model
+		}
+	}
+	return undefined
+}
+
+/** One guarded select by key of the containment columns the policy declares; the generated locator of the dimension. */
+async function locateObject(
+	models: TableModels,
+	runtime: DataLayerRuntime,
+	dimension: string,
+	id: string,
+): Promise<ReadonlyMap<string, string> | null> {
+	const owner = typeof dimension === 'string' ? ownerOf(models, dimension) : undefined
+	if (owner === undefined) {
+		throw new QueryRefusedError(`no table owns the dimension ${String(dimension)}, so nothing locates it`)
+	}
+	if (typeof id !== 'string' || id.length === 0) {
+		throw new QueryRefusedError(`a ${dimension} is located by its ${keyOf(owner)}, a non-empty string`)
+	}
+	const key = keyOf(owner)
+	const scope = equals(owner.name, key, id)
+	const columns: string[] = [key]
+	for (let index = 0; index < owner.chain.length; index++) {
+		columns[columns.length] = owner.chain[index]?.column ?? ''
+	}
+	const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope }
+	const [row] = await sessionOf(runtime.database).run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
+	if (row === undefined) {
+		return null
+	}
+	const chain = new Map<string, string>()
+	for (let index = 0; index < owner.chain.length; index++) {
+		const link = owner.chain[index]
+		const value = link === undefined ? undefined : ownEntry(row, link.column)
+		if (link === undefined || typeof value !== 'string') {
+			throw new PolicyError(`${owner.name}.${link?.column ?? ''} came back as ${typeof value}; a containment column holds its scope value as text`)
+		}
+		chain.set(link.dimension, value)
+	}
+	return chain
 }

@@ -1,6 +1,14 @@
 import type { Ref, Within } from '../../capability'
-import { type DataLayerRuntime, scoped } from '../../store'
+import type { Tables } from '../../policy'
+import { type DataLayerRuntime, type ScopedDatabase, scoped } from '../../store'
 import { tables } from './tables'
+
+/** `scoped(tables)` already connected, as the framework leaves it after boot. */
+export function connected<DB, P>(policies: Tables<DB, P>, runtime: DataLayerRuntime): ScopedDatabase<DB, P> {
+	const database = scoped(policies)
+	database.connect(runtime)
+	return database
+}
 
 export interface Page {
 	readonly limit: number
@@ -9,7 +17,8 @@ export interface Page {
 
 /** The application's stores, as `src/db/stores/*.ts` would define them. */
 export function defineStores(runtime: DataLayerRuntime) {
-	const { defineStore, defineChildStore } = scoped(tables, runtime)
+	const database = connected(tables, runtime)
+	const { defineStore, defineChildStore } = database
 
 	const organizations = defineStore('organizations', (t) => ({
 		list: (within: Within<'organization', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'name']).orderBy('id')),
@@ -59,5 +68,5 @@ export function defineStores(runtime: DataLayerRuntime) {
 		remove: (note: Ref<'note', 'notes.write'>, id: string) => t.remove(note, id),
 	}))
 
-	return { organizations, workspaces, notes, comments, defineStore, defineChildStore }
+	return { organizations, workspaces, notes, comments, defineStore, defineChildStore, locate: database.locate }
 }

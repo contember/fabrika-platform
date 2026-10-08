@@ -4,11 +4,10 @@
 import { type ColumnType, type Generated, sql } from 'kysely'
 import type { Ref, Within } from '../../capability'
 import { defineTables } from '../../policy'
-import { type DataLayerRuntime, scoped } from '../../store'
+import { scoped } from '../../store'
 import { columns, type DB } from '../fixtures/schema'
 import { type Action, tables } from '../fixtures/tables'
 
-declare const runtime: DataLayerRuntime
 declare const read: Within<'workspace', 'notes.read'>
 declare const write: Within<'workspace', 'notes.write'>
 declare const noteRead: Ref<'note', 'notes.read'>
@@ -18,7 +17,7 @@ declare const workspaceWrite: Ref<'workspace', 'notes.write'>
 declare const workspaceAdmin: Ref<'workspace', 'workspaces.admin'>
 declare const organizationCreate: Ref<'organization', 'organizations.create'>
 
-const { defineStore, defineChildStore } = scoped(tables, runtime)
+const { defineStore, defineChildStore } = scoped(tables)
 const notes = defineStore('notes', (t) => t)
 const comments = defineChildStore('note_comments', (t) => t)
 const workspaces = defineStore('workspaces', (t) => t)

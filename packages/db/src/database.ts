@@ -23,6 +23,22 @@ function freezePrototypeChain(object: object): void {
 	}
 }
 
+/** IAM's application id alphabet; `-` maps to `_`, which the alphabet lacks, so two ids never share a schema. */
+const APP_ID = /^[a-z0-9][a-z0-9-]*$/
+/** Postgres truncates identifiers to 63 bytes; `app_` takes four of them. */
+const MAX_APP_ID_LENGTH = 59
+
+/**
+ * `app_<id>`, the schema an application's migrations create (ADR-0017). `@fabrika/platform-node`'s
+ * `applicationDatabaseSchema` derives the same name for the migration runner; the two must agree.
+ */
+export function applicationSchema(appId: string): string {
+	if (!APP_ID.test(appId) || appId.length > MAX_APP_ID_LENGTH) {
+		throw new QueryRefusedError('the application id must be lowercase letters, digits and -, at most 59 characters')
+	}
+	return `app_${appId.replaceAll('-', '_')}`
+}
+
 export interface PostgresOptions {
 	readonly url: string
 	/** The application's schema (`app_<id>`), set as the connection's `search_path`. */

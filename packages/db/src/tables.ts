@@ -1,0 +1,85 @@
+// @fabrika/db/tables — the table policies of `src/db/tables.ts` as data. Browser- and Worker-safe: no Bun API and no
+// driver, so `@fabrika/app/contract` and the static contract reader in `@fabrika/check` import it.
+
+import type { TablePolicyArtifact, TableScope } from '@fabrika/auth-core'
+import { freeze, namesOf, ownKeys, setOwn } from './builtins'
+import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
+
+export { PolicyError } from './errors'
+export {
+	type ChildPolicy,
+	type ChildScope,
+	type ColumnList,
+	defineTables,
+	type DimensionPolicy,
+	type DimensionScope,
+	type InboxPolicy,
+	type InboxScope,
+	isTables,
+	type PolicyMap,
+	readTables,
+	type ReferencePolicy,
+	type ReferenceScope,
+	type TableActions,
+	type TablePolicy,
+	Tables,
+	type VersionColumn,
+} from './policy'
+
+/** Every table's policy in the form the contract artifact carries, by table name. */
+export type TablePolicies = Readonly<Record<string, TablePolicyArtifact>>
+
+/** The artifact form of every policy `defineTables` (or `readTables`) checked. */
+export function tablePolicies<DB, P>(tables: Tables<DB, P>): TablePolicies {
+	const models = tableModels(tables)
+	const names = ownKeys(models)
+	const artifacts: Record<string, TablePolicyArtifact> = {}
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model !== undefined) {
+			setOwn(artifacts, model.name, artifactOf(model))
+		}
+	}
+	return freeze(artifacts)
+}
+
+function artifactOf(model: TableModel): TablePolicyArtifact {
+	const columns: Record<string, { readonly read: string }> = {}
+	const declared = ownKeys(model.columnReads)
+	for (let index = 0; index < declared.length; index++) {
+		const name = declared[index] ?? ''
+		setOwn(columns, name, { read: model.columnReads[name] ?? '' })
+	}
+	return {
+		scope: scopeOf(model.scope),
+		actions: {
+			read: model.actions.read,
+			insert: model.actions.insert ?? null,
+			update: model.actions.update ?? null,
+			delete: model.actions.delete ?? null,
+		},
+		insert: [...namesOf(model.insert)],
+		update: [...namesOf(model.update)],
+		version: model.version ?? null,
+		createdBy: model.createdBy ?? null,
+		columns,
+	}
+}
+
+function scopeOf(scope: ScopeModel): TableScope {
+	switch (scope.mode) {
+		case 'dimension':
+			return {
+				mode: 'dimension',
+				dimension: scope.dimension,
+				key: scope.key,
+				container: scope.container === undefined ? null : { dimension: scope.container.dimension, column: scope.container.column },
+			}
+		case 'child':
+			return { mode: 'child', parent: scope.parent, key: scope.key, column: scope.column, inherit: [...scope.inherit] }
+		case 'reference':
+			return { mode: 'reference', reason: scope.reason }
+		case 'inbox':
+			return { mode: 'inbox', form: scope.form }
+	}
+}

@@ -13,12 +13,11 @@ import type { Ref } from '../capability'
 import { Database } from '../database'
 import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
 import { defineTables } from '../policy'
-import { scoped } from '../store'
 import { TestAuthority } from './fixtures/authority'
 import { call } from './fixtures/harness'
 import { patchedChecks } from './fixtures/patch'
 import { migration } from './fixtures/schema'
-import { defineStores } from './fixtures/stores'
+import { connected, defineStores } from './fixtures/stores'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR]
@@ -113,6 +112,16 @@ describe.skipIf(!hasPostgres)('the scoped layer on Postgres', () => {
 		expect(acknowledged).toEqual({ id, version: 2 })
 		const moved = await stores.notes.move(note('notes.delete', id, 'w1'), into('w2'))
 		expect(moved).toEqual({ id, version: 3, chain: { workspace: 'w2', organization: 'o1' } })
+	})
+
+	test('the generated locator reads the chain of one object, null for a missing one, and the new chain after a move', async () => {
+		const id = await createNote('w1', 'located')
+		expect(Object.fromEntries((await stores.locate('note', id)) ?? [])).toEqual({ workspace: 'w1', organization: 'o1' })
+		expect(Object.fromEntries((await stores.locate('workspace', 'w1')) ?? [])).toEqual({ organization: 'o1' })
+		expect(Object.fromEntries((await stores.locate('organization', 'o1')) ?? [])).toEqual({})
+		expect(await stores.locate('note', 'missing')).toBeNull()
+		await stores.notes.move(note('notes.delete', id, 'w1'), into('w2'))
+		expect(Object.fromEntries((await stores.locate('note', id)) ?? [])).toEqual({ workspace: 'w2', organization: 'o1' })
 	})
 
 	test('a list sees only the scope values of its Within', async () => {
@@ -353,7 +362,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 		expect(() => define({ ...extra, tenant_items: { ...tenantItems, version: 'tenant_id' } })).toThrow(
 			'tenant_items: tenant_id is both the tenant containment column and the version',
 		)
-		const honest = scoped(define(extra), { database, capabilities: alice })
+		const honest = connected(define(extra), { database, capabilities: alice })
 		const top = honest.defineStore('tops', (t) => ({ create: (ref: Ref<'top', 'write'>) => t.insert(ref, {}) }))
 		expect(await top.create(alice.ref('top', 'write', 'authorized-top'))).toEqual({ id: 'authorized-top' })
 		const [stored] = await admin((sql) => sql.unsafe(`select id, created_by from ${schema}.tops`))
@@ -390,7 +399,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 	})
 
 	test('a version column that is not INTEGER is refused at the first mutation, and nothing is written', async () => {
-		const ledger = scoped(defineTables<Extra, string>(extraColumns)(extra), { database, capabilities: alice }).defineStore('ledgers', (t) => ({
+		const ledger = connected(defineTables<Extra, string>(extraColumns)(extra), { database, capabilities: alice }).defineStore('ledgers', (t) => ({
 			open: (ref: Ref<'ledger', 'write'>) => t.insert(ref, {}),
 		}))
 		await expect(ledger.open(alice.ref('ledger', 'write', 'l1'))).rejects.toThrow(

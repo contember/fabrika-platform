@@ -25,6 +25,11 @@
 			"types": "./src/capability.ts",
 			"default": "./src/capability.ts"
 		},
+		"./tables": {
+			"bun": "./src/tables.ts",
+			"types": "./src/tables.ts",
+			"default": "./src/tables.ts"
+		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",
@@ -36,6 +41,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/auth-core": "workspace:*",
 		"kysely": "0.29.6",
 		"kysely-postgres-js": "5.0.1",
 		"zod": "^3.25.76"

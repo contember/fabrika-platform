@@ -1,5 +1,5 @@
 export type { CapabilityAuthority, CapabilityGrant, Ref, RefGrant, Within, WithinGrant } from './capability'
-export { Database, type PostgresOptions } from './database'
+export { applicationSchema, Database, type PostgresOptions } from './database'
 export type {
 	AllowedOperator,
 	ComparisonOperator,
@@ -22,7 +22,9 @@ export {
 	type InboxPolicy,
 	type InboxScope,
 	type InsertValues,
+	isTables,
 	type PolicyMap,
+	readTables,
 	type ReferencePolicy,
 	type ReferenceScope,
 	type RowOf,
@@ -32,4 +34,14 @@ export {
 	type UpdateValues,
 	type VersionColumn,
 } from './policy'
-export { type AggregateRow, type AggregateSpec, type ChildListScope, ChildTable, type DataLayerRuntime, DimensionTable, scoped } from './store'
+export {
+	type AggregateRow,
+	type AggregateSpec,
+	type ChildListScope,
+	ChildTable,
+	type DataLayerRuntime,
+	DimensionTable,
+	scoped,
+	type ScopedDatabase,
+} from './store'
+export { type TablePolicies, tablePolicies } from './tables'

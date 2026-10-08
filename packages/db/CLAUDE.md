@@ -10,30 +10,45 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · store · guard · hardening · type-attacks · codegen · postgres (needs FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
-| Module           | What it owns                                                                                              |
-| ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.         |
-| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`; `@fabrika/db/capability`, no Bun.  |
-| `policy.ts`      | `defineTables`: the literal table policies, checked against the generated column list, and the row types. |
-| `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                   |
-| `nodes.ts`       | Kysely operation nodes built from a description and a scope predicate.                                    |
-| `guard.ts`       | The allowlist over the final operation tree, run immediately before compiling.                            |
-| `database.ts`    | `Database` (the connection, with no public query method) and `Session`, the only path to it.              |
-| `store.ts`       | `scoped` → `defineStore` / `defineChildStore`; the table handles; every capability and scope check.       |
-| `codegen.ts`     | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.    |
+| Module           | What it owns                                                                                               |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `builtins.ts`    | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.          |
+| `capability.ts`  | `Ref` / `Within` (opaque, type-only member) and `CapabilityAuthority`; `@fabrika/db/capability`, no Bun.   |
+| `policy.ts`      | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.   |
+| `tables.ts`      | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.      |
+| `description.ts` | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                    |
+| `nodes.ts`       | Kysely operation nodes built from a description and a scope predicate.                                     |
+| `guard.ts`       | The allowlist over the final operation tree, run immediately before compiling.                             |
+| `database.ts`    | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).    |
+| `store.ts`       | `scoped(tables)` → `ScopedDatabase`: the stores, `connect`, the generated locator; every capability check. |
+| `codegen.ts`     | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.     |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
 
-The framework's `CapabilityAuthority` is `requestCapabilities` in `@fabrika/app/implement`: it binds each capability
-to its request. Not built yet: wiring the stores to it (A8b), generated locators, `@fabrika/db/testing`, and stores
-for `reference` and `inbox` tables
-(`defineTables` accepts their policies; no store reaches them).
+An application calls `scoped(tables)` once (its own `src/db/database.ts`), defines its stores with the
+`defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
+`Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` connects the layer to it and to
+`requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request. `locate` is
+the locator `on` and `in` use: one guarded select by key of the owning table's containment columns. Not built yet:
+`@fabrika/db/testing`, and stores for `reference` and `inbox` tables (`defineTables` accepts their policies; no store
+reaches them).
 
 ## Invariants
+
+- **`@fabrika/db/tables` imports no Bun API, no driver and no Kysely runtime.** `@fabrika/app/contract` (the SPA)
+  and the static contract reader (a Worker) import it; `tables.test.ts` bundles it for a browser.
+- **`defineTables` and `readTables` are one parse** (`parseTables`), over values nobody type-checked: plain objects
+  and arrays only, read through own data properties, unknown fields refused. The static reader reads
+  `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.
+- **The layer is connected once, by the framework, at boot.** Until then every store and `locate` throw; a second
+  `connect` throws, so an application module that connected the layer first makes `boot` fail. Never add another way
+  to set the runtime of a `scoped` result.
+- **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);
+  `tables.test.ts` compares them. Change both together.
 
 - **Every select, update and delete carries its scope predicate as the top-level right conjunct of
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
