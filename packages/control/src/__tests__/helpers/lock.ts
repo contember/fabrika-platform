@@ -1,7 +1,7 @@
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
-import type { ControlRepositories, DeploymentNamespaceState, RunRepository } from '../../db'
-import { LEASE_TTL_MS, type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../../lease'
+import type { AppliedOperationsIngestConfig, ControlRepositories, DeploymentNamespaceState, RunRepository } from '../../db'
+import { CATALOG_LEASE_KEY, LEASE_TTL_MS, type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../../lease'
 import { harnessDatabase } from './harness'
 
 /** The production lease store over a test harness's database. */
@@ -71,5 +71,23 @@ export async function fixtureNamespaceWrite(
 		if (!written) throw new Error(`fixture namespace ${id} write was refused`)
 	} finally {
 		await locks.release(key, holder)
+	}
+}
+
+/** Record a catalog reconcile the way its lease holder does: take the catalog lease as a fixture holder, one fenced write, release. */
+export async function fixtureCatalogApplied(
+	repositories: ControlRepositories,
+	revision: number,
+	snapshotHash: string,
+	configs: readonly AppliedOperationsIngestConfig[],
+): Promise<void> {
+	const locks = makeFakeLock(repositories)
+	const holder = 'fixture-catalog'
+	if (!(await locks.acquire(CATALOG_LEASE_KEY, holder, LEASE_TTL_MS))) throw new Error('fixture catalog lease is held')
+	try {
+		const written = await repositories.operationsCatalog.markApplied(revision, snapshotHash, configs, { holder, nowMs: Date.now() })
+		if (!written) throw new Error('fixture catalog write was refused')
+	} finally {
+		await locks.release(CATALOG_LEASE_KEY, holder)
 	}
 }

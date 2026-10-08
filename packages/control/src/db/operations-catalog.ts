@@ -1,5 +1,6 @@
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from '@fabrika/operations-contract/catalog'
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { CATALOG_LEASE_KEY, type LeaseFence } from '../lease'
 import { firstRow } from './returning'
 
 export interface OperationsCatalogProjectionRow {
@@ -161,8 +162,18 @@ export class OperationsCatalogRepository {
 			.run()
 	}
 
-	async markApplied(revision: number, snapshotHash: string, configs: readonly AppliedOperationsIngestConfig[]): Promise<void> {
-		await this.db.batch([
+	/** Record one reconcile's ingest configurations; `false` when `fence` no longer holds the catalog lease. */
+	async markApplied(
+		revision: number,
+		snapshotHash: string,
+		configs: readonly AppliedOperationsIngestConfig[],
+		fence: LeaseFence,
+	): Promise<boolean> {
+		const held = 'EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)'
+		const lease: [string, string, number] = [CATALOG_LEASE_KEY, fence.holder, fence.nowMs]
+		// The lease row must stay locked through the writes: an EXISTS alone races takeover on Postgres.
+		const results = await this.db.batch<{ singleton: number }>([
+			this.db.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?').bind(...lease),
 			...configs.map((config) =>
 				this.db
 					.prepare(`UPDATE operations_ingest_configs SET
@@ -170,7 +181,7 @@ export class OperationsCatalogRepository {
 							dsn = ?,
 							activated_revision = ?,
 							updated_at = ?
-						WHERE app_id = ? AND env = ? AND service_key = ? AND credential_id = ?`)
+						WHERE app_id = ? AND env = ? AND service_key = ? AND credential_id = ? AND ${held}`)
 					.bind(
 						config.ingestProjectId,
 						config.dsn,
@@ -180,6 +191,7 @@ export class OperationsCatalogRepository {
 						config.environment,
 						config.serviceKey,
 						config.credentialId,
+						...lease,
 					)
 			),
 			this.db
@@ -188,9 +200,11 @@ export class OperationsCatalogRepository {
 					applied_snapshot_hash = CASE WHEN applied_revision <= ? THEN ? ELSE applied_snapshot_hash END,
 					last_success_at = ?,
 					last_error = NULL
-				WHERE singleton = 1`)
-				.bind(revision, revision, revision, snapshotHash, this.now()),
+				WHERE singleton = 1 AND ${held}
+				RETURNING singleton`)
+				.bind(revision, revision, revision, snapshotHash, this.now(), ...lease),
 		])
+		return (results.at(-1)?.results.length ?? 0) > 0
 	}
 
 	getIngestConfig(appId: string, environment: string, serviceKey = DEFAULT_OPERATIONS_SERVICE_KEY): Promise<OperationsIngestConfigRow | null> {

@@ -341,7 +341,8 @@ a 90 s TTL renewed every 30 s, with a local deadline one renew period before the
 namespace jobs, terminal repair and the Operations catalog sync all use it. Failed renewal or a missed
 local deadline aborts the lease's signal. Lease loss stops the invocation; it does not request external
 cancellation. On SIGTERM the Zerops Control process takes no new catalog lease and, after a 10 s grace,
-interrupts the catalog flush it still runs and releases that lease.
+interrupts the catalog flush it still runs and releases that lease. The catalog's reconcile write is
+holder-fenced like a run write, so an interrupted flush's late write cannot land over the next holder's.
 
 Every run lifecycle write is holder-checked: `RunRepository` locks the run's `<app>:<env>` lease row
 and writes only while that holder's lease is live, in the same database transaction. There is no

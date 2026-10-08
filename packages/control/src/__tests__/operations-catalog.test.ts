@@ -1,28 +1,13 @@
 import type { OperationsCatalogReconcileOutcome } from '@fabrika/operations-contract/catalog'
-import type { DeployLocks, HttpService } from '@fabrika/platform'
+import type { HttpService } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
+import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
 import { projectOperationsCatalogChange, replayOperationsCatalog } from '../operations-catalog'
 import { createHarness } from './helpers/harness'
+import { makeFakeLock } from './helpers/lock'
 import { providerEnvironment } from './helpers/provider'
 
 const SYNC_KEY = 'catalog-sync-key-with-at-least-32-characters'
-
-class AvailableLock implements DeployLocks {
-	/** Set to model another holder mid-flush, the only way a caller observes `coalesced`. */
-	held = false
-
-	acquire(): Promise<boolean> {
-		return Promise.resolve(!this.held)
-	}
-
-	release(): Promise<void> {
-		return Promise.resolve()
-	}
-
-	renew(): Promise<boolean> {
-		throw new Error('AvailableLock does not support renewal')
-	}
-}
 
 interface CapturedCatalogRequest {
 	authorization: string | null
@@ -117,7 +102,7 @@ describe('Control Operations catalog projection', () => {
 		service.acceptThenDrop = true
 		const deps = {
 			catalog: harness.repositories.operationsCatalog,
-			locks: new AvailableLock(),
+			locks: makeFakeLock(harness.repositories),
 			service,
 			syncKey: SYNC_KEY,
 			operationsOrigin: 'https://errors.example.test',
@@ -170,7 +155,7 @@ describe('Control Operations catalog projection', () => {
 		service.mismatchCredential = true
 		const result = await projectOperationsCatalogChange({
 			catalog: harness.repositories.operationsCatalog,
-			locks: new AvailableLock(),
+			locks: makeFakeLock(harness.repositories),
 			service,
 			syncKey: SYNC_KEY,
 			operationsOrigin: 'https://errors.example.test',
@@ -194,7 +179,7 @@ describe('Control Operations catalog projection', () => {
 		const service = new CatalogService()
 		const deps = {
 			catalog: harness.repositories.operationsCatalog,
-			locks: new AvailableLock(),
+			locks: makeFakeLock(harness.repositories),
 			service,
 			syncKey: SYNC_KEY,
 			operationsOrigin: 'https://errors.example.test',
@@ -223,7 +208,7 @@ describe('Control Operations catalog projection', () => {
 		const harness = createHarness()
 		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
 		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod'))
-		const locks = new AvailableLock()
+		const locks = makeFakeLock(harness.repositories)
 		const service = new CatalogService()
 		const deps = {
 			catalog: harness.repositories.operationsCatalog,
@@ -242,9 +227,10 @@ describe('Control Operations catalog projection', () => {
 			service.acceptThenDrop = true
 			await replayOperationsCatalog(deps)
 			await replayOperationsCatalog(deps)
-			locks.held = true
+			// Another holder mid-flush is the only way a caller observes `coalesced`.
+			await locks.acquire(CATALOG_LEASE_KEY, 'other-holder', LEASE_TTL_MS)
 			await projectOperationsCatalogChange(deps)
-			locks.held = false
+			await locks.release(CATALOG_LEASE_KEY, 'other-holder')
 			await projectOperationsCatalogChange({ ...deps, operationsOrigin: undefined })
 		} finally {
 			console.info = originalInfo
@@ -275,7 +261,7 @@ describe('Control Operations catalog projection', () => {
 			expect(
 				await projectOperationsCatalogChange({
 					catalog: harness.repositories.operationsCatalog,
-					locks: new AvailableLock(),
+					locks: makeFakeLock(harness.repositories),
 				}),
 			).toEqual({ outcome: 'disabled', revision: null })
 		} finally {
@@ -298,7 +284,7 @@ describe('Control Operations catalog projection', () => {
 		expect(
 			await projectOperationsCatalogChange({
 				catalog: harness.repositories.operationsCatalog,
-				locks: new AvailableLock(),
+				locks: makeFakeLock(harness.repositories),
 				service,
 				syncKey: SYNC_KEY,
 				operationsOrigin: 'https://errors.example.test',

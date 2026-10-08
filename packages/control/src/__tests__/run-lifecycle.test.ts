@@ -20,7 +20,7 @@ import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelo
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
-import { fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
+import { fixtureCatalogApplied, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { createTestVault } from './helpers/vault'
 
 const vault = await createTestVault()
@@ -132,7 +132,7 @@ async function activateOperationsIngest(db: ControlRepositories): Promise<string
 	const source = snapshot.sources[0]
 	if (source === undefined) throw new Error('missing Operations catalog source')
 	const dsn = `https://${source.public_key}@errors.example.test/100000000000000001`
-	await db.operationsCatalog.markApplied(snapshot.revision, 'snapshot-hash', [{
+	await fixtureCatalogApplied(db, snapshot.revision, 'snapshot-hash', [{
 		appId: source.app_id,
 		environment: source.env,
 		serviceKey: source.service_key,

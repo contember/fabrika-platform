@@ -10,7 +10,7 @@ import type { ControlRepositories } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureCatalogApplied, makeFakeLock } from './helpers/lock'
 
 const PROVIDER_ID = 'memory'
 
@@ -174,7 +174,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 		await db.operationsCatalog.markAttempt(1, 'snapshot-hash')
 		// Applied with an EMPTY config list: exactly the live shape where Operations knows the source and
 		// control never recorded the ingest configuration back.
-		await db.operationsCatalog.markApplied(1, 'snapshot-hash', [])
+		await fixtureCatalogApplied(db, 1, 'snapshot-hash', [])
 		const stored = memoryLogs()
 
 		expect((await executeDeploy(deps(db, stored.logs, []), { runId })).status).toBe('succeeded')
@@ -192,7 +192,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 		const source = snapshot.sources[0]
 		if (source === undefined) throw new Error('missing Operations catalog source')
 		const dsn = `https://${source.public_key}@errors.example.test/100000000000000001`
-		await db.operationsCatalog.markApplied(snapshot.revision, 'snapshot-hash', [{
+		await fixtureCatalogApplied(db, snapshot.revision, 'snapshot-hash', [{
 			appId: source.app_id,
 			environment: source.env,
 			serviceKey: source.service_key,

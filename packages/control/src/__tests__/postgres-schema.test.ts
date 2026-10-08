@@ -24,6 +24,7 @@ import type { Env } from '../env'
 import { type PublishGitHubConnectionInput } from '../github/connections/model'
 import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from '../github/connections/secrets'
 import { GitHubConnectionStore } from '../github/connections/store'
+import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
 import { applyMigrations } from '../zerops/migrate'
@@ -604,6 +605,38 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(updated.last_polled_at).toBe(stamped + 5)
 		expect(updated.last_error).toBe('feed HTTP 500')
 		expect((await db.polling.getRepoPollState('public-app', 'prod'))?.last_seen_sha).toBe('bbb')
+	})
+
+	test('operations catalog: a reconcile is recorded only while its writer holds the catalog lease', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		await db.operationsCatalog.markDirty()
+		const snapshot = await db.operationsCatalog.snapshot()
+		const [source] = snapshot.sources
+		if (source === undefined) throw new Error('expected one catalog source')
+		const config = {
+			appId: 'acme',
+			environment: 'prod',
+			serviceKey: source.service_key,
+			credentialId: source.credential_id,
+			ingestProjectId: '100000000000000001',
+			dsn: `https://${source.public_key}@errors.example.test/100000000000000001`,
+		}
+		const locks = new SqlDeployLocks(raw)
+		expect(await locks.acquire(CATALOG_LEASE_KEY, 'live-holder', LEASE_TTL_MS)).toBe(true)
+		try {
+			const stale = { holder: 'stale-holder', nowMs: Date.now() }
+			expect(await db.operationsCatalog.markApplied(snapshot.revision, 'snapshot-hash', [config], stale)).toBe(false)
+			expect(await db.operationsCatalog.getActiveIngestConfig('acme', 'prod')).toBeNull()
+
+			const live = { holder: 'live-holder', nowMs: Date.now() }
+			expect(await db.operationsCatalog.markApplied(snapshot.revision, 'snapshot-hash', [config], live)).toBe(true)
+			expect((await db.operationsCatalog.getActiveIngestConfig('acme', 'prod'))?.dsn).toBe(config.dsn)
+			expect((await db.operationsCatalog.getState()).appliedRevision).toBe(snapshot.revision)
+		} finally {
+			await locks.release(CATALOG_LEASE_KEY, 'live-holder')
+		}
 	})
 })
 

@@ -10,7 +10,7 @@ import type { DeployLocks, HttpService } from '@fabrika/platform'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import type { OperationsCatalogRepository } from './db'
-import { acquireLease, CATALOG_LEASE_KEY, type Lease } from './lease'
+import { acquireLease, CATALOG_LEASE_KEY, type Lease, type LeaseClock } from './lease'
 import { canonicalPublicOrigin, PublicOriginValidationError } from './public-origin'
 
 const CATALOG_ENDPOINT = 'https://operations.internal/private/catalog/reconcile'
@@ -19,8 +19,8 @@ const MIN_SYNC_KEY_LENGTH = 32
 const MAX_COALESCED_PASSES = 20
 /** Guarded flushes after a release, for a change that coalesced against this holder's own handoff. */
 const MAX_HANDOFF_PASSES = 2
-/** A release that hangs must not hold up the rest of a shutdown. */
-const SHUTDOWN_RELEASE_TIMEOUT_MS = 5_000
+/** A release that hangs must not hold up its flush's task, and with it a shutdown's drain. */
+const RELEASE_TIMEOUT_MS = 5_000
 
 export type OperationsCatalogSyncOutcome = 'disabled' | 'applied' | 'unchanged' | 'coalesced' | 'failed'
 
@@ -52,7 +52,7 @@ export async function releaseHeldCatalogLeases(): Promise<void> {
 	heldLeases.clear()
 	if (leases.length === 0) return
 	console.warn('operations catalog sync interrupted by shutdown')
-	await Promise.all(leases.map((lease) => releaseCatalogLeaseWithin(lease, SHUTDOWN_RELEASE_TIMEOUT_MS)))
+	await Promise.all(leases.map((lease) => releaseCatalogLease(lease)))
 }
 
 export interface OperationsCatalogSyncDeps {
@@ -61,6 +61,7 @@ export interface OperationsCatalogSyncDeps {
 	service?: HttpService
 	syncKey?: string
 	operationsOrigin?: string
+	leaseClock?: LeaseClock
 }
 
 /** A registry mutation always advances the desired revision before attempting delivery. */
@@ -130,8 +131,13 @@ async function flushUnderLock(
 	operationsOrigin: string,
 ): Promise<OperationsCatalogSyncSummary | null> {
 	if (closing) return null
-	const lease = await acquireLease(deps.locks, CATALOG_LEASE_KEY)
+	const lease = await acquireLease(deps.locks, CATALOG_LEASE_KEY, deps.leaseClock)
 	if (lease === null) return null
+	// A shutdown sweep that ran while the acquisition was in flight never saw this lease.
+	if (closing) {
+		await releaseCatalogLease(lease)
+		return null
+	}
 	heldLeases.add(lease)
 	try {
 		return await flushCatalog(deps.catalog, lease, service, syncKey, operationsOrigin)
@@ -141,26 +147,22 @@ async function flushUnderLock(
 	}
 }
 
-async function releaseCatalogLeaseWithin(lease: Lease, timeoutMs: number): Promise<void> {
+/** Bounded: a stalled release leaves the row to expire on its TTL; the lease's own renewal has already stopped. */
+async function releaseCatalogLease(lease: Lease): Promise<void> {
 	let timer: ReturnType<typeof setTimeout> | undefined
 	const timedOut = new Promise<void>((resolve) => {
 		timer = setTimeout(() => {
 			console.warn('operations catalog lock release timed out')
 			resolve()
-		}, timeoutMs)
+		}, RELEASE_TIMEOUT_MS)
+	})
+	const released = lease.release().catch(() => {
+		console.warn('operations catalog lock release failed')
 	})
 	try {
-		await Promise.race([releaseCatalogLease(lease), timedOut])
+		await Promise.race([released, timedOut])
 	} finally {
 		clearTimeout(timer)
-	}
-}
-
-async function releaseCatalogLease(lease: Lease): Promise<void> {
-	try {
-		await lease.release()
-	} catch {
-		console.warn('operations catalog lock release failed')
 	}
 }
 
@@ -184,7 +186,8 @@ function logCatalogSync(outcome: OperationsCatalogSyncOutcome, revision: number 
 	console.info(`operations catalog sync: ${outcome}${at}`)
 }
 
-// Catalog writes are revision-monotonic, not fenced: the lease only keeps two holders from sending at once.
+// Applying a reconcile is holder-fenced. `markAttempt` records a diagnostic and `advancePast` only moves the
+// desired revision forward, so a stale holder's late write to either cannot undo a newer one.
 async function flushCatalog(
 	catalog: OperationsCatalogRepository,
 	lease: Lease,
@@ -240,8 +243,7 @@ async function flushCatalog(
 				dsn: buildOperationsDsn(operationsOrigin, source.ingestCredential.publicKey, item.ingestProjectId),
 			}
 		})
-		lease.assertHeld()
-		await catalog.markApplied(snapshot.revision, snapshotHash, configs)
+		lease.assertWritten(await catalog.markApplied(snapshot.revision, snapshotHash, configs, lease.fence()))
 		lastOutcome = response.outcome
 	}
 	return { outcome: 'coalesced', revision: lastRevision }
