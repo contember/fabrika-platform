@@ -33,6 +33,7 @@ import {
 	type TableShape,
 } from './description'
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
+import { fileTables } from './file-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import {
 	acknowledgement,
@@ -873,6 +874,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			connection.runtime = bound
 			return async (dimension, id) => locateObject(models, bound, dimension, id)
 		},
+		files: fileTables(() => runtimeOf(connection)),
 	})
 	return database
 }

@@ -2,9 +2,12 @@
 // the data layer an application passed to `implement` to the framework's connection and capability authority, and
 // hands the framework the locator its access check uses. Browser- and Worker-safe: the Worker adapter imports `boot`.
 
+import type { FileTables } from './file-tables'
 import { frameworkSideOf, type Locator } from './registry'
 import type { DataLayerRuntime } from './store'
 
+export { fileTableName } from './file-table-sql'
+export type { FileTables, LiveFile, NewFile, RemovableFile } from './file-tables'
 export type { Locator } from './registry'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */
@@ -22,4 +25,13 @@ export function bindScopedDatabase(value: unknown, runtime: DataLayerRuntime): L
 		throw new TypeError('not a data layer scoped(tables) created')
 	}
 	return side.bind(runtime)
+}
+
+/** The file collections' tables of the layer `scoped(tables)` created; each operation needs the layer bound first. */
+export function fileTablesOf(value: unknown): FileTables {
+	const side = frameworkSideOf(value)
+	if (side === undefined) {
+		throw new TypeError('not a data layer scoped(tables) created')
+	}
+	return side.files
 }

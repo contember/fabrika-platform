@@ -1,6 +1,7 @@
 // Which objects `scoped` created, and the framework side of each. Module-private state: the only readers are
 // `store.ts`, which registers, and `framework.ts`, which `@fabrika/app` alone imports.
 
+import type { FileTables } from './file-tables'
 import type { DataLayerRuntime } from './store'
 
 /** Answers what the framework's access check reads from the database: an object's containers, by dimension. */
@@ -9,6 +10,8 @@ export type Locator = (dimension: string, id: string) => Promise<ReadonlyMap<str
 export interface FrameworkSide {
 	/** Connects the layer once and answers its locator; a second call throws. */
 	bind(runtime: DataLayerRuntime): Locator
+	/** The rows of the file collections' tables; usable once bound. */
+	readonly files: FileTables
 }
 
 // Captured when the module loads, before application code: a later patch to WeakMap does not change the registry.
