@@ -1,6 +1,6 @@
 import type { Ref, Within } from '../../capability'
 import type { Tables } from '../../policy'
-import { type DataLayerRuntime, type ScopedDatabase, scoped } from '../../store'
+import { type DataLayerRuntime, scoped, type ScopedDatabase } from '../../store'
 import { tables } from './tables'
 
 /** `scoped(tables)` already connected, as the framework leaves it after boot. */
