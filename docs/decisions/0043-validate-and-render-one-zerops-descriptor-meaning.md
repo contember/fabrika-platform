@@ -82,6 +82,11 @@ run's snapshot.
 The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).
 
+**Framework-only variable names are one list.** It reserves the names of the database, storage,
+proxy-secret, job and connector credentials. Control's `assertUnmanagedName` and the provider's
+`MANAGED_KEYS` both use that list. Both refuse an authored variable or a secret under one of those
+names. The framework reads these variables and removes them from `process.env`.
+
 Two platform facts this design needs are not verified yet: whether exec readiness gates a Zerops
 deploy, and whether a failed `initCommands` stops activation. Each gets a row in the
 [platform facts](../reference/zerops-platform.md) before the generated `run` section ships.
@@ -104,8 +109,8 @@ and raises an Operations alert.
 Only CSP extensions in the contract are approvable, through the approval diff of
 [ADR-0050](0050-approved-access.md). No other exposure has an approval path.
 
-The code does not render `run` or `build`, read back `subdomainAccess` or check bucket provenance yet
-(part B, work unit B7). The compiler refusals are part 0, work unit P0.4.
+The code does not render `run` or `build`, share the list of framework-only names, read back
+`subdomainAccess` or check bucket provenance yet (part B, work unit B7). The compiler refusals are part 0, work unit P0.4.
 
 ## Consequences
 
