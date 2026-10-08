@@ -1307,6 +1307,7 @@ describe('Zerops namespace lifecycle', () => {
 					platform: 'zerops',
 					services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
 					proxy: { upstream: 'notes:3000', ...contractProxyTable(notesArtifact) },
+					contract: notesArtifact,
 				},
 			},
 			'prod',

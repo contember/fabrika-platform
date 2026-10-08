@@ -1,4 +1,4 @@
-import { type FrameworkVariableName, isFrameworkVariableName } from '@fabrika/auth-core'
+import { type FrameworkVariableName, frameworkVariableReference, isFrameworkVariableName } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { renderYaml } from './compile'
@@ -70,7 +70,18 @@ export function assertAuthoredManagedName(name: string): void {
 type AuthoredDocumentValue = string | number | boolean | null | readonly AuthoredDocumentValue[] | { readonly [key: string]: AuthoredDocumentValue }
 const isSequence = (value: AuthoredDocumentValue): value is readonly AuthoredDocumentValue[] => Array.isArray(value)
 
-/** Refuse a managed name as a key of any `envVariables`/`envSecrets` mapping, at any depth. */
+/** Refuse a value that references a framework-only variable (`${RUNTIME_FABRIKA_PROXY_SECRET}`), naming only the reference. */
+export function assertNoFrameworkReference(text: string): void {
+	const reference = frameworkVariableReference(text)
+	if (reference !== null) {
+		throw new Error(`zerops: application configuration references the Fabrika-managed variable \`${reference}\``)
+	}
+}
+
+/**
+ * Refuse, in any `envVariables`/`envSecrets` mapping at any depth, a managed name as a key and a reference to one in a
+ * key or a value: Zerops resolves the reference into a variable the application controls, and lifts it into a build.
+ */
 export function assertAuthoredManagedDocument(value: AuthoredDocumentValue): void {
 	const visit = (entry: AuthoredDocumentValue, environmentMapping: boolean): void => {
 		if (isSequence(entry)) {
@@ -79,7 +90,11 @@ export function assertAuthoredManagedDocument(value: AuthoredDocumentValue): voi
 		}
 		if (typeof entry !== 'object' || entry === null) return
 		for (const [key, item] of Object.entries(entry)) {
-			if (environmentMapping) assertAuthoredManagedName(key)
+			if (environmentMapping) {
+				assertAuthoredManagedName(key)
+				assertNoFrameworkReference(key)
+				if (typeof item === 'string') assertNoFrameworkReference(item)
+			}
 			visit(item, key === 'envVariables' || key === 'envSecrets')
 		}
 	}

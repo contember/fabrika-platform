@@ -179,8 +179,8 @@ src/
   and never the SPA, and a non-canonical path is 400.
 - **The proxy secret comes first** (ADR-0022 rule 5). When `FABRIKA_PROXY_SECRET` is set, a request
   without `X-Fabrika-Proxy-Secret` equal to it is a 403 before any other answer — also for an unknown or
-  non-canonical path — and only a `health` endpoint is served without it. The digests are compared,
-  never the secrets. `serveContract` passes `requireProxySecret`, so on Zerops the application does not
+  non-canonical path — and only a `health` endpoint is served without it. The 32-byte SHA-256 digests
+  are compared with `node:crypto`'s `timingSafeEqual`, never the secrets and never with `===`. `serveContract` passes `requireProxySecret`, so on Zerops the application does not
   boot without one (or with one under 32 characters); the Worker adapter and the test kit set none.
 - **Per request, in this order** (ADR-0012 §5): proxy secret → canonical path → `planEndpoint` →
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →

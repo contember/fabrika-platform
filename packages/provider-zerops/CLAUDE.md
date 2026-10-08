@@ -150,7 +150,13 @@ bun test
   `proxySecretVariable(id)` and refuses a member Control handed no `proxySecret`; the attempt writes each
   one to the proxy service, without read-back, before the version is reserved, and the attempt identity
   covers their digest. The deployer refuses a non-dry-run contract deploy whose managed
-  `FABRIKA_PROXY_SECRET` is null. Never log either value.
+  `FABRIKA_PROXY_SECRET` is null, and writes none to any other application: only a contract application
+  checks it, so another would merely hold a credential its own code can print. Never log either value.
+- **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
+  `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
+  a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).
+  Commands are not variables: `start: echo ${FABRIKA_RELEASE}` reads the service's own environment.
+  `secrets.put` refuses the same references.
 
 ## Platform installation (`./installation`, `src/installation/`)
 

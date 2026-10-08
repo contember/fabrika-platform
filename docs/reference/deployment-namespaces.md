@@ -204,8 +204,8 @@ Before an app deploy, the control plane:
    `FABRIKA_PROXY_MANIFEST_JSON` variable, and writes each contract application's
    proxy secret under `proxySecretVariable('<app>@<env>')`;
 4. rolls the proxy and waits for its app version;
-5. applies and deploys the application import, with the same secret as the
-   application's `FABRIKA_PROXY_SECRET`.
+5. applies and deploys the application import, with the same secret as a
+   contract application's `FABRIKA_PROXY_SECRET`; any other application holds none.
 
 The proxy secret authenticates the hop from the proxy to the application, because
 every service of a namespace shares one private network (ADR-0022 rule 5). Control

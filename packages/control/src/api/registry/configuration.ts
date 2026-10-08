@@ -6,7 +6,7 @@ import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { requireApp } from './apps'
 import { type RegistryUseCaseContext } from './context'
-import { assertAppVarValue, assertUnmanagedName } from './validation'
+import { assertAppVarValue, assertNoFrameworkReference, assertUnmanagedName } from './validation'
 
 export async function listAppSecretsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppSecretDto>> {
 	await requireApp(c, appId)
@@ -28,6 +28,7 @@ export async function putAppVarUseCase(c: RegistryUseCaseContext, appId: string,
 	await requireApp(c, appId)
 	assertUnmanagedName('variable', input.name)
 	assertAppVarValue(input.value)
+	assertNoFrameworkReference('variable', input.value)
 	const env = input.env ?? null
 	await assertDeclaredVariable(c, appId, env, input.name)
 	const row = await c.repositories.registry.upsertAppVar({ appId, env, name: input.name, value: input.value })

@@ -13,7 +13,7 @@ import { appSecretPurpose } from '../secret-resolver'
 import { parseVaultRef, type Vault, type VaultSecretPurpose } from '../vault'
 import { fail } from './domain'
 import { toAppSecretDto } from './registry/configuration'
-import { assertUnmanagedName } from './registry/validation'
+import { assertNoFrameworkReference, assertUnmanagedName } from './registry/validation'
 
 export interface VaultUseCaseContext {
 	readonly repositories: ControlRepositories
@@ -47,6 +47,7 @@ async function writeAppSecretValue(
 ): Promise<AppSecretRow> {
 	await requireApp(c, appId)
 	assertUnmanagedName('secret', name)
+	assertNoFrameworkReference('secret', input.value)
 	const env = input.env ?? null
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
@@ -99,6 +100,7 @@ export async function rotateAppSecretValueUseCase(
 ): Promise<OkResponse> {
 	await requireApp(c, appId)
 	assertUnmanagedName('secret', name)
+	assertNoFrameworkReference('secret', input.value)
 	const env = input.env ?? null
 	const valueRef = await findAppSecretRef(c.repositories, appId, env, name)
 	if (valueRef === null) fail(404, 'secret not found')

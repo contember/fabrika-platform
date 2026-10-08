@@ -12,26 +12,27 @@ bun run typecheck
 bun test               # app-environment · canonical-path · contract-canonical · endpoint-digest · endpoints · gates · permissions · requirement · sha256 · token
 ```
 
-| Module                  | What it owns                                                                                                                   |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `app-environment.ts`    | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` — and `FABRIKA_IAM_APP_ID`, the name it travels under. |
-| `canonical-path.ts`     | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
-| `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
-| `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
-| `endpoint-digest.ts`    | `requirementDigest`, `contractDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                          |
-| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                                            |
-| `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
-| `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
-| `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                                               |
-| `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.           |
-| `sha256.ts`             | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                            |
-| `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                           |
-| `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
-| `membership.ts`         | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
-| `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
-| `wire.ts`               | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.       |
-| `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
-| `json.ts`               | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                  |
+| Module                   | What it owns                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `app-environment.ts`     | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` — and `FABRIKA_IAM_APP_ID`, the name it travels under. |
+| `canonical-path.ts`      | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
+| `contract.ts`            | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
+| `contract-canonical.ts`  | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
+| `endpoint-digest.ts`     | `requirementDigest`, `contractDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                          |
+| `endpoints.ts`           | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                                            |
+| `gates.ts`               | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
+| `path-segment.ts`        | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
+| `permissions.ts`         | `matchAction` and `permits` — the authorization decision itself.                                                               |
+| `requirement.ts`         | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.           |
+| `sha256.ts`              | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                            |
+| `token.ts`               | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                           |
+| `rpc.ts`                 | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
+| `membership.ts`          | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
+| `types.ts`               | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
+| `wire.ts`                | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.       |
+| `environment.ts`         | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
+| `framework-variables.ts` | `FRAMEWORK_VARIABLE_NAMES` — the names only the platform writes — and `frameworkVariableReference`, a Zerops reference to one. |
+| `json.ts`                | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                  |
 
 ## Invariants
 

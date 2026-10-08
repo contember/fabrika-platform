@@ -200,6 +200,12 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   deletes its own vault row and answers the recorded one. Every follow goes through
   `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out and the provider
   refuses a contract application. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
+- **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
+  `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
+  `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a
+  nested `${…${…}}`; `frameworkVariableReference` in `@fabrika/auth-core`). `RunLogWriter` passes every
+  provider line through `redactKnownSecrets` — the run's resolved app secrets and its proxy secret — before
+  it prints or stores it, because a provider relays what the application printed.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,

@@ -23,7 +23,7 @@ import { z } from 'zod'
 import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
-import { assertAuthoredManagedInputs, assertAuthoredManagedName, parseManagedValues } from './managed-env'
+import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference, parseManagedValues } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
 	type FabrikaManifest,
@@ -451,6 +451,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		secrets: {
 			put: async (input) => {
 				assertAuthoredManagedName(input.name)
+				assertNoFrameworkReference(input.name)
+				assertNoFrameworkReference(input.value)
 				assertOwnReferencesOnly(input.environment, input.name, input.value)
 				const target = decodeEnvironment(input.environment).target
 				await api.putServiceEnv({

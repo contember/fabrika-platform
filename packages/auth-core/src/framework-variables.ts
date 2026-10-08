@@ -31,3 +31,25 @@ const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAME
 export function isFrameworkVariableName(name: string): name is FrameworkVariableName {
 	return FRAMEWORK_VARIABLES.has(name)
 }
+
+/** A Zerops reference: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}` or `${RUNTIME_<host>_NAME}`. */
+const REFERENCE = /\$\{([^}]*)\}?/g
+const RUNTIME_PREFIX = /^RUNTIME_/
+const HOST_PREFIX = /^[a-z0-9]{1,25}_/
+
+/**
+ * The first reference in `text` to a framework-only variable, or `null`. A value that references one copies a
+ * platform credential into a variable the application controls, so every surface that writes authored values refuses
+ * it. A reference nested in another is refused too, because its name is only known once Zerops resolves it.
+ */
+export function frameworkVariableReference(text: string): string | null {
+	for (const match of text.matchAll(REFERENCE)) {
+		const inner = match[1] ?? ''
+		if (inner.includes('${')) return match[0]
+		const local = inner.replace(RUNTIME_PREFIX, '')
+		for (const name of [inner, local, local.replace(HOST_PREFIX, '')]) {
+			if (isFrameworkVariableName(name)) return match[0]
+		}
+	}
+	return null
+}

@@ -719,6 +719,19 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
 	})
 
+	test('a variable or secret value that references a framework-only variable is refused, naming only the reference', async () => {
+		const { deps } = await seededApp()
+		for (const value of ['${RUNTIME_FABRIKA_PROXY_SECRET}', 'x-${api_FABRIKA_APP_DATABASE_URL}', '${FABRIKA_PROXY_${SUFFIX}}']) {
+			const variable = await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'COPY', value } }), deps)
+			expect(variable.status).toBe(400)
+			expect(((await variable.json()) as { error: string }).error).toContain('references the Fabrika-managed variable')
+			const secret = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'COPY', value } }), deps)
+			expect(secret.status).toBe(400)
+		}
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+		expect(await deps.repositories.registry.listAppVars('app')).toEqual([])
+	})
+
 	test('every name a deploy writes into the managed environment is in the one framework-only list', () => {
 		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
 			expect(`${name}: ${isFrameworkVariableName(name)}`).toBe(`${name}: true`)

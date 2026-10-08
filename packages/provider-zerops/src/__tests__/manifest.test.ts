@@ -255,10 +255,34 @@ const exampleDescriptor = async (file: string): Promise<string> =>
 describe('managed key manifest boundary', () => {
 	test('pure authored walk accepts frozen readonly structures without changing them', () => {
 		const services = Object.freeze([
-			Object.freeze({ hostname: 'notesapi', envVariables: Object.freeze({ APP_READ: '${FABRIKA_RELEASE}' }) }),
+			Object.freeze({ hostname: 'notesapi', envVariables: Object.freeze({ APP_READ: '${notesdb_connectionString}' }) }),
 		])
 		expect(() => assertAuthoredManagedDocument(services)).not.toThrow()
-		expect(services[0]?.envVariables.APP_READ).toBe('${FABRIKA_RELEASE}')
+		expect(services[0]?.envVariables.APP_READ).toBe('${notesdb_connectionString}')
+	})
+
+	test('refuses a variable that copies a framework-only variable, in every reference form (ADR-0022 rule 5)', async () => {
+		for (
+			const reference of [
+				'${FABRIKA_PROXY_SECRET}',
+				'${RUNTIME_FABRIKA_PROXY_SECRET}',
+				'${notesapi_FABRIKA_PROXY_SECRET}',
+				'${RUNTIME_notesapi_FABRIKA_APP_DATABASE_URL}',
+				'${FABRIKA_PROXY_${SUFFIX}}',
+			]
+		) {
+			for (const phase of ['build', 'run']) {
+				// The reviewer's case: `COPY` holds the secret, and anything that prints `$COPY` prints it.
+				const descriptor = await createZeropsArtifactSourceDescriptor(
+					`zerops:\n  - setup: notesapi\n    ${phase}:\n      envVariables:\n        COPY: "${reference}"\n`,
+				)
+				expect(() => compileFabrikaManifest({ ...notesConfig, target: { ...notesConfig.target, zeropsSetup: 'notesapi' } }, 'prod', descriptor))
+					.toThrow('references the Fabrika-managed variable')
+			}
+			expect(() => assertAuthoredManagedDocument([{ hostname: 'notesapi', envVariables: { COPY: reference } }])).toThrow(
+				'references the Fabrika-managed variable',
+			)
+		}
 	})
 
 	test('rejects internal and canonical managed definitions in pipeline declarations and import mappings', async () => {

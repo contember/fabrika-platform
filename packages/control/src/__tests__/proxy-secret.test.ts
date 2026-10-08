@@ -3,6 +3,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { proxySecretPurpose, VaultProxySecrets } from '../proxy-secret'
+import { redactKnownSecrets } from '../run-lifecycle'
 import { Vault } from '../vault'
 import { createHarness, queryRows } from './helpers/harness'
 
@@ -60,5 +61,12 @@ describe('VaultProxySecrets', () => {
 
 	test('the purpose names the IAM application id of the environment', () => {
 		expect(proxySecretPurpose('notes', 'prod')).toEqual({ scope: 'platform', label: 'platform:proxy-secret:notes@prod' })
+	})
+})
+
+describe('redactKnownSecrets', () => {
+	test('replaces every occurrence of every known secret, the longest first, and ignores an empty one', () => {
+		expect(redactKnownSecrets('a=abc b=abcdef c=abc', ['abc', 'abcdef', ''])).toBe('a=[redacted] b=[redacted] c=[redacted]')
+		expect(redactKnownSecrets('nothing secret here', ['s3cr3t'])).toBe('nothing secret here')
 	})
 })

@@ -61,7 +61,10 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		port: 0,
 		fetch(request) {
 			seenByAuth.push(request.headers)
-			return new Response(null, { status: 200, headers: { 'X-Fabrika-Token': 'proxy-token', 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': ENDPOINT } })
+			return new Response(null, {
+				status: 200,
+				headers: { 'X-Fabrika-Token': 'proxy-token', 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': ENDPOINT },
+			})
 		},
 	})
 	const app = Bun.serve({

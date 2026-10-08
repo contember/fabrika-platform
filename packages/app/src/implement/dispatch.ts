@@ -19,9 +19,9 @@ import {
 	satisfies,
 	scopedValues,
 } from '@fabrika/auth-core'
-import { createHash, timingSafeEqual } from 'node:crypto'
 import { type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { TokenVerifier } from '@fabrika/jwks'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import type { Schema } from '../contract/define'
 import {

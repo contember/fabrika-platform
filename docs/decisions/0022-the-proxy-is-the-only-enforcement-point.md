@@ -267,7 +267,9 @@ Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the
 travels as `X-Fabrika-Proxy-Secret`. Control seals it in its vault the first time an environment
 joins a namespace proxy and never rotates it on its own. The proxy service holds one variable per
 application, `proxySecretVariable('<app>@<env>')`, because one proxy fronts a whole namespace; the
-application holds `FABRIKA_PROXY_SECRET`. The Bun adapter refuses to start without it. A health
+application holds `FABRIKA_PROXY_SECRET` and compares digests in constant time. The Bun adapter refuses to
+start without it. No authored variable may reference a framework-only variable, so the secret cannot be
+copied into one the application controls, and Control redacts it from run logs. A health
 endpoint is served without the secret, for the same reason it may arrive without the endpoint
 header. The Operations upload headers are not hop headers: a client sends them to Operations
 through the platform proxy.

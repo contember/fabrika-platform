@@ -94,6 +94,19 @@ const providerAppAtCommit = (app: ProviderApp, commitSha: string): ProviderApp =
 	source: { ...app.source, ref: commitSha },
 })
 
+const REDACTED = '[redacted]'
+
+/**
+ * `text` with every known secret value replaced, longest first so a secret that contains another stays whole. Provider
+ * output can carry a value the application printed, so a line is redacted before it is printed or stored.
+ */
+export function redactKnownSecrets(text: string, secrets: readonly string[]): string {
+	return [...secrets].filter((secret) => secret !== '').sort((a, b) => b.length - a.length).reduce(
+		(redacted, secret) => redacted.replaceAll(secret, REDACTED),
+		text,
+	)
+}
+
 class RunLogWriter {
 	readonly #lines: RunLogLine[] = []
 	#writeQueue: Promise<void> = Promise.resolve()
@@ -102,9 +115,12 @@ class RunLogWriter {
 		private readonly logs: Pick<BlobStore, 'put'>,
 		private readonly key: string,
 		private readonly runId: string,
+		/** The secret values this run handed the provider. */
+		private readonly secrets: readonly string[],
 	) {}
 
-	log(text: string): void {
+	log(line: string): void {
+		const text = redactKnownSecrets(line, this.secrets)
 		console.info(`deploy run ${this.runId}: ${text}`)
 		this.#lines.push({ ts: Date.now(), stream: 'meta', text })
 		const contents = `${this.#lines.map((line) => JSON.stringify(line)).join('\n')}\n`
@@ -520,7 +536,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
-		const runLogs = new RunLogWriter(deps.logs, startedLogKey, runId)
+		const handedSecrets = [...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? '']
+		const runLogs = new RunLogWriter(deps.logs, startedLogKey, runId, handedSecrets)
 		let outcome: ProviderDeployOutcome
 		try {
 			if (ingestGap !== null) {

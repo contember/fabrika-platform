@@ -442,7 +442,6 @@ describe('Zerops provider', () => {
 			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod' },
 			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
 			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
-			{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' },
 		])
 		expect(recorded.envDeletes).toEqual(['env-issuer', 'env-release'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
@@ -469,15 +468,21 @@ describe('Zerops provider', () => {
 		expect(log).toContain('FABRIKA_APP_ID: unchanged')
 		expect(log).toContain('FABRIKA_IAM_ISSUER: removed')
 		expect(log).toContain('FABRIKA_RELEASE: removed')
+		// Not a contract application: it checks no secret, so it is handed none.
+		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_PROXY_SECRET')
 		expect(log).not.toContain('private-')
 		expect(JSON.stringify([recorded.externalStates, recorded.checkpoints])).not.toContain('private-')
 	})
 
 	test('refuses a contract application without its proxy secret, before any platform call', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const base = app()
-		const contractApp: ZeropsAppConfig = { ...base, target: { ...base.target, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } } }
-		const run = { ...deployRun(recorded), artifact: compileFabrikaManifest(contractApp, 'prod', SOURCE_DESCRIPTOR) }
+		const config: ZeropsAppConfig = {
+			...app([API]),
+			id: 'notes',
+			target: { ...app([API]).target, contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } },
+		}
+		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
+		const run = { ...deployRun(recorded), appId: 'notes', artifact }
 		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
 		expect(recorded.timeline).toEqual([])
 		// A dry run writes nothing, so it needs no secret.
@@ -1043,11 +1048,13 @@ describe('a contract application deploy', () => {
 		const result = await provider({
 			...deployRun(recorded),
 			appId: 'notes',
-			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE },
+			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
 			artifact,
 		})
 
 		expect(result.status).toBe('succeeded')
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' })
+		expect(recorded.logs.join('\n')).not.toContain('private-proxy-secret')
 		const sent = recorded.builds[0]?.zeropsYaml ?? ''
 		expect(sent).toContain(`FABRIKA_CONTRACT_DIGEST: "${artifact.target.contract?.digest ?? 'missing'}"`)
 		expect(sent).toContain(`FABRIKA_RELEASE: ${RELEASE}\n`)

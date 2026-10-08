@@ -1,4 +1,4 @@
-import { APP_ENVIRONMENT_SEPARATOR, isAppEnvironmentPart, isFrameworkVariableName } from '@fabrika/auth-core'
+import { APP_ENVIRONMENT_SEPARATOR, frameworkVariableReference, isAppEnvironmentPart, isFrameworkVariableName } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../../public-origin'
 import { fail } from '../domain'
@@ -18,6 +18,14 @@ const isControlCharacter = (code: number): boolean =>
 export function assertUnmanagedName(kind: 'variable' | 'secret', name: string): void {
 	if (isFrameworkVariableName(name)) {
 		fail(400, `application ${kind} "${name}" is managed by Fabrika`)
+	}
+}
+
+/** Refuse a value that would copy a platform-owned variable into one the application controls (`${RUNTIME_FABRIKA_…}`). */
+export function assertNoFrameworkReference(kind: 'variable' | 'secret', value: string): void {
+	const reference = frameworkVariableReference(value)
+	if (reference !== null) {
+		fail(400, `application ${kind} value references the Fabrika-managed variable \`${reference}\``)
 	}
 }
 

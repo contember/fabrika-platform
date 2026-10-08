@@ -14,7 +14,15 @@ const member = (appId: string, options: { contract: boolean; proxySecret?: strin
 		? { upstream: `${appId}:3000`, ...contractProxyTable(notesArtifact) }
 		: { upstream: `${appId}:3000`, gates: { rules: [{ path: '/*', kind: 'human' as const }] } }
 	const manifest = compileFabrikaManifest(
-		defineApp({ id: appId, target: { platform: 'zerops', services: () => [{ hostname: appId, type: 'alpine/bun@1.3' }], proxy } }),
+		defineApp({
+			id: appId,
+			target: {
+				platform: 'zerops',
+				services: () => [{ hostname: appId, type: 'alpine/bun@1.3' }],
+				proxy,
+				...(options.contract ? { contract: notesArtifact } : {}),
+			},
+		}),
 		'prod',
 		SOURCE_DESCRIPTOR,
 	)

@@ -745,9 +745,12 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 	}
 	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
-	const managedValues = parseManagedValues(run.managedEnvironment)
 	const proxy = run.artifact.target.proxy
-	if (!run.dryRun && proxy !== undefined && 'endpoints' in proxy && managedValues.FABRIKA_PROXY_SECRET === null) {
+	const contractProxy = proxy !== undefined && 'endpoints' in proxy
+	const handed = parseManagedValues(run.managedEnvironment)
+	// Only a contract application checks the secret; any other would merely hold a credential its own code can print.
+	const managedValues: ManagedValues = contractProxy ? handed : { ...handed, FABRIKA_PROXY_SECRET: null }
+	if (!run.dryRun && contractProxy && managedValues.FABRIKA_PROXY_SECRET === null) {
 		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
 		throw new Error('zerops: a contract application needs its proxy secret, and Control supplied none')
 	}

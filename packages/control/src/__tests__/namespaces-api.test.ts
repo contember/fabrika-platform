@@ -8,7 +8,7 @@ import type {
 	ProviderNamespaceRepublishInput,
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
 	enqueueUnsettledNamespaces,
 	type NamespaceJobResult,
@@ -1051,6 +1051,39 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		expect(record.deploySecrets).toEqual([alpha, alpha])
 		const stored = await harness.deps.repositories.registry.getAppEnvProxySecretRef('alpha', 'prod')
 		expect(stored === null ? null : await vault.getSecretForPurpose(stored, proxySecretPurpose('alpha', 'prod'))).toBe(alpha ?? '')
+	})
+
+	test('provider output that prints the proxy secret is redacted before Control prints or stores it', async () => {
+		const record = republishing()
+		const base = republishingProvider(record)
+		const provider: ControlProvider = {
+			...base,
+			async deploy(input) {
+				input.events.log(`COPY=${input.managedEnvironment[FABRIKA_PROXY_SECRET] ?? 'none'}`)
+				return { state: 'succeeded' }
+			},
+		}
+		const harness = makeDeps(provider)
+		await seed(harness)
+		const vault = await Vault.create(harnessDatabase(harness.deps.repositories), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
+		const stored: string[] = []
+		const printed: string[] = []
+		const info = spyOn(console, 'info').mockImplementation((...args: unknown[]) => void printed.push(args.map(String).join(' ')))
+		try {
+			await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+			const deps = {
+				...runDepsOf(harness),
+				logs: { put: (_key: string, contents: string) => Promise.resolve(void stored.push(contents)) },
+				proxySecrets: new VaultProxySecrets(harness.deps.repositories.registry, () => Promise.resolve(vault)),
+			}
+			expect(await executeDeploy(deps, { runId: 'run-1' })).toEqual({ runId: 'run-1', status: 'succeeded' })
+		} finally {
+			info.mockRestore()
+		}
+		const secret = await new VaultProxySecrets(harness.deps.repositories.registry, () => Promise.resolve(vault)).forAppEnv('alpha', 'prod')
+		expect(stored.join('\n')).toContain('COPY=[redacted]')
+		expect(printed.join('\n')).toContain('COPY=[redacted]')
+		expect([...stored, ...printed].join('\n')).not.toContain(secret)
 	})
 
 	test('without a vault no member carries a proxy secret and the application gets none', async () => {
