@@ -89,13 +89,13 @@ describe('Cloudflare run outcome through Control', () => {
 		const provider = cloudflareProvider(service, iamCalls)
 
 		expect(await executeDeploy(deps(db, provider), { runId })).toEqual({ runId, status: 'succeeded' })
-		expect(iamCalls).toEqual(['app'])
+		expect(iamCalls).toEqual(['app@prod'])
 		const finished = await db.runs.getRun(runId)
 		expect(finished?.status).toBe('succeeded')
 
 		expect(await executeDeploy(deps(db, provider), { runId })).toEqual({ runId, status: 'skipped' })
 		expect(await reconcileProviderRuns(deps(db, provider))).toMatchObject({ checked: 0, succeeded: 0 })
-		expect(iamCalls).toEqual(['app'])
+		expect(iamCalls).toEqual(['app@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(finished)
 	})
 
@@ -112,14 +112,14 @@ describe('Cloudflare run outcome through Control', () => {
 
 		const restarted = cloudflareProvider(service, iamCalls)
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 1 })
-		expect(iamCalls).toEqual(['app'])
+		expect(iamCalls).toEqual(['app@prod'])
 		const settled = await db.runs.getRun(runId)
 		expect(settled?.status).toBe('succeeded')
 		expect(settled?.exit_code).toBe(0)
 
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0, succeeded: 0 })
 		expect(await executeDeploy(deps(db, restarted), { runId })).toEqual({ runId, status: 'skipped' })
-		expect(iamCalls).toEqual(['app'])
+		expect(iamCalls).toEqual(['app@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
 	})
 
@@ -157,17 +157,17 @@ describe('Cloudflare run outcome through Control', () => {
 		} finally {
 			diagnostic.mockRestore()
 		}
-		expect(iamCalls).toEqual(['app'])
+		expect(iamCalls).toEqual(['app@prod'])
 		expect((await db.runs.getRun(runId))?.status).toBe('running')
 
 		// The intruder's lease expires.
 		sqlite.run('DELETE FROM deploy_locks')
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 1 })
-		expect(iamCalls).toEqual(['app', 'app'])
+		expect(iamCalls).toEqual(['app@prod', 'app@prod'])
 		const settled = await db.runs.getRun(runId)
 		expect(settled?.status).toBe('succeeded')
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0 })
-		expect(iamCalls).toEqual(['app', 'app'])
+		expect(iamCalls).toEqual(['app@prod', 'app@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
 	})
 })
