@@ -256,39 +256,34 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 		return { ok: true, ...result.data }
 	}
 
-	async requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
-		const body = await this.call('requestDelegation', input)
-		return readMembershipFailure(body) ?? decode(delegationSuccessSchema, body, 'requestDelegation')
+	readonly #membership = new DecodedIamMembership((method, input) => this.call(method, input))
+
+	requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
+		return this.#membership.requestDelegation(input)
 	}
 
-	async createScope(input: CreateScopeInput): Promise<CreateScopeResult> {
-		const body = await this.call('createScope', input)
-		return readMembershipFailure(body) ?? decode(createScopeSuccessSchema, body, 'createScope')
+	createScope(input: CreateScopeInput): Promise<CreateScopeResult> {
+		return this.#membership.createScope(input)
 	}
 
-	async assignMember(input: AssignMemberInput): Promise<AssignMemberResult> {
-		const body = await this.call('assignMember', input)
-		return readMembershipFailure(body) ?? decode(assignSuccessSchema, body, 'assignMember')
+	assignMember(input: AssignMemberInput): Promise<AssignMemberResult> {
+		return this.#membership.assignMember(input)
 	}
 
-	async revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult> {
-		const body = await this.call('revokeMember', input)
-		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeMember')
+	revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult> {
+		return this.#membership.revokeMember(input)
 	}
 
-	async listMembers(input: ListMembersInput): Promise<ListMembersResult> {
-		const body = await this.call('listMembers', input)
-		return readMembershipFailure(body) ?? decode(listMembersSuccessSchema, body, 'listMembers')
+	listMembers(input: ListMembersInput): Promise<ListMembersResult> {
+		return this.#membership.listMembers(input)
 	}
 
-	async issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {
-		const body = await this.call('issueLink', input)
-		return readMembershipFailure(body) ?? decode(issueLinkSuccessSchema, body, 'issueLink')
+	issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {
+		return this.#membership.issueLink(input)
 	}
 
-	async revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
-		const body = await this.call('revokeLink', input)
-		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeLink')
+	revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
+		return this.#membership.revokeLink(input)
 	}
 
 	async getJwks(): Promise<Jwks> {
@@ -341,6 +336,57 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 			throw new IamTransportError(method)
 		}
 		return response
+	}
+}
+
+/** The membership operations, by name, as a transport carries them. */
+export type IamMembershipMethod = keyof IamMembershipRpc
+
+/**
+ * `IamMembershipRpc` over any transport that answers each call with a JSON-shaped body: `HttpIamRpc`, or a Workers
+ * binding to IAM's application entrypoint. Every answer is decoded here, so a body that breaks the contract is
+ * `IamTransportError`, never a value of the declared type.
+ */
+export class DecodedIamMembership implements IamMembershipRpc {
+	readonly #call: (method: IamMembershipMethod, input: unknown) => Promise<unknown>
+
+	constructor(call: (method: IamMembershipMethod, input: unknown) => Promise<unknown>) {
+		this.#call = call
+	}
+
+	async requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
+		const body = await this.#call('requestDelegation', input)
+		return readMembershipFailure(body) ?? decode(delegationSuccessSchema, body, 'requestDelegation')
+	}
+
+	async createScope(input: CreateScopeInput): Promise<CreateScopeResult> {
+		const body = await this.#call('createScope', input)
+		return readMembershipFailure(body) ?? decode(createScopeSuccessSchema, body, 'createScope')
+	}
+
+	async assignMember(input: AssignMemberInput): Promise<AssignMemberResult> {
+		const body = await this.#call('assignMember', input)
+		return readMembershipFailure(body) ?? decode(assignSuccessSchema, body, 'assignMember')
+	}
+
+	async revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult> {
+		const body = await this.#call('revokeMember', input)
+		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeMember')
+	}
+
+	async listMembers(input: ListMembersInput): Promise<ListMembersResult> {
+		const body = await this.#call('listMembers', input)
+		return readMembershipFailure(body) ?? decode(listMembersSuccessSchema, body, 'listMembers')
+	}
+
+	async issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {
+		const body = await this.#call('issueLink', input)
+		return readMembershipFailure(body) ?? decode(issueLinkSuccessSchema, body, 'issueLink')
+	}
+
+	async revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
+		const body = await this.#call('revokeLink', input)
+		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeLink')
 	}
 }
 

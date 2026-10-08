@@ -58,7 +58,9 @@ the service that owns identity.
   as proof. IAM evaluates each request against the caller's live permissions, generates the scope value
   and issues the key. The SDK mints nothing, signs nothing, supplies no actor and writes no grant; its
   binding is `IamMembershipRpc`, separate from `IamBinding`, so a platform `IamRpc` need not serve it.
-  The framework (A13) decides which endpoint may call which operation.
+  The framework (A13) decides which endpoint may call which operation. `DecodedIamMembership` decodes
+  every membership answer, whatever carries it: `HttpIamRpc` delegates to it, and `@fabrika/app`'s Worker
+  adapter wraps the `IAM` binding in it, so a body that breaks the contract is `IamTransportError` on both.
 - **THERE IS NO SECOND AUTHENTICATION MODEL HERE, and adding one back is the bug.** The SDK used to
   select a `FakeIamClient` plus synthetic personas from a `DEV` env var, resolved by `?__as=` / a
   cookie / a header, with a default persona holding a global-admin grant — so one misread flag handed
