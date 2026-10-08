@@ -61,7 +61,7 @@ export function namespaceLamp(state: DeploymentNamespaceState): Lamp {
 
 /** Deploy-run state: `pending` reads as `queued`, which is what an operator is actually waiting on. */
 export function RunStatus({ status }: { status: RunStatusValue }) {
-	return <Status lamp={runLamp(status)}>{status === 'pending' ? 'queued' : status}</Status>
+	return <Status lamp={runLamp(status)}>{status === 'pending' ? 'queued' : status === 'awaiting_approval' ? 'awaiting approval' : status}</Status>
 }
 
 export function NamespaceState({ state }: { state: DeploymentNamespaceState }) {

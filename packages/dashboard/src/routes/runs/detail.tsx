@@ -21,7 +21,7 @@ export default createPage()
 	.route('/runs/:id')
 	.render(({ data, invalidate }) => {
 		const { run, appEnv } = data
-		const inFlight = run.status === 'pending' || run.status === 'running'
+		const inFlight = run.status === 'pending' || run.status === 'running' || run.status === 'awaiting_approval'
 
 		return (
 			<>
@@ -71,6 +71,15 @@ export default createPage()
 						)}
 					</div>
 				</section>
+
+				{run.status === 'awaiting_approval' && (
+					<section>
+						<p className="hint">
+							This deploy widens access on a protected environment and waits for a person.{' '}
+							<Link to="approvals/detail" params={{ id: run.id }}>Review the access change</Link>
+						</p>
+					</section>
+				)}
 
 				<section>
 					<div className="section-head">
