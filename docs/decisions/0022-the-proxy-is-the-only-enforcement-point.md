@@ -62,9 +62,10 @@ installation's own services (IAM, Control, Operations), including the `oauth` ga
 an application's contract. It protects every contract application. Control's metadata selects the form
 per service. Both forms are evaluated only by the proxy, with the matchers in `@fabrika/auth-core`.
 
-Today the proxy evaluates authored gates for every service. Part A generates an application's gates
-from its contract. Part B, work units B2 to B4, replaces that intermediate path with endpoint tables,
-the authenticated hop and the response headers.
+The proxy evaluates gates for every app whose manifest entry carries gates, and the endpoint table for
+every app whose entry carries one; an entry carrying both is refused. Part A generates an application's
+gates from its contract as an intermediate path. Work unit B2 built the endpoint tables; the
+authenticated hop (B3) and the response headers (B4) are not built yet.
 
 ### 1. Only the proxy is publicly routed
 
@@ -163,9 +164,11 @@ is denied.
 - `oauth` — an OAuth access token for the declared resource and scopes
   ([ADR-0049](0049-author-applications-through-mcp-in-control.md)).
 
-**Endpoint tables (contract applications).** The manifest carries `{ id, hosts, upstream, endpoints,
-snapshot }` per application. Each endpoint row is `{ id, kind, method, path, callers, requirement,
-digest }`. Array order has no meaning here. The proxy makes one pass over one selected endpoint:
+**Endpoint tables (contract applications).** The manifest carries `{ id, hosts, upstream, scheme,
+endpoints, reservedPrefixes, snapshot }` per application; `snapshot` is the contract digest. Each
+endpoint row is `{ id, kind, method, path, callers, requirement, admission, delegation, digest }`, and
+the manifest parser refuses a row whose digest does not describe its rules. Array order has no meaning
+here. The proxy makes one pass over one selected endpoint:
 
 1. **Canonical path.** The raw path must have no empty segment, no `.` or `..`, no encoded `/` or `\`
    and no literal `\`. Otherwise the answer is 400. A request without a method is denied. A trailing
@@ -187,8 +190,9 @@ digest }`. Array order has no meaning here. The proxy makes one pass over one se
 **Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, and the shell
 of a link SPA) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
 It does not forward a `px_` key or a session that arrives on such a request. Admission still applies:
-a form has a body limit and admits only its content type. A webhook's signature is verified by the
-framework, not by the proxy.
+a form admits only its content type. Its body limit is the framework's, because `forward_auth` hands
+the proxy the headers and never the body. A webhook's signature is verified by the framework, not by
+the proxy.
 
 **Principal kinds.** A `px_` key has its own principal kind. The kinds are `user` and `service`, plus
 `link`, `app`, `job` and `webhook`, each added with the feature that needs it. The caller `human`
@@ -252,9 +256,11 @@ For a contract application, the hop carries more facts, and the application chec
   variable to the proxy and to the application. On Cloudflare the service binding takes its place
   (rule 1).
 - **The endpoint.** The allow response carries `X-Fabrika-Endpoint: <id>@<digest>`. The digest covers
-  the endpoint's kind, method, path, callers, requirement and admission. The application dispatches by
-  the id and answers 503 when the digest differs from its own. A request is therefore never served by
-  code that expects different rules than the proxy applied.
+  the endpoint's kind, method, path, callers, requirement and admission. The application serves the
+  endpoint the id names, and only when its own `planEndpoint` selects the same endpoint and the digest
+  equals its own; a missing header or any disagreement is a 503. A request is therefore never served by
+  code that expects different rules than the proxy applied. A health endpoint alone may arrive without
+  the header, because the platform's liveness probe dials the application directly.
 
 At startup the application compares its contract digest with `FABRIKA_CONTRACT_DIGEST`, a literal in
 the execution descriptor ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). It
@@ -312,9 +318,9 @@ registry of its own.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
   share links included. Membership operations are checked live at IAM.
 
-Work units B5 and A12 built rule 6 at IAM. The proxy side of delegation grants needs the endpoint
-tables of B2; until then the framework obtains a grant from IAM in-process with the caller's token, so
-the binding to the endpoint holds only as far as the framework holds. The platform audiences are IAM
+Work units B5 and A12 built rule 6 at IAM, and B2 built the proxy side of delegation grants: a row
+marked `members` or `creates` gets a fresh grant from IAM's `requestDelegation` for every request,
+forwarded in `X-Fabrika-Delegation`. The platform audiences are IAM
 (`propustka`), the console (`vozka`), Operations and every admin audience. A contract application is
 one whose IAM schema carries `contract: true`; `schemaFromContract` sets it. `listPrincipals` is
 refused for an application token; an application lists the members of a value with IAM's
@@ -378,7 +384,7 @@ principal kind `link`: its token carries no `ptype` and names its link mount and
 - **Keep generated gates for contract applications.** Rejected: an absent credential falls through, so
   a gate can only add access, and the proxy cannot check the caller kind or the requirement.
 - **Let the application select the endpoint again from the path.** Rejected: two selections can
-  diverge. The application dispatches by the id the proxy selected.
+  diverge. The application serves the id the proxy selected; its own selection only has to agree.
 - **One digest for the whole contract instead of one per endpoint.** Rejected: every endpoint would
   answer 503 during a switch, not only the changed ones.
 - **Rely on the private network alone for the hop.** Rejected: every service in a Zerops namespace
