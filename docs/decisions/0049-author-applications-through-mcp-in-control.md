@@ -2,7 +2,7 @@
 id: 0049
 title: Author applications through an MCP endpoint in Control over Git workspaces
 status: accepted
-date: 2026-10-07
+date: 2026-10-08
 ---
 
 # 0049 — Author applications through an MCP endpoint in Control over Git workspaces
@@ -18,6 +18,12 @@ An earlier exploration put the MCP server in a separate service. That service ne
 delegation to reach Control, its own database for a delegation journal, and a second copy of every
 authorization check. Control already owns the application registry, the deploy runs and their
 authorization, and it already holds each GitHub connection's App key in its vault (ADR-0029).
+
+A hosted agent has no shell and no local toolchain. It edits files of a workspace and reads the build
+log. When a request is refused, it loosens whatever refused it. Protecting every `fabrika.*` file
+stops it from widening access, but it also stops it from adding an endpoint or a table. With approval
+of access changes ([ADR-0050](0050-approved-access.md)), the platform can let the agent edit the
+contract and classify what it changed instead.
 
 ## Decision
 
@@ -39,12 +45,21 @@ authorization, and it already holds each GitHub connection's App key in its vaul
 5. **An operator marks an app environment as an authoring target.** A user may author it when they
    also hold `source.workspace.*` grants at its coordinates. One stage environment per app; deploying a
    workspace creates an ordinary run for the exact head SHA in that environment.
-6. **Repository configuration is protected.** Control refuses edits to `zerops.yaml` / `zerops.yml`
-   at any depth, `fabrika.*` files and everything under `.github/`; the operator changes them through
-   normal review.
+6. **Only the build and CI configuration is protected.** Control refuses edits to `zerops.yaml` /
+   `zerops.yml` at any depth and to everything under `.github/`; the operator changes them through
+   normal review. A workspace may edit `fabrika.contract.ts`, its schema modules and
+   `src/db/tables.ts`. Control classifies those changes at deploy time instead of refusing them
+   (ADR-0050).
 7. **Production is not an MCP operation.** The tool opens a pull request. A human reviews and merges
-   in GitHub, and the existing Delivery trigger deploys the merged commit.
-8. **Zerops only** for this version.
+   in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit widens
+   access on a protected environment, the run waits for approval. `get_deployment` reports a waiting
+   run as `awaiting_approval` with the approval link.
+8. **No MCP token approves.** An OAuth or MCP token is refused by `approvals.complete`, whatever its
+   scope (ADR-0050). Every run records its actor, including runs created through MCP.
+9. **Zerops only** for this version.
+
+Today the code still protects every `fabrika.*` file, and nothing waits for approval (part B, work
+unit B6).
 
 ## Consequences
 
@@ -55,6 +70,11 @@ authorization, and it already holds each GitHub connection's App key in its vaul
 - A stage environment shows one workspace at a time. Per-workspace previews are future work.
 - The application owns its data and data authorization; the platform does not isolate generated code
   from the app's database.
+- An agent can add endpoints, roles and tables without an operator. A stage environment is not
+  protected by default, so the change applies there at once; on production a widening waits for a
+  human.
+- Every refusal of the reader, the checker and the build must be one short, actionable line in the
+  build log, because that log is the agent's only feedback.
 
 ## Alternatives considered
 
@@ -62,5 +82,9 @@ authorization, and it already holds each GitHub connection's App key in its vaul
   call, authorization in two places, another service and database to operate.
 - **Separate MCP gateway forwarding a multi-audience token.** Lost: token passthrough to Control RPC,
   which the MCP specification warns against, and a weaker audience check in every verifier.
+- **Keep every `fabrika.*` file protected.** Lost: the agent cannot add an endpoint or a table, so
+  every feature needs an operator. Classification makes the change visible to a human instead.
+- **Let the pull-request review stand in for approval.** Lost: the reviewer may not read the contract
+  diff, and the approval page shows the access change in plain language.
 - **Platform-owned data language with sandboxed generated code.** Lost: a large trusted runtime that
   limits what applications can do, for an isolation property the first users do not need.
