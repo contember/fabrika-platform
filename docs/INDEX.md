@@ -23,6 +23,9 @@ For editing an application from Claude or ChatGPT through MCP, see [MCP authorin
 
 [MCP application authoring](sprints/sprint-2026-10-07-mcp-authoring.md) is active: MCP in Control, IAM OAuth for Claude/ChatGPT, Git workspaces, stage deploys and pull requests on Zerops ([ADR-0049](decisions/0049-author-applications-through-mcp-in-control.md)).
 
+[Port of local-hardening](sprints/sprint-2026-10-08-local-hardening-port.md) is active: the nine fixes of the unmerged
+`sprint/local-hardening` branch, redone on `main`.
+
 The [second simplification pass](archive/sprint-2026-10-08-second-simplification-pass.md)
 shipped on 2026-10-08.
 

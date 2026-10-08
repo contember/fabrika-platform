@@ -20,3 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 - [MCP application authoring](sprint-2026-10-07-mcp-authoring.md) — employees author apps from Claude/ChatGPT through MCP in Control: Git workspaces, stage deploys, pull requests; Zerops first. Decisions in ADR-0049.
+- [Port of local-hardening](sprint-2026-10-08-local-hardening-port.md) — the nine backlog fixes of the unmerged `sprint/local-hardening` branch, redone on current `main`.
