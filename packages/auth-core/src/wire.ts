@@ -1,3 +1,5 @@
+import { sha256Hex } from './sha256'
+
 /** Header carrying the proxy-verified access token to the upstream app. */
 export const PROXY_TOKEN_HEADER = 'X-Fabrika-Token'
 
@@ -41,3 +43,36 @@ export const ENDPOINT_HEADER = 'X-Fabrika-Endpoint'
  * endpoint (ADR-0022 rule 6). The framework forwards it to IAM; nothing else reads it.
  */
 export const DELEGATION_HEADER = 'X-Fabrika-Delegation'
+
+/**
+ * Header carrying the proxy secret of one application environment (ADR-0022 rule 5), on Zerops only: a namespace is
+ * one private network, so the application refuses a request that does not prove it came through the proxy. On
+ * Cloudflare the service binding is the authenticated hop and this header is never set.
+ */
+export const PROXY_SECRET_HEADER = 'X-Fabrika-Proxy-Secret'
+
+/** The application's framework variable holding the secret its proxy sends in `PROXY_SECRET_HEADER`. */
+export const FABRIKA_PROXY_SECRET = 'FABRIKA_PROXY_SECRET'
+
+/**
+ * The proxy service's variable holding the secret of application environment `id` (`<app>@<env>`). One proxy fronts
+ * every application of a namespace, so each secret needs its own name; an environment name may hold any character, so
+ * the name carries a digest of the id rather than the id.
+ */
+export function proxySecretVariable(id: string): string {
+	return `${FABRIKA_PROXY_SECRET}_${sha256Hex(id).slice(0, 32).toUpperCase()}`
+}
+
+/**
+ * Every `X-Fabrika-*` name a proxy hop carries to an application. Caddy's first step and the Cloudflare proxy Worker
+ * delete each of them from the client's request before anything else, then set only what the decision asserts. A new
+ * header the proxy sets joins this list in the same change. The Operations upload headers are not hop headers: a
+ * client sends them to Operations through the platform proxy, so the proxy must let them pass.
+ */
+export const FABRIKA_HOP_HEADERS: readonly string[] = [
+	PROXY_TOKEN_HEADER,
+	CLIENT_ADDRESS_HEADER,
+	ENDPOINT_HEADER,
+	DELEGATION_HEADER,
+	PROXY_SECRET_HEADER,
+]

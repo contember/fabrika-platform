@@ -9,7 +9,7 @@
  *     make the Caddy layer itself fail-closed.
  */
 
-import type { AppGates } from '@fabrika/auth-core'
+import { type AppGates, FABRIKA_HOP_HEADERS, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
 import {
 	CLIENT_ADDRESS_HEADER,
 	DELEGATION_HEADER,
@@ -143,10 +143,11 @@ describe('the per-app chain is fail-closed by construction', () => {
 				request: {
 					delete: [
 						PROXY_TOKEN_HEADER,
-						REQUEST_ID_HEADER,
+						CLIENT_ADDRESS_HEADER,
 						ENDPOINT_HEADER,
 						DELEGATION_HEADER,
-						CLIENT_ADDRESS_HEADER,
+						PROXY_SECRET_HEADER,
+						REQUEST_ID_HEADER,
 						...UNTRUSTED_FORWARD_HEADERS,
 					],
 					set: { [CLIENT_ADDRESS_HEADER]: ['{http.request.client_ip}'] },
@@ -400,6 +401,35 @@ describe('a contract app — the endpoint table', () => {
 		const gateCopies = proxyHandler(subrouteOf(defined(gateRoute)).routes[1]).handle_response?.[0]?.routes ?? []
 		expect(JSON.stringify(gateCopies)).not.toContain('Authorization')
 	})
+
+	test('every X-Fabrika-* hop header a client sends is deleted before the auth service and the app see it', () => {
+		const first = steps[0]?.handle[0]
+		if (first?.handler !== 'headers') throw new Error('expected a headers handler')
+		for (const header of FABRIKA_HOP_HEADERS) {
+			expect(first.request?.delete).toContain(header)
+		}
+		// After the delete, the endpoint is set only from the auth service's answer, never from the request.
+		const endpointSets = copies.flatMap((route) => route.handle).flatMap((handler) =>
+			handler.handler === 'headers' ? [handler.request?.set?.[ENDPOINT_HEADER]] : []
+		)
+			.filter((value) => value !== undefined)
+		expect(endpointSets).toEqual([[placeholder(ENDPOINT_HEADER)]])
+	})
+
+	test('the upstream hop carries the proxy secret, read from the variable of this app environment', () => {
+		const upstream = proxyHandler(steps[2])
+		expect(upstream.headers?.request?.set).toEqual({ [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable('notes@prod')}}`] })
+		// Never a value the auth service answers with, and never copied from the client.
+		expect(JSON.stringify(auth)).not.toContain(PROXY_SECRET_HEADER)
+	})
+
+	test('a gate app gets no proxy secret: it is not a contract application', () => {
+		expect(JSON.stringify(subrouteOf(defined(gateRoute)).routes.slice(1))).not.toContain(PROXY_SECRET_HEADER)
+	})
+
+	test('the secret is in no generated file: the config names only the variable', () => {
+		expect(JSON.stringify(buildCaddyConfig({ apps: [contract] }, OPTIONS))).toContain(`{env.${proxySecretVariable('notes@prod')}}`)
+	})
 })
 
 describe('access-log redaction', () => {
@@ -410,6 +440,7 @@ describe('access-log redaction', () => {
 		expect(fields[`request>headers>${CLIENT_ADDRESS_HEADER}`]).toEqual({ filter: 'delete' })
 		expect(fields['request>headers>Cookie']).toEqual({ filter: 'delete' })
 		expect(fields['request>headers>Authorization']).toEqual({ filter: 'delete' })
+		expect(fields[`request>headers>${PROXY_SECRET_HEADER}`]).toEqual({ filter: 'delete' })
 	})
 
 	test('credentials cannot survive in the logged URI', () => {

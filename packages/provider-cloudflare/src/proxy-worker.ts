@@ -1,4 +1,4 @@
-import { rawRequestTarget } from '@fabrika/auth-core'
+import { FABRIKA_HOP_HEADERS, rawRequestTarget } from '@fabrika/auth-core'
 import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
@@ -158,8 +158,8 @@ const PROXY_ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_
 
 /** Delete every header only this hop may assert, so nothing downstream can read a caller's version. */
 function stripClientAsserted(headers: Headers): void {
-	for (const header of PROXY_ASSERTED_HEADERS) headers.delete(header)
-	headers.delete(CLIENT_ADDRESS_HEADER)
+	for (const header of FABRIKA_HOP_HEADERS) headers.delete(header)
+	headers.delete(REQUEST_ID_HEADER)
 	for (const header of UNTRUSTED_FORWARD_HEADERS) headers.delete(header)
 }
 

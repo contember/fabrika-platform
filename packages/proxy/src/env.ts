@@ -6,7 +6,9 @@
  * misconfigured — and it is read once and never logged, never echoed and never put in a URL.
  */
 
+import { proxySecretVariable } from '@fabrika/auth-core'
 import { DEFAULT_IAM_TIMEOUT_MS } from '@fabrika/proxy-core'
+import { isContractProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 export interface ProxyEnv {
 	/** Path to the deployed `proxy.manifest.json`. */
@@ -55,6 +57,14 @@ export function readProxyEnv(source: Record<string, string | undefined>): ProxyE
 		cacheEnabled: source['FABRIKA_PROXY_CACHE'] !== 'off',
 		iamKey: key,
 	}
+}
+
+/**
+ * The contract apps whose proxy secret variable is unset. Caddy then sends an empty secret and that application
+ * refuses every request; the proxy still boots, because one proxy fronts every application of a namespace.
+ */
+export function appsWithoutProxySecret(manifest: ProxyManifest, source: Record<string, string | undefined>): string[] {
+	return manifest.apps.filter((app) => isContractProxyApp(app) && (source[proxySecretVariable(app.id)] ?? '') === '').map((app) => app.id)
 }
 
 /** Reduce a configured IAM URL to its origin, so every downstream use compares the same bytes. */

@@ -3,8 +3,10 @@
  * coordinates would 503 every request instead of failing where an operator can see it.
  */
 
+import { proxySecretVariable } from '@fabrika/auth-core'
+import type { ContractProxyApp, ProxyApp } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
-import { ProxyEnvError, readProxyEnv } from '../env'
+import { appsWithoutProxySecret, ProxyEnvError, readProxyEnv } from '../env'
 
 describe('readProxyEnv', () => {
 	/** Everything required, so each test varies exactly the one variable it is about. */
@@ -46,5 +48,24 @@ describe('readProxyEnv', () => {
 		const parsed = readProxyEnv(env({ FABRIKA_PROXY_PORT: 'abc', FABRIKA_IAM_TIMEOUT_MS: '-1' }))
 		expect(parsed.port).toBe(9000)
 		expect(parsed.iamTimeoutMs).toBeGreaterThan(0)
+	})
+})
+
+describe('appsWithoutProxySecret', () => {
+	const contract = (id: string): ContractProxyApp => ({
+		id,
+		hosts: [`${id.replace('@', '-')}.example.com`],
+		upstream: 'app:3000',
+		scheme: 'https',
+		endpoints: [],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+	})
+	const gateApp: ProxyApp = { id: 'control', hosts: ['control.example.com'], upstream: 'control:3000', scheme: 'https', gates: { rules: [] } }
+
+	test('names each contract app whose secret variable is unset or empty, and no gate app', () => {
+		const manifest = { apps: [contract('notes@prod'), contract('notes@stage'), contract('wiki@prod'), gateApp] }
+		const source = { [proxySecretVariable('notes@prod')]: 'secret', [proxySecretVariable('notes@stage')]: '' }
+		expect(appsWithoutProxySecret(manifest, source)).toEqual(['notes@stage', 'wiki@prod'])
 	})
 })

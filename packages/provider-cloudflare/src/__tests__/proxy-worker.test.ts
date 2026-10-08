@@ -4,8 +4,10 @@ import {
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
 	type EndpointRules,
+	FABRIKA_HOP_HEADERS,
 	formatEndpointHeader,
 	type Jwks,
+	PROXY_SECRET_HEADER,
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
@@ -63,6 +65,28 @@ describe('Cloudflare proxy Worker', () => {
 		})
 		const proxy = createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, gates: { rules: [] } })
 		expect(proxy.options.observability).toEqual({ logs: { enabled: true, invocation_logs: false } })
+	})
+
+	test('deletes every X-Fabrika-* hop header a client sends; Cloudflare sets no proxy secret', async () => {
+		let seen: Request | undefined
+		const env = environment(
+			{ rules: [{ path: '/public/*', kind: 'public' }] },
+			{
+				fetch: (request: Request) => {
+					seen = request
+					return Promise.resolve(new Response('ok'))
+				},
+			},
+		)
+		const forged = Object.fromEntries(FABRIKA_HOP_HEADERS.map((header) => [header, 'forged']))
+		const response = await createCloudflareProxyHandler(env)(new Request(`https://${HOST}/public/page`, { headers: forged }))
+
+		expect(response.status).toBe(200)
+		for (const header of FABRIKA_HOP_HEADERS) {
+			expect(seen?.headers.get(header) ?? null).not.toBe('forged')
+		}
+		// The service binding is the authenticated hop on Cloudflare (ADR-0022 rule 1).
+		expect(seen?.headers.get(PROXY_SECRET_HEADER)).toBeNull()
 	})
 
 	test('forwards a public request with its method and body, but never a client token', async () => {

@@ -9,7 +9,7 @@
 
 import { consoleLogger, createVerifyService, HttpIamGateway, MemoryTokenCache } from '@fabrika/proxy-core'
 import { parseProxyManifest } from '@fabrika/proxy-core/manifest'
-import { readProxyEnv } from './env'
+import { appsWithoutProxySecret, readProxyEnv } from './env'
 
 const env = readProxyEnv(Bun.env)
 
@@ -20,6 +20,10 @@ if (manifest === null) {
 	// gets connection-refused on /verify and denies every request with a 502.
 	consoleLogger.error('invalid proxy manifest', { path: env.manifestPath })
 	process.exit(1)
+}
+
+for (const app of appsWithoutProxySecret(manifest, Bun.env)) {
+	consoleLogger.warn('no proxy secret for a contract application; it refuses every request', { app })
 }
 
 const iam = new HttpIamGateway({ origin: env.iamUrl, timeoutMs: env.iamTimeoutMs, key: env.iamKey })

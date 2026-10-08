@@ -33,7 +33,15 @@
  */
 
 import type { GateRule } from '@fabrika/auth-core'
-import { API_KEY_PREFIX, AUTH_CODE_PARAM, FABRIKA_COOKIE_PREFIX, SESSION_COOKIE } from '@fabrika/auth-core'
+import {
+	API_KEY_PREFIX,
+	AUTH_CODE_PARAM,
+	FABRIKA_COOKIE_PREFIX,
+	FABRIKA_HOP_HEADERS,
+	PROXY_SECRET_HEADER,
+	proxySecretVariable,
+	SESSION_COOKIE,
+} from '@fabrika/auth-core'
 import {
 	APP_QUERY_PARAM,
 	CLIENT_ADDRESS_HEADER,
@@ -305,7 +313,8 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      then SET the one coordinate only this hop can know. Deletes run before sets within one
  *      `HeaderOps` (`caddyhttp/headers.go` `ApplyTo`, v2.10.2), so the two live in one handler.
  *
- *      Deleted: the injected TOKEN header, the REQUEST ID, the CLIENT ADDRESS, and the caller's
+ *      Deleted: every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` — the TOKEN, the CLIENT ADDRESS,
+ *      the endpoint, the delegation grant, the proxy secret), the REQUEST ID, and the caller's
  *      forwarding headers. Load-bearing for the token: Caddy's `copy_headers` only sets the header
  *      when the auth response's value is non-empty, so on a `public` path (which mints no token) a
  *      client-supplied header would otherwise survive all the way to the app. The app's SDK verifies
@@ -324,7 +333,10 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      endpoint and returns that answer as-is, so the app never sees it. Caddy's `path` matcher is
  *      case-insensitive; the auth service compares host and raw path exactly and 404s anything else.
  *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; it strips every
- *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route.
+ *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route. For a
+ *      contract app it sets the proxy secret from the variable `proxySecretVariable(app.id)`, read at
+ *      request time through `{env.…}`, so the secret is in no generated file (ADR-0022 rule 5). An unset
+ *      variable sends an empty secret, which the application refuses.
  */
 function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean): CaddyRoute {
 	const fabrikaCookiePattern = `(?:^|;[ \\t]*)${escapeRe2(FABRIKA_COOKIE_PREFIX)}[^=;]*=[^;]*`
@@ -342,7 +354,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 					handle: [{
 						handler: 'headers',
 						request: {
-							delete: [...PROXY_ASSERTED_HEADERS, CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
+							delete: [...FABRIKA_HOP_HEADERS, REQUEST_ID_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
 							set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] },
 						},
 					}],
@@ -359,6 +371,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 						upstreams: [{ dial: app.upstream }],
 						headers: {
 							request: {
+								...(isContractProxyApp(app) ? { set: { [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(app.id)}}`] } } : {}),
 								replace: {
 									Cookie: [
 										{
@@ -401,9 +414,8 @@ function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHand
 }
 
 /**
- * The headers only the auth service may assert to the app: deleted from the inbound request in step 1 and copied
- * back from a 2xx auth response. A gate app never gets the endpoint or the delegation header; deleting it is still
- * what keeps a client's own copy from reaching the upstream.
+ * The headers the auth service asserts to the app, copied back from a 2xx auth response after step 1 deleted the
+ * client's own. A gate app never gets the endpoint or the delegation header.
  */
 const PROXY_ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]
 
@@ -464,6 +476,8 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
 		[`request>headers>${PROXY_TOKEN_HEADER}`]: { filter: 'delete' },
 		// A single-use grant, but a credential until IAM spends it.
 		[`request>headers>${DELEGATION_HEADER}`]: { filter: 'delete' },
+		// The proxy sets it only on the upstream hop, which is not logged; a client's guess is dropped too.
+		[`request>headers>${PROXY_SECRET_HEADER}`]: { filter: 'delete' },
 		// Not a credential — dropped because Caddy's record already carries `client_ip` natively, and one
 		// copy of a client address per line is enough.
 		[`request>headers>${CLIENT_ADDRESS_HEADER}`]: { filter: 'delete' },
