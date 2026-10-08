@@ -112,7 +112,8 @@ Only CSP extensions in the contract are approvable, through the approval diff of
 The code does not render `run` or `build`, share the list of framework-only names, read back
 `subdomainAccess` or check bucket provenance yet (part B, work unit B7). The compiler refusals are in place:
 `parseFabrikaManifest` applies them to every application service, on build and on decode; an
-`enableSubdomainAccess` or `enableCdn` of `false` exposes nothing and is accepted.
+`enableSubdomainAccess` or `enableCdn` of `false` exposes nothing and is accepted. An object-storage
+service that omits its policy is given an explicit `private`, because Zerops' default is not established.
 
 ## Consequences
 

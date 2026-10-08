@@ -240,6 +240,15 @@ const withServiceField = (manifest: FabrikaManifest, field: string, value: unkno
 /** A field this manifest does not model: its references are walked like any other. */
 const withUnmodelledField = (manifest: FabrikaManifest, value: unknown): unknown => withServiceField(manifest, 'futureField', value)
 
+const isYamlMapping = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const parsedImportServices = (yaml: string): Array<{ [key: string]: unknown }> => {
+	const document: unknown = Bun.YAML.parse(yaml)
+	const services = isYamlMapping(document) ? document['services'] : undefined
+	if (!Array.isArray(services)) throw new Error('expected a YAML service list')
+	return services.filter(isYamlMapping)
+}
+
 const exampleDescriptor = async (file: string): Promise<string> =>
 	await Bun.file(new URL(`../../../../examples/zerops-app/${file}`, import.meta.url)).text()
 
@@ -372,8 +381,39 @@ describe('application exposure refusals', () => {
 		const manifest = await compileNotes(OWN_SETUP)
 		for (const [field, fields] of refused) {
 			const value = fields[field]
-			expect(() => zeropsArtifactCodec.decode(withServiceField(manifest, field, value))).toThrow(`Zerops service \`notesapi\` sets \`${field}\`;`)
+			expect(() => parseFabrikaManifest(withServiceField(manifest, field, value))).toThrow(`Zerops service \`notesapi\` sets \`${field}\`;`)
 		}
+	})
+
+	test('writes an explicit private policy on an object-storage service that omits one', async () => {
+		const storage: ZeropsServiceSpec = { hostname: 'notesfiles', type: 'object-storage', objectStorageSize: 1 }
+		const config: ZeropsAppConfig = {
+			...notesConfig,
+			target: { ...notesConfig.target, services: () => [...notesConfig.target.services({ env: 'prod' }), storage] },
+		}
+		const manifest = await compileNotes(OWN_SETUP, config)
+		const compiled = manifest.target.importDocument.services.find((service) => service.hostname === 'notesfiles')
+		expect(compiled).toMatchObject({ type: 'object-storage', objectStoragePolicy: 'private' })
+		const runtime = manifest.target.importDocument.services.find((service) => service.hostname === 'notesapi')
+		expect(runtime?.['objectStoragePolicy']).toBeUndefined()
+
+		const rendered = parsedImportServices(renderFabrikaImportYaml(manifest)).find((service) => service['hostname'] === 'notesfiles')
+		expect(rendered?.['objectStoragePolicy']).toBe('private')
+		const provisioning = parsedImportServices(renderFabrikaProvisioningYaml(manifest)).find((service) => service['hostname'] === 'notesfiles')
+		expect(provisioning?.['objectStoragePolicy']).toBe('private')
+
+		const withoutPolicy = manifest.target.importDocument.services.map((service) =>
+			Object.fromEntries(Object.entries(service).filter(([key]) => key !== 'objectStoragePolicy'))
+		)
+		const stored = parseFabrikaManifest({ ...manifest, target: { ...manifest.target, importDocument: { services: withoutPolicy } } })
+		expect(stored.target.importDocument.services.find((service) => service.hostname === 'notesfiles')?.['objectStoragePolicy']).toBe('private')
+
+		const refused: ZeropsServiceSpec = { ...storage, objectStoragePolicy: 'public-read' }
+		const publicBucket: ZeropsAppConfig = {
+			...notesConfig,
+			target: { ...notesConfig.target, services: () => [...notesConfig.target.services({ env: 'prod' }), refused] },
+		}
+		await expect(compileNotes(OWN_SETUP, publicBucket)).rejects.toThrow('Zerops service `notesfiles` sets `objectStoragePolicy`;')
 	})
 
 	test('accepts the forms that expose nothing', async () => {

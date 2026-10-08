@@ -197,6 +197,14 @@ const refuseApplicationExposure = (service: { readonly hostname: string } & Reco
 	}
 }
 
+const OBJECT_STORAGE_TYPES: ReadonlySet<string> = new Set(['object-storage', 'objectstorage'])
+
+/** Nothing establishes what Zerops does with an omitted policy, so an application bucket always says `private`. */
+const withExplicitPrivateStorage = <Service extends { readonly type: string } & Record<string, JsonValue>>(service: Service): Service =>
+	OBJECT_STORAGE_TYPES.has(service.type) && service['objectStoragePolicy'] === undefined
+		? { ...service, objectStoragePolicy: 'private' }
+		: service
+
 const importServiceSchema = z.intersection(
 	z.record(manifestJsonSchema),
 	z.object({
@@ -208,6 +216,7 @@ const importServiceSchema = z.intersection(
 )
 	.superRefine(forbidFields(['envSecrets', 'dotEnvSecrets'], 'invalid fabrika manifest: Zerops import contains a forbidden environment field'))
 	.superRefine(refuseApplicationExposure)
+	.transform(withExplicitPrivateStorage)
 const importProjectSchema = z.intersection(z.record(manifestJsonSchema), z.object({ envIsolation: z.literal(ENV_ISOLATION) }))
 	.superRefine(forbidFields(['envVariables'], 'invalid fabrika manifest: Zerops import contains a forbidden project environment field'))
 

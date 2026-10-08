@@ -92,7 +92,8 @@ bun test
   path.** `REFUSED_APPLICATION_SERVICE_FIELDS` (`src/manifest.ts`) refuses an `objectStoragePolicy` other
   than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml` or `mount`, and an
   `enableSubdomainAccess`/`enableCdn` other than `false`, in `parseFabrikaManifest` — so on build AND on
-  every decode. Keep it out of `compileService`: the installation and namespace topologies compile through
+  every decode. The same boundary writes `objectStoragePolicy: private` on an object-storage service that
+  omits it, because nothing establishes Zerops' default. Keep both out of `compileService`: the installation and namespace topologies compile through
   it and set `enableSubdomainAccess`, `objectStoragePolicy` and `enableCdn` on their own services.
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider's `deploy` decodes the artifact ONCE and runs `createZeropsDeployer` in-process**

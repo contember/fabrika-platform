@@ -408,7 +408,8 @@ The manifest boundary (`parseFabrikaManifest`, on build and on every decode)
 refuses the import fields that would expose an application service past the
 namespace proxy or change what it builds (ADR-0043): an `objectStoragePolicy`
 other than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml`
-or `mount`, and an `enableSubdomainAccess` or `enableCdn` other than `false`. The
+or `mount`, and an `enableSubdomainAccess` or `enableCdn` other than `false`. An object-storage
+service that omits its policy gets an explicit `private`. The
 installation and the namespace proxy compile their own documents and keep these
 fields.
 
