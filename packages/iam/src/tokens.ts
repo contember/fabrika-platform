@@ -16,6 +16,7 @@ import {
 	type AccessTokenClaims,
 	buildAccessClaims,
 	DEFAULT_TOKEN_TTL_SECONDS,
+	type LinkTokenClaims,
 	type MintFromKeyResult,
 	type MintTokenInput,
 	type MintTokenResult,
@@ -32,6 +33,7 @@ import { resolvePermissionsAt } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'
 import { getSigner } from './signing'
+import { parseStoredChain } from './stored-chain'
 
 /** The env slice minting needs (the signing keys + environment for `getSigner`). */
 type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
@@ -144,6 +146,7 @@ export async function mintFromKey(
 			...(effective.type === undefined ? {} : { type: effective.type }),
 			label: effective.label,
 			permissions: effective.permissions,
+			...(effective.link === undefined ? {} : { link: effective.link }),
 			issuedAt: now,
 			expiresAt,
 		}),
@@ -161,7 +164,7 @@ export async function mintFromKey(
  * not for you" and "there is no such key" must look the same to a caller who holds neither.
  */
 export type ResolvedCredential =
-	| { ok: true; subject: string; type?: PrincipalType; label: string | null; permissions: PermissionEntry[] }
+	| { ok: true; subject: string; type?: PrincipalType; label: string | null; permissions: PermissionEntry[]; link?: LinkTokenClaims }
 	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' }
 
 /**
@@ -191,7 +194,15 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 
 	if (cred.principal_id === null) {
 		// Anonymous: the frozen inline grants ARE the permission set (delegation-checked at issue).
-		return { ok: true, subject: cred.id, label: cred.label, permissions: inline }
+		if (cred.link_mount === null) {
+			return { ok: true, subject: cred.id, label: cred.label, permissions: inline }
+		}
+		// A share link's token names its mount and chain, which the framework re-checks per request.
+		const chain = cred.link_chain === null ? null : parseStoredChain(cred.link_chain)
+		if (chain === null) {
+			return { ok: false, reason: 'wrong_app' }
+		}
+		return { ok: true, subject: cred.id, label: cred.label, permissions: inline, link: { mount: cred.link_mount, chain } }
 	}
 
 	const principal = await services.repositories.principals.getPrincipalById(cred.principal_id)

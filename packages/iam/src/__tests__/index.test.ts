@@ -517,22 +517,16 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(auditRows(db)).toHaveLength(0)
 	})
 
-	test('listPrincipals for an application token lists only holders of a grant in that app id', async () => {
+	test('listPrincipals refuses an application token: an application lists members with listMembers', async () => {
 		const ctx = makeCtx()
 		const env = makeEnv(db)
 		const worker = makeEntrypoint(ctx, env)
 		const member = seedUser(db, { sub: 'notes-member', email: 'member@notes.test' })
 		await env.REPOSITORIES.grants.createGrant({ principalId: member, app: 'notes@prod', permissions: ['note.read'], grantedBy: member })
-		const operator = seedUser(db, { sub: 'operator', email: 'operator@platform.test' })
-		await env.REPOSITORIES.grants.createGrant({ principalId: operator, app: null, permissions: ['*'], grantedBy: operator })
-		const staging = seedUser(db, { sub: 'staging-member', email: 'member@stage.test' })
-		await env.REPOSITORIES.grants.createGrant({ principalId: staging, app: 'notes@stage', permissions: ['note.read'], grantedBy: staging })
 
 		const credential = await applicationToken(env, member, 'notes@prod', [{ action: 'note.read', scope: null, source: 'grant' }])
 		const result = await worker.listPrincipals({ app: 'notes@prod', credential, requestId: 'req-app-list' })
-		expect(result.ok).toBe(true)
-		if (!result.ok) throw new Error('expected a roster')
-		expect(result.principals.map((principal) => principal.id)).toEqual([member])
+		expect(result).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 
 	test('revokeKey: unknown id → not_found', async () => {
@@ -547,14 +541,14 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		expect(result).toEqual({ ok: false, reason: 'not_found' })
 	})
 
-	test('listPrincipals: the provisioning caller is scoped to the SDK-passed app', async () => {
+	test('listPrincipals: the provisioning caller lists a platform audience and no application', async () => {
 		const ctx = makeCtx()
 		const worker = makeEntrypoint(ctx, makeEnv(db))
-		// The provisioning key resolves a global-admin caller whose verified app IS the SDK-passed
-		// `app`. So the read succeeds and is scoped to that app — here an empty roster (no users are
-		// seeded for 'poplach').
-		const result = await worker.listPrincipals({ app: 'poplach', credential: PROVISIONING_KEY, requestId: 'req-list-local' })
-		expect(result).toEqual({ ok: true, principals: [] })
+		// The provisioning key resolves a global-admin caller whose verified app IS the SDK-passed `app`.
+		const platform = await worker.listPrincipals({ app: 'operations', credential: PROVISIONING_KEY, requestId: 'req-list-platform' })
+		expect(platform.ok).toBe(true)
+		const application = await worker.listPrincipals({ app: 'poplach', credential: PROVISIONING_KEY, requestId: 'req-list-local' })
+		expect(application).toEqual({ ok: false, reason: 'not_allowed' })
 	})
 })
 
@@ -644,7 +638,21 @@ function prototypeMembers(entrypoint: object): { methods: string[]; accessors: s
 }
 
 describe('the entrypoint an application binds', () => {
-	const APPLICATION_METHODS = ['audit', 'exchangeAuthCode', 'getJwks', 'listPrincipals', 'mintFromKey', 'mintToken']
+	const APPLICATION_METHODS = [
+		'assignMember',
+		'audit',
+		'createScope',
+		'exchangeAuthCode',
+		'getJwks',
+		'issueLink',
+		'listMembers',
+		'listPrincipals',
+		'mintFromKey',
+		'mintToken',
+		'requestDelegation',
+		'revokeLink',
+		'revokeMember',
+	]
 
 	// The name `@fabrika/provider-cloudflare` binds (`IAM_APPLICATION_ENTRYPOINT`); its tests pin the same literal.
 	test('is exported as PropustkaApplication and has no issueKey, revokeKey or device approval', () => {

@@ -11,6 +11,7 @@ import type {
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
 	IamHandoffRpc,
+	IamMembershipRpc,
 	IamRpc,
 	IssueKeyInput,
 	IssueKeyResult,
@@ -88,7 +89,7 @@ describe('RPC input normalization', () => {
 })
 
 /** Records the last input each method received, and answers with a canned result. */
-interface Recorder extends IamRpc, IamHandoffRpc {
+interface Recorder extends IamRpc, IamHandoffRpc, IamMembershipRpc {
 	calls: { method: string; input: unknown }[]
 }
 
@@ -142,8 +143,89 @@ function recorder(canned: Canned = {}): Recorder {
 			note('revokeKey', input)
 			return Promise.resolve({ ok: true, revoked: true })
 		},
+		requestDelegation(input) {
+			note('requestDelegation', input)
+			return Promise.resolve({ ok: true, grant: 'grant', expiresAt: 7 })
+		},
+		createScope(input) {
+			note('createScope', input)
+			return Promise.resolve({ ok: false, reason: 'invalid_delegation' })
+		},
+		assignMember(input) {
+			note('assignMember', input)
+			return Promise.resolve({ ok: true, assigned: { principalId: 'p', role: 'editor' } })
+		},
+		revokeMember(input) {
+			note('revokeMember', input)
+			return Promise.resolve({ ok: true })
+		},
+		listMembers(input) {
+			note('listMembers', input)
+			return Promise.resolve({ ok: true, members: [], invitations: [] })
+		},
+		issueLink(input) {
+			note('issueLink', input)
+			return Promise.resolve({ ok: true, key: 'px_link', id: 'cred-link', expiresAt: 9 })
+		},
+		revokeLink(input) {
+			note('revokeLink', input)
+			return Promise.resolve({ ok: false, reason: 'not_found' })
+		},
 	}
 }
+
+describe('the membership methods over /rpc/*', () => {
+	const caller = { app: 'notes@prod', credential: 'tok', requestId: 'req-1' }
+	const scope = { type: 'workspace', value: 'w1' }
+
+	test.each([
+		{ method: 'requestDelegation', body: { ...caller, endpoint: 'api.invite' }, result: { ok: true, grant: 'grant', expiresAt: 7 } },
+		{ method: 'createScope', body: { ...caller, delegation: 'g', dimension: 'workspace' }, result: { ok: false, reason: 'invalid_delegation' } },
+		{
+			method: 'assignMember',
+			body: { ...caller, delegation: 'g', scope, role: 'editor', member: { email: 'a@b.test' } },
+			result: { ok: true, assigned: { principalId: 'p', role: 'editor' } },
+		},
+		{ method: 'revokeMember', body: { ...caller, delegation: 'g', scope, member: { principalId: 'p' } }, result: { ok: true } },
+		{ method: 'listMembers', body: { ...caller, scope }, result: { ok: true, members: [], invitations: [] } },
+		{
+			method: 'issueLink',
+			body: { ...caller, mount: 'shared', chain: [scope], days: 3 },
+			result: { ok: true, key: 'px_link', id: 'cred-link', expiresAt: 9 },
+		},
+		{ method: 'revokeLink', body: { ...caller, id: 'cred-link' }, result: { ok: false, reason: 'not_found' } },
+	])('$method decodes its input and answers its result as a 200', async ({ method, body, result }) => {
+		const { rpc, response } = call(method, body)
+		const answered = await response
+		expect(answered.status).toBe(200)
+		const decoded: unknown = await answered.json()
+		expect(decoded).toEqual(result)
+		expect(rpc.calls).toHaveLength(1)
+	})
+
+	test('a revoke target without a role reads as every membership role', async () => {
+		const { rpc, response } = call('revokeMember', { ...caller, delegation: 'g', scope, member: { principalId: 'p' } })
+		expect((await response).status).toBe(200)
+		expect(rpc.calls[0]?.input).toEqual({ ...caller, delegation: 'g', scope, member: { principalId: 'p', role: null } })
+	})
+
+	test.each([
+		{
+			method: 'assignMember',
+			body: { ...caller, delegation: 'g', scope, role: 'editor', member: { principalId: 'p', email: 'a@b.test' } },
+			field: 'member',
+		},
+		{ method: 'issueLink', body: { ...caller, mount: 'shared', chain: [{ type: 'note' }], days: 3 }, field: 'chain' },
+		{ method: 'createScope', body: { ...caller, dimension: 'workspace' }, field: 'delegation' },
+	])('$method refuses a malformed $field before it reaches IAM', async ({ method, body, field }) => {
+		const { rpc, response } = call(method, body)
+		const answered = await response
+		expect(answered.status).toBe(400)
+		const decoded: unknown = await answered.json()
+		expect(decoded).toEqual({ error: `invalid or missing field '${field}'` })
+		expect(rpc.calls).toEqual([])
+	})
+})
 
 function call(method: string, body: unknown, options: { key?: string; bearer?: string | null; verb?: string } = {}): {
 	rpc: Recorder

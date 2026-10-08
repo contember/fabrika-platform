@@ -54,6 +54,31 @@ export const auditSchema = z.object({
 	...(metadata === undefined ? {} : { metadata }),
 })).catch(rejectRpcInput)
 
+const memberScopeSchema = z.object({ type: z.string(), value: z.string() })
+export const requestDelegationSchema = z.object({ ...caller, endpoint: z.string() }).catch(rejectRpcInput)
+export const createScopeSchema = z.object({ ...caller, delegation: z.string(), dimension: z.string() }).catch(rejectRpcInput)
+export const assignMemberSchema = z.object({
+	...caller,
+	delegation: z.string(),
+	scope: memberScopeSchema,
+	role: z.string(),
+	member: z.union([z.object({ principalId: z.string() }).strict(), z.object({ email: z.string() }).strict()]),
+}).catch(rejectRpcInput)
+export const revokeMemberSchema = z.object({
+	...caller,
+	delegation: z.string(),
+	scope: memberScopeSchema,
+	member: z.union([
+		z.object({ principalId: z.string(), role: z.string().nullish().transform((value) => value ?? null) }).strict(),
+		z.object({ invitationId: z.string() }).strict(),
+	]),
+}).catch(rejectRpcInput)
+export const listMembersSchema = z.object({ ...caller, scope: memberScopeSchema }).catch(rejectRpcInput)
+export const issueLinkSchema = z.object({ ...caller, mount: z.string(), chain: z.array(memberScopeSchema), days: z.number().finite() }).catch(
+	rejectRpcInput,
+)
+export const revokeLinkSchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
+
 export class RpcInputError extends Error {}
 
 /** Preserve the transport's field-only errors without exposing submitted credentials. */

@@ -23,6 +23,7 @@ import type {
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
 	IamHandoffRpc,
+	IamMembershipRpc,
 	IamRpc,
 	IssueKeyInput,
 	IssueKeyResult,
@@ -43,20 +44,41 @@ import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
 import { issueKey, revokeKey } from './issue'
 import { logError } from './log'
+import { assignMember, createScope, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from './membership'
 import { acceptRequestId } from './request-id'
-import { reachesCrossAppAuthority } from './resolve'
 import { buildServices, type Services } from './services'
 import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
 /** Build the RPC surface bound to one env + request context. */
-export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc {
+export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc & IamMembershipRpc {
 	// Built ONCE per RPC surface, not once per call (ARCH-1). It was constructed inside every method
 	// and, in `audit`, OUTSIDE the fail-closed try — so a configuration error there threw to the
 	// caller instead of failing closed. It also allocated an `OidcClient` and an email sender on the
 	// mint path, which the proxy hits on every cold request and which needs neither.
 	const services = buildServices(env)
+	/** A membership operation never throws to its caller; an unexpected failure is a logged refusal. */
+	const membership = <I extends { requestId: string }, R>(
+		name: string,
+		operation: (services: Services, env: Env, ctx: RequestContext, input: I) => Promise<R | { ok: false; reason: 'not_allowed' }>,
+	) =>
+	async (raw: I): Promise<R | { ok: false; reason: 'not_allowed' }> => {
+		const input = withAcceptedRequestId(raw)
+		try {
+			return await operation(services, env, ctx, input)
+		} catch (err) {
+			logError(`${name} failed for request '${input.requestId}'`, err)
+			return { ok: false, reason: 'not_allowed' }
+		}
+	}
 	return {
+		requestDelegation: membership('requestDelegation', requestDelegation),
+		createScope: membership('createScope', createScope),
+		assignMember: membership('assignMember', assignMember),
+		revokeMember: membership('revokeMember', revokeMember),
+		listMembers: membership('listMembers', listMembers),
+		issueLink: membership('issueLink', issueLink),
+		revokeLink: membership('revokeLink', revokeLink),
 		inspectDeviceAuthorization: (input) => inspectDeviceAuthorization(services, env, input),
 		approveDeviceAuthorization: (input) => approveDeviceAuthorization(services, env, input),
 		denyDeviceAuthorization: (input) => denyDeviceAuthorization(services, env, input),
@@ -224,14 +246,12 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 					return { ok: false, reason: res.reason }
 				}
 				// Authorize: a real principal-bound MEMBER holding ≥1 permission on the app. An anonymous
-				// credential (a share link) and a zero-grant user cannot enumerate the roster.
-				if (res.caller.type === undefined || res.caller.permissions.length === 0) {
+				// credential (a share link) and a zero-grant user cannot enumerate the roster. An application
+				// lists the members of a value with `listMembers`, which checks the dimension's list action.
+				if (res.caller.type === undefined || res.caller.permissions.length === 0 || isApplicationCaller(services, res.verifiedApp)) {
 					return { ok: false, reason: 'not_allowed' }
 				}
-				// An application sees the people holding a grant of its own app id, never a cross-app holder.
-				const rows = await services.repositories.principals.getPrincipalsForApp(res.verifiedApp, {
-					includeCrossApp: reachesCrossAppAuthority(services.config, res.verifiedApp),
-				})
+				const rows = await services.repositories.principals.getPrincipalsForApp(res.verifiedApp, { includeCrossApp: true })
 				const principals: PrincipalListItem[] = rows.map((p) => ({
 					id: p.id,
 					type: p.type,

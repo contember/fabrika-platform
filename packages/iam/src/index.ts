@@ -1,17 +1,26 @@
 import type {
 	ApproveDeviceAuthorizationInput,
 	ApproveDeviceAuthorizationResult,
+	AssignMemberInput,
+	AssignMemberResult,
 	AuditInput,
+	CreateScopeInput,
+	CreateScopeResult,
 	DenyDeviceAuthorizationResult,
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
 	IamHandoffRpc,
+	IamMembershipRpc,
 	IamRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
 	IssueKeyInput,
 	IssueKeyResult,
+	IssueLinkInput,
+	IssueLinkResult,
 	Jwks,
+	ListMembersInput,
+	ListMembersResult,
 	ListOwnDeviceAuthorizationsInput,
 	ListOwnDeviceAuthorizationsResult,
 	ListPrincipalsInput,
@@ -20,8 +29,14 @@ import type {
 	MintFromKeyResult,
 	MintTokenInput,
 	MintTokenResult,
+	RequestDelegationInput,
+	RequestDelegationResult,
 	RevokeKeyInput,
 	RevokeKeyResult,
+	RevokeLinkInput,
+	RevokeLinkResult,
+	RevokeMemberInput,
+	RevokeMemberResult,
 } from '@fabrika/auth-core'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { createIamApp } from './app'
@@ -78,12 +93,15 @@ export function iamEnv(bindings: WorkerBindings): Env {
 }
 
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
-function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc {
+function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamMembershipRpc {
 	return createIamRpc(iamEnv(bindings), ctx)
 }
 
-/** What an application's Workers call over `IAM`: the proxy mints and redeems, the SDK verifies, lists and audits. */
-export type IamApplicationRpc = Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'> & IamHandoffRpc
+/**
+ * What an application's Workers call over `IAM`: the proxy mints and redeems, the SDK verifies, lists and
+ * audits, and the framework requests membership operations on its caller's behalf.
+ */
+export type IamApplicationRpc = Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'> & IamHandoffRpc & IamMembershipRpc
 
 /**
  * The entrypoint every application Worker and its proxy bind (`@fabrika/provider-cloudflare` refuses any
@@ -114,6 +132,34 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 
 	listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult> {
 		return iamRpc(this.env, this.ctx).listPrincipals(input)
+	}
+
+	requestDelegation(input: RequestDelegationInput): Promise<RequestDelegationResult> {
+		return iamRpc(this.env, this.ctx).requestDelegation(input)
+	}
+
+	createScope(input: CreateScopeInput): Promise<CreateScopeResult> {
+		return iamRpc(this.env, this.ctx).createScope(input)
+	}
+
+	assignMember(input: AssignMemberInput): Promise<AssignMemberResult> {
+		return iamRpc(this.env, this.ctx).assignMember(input)
+	}
+
+	revokeMember(input: RevokeMemberInput): Promise<RevokeMemberResult> {
+		return iamRpc(this.env, this.ctx).revokeMember(input)
+	}
+
+	listMembers(input: ListMembersInput): Promise<ListMembersResult> {
+		return iamRpc(this.env, this.ctx).listMembers(input)
+	}
+
+	issueLink(input: IssueLinkInput): Promise<IssueLinkResult> {
+		return iamRpc(this.env, this.ctx).issueLink(input)
+	}
+
+	revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
+		return iamRpc(this.env, this.ctx).revokeLink(input)
 	}
 }
 

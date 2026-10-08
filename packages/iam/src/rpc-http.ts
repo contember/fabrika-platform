@@ -35,7 +35,7 @@
 //
 // ── TWO SURFACES, TWO KEYS ────────────────────────────────────────────────────────────────────────
 //
-// `/rpc/*`        — the MANAGEMENT surface (all eight methods), gated by `rpcKey`.
+// `/rpc/*`        — the MANAGEMENT surface (`IamRpc` and `IamMembershipRpc`), gated by `rpcKey`.
 // `/auth/mint/*`  — the PROXY surface, gated by `proxyKey`: `mintToken`, `mintFromKey`, and — since
 //                   ADR-0022 — `exchangeAuthCode`, which redeems a cross-host handoff code for an
 //                   app-bound session. Paths and wire shapes are fixed by `packages/proxy/src/iam.ts`
@@ -58,16 +58,23 @@
 // Each key is independent, and each unset key 404s only its own surface: a deployment with a proxy
 // and no control plane sets `proxyKey` alone, and vice versa.
 
-import type { IamHandoffRpc, IamRpc } from '@fabrika/auth-core'
+import type { IamHandoffRpc, IamMembershipRpc, IamRpc } from '@fabrika/auth-core'
 import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationInput, parseListOwnDeviceAuthorizationsInput } from '@fabrika/auth-core'
 import {
+	assignMemberSchema,
 	auditSchema,
+	createScopeSchema,
 	exchangeAuthCodeSchema,
 	issueKeySchema,
+	issueLinkSchema,
+	listMembersSchema,
 	listPrincipalsSchema,
 	mintFromKeySchema,
 	mintTokenSchema,
+	requestDelegationSchema,
 	revokeKeySchema,
+	revokeLinkSchema,
+	revokeMemberSchema,
 	RpcInputError,
 } from './rpc-inputs'
 import { hashToken, timingSafeEqualHex } from './secret'
@@ -89,7 +96,7 @@ export function isRpcPath(pathname: string): boolean {
  * distinguish "denied" from "unreachable". Only transport faults use status codes — 401 (bad key),
  * 404 (no such method / surface disabled), 400 (undecodable body), 405 (not a POST).
  */
-export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: string): Promise<Response> {
+export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershipRpc, rpcKey: string): Promise<Response> {
 	if (rpcKey.trim() === '') {
 		return problem(404, 'not found')
 	}
@@ -137,6 +144,20 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: strin
 				await rpc.audit(auditSchema.parse(body))
 				// `audit` returns void over the binding, so there is no result to encode.
 				return new Response(null, { status: 204 })
+			case 'requestDelegation':
+				return json(await rpc.requestDelegation(requestDelegationSchema.parse(body)))
+			case 'createScope':
+				return json(await rpc.createScope(createScopeSchema.parse(body)))
+			case 'assignMember':
+				return json(await rpc.assignMember(assignMemberSchema.parse(body)))
+			case 'revokeMember':
+				return json(await rpc.revokeMember(revokeMemberSchema.parse(body)))
+			case 'listMembers':
+				return json(await rpc.listMembers(listMembersSchema.parse(body)))
+			case 'issueLink':
+				return json(await rpc.issueLink(issueLinkSchema.parse(body)))
+			case 'revokeLink':
+				return json(await rpc.revokeLink(revokeLinkSchema.parse(body)))
 			default:
 				return problem(404, 'not found')
 		}
