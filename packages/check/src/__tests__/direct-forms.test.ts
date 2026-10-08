@@ -192,6 +192,15 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/data.ts:1:18', 'src/data.ts:2:18', 'src/data.ts:3:18', 'src/data.ts:4:18', 'src/data.ts:5:1'],
 	},
 	{
+		name: "the framework's binding subpath of @fabrika/db",
+		rule: 'forbidden-import',
+		files: {
+			'src/db/bind.ts': "import { bindScopedDatabase } from '@fabrika/db/framework'\nexport const bind = bindScopedDatabase\n"
+				+ "export const late = await import('@fabrika/db/framework')\nexport { isScopedDatabase } from '@fabrika/db/framework'\n",
+		},
+		expected: ['src/db/bind.ts:1:1', 'src/db/bind.ts:3:27', 'src/db/bind.ts:4:1'],
+	},
+	{
 		name: 'qualified eval and Function through call and apply',
 		rule: 'dynamic-code',
 		files: {

@@ -11,6 +11,7 @@ export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, Bu
 	'zod/v4': { z: 'zod', '*': 'zod' },
 	'@fabrika/app/contract': { defineContract: 'contract' },
 	'@fabrika/db': { defineTables: 'tables' },
+	'@fabrika/db/tables': { defineTables: 'tables' },
 }
 
 const SURFACE_BUILDERS = new Set(['rpc', 'query', 'mutation', 'link', 'spa', 'health', 'form', 'webhook', 'files', 'cron', 'export'])
@@ -95,7 +96,7 @@ const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, nu
 const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUDE.md): strict objects, no transforms, refinements or pipes'
 const ALLOWED_CALLBACK = 'a function only as the builder callback of defineContract(…, (c) => ({ … })) or of a link: procedures: (l) => ({ … })'
 const ALLOWED_IMPORT =
-	'z from zod/v4, defineContract from @fabrika/app/contract, defineTables from @fabrika/db, or a literal const of the application'
+	'z from zod/v4, defineContract from @fabrika/app/contract, defineTables from @fabrika/db or @fabrika/db/tables, or a literal const of the application'
 
 export type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | {
 	readonly kind: 'call'

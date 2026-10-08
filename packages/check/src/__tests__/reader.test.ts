@@ -371,6 +371,11 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 		expect(readTablesSource(application(BASE))).toEqual({})
 	})
 
+	test('defineTables from the browser-safe @fabrika/db/tables reads the same policies', () => {
+		const subpath = TABLES.replace("from '@fabrika/db'", "from '@fabrika/db/tables'")
+		expect(readTablesSource(withTables(subpath))).toEqual(readTablesSource(withTables(TABLES)))
+	})
+
 	test('a policy the runtime refuses is refused from source, at the defineTables call', () => {
 		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", "insrt: ['title'],")))).toEqual([
 			'src/db/tables.ts:4:23 contract notes: the policy: insrt is not a field here (allowed: scope, actions, insert, update, version, createdBy, columns)',

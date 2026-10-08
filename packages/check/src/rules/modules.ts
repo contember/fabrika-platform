@@ -53,6 +53,14 @@ const FORBIDDEN_PACKAGES: ReadonlyMap<string, Forbidden> = new Map([
 	['child_process', PROCESSES],
 ])
 
+/** Subpaths the framework imports and an application never does. */
+const FRAMEWORK_ONLY: ReadonlyMap<string, Forbidden> = new Map([
+	['@fabrika/db/framework', {
+		what: "the framework's binding of the data layer to its connection",
+		allowed: 'implement({ database: scoped(tables) }); boot binds it',
+	}],
+])
+
 /** The `Bun` globals that open a server, a socket, a database, a bucket or a process; imported by name from `bun`, the same bypass. */
 export const FORBIDDEN_BUN_MEMBERS: ReadonlyMap<string, Forbidden> = new Map([
 	...['sql', 'SQL'].map((name): [string, Forbidden] => [name, DATABASE]),
@@ -80,7 +88,7 @@ const containmentProblem = (target: string | undefined): string | undefined => {
 const checkPackage = (reference: ModuleReference, specifier: string, report: Report, isGeneratedEntry: boolean): void => {
 	const { node } = reference
 	const name = packageName(specifier)
-	const forbidden = FORBIDDEN_PACKAGES.get(name)
+	const forbidden = FRAMEWORK_ONLY.get(specifier) ?? FORBIDDEN_PACKAGES.get(name)
 	if (forbidden !== undefined) {
 		report(node, 'forbidden-import', `'${specifier}' is ${forbidden.what}`, forbidden.allowed)
 		return
