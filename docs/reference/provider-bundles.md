@@ -401,6 +401,14 @@ The resulting `fabrika.manifest.json` is the provider-owned artifact. The contro
 plane validates and stores it, then performs deployments without importing the
 app's TypeScript.
 
+The manifest boundary (`parseFabrikaManifest`, on build and on every decode)
+refuses the import fields that would expose an application service past the
+namespace proxy or change what it builds (ADR-0043): an `objectStoragePolicy`
+other than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml`
+or `mount`, and an `enableSubdomainAccess` or `enableCdn` other than `false`. The
+installation and the namespace proxy compile their own documents and keep these
+fields.
+
 `fabrika app register --env=<env> --app=<id> --repo=<url> [control register options]`
 builds the same artifact in memory and immediately sends the create-only
 `control register` request for it. It writes no file, and Control still never

@@ -18,8 +18,7 @@ const config: ZeropsAppConfig = {
 			{
 				hostname: 'notesapi',
 				type: 'alpine/bun@1.3',
-				buildFromGit: 'https://github.com/acme/notes',
-				zeropsSetup: process.env['IMAGE_TAG'],
+				nginxConfig: process.env['IMAGE_TAG'],
 			},
 			{ hostname: 'notesdb', type: 'postgresql:single@18' },
 		],
@@ -66,7 +65,7 @@ const HOSTILE = [
 
 describe('Zerops manifest variable substitution', () => {
 	test('the compiler plants a placeholder the app cannot fill itself', () => {
-		expect(manifest.target.importDocument.services[0]?.['zeropsSetup']).toBe('${IMAGE_TAG}')
+		expect(manifest.target.importDocument.services[0]?.['nginxConfig']).toBe('${IMAGE_TAG}')
 	})
 
 	test('a value that spells YAML structure stays one string', () => {
@@ -74,15 +73,15 @@ describe('Zerops manifest variable substitution', () => {
 		const services = parsedServices(yaml)
 		expect(services.map((service) => service['hostname'])).toEqual(['notesapi', 'notesdb'])
 		expect(services.map((service) => service['envIsolation'])).toEqual(['service', 'service'])
-		expect(services.map((service) => service['buildFromGit'])).toEqual(['https://github.com/acme/notes', undefined])
-		expect(services[0]?.['zeropsSetup']).toBe(HOSTILE)
+		expect(services.map((service) => service['type'])).toEqual(['alpine/bun@1.3', 'postgresql:single@18'])
+		expect(services[0]?.['nginxConfig']).toBe(HOSTILE)
 	})
 
 	test('a multi-line value round-trips as the same string', () => {
 		const value = 'first\nsecond: not-a-key\n  - not-an-item'
 		const services = parsedServices(renderYaml(substitute({ IMAGE_TAG: value })))
 		expect(services).toHaveLength(2)
-		expect(services[0]?.['zeropsSetup']).toBe(value)
+		expect(services[0]?.['nginxConfig']).toBe(value)
 	})
 
 	test('substitutes nested leaves, arrays included', () => {
@@ -102,8 +101,8 @@ describe('Zerops manifest variable substitution', () => {
 	})
 
 	test("allows a value naming the app's own service or the shared database", () => {
-		expect(substitute({ IMAGE_TAG: '${notesdb_connectionString}' }).services[0]?.['zeropsSetup']).toBe('${notesdb_connectionString}')
-		expect(substitute({ IMAGE_TAG: '${postgres_dbName}' }).services[0]?.['zeropsSetup']).toBe('${postgres_dbName}')
+		expect(substitute({ IMAGE_TAG: '${notesdb_connectionString}' }).services[0]?.['nginxConfig']).toBe('${notesdb_connectionString}')
+		expect(substitute({ IMAGE_TAG: '${postgres_dbName}' }).services[0]?.['nginxConfig']).toBe('${postgres_dbName}')
 	})
 
 	test('refuses a reference two values spell together', () => {
@@ -113,7 +112,7 @@ describe('Zerops manifest variable substitution', () => {
 	})
 
 	test('resolves only declared variables, and only ones with a value', () => {
-		expect(substitute({ IMAGE_TAG: 'v2' }).services[0]?.['zeropsSetup']).toBe('v2')
+		expect(substitute({ IMAGE_TAG: 'v2' }).services[0]?.['nginxConfig']).toBe('v2')
 		expect(() => substitute({})).toThrow('no deploy-time value')
 		expect(() => substitute({ OTHER: 'x' }, documentWith({ zeropsSetup: '${OTHER}', buildFromGit: 'https://github.com/acme/notes' }))).toThrow(
 			'undeclared',
@@ -134,7 +133,7 @@ describe('Zerops manifest variable substitution', () => {
 		for (const value of Object.values(values)) {
 			const services = parsedServices(renderYaml(substitute({ IMAGE_TAG: value })))
 			expect(services.map((service) => service['hostname'])).toEqual(['notesapi', 'notesdb'])
-			expect(services[0]?.['zeropsSetup']).toBe(value)
+			expect(services[0]?.['nginxConfig']).toBe(value)
 		}
 	})
 

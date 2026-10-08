@@ -226,7 +226,7 @@ const app = (services: ZeropsServiceSpec[] = [API]): ZeropsAppConfig => ({
 	pipeline: { secrets: ['TOKEN'], vars: ['IMAGE'] },
 	target: {
 		platform: 'zerops',
-		services: () => services.map((service) => service.hostname === 'api' ? { ...service, buildFromGit: process.env['IMAGE'] } : service),
+		services: () => services.map((service) => service.hostname === 'api' ? { ...service, nginxConfig: process.env['IMAGE'] } : service),
 		deployService: 'api',
 		zeropsSetup: 'api',
 	},

@@ -110,7 +110,9 @@ Only CSP extensions in the contract are approvable, through the approval diff of
 [ADR-0050](0050-approved-access.md). No other exposure has an approval path.
 
 The code does not render `run` or `build`, share the list of framework-only names, read back
-`subdomainAccess` or check bucket provenance yet (part B, work unit B7). The compiler refusals are part 0, work unit P0.4.
+`subdomainAccess` or check bucket provenance yet (part B, work unit B7). The compiler refusals are in place:
+`parseFabrikaManifest` applies them to every application service, on build and on decode; an
+`enableSubdomainAccess` or `enableCdn` of `false` exposes nothing and is accepted.
 
 ## Consequences
 

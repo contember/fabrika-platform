@@ -88,6 +88,12 @@ bun test
   hides a reference the text does not spell. Hostnames are never rewritten at deploy. The rule covers every
   app-supplied path into a service's env — the manifest, `interpolateManifest`, and `secrets.put`
   (`src/control.ts`), which lands on the same resolver.
+- **An application service cannot expose itself or choose its own build (ADR-0043), with no approval
+  path.** `REFUSED_APPLICATION_SERVICE_FIELDS` (`src/manifest.ts`) refuses an `objectStoragePolicy` other
+  than `private`, any `objectStorageRawPolicy`, `buildFromGit`, `zeropsYaml` or `mount`, and an
+  `enableSubdomainAccess`/`enableCdn` other than `false`, in `parseFabrikaManifest` — so on build AND on
+  every decode. Keep it out of `compileService`: the installation and namespace topologies compile through
+  it and set `enableSubdomainAccess`, `objectStoragePolicy` and `enableCdn` on their own services.
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider's `deploy` decodes the artifact ONCE and runs `createZeropsDeployer` in-process**
   on that typed value.

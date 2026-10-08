@@ -17,7 +17,7 @@ import {
 	zeropsArtifactCodec,
 } from '../manifest'
 import { interpolateManifest } from '../provider'
-import type { ZeropsAppConfig } from '../types'
+import type { ZeropsAppConfig, ZeropsServiceSpec } from '../types'
 
 const config: ZeropsAppConfig = {
 	id: 'notes',
@@ -30,7 +30,7 @@ const config: ZeropsAppConfig = {
 	target: {
 		platform: 'zerops',
 		services: ({ env }) => [
-			{ hostname: env === 'prod' ? 'notes' : 'notesstage', type: 'alpine/bun@1.3', buildFromGit: process.env['IMAGE_TAG'] },
+			{ hostname: env === 'prod' ? 'notes' : 'notesstage', type: 'alpine/bun@1.3', nginxConfig: process.env['IMAGE_TAG'] },
 		],
 		proxy: { upstream: 'notes:3000', gates: { rules: [{ path: '/health', kind: 'public' }, { path: '/*', kind: 'human' }] } },
 	},
@@ -227,15 +227,18 @@ const OWN_SETUP = 'zerops:\n  - setup: notesapi\n'
 const compileNotes = async (contents: string, config: ZeropsAppConfig = notesConfig): Promise<FabrikaManifest> =>
 	compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor(contents))
 
-const withZeropsYaml = (manifest: FabrikaManifest, zeropsYaml: unknown): unknown => ({
+const withServiceField = (manifest: FabrikaManifest, field: string, value: unknown): unknown => ({
 	...manifest,
 	target: {
 		...manifest.target,
 		importDocument: {
-			services: manifest.target.importDocument.services.map((service) => service['hostname'] === 'notesapi' ? { ...service, zeropsYaml } : service),
+			services: manifest.target.importDocument.services.map((service) => service['hostname'] === 'notesapi' ? { ...service, [field]: value } : service),
 		},
 	},
 })
+
+/** A field this manifest does not model: its references are walked like any other. */
+const withUnmodelledField = (manifest: FabrikaManifest, value: unknown): unknown => withServiceField(manifest, 'futureField', value)
 
 const exampleDescriptor = async (file: string): Promise<string> =>
 	await Bun.file(new URL(`../../../../examples/zerops-app/${file}`, import.meta.url)).text()
@@ -336,6 +339,53 @@ describe('managed key manifest boundary', () => {
 	})
 })
 
+describe('application exposure refusals', () => {
+	const withApiFields = (fields: Partial<ZeropsServiceSpec>): ZeropsAppConfig => ({
+		...notesConfig,
+		target: {
+			...notesConfig.target,
+			services: () => [{ hostname: 'notesdb', type: 'postgresql:single@18' }, { hostname: 'notesapi', type: 'alpine/bun@1.3', ...fields }],
+		},
+	})
+
+	const refused: ReadonlyArray<readonly [keyof ZeropsServiceSpec, Partial<ZeropsServiceSpec>, string]> = [
+		['objectStoragePolicy', { objectStoragePolicy: 'public-read' }, 'omit it or set `private`'],
+		['objectStoragePolicy', { objectStoragePolicy: 'custom' }, 'omit it or set `private`'],
+		['objectStorageRawPolicy', { objectStorageRawPolicy: '{"Statement":[]}' }, 'omit it'],
+		['enableSubdomainAccess', { enableSubdomainAccess: true }, 'omit it or set `false`'],
+		['buildFromGit', { buildFromGit: 'https://github.com/acme/notes' }, 'omit it'],
+		['zeropsYaml', { zeropsYaml: { zerops: [{ setup: 'notesapi' }] } }, 'omit it'],
+		['mount', { mount: ['shared'] }, 'omit it'],
+		['enableCdn', { enableCdn: true }, 'omit it or set `false`'],
+	]
+
+	test('refuses each exposing field on an application service at compile time, naming the allowed form', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor(OWN_SETUP)
+		for (const [field, fields, allowedForm] of refused) {
+			const compile = () => compileFabrikaManifest(withApiFields(fields), 'prod', descriptor)
+			expect(compile).toThrow(`Zerops service \`notesapi\` sets \`${field}\`;`)
+			expect(compile).toThrow(`(${allowedForm})`)
+		}
+	})
+
+	test('refuses each exposing field in a stored artifact at the decode boundary', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		for (const [field, fields] of refused) {
+			const value = fields[field]
+			expect(() => zeropsArtifactCodec.decode(withServiceField(manifest, field, value))).toThrow(`Zerops service \`notesapi\` sets \`${field}\`;`)
+		}
+	})
+
+	test('accepts the forms that expose nothing', async () => {
+		const manifest = compileFabrikaManifest(
+			withApiFields({ enableSubdomainAccess: false, enableCdn: false, objectStoragePolicy: 'private' }),
+			'prod',
+			await createZeropsArtifactSourceDescriptor(OWN_SETUP),
+		)
+		expect(manifest.target.importDocument.services[1]).toMatchObject({ enableSubdomainAccess: false, enableCdn: false, objectStoragePolicy: 'private' })
+	})
+})
+
 describe('release overlay', () => {
 	const TWO_SETUPS =
 		'zerops:\n  - setup: api\n    run:\n      envVariables:\n        OWN: kept\n  - setup: worker\n    run:\n      start: bun worker.ts\n'
@@ -386,24 +436,24 @@ describe('cross-service variable references', () => {
 		expect(manifest.target.sourceDescriptor).toEqual(descriptor)
 		await expect(verifyZeropsArtifactSourceDescriptor(manifest.target.sourceDescriptor)).resolves.toBeUndefined()
 	})
-	test('refuses an embedded zeropsYaml that reads a service the app does not own', async () => {
+	test('refuses an unmodelled import field that reads a service the app does not own', async () => {
 		const manifest = await compileNotes(OWN_SETUP)
-		const zeropsYaml = { zerops: [{ setup: 'notesapi', run: { envVariables: { STOLEN: '${proxy_FABRIKA_IAM_KEY}' } } }] }
-		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, zeropsYaml))).toThrow('Zerops service `notesapi` references service `proxy`')
+		const stolen = { zerops: [{ setup: 'notesapi', run: { envVariables: { STOLEN: '${proxy_FABRIKA_IAM_KEY}' } } }] }
+		expect(() => parseFabrikaManifest(withUnmodelledField(manifest, stolen))).toThrow('Zerops service `notesapi` references service `proxy`')
 	})
 
 	test('finds a foreign reference at any depth, in an object or an array element', async () => {
 		const manifest = await compileNotes(OWN_SETUP)
 		const deep = { zerops: [{ setup: 'notesapi', run: { envVariables: { NESTED: { a: { b: '${proxy_FABRIKA_IAM_KEY}' } } } } }] }
 		const inArray = { zerops: [{ setup: 'notesapi', build: { buildCommands: ['bun install', 'echo ${proxy_FABRIKA_IAM_KEY}'] } }] }
-		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, deep))).toThrow('references service `proxy`')
-		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, inArray))).toThrow('references service `proxy`')
+		expect(() => parseFabrikaManifest(withUnmodelledField(manifest, deep))).toThrow('references service `proxy`')
+		expect(() => parseFabrikaManifest(withUnmodelledField(manifest, inArray))).toThrow('references service `proxy`')
 	})
 
 	test('allows a reference to an own service and to the namespace-owned postgres', async () => {
 		const manifest = await compileNotes(`${OWN_SETUP}    run:\n      envVariables:\n        URL: \${notesdb_connectionTlsString}/\${notesdb_dbName}\n`)
-		const zeropsYaml = { zerops: [{ setup: 'notesapi', run: { envVariables: { URL: '${postgres_connectionTlsString}/${postgres_dbName}' } } }] }
-		expect(parseFabrikaManifest(withZeropsYaml(manifest, zeropsYaml))).toBeDefined()
+		const shared = { zerops: [{ setup: 'notesapi', run: { envVariables: { URL: '${postgres_connectionTlsString}/${postgres_dbName}' } } }] }
+		expect(parseFabrikaManifest(withUnmodelledField(manifest, shared))).toBeDefined()
 	})
 
 	test('refuses a source descriptor that reads a service the app does not own', async () => {

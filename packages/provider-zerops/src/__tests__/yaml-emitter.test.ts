@@ -97,7 +97,6 @@ describe('a variable value cannot grow the document a service', () => {
 				{
 					hostname: 'notesapi',
 					type: 'alpine/bun@1.3',
-					buildFromGit: 'https://github.com/acme/notes',
 					nginxConfig: `server {\n  listen ${process.env['PORT']};\n}`,
 				},
 				{ hostname: 'notesdb', type: 'postgresql:single@18' },

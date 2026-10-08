@@ -126,6 +126,77 @@ const forbidFields = (fields: readonly string[], message: string) => (record: Re
 		if (Object.hasOwn(record, field)) ctx.addIssue({ code: 'custom', path: [field], message })
 	}
 }
+
+interface RefusedServiceField {
+	readonly field: string
+	readonly accepts: (value: JsonValue) => boolean
+	readonly reason: string
+	readonly allowedForm: string
+}
+
+const refusedOutright = (): boolean => false
+
+/**
+ * Import fields an APPLICATION service may not set, with no approval path (ADR-0043). The installation and
+ * the namespace proxy compile their own documents and never pass through this manifest, so they keep them.
+ */
+const REFUSED_APPLICATION_SERVICE_FIELDS: readonly RefusedServiceField[] = [
+	{
+		field: 'objectStoragePolicy',
+		accepts: (value) => value === 'private',
+		reason: 'a bucket that is not private is read past the namespace proxy',
+		allowedForm: 'omit it or set `private`',
+	},
+	{
+		field: 'objectStorageRawPolicy',
+		accepts: refusedOutright,
+		reason: 'a raw bucket policy cannot be checked to be private',
+		allowedForm: 'omit it',
+	},
+	{
+		field: 'enableSubdomainAccess',
+		accepts: (value) => value === false,
+		reason: 'a `.zerops.app` subdomain reaches the service past the namespace proxy',
+		allowedForm: 'omit it or set `false`',
+	},
+	{
+		field: 'buildFromGit',
+		accepts: refusedOutright,
+		reason: "the platform builds the run's recorded commit, never a repository the import names",
+		allowedForm: 'omit it',
+	},
+	{
+		field: 'zeropsYaml',
+		accepts: refusedOutright,
+		reason: "the build descriptor is the repository's `zerops.yaml`, never an inline copy",
+		allowedForm: 'omit it',
+	},
+	{
+		field: 'mount',
+		accepts: refusedOutright,
+		reason: 'a shared-storage mount reaches a volume outside the application',
+		allowedForm: 'omit it',
+	},
+	{
+		field: 'enableCdn',
+		accepts: (value) => value === false,
+		reason: 'a CDN serves the service past the namespace proxy',
+		allowedForm: 'omit it or set `false`',
+	},
+]
+
+const refuseApplicationExposure = (service: { readonly hostname: string } & Record<string, JsonValue>, ctx: z.RefinementCtx): void => {
+	for (const { field, accepts, reason, allowedForm } of REFUSED_APPLICATION_SERVICE_FIELDS) {
+		const value = service[field]
+		if (value === undefined || accepts(value)) continue
+		ctx.addIssue({
+			code: 'custom',
+			path: [field],
+			message: `invalid fabrika manifest: Zerops service \`${service.hostname}\` sets \`${field}\`; ${reason} (${allowedForm})`,
+		})
+	}
+}
+
 const importServiceSchema = z.intersection(
 	z.record(manifestJsonSchema),
 	z.object({
@@ -134,7 +205,9 @@ const importServiceSchema = z.intersection(
 		envIsolation: z.literal(ENV_ISOLATION),
 		override: z.literal(OVERRIDE),
 	}),
-).superRefine(forbidFields(['envSecrets', 'dotEnvSecrets'], 'invalid fabrika manifest: Zerops import contains a forbidden environment field'))
+)
+	.superRefine(forbidFields(['envSecrets', 'dotEnvSecrets'], 'invalid fabrika manifest: Zerops import contains a forbidden environment field'))
+	.superRefine(refuseApplicationExposure)
 const importProjectSchema = z.intersection(z.record(manifestJsonSchema), z.object({ envIsolation: z.literal(ENV_ISOLATION) }))
 	.superRefine(forbidFields(['envVariables'], 'invalid fabrika manifest: Zerops import contains a forbidden project environment field'))
 
