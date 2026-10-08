@@ -191,7 +191,9 @@ Without a connection (the data layer runs on Bun with Postgres only, so on Cloud
 with a copy or a wrapper of the layer, or with a layer bound before boot, `boot` refuses
 to start. `boot` verifies tokens for the audience
 `FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
-`FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when the contract
+`FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when
+`FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
+(ADR-0022 rule 5), when the contract
 declares something this version cannot serve yet (link, form and webhook mounts,
 files, jobs, exports, imports, `creates`), when an `on` dimension has no table, or
 when a handler is missing or undeclared.
@@ -200,17 +202,21 @@ Per request, in this order:
 
 1. refuse a non-canonical path (400) and select the endpoint with `planEndpoint`; no
    endpoint is 404, never the SPA;
-2. verify the proxy-injected token with the shared verifier, for this application in
+2. `X-Fabrika-Endpoint` must be `<id>@<digest>` of that endpoint, with this version's
+   `requirementDigest` of its row: the proxy names what it selected and the rules it
+   applied, and any other value — or none — is 503. Only a `health` endpoint may arrive
+   without it;
+3. verify the proxy-injected token with the shared verifier, for this application in
    this environment: none, invalid, or minted for another environment or application
    is 401, an unreachable IAM is 503;
-3. the token's caller kind must be one of the mount's callers: a user token is
+4. the token's caller kind must be one of the mount's callers: a user token is
    `human`, a service token `machine`, an anonymous token (a share link) `link` (403);
-4. the requirement: `member` is any permission, an action is that action in some
+5. the requirement: `member` is any permission, an action is that action in some
    scope (403);
-5. admission: a request without `Authorization` that is not a `GET` needs
+6. admission: a request without `Authorization` that is not a `GET` needs
    `Sec-Fetch-Site: same-origin` (403), and RPC needs `Content-Type: application/json`
    (400);
-6. parse the body strictly (400), run the access form, remove the `from` field, call
+7. parse the body strictly (400), run the access form, remove the `from` field, call
    the handler, project the output through its schema (a union through its first
    branch that accepts the value), answer `{ result }`.
 

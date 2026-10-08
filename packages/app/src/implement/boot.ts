@@ -5,11 +5,14 @@
 import {
 	compileEndpointTable,
 	type ContractArtifact,
+	contractDigest,
 	type CredentialedEndpoint,
 	type EndpointRow,
+	FABRIKA_CONTRACT_DIGEST,
 	FABRIKA_IAM_APP_ID,
 	type Jwks,
 	parseAppEnvironmentId,
+	requirementDigest,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
@@ -91,6 +94,19 @@ function readFramework(framework: Readonly<Record<string, string>>, contractApp:
 	const dsn = framework['FABRIKA_OPERATIONS_DSN']
 	const operationsOrigin = dsn === undefined ? null : httpOrigin('FABRIKA_OPERATIONS_DSN', dsn, problems)
 	return { iamAppId, issuer: issuer ?? '', operationsOrigin }
+}
+
+/** The deploy was approved with one contract; this build must be that contract, or it does not start (ADR-0022 rule 5). */
+function checkContractDigest(framework: Readonly<Record<string, string>>, artifact: ContractArtifact, problems: string[]): void {
+	const expected = framework[FABRIKA_CONTRACT_DIGEST]?.trim() ?? ''
+	const actual = contractDigest(artifact)
+	if (expected === '') {
+		problems.push(`${FABRIKA_CONTRACT_DIGEST} is not set; it is the digest of the contract the deploy was approved with`)
+	} else if (expected !== actual) {
+		problems.push(
+			`the contract's digest is ${actual}, but ${FABRIKA_CONTRACT_DIGEST} is ${expected}: this build is not the contract the deploy was approved with`,
+		)
+	}
 }
 
 /** What this version cannot serve yet; a contract that declares it does not boot rather than answer nothing. */
@@ -200,6 +216,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const problems: string[] = []
 	const framework = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
+	checkContractDigest(options.environment.framework, artifact, problems)
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	unservable(artifact, options.assets, owned, problems)
 	const database = contractDatabase(app.database, options.database, problems)
@@ -254,6 +271,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	return new ContractRuntime({
 		table: compileEndpointTable(artifact),
 		endpoints,
+		digests: new Map(artifact.endpoints.map((row) => [row.id, requirementDigest(row)])),
 		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: framework.issuer }),
 		audience: framework.iamAppId,
 		policy: headerPolicy(artifact.csp, framework.operationsOrigin),

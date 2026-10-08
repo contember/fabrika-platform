@@ -1,5 +1,5 @@
 // The per-request pipeline of a contract application (ADR-0012 §5): canonical path and endpoint selection, the
-// token, the caller kind, the requirement, admission, strict input, the access form, the handler, output
+// endpoint the proxy applied (ADR-0022 rule 5), the token, the caller kind, the requirement, admission, strict input, the access form, the handler, output
 // projection. The caller-kind, requirement and access checks are authorization; the same-origin and content-type
 // checks are admission. Neither evaluates a gate: the proxy has already decided that the request may reach us.
 
@@ -7,7 +7,9 @@ import {
 	type AccessForm,
 	type CompiledEndpointTable,
 	type CredentialedEndpoint,
+	ENDPOINT_HEADER,
 	type EndpointRow,
+	parseEndpointHeader,
 	type PermissionEntry,
 	permits,
 	planEndpoint,
@@ -54,6 +56,8 @@ export type ServedEndpoint =
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
 	readonly endpoints: ReadonlyMap<string, ServedEndpoint>
+	/** Endpoint id → `requirementDigest` of its row: what the proxy's `X-Fabrika-Endpoint` must name. */
+	readonly digests: ReadonlyMap<string, string>
 	readonly verifier: TokenVerifier
 	/** The token audience: this application's IAM id in this environment, `<app>@<env>`. */
 	readonly audience: string
@@ -113,6 +117,7 @@ export class ContractRuntime {
 				throw new NotFoundError(`No endpoint serves ${request.method} ${rawRequestTarget(request.url).pathname}`)
 			}
 			where = served.row.id
+			this.#checkEndpoint(served, request)
 			switch (served.kind) {
 				case 'health':
 					return jsonResponse({ status: 'ok' }, 200)
@@ -129,6 +134,26 @@ export class ContractRuntime {
 			}
 		} catch (error) {
 			return errorResponse(error, where)
+		}
+	}
+
+	/**
+	 * The proxy names the endpoint it selected and the digest of the rules it applied. Any disagreement with this
+	 * version's own selection or rules is a 503, so no request is served under rules the proxy did not apply. A
+	 * health endpoint answers a constant and is what the platform's liveness probe dials directly, so it alone may
+	 * arrive without the header.
+	 */
+	#checkEndpoint(served: ServedEndpoint, request: Request): void {
+		const header = request.headers.get(ENDPOINT_HEADER)
+		if (header === null && served.kind === 'health') {
+			return
+		}
+		const named = header === null ? null : parseEndpointHeader(header)
+		if (named === null) {
+			throw new ServerFault(`'${served.row.id}' was reached without the proxy's endpoint decision`, 503)
+		}
+		if (named.id !== served.row.id || named.digest !== this.#parts.digests.get(served.row.id)) {
+			throw new ServerFault(`the proxy applied '${named.id}' with other rules than this version serves '${served.row.id}' with`, 503)
 		}
 	}
 

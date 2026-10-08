@@ -180,12 +180,19 @@ src/
   table. There is no second router: an unknown procedure under an RPC prefix is 404
   and never the SPA, and a non-canonical path is 400.
 - **Per request, in this order** (ADR-0012 §5): canonical path → `planEndpoint` →
-  token verification with `@fabrika/jwks`'s shared verifier → caller kind →
+  the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
   requirement (`satisfies`) → admission → strict input → access form → remove the
   `from` field → handler → output projection → the header policy. Caller kind,
   requirement and access form are authorization; same-origin and content type are
   admission. Neither evaluates a gate; never reorder them so that admission or input
   parsing answers a caller the requirement refused.
+- **The proxy names the endpoint, and the application agrees or answers 503**
+  (ADR-0022 rule 5). `X-Fabrika-Endpoint: <id>@<digest>` must name the endpoint
+  `planEndpoint` selected, with this version's `requirementDigest` of its row; a
+  missing, malformed or different header is a 503 before the token is read. Only a
+  `health` endpoint may arrive without it, because the platform's liveness probe dials
+  the application directly. Tests reach the runtime through the harness's `bootApp`,
+  which adds the header the way the proxy does.
 - **Caller kinds** come from the token (`presentedBy`): `ptype: 'user'` is `human`,
   `ptype: 'service'` is `machine`, an anonymous token (a share link) is `link`. No
   token is an `app:<id>` caller yet, and an OAuth resource token is no caller.
@@ -244,7 +251,9 @@ src/
   load `src/app.ts`, so a dependency that copies the environment at module load
   copies none of them. Never import the application statically from the entrypoint.
   `boot` reads `FABRIKA_IAM_APP_ID` — the token audience `<app>@<env>`, whose
-  application part must equal `contract.app` — `FABRIKA_IAM_ISSUER` and
+  application part must equal `contract.app` — `FABRIKA_CONTRACT_DIGEST`, which must
+  equal `contractDigest` of the compiled contract (a missing or different one stops
+  the boot), `FABRIKA_IAM_ISSUER` and
   `FABRIKA_OPERATIONS_DSN` (its origin joins `connect-src`), and hands `deps` the
   rest. `FABRIKA_APP_ID` is the Operations ingest coordinate and the application's
   database schema (`app_<id>`), never an audience. The

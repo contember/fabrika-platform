@@ -6,7 +6,7 @@ import { boot, BootError, captureEnvironment, type ContractImplementation, imple
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
-import { echoAssets, environment, FRAMEWORK_ENV, keepingProcessEnvironment, keySource } from './fixtures/implement/harness'
+import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource } from './fixtures/implement/harness'
 
 function problemsOf(start: () => unknown): readonly string[] {
 	try {
@@ -32,7 +32,11 @@ describe('the framework variables', () => {
 
 	test("FABRIKA_IAM_APP_ID must be <app>@<env> of the contract's application", () => {
 		const start = (iamAppId: string) => () =>
-			boot(notesApp(new Map()), { environment: environment({ ...FRAMEWORK_ENV, FABRIKA_IAM_APP_ID: iamAppId }), iam: keySource, assets: echoAssets })
+			boot(notesApp(new Map()), {
+				environment: environment({ ...frameworkEnvFor(notesApp(new Map())), FABRIKA_IAM_APP_ID: iamAppId }),
+				iam: keySource,
+				assets: echoAssets,
+			})
 		expect(problemsOf(start('notes'))).toEqual(["FABRIKA_IAM_APP_ID 'notes' is not an application environment id (allowed: <app>@<env>)"])
 		expect(problemsOf(start('other@prod'))).toEqual(["FABRIKA_IAM_APP_ID names the application 'other', but the contract declares 'notes'"])
 	})
@@ -47,9 +51,37 @@ describe('the framework variables', () => {
 				return base.handlers(env, runtime)
 			},
 		}
-		const captured = environment({ ...FRAMEWORK_ENV, FABRIKA_TEST_SECRET: 'x', NOTES_API_URL: 'https://x.test' })
+		const captured = environment({ ...frameworkEnvFor(app), FABRIKA_TEST_SECRET: 'x', NOTES_API_URL: 'https://x.test' })
 		boot(app, { environment: captured, iam: keySource, assets: echoAssets })
 		expect(seen).toEqual({ NOTES_API_URL: 'https://x.test' })
+	})
+})
+
+describe('the contract digest', () => {
+	const app = notesApp(new Map())
+	const start = (digest: string | undefined) => () => {
+		const { FABRIKA_CONTRACT_DIGEST: _approved, ...rest } = frameworkEnvFor(app)
+		return boot(app, {
+			environment: environment(digest === undefined ? rest : { ...rest, FABRIKA_CONTRACT_DIGEST: digest }),
+			iam: keySource,
+			assets: echoAssets,
+		})
+	}
+
+	test('a build whose contract is not the approved one does not start', () => {
+		const [problem] = problemsOf(start(`sha256:${'0'.repeat(64)}`))
+		expect(problem).toStartWith("the contract's digest is sha256:")
+		expect(problem).toEndWith(`but FABRIKA_CONTRACT_DIGEST is sha256:${'0'.repeat(64)}: this build is not the contract the deploy was approved with`)
+	})
+
+	test('a deploy without the digest does not start', () => {
+		expect(problemsOf(start(undefined))).toEqual([
+			'FABRIKA_CONTRACT_DIGEST is not set; it is the digest of the contract the deploy was approved with',
+		])
+	})
+
+	test("the approved contract's digest starts", () => {
+		expect(() => start(frameworkEnvFor(app)['FABRIKA_CONTRACT_DIGEST'])()).not.toThrow()
 	})
 })
 
@@ -94,7 +126,7 @@ describe('what this version does not serve yet stops the boot', () => {
 			deps: () => null,
 			handlers: () => ({ api: { start: () => ({ ok: true }) }, shared: { note: () => ({ ok: true }) } }),
 		})
-		const problems = problemsOf(() => boot(app, { environment: environment(FRAMEWORK_ENV), iam: keySource }))
+		const problems = problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))
 		expect(problems).toEqual([
 			"mount 'shared' is a link mount, which this version of @fabrika/app does not serve yet",
 			"mount 'spa' is an SPA, and the runtime adapter supplies no asset server",
@@ -107,7 +139,7 @@ describe('what this version does not serve yet stops the boot', () => {
 describe('an access form the framework cannot resolve stops the boot', () => {
 	test('on, when no table owns the dimension', () => {
 		const app: ContractImplementation = { ...notesApp(new Map()), database: null }
-		expect(problemsOf(() => boot(app, { environment: environment(FRAMEWORK_ENV), iam: keySource, assets: echoAssets }))).toEqual([
+		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets }))).toEqual([
 			"'api.notes.get' acts on a 'note', but no table in src/db/tables.ts owns that dimension to locate it",
 			"'api.notes.remove' acts on a 'note', but no table in src/db/tables.ts owns that dimension to locate it",
 		])
@@ -132,7 +164,7 @@ describe('the handler tree is checked again at boot', () => {
 			database: null,
 			handlers: () => ({ api: { dump: () => ({ everything: true }) }, admin: { reset: () => null } }),
 		}
-		expect(problemsOf(() => boot(app, { environment: environment(FRAMEWORK_ENV), iam: keySource }))).toEqual([
+		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))).toEqual([
 			"procedure 'api.get' has no handler; add it to handlers",
 			"handler 'api.dump' is not in the contract; declare the endpoint in fabrika.contract.ts first",
 			"handler 'admin.reset' is not in the contract; declare the endpoint in fabrika.contract.ts first",
@@ -141,7 +173,7 @@ describe('the handler tree is checked again at boot', () => {
 
 	test('a prototype member is never a handler', () => {
 		const app: ContractImplementation = { contract: small, database: null, handlers: () => ({ api: {} }) }
-		expect(problemsOf(() => boot(app, { environment: environment(FRAMEWORK_ENV), iam: keySource }))).toEqual([
+		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))).toEqual([
 			"procedure 'api.get' has no handler; add it to handlers",
 		])
 	})

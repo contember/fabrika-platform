@@ -3,12 +3,27 @@
 
 import { HttpError } from '@fabrika/app'
 import { defineContract } from '@fabrika/app/contract'
-import { implement, type Ref, requestCapabilities } from '@fabrika/app/implement'
+import { boot, implement, type Ref, requestCapabilities } from '@fabrika/app/implement'
+import { ENDPOINT_HEADER } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
-import { bootApp, environment, errorType, FRAMEWORK_ENV, grant, resultOf, send, type Sent, token, unreachableIam } from './fixtures/implement/harness'
+import {
+	bootApp,
+	echoAssets,
+	endpointHeaderFor,
+	environment,
+	errorType,
+	frameworkEnvFor,
+	grant,
+	keySource,
+	resultOf,
+	send,
+	type Sent,
+	token,
+	unreachableIam,
+} from './fixtures/implement/harness'
 import { noteDatabase, type NoteRow, notesStore } from './fixtures/implement/stores'
 
 const N1 = '0190a0a0-0000-7000-8000-000000000001'
@@ -497,9 +512,50 @@ describe('the response header policy', () => {
 
 	test('the Operations ingest origin joins connect-src', async () => {
 		const reporting = bootApp(notesApp(seed()), {
-			environment: environment({ ...FRAMEWORK_ENV, FABRIKA_OPERATIONS_DSN: 'https://key@ops.test/42' }),
+			environment: environment({ ...frameworkEnvFor(notesApp(seed())), FABRIKA_OPERATIONS_DSN: 'https://key@ops.test/42' }),
 		})
 		const sent = await send(reporting, '/healthz')
 		expect(sent.headers.get('Content-Security-Policy')).toContain("connect-src 'self' https://ops.test;")
+	})
+})
+
+describe('the endpoint the proxy applied', () => {
+	const implementation = notesApp(seed())
+	const direct = boot(implementation, { environment: environment(frameworkEnvFor(implementation)), iam: keySource, assets: echoAssets })
+	const UNAVAILABLE = { error: { type: 'unavailable', message: 'Service unavailable' } }
+	const meHeader = endpointHeaderFor(implementation, 'POST', '/api/me') ?? ''
+	const listHeader = endpointHeaderFor(implementation, 'POST', '/api/notes.list') ?? ''
+	const withEndpoint = (endpoint: string | null) => ({
+		'Sec-Fetch-Site': 'same-origin',
+		'Content-Type': 'application/json',
+		...(endpoint === null ? {} : { [ENDPOINT_HEADER]: endpoint }),
+	})
+
+	test('the header the proxy sends for the endpoint this version selects is served', async () => {
+		const sent = await send(direct, '/api/me', { token: await token('user', [grant('notes.read')]), body: {}, headers: withEndpoint(meHeader) })
+		expect(resultOf(sent)).toEqual({ id: 'user-1', label: 'user@notes.test' })
+	})
+
+	test.each<[string, string | null]>([
+		['no header: the request did not pass the endpoint decision', null],
+		['a malformed header', 'api.me'],
+		['another endpoint: the two selections disagree', listHeader],
+		['other rules: the proxy applied a different version of the endpoint', `api.me@sha256:${'0'.repeat(64)}`],
+	])('%s is a 503 before the token is read', async (_name, endpoint) => {
+		const logged = await capturingLog(async () => {
+			const sent = await send(direct, '/api/me', { token: await token('user', [grant('notes.read')]), body: {}, headers: withEndpoint(endpoint) })
+			expect(sent.status).toBe(503)
+			expect(sent.body).toEqual(UNAVAILABLE)
+		})
+		expect(logged.join('\n')).not.toContain('Bearer')
+	})
+
+	test('a health check may arrive without the header, the platform probe dials the app directly; a wrong one is still a 503', async () => {
+		expect((await send(direct, '/healthz')).status).toBe(200)
+		expect((await send(direct, '/healthz', { headers: { [ENDPOINT_HEADER]: meHeader } })).status).toBe(503)
+	})
+
+	test('a path no endpoint serves stays a 404 whatever the header says', async () => {
+		expect((await send(direct, '/api/unknown', { body: {}, headers: withEndpoint(meHeader) })).status).toBe(404)
 	})
 })

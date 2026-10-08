@@ -8,7 +8,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesApp } from './fixtures/implement/app'
-import { FRAMEWORK_ENV, grant, keepingProcessEnvironment, keySource, ORIGIN, token } from './fixtures/implement/harness'
+import { endpointHeaderFor, frameworkEnvFor, grant, keepingProcessEnvironment, keySource, ORIGIN, token } from './fixtures/implement/harness'
+
+const FRAMEWORK_ENV = frameworkEnvFor(notesApp(new Map()))
+const endpointOf = (method: string, path: string): string => endpointHeaderFor(notesApp(new Map()), method, path) ?? ''
 
 const exec = { waitUntil() {}, passThroughOnException() {} }
 
@@ -20,13 +23,20 @@ describe('createContractWorker', () => {
 		const env = { ...FRAMEWORK_ENV, IAM: keySource, ASSETS: assets }
 		const request = new Request(`${ORIGIN}/api/me`, {
 			method: 'POST',
-			headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]), 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+			headers: {
+				'X-Fabrika-Token': await token('user', [grant('notes.read')]),
+				'X-Fabrika-Endpoint': endpointOf('POST', '/api/me'),
+				'Content-Type': 'application/json',
+				'Sec-Fetch-Site': 'same-origin',
+			},
 			body: '{}',
 		})
 		const response = await keepingProcessEnvironment(() => worker.fetch(request, env, exec))
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ result: { id: 'user-1', label: 'user@notes.test' } })
-		const pageRequest = new Request(`${ORIGIN}/`, { headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]) } })
+		const pageRequest = new Request(`${ORIGIN}/`, {
+			headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]), 'X-Fabrika-Endpoint': endpointOf('GET', '/') },
+		})
 		const page = await keepingProcessEnvironment(() => worker.fetch(pageRequest, env, exec))
 		expect(await page.text()).toBe('asset /')
 	})

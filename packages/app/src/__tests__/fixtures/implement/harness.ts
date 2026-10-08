@@ -1,6 +1,7 @@
 // Signs tokens the way IAM does and sends requests the way the proxy forwards them, so the tests drive `boot`'s
 // real pipeline: the shared verifier, the endpoint table and the handlers.
 
+import { compileContract } from '@fabrika/app/contract'
 import {
 	boot,
 	type BootOptions,
@@ -10,7 +11,20 @@ import {
 	type IamKeySource,
 	type SpaAssets,
 } from '@fabrika/app/implement'
-import { buildAccessClaims, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import {
+	buildAccessClaims,
+	compileEndpointTable,
+	contractDigest,
+	ENDPOINT_HEADER,
+	FABRIKA_CONTRACT_DIGEST,
+	formatEndpointHeader,
+	type Jwks,
+	type PermissionEntry,
+	planEndpoint,
+	PROXY_TOKEN_HEADER,
+	rawRequestTarget,
+	requirementDigest,
+} from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 
 export const ISSUER = 'https://iam.test'
@@ -27,6 +41,24 @@ export const keySource: IamKeySource = { getJwks: () => Promise.resolve(JWKS) }
 export const unreachableIam: IamKeySource = { getJwks: () => Promise.reject(new Error('IAM is down')) }
 
 export const FRAMEWORK_ENV = { FABRIKA_IAM_APP_ID: APP_ID, FABRIKA_IAM_ISSUER: ISSUER }
+
+function artifactOf(app: ContractImplementation) {
+	return compileContract(app.contract, app.database?.tables ?? {})
+}
+
+/** The framework variables a deploy of `app` gets: `FRAMEWORK_ENV` plus the digest of the contract it was approved with. */
+export function frameworkEnvFor(app: ContractImplementation): Record<string, string> {
+	return { ...FRAMEWORK_ENV, [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifactOf(app)) }
+}
+
+/**
+ * `X-Fabrika-Endpoint` as the proxy sets it: the endpoint its table selects for the request, with the digest of the
+ * rules it applied. `null` where the proxy selects nothing.
+ */
+export function endpointHeaderFor(app: ContractImplementation, method: string, path: string): string | null {
+	const plan = planEndpoint(compileEndpointTable(artifactOf(app)), method, path)
+	return plan.outcome === 'endpoint' ? formatEndpointHeader(plan.endpoint.id, requirementDigest(plan.endpoint)) : null
+}
 
 /** What `captureEnvironment` would return for `variables`, without scrubbing this test process's environment. */
 export function environment(variables: Readonly<Record<string, unknown>>): CapturedEnvironment {
@@ -77,8 +109,20 @@ export async function token(kind: TokenKind, perms: PermissionEntry[], audience 
 	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
 }
 
+/** Boots `app` and puts it behind what the proxy adds: the endpoint header, unless the request already carries one. */
 export function bootApp(app: ContractImplementation, options: Partial<BootOptions> = {}): ContractApp {
-	return boot(app, { environment: environment(FRAMEWORK_ENV), iam: keySource, assets: echoAssets, ...options })
+	const runtime = boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets, ...options })
+	return {
+		fetch: (request) => {
+			const header = endpointHeaderFor(app, request.method, rawRequestTarget(request.url).pathname)
+			if (header === null || request.headers.has(ENDPOINT_HEADER)) {
+				return runtime.fetch(request)
+			}
+			const headers = new Headers(request.headers)
+			headers.set(ENDPOINT_HEADER, header)
+			return runtime.fetch(new Request(request, { headers }))
+		},
+	}
 }
 
 export interface Sent {
