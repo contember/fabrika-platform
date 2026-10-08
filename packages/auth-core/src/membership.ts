@@ -96,7 +96,8 @@ export interface ListMembersInput extends MembershipCaller {
 
 export interface MemberItem {
 	principalId: string
-	label: string
+	/** Null unless the caller holds the dimension's `members.manage` in the scope: a user's label is its address. */
+	label: string | null
 	/** Null unless the caller holds the dimension's `members.manage` in the scope. */
 	email: string | null
 	roles: string[]

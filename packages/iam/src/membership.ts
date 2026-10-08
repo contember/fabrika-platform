@@ -385,6 +385,8 @@ export async function revokeMember(services: Services, env: CallerEnv, ctx: Requ
 	const { caller } = resolved
 	const spent = await spendDelegation(services, caller, input, 'members', input.scope.type)
 	if (!spent.ok) return spent
+	const problem = scopeProblem(input.scope)
+	if (problem !== null) return invalid(problem)
 	const manage = await manageAuthority(services, caller, input.scope)
 	if (!manage.ok) return manage
 	const actor = { ...caller, principalId: caller.principal.id }
@@ -478,7 +480,7 @@ export async function listMembers(services: Services, env: CallerEnv, ctx: Reque
 		if (member === undefined) {
 			members.set(row.principal_id, {
 				principalId: row.principal_id,
-				label: row.label,
+				label: manager ? row.label : null,
 				email: manager ? row.email : null,
 				roles: [row.role_key],
 				disabled: row.disabled_at !== null,

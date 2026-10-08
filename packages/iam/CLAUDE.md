@@ -180,7 +180,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   Assigning needs the dimension's `members.manage` there, a role there that the target role's
   `assignableBy` names, and every action of the target role there; revoking needs the same for every
   role it removes. Repeating an assign or a revoke answers the same result (backlog 82's 409 stays for
-  the admin grant API).
+  the admin grant API). `listMembers` needs `members.list` there and shows labels, emails and open
+  invitations only to `members.manage` — a user's label is its address.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
   one only to a user principal, only for an endpoint the schema lists under `delegations`, bound to the
   caller, the endpoint and the request id, for `DELEGATION_GRANT_TTL_SECONDS`. It is consumed BEFORE

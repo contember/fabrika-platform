@@ -115,7 +115,7 @@ const assignSuccessSchema = z.union([
 const listMembersSuccessSchema = z.object({
 	members: z.array(z.object({
 		principalId: z.string(),
-		label: z.string(),
+		label: z.string().nullable(),
 		email: z.string().nullable(),
 		roles: z.array(z.string()),
 		disabled: z.boolean(),

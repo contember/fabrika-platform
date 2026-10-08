@@ -479,14 +479,17 @@ describe('members.list', () => {
 
 		const asEditor = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(editor)), scope })
 		if (!asEditor.ok) throw new Error('expected a list')
-		expect(asEditor.members.map((member) => [member.principalId, member.roles, member.email])).toEqual(
-			[[owner.id, ['owner'], null], [editor.id, ['editor'], null]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+		expect(asEditor.members.map((member) => [member.principalId, member.roles, member.label, member.email])).toEqual(
+			[[owner.id, ['owner'], null, null], [editor.id, ['editor'], null, null]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
 		)
 		expect(asEditor.invitations).toEqual([])
 
 		const asOwner = await listMembers(f.services, CALLER_ENV, f.ctx, { ...(await caller(owner)), scope })
 		if (!asOwner.ok) throw new Error('expected a list')
-		expect(asOwner.members.find((member) => member.principalId === editor.id)?.email).toBe('editor@example.test')
+		expect(asOwner.members.find((member) => member.principalId === editor.id)).toMatchObject({
+			label: 'editor@example.test',
+			email: 'editor@example.test',
+		})
 		expect(asOwner.invitations.map((invitation) => invitation.email)).toEqual(['invitee@example.test'])
 	})
 
