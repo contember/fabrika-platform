@@ -113,20 +113,17 @@ what `defineTables` returned, or the artifact form of each policy; `@fabrika/db/
 (browser-safe) converts one into the other. Schemas are the zod 4 subset that
 `@fabrika/check` accepts.
 
-Until the proxy reads endpoint tables (B2), the artifact compiles to what today's proxy
-and IAM consume, and `fabrika.config.ts` hands both to its provider: the Zerops
-`target.proxy.gates` and `schema`, or the Cloudflare `createCloudflareProxyWorker({ gates })`
-and `schema`.
+The artifact compiles to what the proxy and IAM consume, and `fabrika.config.ts` hands both
+to its provider: the Zerops `target.proxy` (`{ upstream, ...contractProxyTable(artifact) }`)
+and `schema`, or the Cloudflare `createCloudflareProxyWorker({ endpoints:
+contractProxyTable(artifact) })` and `schema`. A contract application generates no gates;
+both providers refuse one whose proxy carries gates.
 
-- `gatesFromContract(artifact)` emits one rule per endpoint path and kind, most specific
-  path first: `human` is a `human` rule; `machine`, `link` and `app:<id>` a `service`
-  rule, before the `human` one; an anonymous kind a `public` rule, last. A gate knows no
-  method, so a path also admits the kinds of the rows the other method can select
-  through it: with a form at `POST /contact`, `GET /contact` still reaches the SPA for a
-  signed-in person. A path with no endpoint has no rule, so the proxy denies it. The
-  gates are coarser than the table: an absent key falls through to a broader path's
-  rules, and an unknown procedure under an RPC prefix is admitted with the SPA's kind.
-  The framework refuses both (caller kind 403, unknown endpoint 404).
+- `contractProxyTable(artifact)` (`@fabrika/proxy-core/manifest`) emits every endpoint row's
+  rules — kind, method, path, callers, requirement, admission — with its delegation and
+  `requirementDigest`, the reserved prefixes, and the contract digest as `snapshot`. The
+  proxy selects one endpoint per request with `planEndpoint` and decides there
+  (ADR-0022 rule 3); there is no fall-through to a broader path.
 - `schemaFromContract(artifact)` emits the dimensions as scopes (with `in`, `creator` and
   `members`), the actions, the roles (a membership role with its scope and `assignableBy`),
   the link mounts by name, the delegations, and `contract: true`, which makes IAM refuse
@@ -331,15 +328,13 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   403, as IAM refuses to sign it.
 - Only test files may import the kit: `@fabrika/check` reports `test-only-import`
   for `@fabrika/app/testing`, or a test module, loaded from any other file.
-- The proxy decision runs first, and by default it is production's: proxy-core's
-  verify service over the gates `gatesFromContract` generates, with the kit's IAM
-  (`kit.iam`) behind it. A denial or a login answer reaches the test as the proxy
-  sends it. So a `px_` key on a mount whose only caller is `human` gets the login
-  answer, because the human gate reads the session only.
-  `proxy: 'endpoints'` opts into ADR-0022's per-endpoint decision instead: canonical
-  path (400), `planEndpoint` (no endpoint is 403), a `px_` key whose caller kind must
-  be a caller (401 unknown, 403 wrong kind) or the session (401 when `human` is not a
-  caller, the login URL when there is none), and the requirement (403).
+- The proxy decision runs first, and it is production's: proxy-core's verify service
+  over `contractProxyTable(kit.artifact)`, with the kit's IAM (`kit.iam`) behind it. A
+  denial or a login answer reaches the test as the proxy sends it: canonical path (400),
+  `planEndpoint` (no endpoint is 403), a `px_` key whose caller kind must be a caller
+  (401 unknown, 403 wrong kind) or the session (401 when `human` is not a caller, the
+  login answer when there is none), the requirement (403) and admission (cross-site
+  403, media type 400). An allow forwards `X-Fabrika-Endpoint` as production does.
 - A request loses every `X-Fabrika-*` header, `X-Request-Id` and the forwarding
   headers before the decision, and the `__Host-px_*` cookies before the application.
   It carries the proxy's token, signed by the kit the way IAM signs, and the real

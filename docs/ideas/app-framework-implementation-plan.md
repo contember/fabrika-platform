@@ -261,6 +261,8 @@ platform already consumes; the application runtime enforces the rest in-process.
 
 **A4 — Gates and schema from the contract (M)**
 
+Superseded by B2 on 2026-10-09: a contract application is served behind its endpoint table, `gatesFromContract` is removed, and only `schemaFromContract` remains.
+
 - `gatesFromContract(contract)`: one gate rule per endpoint path in order of specificity; `human` → `human`;
   `machine`, `link` and `app:<id>` → `service`; both → `service` first; anonymous kinds → `public`. No rule for an
   undeclared path.

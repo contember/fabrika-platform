@@ -95,26 +95,24 @@ for an undeclared endpoint, a missing handler, or a handler of the wrong kind is
 The installation's own services (IAM, Control, Operations) keep `defineApp()` and their hand-written
 gates, including the `oauth` gates of MCP authoring. This ADR does not move them to contracts.
 
-### 3. The router and the gates come from one endpoint table
+### 3. The router and the proxy select from one endpoint table
 
 The contract compiles to one endpoint table. The framework dispatches from it through `planEndpoint`
 in `@fabrika/auth-core`, which refuses a non-canonical path and selects the most specific endpoint.
 An unknown procedure under an RPC prefix is 404 and never falls through to the SPA.
 
-The gates are generated from the same table. The router therefore cannot serve a path under different
-gates than the proxy evaluated.
+The proxy selects from the same table. The router therefore cannot serve a path under different rules
+than the proxy applied, and `X-Fabrika-Endpoint` names the endpoint and the digest of those rules.
 
-### 4. On today's platform, the contract generates gates and the IAM schema
+### 4. The proxy reads the endpoint table; the contract generates the IAM schema
 
-The proxy does not change for this decision. The contract compiles into the two artifacts that the
-proxy and IAM already consume:
+The contract compiles into the two artifacts the proxy and IAM consume. It generates no gates:
 
-- **`gatesFromContract(contract)`** produces the gates for `fabrika.config.ts`: one rule per endpoint
-  path, in order of specificity. `human` becomes a `human` gate; `machine`, `link` and `app:<id>`
-  become a `service` gate; a mount with both gets the `service` rule first; the anonymous kinds become
-  `public`, after every other rule of the path. A gate knows no method, so a path also admits the
-  kinds of the rows that the other method can select through it. A path with no endpoint has no
-  rule, so the proxy denies it.
+- **`contractProxyTable(artifact)`** (`@fabrika/proxy-core/manifest`) produces the endpoint table of
+  the proxy manifest: every row's rules, its delegation and digest, the reserved prefixes and the
+  contract digest. The proxy decides per endpoint with it
+  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3). Both providers refuse a contract
+  application whose proxy carries gates.
 - **`schemaFromContract(contract)`** produces the `AppSchema` that the deploy reconciles into IAM:
   scopes with their membership metadata, actions, roles, link mounts, and the endpoints that spend
   membership authority (`creates`, and the dimension's `members.manage`) as delegations.
@@ -124,8 +122,8 @@ Both providers take these from `fabrika.config.ts`. The application never writes
 ### 5. The framework authorizes; the proxy stays the only gate evaluator
 
 The vocabulary is the one of [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) and
-[`overview.md`](../reference/overview.md). The proxy evaluates the generated gates with the canonical
-matcher, and it is the only component that evaluates a gate. The framework evaluates no gate rule.
+[`overview.md`](../reference/overview.md). The proxy decides with the endpoint table and the canonical
+matchers, and it is the only enforcement point. The framework evaluates no gate rule.
 
 Per request, after the proxy has admitted it, the framework runs these steps in order:
 
@@ -167,8 +165,8 @@ loosen any of it, and only the pull request shows the change.
 
 Other ADRs make the contract binding outside the application process:
 
-- The proxy reads endpoint tables instead of generated gates, and checks caller kinds, requirements
-  and admission itself: [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md).
+- The proxy reads the endpoint table, and checks caller kinds, requirements and admission itself:
+  [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md).
 - Control reads the contract from source by static parsing
   ([ADR-0005](0005-compile-app-config-to-static-manifest.md)), and a widened contract waits for a human
   on a protected environment ([ADR-0050](0050-approved-access.md)).
@@ -182,21 +180,21 @@ None of these is built yet; until they are, the framework is the only check.
 
 ## Consequences
 
-- An application declares its access surface once. The gates, the IAM vocabulary, the router, the
-  typed client and the handler types derive from it.
-- A missing access declaration is a type error and a path no gate admits. A forgotten endpoint stops
-  being a silent hole.
-- The router and the proxy select by one table, so a path cannot pass one gate and reach a different
-  handler.
+- An application declares its access surface once. The proxy's endpoint table, the IAM vocabulary, the
+  router, the typed client and the handler types derive from it.
+- A missing access declaration is a type error and a path no endpoint serves. A forgotten endpoint
+  stops being a silent hole.
+- The router and the proxy select by one table, so a path cannot pass one endpoint's rules and reach a
+  different handler.
 - The literal rule makes contracts more verbose. Shared schema fragments must be `const` imports;
   computed contracts are impossible.
 - Contracts depend on zod 4. Other validators cannot appear in a contract.
 - `@fabrika/app` now has two surfaces: `implement` for applications and `defineApp()` for the
   installation's own services. Both share the router, the RPC wire and the runtime adapters.
 - RPC clients can no longer send `{ batch }`. One request is one procedure.
-- `@fabrika/auth-core` gains the contract model, `planEndpoint` and the requirement check. The gate
-  matcher stays the only gate evaluator; the generated gates and `planEndpoint` must agree on every
-  path, which a property test checks.
+- `@fabrika/auth-core` gains the contract model, `planEndpoint` and the requirement check. The proxy
+  and the framework select with the same `planEndpoint`, and the per-endpoint digest proves they
+  applied the same rules.
 - Until platform enforcement exists, a loosened contract or role is visible only in review. The
   framework is a strong default, not a boundary against an agent that edits any file.
 
