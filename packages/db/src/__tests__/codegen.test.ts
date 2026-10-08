@@ -1,0 +1,251 @@
+// `fabrika db codegen`'s rendering, and its introspection against a REAL Postgres (skips cleanly without
+// FABRIKA_TEST_POSTGRES_URL). The fixture `schema.generated.ts` that the rest of this package's tests use is this
+// codegen's output for the fixture migration, and the Postgres suite regenerates it byte for byte.
+
+import { checkApplication, formatFinding } from '@fabrika/check'
+import { SQL } from 'bun'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
+import { type CatalogColumn, CodegenError, generateSchema, introspectSchema, renderSchema } from '../codegen'
+import { migration } from './fixtures/schema'
+
+const column = (table: string, name: string, type: string, extra: Partial<CatalogColumn> = {}): CatalogColumn => ({
+	table_name: table,
+	column_name: name,
+	type_name: type,
+	type_type: 'b',
+	type_category: 'S',
+	nullable: false,
+	generated: 'no',
+	enum_labels: [],
+	...extra,
+})
+
+const interfaceOf = (source: string, name: string): string => {
+	const start = source.indexOf(`export interface ${name} {`)
+	return source.slice(start, source.indexOf('}\n', start) + 2)
+}
+
+describe('renderSchema', () => {
+	test('maps each column to what Bun.SQL decodes and what the layer may bind', () => {
+		const source = renderSchema([
+			column('things', 'id', 'uuid'),
+			column('things', 'small', 'int2'),
+			column('things', 'big', 'int8'),
+			column('things', 'amount', 'numeric', { nullable: true }),
+			column('things', 'ratio', 'float8'),
+			column('things', 'done', 'bool'),
+			column('things', 'due', 'date', { nullable: true }),
+			column('things', 'created_at', 'timestamptz', { generated: 'default' }),
+			column('things', 'serial', 'int8', { generated: 'default' }),
+			column('things', 'total', 'int4', { generated: 'always' }),
+			column('things', 'state', 'thing_state', { type_type: 'e', type_category: 'E', enum_labels: ['draft', "it's"] }),
+		])
+		expect(interfaceOf(source, 'ThingsTable')).toBe(`export interface ThingsTable {
+	id: string
+	small: number
+	big: ColumnType<string, bigint | number | string, bigint | number | string>
+	amount: ColumnType<string | null, bigint | number | string | null, bigint | number | string | null>
+	ratio: number
+	done: boolean
+	due: Date | null
+	created_at: Generated<Date>
+	serial: ColumnType<string, bigint | number | string | undefined, bigint | number | string>
+	total: GeneratedAlways<number>
+	state: 'draft' | 'it\\'s'
+}
+`)
+		expect(source).toContain("import type { ColumnType, Generated, GeneratedAlways } from 'kysely'\n")
+	})
+
+	test('leaves out framework tables and imports only what it uses', () => {
+		const source = renderSchema([column('fabrika_migrations', 'name', 'text'), column('notes', 'id', 'text')])
+		expect(source).not.toContain('fabrika_migrations')
+		expect(source).not.toContain("from 'kysely'")
+		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
+		expect(source).toContain("export const columns = {\n\tnotes: [\n\t\t'id',\n\t],\n} as const satisfies ColumnList<DB>\n")
+	})
+
+	test('orders tables by name and keeps column order', () => {
+		const source = renderSchema([column('notes', 'title', 'text'), column('notes', 'id', 'text'), column('authors', 'id', 'text')])
+		expect(source.indexOf('AuthorsTable {')).toBeLessThan(source.indexOf('NotesTable {'))
+		expect(interfaceOf(source, 'NotesTable')).toBe('export interface NotesTable {\n\ttitle: string\n\tid: string\n}\n')
+	})
+
+	test('refuses a type it cannot type exactly, rather than guessing', () => {
+		for (
+			const unsupported of [
+				column('notes', 'meta', 'jsonb'),
+				column('notes', 'blob', 'bytea'),
+				column('notes', 'tags', '_text', { type_category: 'A' }),
+				column('notes', 'email', 'email_address', { type_type: 'd' }),
+			]
+		) {
+			expect(() => renderSchema([unsupported])).toThrow(CodegenError)
+		}
+		expect(() => renderSchema([column('notes', 'meta', 'jsonb')])).toThrow(
+			'notes.meta has type jsonb, which the data layer does not read or bind (supported: text,',
+		)
+	})
+
+	test('refuses names the data layer cannot address and names that collide', () => {
+		expect(() => renderSchema([column('Notes', 'id', 'text')])).toThrow('Notes is not a plain identifier')
+		expect(() => renderSchema([column('notes', 'Title', 'text')])).toThrow('Title is not a plain identifier')
+		expect(() => renderSchema([column('a_b', 'id', 'text'), column('a__b', 'id', 'text')])).toThrow(
+			'tables a__b and a_b would both generate ABTable',
+		)
+	})
+})
+
+describe('the generated module under the checker', () => {
+	const fixture = Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text()
+	const tables = `import { defineTables } from '@fabrika/db'
+import { columns, type DB } from './schema.generated'
+
+export const tables = defineTables<DB, 'countries.read'>(columns)({
+	countries: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+})
+`
+	const check = async (generated: string): Promise<string[]> =>
+		(await checkApplication({ root: '/app', files: new Map([['src/db/schema.generated.ts', generated], ['src/db/tables.ts', tables]]) })).map(
+			formatFinding,
+		)
+
+	test('has no finding, as a literal module of tables.ts', async () => {
+		expect(await check(await fixture)).toEqual([])
+	})
+
+	test('is inside the literal graph, so an edit to it is a finding', async () => {
+		expect((await check(`${await fixture}export const extra = Date.now()\n`)).some((line) => line.includes(' literal '))).toBe(true)
+	})
+})
+
+const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
+const url = process.env[URL_VAR] ?? ''
+const hasPostgres = url !== ''
+
+if (!hasPostgres) console.warn(`codegen.test.ts skipped: set ${URL_VAR} to run the Postgres-backed tests`)
+
+const schemas: string[] = []
+
+afterAll(async () => {
+	if (!hasPostgres) return
+	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+	for (const schema of schemas) await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+	await sql.close()
+})
+
+/** A fresh schema with `ddl` applied, as `fabrika db migrate` leaves it (ledger included). */
+async function migrated(ddl: string): Promise<string> {
+	const schema = `codegen_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
+	schemas.push(schema)
+	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+	try {
+		await sql.unsafe(`CREATE SCHEMA ${schema}; SET search_path TO ${schema};
+			CREATE TABLE fabrika_migrations (bundle TEXT NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);
+			${ddl}`)
+	} finally {
+		await sql.close()
+	}
+	return schema
+}
+
+describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
+	test('regenerates the committed fixture from the fixture migration', async () => {
+		const schema = await migrated(migration)
+		expect(await generateSchema(url, schema)).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text())
+	})
+
+	test('types each supported column as Bun.SQL decodes it', async () => {
+		const schema = await migrated(`
+			CREATE TYPE mood AS ENUM ('calm', 'busy');
+			CREATE TABLE samples (
+				id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+				label varchar(20) NOT NULL,
+				code char(2) NOT NULL,
+				small int2 NOT NULL,
+				medium int4 NOT NULL,
+				big int8 NOT NULL,
+				amount numeric NOT NULL,
+				ratio float4 NOT NULL,
+				share float8 NOT NULL,
+				done bool NOT NULL,
+				due date NOT NULL,
+				seen timestamp NOT NULL,
+				created_at timestamptz NOT NULL DEFAULT now(),
+				starts time NOT NULL,
+				starts_tz timetz NOT NULL,
+				length interval NOT NULL,
+				state mood NOT NULL,
+				counter int8 GENERATED ALWAYS AS IDENTITY,
+				twice int4 GENERATED ALWAYS AS (medium * 2) STORED,
+				note text
+			);
+			INSERT INTO samples (label, code, small, medium, big, amount, ratio, share, done, due, seen, starts, starts_tz, length, state)
+			VALUES ('a', 'xy', 1, 2, 3, 4.5, 1.5, 2.5, true, '2026-10-08', '2026-10-08 12:00', '12:00', '12:00+02', '1 hour', 'busy');
+		`)
+		const source = await generateSchema(url, schema)
+		expect(interfaceOf(source, 'SamplesTable')).toBe(`export interface SamplesTable {
+	id: Generated<string>
+	label: string
+	code: string
+	small: number
+	medium: number
+	big: ColumnType<string, bigint | number | string, bigint | number | string>
+	amount: ColumnType<string, bigint | number | string, bigint | number | string>
+	ratio: number
+	share: number
+	done: boolean
+	due: Date
+	seen: Date
+	created_at: Generated<Date>
+	starts: string
+	starts_tz: string
+	length: string
+	state: 'calm' | 'busy'
+	counter: GeneratedAlways<string>
+	twice: GeneratedAlways<number | null>
+	note: string | null
+}
+`)
+
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		let row: unknown
+		try {
+			const rows: unknown = await sql.unsafe(`SELECT * FROM ${schema}.samples`)
+			row = Array.isArray(rows) ? rows[0] : undefined
+		} finally {
+			await sql.close()
+		}
+		const decoded = typeof row === 'object' && row !== null ? Object.entries(row) : []
+		const kind = (value: unknown): string => (value instanceof Date ? 'Date' : value === null ? 'null' : typeof value)
+		expect(Object.fromEntries(decoded.map(([key, value]) => [key, kind(value)]))).toEqual({
+			id: 'string',
+			label: 'string',
+			code: 'string',
+			small: 'number',
+			medium: 'number',
+			big: 'string',
+			amount: 'string',
+			ratio: 'number',
+			share: 'number',
+			done: 'boolean',
+			due: 'Date',
+			seen: 'Date',
+			created_at: 'Date',
+			starts: 'string',
+			starts_tz: 'string',
+			length: 'string',
+			state: 'string',
+			counter: 'string',
+			twice: 'number',
+			note: 'null',
+		})
+	})
+
+	test('refuses a schema that was never migrated', async () => {
+		await expect(introspectSchema(url, 'codegen_missing_schema')).rejects.toThrow(
+			'schema codegen_missing_schema does not exist; run fabrika db migrate first',
+		)
+	})
+})

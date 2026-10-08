@@ -19,6 +19,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./codegen": {
+			"bun": "./src/codegen.ts",
+			"types": "./src/codegen.ts",
+			"default": "./src/codegen.ts"
 		}
 	},
 	"scripts": {
@@ -27,10 +32,12 @@
 	},
 	"dependencies": {
 		"kysely": "0.29.6",
-		"kysely-postgres-js": "5.0.1"
+		"kysely-postgres-js": "5.0.1",
+		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
-		"typescript": "^5.9.3"
+		"typescript": "^5.9.3",
+		"@fabrika/check": "workspace:*"
 	}
 }
