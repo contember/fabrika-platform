@@ -6,10 +6,12 @@
 // entrypoint.
 
 import { rawRequestTarget } from '@fabrika/auth-core'
+import type * as DataLayer from '@fabrika/db'
+import type { Database } from '@fabrika/db'
 import { parseJwks } from '@fabrika/jwks'
 import { join, resolve, sep } from 'node:path'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
-import { boot, type IamKeySource } from './implement/boot.js'
+import { boot, BootError, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
 import type { ContractImplementation } from './implement/implement.js'
@@ -116,6 +118,29 @@ export interface ContractServer {
 	stop(): Promise<void>
 }
 
+/**
+ * The application's connection: `FABRIKA_APP_DATABASE_URL`, on the schema `app_<FABRIKA_APP_ID>` its migrations
+ * created. The URL is a credential, so no message quotes it.
+ */
+function openApplicationDatabase(data: typeof DataLayer, framework: Readonly<Record<string, string>>): Database {
+	const url = framework['FABRIKA_APP_DATABASE_URL'] ?? ''
+	const appId = framework['FABRIKA_APP_ID'] ?? ''
+	const problems: string[] = []
+	if (url.trim() === '') {
+		problems.push('FABRIKA_APP_DATABASE_URL is not set; the platform writes it for an application with a database')
+	}
+	let schema = ''
+	try {
+		schema = data.applicationSchema(appId)
+	} catch {
+		problems.push(`FABRIKA_APP_ID '${appId}' is not an application id (allowed: lowercase letters, digits and -, at most 59)`)
+	}
+	if (problems.length > 0) {
+		throw new BootError(problems)
+	}
+	return data.Database.postgres({ url, schema })
+}
+
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
@@ -130,11 +155,17 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	if (!Number.isInteger(port) || port < 0 || port > 65535) {
 		throw new Error('PORT must be an integer between 0 and 65535')
 	}
+	// Loaded before the application: it captures the built-ins its checks use and freezes the Kysely compiler.
+	const data = await import('@fabrika/db')
 	const { default: app } = await load()
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
-	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()) })
+	const database = app.database?.connect === undefined ? undefined : openApplicationDatabase(data, environment.framework)
+	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
-	const stop = (): Promise<void> => server.stop(false)
+	const stop = async (): Promise<void> => {
+		await server.stop(false)
+		await database?.close()
+	}
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))
 	return { port: server.port ?? port, stop }
 }

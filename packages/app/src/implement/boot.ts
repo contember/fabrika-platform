@@ -11,6 +11,7 @@ import {
 	type Jwks,
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
+import type { Database } from '@fabrika/db'
 import { TokenVerifier } from '@fabrika/jwks'
 import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
@@ -19,7 +20,7 @@ import { requestCapabilities } from './capability'
 import { ContractRuntime, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { headerPolicy } from './headers'
-import type { ContractImplementation } from './implement'
+import type { ContractDatabase, ContractImplementation } from './implement'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
 export interface IamKeySource {
@@ -32,6 +33,8 @@ export interface BootOptions {
 	readonly iam: IamKeySource
 	/** Serves the SPA mounts. Without it, a contract that declares one does not boot. */
 	readonly assets?: SpaAssets
+	/** The application's Postgres connection, which the Bun adapter opens. Without it, an application on `@fabrika/db` does not boot. */
+	readonly database?: Database
 }
 
 export interface ContractApp {
@@ -161,6 +164,22 @@ function undeclaredHandlers(node: unknown, declared: ReadonlySet<string>, path: 
 	}
 }
 
+/** Connects `@fabrika/db`'s data layer to the adapter's connection and to the authority that binds capabilities to requests. */
+function connectDatabase(database: ContractDatabase | null, connection: Database | undefined, problems: string[]): void {
+	if (database?.connect === undefined) {
+		return
+	}
+	if (connection === undefined) {
+		problems.push('the application uses @fabrika/db, which runs on Bun with Postgres, and the runtime adapter supplies no database connection')
+		return
+	}
+	try {
+		database.connect({ database: connection, capabilities: requestCapabilities })
+	} catch {
+		problems.push('the data layer was connected before boot; only the framework connects it, so remove the connect call from the application')
+	}
+}
+
 function isCredentialed(row: EndpointRow | undefined): row is CredentialedEndpoint {
 	return row !== undefined && row.requirement !== null
 }
@@ -171,6 +190,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	unservable(artifact, options.assets, owned, problems)
+	connectDatabase(app.database, options.database, problems)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}

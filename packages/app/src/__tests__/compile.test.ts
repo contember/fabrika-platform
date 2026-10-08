@@ -1,9 +1,13 @@
 import { canonicalArtifactJson, canonicalizeArtifact, type ContractArtifact } from '@fabrika/auth-core'
+import { tablePolicies } from '@fabrika/db/tables'
 import { describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { compileContract, defineContract, parseContractArtifact } from '../contract'
 import { contract } from './fixtures/notes-app/fabrika.contract'
+import { contract as scopedContract } from './fixtures/scoped-notes/fabrika.contract'
+import { tables as scopedTables } from './fixtures/scoped-notes/src/db/tables'
 
 /** The generated file endpoints `notesArtifact` does not list. */
 const UNLISTED_FILE_ROWS = new Set(['files.attachments.upload', 'files.attachments.remove'])
@@ -55,6 +59,28 @@ describe('compileContract', () => {
 		expect(artifact.dimensions['note']).toEqual({ in: 'workspace', creator: null, members: null })
 		expect(artifact.roles['starter']).toEqual({ grants: ['workspaces.create'], member: null })
 		expect(artifact.csp.imgSrc).toEqual([])
+	})
+})
+
+describe('compileContract over defineTables output', () => {
+	test('gives the artifact the artifact form of the same policies gives', () => {
+		const artifact = compileContract(scopedContract, scopedTables)
+		expect(artifact).toEqual(compileContract(scopedContract, tablePolicies(scopedTables)))
+		const { notes } = artifact.tables
+		expect(notes?.scope).toEqual({
+			mode: 'dimension',
+			dimension: 'note',
+			key: 'id',
+			container: { dimension: 'workspace', column: 'workspace_id' },
+		})
+	})
+
+	test('@fabrika/app/contract still bundles for a browser: no Bun API, no driver', async () => {
+		const built = await Bun.build({ entrypoints: [join(import.meta.dir, '..', 'contract', 'index.ts')], target: 'browser' })
+		expect(built.success).toBe(true)
+		const text = built.outputs[0] === undefined ? '' : await built.outputs[0].text()
+		expect(text).not.toContain('kysely')
+		expect(text).not.toMatch(/from ['"]bun['"]/)
 	})
 })
 

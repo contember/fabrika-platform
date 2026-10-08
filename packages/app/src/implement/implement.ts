@@ -2,6 +2,7 @@
 // mirror the contract's procedure tree exactly; there is no slot for routes, middleware, authentication or a server.
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
+import type { DataLayerRuntime } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
 import type { AnyContract } from '../contract/define'
 import type { ExactHandlers, HandlersOf } from './types'
@@ -9,12 +10,14 @@ import type { ExactHandlers, HandlersOf } from './types'
 /**
  * What the framework reads from the application's tables before a handler runs. The table policies are what
  * `compileContract` takes; `locate` resolves an object's containment chain for `on` and checks that an `in` scope
- * exists. A10 generates it from `src/db/tables.ts`.
+ * exists. `@fabrika/db`'s `scoped(tables)` is one, with the locator it generates from `src/db/tables.ts`.
  */
 export interface ContractDatabase {
 	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
 	/** The containers an object lies in, by dimension, or `null` when the table that owns `dimension` has no such row. */
 	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
+	/** `@fabrika/db`'s data layer: `boot` connects it, once, to the runtime adapter's connection and `requestCapabilities`. */
+	readonly connect?: (runtime: DataLayerRuntime) => void
 }
 
 /**

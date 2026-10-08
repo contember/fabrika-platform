@@ -20,6 +20,7 @@ bun test src/__tests__/rpc.test.ts
 bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compiled by tsc
 bun test src/__tests__/implement-types.test.ts  # the handler mistakes, compiled by tsc
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
+bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 ## Structure
@@ -100,9 +101,10 @@ src/
 
 ## Contract framework
 
-- `@fabrika/app/contract` is browser-safe: it imports `@fabrika/auth-core` and
-  `zod/v4` only. The SPA imports `fabrika.contract.ts` for the typed client, so
-  never import a server runtime, `@fabrika/db` or a Node/Bun API there.
+- `@fabrika/app/contract` is browser-safe: it imports `@fabrika/auth-core`,
+  `@fabrika/db/tables` and `zod/v4` only. The SPA imports `fabrika.contract.ts` for
+  the typed client, so never import a server runtime, `@fabrika/db`'s root or a
+  Node/Bun API there.
 - `defineContract(vocabulary, (c) => surface)` builds plain data and validates
   nothing at runtime. The surface holds mounts by name plus the sections
   `files`, `jobs`, `exports`, `imports`, `csp` (`SURFACE_SECTIONS`); a mount may
@@ -138,9 +140,9 @@ src/
   diagnostic text on the line after each `// mistake:` marker. A new rule the
   types enforce gets a fixture there. `contract-scale.test.ts` keeps 200
   procedures under its instantiation budget.
-- `tables` is the artifact form of each table policy (`TablePolicyArtifact`).
-  `@fabrika/db`'s `Tables` keeps its policies private and imports `bun`, so A8b
-  exposes them as data; until then the caller passes artifacts.
+- `tables` is what `defineTables` returned or the artifact form of each table
+  policy (`TablePolicyArtifact`); `@fabrika/db/tables`' `tablePolicies` converts
+  the one into the other, so both paths share `@fabrika/db`'s one policy parse.
 - Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; a link mount
   serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
@@ -195,6 +197,14 @@ src/
   changes a returned chain changes only their copy; the data layer's next
   resolution still carries the chain that was checked. Never hand out the stored
   chain itself (`capability-chain.test.ts`).
+- **`@fabrika/db` is connected by `boot`, once.** An application passes
+  `scoped(tables)` as `implement({ database })`; it is a `ContractDatabase` whose
+  `connect` `boot` calls with the adapter's connection and `requestCapabilities`.
+  `serveContract` imports `@fabrika/db` before the application (it captures its
+  built-ins and freezes the Kysely compiler at load) and opens `Database.postgres` on
+  `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
+  or a layer the application connected itself is a `BootError`. `boot.ts` imports
+  `@fabrika/db` for types only, because the Worker adapter imports `boot`.
 - **`on` needs a table that owns its dimension** (`ContractDatabase.tables`); `boot`
   refuses the contract otherwise. `on` checks the action on the object or any
   container of its chain and answers 404 for both "missing" and "not yours"; `in`
@@ -223,7 +233,8 @@ src/
   `boot` reads `FABRIKA_IAM_APP_ID` — the token audience `<app>@<env>`, whose
   application part must equal `contract.app` — `FABRIKA_IAM_ISSUER` and
   `FABRIKA_OPERATIONS_DSN` (its origin joins `connect-src`), and hands `deps` the
-  rest. `FABRIKA_APP_ID` is the Operations ingest coordinate, never an audience. The
+  rest. `FABRIKA_APP_ID` is the Operations ingest coordinate and the application's
+  database schema (`app_<id>`), never an audience. The
   Worker adapter also keeps the `IAM` and `ASSETS` bindings from `deps`.
 - **`handlers` is a function of what `deps` returned.** TypeScript cannot infer
   `deps`' type into `ctx` through the contract's conditional handler types, so a

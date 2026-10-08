@@ -2,6 +2,7 @@
 // `buildArtifact`. A reader of source produces the same declaration and calls `buildArtifact` itself.
 
 import type { ContractArtifact, SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
+import { isTables, tablePolicies, type Tables } from '@fabrika/db/tables'
 import { buildArtifact } from './build'
 import {
 	type ContractDeclaration,
@@ -18,11 +19,14 @@ import { Problems } from './problems'
 import { describeSchema } from './schema-shape'
 
 /**
- * The normalized artifact of a contract and its table policies. Until `@fabrika/db` exposes its policies as data
- * (A8b), `tables` is the artifact form of each table policy.
+ * The normalized artifact of a contract and its table policies: what `defineTables` returned (`src/db/tables.ts`),
+ * or the artifact form of each policy.
  */
-export function compileContract(contract: AnyContract, tables: Readonly<Record<string, TablePolicyArtifact>>): ContractArtifact {
-	return buildArtifact(describeContract(contract), tables)
+export function compileContract<DB, P>(
+	contract: AnyContract,
+	tables: Tables<DB, P> | Readonly<Record<string, TablePolicyArtifact>>,
+): ContractArtifact {
+	return buildArtifact(describeContract(contract), isTables(tables) ? tablePolicies(tables) : tables)
 }
 
 /** The contract with its schemas read as shapes; throws `ContractError` for a schema outside the subset. */
