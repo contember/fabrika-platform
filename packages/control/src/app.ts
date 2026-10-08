@@ -48,6 +48,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		route.all('/healthz', () => Response.json({ status: 'ok' })),
 		route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),
 		route.post('/webhooks/github/:connectionId', (ctx, params) => webhook(ctx, params.connectionId)),
+		route.all('/webhooks', () => error(404, 'not found')),
 		route.all('/webhooks/*path', () => error(404, 'not found')),
 		route.get(
 			'/api/source/github/manifest/:connectionId',

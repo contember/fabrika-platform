@@ -296,6 +296,10 @@ describe('controlApp', () => {
 		const unscopedResponse = await fetch(unscoped)
 		expect(unscopedResponse.status).toBe(404)
 		expect(await unscopedResponse.text()).not.toBe('dashboard')
+		// `/webhooks/*path` needs its slash, so the bare prefix has its own 404 rather than the dashboard.
+		const bare = await fetch(await webhookRequest('/webhooks', 'secret-a', 'github.com/acme/app', 42))
+		expect(bare.status).toBe(404)
+		expect(await bare.text()).not.toBe('dashboard')
 		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(2)
 	})
 })
