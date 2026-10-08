@@ -23,7 +23,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
 | `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                                               |
 | `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions.                                                   |
-| `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.                                           |
+| `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                           |
 | `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
 | `membership.ts`         | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
 | `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |

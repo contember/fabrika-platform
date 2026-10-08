@@ -1,9 +1,9 @@
-import { DEFAULT_TOKEN_TTL_SECONDS, parseAccessClaims, permits } from '@fabrika/auth-core'
+import { DEFAULT_TOKEN_TTL_SECONDS, MAX_ACCESS_TOKEN_BYTES, parseAccessClaims, permits } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
-import { MAX_ACCESS_TOKEN_BYTES, mintFromKey, mintToken } from '../tokens'
+import { mintFromKey, mintToken } from '../tokens'
 import { createHarness, seedInlineGrant, seedUser } from './helpers/harness'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }

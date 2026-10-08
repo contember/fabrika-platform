@@ -218,7 +218,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
   `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.
-- **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, `src/tokens.ts`).** The proxy
+- **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, from `@fabrika/auth-core`).** The proxy
   forwards the token as one header and Bun, the application runtime on Zerops, refuses more than
   16 KiB of headers per request. Every bearer passes `boundedToken`: both mint fronts answer
   `token_too_large`, a decided refusal the proxy turns into a 403 — never a login bounce, because a

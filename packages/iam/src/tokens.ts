@@ -17,6 +17,7 @@ import {
 	buildAccessClaims,
 	DEFAULT_TOKEN_TTL_SECONDS,
 	type LinkTokenClaims,
+	MAX_ACCESS_TOKEN_BYTES,
 	type MintFromKeyResult,
 	type MintTokenInput,
 	type MintTokenResult,
@@ -37,14 +38,6 @@ import { parseStoredChain } from './stored-chain'
 
 /** The env slice minting needs (the signing keys + environment for `getSigner`). */
 type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
-
-/**
- * The largest access token IAM signs, in bytes (a JWT is ASCII). The proxy forwards it as one header,
- * and Bun's server, the application's runtime on Zerops, refuses a request whose headers exceed 16 KiB
- * in total; 8 KiB leaves the rest for the request's own headers and cookies. Caddy (1 MiB) and
- * Cloudflare (128 KiB) allow more.
- */
-export const MAX_ACCESS_TOKEN_BYTES = 8192
 
 /** `principalId` (resolved session subject, or null on failure) is surfaced for the auth_log row. */
 export interface MintOutcome {

@@ -61,6 +61,14 @@ export const DEFAULT_TOKEN_TTL_SECONDS = 300
  */
 export const TOKEN_REFRESH_SKEW_SECONDS = 30
 
+/**
+ * The largest access token IAM signs, in bytes (a JWT is ASCII). The proxy forwards it as one header,
+ * and Bun's server, the application's runtime on Zerops, refuses a request whose headers exceed 16 KiB
+ * in total; 8 KiB leaves the rest for the request's own headers and cookies. Caddy (1 MiB) and
+ * Cloudflare (128 KiB) allow more.
+ */
+export const MAX_ACCESS_TOKEN_BYTES = 8192
+
 // ── Claim shape (one, no discriminator) ────────────────────────────────────────
 
 /**
