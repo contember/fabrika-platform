@@ -62,15 +62,18 @@ bun run provision-schema -- --dry-run
 # push against a running Worker (an IAM-issued px_ admin key is required in every environment)
 FABRIKA_IAM_ISSUER=http://127.0.0.1:18191 FABRIKA_IAM_ADMIN_KEY=px_… bun run provision-schema
 
-# remote: the admin API is gated by IAM itself — supply an IAM-issued `px_` admin key
+# remote: the admin API is gated by IAM itself — supply an IAM-issued `px_` admin key, and name the
+# environment: IAM registers the schema under `example-app@<env>`
 FABRIKA_IAM_ISSUER=https://iam.example.com \
 FABRIKA_IAM_ADMIN_KEY=px_… \
+APP_ENV=prod \
 bun run provision-schema
 ```
 
 Reconcile is idempotent: it upserts the app's scopes/actions/`origin='app'` roles, deletes
 app-origin rows you removed, and never touches admin-composed `origin='custom'` policies. The
-first reconcile registers the app id (`example-app`); after that it self-mirrors on every push.
+first reconcile registers the IAM application id (`example-app@local` unless `APP_ENV` names another
+environment); after that it self-mirrors on every push.
 
 The schema is attached to [`fabrika.config.ts`](./fabrika.config.ts), so a Cloudflare provider
 deploy reconciles it automatically. This example keeps the explicit command too, so the IAM

@@ -1,3 +1,4 @@
+import { appEnvironmentId } from '@fabrika/auth-core'
 import { createCloudflareProxyWorker, defineApp, iamServiceReference, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 import { exampleGates } from './fabrika.gates'
 import { exampleAppId, exampleAppSchema } from './fabrika.schema'
@@ -18,7 +19,7 @@ export const buildExampleWorker = (): Worker =>
 			// IAM's application entrypoint: token verification, the people directory, audit. No key issuing.
 			IAM: iamServiceReference(),
 		},
-		// No `FABRIKA_IAM_ISSUER` here: the platform owns it and every deploy writes it into this Worker's
+		// No `FABRIKA_IAM_ISSUER` or `FABRIKA_IAM_APP_ID` here: the platform owns both and every deploy writes them into this Worker's
 		// environment (ADR-0035). Declaring it would be REFUSED, because an app that names its own issuer
 		// can point itself at a different one.
 	})
@@ -27,7 +28,9 @@ export const buildExampleProxy = (ctx: ResourceContext): Worker =>
 	createCloudflareProxyWorker({
 		name: 'propustka-example-proxy',
 		app: buildExampleWorker(),
-		appId: exampleAppId,
+		// The proxy mints for this environment's IAM application id; the deploy writes the same id into
+		// the app Worker as FABRIKA_IAM_APP_ID, the audience it verifies.
+		appId: appEnvironmentId(exampleAppId, ctx.env),
 		appHost: ctx.domain ?? 'localhost',
 		domain: ctx.domain,
 		gates: exampleGates,

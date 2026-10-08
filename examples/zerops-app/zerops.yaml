@@ -131,5 +131,5 @@ zerops:
         # `db` whatever the service is called. `verify-full` fails on a self-signed certificate, so
         # `require` is the strongest mode there is.
         NOTES_DATABASE_URL: ${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require
-        # Must equal `id` in fabrika.config.ts and the `aud` of every token minted for this app.
-        NOTES_APP_ID: notes
+        # No app id here: every deploy writes FABRIKA_IAM_APP_ID (`notes@<env>`), the `aud` of every
+        # token the proxy mints for this environment, and refuses a descriptor that names it.

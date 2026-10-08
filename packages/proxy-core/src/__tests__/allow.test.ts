@@ -28,6 +28,28 @@ function service(gates: AppGates, options: FakeIamOptions = {}, cache: MemoryTok
 	return { iam, verify: createVerifyService({ manifest: manifestWith(gates), iam, issuer: ISSUER, cache }) }
 }
 
+describe('allow — the audience is the manifest id', () => {
+	test('an application environment <app>@<env> is minted for and verified under that id', async () => {
+		const token = await signToken({ type: 'user', audience: 'notes@prod' })
+		const iam = new FakeIam({ mintToken: { ok: true, token, expiresAt: future() } })
+		const manifest = manifestWith({ rules: [{ path: '/*', kind: 'human' }] }, { id: 'notes@prod' })
+		const verify = createVerifyService({ manifest, iam, issuer: ISSUER, cache: null })
+		const response = await verify(verifyRequest({ cookie: '__Host-px_session=s', app: 'notes@prod' }))
+		expect(response.status).toBe(204)
+		expect(iam.seenApps).toEqual(['notes@prod'])
+	})
+
+	test('a token minted for another environment of the same app is refused', async () => {
+		const token = await signToken({ type: 'user', audience: 'notes@stage' })
+		const iam = new FakeIam({ mintToken: { ok: true, token, expiresAt: future() } })
+		const manifest = manifestWith({ rules: [{ path: '/*', kind: 'human' }] }, { id: 'notes@prod' })
+		const verify = createVerifyService({ manifest, iam, issuer: ISSUER, cache: null })
+		const response = await verify(verifyRequest({ cookie: '__Host-px_session=s', app: 'notes@prod' }))
+		expect(response.status).not.toBe(204)
+		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+	})
+})
+
 describe('allow — public', () => {
 	test('a public path passes with NO token header and no IAM contact', async () => {
 		const { iam, verify } = service({ rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] })

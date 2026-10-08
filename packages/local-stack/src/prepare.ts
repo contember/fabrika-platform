@@ -1,4 +1,6 @@
+import { appEnvironmentId } from '@fabrika/auth-core'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
+import { NOTES_APP_ID } from '@fabrika/example-zerops-app/schema'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
@@ -225,11 +227,15 @@ export const readLocalMcpClients = (env: Record<string, string | undefined>): re
 export const localIamOAuthConfig = (mcpClients: readonly McpClient[] | undefined): string =>
 	mcpClients === undefined ? '' : JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcpClients), mcpClients))
 
+/** The local `notes` service plays the `prod` environment; IAM knows it as `notes@prod` (ADR-0022 rule 6). */
+export const LOCAL_NOTES_ENVIRONMENT = 'prod'
+export const LOCAL_NOTES_IAM_APP_ID = appEnvironmentId(NOTES_APP_ID, LOCAL_NOTES_ENVIRONMENT)
+
 const generateProxyConfigs = async (mcpClients: readonly McpClient[] | undefined): Promise<void> => {
 	const platformManifest = localPlatformProxyManifest(mcpClients)
 	const appsManifest: ProxyManifest = {
 		apps: [{
-			id: 'notes',
+			id: LOCAL_NOTES_IAM_APP_ID,
 			hosts: ['notes.fabrika.localhost'],
 			upstream: 'notes:3000',
 			gates: notesGates,

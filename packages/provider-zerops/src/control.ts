@@ -1,3 +1,4 @@
+import { appEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -255,7 +256,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		signal.throwIfAborted()
 		await reconcileSchema({
 			url: options.propustkaUrl,
-			app: artifact.app.id,
+			app: appEnvironmentId(artifact.app.id, artifact.app.env),
 			schema: artifact.app.schema,
 			...(input.returnOrigins === undefined || input.returnOrigins.length === 0 ? {} : { returnOrigins: input.returnOrigins }),
 			adminKey: options.adminKey,

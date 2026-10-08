@@ -13,7 +13,7 @@ import {
 	resolveRegistrationNamespace,
 	toAppEnvDto,
 } from './registration'
-import { assertProxyDomain, canonicalOrigin } from './validation'
+import { assertAppEnvironmentPart, assertProxyDomain, canonicalOrigin } from './validation'
 
 export async function listAppEnvsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppEnvDto>> {
 	await requireApp(c, appId)
@@ -22,6 +22,7 @@ export async function listAppEnvsUseCase(c: RegistryUseCaseContext, appId: strin
 
 export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string, input: PutAppEnvRequest): Promise<AppEnvDto> {
 	const app = await requireApp(c, appId)
+	assertAppEnvironmentPart('environment', env)
 	assertProxyDomain(input.domain)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
 	if (input.authoring === true) {

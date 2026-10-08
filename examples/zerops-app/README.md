@@ -127,7 +127,7 @@ bun run typecheck
 To run the server you need a Postgres and an IAM origin:
 
 ```bash
-NOTES_DATABASE_URL=postgres://…  NOTES_APP_ID=notes  FABRIKA_IAM_ISSUER=https://iam.example.com \
+NOTES_DATABASE_URL=postgres://…  FABRIKA_IAM_APP_ID=notes@prod  FABRIKA_IAM_ISSUER=https://iam.example.com \
   bun src/migrate.ts && bun src/server.ts
 ```
 

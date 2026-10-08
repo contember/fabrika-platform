@@ -670,7 +670,7 @@ describe('Cloudflare control provider', () => {
 		expect(outcome).toMatchObject({ state: 'succeeded' })
 		expect(calls).toEqual([{
 			url: 'https://iam.example.com',
-			app: 'api',
+			app: 'api@production',
 			schema: { scopes: [{ type: 'team' }], actions: [{ action: 'notes.read' }], roles: {} },
 			returnOrigins: ['https://api.example.com'],
 			adminKey: 'px_admin',
@@ -711,7 +711,7 @@ describe('Cloudflare control provider', () => {
 		})
 
 		await provider.deploy({ ...deployInput(), dryRun: false })
-		expect(calls).toEqual([{ app: 'api', hasReturnOrigins: false }])
+		expect(calls).toEqual([{ app: 'api@production', hasReturnOrigins: false }])
 	})
 
 	test('fails the run without touching IAM when the container reports another app', async () => {
@@ -828,7 +828,7 @@ describe('Cloudflare control provider', () => {
 		if (provider.reconcile === undefined) throw new Error('missing recovery')
 
 		expect(await provider.reconcile(reconcileInput(['https://api.example.com']))).toEqual({ state: 'succeeded', exitCode: 0 })
-		expect(calls).toEqual([{ app: 'api', returnOrigins: ['https://api.example.com'] }])
+		expect(calls).toEqual([{ app: 'api@production', returnOrigins: ['https://api.example.com'] }])
 	})
 
 	test('a reconcile of a run still in flight applies nothing', async () => {
@@ -867,7 +867,7 @@ describe('Cloudflare control provider', () => {
 		if (provider.reconcile === undefined) throw new Error('missing recovery')
 
 		expect(await provider.reconcile(reconcileInput(undefined, logs))).toEqual({ state: 'running' })
-		expect(calls).toEqual([{ app: 'api' }])
+		expect(calls).toEqual([{ app: 'api@production' }])
 		expect(logs).toEqual(['reconcile-schema failed: PUT /admin/apps/api/schema failed (503): unavailable'])
 	})
 

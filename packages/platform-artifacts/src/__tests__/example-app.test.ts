@@ -202,6 +202,7 @@ const makeRun = (
 		FABRIKA_RELEASE: null,
 		FABRIKA_OPERATIONS_DSN: null,
 		FABRIKA_IAM_ISSUER: null,
+		FABRIKA_IAM_APP_ID: null,
 		FABRIKA_APP_ID: null,
 		FABRIKA_ENVIRONMENT: null,
 		FABRIKA_SERVICE_KEY: null,
@@ -351,12 +352,12 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
 			`[dry-run] would write service variables on ${TARGET.serviceId}: (none)`,
-			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
+			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
 			'[dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor',
 			'[dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log',
-			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}\` against https://iam.example.test`,
+			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}@prod\` against https://iam.example.test`,
 		])
 	})
 
@@ -437,7 +438,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 	test("the schema reconcile names the app id the token's `aud` will carry", async () => {
 		const result = await deployExample(rec)
 		expect(result.status).toBe('succeeded')
-		expect(rec.schemas).toEqual([{ url: 'https://iam.example.test', app: NOTES_APP_ID }])
+		expect(rec.schemas).toEqual([{ url: 'https://iam.example.test', app: `${NOTES_APP_ID}@prod` }])
 	})
 
 	test('NO secret is pushed as part of the deploy, even though the app declares two', async () => {

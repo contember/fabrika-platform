@@ -149,6 +149,8 @@ export class FakeIam implements IamGateway {
 	mintFromKeyCalls = 0
 	jwksCalls = 0
 	exchangeCalls = 0
+	/** The app id each mint asked for — the audience the proxy mints under. */
+	readonly seenApps: string[] = []
 	readonly seenSessions: string[] = []
 	readonly seenKeys: string[] = []
 	readonly seenCodes: string[] = []
@@ -156,8 +158,9 @@ export class FakeIam implements IamGateway {
 
 	constructor(private readonly options: FakeIamOptions = {}) {}
 
-	mintToken(input: { session: string | null }): Promise<MintTokenResult> {
+	mintToken(input: { app: string; session: string | null }): Promise<MintTokenResult> {
 		this.mintTokenCalls++
+		this.seenApps.push(input.app)
 		if (input.session !== null) {
 			this.seenSessions.push(input.session)
 		}
@@ -168,8 +171,9 @@ export class FakeIam implements IamGateway {
 		return Promise.resolve(typeof canned === 'function' ? canned() : (canned ?? { ok: false, reason: 'no_session' }))
 	}
 
-	mintFromKey(input: { key: string }): Promise<MintFromKeyResult> {
+	mintFromKey(input: { app: string; key: string }): Promise<MintFromKeyResult> {
 		this.mintFromKeyCalls++
+		this.seenApps.push(input.app)
 		this.seenKeys.push(input.key)
 		if (this.options.unreachable === true) {
 			return Promise.reject(new Error('connect ECONNREFUSED'))

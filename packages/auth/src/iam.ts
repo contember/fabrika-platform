@@ -30,13 +30,13 @@ export interface IamEnv {
 	IAM?: IamBinding
 	/** IAM origin — the token `iss` this SDK verifies against. Canonicalized once in `createIam`. */
 	FABRIKA_IAM_ISSUER?: string
-	/** Fallback app id when `opts.appId` is omitted. */
-	FABRIKA_APP_ID?: string
+	/** The IAM app id `<app>@<env>` every deploy writes (`FABRIKA_IAM_APP_ID`); the fallback for `opts.appId`. */
+	FABRIKA_IAM_APP_ID?: string
 }
 
-/** Options for `createIam`. `appId` falls back to `env.FABRIKA_APP_ID`. */
+/** Options for `createIam`. `appId` falls back to `env.FABRIKA_IAM_APP_ID`. */
 export interface CreateIamOptions {
-	/** The IAM app id (baked in so it can never be mistyped). Falls back to `env.FABRIKA_APP_ID`. */
+	/** The IAM app id: a platform service bakes its own in; an application reads `env.FABRIKA_IAM_APP_ID`. */
 	appId?: string
 	/**
 	 * Which tokens `authenticate` accepts. Defaults to the app's native tokens; a resource server
@@ -163,9 +163,9 @@ export class Iam {
  * there is no mode in which any of the three is optional.
  */
 export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
-	const appId = opts.appId ?? env.FABRIKA_APP_ID
+	const appId = opts.appId ?? env.FABRIKA_IAM_APP_ID
 	if (appId === undefined || appId === '') {
-		throw new Error('createIam: app id is required — pass opts.appId or set env.FABRIKA_APP_ID')
+		throw new Error('createIam: app id is required — pass opts.appId or set env.FABRIKA_IAM_APP_ID')
 	}
 
 	const binding = env.IAM

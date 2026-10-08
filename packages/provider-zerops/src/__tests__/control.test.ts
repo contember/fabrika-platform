@@ -57,6 +57,7 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
+	FABRIKA_IAM_APP_ID: null,
 	FABRIKA_APP_ID: null,
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
@@ -1219,7 +1220,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(outcome).toEqual({ state: 'succeeded' })
 		expect(recorded.imports.map((entry) => entry.projectId)).toEqual(['project-1'])
 		expect(uploads).toEqual([{ repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA, uploadUrl: UPLOAD_URL }])
-		expect(reconciles).toEqual([{ url: 'https://iam.test', app: 'notes', adminKey: 'px-secret' }])
+		expect(reconciles).toEqual([{ url: 'https://iam.test', app: 'notes@prod', adminKey: 'px-secret' }])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.triggers).toEqual([])
 		expect(recorded.calls).toContain('createAppVersion:service-1')
@@ -1422,13 +1423,13 @@ describe('Zerops ControlProvider lifecycle', () => {
 			returnOrigins: ['https://notes.example.test', 'https://stage.notes.example.test'],
 		})
 		expect(reconciled).toEqual([{
-			app: 'notes',
+			app: 'notes@prod',
 			returnOrigins: ['https://notes.example.test', 'https://stage.notes.example.test'],
 		}])
 
 		// Nothing projected → the registry is left alone rather than cleared.
 		await control.deploy({ ...deployInput(recorded), runId: 'run-2', environment: withSchema })
-		expect(reconciled[1]).toEqual({ app: 'notes' })
+		expect(reconciled[1]).toEqual({ app: 'notes@prod' })
 	})
 
 	test('fails before proxy or app mutation when namespace placement is not ready', async () => {
@@ -1496,7 +1497,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual([
 			'getAppVersion:version-1',
 			'getAppVersion:version-1',
-			'reconcileSchema:notes',
+			'reconcileSchema:notes@prod',
 		])
 		expect(reconcileSignals).toHaveLength(1)
 		expect(reconcileSignals[0]?.aborted).toBe(false)

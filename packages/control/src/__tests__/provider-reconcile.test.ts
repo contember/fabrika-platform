@@ -327,7 +327,7 @@ describe('reconcileProviderRuns', () => {
 			lock: makeFakeLock(db),
 		})
 
-		expect(projected).toEqual([['https://app.example.test', 'https://stage.app.example.test']])
+		expect(projected).toEqual([['https://app.example.test']])
 	})
 
 	test("projects the provider's artifact state and dry flag, and appends its log lines after the executor's", async () => {

@@ -43,4 +43,3 @@ zerops:
         # Must match `useSharedPostgres()` exactly — a test asserts it. See the sibling zerops.yaml for
         # why the TLS port, the database and the TLS mode are named rather than left to the driver.
         NOTES_DATABASE_URL: ${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require
-        NOTES_APP_ID: notes

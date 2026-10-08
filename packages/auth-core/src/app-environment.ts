@@ -5,6 +5,13 @@
  * The installation's own services keep a plain id without `@` — the platform audiences IAM registers.
  */
 
+/**
+ * The one name the IAM application id travels under, from the control plane to the application that
+ * verifies a token's `aud` against it. Platform-owned like `FABRIKA_IAM_ISSUER`: every deploy writes it,
+ * and an application that declares it for itself is refused.
+ */
+export const FABRIKA_IAM_APP_ID = 'FABRIKA_IAM_APP_ID'
+
 /** Separates the application from the environment. Reserved: neither part may contain it. */
 export const APP_ENVIRONMENT_SEPARATOR = '@'
 

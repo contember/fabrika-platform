@@ -44,8 +44,8 @@ describe('namespace proxy manifest', () => {
 			member('beta', 'beta.example.com'),
 		])).toEqual({
 			apps: [
-				{ id: 'alpha', hosts: ['alpha.example.com'], upstream: 'alpha:3000', gates: GATES, scheme: 'https' },
-				{ id: 'beta', hosts: ['beta.example.com'], upstream: 'beta:3000', gates: GATES, scheme: 'https' },
+				{ id: 'alpha@prod', hosts: ['alpha.example.com'], upstream: 'alpha:3000', gates: GATES, scheme: 'https' },
+				{ id: 'beta@prod', hosts: ['beta.example.com'], upstream: 'beta:3000', gates: GATES, scheme: 'https' },
 			],
 		})
 	})

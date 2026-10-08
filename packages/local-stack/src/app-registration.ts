@@ -20,10 +20,10 @@
 import { reconcileSchema } from '@fabrika/auth'
 import type { AppSchema } from '@fabrika/auth-core'
 import { controlSchema } from '@fabrika/control/schema'
-import { NOTES_APP_ID, notesSchema } from '@fabrika/example-zerops-app/schema'
+import { notesSchema } from '@fabrika/example-zerops-app/schema'
 import { resolve } from 'node:path'
 import { readStateEnv } from './machine-key'
-import { STATE_DIR } from './prepare'
+import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 
@@ -47,7 +47,7 @@ export interface LocalApp {
  */
 export const localApps: readonly LocalApp[] = [
 	{ id: 'vozka', schema: controlSchema, returnOrigins: ['http://control.fabrika.localhost:18080'] },
-	{ id: NOTES_APP_ID, schema: notesSchema, returnOrigins: ['http://notes.fabrika.localhost:18081'] },
+	{ id: LOCAL_NOTES_IAM_APP_ID, schema: notesSchema, returnOrigins: ['http://notes.fabrika.localhost:18081'] },
 ]
 
 export const registerLocalApps = async (): Promise<void> => {

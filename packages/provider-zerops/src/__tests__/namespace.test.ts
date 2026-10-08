@@ -1207,7 +1207,13 @@ describe('Zerops namespace lifecycle', () => {
 	test('reconciles namespace-owned services, disables session ownership and publishes the manifest its members compile to', async () => {
 		const state = freshState()
 		const manifest = JSON.stringify({
-			apps: [{ id: 'notes', hosts: ['notes.example.test'], upstream: 'notes:3000', gates: { rules: [{ path: '/*', kind: 'human' }] }, scheme: 'https' }],
+			apps: [{
+				id: 'notes@prod',
+				hosts: ['notes.example.test'],
+				upstream: 'notes:3000',
+				gates: { rules: [{ path: '/*', kind: 'human' }] },
+				scheme: 'https',
+			}],
 		})
 		state.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
 		state.services.set(projectId, [proxy()])

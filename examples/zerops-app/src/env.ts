@@ -15,7 +15,7 @@ export interface NotesEnv {
 	 * JWKS it fetches. Per-environment, so it is a service-level variable rather than a committed one.
 	 */
 	iamIssuer: string
-	/** This app's id — the `aud` a token must carry to be accepted here. */
+	/** This environment's IAM application id `<app>@<env>` — the `aud` a token must carry to be accepted here. */
 	appId: string
 	/** Browser-safe public DSN managed by Fabrika for this application environment. */
 	operationsDsn: string
@@ -27,7 +27,7 @@ export const readNotesEnv = (source: Record<string, string | undefined> = proces
 	port: port(source['PORT']),
 	databaseUrl: required(source, 'NOTES_DATABASE_URL'),
 	iamIssuer: required(source, 'FABRIKA_IAM_ISSUER'),
-	appId: required(source, 'NOTES_APP_ID'),
+	appId: required(source, 'FABRIKA_IAM_APP_ID'),
 	operationsDsn: required(source, 'FABRIKA_OPERATIONS_DSN'),
 	release: required(source, 'FABRIKA_RELEASE'),
 })

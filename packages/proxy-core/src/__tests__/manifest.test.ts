@@ -33,6 +33,10 @@ describe('parseProxyManifest — accepts', () => {
 		expect(manifest?.apps[0]?.gates.rules.map((rule) => rule.path)).toEqual(['/public/*', '/api/*', '/*'])
 	})
 
+	test('an application environment id <app>@<env>, the audience the proxy mints for', () => {
+		expect(parseProxyManifest({ apps: [{ ...VALID.apps[0], id: 'notes@prod' }] })?.apps[0]?.id).toBe('notes@prod')
+	})
+
 	test('hosts are lower-cased', () => {
 		expect(parseProxyManifest(VALID)?.apps[0]?.hosts).toEqual(['one.example.com'])
 	})
@@ -99,6 +103,8 @@ describe('parseProxyManifest — rejects', () => {
 		['a missing apps array', {}],
 		['an app with no id', { apps: [{ hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }] }],
 		['an app with no gates', { apps: [{ id: 'a', hosts: ['a'], upstream: 'a:1' }] }],
+		['an app id with @ that is not <app>@<env>', { apps: [{ id: 'notes@', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }] }],
+		['an app id with two @', { apps: [{ id: 'notes@prod@eu', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }] }],
 		['an app with no hosts', { apps: [{ id: 'a', hosts: [], upstream: 'a:1', gates: { rules: [] } }] }],
 		['an app with no upstream', { apps: [{ id: 'a', hosts: ['a'], gates: { rules: [] } }] }],
 		['duplicate app ids', {

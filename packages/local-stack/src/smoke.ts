@@ -1,4 +1,4 @@
-import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { LEASE_TTL_MS } from '@fabrika/control/lease'
 import { normalizeRepoUrl } from '@fabrika/control/repo-source'
 import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
@@ -33,7 +33,7 @@ import {
 } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
-import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
+import { COMPOSE_FILE, LOCAL_NOTES_ENVIRONMENT, LOCAL_NOTES_IAM_APP_ID, REPO_ROOT, STATE_DIR } from './prepare'
 import { idResponseSchema, itemsResponseSchema, rpcResponseSchema } from './response-schemas'
 import {
 	activeOperationsConfigSchema,
@@ -63,7 +63,7 @@ const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const NOTES_ORIGIN = 'http://notes.fabrika.localhost:18081'
 const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const NOTES_APP_ID = 'notes'
-const NOTES_ENVIRONMENT = 'prod'
+const NOTES_ENVIRONMENT = LOCAL_NOTES_ENVIRONMENT
 const NOTES_DEPLOY_SERVICE = 'notesapi'
 const NOTES_TRIGGER_REF = 'refs/heads/main'
 // The keyed connection the notes app is bound to; its scoped route is the only one that can trigger it.
@@ -526,6 +526,7 @@ const proveManagedOperationsEnvironment = async (
 	const expected = new Map<string, string>([
 		[FABRIKA_OPERATIONS_DSN, config.dsn],
 		[FABRIKA_APP_ID, NOTES_APP_ID],
+		[FABRIKA_IAM_APP_ID, LOCAL_NOTES_IAM_APP_ID],
 		[FABRIKA_ENVIRONMENT, NOTES_ENVIRONMENT],
 		[FABRIKA_SERVICE_KEY, DEFAULT_OPERATIONS_SERVICE_KEY],
 	])
@@ -545,14 +546,15 @@ const proveManagedOperationsEnvironment = async (
 		throw new Error('The deployed version does not carry the release in its execution descriptor')
 	}
 	// No retired protocol record survives: every Fabrika-prefixed record is a managed key.
-	const managedKeys = new Set<string>([...expected.keys(), FABRIKA_RELEASE, FABRIKA_IAM_ISSUER])
+	const managedKeys = new Set<string>([...expected.keys(), FABRIKA_RELEASE, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID])
 	if (records.some(record => record.key.startsWith('FABRIKA_') && !managedKeys.has(record.key))) {
 		throw new Error('Zerops emulator holds Fabrika records beyond the managed keys')
 	}
 }
 
 const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
-	const schema = iamSchemaResponseSchema.parse(await requestJson(IAM_ORIGIN, '/admin/apps/notes/schema', { bearer: provisioningKey }))
+	const schemaPath = `/admin/apps/${encodeURIComponent(LOCAL_NOTES_IAM_APP_ID)}/schema`
+	const schema = iamSchemaResponseSchema.parse(await requestJson(IAM_ORIGIN, schemaPath, { bearer: provisioningKey }))
 	if (schema.actions.length !== 4 || schema.scopes.length !== 1) {
 		throw new Error('notes IAM schema was not reconciled')
 	}
@@ -561,7 +563,7 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 		body: {
 			label: `local smoke ${new Date().toISOString()}`,
 			type: 'service',
-			app: 'notes',
+			app: LOCAL_NOTES_IAM_APP_ID,
 			permissions: ['notes.read', 'notes.write'],
 			scopeType: 'workspace',
 			scopeValue: 'local',

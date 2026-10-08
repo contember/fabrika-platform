@@ -1,4 +1,4 @@
-import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { appEnvironmentId, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
 import {
 	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
@@ -307,7 +307,7 @@ const assertUnmanagedNames = (kind: 'variable' | 'secret', names: readonly strin
 	}
 	// `FABRIKA_RELEASE` is only caught by the release-context loop below, and only when Operations is
 	// configured — an installation without it had no deploy-time guard at all.
-	for (const reserved of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE]) {
+	for (const reserved of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE]) {
 		if (names.includes(reserved)) {
 			throw new Error(`application ${kind} "${reserved}" is managed by Fabrika`)
 		}
@@ -489,7 +489,12 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		// Resolved here rather than at the provider call, so a reserved secret name fails before any effect.
 		const secrets = await resolveSecrets(deps, app.id, appEnv.env)
 		assertUnmanagedNames('secret', Object.keys(secrets))
-		const managedEnvironment: Record<string, string | null> = { [FABRIKA_RELEASE]: null, [FABRIKA_IAM_ISSUER]: null }
+		const managedEnvironment: Record<string, string | null> = {
+			[FABRIKA_RELEASE]: null,
+			[FABRIKA_IAM_ISSUER]: null,
+			// The token audience the application verifies; the proxy in front of it mints for the same id.
+			[FABRIKA_IAM_APP_ID]: appEnvironmentId(app.id, appEnv.env),
+		}
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
 		// instead of deploying an app that verifies against the previous installation's tokens.
@@ -518,7 +523,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			}
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
-		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id)
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
 		const runLogs = new RunLogWriter(deps.logs, startedLogKey, runId)
 		let outcome: ProviderDeployOutcome
 		try {
@@ -690,7 +695,7 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 		if (reconcile === undefined) return 'untracked'
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (appEnv === null || appEnv.provider !== deps.provider.id) throw new Error('provider environment disappeared or changed owner')
-		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, run.app_id)
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, run.app_id, run.env)
 		const environment = await providerEnvironment(deps.repositories.registry, appEnv)
 		await invocation.boundary()
 		const outcome = await reconcile({
@@ -757,7 +762,7 @@ export async function settleRunCancellation(
 		if (appEnv.provider !== deps.provider.id) {
 			throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} changed owner during cancellation`)
 		}
-		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, cancelling.app_id)
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, cancelling.app_id, cancelling.env)
 		const environment = await providerEnvironment(deps.repositories.registry, appEnv)
 		// Only the lease holder may cancel external work, and only while it still holds the lease.
 		invocation.lease.assertHeld()

@@ -252,6 +252,7 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
+	FABRIKA_IAM_APP_ID: null,
 	FABRIKA_APP_ID: null,
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
@@ -373,7 +374,7 @@ describe('Zerops provider', () => {
 		expect(recorded.sleeps).toEqual([3000])
 		expect(recorded.imports[0]?.yaml).toContain('registry.test/demo:v2')
 		expect(recorded.triggers).toEqual([])
-		expect(recorded.schemas).toEqual(['demo'])
+		expect(recorded.schemas).toEqual(['demo@prod'])
 		expect(recorded.schemaSignals).toEqual([controller.signal])
 		const log = recorded.logs.join('\n')
 		expect(log).toContain('reserved app-version version-1')
@@ -402,6 +403,7 @@ describe('Zerops provider', () => {
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_OPERATIONS_DSN: 'private-new-dsn',
 				FABRIKA_IAM_ISSUER: null,
+				FABRIKA_IAM_APP_ID: 'demo@prod',
 				FABRIKA_APP_ID: 'demo',
 				FABRIKA_ENVIRONMENT: 'prod',
 				FABRIKA_SERVICE_KEY: 'private-service-key',
@@ -410,6 +412,7 @@ describe('Zerops provider', () => {
 
 		expect(recorded.envWrites).toEqual([
 			{ key: 'FABRIKA_OPERATIONS_DSN', value: 'private-new-dsn' },
+			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod' },
 			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
 			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
 		])
@@ -420,7 +423,9 @@ describe('Zerops provider', () => {
 			zerops: [{ setup: 'api', run: { envVariables: { FABRIKA_RELEASE: RELEASE } } }],
 		})
 		const yaml = recorded.builds[0]?.zeropsYaml ?? ''
-		for (const key of ['FABRIKA_OPERATIONS_DSN', 'FABRIKA_IAM_ISSUER', 'FABRIKA_APP_ID', 'FABRIKA_ENVIRONMENT', 'FABRIKA_SERVICE_KEY']) {
+		for (
+			const key of ['FABRIKA_OPERATIONS_DSN', 'FABRIKA_IAM_ISSUER', 'FABRIKA_IAM_APP_ID', 'FABRIKA_APP_ID', 'FABRIKA_ENVIRONMENT', 'FABRIKA_SERVICE_KEY']
+		) {
 			expect(yaml).not.toContain(key)
 		}
 		const log = recorded.logs.join('\n')

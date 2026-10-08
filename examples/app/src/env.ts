@@ -7,6 +7,8 @@ export interface Env {
 	IAM: IamBinding
 	// IAM's origin — the `iss` the SDK verifies every token against, and the JWKS source.
 	FABRIKA_IAM_ISSUER?: string
+	// This environment's IAM application id `<app>@<env>` — the `aud` the SDK verifies. Written by every deploy.
+	FABRIKA_IAM_APP_ID?: string
 }
 
 export const readIamIssuer = (env: Pick<Env, 'FABRIKA_IAM_ISSUER'>): string => {

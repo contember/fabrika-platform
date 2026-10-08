@@ -1,4 +1,11 @@
-import { type AppGates, type CredentialLocation, type GateRule, isOAuthResourceUri } from '@fabrika/auth-core'
+import {
+	APP_ENVIRONMENT_SEPARATOR,
+	type AppGates,
+	type CredentialLocation,
+	type GateRule,
+	isOAuthResourceUri,
+	parseAppEnvironmentId,
+} from '@fabrika/auth-core'
 import { z } from 'zod'
 import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
 
@@ -7,7 +14,7 @@ export * from './oauth-resource'
 export const FABRIKA_PROXY_MANIFEST_JSON = 'FABRIKA_PROXY_MANIFEST_JSON'
 
 export interface ProxyApp {
-	/** The IAM app id, used as the minted token audience. */
+	/** The IAM app id, used as the minted token audience: `<app>@<env>` for an application, a plain id for a platform service. */
 	id: string
 	/** Literal hostnames, lower-cased on parse; never patterns or host:port pairs. */
 	hosts: string[]
@@ -57,8 +64,11 @@ export const proxyAppGatesSchema = z.object({
 	rules: z.array(proxyGateRuleSchema),
 }) satisfies z.ZodType<AppGates, z.ZodTypeDef, unknown>
 
+/** An id that holds `@` must be a whole `<app>@<env>`; a malformed one would mint for an app IAM never registered. */
+const proxyAppIdSchema = z.string().min(1).refine((id) => !id.includes(APP_ENVIRONMENT_SEPARATOR) || parseAppEnvironmentId(id) !== null)
+
 export const proxyAppSchema = z.object({
-	id: z.string().min(1),
+	id: proxyAppIdSchema,
 	hosts: z.array(z.string().toLowerCase().refine(isProxyHost)).min(1),
 	upstream: z.string().min(1),
 	gates: proxyAppGatesSchema,

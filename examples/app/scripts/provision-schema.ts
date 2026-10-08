@@ -1,7 +1,11 @@
 #!/usr/bin/env bun
 
 import { reconcileSchema } from '@fabrika/auth'
+import { appEnvironmentId } from '@fabrika/auth-core'
 import { exampleAppId, exampleAppSchema } from '../fabrika.schema'
+
+// IAM registers the schema per environment, under `<app>@<env>` (ADR-0022 rule 6).
+const iamAppId = appEnvironmentId(exampleAppId, process.env['APP_ENV'] ?? 'local')
 
 function required(value: string | undefined, name: string): string {
 	if (value === undefined || value === '') {
@@ -11,7 +15,7 @@ function required(value: string | undefined, name: string): string {
 }
 
 function describeSchema(): void {
-	console.log(`  app:     ${exampleAppId}`)
+	console.log(`  app:     ${iamAppId}`)
 	console.log(`  scopes:  ${exampleAppSchema.scopes.map((scope) => scope.type).join(', ') || '(none)'}`)
 	console.log(`  actions: ${exampleAppSchema.actions.map((action) => action.action).join(', ') || '(none)'}`)
 	console.log(`  roles:   ${Object.keys(exampleAppSchema.roles).join(', ') || '(none)'}`)
@@ -28,11 +32,11 @@ async function main(): Promise<void> {
 	const adminKey = process.env['FABRIKA_IAM_ADMIN_KEY']
 	await reconcileSchema({
 		url,
-		app: exampleAppId,
+		app: iamAppId,
 		schema: exampleAppSchema,
 		...(adminKey === undefined ? {} : { adminKey }),
 	})
-	console.log(`Reconciled ${exampleAppId}.`)
+	console.log(`Reconciled ${iamAppId}.`)
 }
 
 main().catch((error: unknown) => {

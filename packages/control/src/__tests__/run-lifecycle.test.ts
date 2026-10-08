@@ -1,4 +1,4 @@
-import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE, parseOperationsReleasePayload } from '@fabrika/operations-contract/releases'
 import { type BlobStore, uuidv7 } from '@fabrika/platform'
@@ -613,6 +613,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_SERVICE_KEY]: null,
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
+			[FABRIKA_IAM_APP_ID]: 'app@prod',
 		})
 		expect(input.dryRun).toBe(true)
 
@@ -785,6 +786,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_SERVICE_KEY]: null,
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
+			[FABRIKA_IAM_APP_ID]: 'app@prod',
 		})
 
 		const secondRunId = uuidv7()
@@ -808,7 +810,17 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_SERVICE_KEY]: 'default',
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
+			[FABRIKA_IAM_APP_ID]: 'app@prod',
 		})
+	})
+
+	test('delivers the IAM application id of the deploying environment, <app>@<env>', async () => {
+		// ADR-0022 rule 6: the proxy mints for `app@prod`, so the application must verify that audience.
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_APP_ID]).toBe('app@prod')
 	})
 
 	test('delivers the installation issuer and refuses an application that names its own', async () => {
@@ -845,7 +857,7 @@ describe('provider-neutral run lifecycle', () => {
 		// The registry surface refuses these names too; this is the belt for a row that predates that check
 		// or arrived through a provider-managed target.
 		const { db } = createHarness()
-		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, FABRIKA_OPERATIONS_DSN]) {
+		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE, FABRIKA_OPERATIONS_DSN]) {
 			const runId = await seedRun(db)
 			await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name, valueRef: await sealAppSecret('prod', name, 'attacker') })
 			const refused: ProviderDeployInput[] = []
@@ -898,11 +910,11 @@ describe('provider-neutral run lifecycle', () => {
 	// reaches the provider here is what the deploy step hands to IAM's registry. All three acceptance
 	// clauses of backlog 51 are decided by these two tests.
 
-	test('projects every environment public origin of the app, not just the one being deployed', async () => {
+	test('projects the deploying environment public origin and no other environment of the app', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
 		// A second environment of the SAME app, plus a third with no public origin at all. IAM's registry
-		// is keyed by app id, so deploying `prod` must not un-register `stage`.
+		// is keyed by `<app>@<env>`, so `stage`'s origin registered under `app@prod` would hand it prod sessions.
 		await db.registry.upsertAppEnv({
 			appId: 'app',
 			env: 'stage',
@@ -926,7 +938,7 @@ describe('provider-neutral run lifecycle', () => {
 		const inputs: ProviderDeployInput[] = []
 
 		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
-		expect(inputs[0]?.returnOrigins).toEqual(['https://public.example.com', 'https://stage.example.com'])
+		expect(inputs[0]?.returnOrigins).toEqual(['https://public.example.com'])
 
 		// Re-pointing an environment REPLACES its origin rather than adding one: the old address stops
 		// being handed a session on the next deploy.
@@ -946,7 +958,7 @@ describe('provider-neutral run lifecycle', () => {
 		expect((await executeDeploy(makeDeps(db, makeProvider(moved, { state: 'succeeded' })), { runId: secondRunId })).status).toBe(
 			'succeeded',
 		)
-		expect(moved[0]?.returnOrigins).toEqual(['https://moved.example.com', 'https://stage.example.com'])
+		expect(moved[0]?.returnOrigins).toEqual(['https://moved.example.com'])
 	})
 
 	test('leaves an app with no public origin unregistered rather than guessing one', async () => {

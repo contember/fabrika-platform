@@ -8,6 +8,7 @@
 // runs. Recovery never resumes a deploy (ADR-0044): a version reserved but never triggered is deleted, and
 // one whose build may have been requested is settled only by polling it.
 
+import { appEnvironmentId } from '@fabrika/auth-core'
 import {
 	type DeployStepResult,
 	followLeaseLoss,
@@ -411,7 +412,7 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 	}
 }
 
-/** Write the five service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
+/** Write the six service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
 const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	const { zerops, log, signal, managedValues } = env
 	const serviceId = env.run.target.serviceId
@@ -595,17 +596,18 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			// Return origins ride this step because `apps.setReturnOrigins` 404s for an app IAM has never
 			// heard of, and the schema reconcile is what registers it. Separate call, same moment.
 			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
+			const iamApp = appEnvironmentId(artifact.app.id, artifact.app.env)
 			if (dryRun) {
-				log(`  [dry-run] would reconcile schema for \`${artifact.app.id}\` against ${propustkaUrl}`)
+				log(`  [dry-run] would reconcile schema for \`${iamApp}\` against ${propustkaUrl}`)
 				if (returnOrigins !== undefined) {
-					log(`  [dry-run] would register return origins for \`${artifact.app.id}\`: ${returnOrigins.join(', ')}`)
+					log(`  [dry-run] would register return origins for \`${iamApp}\`: ${returnOrigins.join(', ')}`)
 				}
 				return
 			}
 			assertRunning(signal)
 			await zerops.reconcileSchema({
 				url: propustkaUrl,
-				app: artifact.app.id,
+				app: iamApp,
 				schema,
 				...(returnOrigins === undefined ? {} : { returnOrigins }),
 				adminKey: target.adminKey,

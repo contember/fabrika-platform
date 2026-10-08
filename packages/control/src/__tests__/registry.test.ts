@@ -1,5 +1,5 @@
 import { ConflictError } from '@fabrika/app'
-import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import { uuidv7 } from '@fabrika/platform'
@@ -711,7 +711,7 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 
 	test('a reserved name is refused on the SECRET surface, exactly as it is on the variable surface', async () => {
 		const { deps } = await seededApp()
-		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
+		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
 			const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name, value: 'x' } }), deps)
 			expect(`${name}: ${refused.status}`).toBe(`${name}: 400`)
 			expect(((await refused.json()) as { error: string }).error).toContain('managed by Fabrika')
@@ -795,6 +795,19 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 		)
 		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'a\tb' } }), deps)).status).toBe(200)
 		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'a\u00a0b' } }), deps)).status).toBe(200)
+	})
+
+	test('@ is reserved in an app id and an environment name, because it joins them into the IAM application id', async () => {
+		const { deps } = await seededApp()
+		const app = await rpcResult(rpcRequest('apps.create', { id: 'no@tes', repoUrl: 'https://github.com/acme/notes' }), deps)
+		expect(app.status).toBe(400)
+		expect(((await app.json()) as { error: string }).error).toContain("must not contain '@'")
+		const environment = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'app', env: 'pr@od', environment: registrationEnvelopes() }),
+			deps,
+		)
+		expect(environment.status).toBe(400)
+		expect(await deps.repositories.registry.listAppEnvs('app')).toEqual([])
 	})
 
 	const BAD_DOMAINS = ['*', '*.apps.example.com', 'apps.example.com:8080', 'https://apps.example.com', 'apps.example.com/x']

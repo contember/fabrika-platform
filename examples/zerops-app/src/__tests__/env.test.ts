@@ -5,7 +5,7 @@ const completeEnv = {
 	PORT: '3000',
 	NOTES_DATABASE_URL: 'postgres://notes.test/notes',
 	FABRIKA_IAM_ISSUER: 'https://iam.test',
-	NOTES_APP_ID: 'notes',
+	FABRIKA_IAM_APP_ID: 'notes@prod',
 	FABRIKA_OPERATIONS_DSN: 'https://0123456789abcdef0123456789abcdef@operations.test/123',
 	FABRIKA_RELEASE: 'release-123',
 }
@@ -16,7 +16,7 @@ describe('notes runtime configuration', () => {
 			port: 3000,
 			databaseUrl: 'postgres://notes.test/notes',
 			iamIssuer: 'https://iam.test',
-			appId: 'notes',
+			appId: 'notes@prod',
 			operationsDsn: completeEnv.FABRIKA_OPERATIONS_DSN,
 			release: completeEnv.FABRIKA_RELEASE,
 		})

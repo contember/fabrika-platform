@@ -225,7 +225,7 @@ services:
     environment:
       PORT: "3000"
       FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
-      NOTES_APP_ID: notes
+      FABRIKA_IAM_APP_ID: notes@prod
       FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
       FABRIKA_RELEASE: fabrika/local-notes/local/default/0000000000000000000000000000000000000000
     networks: [apps-prod, iam-public]

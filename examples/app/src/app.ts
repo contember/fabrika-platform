@@ -1,6 +1,5 @@
 import { type AuthContext, defineApp, type Middleware, type RequestExecutionContext, route } from '@fabrika/app'
 import { anonymousContext, createIam } from '@fabrika/auth'
-import { exampleAppId } from '../fabrika.gates'
 import { type Env, readIamIssuer } from './env'
 
 interface Ctx {
@@ -14,7 +13,7 @@ interface Ctx {
  * the header is never trusted blindly — and turns it into an `AuthContext`. It evaluates no gate.
  */
 const authMiddleware = (env: Env): Middleware<Ctx> => {
-	const iam = createIam({ IAM: env.IAM, FABRIKA_IAM_ISSUER: readIamIssuer(env), FABRIKA_APP_ID: exampleAppId })
+	const iam = createIam({ IAM: env.IAM, FABRIKA_IAM_ISSUER: readIamIssuer(env), FABRIKA_IAM_APP_ID: env.FABRIKA_IAM_APP_ID })
 	return async (request, ctx, next) => {
 		const result = await iam.authenticate(request)
 		if (result.ok) {

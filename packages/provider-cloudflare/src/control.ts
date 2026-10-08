@@ -1,4 +1,5 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
+import { appEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -271,6 +272,7 @@ const MAX_SCHEMA_JSON_CHARS = 1024 * 1024
 /** The app a terminal outcome belongs to, and where IAM may hand it a session. */
 interface IamReconcileTarget {
 	readonly appId: string
+	readonly env: string
 	readonly returnOrigins?: readonly string[]
 	readonly signal: AbortSignal
 }
@@ -314,7 +316,7 @@ const applyIamReconcile = async (
 	const returnOrigins = target.returnOrigins !== undefined && target.returnOrigins.length > 0 ? target.returnOrigins : undefined
 	await (options.reconcileSchema ?? defaultReconcileSchema)({
 		url: options.propustkaUrl,
-		app: target.appId,
+		app: appEnvironmentId(target.appId, target.env),
 		schema: schema.schema,
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(options.propustkaProvisioningKey === undefined ? {} : { adminKey: options.propustkaProvisioningKey }),
@@ -400,7 +402,12 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 		}
 		input.signal.throwIfAborted()
 		if (input.dryRun) return outcome
-		const target = { appId: input.app.id, signal: input.signal, ...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }) }
+		const target = {
+			appId: input.app.id,
+			env: input.environment.env,
+			signal: input.signal,
+			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+		}
 		const log = async (line: string): Promise<void> => input.events.log(line)
 		return settleOutcome(options, target, outcome, log, false)
 	},
@@ -412,6 +419,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 		if (recovery.state === 'running') return { state: 'running' }
 		const target = {
 			appId: input.environment.appId,
+			env: input.environment.env,
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 		}

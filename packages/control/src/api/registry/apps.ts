@@ -4,6 +4,7 @@ import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-ev
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
+import { assertAppEnvironmentPart } from './validation'
 
 export async function listAppsUseCase(c: RegistryUseCaseContext): Promise<ListResponse<AppDto>> {
 	return { items: (await c.repositories.registry.listApps()).map(toAppDto) }
@@ -16,6 +17,7 @@ export async function getAppUseCase(c: RegistryUseCaseContext, id: string): Prom
 }
 
 export async function createAppUseCase(c: RegistryUseCaseContext, input: CreateAppRequest): Promise<AppDto> {
+	assertAppEnvironmentPart('app id', input.id)
 	if (await c.repositories.registry.getApp(input.id)) fail(409, 'an app with this id already exists')
 	const normalized = normalizeRepoUrl(input.repoUrl)
 	const sourceBinding = await sourceBindingFields(c, input, normalized)

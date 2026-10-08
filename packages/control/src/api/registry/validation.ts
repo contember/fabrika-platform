@@ -1,4 +1,4 @@
-import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { APP_ENVIRONMENT_SEPARATOR, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, isAppEnvironmentPart } from '@fabrika/auth-core'
 import { operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
@@ -18,8 +18,17 @@ const isControlCharacter = (code: number): boolean =>
 
 /** Refuse a name the platform assigns itself, whichever surface writes it (ADR-0035). */
 export function assertUnmanagedName(kind: 'variable' | 'secret', name: string): void {
-	if (name === FABRIKA_RELEASE || name === FABRIKA_IAM_ISSUER || operationsManagedEnvironmentCollisions([name]).length > 0) {
+	if (
+		name === FABRIKA_RELEASE || name === FABRIKA_IAM_ISSUER || name === FABRIKA_IAM_APP_ID || operationsManagedEnvironmentCollisions([name]).length > 0
+	) {
 		fail(400, `application ${kind} "${name}" is managed by Fabrika`)
+	}
+}
+
+/** `@` joins an app id and an environment into the IAM application id `<app>@<env>` (ADR-0022 rule 6), so neither may hold it. */
+export function assertAppEnvironmentPart(kind: 'app id' | 'environment', value: string): void {
+	if (!isAppEnvironmentPart(value)) {
+		fail(400, `${kind} "${value}" must be non-empty and must not contain '${APP_ENVIRONMENT_SEPARATOR}'`)
 	}
 }
 

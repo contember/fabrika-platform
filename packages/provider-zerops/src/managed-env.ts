@@ -7,6 +7,7 @@ export type ManagedKey =
 	| 'FABRIKA_RELEASE'
 	| 'FABRIKA_OPERATIONS_DSN'
 	| 'FABRIKA_IAM_ISSUER'
+	| 'FABRIKA_IAM_APP_ID'
 	| 'FABRIKA_APP_ID'
 	| 'FABRIKA_ENVIRONMENT'
 	| 'FABRIKA_SERVICE_KEY'
@@ -15,6 +16,7 @@ export const MANAGED_KEYS: readonly ManagedKey[] = [
 	'FABRIKA_RELEASE',
 	'FABRIKA_OPERATIONS_DSN',
 	'FABRIKA_IAM_ISSUER',
+	'FABRIKA_IAM_APP_ID',
 	'FABRIKA_APP_ID',
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_SERVICE_KEY',
@@ -24,6 +26,7 @@ export const MANAGED_KEYS: readonly ManagedKey[] = [
 export const SERVICE_MANAGED_KEYS: readonly Exclude<ManagedKey, 'FABRIKA_RELEASE'>[] = [
 	'FABRIKA_OPERATIONS_DSN',
 	'FABRIKA_IAM_ISSUER',
+	'FABRIKA_IAM_APP_ID',
 	'FABRIKA_APP_ID',
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_SERVICE_KEY',
@@ -35,6 +38,7 @@ const managedValuesSchema = z.object({
 	FABRIKA_RELEASE: z.string().nullable(),
 	FABRIKA_OPERATIONS_DSN: z.string().nullable(),
 	FABRIKA_IAM_ISSUER: z.string().nullable(),
+	FABRIKA_IAM_APP_ID: z.string().nullable(),
 	FABRIKA_APP_ID: z.string().nullable(),
 	FABRIKA_ENVIRONMENT: z.string().nullable(),
 	FABRIKA_SERVICE_KEY: z.string().nullable(),
@@ -42,7 +46,7 @@ const managedValuesSchema = z.object({
 
 export function parseManagedValues(value: unknown): ManagedValues {
 	const result = managedValuesSchema.safeParse(value)
-	if (!result.success) throw new Error('zerops: managed environment must name exactly the six managed keys')
+	if (!result.success) throw new Error('zerops: managed environment must name exactly the seven managed keys')
 	return result.data
 }
 
