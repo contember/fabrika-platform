@@ -76,7 +76,7 @@ const checkSourceModule = async (
 		if (isTest) checkTestNode(node, report)
 	})
 	checkComments(module.comments, report)
-	checkModuleReferences(module.file, moduleReferences(module.program), mappings, exists, report, isGeneratedEntry)
+	checkModuleReferences(module.file, moduleReferences(module.program), mappings, exists, report, isGeneratedEntry, isTest)
 	await checkGeneratedTest(text, module.comments, report)
 }
 

@@ -1,5 +1,5 @@
 import type { Report } from '../finding'
-import { isIgnoredSegment, isRelativeSpecifier, joinRelative, resolveRelative } from '../layout'
+import { isIgnoredSegment, isRelativeSpecifier, isTestFile, joinRelative, resolveRelative } from '../layout'
 import type { ModuleReference } from '../references'
 import { type ImportMappings, mappedTargets } from '../resolution'
 
@@ -78,6 +78,24 @@ const packageName = (specifier: string): string => {
 
 const ALLOWED_ENV = 'values the framework hands the handler through deps or ctx'
 
+/** The test kit signs tokens with its own key and boots the application a second way; production never loads it. */
+const TEST_KIT = '@fabrika/app/testing'
+const TEST_ONLY_ALLOWED = 'the kit in a test file (*.test.ts, *.spec.ts or a __tests__ directory) only'
+
+const isTestKit = (specifier: string): boolean => specifier === TEST_KIT || specifier.startsWith(`${TEST_KIT}/`)
+
+/**
+ * A non-test module may reach neither the kit nor a test module: a test helper may load the kit, so a production
+ * import of one would reach it too.
+ */
+const checkTestOnly = (reference: ModuleReference, target: string, report: Report): void => {
+	if (isTestKit(target)) {
+		report(reference.node, 'test-only-import', `'${reference.specifier}' is the test kit, loaded outside a test file`, TEST_ONLY_ALLOWED)
+	} else if (isTestFile(target)) {
+		report(reference.node, 'test-only-import', `'${reference.specifier}' is a test module, loaded outside a test file`, TEST_ONLY_ALLOWED)
+	}
+}
+
 /** A path from the root that a mapping or an import lands on, judged by where the checker reads. */
 const containmentProblem = (target: string | undefined): string | undefined => {
 	if (target === undefined) return 'resolves outside the application root, where the checker does not look'
@@ -113,7 +131,11 @@ export const checkModuleReferences = (
 	exists: (path: string) => boolean,
 	report: Report,
 	isGeneratedEntry: boolean,
+	isTest: boolean,
 ): void => {
+	const testOnly = (reference: ModuleReference, target: string): void => {
+		if (!isTest && !reference.typeOnly) checkTestOnly(reference, target, report)
+	}
 	for (const reference of references) {
 		const { specifier, node } = reference
 		if (specifier.startsWith('/') || /^file:/i.test(specifier)) {
@@ -132,6 +154,7 @@ export const checkModuleReferences = (
 				continue
 			}
 			const resolution = resolveRelative(exists, file, specifier)
+			if (resolution.kind === 'file') testOnly(reference, resolution.path)
 			const packageEntry = resolution.kind === 'directory' && resolution.paths.some((path) => path.endsWith('/package.json'))
 			if (resolution.kind === 'ambiguous' || packageEntry) {
 				const what = packageEntry
@@ -148,16 +171,20 @@ export const checkModuleReferences = (
 		}
 		const targets = mappedTargets(mappings, specifier)
 		if (targets === undefined) {
+			testOnly(reference, specifier)
 			if (!reference.typeOnly) checkPackage(reference, specifier, report, isGeneratedEntry)
 			continue
 		}
 		for (const target of targets) {
 			if (!isRelativeSpecifier(target) && !target.startsWith('/')) {
+				testOnly(reference, target)
 				if (!reference.typeOnly) checkPackage(reference, target, report, isGeneratedEntry)
 				continue
 			}
 			// Mapping targets are relative to the root, where both package.json and tsconfig.json live.
-			const problem = containmentProblem(target.startsWith('/') ? undefined : joinRelative('package.json', target))
+			const mapped = target.startsWith('/') ? undefined : joinRelative('package.json', target)
+			if (mapped !== undefined) testOnly(reference, mapped)
+			const problem = containmentProblem(mapped)
 			if (problem !== undefined) {
 				report(node, 'unchecked-import', `'${specifier}' is mapped to '${target}', which ${problem}`, 'a mapping onto a module inside the application')
 			}

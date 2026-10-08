@@ -77,6 +77,40 @@ const cases: readonly RuleCase[] = [
 		good: { 'src/data.ts': "import type { Selectable } from 'kysely'\n\nexport type Row = Selectable<{ id: string }>\n" },
 	},
 	{
+		rule: 'test-only-import',
+		bad: {
+			'package.json': JSON.stringify({ imports: { '#kit': '@fabrika/app/testing' } }),
+			'src/app.ts': [
+				"import { testKit } from '@fabrika/app/testing'",
+				"export * from '@fabrika/app/testing'",
+				"export const later = await import('@fabrika/app/testing')",
+				"import { signer } from './__tests__/helpers.ts'",
+				"export { other } from './kit.test.ts'",
+				"export { mapped } from './mapped.ts'",
+				'export { testKit, signer }',
+				'',
+			].join('\n'),
+			'src/helper.ts': "export { testKit as viaHelper } from '@fabrika/app/testing'\n",
+			'src/mapped.ts': "export { testKit as mapped } from '#kit'\n",
+			'src/__tests__/helpers.ts': "export { testKit as signer } from '@fabrika/app/testing'\n",
+			'src/kit.test.ts': "export { testKit as other } from '@fabrika/app/testing'\n",
+		},
+		expected: ['src/app.ts:1:1', 'src/app.ts:2:1', 'src/app.ts:3:28', 'src/app.ts:4:1', 'src/app.ts:5:1', 'src/helper.ts:1:1', 'src/mapped.ts:1:1'],
+		good: {
+			'src/app.ts': "import type { TestCaller } from '@fabrika/app/testing'\n\nexport type Caller = TestCaller\n",
+			'src/__tests__/helpers.ts': "export { testKit } from '@fabrika/app/testing'\n",
+			'src/__tests__/notes.test.ts': [
+				"import { expect, test } from 'bun:test'",
+				"import { testKit } from './helpers.ts'",
+				'',
+				"test('the kit is loaded', () => {",
+				"\texpect(typeof testKit).toBe('function')",
+				'})',
+				'',
+			].join('\n'),
+		},
+	},
+	{
 		rule: 'unchecked-import',
 		bad: {
 			'src/a.ts':

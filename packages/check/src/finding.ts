@@ -6,6 +6,7 @@ export const RULE_IDS = [
 	'literal',
 	'contract',
 	'forbidden-import',
+	'test-only-import',
 	'unchecked-import',
 	'forbidden-global',
 	'raw-sql',
