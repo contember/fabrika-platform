@@ -46,11 +46,12 @@ contract and classify what it changed instead.
    also hold `source.workspace.*` grants at its coordinates. One stage environment per app; deploying a
    workspace creates an ordinary run for the exact head SHA in that environment.
 6. **Repository configuration is protected; the contract files are classified.** Control refuses edits
-   to `fabrika.config.ts`, to `zerops.yaml` / `zerops.yml` at any depth and to everything under
-   `.github/`; the operator changes them through normal review. A workspace may edit
-   `fabrika.contract.ts`, the schema modules it imports, `src/db/tables.ts` and the files under
-   `migrations/`. Control classifies those changes at deploy time instead of refusing them
-   (ADR-0050).
+   to `zerops.yaml` / `zerops.yml` at any depth, `fabrika.*` files and everything under `.github/`; the
+   operator changes them through normal review. The only exceptions are `fabrika.contract.ts`, the
+   schema modules it imports, `src/db/tables.ts` and the files under `migrations/`. A workspace may
+   edit them, and Control classifies those changes at deploy time instead of refusing them (ADR-0050).
+   Every other `fabrika.*` file, `fabrika.config.ts` included, stays protected. A contract import does
+   not lift the protection of a file that is protected otherwise.
 7. **Production is not an MCP operation.** The tool opens a pull request. A human reviews and merges
    in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit widens
    access on a protected environment, the run waits for approval. `get_deployment` reports a waiting
@@ -85,8 +86,8 @@ unit B6).
   which the MCP specification warns against, and a weaker audience check in every verifier.
 - **Keep every `fabrika.*` file protected.** Lost: the agent cannot add an endpoint or a table, so
   every feature needs an operator. Classification makes the change visible to a human instead.
-- **Open `fabrika.config.ts` too.** Lost: it declares resources and provider settings, which the
-  approval diff does not classify. It stays with the operator.
+- **Open every `fabrika.*` file, or `fabrika.config.ts` too.** Lost: they declare resources and
+  provider settings, which the approval diff does not classify. They stay with the operator.
 - **Let the pull-request review stand in for approval.** Lost: the reviewer may not read the contract
   diff, and the approval page shows the access change in plain language.
 - **Platform-owned data language with sandboxed generated code.** Lost: a large trusted runtime that
