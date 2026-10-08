@@ -115,3 +115,15 @@ integrator gate → fast-forward to `main`.
 
 - 2026-10-08: `mcp-authoring` landed on `main` (`28706106`). Wave 1 started from it. Spikes S-A7 (parser) and S-A8
   (Kysely on `Bun.SQL`) run in scratch, outside the repository.
+- 2026-10-08: P4 landed (`64db75aa`, `3b6afbd7`). Backlog 88 was already closed on `main` by `b2935a15` (Control
+  settles Cloudflare runs and applies their IAM reconcile from R2); no migration was needed, `0003` stays free. 89:
+  keyed instance name plus an instance check on four `RunnerContainer` methods; residual re-filed. Old 93 no longer
+  holds; 94 re-filed.
+- 2026-10-08: P6 landed (`8bf351fe`, `c49f048f`) after one review round: compile errors drop the Control key; a
+  config that fails during provider inference reports the compile phase. Found, not fixed: `app build`, `app deploy`
+  and `control register` echo raw exceptions.
+- 2026-10-08: P3 and P1 went through one fix round each. P3 does not shorten the catalog TTL: `main` already uses
+  ADR-0044's renewed 90 s lease. P1 decides a duplicate grant from `INSERT … ON CONFLICT <index> DO NOTHING`, not
+  from driver error codes.
+- 2026-10-08: Owner checkpoints answered: parser `@babel/parser` 8.0.7 (H4), `kysely-postgres-js` 5.0.1 over
+  `Bun.SQL` (H5), A8 split into A8a and A8b (H3) — recorded in the implementation plan.

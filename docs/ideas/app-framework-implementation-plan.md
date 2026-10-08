@@ -285,17 +285,21 @@ platform already consumes; the application runtime enforces the rest in-process.
 
 - `@fabrika/check` (D11) with the rules of the framework document's section 8, including the literal rule of D5,
   migration file names and crontab entries.
-- Verify first: the parser. It must later run in Control on Bun and in a Worker within the size budget (B1);
-  candidates are TypeScript's `createSourceFile`, acorn with a TypeScript plugin, and oxc-parser.
+- The parser is `@babel/parser` 8.0.7, pinned exactly, with the `typescript` and `estree` plugins (decided
+  2026-10-08 after a spike). It is plain JavaScript, about 71 KB gzip, and runs on Bun and in a Worker. Control's
+  Worker is about 91 KB gzip today. TypeScript's JavaScript line has ended, and oxc is 0.x and needs WASM.
 - The template's build runs it; it prints one actionable line per finding.
 - Witness: a positive and a negative fixture per rule.
 
-**A8 — `@fabrika/db` (L, Zerops)**
+**A8 — `@fabrika/db` (L, Zerops)**, in two parts (decided 2026-10-08):
 
-- Pinned Kysely; verify first that `kysely-postgres-js` works over `Bun.SQL`, otherwise a small dialect.
-- `defineTables`, `defineStore`, `defineChildStore`; the frozen description builder; the `OperationNode` guard;
-  runtime column lists and action checks; request binding; refusal of unknown keys; `move`; aggregates; optimistic
-  concurrency. Port the spike's attack suite.
+- **A8a**, which does not need A3. Kysely 0.29.6 and `kysely-postgres-js` 5.0.1, both pinned exactly, over
+  `Bun.SQL` with `prepare: false`. A spike confirmed transactions, savepoints, `SET LOCAL`, `READ ONLY` and cancel.
+  It cannot stream, and v1 does not need it. The data layer never binds a JavaScript array and never stringifies
+  JSON before binding. `defineTables`, `defineStore` and `defineChildStore`; the frozen description builder; the
+  `OperationNode` guard; runtime column lists; refusal of unknown keys; `move`; aggregates; optimistic concurrency.
+  Port the spike's attack suite.
+- **A8b**, after A3: request binding and action checks through `Ref` and `Within`.
 - Witness: the attack suite; no scoped query compiles without its scope predicate.
 
 **A9 — Migrations and codegen (M)**
@@ -324,7 +328,8 @@ platform already consumes; the application runtime enforces the rest in-process.
   Revoke cannot remove the last creator. Keep the tables compatible with backlog 91.
 - Share links: required expiry up to the mount's `maxDays`, the link mount id, the bound containment chain; revoke
   by the issuer, by `members.manage`, or by mount removal; principal kind `link` (D10).
-- Grant writes become idempotent (closes backlog 82).
+- A duplicate admin grant already answers 409 (backlog 82, closed by the local-hardening port). Membership
+  writes are idempotent: a repeated assign or revoke answers the same result.
 - Workload principals cannot create scopes or manage members.
 - Needs `mcp-authoring` merged (IAM migrations).
 - Witness: every rule of the framework document's membership table.
@@ -399,7 +404,7 @@ A7, and `mcp-authoring` merged.
 
 - `readContractSource(files) → ContractArtifact` on the A7 parser; refuses anything that is not a literal with the
   file, the line and the allowed form. Used by Control, `fabrika contract check`, the platform build and the checker.
-- Verify first: the parser runs in Control on Bun and in a Worker within the size budget.
+- The parser is A7's (`@babel/parser`); the spike measured it on Bun and in workerd.
 - Witness: a **differential test** over every fixture contract: the static reader and `compileContract` on the
   evaluated module produce the same artifact and digest.
 
@@ -528,7 +533,8 @@ A7, and `mcp-authoring` merged.
 | Work unit | Waits for                                     |
 | --------- | --------------------------------------------- |
 | A1–A7     | A0; P0.1 for the canonical check              |
-| A8–A11    | A3                                            |
+| A8a       | —                                             |
+| A8b–A11   | A3, A8a                                       |
 | A12       | `mcp-authoring` merged                        |
 | A13       | A10, A12                                      |
 | A14–A16   | A10; A15 and A16 also A12 for principal kinds |

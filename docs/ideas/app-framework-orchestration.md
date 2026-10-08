@@ -164,9 +164,7 @@ waves. "on `main`" means merged.
 | 5     | A11 database test kit                                                                        | A10 on `main`               |
 | 6     | A14 storage port, A15 job runner                                                             | A10 on `main`; A15 also A12 |
 
-**Proposed split, not in the plan:** the plan makes A8 wait for A3. Only the request binding needs A3. Splitting A8
-into A8a and A8b lets the data lane start at G0 instead of after A3. The owner confirms the split at the first
-checkpoint.
+The split of A8 into A8a and A8b was confirmed on 2026-10-08. The data lane starts at G0 instead of after A3.
 
 **L4 IAM**
 
