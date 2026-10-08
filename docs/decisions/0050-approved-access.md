@@ -90,7 +90,7 @@ covers:
 The rule has three outcomes:
 
 - **No change** passes.
-- **A change that only removes** passes, with one exception for endpoints (below).
+- **A change that only removes** passes, with two exceptions (below).
 - **Everything else** waits for approval on a protected environment.
 
 **A removed endpoint can widen access.** The proxy selects the most specific endpoint
@@ -99,6 +99,10 @@ broader parameter or wildcard endpoint. Removing the literal would send its path
 A removal of an endpoint therefore passes only when none of its former paths matches another endpoint
 in the candidate table: `planEndpoint` over the candidate table selects no endpoint for those paths, so
 they become denied. Otherwise Control classifies the removal as a widening, and it waits like any other.
+
+**A removed column read policy widens access.** Without its own read policy, a column falls back to the
+table's read action. Removing a column's read policy is therefore a widening, and it waits. Removing a
+whole table or a whole column stays a removal.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
@@ -145,7 +149,7 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
   reads the plain-language lines and approves.
 - A removal and a code-only change deploy without a prompt, unless the removal uncovers a broader
-  endpoint. Unprotected environments, including
+  endpoint or removes a column read policy. Unprotected environments, including
   staging and MCP authoring targets by default, do not wait.
 - The first deploy to a protected environment always waits: against the empty snapshot, every item is
   an addition.
