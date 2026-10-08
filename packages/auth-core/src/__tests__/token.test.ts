@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { accessClaimsToResolved, type AccessTokenClaims, buildAccessClaims, parseAccessClaims } from '../token'
+import { accessClaimsToResolved, type AccessTokenClaims, buildAccessClaims, parseAccessClaims, principalKind } from '../token'
 import type { PermissionEntry } from '../types'
 
 const ISS = 'https://propustka.example.com'
@@ -148,5 +148,47 @@ describe('parseAccessClaims — rejects malformed', () => {
 	test('non-object payload', () => {
 		expect(parseAccessClaims(null)).toBeNull()
 		expect(parseAccessClaims('a string')).toBeNull()
+	})
+})
+
+describe('share-link claims', () => {
+	const linkParams = {
+		iss: ISS,
+		app: 'notes@prod',
+		subject: 'cred-link',
+		label: 'Shared note',
+		permissions: [{ action: 'notes.read', scope: { type: 'note', value: 'n1' }, source: 'grant' as const }],
+		issuedAt: 1,
+		expiresAt: 2,
+		link: { mount: 'shared', chain: [{ type: 'note', value: 'n1' }, { type: 'workspace', value: 'w1' }] },
+	}
+
+	test('a link token round-trips its mount and chain and has the link principal kind', () => {
+		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(buildAccessClaims(linkParams))))
+		expect(parsed?.link).toEqual(linkParams.link)
+		expect(parsed?.ptype).toBeUndefined()
+		expect(parsed === null ? null : principalKind(parsed)).toBe('link')
+	})
+
+	test('the principal kind of a bound token is its ptype, and of a plain anonymous token null', () => {
+		expect(principalKind(principalClaims())).toBe('user')
+		expect(principalKind(buildAccessClaims({ ...linkParams, link: undefined }))).toBeNull()
+	})
+
+	test('a link token cannot also name a principal type', () => {
+		expect(() => buildAccessClaims({ ...linkParams, type: 'user' })).toThrow()
+		expect(parseAccessClaims({ ...buildAccessClaims(linkParams), ptype: 'user' })).toBeNull()
+	})
+
+	test('a malformed link claim rejects the whole token', () => {
+		const base = buildAccessClaims(linkParams)
+		for (
+			const link of [null, 'shared', { mount: '', chain: [{ type: 'note', value: 'n1' }] }, { mount: 'shared', chain: [] }, {
+				mount: 'shared',
+				chain: [null],
+			}, { mount: 'shared', chain: [{ type: 'note' }] }]
+		) {
+			expect(parseAccessClaims({ ...base, link })).toBeNull()
+		}
 	})
 })

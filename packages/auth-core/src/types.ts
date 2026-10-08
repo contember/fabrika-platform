@@ -45,20 +45,56 @@ export interface RoleDef {
 	name: string
 	description?: string
 	permissions: string[]
-	/** A membership role is granted only in a value of this scope dimension, never globally. */
-	member?: { scope: string }
+	/**
+	 * A membership role is granted only in a value of `scope`, never globally. `assignableBy` names the
+	 * membership roles of the same scope whose holders may assign it there; absent, only an IAM
+	 * administrator assigns it.
+	 */
+	member?: { scope: string; assignableBy?: string[] }
 }
 
-/** One scope dimension an app exposes (flat, independent). */
+/**
+ * One scope dimension an app exposes. IAM evaluates every value as a flat scope; `in` only tells IAM
+ * which dimension a share link's containment chain names next.
+ */
 export interface AppScopeDef {
 	type: string
 	label?: string
+	/** The dimension that contains every value of this one (`note` is in `workspace`). */
+	in?: string
+	/** The membership role IAM grants the caller in a value it creates for them (`createScope`). */
+	creator?: string
+	/** The action that manages the members of a value, and the one that lists them. */
+	members?: { manage: string; list: string }
 }
 
 /** One action in an app's catalog (used for validation + admin UI discovery). */
 export interface AppActionDef {
 	action: string
 	description?: string
+}
+
+/** A share-link mount: what a link key of the mount carries and who may issue one. */
+export interface AppLinkMountDef {
+	/** The dimension of the object a link is bound to. */
+	dimension: string
+	/** Exact actions frozen into every key, on the bound object. */
+	grants: string[]
+	/** The action the issuer must hold on the object or a value containing it. */
+	issuedBy: string
+	/** The longest a link of the mount may live, in days. */
+	maxDays: number
+}
+
+/**
+ * An endpoint whose request may spend the caller's membership authority. IAM issues a delegation grant
+ * only for one of these: `members` for an endpoint whose action is the dimension's `members.manage`,
+ * `creates` for one that creates a value of the dimension.
+ */
+export interface AppDelegationDef {
+	action: string
+	dimension: string
+	purpose: 'members' | 'creates'
 }
 
 /** An app's full authz vocabulary, declared in the app's code, reconciled into Propustka. */
@@ -69,6 +105,10 @@ export interface AppSchema {
 	roles: Record<string, RoleDef>
 	/** Compiled from a contract (`schemaFromContract`): IAM then refuses every wildcard action written for the app. */
 	contract?: boolean
+	/** Link mount id -> its definition. Removing a mount revokes its keys. */
+	links?: Record<string, AppLinkMountDef>
+	/** Endpoint id -> what the endpoint may spend through a delegation grant. */
+	delegations?: Record<string, AppDelegationDef>
 }
 
 // ── Per-path access gates (the propustka-native front door, enforced by the proxy) ──

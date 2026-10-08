@@ -87,6 +87,26 @@ export interface AccessTokenClaims {
 	label: string | null
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
 	oauth?: OAuthTokenClaims
+	/** Present only on a share-link token, which has no `ptype`: `sub` is then the link key's id. */
+	link?: LinkTokenClaims
+}
+
+/** What a share-link token adds: the link mount that issued the key and the chain the key is bound to. */
+export interface LinkTokenClaims {
+	mount: string
+	/** The bound object first, then each value containing it, outward. */
+	chain: Scope[]
+}
+
+/**
+ * The principal kind of a token (ADR-0022 rule 3): a user or a service principal, or a share link. Null
+ * for an anonymous credential that is not a link, which no contract mount admits.
+ */
+export type PrincipalKind = PrincipalType | 'link'
+
+export function principalKind(claims: AccessTokenClaims): PrincipalKind | null {
+	if (claims.ptype !== undefined) return claims.ptype
+	return claims.link === undefined ? null : 'link'
 }
 
 /** What an OAuth resource token adds: the signed app coordinate and the grant it was minted from. */
@@ -145,6 +165,8 @@ export interface AccessTokenParams {
 	permissions: PermissionEntry[]
 	issuedAt: number
 	expiresAt: number
+	/** A share-link key's mount and chain; only on a token without `type`. */
+	link?: LinkTokenClaims
 }
 
 export interface ResourceAccessTokenParams {
@@ -207,6 +229,10 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 	if (params.type !== undefined) {
 		claims.ptype = params.type
 	}
+	if (params.link !== undefined) {
+		if (params.type !== undefined) throw new Error('A share-link token has no principal type')
+		claims.link = { mount: params.link.mount, chain: params.link.chain.map((scope) => ({ type: scope.type, value: scope.value })) }
+	}
 	return claims
 }
 
@@ -236,6 +262,10 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (oauth === undefined || (oauth !== null && (ptype !== 'user' || !isOAuthResourceUri(aud)))) {
 		return null
 	}
+	const link = parseLinkClaims(prop(payload, 'link'))
+	if (link === undefined || (link !== null && (ptype !== null || oauth !== null))) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
@@ -243,7 +273,31 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (oauth !== null) {
 		claims.oauth = oauth
 	}
+	if (link !== null) {
+		claims.link = link
+	}
 	return claims
+}
+
+/** Absent → null; a mount and a non-empty chain → the claims; anything else → undefined. */
+function parseLinkClaims(value: unknown): LinkTokenClaims | null | undefined {
+	if (value === undefined) {
+		return null
+	}
+	const mount = stringField(value, 'mount')
+	const rawChain = prop(value, 'chain')
+	if (mount === undefined || mount === '' || !Array.isArray(rawChain) || rawChain.length === 0) {
+		return undefined
+	}
+	const chain: Scope[] = []
+	for (const item of rawChain) {
+		const scope = parseScope(item)
+		if (scope === null || scope === undefined) {
+			return undefined
+		}
+		chain.push(scope)
+	}
+	return { mount, chain }
 }
 
 /** Absent OAuth claims → null; complete and valid → the claims; partial or malformed → undefined. */

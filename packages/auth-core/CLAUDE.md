@@ -25,6 +25,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `requirement.ts`        | `satisfies` — an endpoint requirement checked against a token's permissions.                                                   |
 | `token.ts`              | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.                                           |
 | `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
+| `membership.ts`         | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
 | `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
 | `wire.ts`               | The proxy→app header names: the verified token, the client address, and what to strip.                                         |
 | `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
@@ -44,6 +45,12 @@ bun test               # app-environment · canonical-path · contract-canonical
   `HttpIamRpc` carry the same methods over HTTP. Consumers type their binding as `IamRpc` and never
   import IAM. Changing a method's shape here is a simultaneous change to the Worker, the HTTP
   transport, and every caller — make it in one commit or the two transports diverge silently.
+- **The membership RPC is a SEPARATE interface too.** `IamMembershipRpc` is what an application's IAM
+  entrypoint serves on top of the SDK's `IamRpc` subset; a platform component implementing `IamRpc`
+  does not implement it. Its requests carry the caller's own credential and never an actor.
+- **A share-link token has no `ptype` and carries `link: { mount, chain }`.** `principalKind` reads the
+  kind ADR-0022 rule 3 checks (`user`, `service`, `link`); a plain anonymous token has none, so no
+  contract mount admits it. `parseAccessClaims` rejects a link claim next to a `ptype` or OAuth claims.
 - **The handoff RPC is a SEPARATE interface on purpose.** `exchangeAuthCode` lives on
   `IamHandoffRpc`, never on `IamRpc`, because only the proxy may turn a one-time code into a session
   and `IamRpc` is held by every SDK consumer. On Zerops that split is a real key boundary
