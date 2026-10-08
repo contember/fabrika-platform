@@ -7,7 +7,9 @@ import type { AuthContext } from '@fabrika/auth'
 import type { RunDto, RunLogLine } from '@fabrika/control-contract'
 import { uuidv7 } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
+import { CONTRACT_FILE } from '@fabrika/check/contract'
 import { ACTIONS } from '../actions'
+import { parseClassification } from '../approval/publish'
 import { type AppEnvRow, type AppRow, type ControlRepositories, SourceBindingError, type WorkspaceRow } from '../db'
 import { parseGitHubRepo } from '../github/triggers/push-event'
 import { WorkspaceSourceError, type WorkspaceSourcePort, type WorkspaceSourceTarget } from '../workspace-source-port'
@@ -27,6 +29,8 @@ export interface WorkspaceUseCaseContext {
 	readonly logs: LogReader
 	readonly auth: AuthContext
 	readonly signal: AbortSignal
+	/** The console's public origin, for the approval link of a parked run; absent leaves the link out. */
+	readonly consoleOrigin?: string
 }
 
 export interface AuthoringTargetDto {
@@ -65,6 +69,15 @@ export interface DeploymentDto {
 	run: RunDto
 	/** The last lines of the build log, oldest first. */
 	logTail: RunLogLine[]
+	/** Present while the run waits for a person to approve its access change (ADR-0050); no MCP token can. */
+	approval: DeploymentApprovalDto | null
+}
+
+export interface DeploymentApprovalDto {
+	/** The console page where a person with `access.approve` decides; null when the console origin is unknown. */
+	url: string | null
+	/** The plain-language lines of the change the approver reads. */
+	changes: string[]
 }
 
 interface AuthoringTarget {
@@ -242,7 +255,13 @@ export async function getDeploymentUseCase(c: WorkspaceUseCaseContext, input: { 
 	) fail(404, 'run not found')
 	const run = await getRunUseCase(c, input.runId)
 	const log = await getRunLogUseCase(c, input.runId)
-	return { run, logTail: log.lines.slice(-DEPLOYMENT_LOG_TAIL_LINES) }
+	const approval = row.status === 'awaiting_approval' && row.classification_json !== null
+		? {
+			url: c.consoleOrigin === undefined ? null : `${c.consoleOrigin}/approvals/${encodeURIComponent(row.id)}`,
+			changes: parseClassification(row.classification_json).changes.map((change) => change.line),
+		}
+		: null
+	return { run, logTail: log.lines.slice(-DEPLOYMENT_LOG_TAIL_LINES), approval }
 }
 
 export async function createPullRequestUseCase(
@@ -277,13 +296,16 @@ export function isRepositoryPath(path: string): boolean {
 }
 
 /**
- * ADR-0049 D4: deployment configuration and CI are changed through normal review only — `zerops.yaml`
- * / `zerops.yml` at any depth, any `fabrika.*` file, and anything under `.github/`.
+ * ADR-0049 D6: deployment configuration and CI are changed through normal review only — `zerops.yaml`
+ * / `zerops.yml` at any depth, every `fabrika.*` file but the contract, and anything under `.github/`.
+ * `fabrika.contract.ts` is editable because Control classifies its changes at deploy time (ADR-0050).
  */
 export function isProtectedPath(path: string): boolean {
 	const lower = path.toLowerCase()
 	const name = lower.split('/').at(-1) ?? lower
-	return name === 'zerops.yaml' || name === 'zerops.yml' || name.startsWith('fabrika.') || lower.startsWith('.github/')
+	if (name === 'zerops.yaml' || name === 'zerops.yml' || lower.startsWith('.github/')) return true
+	// Exact case only: a case-insensitive file system could otherwise check out `Fabrika.Contract.ts` as something else.
+	return name.startsWith('fabrika.') && path.split('/').at(-1) !== CONTRACT_FILE
 }
 
 function commitMessage(message: string, principalId: string, clientId: string | undefined): string {

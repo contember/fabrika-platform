@@ -42,6 +42,7 @@ export function fixtureRuns(runs: RunRepository, locks: DeployLocks, now: () => 
 		finish: (id: string, status: 'succeeded' | 'failed', exitCode: number | null = null) =>
 			owned(id, (fence) => runs.markRunFinished(id, status, exitCode, fence)),
 		finishCancellation: (id: string, status: 'succeeded' | 'failed') => owned(id, (fence) => runs.markRunCancellationFinished(id, status, fence)),
+		park: (id: string, classificationJson: string) => owned(id, (fence) => runs.parkRunForApproval(id, classificationJson, fence)),
 	}
 }
 

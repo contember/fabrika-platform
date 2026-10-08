@@ -1,7 +1,7 @@
 // Authoring targets and Git workspaces (ADR-0049), against SQLite always and Postgres when
 // FABRIKA_TEST_POSTGRES_URL is set. The repository port is a recording fake; the SQL runs against the real schema.
 
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { putAppEnvUseCase } from '../api/registry/environments'
 import {
@@ -19,6 +19,7 @@ import {
 } from '../api/workspaces'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { createHarness } from './helpers/harness'
+import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
 import {
@@ -76,6 +77,11 @@ for (const backend of backends) {
 			await opened?.close()
 			opened = null
 		})
+
+		function requireOpened(): Backend {
+			if (opened === null) throw new Error('no backend is open')
+			return opened
+		}
 
 		async function world(): Promise<WorkspaceWorld> {
 			opened = await backend.open()
@@ -251,6 +257,10 @@ for (const backend of backends) {
 					})).rejects.toMatchObject({ httpStatus: 403 })
 				}
 				expect(w.source.kinds()).toEqual(['read-branch', 'create-branch'])
+				expect(isProtectedPath('fabrika.contract.ts')).toBe(false)
+				expect(isProtectedPath('Fabrika.Contract.ts')).toBe(true)
+				expect(isProtectedPath('src/db/tables.ts')).toBe(false)
+				expect(isProtectedPath('db/migrations/20260101000000_init.sql')).toBe(false)
 				expect(isProtectedPath('docs/zerops.yaml.md')).toBe(false)
 				expect(isProtectedPath('.github/dependabot.yml')).toBe(true)
 				expect(isProtectedPath('docs/.github/notes.md')).toBe(false)
@@ -302,9 +312,34 @@ for (const backend of backends) {
 				expect(await getDeploymentUseCase(w.context(author), { runId: run.id })).toEqual({
 					run,
 					logTail: [{ ts: 1, stream: 'meta', text: 'building' }],
+					approval: null,
 				})
 				await expect(getDeploymentUseCase(w.context(oauthUser(['source.workspace.read'])), { runId: run.id })).rejects.toMatchObject({
 					httpStatus: 404,
+				})
+			})
+
+			test('a run parked for approval is reported with the approval link and the change, which no MCP token can approve', async () => {
+				const w = await world()
+				const created = await workspace(w)
+				const run = await deployStageUseCase(w.context(author), { workspaceId: created.id })
+				const classification = {
+					outcome: 'widening',
+					changes: [{ widens: true, line: 'Role `editor` gains `notes.delete`' }],
+					candidateDigest: `sha256:${'a'.repeat(64)}`,
+					baselineDigest: `sha256:${'b'.repeat(64)}`,
+					baselineRunId: null,
+					protected: true,
+				}
+				const owned = fixtureRuns(w.repositories.runs, new SqlDeployLocks(requireOpened().db))
+				await owned.start(run.id, `runs/${run.id}/logs.ndjson`)
+				await owned.park(run.id, JSON.stringify(classification))
+
+				const deployment = await getDeploymentUseCase(w.context(author), { runId: run.id })
+				expect(deployment.run.status).toBe('awaiting_approval')
+				expect(deployment.approval).toEqual({
+					url: `https://console.example.test/approvals/${run.id}`,
+					changes: ['Role `editor` gains `notes.delete`'],
 				})
 			})
 

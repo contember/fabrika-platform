@@ -162,6 +162,7 @@ export async function seedWorkspaceWorld(repositories: ControlRepositories, db: 
 		context: (auth) => ({
 			repositories,
 			source,
+			consoleOrigin: 'https://console.example.test',
 			queue: {
 				send(message) {
 					queued.push(message)

@@ -30,6 +30,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort): McpRoute
 			logs: env.RUN_LOGS,
 			auth,
 			signal,
+			consoleOrigin: publicOrigin,
 		}),
 	})
 }

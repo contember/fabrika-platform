@@ -188,8 +188,10 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 	server.registerTool('apply_changes', {
 		description: 'Commit a batch of file changes to the workspace branch as one ordinary Git commit. expectedHeadSha must be the '
 			+ 'current head from get_workspace or read_files; if the branch moved, the call fails with the new head and you must re-read '
-			+ 'and retry. content null deletes a file. zerops.yaml, zerops.yml, fabrika.* files and everything under .github/ are '
-			+ 'protected and cannot be changed. A file may hold at most 512 KiB.',
+			+ 'and retry. content null deletes a file. zerops.yaml, zerops.yml, every fabrika.* file but fabrika.contract.ts and '
+			+ 'everything under .github/ are protected and cannot be changed. A change of the contract, its schema modules, '
+			+ 'src/db/tables.ts or db/migrations/ is classified at deploy time; on a protected environment a widening waits for '
+			+ 'a person to approve it. A file may hold at most 512 KiB.',
 		inputSchema: toolInput(toolInputs.applyChanges),
 	}, (input) => run(() => applyChangesUseCase(c, input)))
 	server.registerTool('deploy_stage', {
@@ -198,7 +200,9 @@ function controlMcpServer(c: WorkspaceUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.deployStage),
 	}, (input) => run(() => deployStageUseCase(c, input)))
 	server.registerTool('get_deployment', {
-		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and the last lines of its build log.',
+		description: 'Read a deploy run of one of your workspaces: its status, the deployed commit and the last lines of its build log. '
+			+ 'A run whose access change waits for a person reports status awaiting_approval with the approval link and the change '
+			+ 'in plain language; you cannot approve it, and loosening access further only adds to what the person must approve.',
 		inputSchema: toolInput(toolInputs.getDeployment),
 	}, (input) => run(() => getDeploymentUseCase(c, input)))
 	server.registerTool('create_pull_request', {
