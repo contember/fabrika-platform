@@ -65,7 +65,7 @@ export interface VaultD1 {
 // WebCrypto's `BufferSource` wants an ArrayBuffer-backed view; `TextEncoder().encode` and friends are
 // typed `Uint8Array<ArrayBufferLike>` under the workers-types lib. Every helper here returns
 // `Uint8Array<ArrayBuffer>` (copied into a fresh ArrayBuffer) so crypto calls type-check without a cast
-// — same convention as src/repo-source.ts.
+// — same convention as src/github/triggers/push-event.ts.
 
 /** Copy any byte view into a fresh ArrayBuffer-backed `Uint8Array` (satisfies WebCrypto's BufferSource). */
 function bytes(view: Uint8Array | ArrayBuffer): Uint8Array<ArrayBuffer> {

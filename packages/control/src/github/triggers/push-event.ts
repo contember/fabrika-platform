@@ -1,6 +1,6 @@
 // GitHub push webhooks: HMAC verification against one connection's secret, payload decoding, and the
 // repository URL normalization both the webhook and the registry match on. Public repositories have no
-// webhook; their trigger is pulled by `src/repo-poll.ts`.
+// webhook; their trigger is pulled by `src/github/triggers/poll.ts`.
 
 import { z } from 'zod'
 

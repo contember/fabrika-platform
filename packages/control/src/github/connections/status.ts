@@ -6,9 +6,9 @@ import type {
 	GitHubSourceConnectionSetupPendingDto,
 	GitHubSourceConnectionWorkflowDto,
 } from '@fabrika/control-contract'
-import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from '../github-connection-store'
 import { requireHuman, type SourceConnectionWorkflowDeps } from './context'
 import { SourceConnectionWorkflowError } from './errors'
+import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
 
 export async function sourceConnectionList(
 	deps: SourceConnectionWorkflowDeps,

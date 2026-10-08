@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { createHarness, type Harness } from '../../__tests__/helpers/harness'
-import type { Env } from '../../env'
-import { githubAppCredentialSecretLabel } from '../../github-connection-store'
-import { Vault } from '../../vault'
+import { createHarness, type Harness } from '../../../__tests__/helpers/harness'
+import type { Env } from '../../../env'
+import { Vault } from '../../../vault'
 import { decodeGitHubAppCredential, encodeGitHubAppCredential, gitHubAppClientFactory, vaultGitHubCredentials } from '../credentials'
+import { githubAppCredentialSecretLabel } from '../secrets'
 
 function testKey(): string {
 	let binary = ''

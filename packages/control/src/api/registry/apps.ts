@@ -1,6 +1,6 @@
 import type { AppDto, AppOptionalFields, CreateAppRequest, ListResponse, OkResponse, UpdateAppRequest } from '@fabrika/control-contract'
 import { type AppRow, type NamespaceResourceClaimRow } from '../../db'
-import { normalizeRepoUrl, parseGitHubRepo } from '../../repo-source'
+import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-event'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'

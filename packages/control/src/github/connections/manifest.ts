@@ -1,9 +1,7 @@
 import type { StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse } from '@fabrika/control-contract'
 import { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from '@fabrika/github-app'
 import { uuidv7 } from '@fabrika/platform'
-import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, type GitHubSetupAttempt } from '../github-connection-store'
-import { vault } from '../services'
-import { encodeGitHubAppCredential } from '../source/credentials'
+import { vault } from '../../services'
 import { advanceWithDeadline, errorForPhase } from './configuration'
 import {
 	abortable,
@@ -17,7 +15,10 @@ import {
 	type SourceConnectionWorkflowDeps,
 	throwIfAborted,
 } from './context'
+import { encodeGitHubAppCredential } from './credentials'
 import { SourceConnectionWorkflowError } from './errors'
+import { type GitHubSetupAttempt } from './model'
+import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel } from './secrets'
 import { MANIFEST_PATH } from './status'
 
 const CALLBACK_PATH = '/api/source/github/callback'

@@ -83,8 +83,8 @@ adapters) · `src/services.ts` (how every dependency bag is built). Persistence 
 for Postgres).
 
 Three deploy TRIGGERS, all converging on the same `createRun` + enqueue: (1) the GitHub-App push
-webhook (`src/webhook.ts`, private repos, scoped to one connection); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
-poller (`src/repo-poll.ts`, wired in `scheduled`) for PUBLIC repos with no App install — it conditional-
+webhook (`src/github/triggers/webhook.ts`, private repos, scoped to one connection); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
+poller (`src/github/triggers/poll.ts`, wired in `scheduled`) for PUBLIC repos with no App install — it conditional-
 GETs the repo's commits/tags Atom feed (ETag) and enqueues on a new head sha (`runs.trigger='poll'`).
 
 An env's `trigger_ref` is an exact git ref OR a `*`-GLOB (`src/ref-match.ts` `refMatches`), most usefully
@@ -134,16 +134,18 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   a full origin mean the same thing; stating no origin is supported and means no claim.
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
-- **GitHub sources are one model on both clouds (`src/source/`, ADR-0029).** Each connection's App id and key
+- **GitHub sources are one model on both clouds (`src/github/`, ADR-0029).** `connections/` holds the connection store,
+  the management workflow and the vault-held credentials; `source/` the archive, transport and metadata; `triggers/`
+  the push webhook and the public-repo poll. Each connection's App id and key
   are a platform vault entry (`platform:github-source:<id>:app-credential`), written in the callback's
   checkpoint transaction and read per operation; nothing caches them, and no App key is a Worker secret or
   env var. Both compositions manage connections from the console (`createSourceConnections`) and mint
   repository tokens with `vaultGitHubCredentials`. A private operation names `(connectionId,
   installationId)` and never falls back to another connection. Origins are fixed; seams come only from code
-  (the local stack's `control-server.ts`, tests), never from env. `archive.ts`, `repository.ts`,
-  `transport.ts` are process-only; the Worker and the shared layer reach `connections.ts`, `credentials.ts`,
-  and `metadata.ts`. On Cloudflare `cloudflareGitHubSource` (`src/platform-cf.ts`) resolves the commit and
-  builds the runner's clone URL with a repository-scoped token as `x-access-token`. Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
+  (the local stack's `control-server.ts`, tests), never from env. `source/archive.ts`, `source/repository.ts`,
+  `source/transport.ts` are process-only; the Worker and the shared layer reach `connections/port.ts`,
+  `connections/credentials.ts`, and `source/metadata.ts`. On Cloudflare `cloudflareGitHubSource` (`src/platform-cf.ts`) resolves the commit and
+  builds the runner's clone URL with a repository-scoped token as `x-access-token`. Every gzip stage goes through `pullThrough` (`src/github/source/streams.ts`):
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
 - **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
   plaintext VALUE and seal it (or hand it to a provider that manages secrets itself); no API accepts a ref.
@@ -159,7 +161,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   There is no AAD on the envelope, so the row's own scope+label is the whole ownership record; do not add a
   second way to address a vault row.
 - **The platform's own environment names are refused on the SECRET surface too**, not only on `vars`:
-  `assertUnmanagedName` (`src/api/registry.ts`) guards `apps.secrets.put`, `vault.set` and `vault.rotate`, and
+  `assertUnmanagedName` (`src/api/registry/validation.ts`) guards `apps.secrets.put`, `vault.set` and `vault.rotate`, and
   `executeDeploy` re-checks the resolved secret names beside the variable names, before any provider effect.
   A Zerops managed-secret write reaches the live service at REQUEST time, so the API check is the only one
   that runs in time there.

@@ -4,7 +4,7 @@ import {
 	GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH,
 } from '@fabrika/control-contract'
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
-import { type PreparedVaultSecret, vaultRef } from '../vault'
+import { type PreparedVaultSecret, vaultRef } from '../../vault'
 import {
 	canonicalRepositories,
 	canTransition,

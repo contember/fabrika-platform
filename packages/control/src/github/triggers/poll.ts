@@ -1,6 +1,6 @@
 // Public-repo POLLING — the pull-based deploy trigger for apps with no GitHub App installation.
 //
-// A private app (a GitHub App install) gets a push webhook (src/webhook.ts). A PUBLIC app has no
+// A private app (a GitHub App install) gets a push webhook (src/github/triggers/webhook.ts). A PUBLIC app has no
 // installation and so no webhook, so fabrika instead POLLS the repo's commits/tags Atom feed on a cron
 // (wired in src/index.ts `scheduled`). For each poll-eligible (app, env) we conditional-GET the feed
 // (If-None-Match against the stored ETag), and when the subscribed ref's head sha changes we create a
@@ -8,14 +8,14 @@
 //
 // Decoupled from the Worker (takes repositories + fetch + queue + clock) so it's unit-testable with the
 // in-memory harness and a fake `fetch` — no GitHub, no Cloudflare, no cron. This is the post-v1 seam
-// the repo-source header describes; it is standalone (no webhook HMAC applies to a public feed) rather
+// the push-event header describes; it is standalone (no webhook HMAC applies to a public feed) rather
 // than a `RepoSource` implementation.
 
 import { type JobQueue, uuidv7 } from '@fabrika/platform'
-import { type ControlRepositories } from './db'
-import { refMatches } from './ref-match'
-import { normalizeRepoUrl } from './repo-source'
-import type { DeployJobMessage } from './run-lifecycle'
+import { type ControlRepositories } from '../../db'
+import { refMatches } from '../../ref-match'
+import type { DeployJobMessage } from '../../run-lifecycle'
+import { normalizeRepoUrl } from './push-event'
 
 /**
  * The slice of `fetch` the poller uses — just the call signature. Narrower than `typeof fetch` (which

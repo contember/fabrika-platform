@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../credentials'
+import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../../connections/credentials'
 import { SourceFailure } from '../failure'
 import {
 	descriptor,

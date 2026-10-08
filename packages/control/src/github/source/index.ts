@@ -1,13 +1,13 @@
-// Process-only: the archive rewrite hashes with `node:crypto`. The shared layer reaches only
-// `credentials.ts` and `connections.ts` (`entrypoint-isolation.test.ts`).
-import type { GitHubSourceCredentials } from './credentials'
+// Process-only: the archive rewrite hashes with `node:crypto`. The shared layer must not import this
+// file (`entrypoint-isolation.test.ts`).
+import type { GitHubSourceCredentials } from '../connections/credentials'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './metadata'
 import { type SourceDownloadFetch, TarballRepositorySource } from './repository'
 import { SourceTransport, type SourceUploadFetch } from './transport'
 import type { SourceDescriptorRule, SourceResolution, SourceResolveInput, SourceUploadInput, SourceUploadResult } from './types'
 
+export { encodeGitHubAppCredential, type GitHubAppCredential } from '../connections/credentials'
 export { type ArchiveSummary, createTarRewrite, type SourceBytes, type TarRewrite, type TarRewriteInput } from './archive'
-export { encodeGitHubAppCredential, type GitHubAppCredential } from './credentials'
 export { SourceFailure, type SourceFailureCode, type SourceFailureStage } from './failure'
 export type { GitHubMetadataFetch } from './metadata'
 export type { SourceDownloadFetch } from './repository'

@@ -19,7 +19,7 @@ keys in Control's vault. Nothing can deploy through them.
 
 An app bound to a connection takes the keyed path: `run-lifecycle` passes the binding,
 `provider-zerops/src/control.ts` calls the source port's `resolve` with `privateBinding`, and
-`packages/control/src/source/credentials.ts` mints a repository token through `GitHubAppClient`. The
+`packages/control/src/github/connections/credentials.ts` mints a repository token through `GitHubAppClient`. The
 only seam is `githubAppFetch` (`packages/control/src/zerops/provider.ts`), which
 `packages/local-stack/src/control-server.ts` answers with 404, and `compose.yaml` has no GitHub double.
 The synthetic App is not a real App, so the mint fails and the deploy fails with it.

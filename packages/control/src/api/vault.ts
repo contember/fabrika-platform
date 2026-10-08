@@ -12,7 +12,8 @@ import { providerEnvironment } from '../run-lifecycle'
 import { appSecretPurpose } from '../secret-resolver'
 import { parseVaultRef, type Vault, type VaultSecretPurpose } from '../vault'
 import { fail } from './domain'
-import { assertUnmanagedName, toAppSecretDto } from './registry'
+import { toAppSecretDto } from './registry/configuration'
+import { assertUnmanagedName } from './registry/validation'
 
 export interface VaultUseCaseContext {
 	readonly repositories: ControlRepositories

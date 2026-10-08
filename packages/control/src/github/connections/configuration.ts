@@ -1,13 +1,8 @@
-import {
-	type GitHubSetupAttempt,
-	type GitHubSetupErrorCode,
-	type GitHubSetupPhase,
-	type GitHubSourceConnection,
-	githubWebhookSecretLabel,
-} from '../github-connection-store'
-import { vault } from '../services'
-import type { SourceGitHubAppIdentity } from '../source/connections'
+import { vault } from '../../services'
 import { linkedDeadline, randomToken, type SourceConnectionWorkflowDeps } from './context'
+import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from './model'
+import type { SourceGitHubAppIdentity } from './port'
+import { githubWebhookSecretLabel } from './secrets'
 
 /** Bounds every request-driven run of GitHub App calls, so a stalled GitHub cannot hold a request open. */
 export const CONFIGURATION_DEADLINE_MS = 5 * 60_000

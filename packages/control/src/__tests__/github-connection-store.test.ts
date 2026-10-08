@@ -1,16 +1,10 @@
 import type { SqlDatabase, SqlQueryResult, SqlStatement } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import {
-	githubAppCredentialSecretLabel,
-	GitHubConnectionCasError,
-	GitHubConnectionStore,
-	GitHubConnectionWebhookSecretProvider,
-	githubManifestStateSecretLabel,
-	type GitHubSetupAttempt,
-	githubWebhookSecretLabel,
-	type PublishGitHubConnectionInput,
-} from '../github-connection-store'
-import { connectionDto, workflowDto } from '../source-connection/status'
+import { GitHubConnectionCasError, type GitHubSetupAttempt, type PublishGitHubConnectionInput } from '../github/connections/model'
+import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from '../github/connections/secrets'
+import { connectionDto, workflowDto } from '../github/connections/status'
+import { GitHubConnectionStore } from '../github/connections/store'
+import { GitHubConnectionWebhookSecretProvider } from '../github/connections/webhook-secret'
 import { Vault } from '../vault'
 import { createHarness, createHarnessThrough, type Harness, migrationsAfter, queryRows } from './helpers/harness'
 

@@ -1,7 +1,7 @@
 import type { GitHubAppIdentity, GitHubAppInstallation } from '@fabrika/github-app'
-import type { Vault } from '../vault'
+import type { Vault } from '../../vault'
+import { cancelled, SourceFailure, throwIfAborted } from '../source/failure'
 import { readGitHubAppCredential, type SourceGitHubClient, type SourceGitHubClientFactory } from './credentials'
-import { cancelled, SourceFailure, throwIfAborted } from './failure'
 
 export interface SourceGitHubAppIdentity {
 	readonly id: number

@@ -164,7 +164,7 @@ The detached runner/image precedes Control in an operator-owned rollout; see
 
 The Zerops installation starts at `packages/control/src/zerops/server.ts`.
 `zerops/provider.ts` composes `@fabrika/provider-zerops` with the Zerops access
-token, control's in-process GitHub source (`packages/control/src/source/`, App
+token, control's in-process GitHub source (`packages/control/src/github/source/`, App
 keys from the vault), and the namespace inputs. Deploy execution stays in the
 Bun process. Recorded app-version ids are reconciled through the provider
 capability after restarts: polled when the build was requested, deleted when it
@@ -175,7 +175,7 @@ state to Operations before releasing the run lease.
 
 No Zerops deploy uses `buildFromGit`: Zerops builds a revision-suffixed Git source from the default
 branch ([platform facts](zerops-platform.md)). Public and private GitHub repositories share one
-upload path, run in-process by control (`packages/control/src/source/`, ADR-0029): resolve the exact
+upload path, run in-process by control (`packages/control/src/github/source/`, ADR-0029): resolve the exact
 commit and the registered root `zerops.yaml` digest; create and record an application version; stream
 the repository tarball for that commit into the version's upload; call `build-and-deploy` with the
 validated, canonically rendered descriptor and selected setup. Namespace proxies use the same path
@@ -249,7 +249,7 @@ For local stream witnesses on Bun 1.3.14, consume the archive through a reader a
 `FileSink`. `Bun.write(path, new Response(customStream))` stalled even for a network-free 2 KiB
 stream; an upstream HTTP abort did not unblock that consumer after download had completed.
 A native fetch consumer did not exhibit that failure. Bun's compression streams also ignore
-backpressure, so the pipe pulls through explicitly (`packages/control/src/source/streams.ts`).
+backpressure, so the pipe pulls through explicitly (`packages/control/src/github/source/streams.ts`).
 
 The transport accepts only the measured `prg1` upload destination: HTTPS host
 `proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, empty userinfo, no explicit
@@ -258,7 +258,7 @@ exists only in memory for the live PUT; it is never persisted or logged.
 
 Resolve is bounded to four minutes and upload to 15 minutes; the PUT itself is bounded to ten minutes,
 and that bound covers the whole download-rewrite-upload pipe
-(`packages/control/src/source/transport.ts`). Caller cancellation is propagated through GitHub REST,
+(`packages/control/src/github/source/transport.ts`). Caller cancellation is propagated through GitHub REST,
 the tarball download, the rewrite and the upload.
 
 Validation happens while the PUT is in flight, so a rejected repository aborts the upload. The
@@ -291,7 +291,7 @@ unknown or duplicate query fields, bounds the GitHub response and redirects to a
 and private key in its encrypted platform vault, in the same transaction as the setup checkpoint. The
 setup state stores only nonsecret phases, hashes, verified identities and vault references.
 
-For every new connection, Control then (`packages/control/src/source-connection/`):
+For every new connection, Control then (`packages/control/src/github/connections/`):
 
 1. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
    `push` event with the vault key;

@@ -99,7 +99,18 @@ const packageOf = (specifier: string): string => specifier.split('/').slice(0, s
 const packagesOf = (graph: Graph): string[] => [...graph.externals].map(packageOf)
 
 /** The layer both entrypoints sit on — every shared module either one enters through. */
-const SHARED = ['app.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'control-rpc.ts', 'webhook.ts', 'repo-poll.ts']
+const SHARED = [
+	'app.ts',
+	'consumer.ts',
+	'cron.ts',
+	'services.ts',
+	'db.ts',
+	'env.ts',
+	'iam.ts',
+	'control-rpc.ts',
+	'github/triggers/webhook.ts',
+	'github/triggers/poll.ts',
+]
 
 describe('entrypoint isolation', () => {
 	test('the Worker entrypoint reaches no Bun/Node-only module', () => {
@@ -175,21 +186,21 @@ describe('entrypoint isolation', () => {
 	})
 
 	test('the Worker and the shared layer never reach the process-only source modules', () => {
-		const processOnly = ['source/archive.ts', 'source/repository.ts', 'source/transport.ts', 'source/index.ts']
+		const processOnly = ['github/source/archive.ts', 'github/source/repository.ts', 'github/source/transport.ts', 'github/source/index.ts']
 		for (const entry of ['index.ts', ...SHARED]) {
 			expect(`${entry} → ${walk(entry).files.filter((file) => processOnly.includes(file)).join(',')}`).toBe(`${entry} → `)
 		}
 		// Not vacuous: the shared workflows do reach the vault-backed connection port, and the process reaches the rest.
-		expect(walk('control-rpc.ts').files).toContain('source/connections.ts')
+		expect(walk('control-rpc.ts').files).toContain('github/connections/port.ts')
 		expect(walk('zerops/server.ts').files).toEqual(expect.arrayContaining(processOnly))
 		// The Worker resolves commits through the runtime-neutral metadata client and mints tokens from the vault.
 		expect(walk('index.ts').files).toEqual(
-			expect.arrayContaining(['source/metadata.ts', 'source/tree.ts', 'source/credentials.ts', 'source/connections.ts']),
+			expect.arrayContaining(['github/source/metadata.ts', 'github/source/tree.ts', 'github/connections/credentials.ts', 'github/connections/port.ts']),
 		)
 	})
 
-	test('no source module names a provider package', () => {
-		const sourceFiles = walk('zerops/server.ts').files.filter((file) => file.startsWith('source/'))
+	test('no GitHub module names a provider package', () => {
+		const sourceFiles = walk('zerops/server.ts').files.filter((file) => file.startsWith('github/'))
 		expect(sourceFiles.length).toBeGreaterThan(5)
 		for (const file of sourceFiles) {
 			const named = specifiersOf(readFileSync(resolve(SRC, file), 'utf8')).map(packageOf).filter((name) => PROVIDERS.has(name))

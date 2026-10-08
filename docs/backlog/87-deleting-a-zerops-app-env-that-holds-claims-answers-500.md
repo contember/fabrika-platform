@@ -53,7 +53,7 @@ foreign-key 500.
 ## Touch points
 
 - `packages/control/src/db.ts` — `deleteAppEnv`, `deleteApp`, `deleteNamespaceResourceClaimsForOwner`.
-- `packages/control/src/api/registry.ts` — the two delete use cases.
+- `packages/control/src/api/registry/{apps,registration}.ts` — the two delete use cases.
 - `packages/control/src/api/namespaces.ts` — a removal job if option 1.
 - `packages/control/CLAUDE.md` — the "namespace proxy FOLLOWS the registry" bullet.
 

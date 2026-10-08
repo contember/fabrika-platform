@@ -25,8 +25,8 @@ import {
 	type ZeropsSourcePort,
 } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
-import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, type SourceUploadFetch } from '../source'
-import { gitHubAppClientFactory, vaultGitHubCredentials } from '../source/credentials'
+import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
+import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, type SourceUploadFetch } from '../github/source'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]

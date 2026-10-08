@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
+import type { GitHubSourceCredentials } from '../connections/credentials'
 import { type ArchiveSummary, createTarRewrite, type SourceBytes } from './archive'
-import type { GitHubSourceCredentials } from './credentials'
 import { cancelled, SourceFailure, throwIfAborted } from './failure'
 import type { GitHubMetadataClient } from './metadata'
 import { pullThrough } from './streams'

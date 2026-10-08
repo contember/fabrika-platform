@@ -21,13 +21,9 @@ import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import type { Env } from '../env'
-import {
-	githubAppCredentialSecretLabel,
-	GitHubConnectionStore,
-	githubManifestStateSecretLabel,
-	githubWebhookSecretLabel,
-	type PublishGitHubConnectionInput,
-} from '../github-connection-store'
+import { type PublishGitHubConnectionInput } from '../github/connections/model'
+import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from '../github/connections/secrets'
+import { GitHubConnectionStore } from '../github/connections/store'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
 import { applyMigrations } from '../zerops/migrate'

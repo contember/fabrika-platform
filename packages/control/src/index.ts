@@ -3,12 +3,12 @@ import { controlApp } from './app'
 import { controlJobLogLine, runControlJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
+import { gitHubAppClientFactory } from './github/connections/credentials'
+import { createSourceConnections } from './github/connections/port'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
 import type { ControlJobMessage } from './run-lifecycle'
 import { locks, operationsReleaseDeps, vault } from './services'
-import { createSourceConnections } from './source/connections'
-import { gitHubAppClientFactory } from './source/credentials'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`

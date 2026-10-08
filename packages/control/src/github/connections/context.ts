@@ -1,11 +1,11 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { exchangeGitHubAppManifestCode, GitHubAppFetch } from '@fabrika/github-app'
-import { ACTIONS } from '../actions'
-import type { Env } from '../env'
-import { controlPublicOrigin } from '../iam'
-import { sameOrigin } from '../origin-guard'
-import type { SourceConnectionPort } from '../source/connections'
+import { ACTIONS } from '../../actions'
+import type { Env } from '../../env'
+import { controlPublicOrigin } from '../../iam'
+import { sameOrigin } from '../../origin-guard'
 import { SourceConnectionWorkflowError } from './errors'
+import type { SourceConnectionPort } from './port'
 
 export interface SourceConnectionWorkflowDeps {
 	readonly env: Env

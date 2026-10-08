@@ -1,4 +1,4 @@
-import type { SourceConnectionPort } from '../../source/connections'
+import type { SourceConnectionPort } from '../../github/connections/port'
 
 /** A connection port for request paths that never reach GitHub App administration. */
 export function unusedSourceConnection(provider: string): SourceConnectionPort {

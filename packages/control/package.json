@@ -25,9 +25,9 @@
 			"default": "./src/api/provider-envelope.ts"
 		},
 		"./github-connection-store": {
-			"bun": "./src/github-connection-store.ts",
-			"types": "./src/github-connection-store.ts",
-			"default": "./src/github-connection-store.ts"
+			"bun": "./src/github/connections/secrets.ts",
+			"types": "./src/github/connections/secrets.ts",
+			"default": "./src/github/connections/secrets.ts"
 		},
 		"./iam-admin": {
 			"bun": "./src/iam-admin.ts",
@@ -35,9 +35,9 @@
 			"default": "./src/iam-admin.ts"
 		},
 		"./repo-source": {
-			"bun": "./src/repo-source.ts",
-			"types": "./src/repo-source.ts",
-			"default": "./src/repo-source.ts"
+			"bun": "./src/github/triggers/push-event.ts",
+			"types": "./src/github/triggers/push-event.ts",
+			"default": "./src/github/triggers/push-event.ts"
 		},
 		"./lease": {
 			"bun": "./src/lease.ts",
@@ -50,9 +50,9 @@
 			"default": "./src/vault.ts"
 		},
 		"./source": {
-			"bun": "./src/source/index.ts",
-			"types": "./src/source/index.ts",
-			"default": "./src/source/index.ts"
+			"bun": "./src/github/source/index.ts",
+			"types": "./src/github/source/index.ts",
+			"default": "./src/github/source/index.ts"
 		},
 		"./zerops/runtime": {
 			"bun": "./src/zerops/runtime.ts",

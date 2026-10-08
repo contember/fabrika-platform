@@ -21,10 +21,10 @@ import { PostgresJobConsumer } from '@fabrika/platform-node'
 import { controlApp } from '../app'
 import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
+import type { SourceConnectionPort } from '../github/connections/port'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { locks, operationsReleaseDeps, repositories } from '../services'
-import type { SourceConnectionPort } from '../source/connections'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */

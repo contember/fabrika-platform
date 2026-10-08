@@ -7,7 +7,7 @@ import {
 	normalizeRepoUrl,
 	parseGitHubRepo,
 	verifyWebhookSignature,
-} from '../repo-source'
+} from '../github/triggers/push-event'
 import { signWebhook } from './helpers/harness'
 
 // Primitive-level unit tests for the control-owned webhook logic: HMAC-SHA256 verification, repo-URL

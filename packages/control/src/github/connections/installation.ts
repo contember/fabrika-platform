@@ -1,10 +1,11 @@
 import type { GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
-import { type GitHubSetupAttempt, type GitHubSetupPhase, githubWebhookSecretLabel } from '../github-connection-store'
-import { vault } from '../services'
-import type { SourceGitHubAppIdentity, SourceInstallationScope, SourceInstallationVerification } from '../source/connections'
+import { vault } from '../../services'
 import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, errorForPhase, matchesConnectionIdentity, webhookUrl } from './configuration'
 import { audit, linkedDeadline, requireHuman, requireSameOrigin, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
 import { reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
+import { type GitHubSetupAttempt, type GitHubSetupPhase } from './model'
+import type { SourceGitHubAppIdentity, SourceInstallationScope, SourceInstallationVerification } from './port'
+import { githubWebhookSecretLabel } from './secrets'
 import { connectionDto, splitRepository, workflowDto } from './status'
 
 export async function verifySourceInstallation(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {

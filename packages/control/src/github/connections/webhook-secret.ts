@@ -1,5 +1,5 @@
-import type { WebhookSecretProvider } from '../repo-source'
-import { type Vault } from '../vault'
+import { type Vault } from '../../vault'
+import type { WebhookSecretProvider } from '../triggers/push-event'
 import { githubWebhookSecretLabel } from './secrets'
 import type { GitHubConnectionStore } from './store'
 

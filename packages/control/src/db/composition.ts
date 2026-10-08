@@ -1,5 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
-import { GitHubConnectionStore } from '../github-connection-store'
+import { GitHubConnectionStore } from '../github/connections/store'
 import { BuilderConnectionRepository } from './builder-connections'
 import { OperationsCatalogRepository } from './operations-catalog'
 import { OperationsReleaseRepository } from './operations-releases'

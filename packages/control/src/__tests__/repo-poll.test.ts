@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { feedUrlFor, type FetchFn, parseLatestEntry, parseLatestTag, pollPublicRepos } from '../repo-poll'
+import { feedUrlFor, type FetchFn, parseLatestEntry, parseLatestTag, pollPublicRepos } from '../github/triggers/poll'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
 import { providerEnvironment } from './helpers/provider'

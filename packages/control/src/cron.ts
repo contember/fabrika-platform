@@ -9,11 +9,11 @@
 
 import { enqueueUnsettledNamespaces } from './api/namespaces'
 import type { Env } from './env'
+import { type FetchFn, pollPublicRepos, type PollSummary } from './github/triggers/poll'
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
 import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
 import { type ProviderReconcileSummary, sweepStaleRuns } from './provider-reconcile'
-import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
 import { locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */

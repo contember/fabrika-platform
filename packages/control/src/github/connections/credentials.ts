@@ -9,12 +9,12 @@ import {
 	type GitHubRepositoryTokenRequest,
 } from '@fabrika/github-app'
 import { z } from 'zod'
-import type { Env } from '../env'
-import { githubAppCredentialSecretLabel } from '../github-connection/secrets'
-import { vault as openVault } from '../services'
-import type { Vault } from '../vault'
-import { cancelled, SourceFailure } from './failure'
-import type { SourcePrivateBinding, SourceRepository } from './types'
+import type { Env } from '../../env'
+import { vault as openVault } from '../../services'
+import type { Vault } from '../../vault'
+import { cancelled, SourceFailure } from '../source/failure'
+import type { SourcePrivateBinding, SourceRepository } from '../source/types'
+import { githubAppCredentialSecretLabel } from './secrets'
 
 const MAX_APP_CREDENTIAL_BYTES = 72 * 1024
 const MAX_PRIVATE_KEY_LENGTH = 64 * 1024

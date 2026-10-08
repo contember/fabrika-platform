@@ -24,11 +24,11 @@ import { type RelayResult, type RunnerStatus, runnerStatusSchema, type VozkaRunn
 import { z } from 'zod'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
+import { gitHubAppClientFactory, vaultGitHubCredentials } from './github/connections/credentials'
+import { GitHubMetadataClient, type GitHubMetadataFetch } from './github/source/metadata'
+import type { SourceRepository } from './github/source/types'
 import { controlPublicOrigin } from './iam'
 import type { ControlJobMessage } from './run-lifecycle'
-import { gitHubAppClientFactory, vaultGitHubCredentials } from './source/credentials'
-import { GitHubMetadataClient, type GitHubMetadataFetch } from './source/metadata'
-import type { SourceRepository } from './source/types'
 
 /** The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills `this.env` with. */
 export interface WorkerBindings

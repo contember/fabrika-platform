@@ -5,14 +5,10 @@ import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import {
-	deleteAppEnvUseCase,
-	deleteAppUseCase,
-	putAppEnvUseCase,
-	registerAppUseCase,
-	type RegistryUseCaseContext,
-	updateAppUseCase,
-} from '../api/registry'
+import { deleteAppUseCase, updateAppUseCase } from '../api/registry/apps'
+import { type RegistryUseCaseContext } from '../api/registry/context'
+import { deleteAppEnvUseCase, putAppEnvUseCase } from '../api/registry/environments'
+import { registerAppUseCase } from '../api/registry/registration'
 import { normalizeRegistration } from '../api/registry/registration'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'

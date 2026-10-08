@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { ConnectionWebhookVerifier, normalizeRepoUrl } from '../repo-source'
+import { ConnectionWebhookVerifier, normalizeRepoUrl } from '../github/triggers/push-event'
+import { handleWebhook, type WebhookDeps } from '../github/triggers/webhook'
 import type { DeployJobMessage } from '../run-lifecycle'
-import { handleWebhook, type WebhookDeps } from '../webhook'
 import { createHarness, pushWebhookRequest, signWebhook } from './helpers/harness'
 import { providerEnvironment } from './helpers/provider'
 

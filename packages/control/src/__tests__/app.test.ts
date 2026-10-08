@@ -1,11 +1,10 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE, type GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
+import { GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
-import { projectSingletonSourceConnectionPage } from '../control-rpc'
 import type { Env } from '../env'
-import { githubWebhookSecretLabel } from '../github-connection-store'
+import { githubWebhookSecretLabel } from '../github/connections/secrets'
 import { Vault } from '../vault'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
 import { fakeControlProvider, TEST_PROVIDER_ID } from './helpers/provider'
@@ -246,28 +245,6 @@ describe('controlApp', () => {
 		const machine = await fetch(apiRequest('https://control.test/api/source/github/manifest/connection', service))
 		expect(machine.status).toBe(403)
 		expect(machine.headers.get('cache-control')).toBe('no-store')
-	})
-
-	test('projects the singleton connected state only on the first compatibility page', () => {
-		const connected = {
-			provider: 'zerops',
-			kind: 'github-app',
-			state: 'connected',
-			connectionId: 'connection-1',
-			app: {
-				id: 123,
-				slug: 'fabrika-test',
-				htmlUrl: 'https://github.com/apps/fabrika-test',
-				public: false,
-				owner: { login: 'Contember', type: 'Organization' },
-				permissions: { contents: 'read' },
-				events: ['push'],
-			},
-			installation: { id: 456, accountLogin: 'Contember', repositorySelection: 'all', verifiedRepositories: [] },
-		} satisfies GitHubSourceConnectionStatusDto
-
-		expect(projectSingletonSourceConnectionPage(connected, {})).toEqual({ items: [connected], nextCursor: null, workflow: null })
-		expect(projectSingletonSourceConnectionPage(connected, { cursor: 'later-page' })).toEqual({ items: [], nextCursor: null, workflow: null })
 	})
 
 	test('mounts scoped webhooks with their exact vault secret and no unscoped route', async () => {

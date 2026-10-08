@@ -1,32 +1,26 @@
 import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import type { Env } from '../env'
+import { readGitHubAppCredential } from '../github/connections/credentials'
+import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from '../github/connections/installation'
+import { manifestCallback, manifestHandoff, startSourceConnection } from '../github/connections/manifest'
 import {
-	githubAppCredentialSecretLabel,
-	GitHubConnectionStore,
 	type GitHubSetupAttempt,
 	type GitHubSourceConnection,
 	type GitHubSourceConnectionPage,
 	type GitHubSourceConnectionPageInput,
-} from '../github-connection-store'
-import {
-	manifestCallback,
-	manifestHandoff,
-	reconcileSourceConnection,
-	repairSourceConnection,
-	sourceConnectionList,
-	startSourceConnection,
-	verifySourceInstallation,
-} from '../source-connection'
+} from '../github/connections/model'
 import type {
 	SourceConnectionCredential,
 	SourceConnectionPort,
 	SourceGitHubAppIdentity,
 	SourceInstallationVerification,
 	SourceWebhookConfigurationInput,
-} from '../source/connections'
-import { readGitHubAppCredential } from '../source/credentials'
-import { SourceFailure } from '../source/failure'
+} from '../github/connections/port'
+import { githubAppCredentialSecretLabel } from '../github/connections/secrets'
+import { sourceConnectionList } from '../github/connections/status'
+import { GitHubConnectionStore } from '../github/connections/store'
+import { SourceFailure } from '../github/source/failure'
 import type { PreparedVaultSecret } from '../vault'
 import { Vault } from '../vault'
 import { createHarness } from './helpers/harness'

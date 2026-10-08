@@ -6,7 +6,8 @@ import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces
 import type { DeployQueue, LogReader } from './api/runs'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
-import { GitHubConnectionWebhookSecretProvider } from './github-connection-store'
+import { GitHubConnectionWebhookSecretProvider } from './github/connections/webhook-secret'
+import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
 import {
 	type OperationsCatalogSyncDeps,
 	type OperationsCatalogSyncSummary,
@@ -14,7 +15,6 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
-import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'

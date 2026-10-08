@@ -5,10 +5,7 @@ import {
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
 	type ControlRpcContract,
-	type GitHubSourceConnectionListInput,
 	githubSourceConnectionListInputSchema,
-	type GitHubSourceConnectionListResponse,
-	type GitHubSourceConnectionStatusDto,
 } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { z } from 'zod'
@@ -34,25 +31,18 @@ import {
 	removeNamespaceUseCase,
 } from './api/namespaces'
 import { providerEnvelopeSchema } from './api/provider-envelope'
+import { createAppUseCase, deleteAppUseCase, getAppUseCase, listAppsUseCase, updateAppUseCase } from './api/registry/apps'
 import {
-	APP_VAR_VALUE_MAX_LENGTH,
-	assertAppVarValue,
-	createAppUseCase,
-	deleteAppEnvUseCase,
 	deleteAppSecretUseCase,
-	deleteAppUseCase,
 	deleteAppVarUseCase,
-	getAppUseCase,
-	listAppEnvsUseCase,
 	listAppSecretsUseCase,
-	listAppsUseCase,
 	listAppVarsUseCase,
-	putAppEnvUseCase,
 	putAppVarUseCase,
-	registerAppUseCase,
-	type RegistryUseCaseContext,
-	updateAppUseCase,
-} from './api/registry'
+} from './api/registry/configuration'
+import { type RegistryUseCaseContext } from './api/registry/context'
+import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase } from './api/registry/environments'
+import { registerAppUseCase } from './api/registry/registration'
+import { APP_VAR_VALUE_MAX_LENGTH, assertAppVarValue } from './api/registry/validation'
 import {
 	cancelRunUseCase,
 	getRunLogUseCase,
@@ -70,17 +60,13 @@ import {
 	type VaultUseCaseContext,
 } from './api/vault'
 import type { Env } from './env'
+import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
+import { startSourceConnection } from './github/connections/manifest'
+import type { SourceConnectionPort } from './github/connections/port'
+import { sourceConnectionList } from './github/connections/status'
 import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
 import { buildControlRpcDeps } from './services'
-import {
-	reconcileSourceConnection,
-	repairSourceConnection,
-	sourceConnectionList,
-	startSourceConnection,
-	verifySourceInstallation,
-} from './source-connection'
-import type { SourceConnectionPort } from './source/connections'
 
 interface ControlRpcContext {
 	readonly env: Env
@@ -366,17 +352,6 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			...(deps.vault === undefined ? {} : { vault: deps.vault }),
 		}
 	}
-}
-
-/** Frozen compatibility helper for older direct callers; the RPC list uses keyed persistence. */
-export function projectSingletonSourceConnectionPage(
-	status: GitHubSourceConnectionStatusDto,
-	input: GitHubSourceConnectionListInput,
-): GitHubSourceConnectionListResponse {
-	if (status.state === 'connected') {
-		return { items: input.cursor === undefined ? [status] : [], nextCursor: null, workflow: null }
-	}
-	return { items: [], nextCursor: null, workflow: status }
 }
 
 function sourceConnectionContext(ctx: ControlRpcContext) {
