@@ -1,7 +1,7 @@
 // The fixture application: one handler per procedure of `contract.ts`.
 
 import { implement } from '@fabrika/app/implement'
-import { contract } from './contract'
+import { contract } from './fabrika.contract'
 import { noteDatabase, type NoteRow, notesStore } from './stores'
 
 export function notesApp(rows: Map<string, NoteRow>) {

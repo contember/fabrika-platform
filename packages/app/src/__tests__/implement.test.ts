@@ -7,7 +7,7 @@ import { implement, type Ref, requestCapabilities } from '@fabrika/app/implement
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
-import { contract } from './fixtures/implement/contract'
+import { contract } from './fixtures/implement/fabrika.contract'
 import { bootApp, environment, errorType, FRAMEWORK_ENV, grant, resultOf, send, type Sent, token, unreachableIam } from './fixtures/implement/harness'
 import { noteDatabase, type NoteRow, notesStore } from './fixtures/implement/stores'
 

@@ -20,8 +20,8 @@ const fixtures = join(import.meta.dir, 'fixtures', 'implement')
 function applicationFiles(runtime: EntryRuntime): Map<string, string> {
 	const read = (file: string) => readFileSync(join(fixtures, file), 'utf8')
 	return new Map([
-		[CONTRACT_FILE, read('contract.ts')],
-		['src/app.ts', `${read('app.ts').replace("from './contract'", "from '../fabrika.contract'")}\nexport default notesApp(new Map())\n`],
+		[CONTRACT_FILE, read('fabrika.contract.ts')],
+		['src/app.ts', `${read('app.ts').replace("from './fabrika.contract'", "from '../fabrika.contract'")}\nexport default notesApp(new Map())\n`],
 		['src/stores.ts', read('stores.ts')],
 		[GENERATED_ENTRY_FILE, generatedEntry(runtime)],
 	])

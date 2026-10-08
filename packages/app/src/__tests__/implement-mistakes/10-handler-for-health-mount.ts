@@ -1,5 +1,5 @@
 import { implement } from '@fabrika/app/implement'
-import { contract } from '../fixtures/implement/contract'
+import { contract } from '../fixtures/implement/fabrika.contract'
 import { noteDatabase, type NoteRow, notesStore } from '../fixtures/implement/stores'
 
 const rows = new Map<string, NoteRow>()

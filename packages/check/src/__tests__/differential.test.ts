@@ -8,6 +8,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
+import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
+import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource } from '../contract'
@@ -63,6 +65,12 @@ const fixtures: readonly Fixture[] = [
 		root: join(import.meta.dir, 'fixtures', 'reader-forms'),
 		evaluated: readerFormsContract,
 		tables: READER_FORMS_TABLES,
+	},
+	{
+		name: '@fabrika/app implement',
+		root: join(APP_TESTS, 'fixtures', 'implement'),
+		evaluated: implementContract,
+		tables: { notes: NOTE_TABLE },
 	},
 ]
 
