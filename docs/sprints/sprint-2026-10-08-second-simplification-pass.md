@@ -411,3 +411,6 @@ whenever the package set changes.
 - WU2.2 keeps `IamRpc.issueKey`: `fabrika control key issue` bootstraps machine keys through `/rpc/issueKey`.
 - WU2.1 review: the release projection hash no longer matches rows stored before the change (a replayed revision would answer 409). Accepted under D2; WU6.1 and the reinstall reset the data.
 - Left for WU5.1: `projectSingletonSourceConnectionPage` in `control-rpc.ts` is test-only.
+- Wave 3 → `e314b93` (WU3.2), `fb4e2cb` (WU3.1, proxy-contract only). Gates: typecheck, `bun run test` with Postgres 3954 + 317 + 180 pass / 0 fail, lint, format, `gen:check`, `release:validate` (21 public packages), `release:pack` + `smoke`, `local:reset && local:smoke`, `test:browser` 10 pass.
+- WU3.1: `@fabrika/email` stays a package — ADR-0019 and backlog 46 plan Operations alert email as its second consumer.
+- WU3.2: ref grammar is now GitHub's (bare names follow git's resolution order, short SHAs resolve); `GET /commits/refs%2Fheads%2F…` and an annotated tag were checked against live GitHub. `GitHubAppConfig.apiBaseUrl` now only affects token minting; WU4.1 removes that path.
