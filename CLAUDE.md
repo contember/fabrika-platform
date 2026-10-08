@@ -74,6 +74,7 @@ packages/
   github-app                      # the shared GitHub App client
   proxy-core proxy                # the auth enforcement decision and its `/manifest` wire contract · its Caddy deployment
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
+  check                           # the application checker (`fabrika-check`), for applications, not this repo
 examples/app examples/zerops-app  # a worked app per provider
 tests/browser                     # opice end-to-end suites against the local stack
 ```
@@ -147,7 +148,7 @@ contract note (`*-contract`), the substantial ones are:
 - `provider-<cloud>/src/installation/` — platform installation, each generating the operator's own
   sidecar repository over the shared `packages/installation-init/` · `packages/platform-artifacts/` —
   the private codegen behind the Zerops installation's generated files · `packages/cli/` — command
-  routing and provider inference.
+  routing and provider inference · `packages/check/` — the application checker and its rules.
 - `packages/proxy-core/` — the enforcement decision, public and runtime-neutral · `packages/proxy/` —
   its Caddy deployment, private because it is an artifact · `packages/operations/` —
   the Operations kernel · `packages/dashboard/` — the console SPA for all three planes.
