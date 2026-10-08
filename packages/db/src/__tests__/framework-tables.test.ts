@@ -60,10 +60,16 @@ const W1 = { type: 'workspace', value: 'w1' }
 
 describe('the inbox check, before anything is bound', () => {
 	test('names a form without an inbox and a field that is not a column', () => {
-		const unbound = frameworkTablesOf(connected(tables, { database: Database.fromDialect(new RecordingDialect()), capabilities: new TestAuthority('x') }).database)
+		const unbound = frameworkTablesOf(
+			connected(tables, { database: Database.fromDialect(new RecordingDialect()), capabilities: new TestAuthority('x') }).database,
+		)
 		expect(unbound.inboxProblems('contact', ['id', 'email', 'body'])).toEqual([])
-		expect(unbound.inboxProblems('contact', ['email', 'phone'])).toEqual(["the input field 'phone' of 'contact' is not a column of its inbox contact_messages"])
-		expect(unbound.inboxProblems('feedback', [])).toEqual(["no table in src/db/tables.ts is the inbox of 'feedback' (scope: { inbox: 'feedback', read })"])
+		expect(unbound.inboxProblems('contact', ['email', 'phone'])).toEqual([
+			"the input field 'phone' of 'contact' is not a column of its inbox contact_messages",
+		])
+		expect(unbound.inboxProblems('feedback', [])).toEqual([
+			"no table in src/db/tables.ts is the inbox of 'feedback' (scope: { inbox: 'feedback', read })",
+		])
 	})
 
 	test('refuses a value that is not one of scoped(tables)', () => {
@@ -98,8 +104,24 @@ describe.skipIf(!hasPostgres)('the framework tables on Postgres', () => {
 	})
 
 	test('a delivery id is recorded once per binding, concurrent copies included, and can be forgotten', async () => {
-		await framework.webhooks.createBinding({ id: 'b2', webhook: 'github', scope: W1, account: 'repository:7', secret: 's', createdBy: 'u', createdAt: 1 })
-		await framework.webhooks.createBinding({ id: 'b3', webhook: 'github', scope: W1, account: 'repository:7', secret: 's', createdBy: 'u', createdAt: 1 })
+		await framework.webhooks.createBinding({
+			id: 'b2',
+			webhook: 'github',
+			scope: W1,
+			account: 'repository:7',
+			secret: 's',
+			createdBy: 'u',
+			createdAt: 1,
+		})
+		await framework.webhooks.createBinding({
+			id: 'b3',
+			webhook: 'github',
+			scope: W1,
+			account: 'repository:7',
+			secret: 's',
+			createdBy: 'u',
+			createdAt: 1,
+		})
 		const copies = await Promise.all([1, 2, 3, 4].map(() => framework.webhooks.recordDelivery('b2', 'd1', 10)))
 		expect(copies.filter((recorded) => recorded)).toHaveLength(1)
 		expect(await framework.webhooks.recordDelivery('b3', 'd1', 10)).toBe(true)
