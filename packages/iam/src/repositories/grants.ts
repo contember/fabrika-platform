@@ -1,4 +1,4 @@
-import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { firstRow, unixNow } from './sql'
 
 export interface GrantRow {
@@ -17,6 +17,17 @@ export interface GrantRow {
 	granted_by: string | null
 	expires_at: number | null
 	created_at: number
+}
+
+export interface CreateGrantInput {
+	principalId: string
+	app?: string | null
+	roleKey?: string | null
+	permissions?: string[] | null
+	scopeType?: string | null
+	scopeValue?: string | null
+	grantedBy?: string | null
+	expiresAt?: number | null
 }
 
 export class GrantRepository {
@@ -83,34 +94,38 @@ export class GrantRepository {
 	 * DB CHECK rejects both/neither. `scopeType`/`scopeValue` are both-or-neither (both
 	 * null = global). The handler validates which is set; this layer just persists it.
 	 */
-	async createGrant(input: {
-		principalId: string
-		app?: string | null
-		roleKey?: string | null
-		permissions?: string[] | null
-		scopeType?: string | null
-		scopeValue?: string | null
-		grantedBy?: string | null
-		expiresAt?: number | null
-	}): Promise<GrantRow> {
-		const id = uuidv7()
-		return firstRow<GrantRow>(
-			this.db
-				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
-				.bind(
-					id,
-					input.principalId,
-					input.app ?? null,
-					input.roleKey ?? null,
-					input.permissions == null ? null : JSON.stringify(input.permissions),
-					input.scopeType ?? null,
-					input.scopeValue ?? null,
-					input.grantedBy ?? null,
-					input.expiresAt ?? null,
-					unixNow(),
-				),
-		)
+	async createGrant(input: CreateGrantInput): Promise<GrantRow> {
+		return firstRow<GrantRow>(this.insertGrant(input, ''))
+	}
+
+	/**
+	 * Create a ROLE grant, or answer null when the principal already holds it. The conflict target is
+	 * the one unique index this grant falls under (`idx_grants_uq_scoped` / `idx_grants_uq_global`), so
+	 * the statement itself decides on both engines and any other failure still throws.
+	 */
+	async createRoleGrantUnlessHeld(input: CreateGrantInput & { roleKey: string; permissions?: null }): Promise<GrantRow | null> {
+		const target = input.scopeValue == null
+			? `(principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL`
+			: `(principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL`
+		return this.insertGrant(input, `ON CONFLICT ${target} DO NOTHING`).first<GrantRow>()
+	}
+
+	private insertGrant(input: CreateGrantInput, onConflict: string): SqlStatement {
+		return this.db
+			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${onConflict} RETURNING *`)
+			.bind(
+				uuidv7(),
+				input.principalId,
+				input.app ?? null,
+				input.roleKey ?? null,
+				input.permissions == null ? null : JSON.stringify(input.permissions),
+				input.scopeType ?? null,
+				input.scopeValue ?? null,
+				input.grantedBy ?? null,
+				input.expiresAt ?? null,
+				unixNow(),
+			)
 	}
 
 	async deleteGrant(id: string): Promise<boolean> {

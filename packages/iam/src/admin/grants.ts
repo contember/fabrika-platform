@@ -24,23 +24,19 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
-	const candidate = { principalId, app, roleKey: roleOrInline.roleKey, scopeType: scope.scopeType, scopeValue: scope.scopeValue }
+	const values = { principalId, app, scopeType: scope.scopeType, scopeValue: scope.scopeValue, grantedBy: c.admin.id, expiresAt }
+	const roleKey = roleOrInline.roleKey
 	let grant: GrantRow
-	try {
-		grant = await c.services.repositories.grants.createGrant({
-			...candidate,
-			permissions: roleOrInline.permissions,
-			grantedBy: c.admin.id,
-			expiresAt,
-		})
-	} catch (err) {
-		// The unique indexes are the arbiter, so a concurrent duplicate lands here too; the error itself
-		// differs per engine, so the conflict is recognized by the row it collided with.
-		const existing = await findHeldRoleGrant(c, candidate).catch(() => undefined)
-		if (existing === undefined) {
-			throw err
+	if (roleKey === null) {
+		grant = await c.services.repositories.grants.createGrant({ ...values, permissions: roleOrInline.permissions })
+	} else {
+		const created = await c.services.repositories.grants.createRoleGrantUnlessHeld({ ...values, roleKey })
+		if (created === null) {
+			const held = await findHeldRoleGrant(c, { ...values, roleKey }).catch(() => undefined)
+			const naming = held === undefined ? '' : `: ${held.id}`
+			return fail(409, `principal ${principalId} already holds this grant${naming}`)
 		}
-		return fail(409, `principal ${principalId} already holds this grant: ${existing.id}`)
+		grant = created
 	}
 	await adminAudit(c, {
 		action: 'iam.grant.create',
@@ -80,17 +76,11 @@ export async function deleteGrantUseCase(c: AdminContext, input: { id: string })
 	return { ok: true }
 }
 
-/**
- * The stored grant a role grant would duplicate. Mirrors `idx_grants_uq_scoped` / `idx_grants_uq_global`:
- * only role grants are unique, and expiry is not part of the key.
- */
+/** The held grant a refused role grant duplicates, to name it in the 409; it may be gone by the time this reads. */
 async function findHeldRoleGrant(
 	c: AdminContext,
-	candidate: { principalId: string; app: string | null; roleKey: string | null; scopeType: string | null; scopeValue: string | null },
+	candidate: { principalId: string; app: string | null; roleKey: string; scopeType: string | null; scopeValue: string | null },
 ): Promise<GrantRow | undefined> {
-	if (candidate.roleKey === null) {
-		return undefined
-	}
 	const held = await c.services.repositories.grants.listGrants(candidate.principalId)
 	return held.find((row) =>
 		row.role_key === candidate.roleKey

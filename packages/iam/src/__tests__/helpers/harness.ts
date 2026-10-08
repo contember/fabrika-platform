@@ -232,6 +232,26 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 }
 
 /** Stand up a fresh in-memory DB + helpers. Call once per test for isolation. */
+/** `Harness.adminToken` over any repositories — so a test can drive the admin surface on Postgres too. */
+export async function adminTokenFor(repositories: IamRepositories, principalId: string, options: AdminTokenOptions = {}): Promise<string> {
+	const principal = await repositories.principals.getPrincipalById(principalId)
+	if (principal === null) {
+		throw new Error(`adminToken: no principal ${principalId}`)
+	}
+	const issuedAt = Math.floor(Date.now() / 1000)
+	const signer = await getSigner(TEST_SIGNING_ENV)
+	return signer.sign(buildAccessClaims({
+		iss: options.issuer ?? DEFAULT_ISSUER,
+		app: options.app ?? CONSOLE_APP,
+		subject: principal.id,
+		type: principal.type,
+		label: principal.label,
+		permissions: [],
+		issuedAt,
+		expiresAt: issuedAt + 300,
+	}))
+}
+
 export function createHarness(): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
@@ -255,23 +275,8 @@ export function createHarness(): Harness {
 		return token
 	}
 
-	async function adminToken(principalId: string, options: AdminTokenOptions = {}): Promise<string> {
-		const principal = await repositories.principals.getPrincipalById(principalId)
-		if (principal === null) {
-			throw new Error(`adminToken: no principal ${principalId}`)
-		}
-		const issuedAt = Math.floor(Date.now() / 1000)
-		const signer = await getSigner(TEST_SIGNING_ENV)
-		return signer.sign(buildAccessClaims({
-			iss: options.issuer ?? DEFAULT_ISSUER,
-			app: options.app ?? CONSOLE_APP,
-			subject: principal.id,
-			type: principal.type,
-			label: principal.label,
-			permissions: [],
-			issuedAt,
-			expiresAt: issuedAt + 300,
-		}))
+	function adminToken(principalId: string, options: AdminTokenOptions = {}): Promise<string> {
+		return adminTokenFor(repositories, principalId, options)
 	}
 
 	return { sqlite, repositories, signSession, adminToken, makeServices }

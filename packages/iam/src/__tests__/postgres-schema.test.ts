@@ -197,6 +197,12 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 		await db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'globex' })
 		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'acme' })).rejects.toThrow()
 
+		// The conflict-target insert infers the same partial indexes and answers null instead of throwing.
+		expect(await db.grants.createRoleGrantUnlessHeld({ principalId: p.id, roleKey: 'editor' })).toBeNull()
+		expect(await db.grants.createRoleGrantUnlessHeld({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'acme' })).toBeNull()
+		expect((await db.grants.createRoleGrantUnlessHeld({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'initech' }))?.scope_value)
+			.toBe('initech')
+
 		// Inline grants are deliberately unconstrained — each is its own attachment.
 		await db.grants.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
 		await db.grants.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
