@@ -27,8 +27,10 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those of each directory of
   such a module. For an import without an extension, `files` holds every candidate that
   exists, so the reader sees two of them. The reader cannot tell a missing file from an absent one, so the caller
-  (Control, B6) supplies them all; nothing else is read. It throws `ContractSourceError` (findings with file, line, column and allowed form) for a form
-  it refuses, and `ContractError` with the problems `compileContract` reports for a contract that does not compile.
+  (Control, B6) supplies them all; nothing else is read. `contractReaderInputs(files, exists)` names them: given the
+  paths that exist at a commit, it answers the ones still missing from `files`; the caller reads them and asks again
+  until the answer is empty. `CHECKER_VERSION` is this package's version, which Control records in a snapshot. The
+  reader throws `ContractSourceError` (findings with file, line, column and allowed form) for a form it refuses, and `ContractError` with the problems `compileContract` reports for a contract that does not compile.
   `readTablesSource` reads `src/db/tables.ts` and the modules it imports (the generated `src/db/schema.generated.ts`)
   under the same literal rule, and parses the two arguments of `defineTables` with `@fabrika/db/tables`' `readTables`,
   the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
@@ -45,6 +47,7 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `trust.ts`             | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
 | `jsonc.ts`             | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
 | `toml.ts`              | The TOML subset `bunfig.toml` is read in, keys decoded as Bun decodes them; anything else is refused.  |
+| `inputs.ts`            | `contractReaderInputs`: which files of a commit the reader needs, round by round.                      |
 | `limits.ts`            | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
 | `finding.ts`           | The rule ids, the `Finding` shape and its one-line format.                                             |
 | `rules/literal.ts`     | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
@@ -234,7 +237,8 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   `buildArtifact`) does every check and default. A change to the kit's builders (`BUILDER_FIELDS`, a new option) is
   a change to `reader/surface.ts`; `differential.test.ts` fails when they drift.
 - **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
-  `finding.ts`, `trust.ts`, `jsonc.ts`, `toml.ts`, `limits.ts` and `rules/literal.ts` import no `node:*`, `bun` or file API. A Worker bundle of the reader measured
+  `finding.ts`, `trust.ts`, `jsonc.ts`, `toml.ts`, `limits.ts`, `inputs.ts`, `version.ts` and `rules/literal.ts` import no
+  `node:*`, `bun` or file API. A Worker bundle of the reader measured
   638 KiB, 153 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes
   contract in workerd.
 - **Read nothing outside the checked set.** `node_modules`, `dist` and dot-directories are skipped, and symbolic

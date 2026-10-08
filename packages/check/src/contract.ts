@@ -5,7 +5,7 @@
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
 import type { TablePolicies } from '@fabrika/db/tables'
-import { child, children, nodeDepth, type ParsedModule, parseModule, staticString, utf8Bytes } from './ast'
+import { importedSpecifiers, nodeDepth, type ParsedModule, parseModule, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
 import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_FILE } from './layout'
@@ -19,7 +19,10 @@ import { checkTrustedResolution } from './trust'
 
 export { ContractError } from '@fabrika/app/contract'
 export { type Finding, formatFinding } from './finding'
+export { contractReaderInputs } from './inputs'
+export { CONTRACT_FILE, MIGRATIONS_DIR, TABLES_FILE } from './layout'
 export { CONTRACT_LIMITS } from './limits'
+export { CHECKER_VERSION } from './version'
 
 /** Every form the reader refuses, each with its file, line, column and the allowed form. */
 export class ContractSourceError extends Error {
@@ -203,18 +206,6 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		}
 	}
 	return findings.length > 0 ? { ok: false, findings } : { ok: true, graph: new ModuleGraph(modules) }
-}
-
-/** The sources of a module's import and re-export declarations; `rules/literal.ts` decides which of them are allowed. */
-function importedSpecifiers(module: ParsedModule): string[] {
-	const specifiers: string[] = []
-	for (const statement of children(module.program, 'body')) {
-		const source = statement === null ? undefined : staticString(child(statement, 'source'))
-		if (source !== undefined && statement?.['importKind'] !== 'type' && statement?.['exportKind'] !== 'type') {
-			specifiers.push(source)
-		}
-	}
-	return specifiers
 }
 
 function missingFile(file: string): Finding {

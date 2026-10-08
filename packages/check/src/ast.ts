@@ -248,3 +248,15 @@ export const parseModule = (file: string, text: string): ParseResult => {
 		return { ok: false, message, position: syntaxErrorPosition(error) }
 	}
 }
+
+/** The sources of a module's import and re-export declarations; `rules/literal.ts` decides which of them are allowed. */
+export const importedSpecifiers = (module: ParsedModule): string[] => {
+	const specifiers: string[] = []
+	for (const statement of children(module.program, 'body')) {
+		const source = statement === null ? undefined : staticString(child(statement, 'source'))
+		if (source !== undefined && statement?.['importKind'] !== 'type' && statement?.['exportKind'] !== 'type') {
+			specifiers.push(source)
+		}
+	}
+	return specifiers
+}
