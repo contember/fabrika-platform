@@ -86,7 +86,7 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 			},
 		})
 	}
-	const apply = (db: SqlDatabase, migrations: readonly PostgresMigration[] = read()): Promise<string[]> =>
+	const apply = async (db: SqlDatabase, migrations: readonly PostgresMigration[] = read()): Promise<string[]> =>
 		applyPostgresMigrations(db, plan(migrations))
 	return { schema, read, plan, apply }
 }

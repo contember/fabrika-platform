@@ -2,11 +2,14 @@ import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { refusedStatement } from './migration-sql'
 
 const IDENTIFIER = /^[a-z][a-z0-9_]*$/
 const BUNDLE_NAME = /^[a-z][a-z0-9-]*$/
 const MIGRATION_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.sql$/
 const CHECKSUM = /^[0-9a-f]{64}$/
+/** Raised in the migration's own transaction when the file ended it or changed a runner-owned setting. */
+const GUARD_FAILURE = 'fabrika-migration-guard'
 const PLATFORM_MIGRATIONS_DIR = join(import.meta.dir, '..', 'migrations')
 
 export interface PostgresMigration {
@@ -158,10 +161,17 @@ export async function applyPostgresMigrations(
 				try {
 					await db.batch([
 						...applicationSettings(db, plan.application),
+						db.prepare(GUARD_MARK),
 						db.prepare(migration.sql),
+						db.prepare(guardCheck(plan.application)),
 						ledgerInsert(db, plan, bundle.name, migration, (options.now ?? unixNow)()),
 					])
 				} catch (error) {
+					if (error instanceof Error && error.message === GUARD_FAILURE) {
+						throw new PostgresMigrationError(
+							`Postgres migration ${identity} ended the runner's transaction or changed its lock_timeout, statement_timeout or search_path`,
+						)
+					}
 					throw new PostgresMigrationError(`Postgres migration ${identity} failed`, { cause: error })
 				}
 				applied.set(identity, undefined)
@@ -195,6 +205,12 @@ function validateBundle(bundle: PostgresMigrationBundle): void {
 		validateMigrationName(migration.name)
 		if (migration.sql.trim() === '') throw new Error(`Postgres migration ${bundle.name}/${migration.name} is empty`)
 		if (names.has(migration.name)) throw new Error(`Duplicate Postgres migration ${bundle.name}/${migration.name}`)
+		const refused = refusedStatement(migration.sql)
+		if (refused !== undefined) {
+			throw new PostgresMigrationError(
+				`Postgres migration ${bundle.name}/${migration.name} line ${refused.line}: ${refused.statement} is not allowed; the runner owns the transaction and its settings`,
+			)
+		}
 		if (previous !== '' && migration.name.localeCompare(previous) < 0) {
 			throw new Error(`Postgres migration bundle ${bundle.name} is not ordered by filename`)
 		}
@@ -296,6 +312,23 @@ function verifyChecksums(bundles: readonly PostgresMigrationBundle[], applied: R
 /** SHA-256 of the file's text, hex. */
 export function migrationChecksum(sql: string): string {
 	return createHash('sha256').update(sql, 'utf8').digest('hex')
+}
+
+/** Remembers the transaction in a transaction-local setting, which a COMMIT or ROLLBACK in the file discards. */
+const GUARD_MARK = "SELECT set_config('fabrika.migration_xact', txid_current()::text, true)"
+
+/**
+ * Fails the transaction when the file ended it or loosened a runner-owned setting. The lexical refusal runs first;
+ * this also catches `set_config()` and anything the tokenizer cannot see. `pg_settings.setting` is in milliseconds.
+ */
+function guardCheck(application: PostgresApplicationMigrationSettings | undefined): string {
+	const settings = application === undefined ? [] : [
+		`(SELECT setting FROM pg_settings WHERE name = 'lock_timeout') <> '${application.lockTimeoutMs}'`,
+		`(SELECT setting FROM pg_settings WHERE name = 'statement_timeout') <> '${application.statementTimeoutMs}'`,
+		`current_setting('search_path') <> '${application.schema}'`,
+	]
+	const conditions = [`current_setting('fabrika.migration_xact', true) IS DISTINCT FROM txid_current()::text`, ...settings]
+	return `DO $guard$ BEGIN IF ${conditions.join(' OR ')} THEN RAISE EXCEPTION '${GUARD_FAILURE}'; END IF; END $guard$`
 }
 
 function applicationSettings(db: SqlDatabase, application: PostgresApplicationMigrationSettings | undefined): SqlStatement[] {

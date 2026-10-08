@@ -252,6 +252,71 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 		}
 	})
 
+	test('a file that would end the transaction or change its settings is refused before any SQL runs', async () => {
+		const { migrations, db } = application()
+		for (
+			const [sql, refusal] of [
+				['CREATE TABLE marker (id text); ROLLBACK', 'line 1: ROLLBACK is not allowed'],
+				['CREATE TABLE marker (id text);\nCOMMIT;\nSELECT * FROM missing_table', 'line 2: COMMIT is not allowed'],
+				['SET LOCAL statement_timeout = 0; SELECT pg_sleep(0.2)', 'line 1: SET is not allowed'],
+			] as const
+		) {
+			const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
+			expect(failure.message).toContain(`Postgres migration app/20261008120000_init.sql ${refusal}`)
+		}
+		const schema = await db.prepare(`SELECT to_regnamespace('${migrations.schema}') AS schema`).first<{ schema: string | null }>()
+		expect(schema?.schema).toBeNull()
+	})
+
+	test('a runner-owned setting changed through set_config fails the migration and rolls it back', async () => {
+		for (
+			const sql of [
+				"select set_config('statement_timeout', '0', true)",
+				"select set_config('lock_timeout', '0', true)",
+				"select set_config('search_path', 'public', true)",
+				"select set_config('fabrika.migration_xact', '0', true)",
+			]
+		) {
+			const { migrations, db } = application()
+			const failure = await failureOf(
+				migrations.apply(db, [migration('20261008120000_init.sql', `CREATE TABLE marker (id text); ${sql}`)]),
+			)
+			expect(failure.message).toBe(
+				"Postgres migration app/20261008120000_init.sql ended the runner's transaction or changed its lock_timeout, statement_timeout or search_path",
+			)
+			const marker = await db.prepare(`SELECT to_regclass('${migrations.schema}.marker') AS relation`).first<{ relation: string | null }>()
+			expect(marker?.relation).toBeNull()
+			const { results } = await db.prepare(`SELECT name FROM ${migrations.schema}.fabrika_migrations`).all()
+			expect(results).toEqual([])
+		}
+	})
+
+	test('keywords inside strings, comments and dollar-quoted bodies are applied', async () => {
+		const { migrations, db } = application()
+		const sql = [
+			'-- COMMIT; ROLLBACK;',
+			'/* SET statement_timeout = 0; /* nested */ */',
+			'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT);',
+			"INSERT INTO notes VALUES ('n1', 'COMMIT; SET search_path TO public');",
+			'CREATE FUNCTION note_count() RETURNS bigint LANGUAGE plpgsql AS $body$ BEGIN RETURN (SELECT count(*) FROM notes); END; $body$;',
+			'DO $$ BEGIN PERFORM 1; END $$;',
+		].join('\n')
+		expect(await migrations.apply(db, [migration('20261008120000_init.sql', sql)])).toEqual(['app/20261008120000_init.sql'])
+		const row = await db.prepare(`SELECT body FROM ${migrations.schema}.notes`).first<{ body: string }>()
+		expect(row?.body).toBe('COMMIT; SET search_path TO public')
+	})
+
+	test('a COMMIT inside a DO block is refused by Postgres inside the runner transaction', async () => {
+		const { migrations, db } = application()
+		const failure = await failureOf(
+			migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE marker (id text); DO $$ BEGIN COMMIT; END $$')]),
+		)
+		expect(failure.message).toBe('Postgres migration app/20261008120000_init.sql failed')
+		expect(sqlStateOf(failure)).toBe('2D000')
+		const marker = await db.prepare(`SELECT to_regclass('${migrations.schema}.marker') AS relation`).first<{ relation: string | null }>()
+		expect(marker?.relation).toBeNull()
+	})
+
 	test('a service ledger keeps its shape and records no checksum', async () => {
 		const schema = `service_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
 		schemas.push(schema)
