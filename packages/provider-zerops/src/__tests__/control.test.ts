@@ -453,22 +453,33 @@ describe('Zerops ControlProvider registration', () => {
 		expect(await control.deploy({ ...deployInput(recorded), environment: prepared.environment })).toEqual({ state: 'succeeded' })
 	})
 
-	test('records the buckets its collision-refusing import created as the provenance marker of the deploy service', async () => {
+	test('persists the buckets its collision-refusing import created, and the first deploy writes them into the marker', async () => {
 		const withBucket: ZeropsAppConfig = {
 			...config,
-			target: { ...config.target, services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }, { hostname: 'files', type: 'object-storage' }] },
+			target: {
+				...config.target,
+				deployService: 'notes',
+				services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }, { hostname: 'files', type: 'object-storage' }],
+			},
+		}
+		const artifact = {
+			provider: 'zerops',
+			version: zeropsArtifactCodec.version,
+			payload: zeropsArtifactCodec.encode(compileFabrikaManifest(withBucket, 'prod', SOURCE_DESCRIPTOR)),
 		}
 		const api = makeApi(recorded)
+		let registered = false
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: {
 				...api,
-				findService: async () => null,
+				findService: async ({ hostname }) =>
+					registered ? { id: hostname === 'files' ? 'bucket-1' : 'service-1', name: hostname, subdomainAccess: false } : null,
 				importServices: async (input) => {
 					await api.importServices(input)
 					return {
 						projectId: input.projectId,
-						services: [
+						services: registered ? [] : [
 							{ id: 'bucket-1', name: 'files', processes: [{ id: 'create-files', actionName: 'stack.create' }] },
 							{ id: 'service-1', name: 'notes', processes: [{ id: 'create-notes', actionName: 'stack.create' }] },
 						],
@@ -479,23 +490,57 @@ describe('Zerops ControlProvider registration', () => {
 		})
 		const prepare = control.namespaces?.prepareRegistration
 		if (prepare === undefined) throw new Error('expected registration preparation')
-		await prepare({
+		const prepared = await prepare({
 			registration: {
 				app,
-				environment: environment({
-					target: { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} },
-					artifact: {
-						provider: 'zerops',
-						version: zeropsArtifactCodec.version,
-						payload: zeropsArtifactCodec.encode(
-							compileFabrikaManifest({ ...withBucket, target: { ...withBucket.target, deployService: 'notes' } }, 'prod', SOURCE_DESCRIPTOR),
-						),
-					},
-				}),
+				environment: environment({ target: { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} }, artifact }),
 			},
 			signal: new AbortController().signal,
 		})
-		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1' }])
+		registered = true
+
+		expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1', createdBuckets: ['bucket-1'] })
+		expect(recorded.envWrites).toEqual([])
+		expect(await control.deploy({ ...deployInput(recorded), environment: prepared.environment })).toEqual({ state: 'succeeded' })
+		expect(recorded.envWrites).toContainEqual({ serviceId: 'service-1', key: 'FABRIKA_STORAGE_PROVENANCE', value: 'bucket-1' })
+	})
+
+	test('an adopted bucket gets no creation evidence and its deploy is refused', async () => {
+		const withBucket: ZeropsAppConfig = {
+			...config,
+			target: {
+				...config.target,
+				deployService: 'notes',
+				services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }, { hostname: 'files', type: 'object-storage' }],
+			},
+		}
+		const artifact = {
+			provider: 'zerops',
+			version: zeropsArtifactCodec.version,
+			payload: zeropsArtifactCodec.encode(compileFabrikaManifest(withBucket, 'prod', SOURCE_DESCRIPTOR)),
+		}
+		const api = makeApi(recorded)
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: {
+				...api,
+				findService: async ({ hostname }) => ({ id: hostname === 'files' ? 'bucket-1' : 'service-1', name: hostname, subdomainAccess: false }),
+			},
+			namespaces: { clientId: 'client-1', proxySource: PROXY_SOURCE, iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
+		})
+		const prepare = control.namespaces?.prepareRegistration
+		if (prepare === undefined) throw new Error('expected registration preparation')
+		const prepared = await prepare({
+			registration: {
+				app,
+				environment: environment({ target: { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} }, artifact }),
+			},
+			signal: new AbortController().signal,
+		})
+
+		expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1' })
+		expect(await control.deploy({ ...deployInput(recorded), environment: prepared.environment })).toEqual({ state: 'failed' })
+		expect(recorded.logs.join('\n')).toContain('service `files` is a bucket the platform did not create private')
 	})
 
 	test('refuses an import collision after an absent lookup without retrying or adopting the raced service', async () => {

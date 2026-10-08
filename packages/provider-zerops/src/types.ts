@@ -151,6 +151,8 @@ export interface ZeropsRunState {
 export interface ZeropsRuntimeTarget {
 	projectId: string
 	serviceId: string
+	/** The buckets the environment's registration created, from its stored target (creation evidence, ADR-0043). */
+	createdBuckets?: readonly string[]
 	accessToken: string
 	/** Absent only for dry runs, which perform no source or Zerops mutation. */
 	source?: ZeropsRuntimeSource

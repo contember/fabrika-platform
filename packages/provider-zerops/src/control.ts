@@ -22,7 +22,7 @@ import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
-import { createdServices, type ExposureAlerter, formatStorageProvenance, isObjectStorageType, STORAGE_PROVENANCE_KEY } from './exposure'
+import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
 import { assertAuthoredManagedInputs, assertAuthoredManagedName, parseManagedValues } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
@@ -49,13 +49,21 @@ import { deleteVersion, isVersionNotFound } from './version-attempt'
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
 export interface ZeropsStoredTarget {
 	serviceId: string
+	/**
+	 * The object-storage service ids the first registration's collision-refusing import created: the creation evidence
+	 * the first deploy writes into the provenance marker (ADR-0043). Absent when that import created no bucket.
+	 */
+	createdBuckets?: string[]
 }
 
-const storedTargetSchema = z.object({ serviceId: z.string().min(1) })
+const storedTargetSchema = z.object({ serviceId: z.string().min(1), createdBuckets: z.array(z.string().min(1)).min(1).optional() })
 
 export const zeropsStoredTargetCodec: ProviderCodec<ZeropsStoredTarget> = {
 	version: 2,
-	encode: (target) => ({ serviceId: target.serviceId }),
+	encode: (target) => ({
+		serviceId: target.serviceId,
+		...(target.createdBuckets === undefined ? {} : { createdBuckets: [...target.createdBuckets] }),
+	}),
 	decode: (payload) => {
 		const result = storedTargetSchema.safeParse(payload)
 		if (!result.success) throw new Error('Zerops stored target serviceId must be a non-empty string')
@@ -344,6 +352,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				projectId: placement.projectId,
 				serviceId: placement.target.serviceId,
 				accessToken: options.accessToken,
+				...(placement.target.createdBuckets === undefined ? {} : { createdBuckets: placement.target.createdBuckets }),
 				...(source === undefined ? {} : { source }),
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
@@ -514,27 +523,21 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						if (discovered === null || discovered === undefined || discovered.id === '') {
 							throw new Error(`Zerops import did not create deploy service \`${manifest.target.deployService}\``)
 						}
-						// Only this collision-refusing import proves the platform created the buckets private (ADR-0043).
-						if (present.length === 0) {
-							const created = createdServices(imported)
-							const buckets = manifest.target.importDocument.services.flatMap((service) => {
-								const id = isObjectStorageType(service.type) ? created.get(service.hostname) : undefined
-								return id === undefined ? [] : [id]
-							})
-							if (buckets.length > 0) {
-								await api.putServiceEnv({
-									serviceId: discovered.id,
-									key: STORAGE_PROVENANCE_KEY,
-									value: formatStorageProvenance(buckets),
-									signal: input.signal,
-								})
-							}
-						}
+						// Only this collision-refusing import proves the platform created the buckets private (ADR-0043). The
+						// evidence is persisted with the registration, so no write can fail between it and the first deploy.
+						const created = present.length === 0 ? createdServices(imported) : new Map<string, string>()
+						const createdBuckets = manifest.target.importDocument.services.flatMap((service) => {
+							const id = isObjectStorageType(service.type) ? created.get(service.hostname) : undefined
+							return id === undefined ? [] : [id]
+						})
 						return normalizeRegistration({
 							app: input.registration.app,
 							environment: {
 								...input.registration.environment,
-								target: envelope(zeropsStoredTargetCodec, { serviceId: discovered.id }),
+								target: envelope(zeropsStoredTargetCodec, {
+									serviceId: discovered.id,
+									...(createdBuckets.length === 0 ? {} : { createdBuckets }),
+								}),
 							},
 						})
 					},

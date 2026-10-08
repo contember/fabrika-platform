@@ -448,7 +448,7 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 	const buckets = artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
 	const records = buckets.length === 0 ? [] : await zerops.api.listServiceEnv({ serviceId: target.serviceId, signal })
 	const marker = records.find((record) => record.key === STORAGE_PROVENANCE_KEY)
-	const known = parseStorageProvenance(marker?.content)
+	const known = new Set([...parseStorageProvenance(marker?.content), ...(target.createdBuckets ?? [])])
 	const findings: ExposureFinding[] = []
 	const bucketIds: string[] = []
 	for (const hostname of manifestServiceHostnames(artifact)) {
