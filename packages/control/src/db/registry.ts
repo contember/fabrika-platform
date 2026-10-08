@@ -780,6 +780,25 @@ export class ControlRegistryRepository {
 		}
 	}
 
+	// ── Proxy secrets (ADR-0022 rule 5; the value lives in the vault) ─────────────
+
+	async getAppEnvProxySecretRef(appId: string, env: string): Promise<string | null> {
+		const row = await this.d1
+			.prepare('SELECT value_ref FROM app_env_proxy_secrets WHERE app_id = ? AND env = ?')
+			.bind(appId, env)
+			.first<{ value_ref: string }>()
+		return row?.value_ref ?? null
+	}
+
+	/** Records `valueRef` as the environment's proxy secret unless it has one; true when this call recorded it. */
+	async claimAppEnvProxySecretRef(appId: string, env: string, valueRef: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare('INSERT INTO app_env_proxy_secrets (app_id, env, value_ref) VALUES (?, ?, ?) ON CONFLICT (app_id, env) DO NOTHING')
+			.bind(appId, env, valueRef)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
 	// ── App vars (non-secret deploy-time config; PLAINTEXT, mirrors app_secrets' env layering) ──
 
 	/**

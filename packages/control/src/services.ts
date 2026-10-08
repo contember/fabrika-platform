@@ -15,6 +15,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
+import { type ProxySecrets, VaultProxySecrets } from './proxy-secret'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
@@ -88,7 +89,13 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
+		...proxySecretDeps(env),
 	}
+}
+
+/** The proxy secrets live in the vault, so an installation without one hands the providers none. */
+export function proxySecretDeps(env: Env): { proxySecrets?: ProxySecrets } {
+	return env.FABRIKA_CONTROL_VAULT_KEY === undefined ? {} : { proxySecrets: new VaultProxySecrets(repositories(env).registry, () => vault(env)) }
 }
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
@@ -123,7 +130,11 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 			? {}
 			: {
 				namespaceProxyChanged: (namespaceId: string) =>
-					republishNamespace({ repositories: repositories(env), provider, lock: locks(env), queue: env.DEPLOY_QUEUE }, namespaceId, { wait: 'started' }),
+					republishNamespace(
+						{ repositories: repositories(env), provider, lock: locks(env), queue: env.DEPLOY_QUEUE, ...proxySecretDeps(env) },
+						namespaceId,
+						{ wait: 'started' },
+					),
 			}),
 	}
 }

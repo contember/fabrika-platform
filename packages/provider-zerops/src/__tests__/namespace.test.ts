@@ -1,3 +1,4 @@
+import { proxySecretVariable } from '@fabrika/auth-core'
 import {
 	type JsonValue,
 	PROVIDER_NAMESPACE_IMMUTABLE,
@@ -8,8 +9,9 @@ import {
 	type ProviderNamespaceOperator,
 	type ProviderRegistration,
 } from '@fabrika/provider-contract'
-import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import { describe, expect, spyOn, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	createZeropsApi,
 	ZEROPS_SERVICE_NOT_HTTP,
@@ -1281,6 +1283,57 @@ describe('Zerops namespace lifecycle', () => {
 		state.calls.length = 0
 		await run(capabilities, result, [], 'reconcile')
 		expect(state.calls).not.toContain(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`)
+	})
+
+	test("writes a contract member's proxy secret to the proxy service before the proxy builds (ADR-0022 rule 5)", async () => {
+		const state = freshState()
+		state.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
+		state.services.set(projectId, [proxy()])
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+		const ready = namespace({
+			projectId,
+			projectName: 'apps-prod',
+			corePackage: 'SERIOUS',
+			publicAccess: 'custom-domain',
+			managed: true,
+			proxyServiceId: proxyId,
+			proxyConfigured: true,
+			ready: true,
+		})
+		const notes = compileFabrikaManifest(
+			{
+				id: 'notes',
+				target: {
+					platform: 'zerops',
+					services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
+					proxy: { upstream: 'notes:3000', ...contractProxyTable(notesArtifact) },
+				},
+			},
+			'prod',
+			SOURCE_DESCRIPTOR,
+		)
+		const member = {
+			appId: 'notes',
+			env: 'prod',
+			domain: 'notes.example.test',
+			artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
+		}
+		const events = { checkpoint: async () => {}, boundary: async () => {} }
+
+		await expect(capabilities.reconcile({ namespace: ready, members: [member], signal: new AbortController().signal, events })).rejects.toThrow(
+			'no proxy secret',
+		)
+		await capabilities.reconcile({
+			namespace: ready,
+			members: [{ ...member, proxySecret: 'notes-proxy-secret' }],
+			signal: new AbortController().signal,
+			events,
+		})
+
+		const variable = proxySecretVariable('notes@prod')
+		expect(state.env.get(proxyId)?.get(variable)?.content).toBe('notes-proxy-secret')
+		expect(state.calls.indexOf(`put:${proxyId}:${variable}`)).toBeLessThan(state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'))
+		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).not.toContain('notes-proxy-secret')
 	})
 
 	// The import cannot establish a `.zerops.app` subdomain — the platform accepts `enableSubdomainAccess`

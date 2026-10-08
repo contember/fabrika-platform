@@ -1,5 +1,6 @@
 import { ConflictError } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
+import { FABRIKA_PROXY_SECRET } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	ProviderDeploymentNamespace,
@@ -17,10 +18,12 @@ import {
 	runNamespaceJob,
 } from '../api/namespaces'
 import { acquireLease, namespaceLeaseKey } from '../lease'
+import { proxySecretPurpose, VaultProxySecrets } from '../proxy-secret'
 import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
-import { createHarness } from './helpers/harness'
+import { Vault } from '../vault'
+import { createHarness, harnessDatabase } from './helpers/harness'
 import { fixtureNamespaceWrite, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
@@ -831,6 +834,9 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		/** A `started` rebuild that finds nothing left in flight. */
 		settledWhenStarted: boolean
 		deploys: string[]
+		/** The proxy secret each republish handed each member, and the one each deploy handed its application. */
+		memberSecrets: (string | undefined)[][]
+		deploySecrets: (string | null | undefined)[]
 		/** Held open inside source resolution, while the deploy holds the namespace lease but has not republished. */
 		resolving: Promise<void> | null
 	}
@@ -847,12 +853,14 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			},
 			async deploy(input) {
 				record.deploys.push(input.runId)
+				record.deploySecrets.push(input.managedEnvironment[FABRIKA_PROXY_SECRET])
 				return { state: 'succeeded' }
 			},
 			namespaces: {
 				...namespaces,
 				async republish(input) {
 					record.calls.push({ wait: input.wait, members: input.members.map((member) => `${member.appId}/${member.env}@${member.domain ?? '-'}`) })
+					record.memberSecrets.push(input.members.map((member) => member.proxySecret))
 					record.entered()
 					const checkpoint = withTarget(input.namespace, target('rebuilding'))
 					await input.events.checkpoint(checkpoint)
@@ -866,7 +874,17 @@ describe('a namespace republish rebuilds the entry point from the registry under
 	}
 
 	function republishing(): Republishing {
-		return { calls: [], gate: null, entered: () => {}, fail: false, settledWhenStarted: false, deploys: [], resolving: null }
+		return {
+			calls: [],
+			gate: null,
+			entered: () => {},
+			fail: false,
+			settledWhenStarted: false,
+			deploys: [],
+			memberSecrets: [],
+			deploySecrets: [],
+			resolving: null,
+		}
 	}
 
 	async function seed(harness: NamespaceHarness, apps: string[] = ['alpha']): Promise<void> {
@@ -1011,6 +1029,38 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		...republishDeps(harness),
 		secrets: new VaultSecretResolver({}),
 		logs: { put: () => Promise.resolve() },
+	})
+
+	test('a deploy hands the proxy and the application the same proxy secret, generated once per environment (ADR-0022 rule 5)', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness, ['alpha', 'beta'])
+		const vault = await Vault.create(harnessDatabase(harness.deps.repositories), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
+		const proxySecrets = new VaultProxySecrets(harness.deps.repositories.registry, () => Promise.resolve(vault))
+		const deps = { ...runDepsOf(harness), proxySecrets }
+		for (const run of ['run-1', 'run-2']) {
+			await harness.deps.repositories.runs.createRun({ id: run, appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+			expect(await executeDeploy(deps, { runId: run })).toEqual({ runId: run, status: 'succeeded' })
+		}
+
+		const [alpha, beta] = record.memberSecrets[0] ?? []
+		expect(alpha).toMatch(/^[A-Za-z0-9_-]{43}$/)
+		expect(beta).toMatch(/^[A-Za-z0-9_-]{43}$/)
+		expect(beta).not.toBe(alpha)
+		expect(record.memberSecrets[1]).toEqual([alpha, beta])
+		expect(record.deploySecrets).toEqual([alpha, alpha])
+		const stored = await harness.deps.repositories.registry.getAppEnvProxySecretRef('alpha', 'prod')
+		expect(stored === null ? null : await vault.getSecretForPurpose(stored, proxySecretPurpose('alpha', 'prod'))).toBe(alpha ?? '')
+	})
+
+	test('without a vault no member carries a proxy secret and the application gets none', async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness)
+		await harness.deps.repositories.runs.createRun({ id: 'run-1', appId: 'alpha', env: 'prod', ref: 'main', trigger: 'manual' })
+		expect(await executeDeploy(runDepsOf(harness), { runId: 'run-1' })).toEqual({ runId: 'run-1', status: 'succeeded' })
+		expect(record.memberSecrets).toEqual([[undefined]])
+		expect(record.deploySecrets).toEqual([null])
 	})
 
 	test('a started rebuild that leaves nothing in flight ends ready without a reconcile job', async () => {

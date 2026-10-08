@@ -1,4 +1,4 @@
-import { appEnvironmentId, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, isFrameworkVariableName } from '@fabrika/auth-core'
+import { appEnvironmentId, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FABRIKA_PROXY_SECRET, isFrameworkVariableName } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
@@ -33,6 +33,7 @@ import {
 } from './db'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
+import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
 
@@ -55,6 +56,8 @@ export interface RunDeps {
 	 * service rather than left stale, and an app that requires it fails its own boot, loudly.
 	 */
 	iamIssuer?: string
+	/** The proxy secret of an environment behind a namespace proxy (ADR-0022 rule 5); absent without a vault. */
+	proxySecrets?: ProxySecrets
 }
 
 export interface DeployJobMessage {
@@ -485,6 +488,10 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			[FABRIKA_IAM_APP_ID]: appEnvironmentId(app.id, appEnv.env),
 		}
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
+		// Only a namespace proxy authenticates itself with a secret; a dry run generates none.
+		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
+			? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null
+			: null
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
 		// instead of deploying an app that verifies against the previous installation's tokens.
 		if (deps.iamIssuer !== undefined && deps.iamIssuer.trim() !== '') {

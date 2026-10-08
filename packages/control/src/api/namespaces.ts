@@ -39,6 +39,7 @@ import {
 	NamespaceResourceClaimConflictError,
 } from '../db'
 import { acquireLease, type Lease, type LeaseClock, namespaceLeaseKey } from '../lease'
+import type { ProxySecrets } from '../proxy-secret'
 import type { ControlJobMessage, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
 import { fail } from './domain'
 import { parseStoredEnvelope } from './provider-envelope'
@@ -333,6 +334,8 @@ export interface NamespaceJobDeps {
 	readonly provider: ControlProvider
 	readonly lock: DeployLocks
 	readonly leaseClock?: LeaseClock
+	/** Absent without a vault; then no member carries a proxy secret, and the provider refuses a contract member. */
+	readonly proxySecrets?: ProxySecrets
 }
 
 /**
@@ -360,14 +363,23 @@ async function writeNamespace(
 	)
 }
 
-/** Every app environment the namespace's entry point routes, read under its lease. */
-async function namespaceMembers(repositories: ControlRepositories, namespaceId: string): Promise<ProviderNamespaceMember[]> {
-	return (await repositories.registry.listAppEnvsByNamespace(namespaceId)).map((row) => ({
-		appId: row.app_id,
-		env: row.env,
-		...(row.domain === null ? {} : { domain: row.domain }),
-		artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
-	}))
+/** Every app environment the namespace's entry point routes, read under its lease, with the secret its proxy sends. */
+async function namespaceMembers(
+	deps: Pick<NamespaceJobDeps, 'repositories' | 'proxySecrets'>,
+	namespaceId: string,
+): Promise<ProviderNamespaceMember[]> {
+	const members: ProviderNamespaceMember[] = []
+	for (const row of await deps.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
+		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)
+		members.push({
+			appId: row.app_id,
+			env: row.env,
+			...(row.domain === null ? {} : { domain: row.domain }),
+			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
+			...(proxySecret === undefined ? {} : { proxySecret }),
+		})
+	}
+	return members
 }
 
 /**
@@ -419,7 +431,7 @@ async function mutateNamespace(
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning', { claim: true })
 	const providerInput: ProviderNamespaceMutationInput = {
 		namespace: current,
-		members: await namespaceMembers(deps.repositories, row.id),
+		members: await namespaceMembers(deps, row.id),
 		// The signal belongs to the JOB, never to a request — a caller that hangs up must not cancel this.
 		signal: lease.signal,
 		events: {
@@ -502,7 +514,7 @@ export async function republishUnderLease(
 	}
 	if (row.state === 'failed') throw new Error(`Namespace ${namespaceId} is not ready`)
 	let current = toProviderNamespace(row)
-	const members = await namespaceMembers(deps.repositories, row.id)
+	const members = await namespaceMembers(deps, row.id)
 	await writeNamespace(deps.repositories, lease, row, current, 'provisioning')
 	const reconcileLater = (): Promise<void> => deps.queue.send({ kind: 'namespace', namespaceId, mutation: 'reconcile' })
 	let settled: boolean

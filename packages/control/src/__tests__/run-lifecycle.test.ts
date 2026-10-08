@@ -1,4 +1,4 @@
-import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FABRIKA_PROXY_SECRET } from '@fabrika/auth-core'
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE, parseOperationsReleasePayload } from '@fabrika/operations-contract/releases'
 import { type BlobStore, uuidv7 } from '@fabrika/platform'
@@ -614,6 +614,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
 			[FABRIKA_IAM_APP_ID]: 'app@prod',
+			[FABRIKA_PROXY_SECRET]: null,
 		})
 		expect(input.dryRun).toBe(true)
 
@@ -787,6 +788,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
 			[FABRIKA_IAM_APP_ID]: 'app@prod',
+			[FABRIKA_PROXY_SECRET]: null,
 		})
 
 		const secondRunId = uuidv7()
@@ -811,6 +813,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_RELEASE]: null,
 			[FABRIKA_IAM_ISSUER]: null,
 			[FABRIKA_IAM_APP_ID]: 'app@prod',
+			[FABRIKA_PROXY_SECRET]: null,
 		})
 	})
 

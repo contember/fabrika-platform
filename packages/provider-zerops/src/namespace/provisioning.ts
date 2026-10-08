@@ -15,6 +15,7 @@ import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED, ZEROPS_SU
 import { compileNamespaceProxyManifest } from './manifest'
 import { createZeropsNamespaceOperator } from './operator'
 import { republishProxy } from './proxy-attempt'
+import { namespaceProxySecrets } from './proxy-secrets'
 import { verifyZeropsNamespaceProxySource } from './proxy-source'
 import { compileZeropsNamespaceTopology, projectMarker, PROXY_TYPE } from './topology'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource } from './types'
@@ -214,9 +215,11 @@ const deployProxy = async (
 	wait: ProviderNamespaceRepublishInput['wait'],
 ): Promise<{ namespace: ProviderDeploymentNamespace; target: NormalizedZeropsNamespaceTarget }> => {
 	let currentNamespace = namespace
+	const manifest = compileNamespaceProxyManifest(namespace.id, input.members)
 	const result = await republishProxy({
 		target,
-		manifest: compileNamespaceProxyManifest(namespace.id, input.members),
+		manifest,
+		proxySecrets: namespaceProxySecrets(manifest, input.members),
 		...(options.source === undefined ? {} : { source: options.source }),
 		api: options.api,
 		iamUrl: options.iamUrl,

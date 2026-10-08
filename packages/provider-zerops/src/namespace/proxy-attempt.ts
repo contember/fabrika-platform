@@ -22,6 +22,8 @@ export interface ZeropsProxyRepublishInput {
 	readonly api: ZeropsProxyApi
 	readonly iamUrl: string
 	readonly iamKey: string
+	/** Proxy service variable → the secret of one contract application (`namespaceProxySecrets`); none without one. */
+	readonly proxySecrets?: ReadonlyMap<string, string>
 	/** Aborts with `lease_lost` when the namespace lease goes, and with `cancel_requested` when a deploy is cancelled. */
 	readonly signal: AbortSignal
 	readonly wait: 'started' | 'active'
@@ -55,7 +57,14 @@ const writeProxyIam = async (input: ZeropsProxyRepublishInput, serviceId: string
 	}
 	// Secret read-back is not trustworthy, so overwrite it without inspecting its value.
 	await api.putServiceEnv({ serviceId, key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE, value: input.iamKey, signal })
+	for (const [key, value] of input.proxySecrets ?? []) {
+		await api.putServiceEnv({ serviceId, key, value, signal })
+	}
 }
+
+/** One line per secret, sorted, so the attempt's identity changes when any secret does and never carries one. */
+const proxySecretsDigest = async (secrets: ReadonlyMap<string, string>): Promise<string> =>
+	digest([...secrets].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, value]) => `${key}=${value}`).join('\n'))
 
 /**
  * Rebuild the namespace proxy with `manifest` (ADR-0044). The attempt is recorded as `proxyBuild` and never
@@ -68,8 +77,10 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 	if (serviceId === undefined) throw new Error('Zerops namespace has no proxy service id')
 	await verifyZeropsNamespaceProxySource(pin)
 	const manifest = encodeProxyManifestJson(input.manifest)
-	// The attempt's identity covers the IAM configuration too, so a rotated issuer or key forces a rebuild.
-	const manifestSha256 = await digest(`${manifest}\n${input.iamUrl}\n${await digest(input.iamKey)}`)
+	// The attempt's identity covers the IAM configuration and the proxy secrets too, so rotating any forces a rebuild.
+	const proxySecrets = input.proxySecrets ?? new Map<string, string>()
+	const secrets = proxySecrets.size === 0 ? '' : `\n${await proxySecretsDigest(proxySecrets)}`
+	const manifestSha256 = await digest(`${manifest}\n${input.iamUrl}\n${await digest(input.iamKey)}${secrets}`)
 	let target = input.target
 
 	const save = async (next: ZeropsNamespaceTarget): Promise<void> => {

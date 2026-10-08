@@ -210,6 +210,7 @@ const makeRun = (
 		FABRIKA_APP_ID: null,
 		FABRIKA_ENVIRONMENT: null,
 		FABRIKA_SERVICE_KEY: null,
+		FABRIKA_PROXY_SECRET: null,
 	},
 	dryRun: false,
 	signal: new AbortController().signal,
@@ -358,7 +359,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
 			'[dry-run] would read back subdomain access and bucket provenance of every declared service',
 			`[dry-run] would write service variables on ${TARGET.serviceId}: (none)`,
-			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
+			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_PROXY_SECRET, FABRIKA_RELEASE`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
 			'[dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor',
@@ -506,7 +507,7 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		// The client address and its aliases join them so an upstream's abuse limit keys on what this
 		// hop observed and never on what the caller claimed.
 		expect(serialized).toContain(
-			`"delete":["${PROXY_TOKEN_HEADER}","X-Request-Id","X-Fabrika-Endpoint","X-Fabrika-Delegation","X-Fabrika-Client-Ip","X-Forwarded-For","CF-Connecting-IP"]`,
+			`"delete":["${PROXY_TOKEN_HEADER}","X-Fabrika-Client-Ip","X-Fabrika-Endpoint","X-Fabrika-Delegation","X-Fabrika-Proxy-Secret","X-Request-Id","X-Forwarded-For","CF-Connecting-IP"]`,
 		)
 		expect(serialized).toContain('"set":{"X-Fabrika-Client-Ip":["{http.request.client_ip}"]}')
 		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.

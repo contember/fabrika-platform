@@ -492,7 +492,7 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 	)
 }
 
-/** Write the six service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
+/** Write the seven service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
 const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	const { zerops, log, signal, managedValues } = env
 	const serviceId = env.run.target.serviceId
@@ -746,6 +746,11 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 	}
 	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
 	const managedValues = parseManagedValues(run.managedEnvironment)
+	const proxy = run.artifact.target.proxy
+	if (!run.dryRun && proxy !== undefined && 'endpoints' in proxy && managedValues.FABRIKA_PROXY_SECRET === null) {
+		// The application would refuse every request its proxy sends (ADR-0022 rule 5).
+		throw new Error('zerops: a contract application needs its proxy secret, and Control supplied none')
+	}
 	const hostnames = manifestServiceHostnames(run.artifact)
 	const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
 	const compiled = { yaml: renderYaml(document), hostnames }

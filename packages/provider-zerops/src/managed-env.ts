@@ -14,6 +14,7 @@ export type ManagedKey = Extract<
 	| 'FABRIKA_APP_ID'
 	| 'FABRIKA_ENVIRONMENT'
 	| 'FABRIKA_SERVICE_KEY'
+	| 'FABRIKA_PROXY_SECRET'
 >
 
 export const MANAGED_KEYS: readonly ManagedKey[] = [
@@ -24,6 +25,7 @@ export const MANAGED_KEYS: readonly ManagedKey[] = [
 	'FABRIKA_APP_ID',
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_SERVICE_KEY',
+	'FABRIKA_PROXY_SECRET',
 ]
 
 /** The managed keys written as service variables; `FABRIKA_RELEASE` travels only in the execution descriptor (ADR-0044). */
@@ -34,6 +36,7 @@ export const SERVICE_MANAGED_KEYS: readonly Exclude<ManagedKey, 'FABRIKA_RELEASE
 	'FABRIKA_APP_ID',
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_SERVICE_KEY',
+	'FABRIKA_PROXY_SECRET',
 ]
 
 export type ManagedValues = Record<ManagedKey, string | null>
@@ -46,11 +49,12 @@ const managedValuesSchema = z.object({
 	FABRIKA_APP_ID: z.string().nullable(),
 	FABRIKA_ENVIRONMENT: z.string().nullable(),
 	FABRIKA_SERVICE_KEY: z.string().nullable(),
+	FABRIKA_PROXY_SECRET: z.string().nullable(),
 }).strict()
 
 export function parseManagedValues(value: unknown): ManagedValues {
 	const result = managedValuesSchema.safeParse(value)
-	if (!result.success) throw new Error('zerops: managed environment must name exactly the seven managed keys')
+	if (!result.success) throw new Error('zerops: managed environment must name exactly the eight managed keys')
 	return result.data
 }
 

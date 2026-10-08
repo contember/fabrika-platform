@@ -278,6 +278,7 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_APP_ID: null,
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
+	FABRIKA_PROXY_SECRET: null,
 }
 
 const checkpointLabel = (state: JsonValue): string => {
@@ -432,6 +433,7 @@ describe('Zerops provider', () => {
 				FABRIKA_APP_ID: 'demo',
 				FABRIKA_ENVIRONMENT: 'prod',
 				FABRIKA_SERVICE_KEY: 'private-service-key',
+				FABRIKA_PROXY_SECRET: 'private-proxy-secret',
 			},
 		}, provider)
 
@@ -440,6 +442,7 @@ describe('Zerops provider', () => {
 			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod' },
 			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
 			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
+			{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' },
 		])
 		expect(recorded.envDeletes).toEqual(['env-issuer', 'env-release'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
@@ -449,7 +452,15 @@ describe('Zerops provider', () => {
 		})
 		const yaml = recorded.builds[0]?.zeropsYaml ?? ''
 		for (
-			const key of ['FABRIKA_OPERATIONS_DSN', 'FABRIKA_IAM_ISSUER', 'FABRIKA_IAM_APP_ID', 'FABRIKA_APP_ID', 'FABRIKA_ENVIRONMENT', 'FABRIKA_SERVICE_KEY']
+			const key of [
+				'FABRIKA_OPERATIONS_DSN',
+				'FABRIKA_IAM_ISSUER',
+				'FABRIKA_IAM_APP_ID',
+				'FABRIKA_APP_ID',
+				'FABRIKA_ENVIRONMENT',
+				'FABRIKA_SERVICE_KEY',
+				'FABRIKA_PROXY_SECRET',
+			]
 		) {
 			expect(yaml).not.toContain(key)
 		}
@@ -460,6 +471,17 @@ describe('Zerops provider', () => {
 		expect(log).toContain('FABRIKA_RELEASE: removed')
 		expect(log).not.toContain('private-')
 		expect(JSON.stringify([recorded.externalStates, recorded.checkpoints])).not.toContain('private-')
+	})
+
+	test('refuses a contract application without its proxy secret, before any platform call', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
+		const base = app()
+		const contractApp: ZeropsAppConfig = { ...base, target: { ...base.target, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } } }
+		const run = { ...deployRun(recorded), artifact: compileFabrikaManifest(contractApp, 'prod', SOURCE_DESCRIPTOR) }
+		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
+		expect(recorded.timeline).toEqual([])
+		// A dry run writes nothing, so it needs no secret.
+		expect((await provider({ ...run, dryRun: true })).status).not.toBe('failed')
 	})
 
 	test('omits FABRIKA_RELEASE from the execution descriptor when there is no release', async () => {

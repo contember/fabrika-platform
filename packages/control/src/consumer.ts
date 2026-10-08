@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { type NamespaceJobDeps, type NamespaceJobResult, runNamespaceJob } from './api/namespaces'
 import type { Env } from './env'
 import { type ControlJobMessage, type DeployJobMessage, executeDeploy, type NamespaceJobMessage } from './run-lifecycle'
-import { buildRunDeps, DEPLOY_LOCK_REQUEUE_DELAY_S, locks, repositories } from './services'
+import { buildRunDeps, DEPLOY_LOCK_REQUEUE_DELAY_S, locks, proxySecretDeps, repositories } from './services'
 
 /** The lifecycle's terminal answer for one message — what the caller logs, and nothing it must act on. */
 export type DeployJobResult = Awaited<ReturnType<typeof executeDeploy>>
@@ -37,7 +37,7 @@ export type ControlJobResult =
 
 /** Namespace jobs take the same generic lease deploys do, keyed by namespace instead of by app-env. */
 export function namespaceJobDeps(env: Env, provider: ControlProvider): NamespaceJobDeps {
-	return { repositories: repositories(env), provider, lock: locks(env) }
+	return { repositories: repositories(env), provider, lock: locks(env), ...proxySecretDeps(env) }
 }
 
 /**

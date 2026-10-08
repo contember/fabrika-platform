@@ -1,6 +1,7 @@
 import { FABRIKA_IAM_APP_ID } from './app-environment'
 import { FABRIKA_CONTRACT_DIGEST } from './endpoint-digest'
 import { FABRIKA_IAM_ISSUER } from './environment'
+import { FABRIKA_PROXY_SECRET } from './wire'
 
 /**
  * The environment names only the platform writes into an application
@@ -19,6 +20,7 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 	'FABRIKA_SERVICE_KEY',
 	'FABRIKA_APP_DATABASE_URL',
 	'FABRIKA_STORAGE_PROVENANCE',
+	FABRIKA_PROXY_SECRET,
 ] as const
 
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]

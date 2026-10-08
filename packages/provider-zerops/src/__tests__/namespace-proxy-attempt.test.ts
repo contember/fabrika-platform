@@ -195,6 +195,19 @@ for (const rotation of ['issuer', 'key'] as const) {
 	})
 }
 
+test('writes every proxy secret before the version is reserved, and a changed secret rebuilds', async () => {
+	const f = fixture()
+	const secrets = new Map([['FABRIKA_PROXY_SECRET_A', 'secret-one']])
+	await republishProxy({ ...f.input(), proxySecrets: secrets })
+	expect(f.calls.indexOf('env:FABRIKA_PROXY_SECRET_A')).toBeGreaterThan(-1)
+	expect(f.calls.indexOf('env:FABRIKA_PROXY_SECRET_A')).toBeLessThan(f.calls.indexOf('reserve:v1'))
+	f.calls.length = 0
+	const result = await republishProxy({ ...f.input(), wait: 'active', proxySecrets: new Map([['FABRIKA_PROXY_SECRET_A', 'secret-two']]) })
+	expect(result.proxyDeployment?.appVersionId).toBe('v2')
+	expect(f.calls).toContain('build:v2')
+	expect(JSON.stringify(f.target())).not.toContain('secret-')
+})
+
 test('a lost build response stays a triggered attempt that is observed, never deleted or resubmitted', async () => {
 	const f = fixture()
 	f.status('UPLOADING')

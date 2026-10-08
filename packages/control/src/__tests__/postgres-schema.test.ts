@@ -138,6 +138,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0001_init.sql' },
 			{ bundle: 'control', name: '0002_authoring_workspaces.sql' },
 			{ bundle: 'control', name: '0003_namespace_update.sql' },
+			{ bundle: 'control', name: '0004_proxy_secrets.sql' },
 		])
 	})
 
@@ -155,6 +156,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'namespace_resource_claims',
 				'app_secrets',
 				'app_vars',
+				'app_env_proxy_secrets',
 				'runs',
 				'repo_poll_state',
 				'vault',

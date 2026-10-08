@@ -272,6 +272,11 @@ export interface ProviderNamespaceMember {
 	readonly env: string
 	readonly domain?: string
 	readonly artifact: ProviderEnvelope
+	/**
+	 * The secret the namespace proxy authenticates itself to this application environment with (ADR-0022 rule 5).
+	 * Control generates it once and keeps it in its vault; absent when Control has no vault.
+	 */
+	readonly proxySecret?: string
 }
 
 /** One idempotent namespace lifecycle invocation. */
