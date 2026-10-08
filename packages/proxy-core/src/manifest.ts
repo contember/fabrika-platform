@@ -1,5 +1,8 @@
-import type { AppGates, CredentialLocation, GateRule } from '@fabrika/auth-core'
+import { type AppGates, type CredentialLocation, type GateRule, isOAuthResourceUri } from '@fabrika/auth-core'
 import { z } from 'zod'
+import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
+
+export * from './oauth-resource'
 
 export const FABRIKA_PROXY_MANIFEST_JSON = 'FABRIKA_PROXY_MANIFEST_JSON'
 
@@ -14,6 +17,7 @@ export interface ProxyApp {
 	gates: AppGates
 	/** Browser-facing scheme used for login and handoff URLs, defaulting to https. */
 	scheme: 'http' | 'https'
+	oauthResources?: OAuthProtectedResource[]
 }
 
 export interface ProxyManifest {
@@ -38,6 +42,7 @@ export const proxyGateRuleFieldsSchema = z.discriminatedUnion('kind', [
 	z.object({ path: gatePathSchema, kind: z.literal('public') }),
 	z.object({ path: gatePathSchema, kind: z.literal('human') }),
 	z.object({ path: gatePathSchema, kind: z.literal('service'), credential: proxyCredentialLocationSchema.nullish() }),
+	z.object({ path: gatePathSchema, kind: z.literal('oauth'), resource: z.string().refine(isOAuthResourceUri), scopes: oauthScopesSchema }),
 ])
 
 /** Drop an absent service credential, so a rule without one carries no `credential` key at all. */
@@ -58,6 +63,28 @@ export const proxyAppSchema = z.object({
 	upstream: z.string().min(1),
 	gates: proxyAppGatesSchema,
 	scheme: z.preprocess((value) => typeof value === 'string' ? value : undefined, z.enum(['http', 'https']).default('https')),
+	oauthResources: z.array(oauthProtectedResourceSchema).min(1).optional(),
+}).superRefine((app, ctx) => {
+	const resources = new Set<string>()
+	const metadata = new Set<string>()
+	for (const resource of app.oauthResources ?? []) {
+		const url = new URL(resource.resource)
+		if (
+			resources.has(resource.resource) || metadata.has(resource.resourceMetadata) || !app.hosts.includes(url.hostname)
+			|| url.protocol !== `${app.scheme}:`
+		) {
+			ctx.addIssue({ code: 'custom', message: 'invalid OAuth resource binding' })
+		}
+		resources.add(resource.resource)
+		metadata.add(resource.resourceMetadata)
+	}
+	for (const rule of app.gates.rules) {
+		if (rule.kind !== 'oauth') continue
+		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
+		if (resource === undefined || !rule.scopes.every((scope) => resource.scopesSupported.includes(scope))) {
+			ctx.addIssue({ code: 'custom', message: 'unregistered OAuth gate' })
+		}
+	}
 }) satisfies z.ZodType<ProxyApp, z.ZodTypeDef, unknown>
 
 /** The first host two apps (or one app twice) claim, or null. A host belongs to exactly one app. */

@@ -23,6 +23,7 @@
  */
 
 import { numberField, prop, stringField } from './json'
+import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
 import type { ResolvedPrincipal } from './rpc'
 import type { PermissionEntry, PermissionSource, PrincipalType, Scope } from './types'
 
@@ -49,6 +50,8 @@ export const API_KEY_PREFIX = 'px_'
 
 /** Signing algorithm propustka issues with and the SDK verifies (ECDSA P-256 — compact, ubiquitous). */
 export const TOKEN_ALG = 'ES256'
+/** JWT `typ` of an OAuth resource access token (RFC 9068). Native app tokens carry no `typ`. */
+export const RESOURCE_ACCESS_TOKEN_TYP = 'at+jwt'
 
 /** Default per-app access-token lifetime. Revocation/role changes take effect within this. */
 export const DEFAULT_TOKEN_TTL_SECONDS = 300
@@ -82,7 +85,26 @@ export interface AccessTokenClaims {
 	ptype?: PrincipalType
 	/** Audit actor label — the principal's label, or the credential label, or null (anonymous). */
 	label: string | null
+	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
+	oauth?: OAuthTokenClaims
 }
+
+/** What an OAuth resource token adds: the signed app coordinate and the grant it was minted from. */
+export interface OAuthTokenClaims {
+	/** The app whose permissions `perms` are; `aud` names the resource URI instead. */
+	app: string
+	/** CIMD URL of the MCP client the user consented to. */
+	clientId: string
+	/** Consented scopes; `perms` is already narrowed by them. */
+	scopes: string[]
+	/** IAM's OAuth grant id — revoking it stops refresh. */
+	grantId: string
+	/** Unique token id, fresh on every mint. */
+	tokenId: string
+}
+
+/** Which tokens a verifier accepts: native app tokens, or OAuth tokens minted for one resource of one app. */
+export type TokenAudienceProfile = { kind: 'app'; app: string } | { kind: 'resource'; app: string; resource: string }
 
 // ── Public JWKS (the SDK fetches this once, then verifies tokens locally) ───────
 //
@@ -125,6 +147,52 @@ export interface AccessTokenParams {
 	expiresAt: number
 }
 
+export interface ResourceAccessTokenParams {
+	iss: string
+	app: string
+	resource: string
+	subject: string
+	label: string | null
+	permissions: PermissionEntry[]
+	issuedAt: number
+	expiresAt: number
+	clientId: string
+	scopes: string[]
+	grantId: string
+	tokenId: string
+}
+
+/**
+ * Assemble an OAuth resource access token. Always a user principal. The wire carries the standard
+ * `client_id`/`scope`/`jti` claims plus Fabrika's `app` and `grant`; the caller signs with
+ * `typ: RESOURCE_ACCESS_TOKEN_TYP`.
+ */
+export function buildResourceAccessClaims(params: ResourceAccessTokenParams): Record<string, unknown> {
+	const payload = {
+		iss: params.iss,
+		aud: params.resource,
+		sub: params.subject,
+		iat: params.issuedAt,
+		exp: params.expiresAt,
+		perms: params.permissions,
+		ptype: 'user',
+		label: params.label,
+		app: params.app,
+		client_id: params.clientId,
+		scope: params.scopes.join(' '),
+		grant: params.grantId,
+		jti: params.tokenId,
+	}
+	if (parseAccessClaims(payload)?.oauth === undefined) throw new Error('Invalid resource access token claims')
+	return payload
+}
+
+/** A token is accepted only by the profile it was minted for: an app token never passes as a resource token, and vice versa. */
+export function matchesTokenAudience(claims: AccessTokenClaims, profile: TokenAudienceProfile): boolean {
+	if (profile.kind === 'app') return claims.oauth === undefined && claims.aud === profile.app
+	return claims.oauth !== undefined && claims.aud === profile.resource && claims.oauth.app === profile.app
+}
+
 /** Assemble the claim object for an access token. Pure — the caller signs the result. */
 export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims {
 	const claims: AccessTokenClaims = {
@@ -164,11 +232,38 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (perms === null || label === undefined || ptype === undefined) {
 		return null
 	}
+	const oauth = parseOAuthClaims(payload)
+	if (oauth === undefined || (oauth !== null && (ptype !== 'user' || !isOAuthResourceUri(aud)))) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
 	}
+	if (oauth !== null) {
+		claims.oauth = oauth
+	}
 	return claims
+}
+
+/** Absent OAuth claims → null; complete and valid → the claims; partial or malformed → undefined. */
+function parseOAuthClaims(payload: unknown): OAuthTokenClaims | null | undefined {
+	const app = prop(payload, 'app')
+	const clientId = prop(payload, 'client_id')
+	const scope = prop(payload, 'scope')
+	const grantId = prop(payload, 'grant')
+	const tokenId = prop(payload, 'jti')
+	if (app === undefined && clientId === undefined && scope === undefined && grantId === undefined && tokenId === undefined) {
+		return null
+	}
+	const scopes = typeof scope === 'string' ? parseOAuthScopes(scope.split(' ')) : null
+	if (
+		typeof app !== 'string' || app === '' || !isCimdClientId(clientId) || scopes === null || typeof grantId !== 'string' || grantId === ''
+		|| typeof tokenId !== 'string' || tokenId === ''
+	) {
+		return undefined
+	}
+	return { app, clientId, scopes, grantId, tokenId }
 }
 
 /**

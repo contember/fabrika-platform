@@ -24,6 +24,32 @@ const CONTROL_GATES: AppGates = {
 	],
 }
 
+/** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for. */
+export const CONTROL_MCP_PATH = '/mcp'
+export const CONTROL_MCP_SCOPE = 'authoring'
+
+/** RFC 8707 resource URI of the MCP endpoint for a console public origin (no trailing slash). */
+export function controlMcpResource(publicOrigin: string): string {
+	return `${publicOrigin}${CONTROL_MCP_PATH}`
+}
+
+/** RFC 9728 metadata URL the proxy serves for that resource. */
+export function controlMcpResourceMetadata(publicOrigin: string): string {
+	return `${publicOrigin}/.well-known/oauth-protected-resource${CONTROL_MCP_PATH}`
+}
+
+/**
+ * The console gates. With a public origin, `/mcp` accepts only an OAuth bearer minted for
+ * `controlMcpResource(publicOrigin)`; the proxy app must then also register that resource in its
+ * `oauthResources`. Without one, `/mcp` falls to the human catch-all and MCP is unreachable.
+ */
+export function controlProxyGates(publicOrigin?: string): AppGates {
+	const mcp: AppGates['rules'] = publicOrigin === undefined
+		? []
+		: [{ path: CONTROL_MCP_PATH, kind: 'oauth', resource: controlMcpResource(publicOrigin), scopes: [CONTROL_MCP_SCOPE] }]
+	return { rules: [...mcp, ...CONTROL_PROXY_GATES.rules] }
+}
+
 export const CONTROL_PROXY_GATES: AppGates = {
 	rules: [
 		{ path: '/healthz', kind: 'public' },

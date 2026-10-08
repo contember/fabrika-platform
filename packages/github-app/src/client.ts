@@ -11,6 +11,7 @@ import type {
 	GitHubInstallationToken,
 	GitHubRepositoryTokenRequest,
 } from './types'
+import type { GitHubRepositoryClient, GitHubRepositoryOpenRequest } from './repository-types'
 import {
 	decodeAppIdentity,
 	decodeWebhookConfig,
@@ -167,6 +168,15 @@ export class GitHubAppClient {
 			throw responseError()
 		}
 		return { token, expiresAt }
+	}
+
+	/**
+	 * Mint a token restricted to one repository with `contents: write` and `pull_requests: write`,
+	 * and return a client bound to it. The token never leaves the returned client.
+	 */
+	async openRepository(input: GitHubRepositoryOpenRequest): Promise<GitHubRepositoryClient> {
+		void input
+		throw new Error('not implemented')
 	}
 
 	private async requestJson(

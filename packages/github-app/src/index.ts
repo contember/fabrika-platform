@@ -1,4 +1,5 @@
 export { GitHubAppClient } from './client'
+export { GitHubBranchConflictError, GitHubStaleHeadError } from './errors'
 export { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from './manifest'
 export { pemToPkcs8 } from './signing'
 export type {
@@ -14,3 +15,18 @@ export type {
 	GitHubInstallationToken,
 	GitHubRepositoryTokenRequest,
 } from './types'
+export type {
+	GitHubCommit,
+	GitHubCommitFilesInput,
+	GitHubCreateBranchInput,
+	GitHubFileChange,
+	GitHubFileRead,
+	GitHubOpenPullRequestInput,
+	GitHubPullRequestRef,
+	GitHubRef,
+	GitHubRepositoryClient,
+	GitHubRepositoryOpenRequest,
+	GitHubTextFile,
+	GitHubTreeEntry,
+	GitHubTreeListing,
+} from './repository-types'

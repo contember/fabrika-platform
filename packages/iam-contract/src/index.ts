@@ -490,3 +490,4 @@ export interface IamAdminRpcContract {
 }
 
 export type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalType, RoleDef }
+export * from './oauth'

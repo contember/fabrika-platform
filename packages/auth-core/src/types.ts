@@ -100,6 +100,12 @@ export type GateKind =
 	| { kind: 'service'; credential?: CredentialLocation }
 	/** A logged-in human (a `user` principal via the `px_session`/`px_token` cookies). */
 	| { kind: 'human' }
+	/**
+	 * An OAuth bearer access token minted for `resource` (RFC 8707) that carries every scope in
+	 * `scopes`. Missing or invalid → 401 with an RFC 9728 `WWW-Authenticate` challenge; never a
+	 * browser login redirect. Terminal like `public`: an absent token does not fall through.
+	 */
+	| { kind: 'oauth'; resource: string; scopes: string[] }
 
 /**
  * One per-path gate rule. The array order on `AppGates.rules` is the PRECEDENCE: the first rule whose
