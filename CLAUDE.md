@@ -114,6 +114,9 @@ needed only when there is no app config. Platform commands load the provider's
   Two other layers refuse requests and are **not** gate evaluators: **authorization** (`.require`,
   `can()`, control's scoped use-case checks) and **admission** (the console gateways' same-origin guards; IAM's `/admin/*` is bearer-only).
   `docs/reference/overview.md` defines all three; keep the vocabulary.
+  Array order is precedence for the installation's own gates only. A contract application gets an
+  endpoint table instead: the most specific endpoint wins, and the application dispatches by the
+  endpoint id the proxy sets (ADR-0022; decided, not built yet — B2).
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned

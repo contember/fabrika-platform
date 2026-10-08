@@ -61,7 +61,10 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   the header of `src/caddy.ts` before revisiting this.
 - **Gate semantics are `AppGates`', verbatim:** array order IS precedence; a matching rule whose
   credential is ABSENT falls through; a matching rule whose credential is PRESENT is terminal. A
-  rejected human session therefore never falls through to a later public or service rule.
+  rejected human session therefore never falls through to a later public or service rule. **This holds
+  for installation gates only.** A contract application's endpoint table selects the most specific
+  endpoint, array order means nothing, and an absent credential falls through to no other endpoint
+  (ADR-0022; decided, not built yet — B2).
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
