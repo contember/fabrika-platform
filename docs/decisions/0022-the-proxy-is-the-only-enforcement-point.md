@@ -53,7 +53,7 @@ proxy:
 
 ## Decision
 
-**We will make the proxy the single enforcement point for every request to every application.** Five
+**We will make the proxy the single enforcement point for every request to every application.** Six
 rules.
 
 The proxy evaluates one of two forms of policy. **Gates** are an ordered rule list. They protect the
@@ -63,7 +63,7 @@ an application's contract. It protects every contract application. Control's met
 per service. Both forms are evaluated only by the proxy, with the matchers in `@fabrika/auth-core`.
 
 The code does not do the endpoint-table form yet: the proxy evaluates generated gates for contract
-applications (part B, work units B2 and B3).
+applications (part B, work units B2, B3 and B4).
 
 ### 1. Only the proxy is publicly routed
 
@@ -71,9 +71,11 @@ An application service has no public address. On Zerops that is the platform def
 the app Worker declares no route and sets `workers_dev: false`; the provider refuses the graph
 otherwise. It is reachable only through the `APP` service binding of its proxy Worker.
 
-A Zerops namespace is one private network, so a sibling service can still reach an application. The
-proxy therefore authenticates itself to the application with a **secret per application and
-environment** (rule 5).
+A Zerops namespace is one private network, so a sibling service can still reach an application. On
+Zerops the proxy therefore authenticates itself to the application with a **secret per application and
+environment** (rule 5). On Cloudflare the service binding is the authenticated hop: the application
+Worker has no public route, and nothing else can bind it
+([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)). Cloudflare has no proxy secret.
 
 IAM stays **global**: one identity database, one audit log, one console. The proxy is **stateless**
 and per deployment boundary: one per namespace on Zerops, one per app environment on Cloudflare. Only
@@ -103,6 +105,12 @@ table say:
 
 Step 1 must be a delete, not an overwrite: `copy_headers` skips an empty auth-response value, so a
 client's own `X-Fabrika-Token` would otherwise reach the app on a `public` path.
+
+**Response headers.** The proxy sets one conservative header policy on every application response and
+on its own denials: Caddy through its response operations, the Cloudflare proxy Worker in code, and
+`@fabrika/proxy-core` on every denial it answers. An application cannot omit the policy. A download
+endpoint gets the file treatment instead. The framework sets the same policy in-process.
+Per-endpoint profiles are not part of v1.
 
 **Invariant: a header a client can set never reaches a decision.**
 
@@ -139,13 +147,19 @@ digest }`. Array order has no meaning here. The proxy makes one pass over one se
 3. **A `px_` key is present.** The proxy mints from it with `mintFromKey`. The key's principal kind must
    be one of the endpoint's callers. This step is terminal: a rejected key never falls back to a
    session.
-4. **No key, and `human` is a caller.** The proxy uses the session, or answers with the login redirect
-   of rule 4.
+4. **No key.** When `human` is a caller, the proxy uses the session, or answers with the login
+   redirect of rule 4. When `human` is not a caller, the answer is 401, never a login redirect.
 5. **Requirement.** The token must satisfy the endpoint's requirement: `member` (any permission of this
    application), or the action in some scope. Otherwise the answer is 403.
 6. **Admission.** A session-authenticated request that is not `GET` must carry
    `Sec-Fetch-Site: same-origin`. An RPC request must carry `Content-Type: application/json`. An upload
    admits only its declared content types.
+
+**Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, and the shell
+of a link SPA) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
+It does not forward a `px_` key or a session that arrives on such a request. Admission still applies:
+a form has a body limit and admits only its content type. A webhook's signature is verified by the
+framework, not by the proxy.
 
 **Principal kinds.** A `px_` key has its own principal kind. The kinds are `user` and `service`, plus
 `link`, `app`, `job` and `webhook`, each added with the feature that needs it. The caller `human`
@@ -201,12 +215,13 @@ against IAM's JWKS (signature, `iss`, `aud`, `exp`) with the shared verifier of
 exchanges no session, writes no cookie and issues no login bounce. Verifying the audience keeps a token
 minted for another app out.
 
-For a contract application, the hop carries two more facts, and the application checks both:
+For a contract application, the hop carries more facts, and the application checks them:
 
-- **The proxy secret.** The application checks it before anything else and refuses a request without
-  it. A direct dial inside a Zerops namespace therefore gets no answer from application code.
-  Control generates the secret per application and environment and writes it as a managed variable to
-  the proxy and to the application.
+- **The proxy secret, on Zerops.** The application checks it before anything else and refuses a
+  request without it. A direct dial inside a Zerops namespace therefore gets no answer from application
+  code. Control generates the secret per application and environment and writes it as a managed
+  variable to the proxy and to the application. On Cloudflare the service binding takes its place
+  (rule 1).
 - **The endpoint.** The allow response carries `X-Fabrika-Endpoint: <id>@<digest>`. The digest covers
   the endpoint's kind, method, path, callers, requirement and admission. The application dispatches by
   the id and answers 503 when the digest differs from its own. A request is therefore never served by
@@ -239,6 +254,22 @@ forwards as a bearer (its audience must be a registered admin gateway) or a `px_
 session cookie. Admission for the console is Control's gateway origin guard; IAM keeps no origin
 registry of its own.
 
+### 6. An application token is minted for one application in one environment
+
+- **The IAM application id carries the environment:** `<app>@<env>`, for example `notes@prod`. `@` is
+  reserved in application ids. One helper in `@fabrika/auth-core` builds and parses the id. The proxy
+  mints for that id, and Control registers schemas, return origins and keys under it. A staging key is
+  therefore refused at production.
+- **An application token carries only grants of that application id.** Cross-application grants and
+  the bootstrap `admin` grant reach only a registry of platform audiences, separate from
+  `adminAudiences`.
+- **An application token cannot call `issueKey`, `revokeKey` or `listPrincipals`**, on any transport.
+- **Delegation grants.** For an endpoint whose action is a dimension's `members.manage`, the proxy
+  obtains a single-use grant bound to the endpoint and the request. IAM requires it for membership
+  operations, so a handler on another endpoint cannot spend the caller's authority.
+
+The code does none of rule 6 yet (part B, work unit B5).
+
 ## Consequences
 
 - **Unreachability is structural**, and one implementation of the security-critical path serves both
@@ -251,6 +282,11 @@ registry of its own.
 - **The application and the proxy agree per request.** The endpoint id and digest bind each request to
   the rules the proxy applied. A version switch costs 503 and 404 answers for the changed and new
   endpoints, never a request served under the wrong rules.
+- **The proxy sets the response headers.** An application that omits them, or a denial the
+  application never sees, still carries the policy.
+- **Authenticated is not authorized at the edge.** A token carries no grant of another application or
+  another environment, so a global `admin` grant no longer reaches every application.
+- **IAM administration lists one entry per environment** of each application.
 - **A proxy table change is a proxy rebuild on Zerops**: about 190 s of build plus 60 s of deploy,
   because the manifest is read once at build. On Cloudflare it is a Worker variable.
 - **The proxy is a per-deployment single point of failure** and the only thing that establishes an app
@@ -294,6 +330,13 @@ registry of its own.
   answer 503 during a switch, not only the changed ones.
 - **Rely on the private network alone for the hop.** Rejected: every service in a Zerops namespace
   shares that network, so a sibling service could dial the application directly.
+- **A proxy secret on Cloudflare too.** Rejected: the service binding already authenticates the hop,
+  and the application Worker has no public route.
+- **Let cross-application grants enter every application token.** Rejected: a token minted for one
+  application would carry authority over others, and the requirement check would pass on a grant the
+  application never declared.
+- **One IAM application per application, shared by its environments.** Rejected: a staging key or role
+  would also work at production.
 - **A shared parent-domain session cookie, or every app on one hostname.** The first fails on
   `*.zerops.app` and forces apps under a platform domain. The second breaks routing by `Host` and loses
   cookie and CORS isolation between apps.
