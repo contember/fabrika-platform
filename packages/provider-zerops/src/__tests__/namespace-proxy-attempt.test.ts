@@ -8,7 +8,7 @@ import { zeropsNamespaceTargetCodec } from '../namespace/codec'
 import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE } from '../namespace/constants'
 import { republishProxy, type ZeropsProxyApi, type ZeropsProxyRepublishInput } from '../namespace/proxy-attempt'
 import type { ZeropsNamespaceTarget } from '../namespace/types'
-import type { ZeropsSourceClient } from '../source'
+import type { ZeropsSourcePort } from '../source/port'
 
 const pin = {
 	repository: { owner: 'example', name: 'platform' },
@@ -34,7 +34,7 @@ function fixture() {
 		createAppVersion: async () => {
 			sequence++
 			calls.push(`reserve:v${sequence}`)
-			return { id: `v${sequence}`, uploadUrl: 'https://upload.example.test?secret=redacted' }
+			return { id: `v${sequence}`, uploadUrl: `https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?version=v${sequence}&secret=redacted` }
 		},
 		deleteAppVersion: async input => {
 			calls.push(`delete:${input.appVersionId}`)
@@ -52,20 +52,19 @@ function fixture() {
 			return { id: input.appVersionId, status }
 		},
 	}
-	const source: ZeropsSourceClient = {
+	const source: ZeropsSourcePort = {
 		resolve: async input => {
 			calls.push('resolve')
 			expect(input.requestedRef).toBe(pin.commitSha)
 			expect(input.expectedCommitSha).toBe(pin.commitSha)
-			return { runId: input.runId, commitSha: pin.commitSha, descriptorSha256: pin.descriptor.sha256 }
+			expect(input.privateBinding).toBeUndefined()
+			return { commitSha: pin.commitSha, descriptorSha256: pin.descriptor.sha256 }
 		},
 		upload: async input => {
-			calls.push(`upload:${input.appVersionId}`)
-			expect(input.archiveKind).toBe('platform')
-			return { runId: input.runId, appVersionId: input.appVersionId, commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }
-		},
-		cancel: async input => {
-			calls.push(`cancelSource:${input.appVersionId}`)
+			calls.push(`upload:${new URL(input.uploadUrl).searchParams.get('version')}`)
+			// ADR-0045: a platform archive is anonymous; it names no connection.
+			expect(input.archive).toEqual({ kind: 'platform' })
+			return { commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 }
 		},
 	}
 	const controller = new AbortController()
@@ -223,7 +222,6 @@ test('a failure before the build request deletes the reserved version and clears
 	})).rejects.toThrow('upload failed')
 	expect(effects(f.calls).slice(-1)).toEqual(['delete:v1'])
 	expect(f.calls).not.toContain('build:v1')
-	expect(f.calls.some(call => call.startsWith('cancelSource:'))).toBe(false)
 	expect(f.target().proxyBuild).toBeUndefined()
 })
 

@@ -1,5 +1,5 @@
-export function githubRecoverySecretLabel(attemptId: string): string {
-	return `platform:github-source:${attemptId}:recovery`
+export function githubAppCredentialSecretLabel(connectionId: string): string {
+	return `platform:github-source:${connectionId}:app-credential`
 }
 
 export function githubManifestStateSecretLabel(attemptId: string): string {

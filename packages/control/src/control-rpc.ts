@@ -77,7 +77,7 @@ import {
 	startSourceConnection,
 	verifySourceInstallation,
 } from './source-connection'
-import type { SourceConnectionPort } from './source-connection-port'
+import type { SourceConnectionPort } from './source/connections'
 
 interface ControlRpcContext {
 	readonly env: Env

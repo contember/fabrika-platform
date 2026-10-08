@@ -222,6 +222,7 @@ export type {
 	SourceConnectionZeropsApi,
 	ZeropsSourceConnectionAdminOptions,
 } from './source-connection'
+export type { ZeropsSourceArchive, ZeropsSourcePort, ZeropsSourcePrivateBinding, ZeropsSourceResolution } from './source/port'
 export type {
 	ZeropsAppConfig,
 	ZeropsCompilerOwnedProjectField,

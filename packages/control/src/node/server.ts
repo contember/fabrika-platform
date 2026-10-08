@@ -24,7 +24,7 @@ import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { locks, operationsReleaseDeps, repositories } from '../services'
-import type { SourceConnectionPort } from '../source-connection-port'
+import type { SourceConnectionPort } from '../source/connections'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -87,8 +87,8 @@ export function createConsumer(runtime: Runtime): PostgresJobConsumer<ControlJob
 	})
 }
 
-async function main(): Promise<void> {
-	const runtime = createRuntime()
+/** Serve an assembled runtime until SIGTERM/SIGINT. The local stack calls this with its fixture source transports. */
+export async function startControlServer(runtime: Runtime): Promise<void> {
 	const consumer = createConsumer(runtime)
 	const reconciliation = await reconcileProviderRuns({
 		repositories: repositories(runtime.env),
@@ -159,7 +159,7 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
 	// Never log the error object: configuration errors can quote a connection string.
-	main().catch((err: unknown) => {
+	Promise.resolve().then(() => startControlServer(createRuntime())).catch((err: unknown) => {
 		console.error('vozka failed to start:', err instanceof Error ? err.message : 'unknown error')
 		process.exit(1)
 	})

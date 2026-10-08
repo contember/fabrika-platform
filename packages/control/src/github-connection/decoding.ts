@@ -7,20 +7,19 @@ import {
 	type GitHubSetupStatus,
 	type GitHubSourceConnection,
 	type GitHubSourceConnectionRow,
-	type GitHubSourceTransportKind,
 } from './model'
 
 const ACTIVE_PHASES: readonly GitHubSetupPhase[] = [
 	'awaiting_manifest_callback',
 	'exchange_claimed',
-	'recovery_stored',
-	'source_bundle_written',
-	'source_activated',
+	'credential_stored',
+	'app_verified',
 	'webhook_secret_stored',
 	'webhook_configured',
-	'configuration_verified',
 	'installation_required',
 ]
+
+const PHASES: readonly GitHubSetupPhase[] = [...ACTIVE_PHASES, 'connected']
 
 const storedText = z.string().refine(value => value.trim() !== '')
 const storedDigest = z.string().regex(/^[0-9a-f]{64}$/)
@@ -38,8 +37,7 @@ const attemptFieldsSchema = z.object({
 	app_id: storedText.nullable(),
 	app_slug: storedText.nullable(),
 	app_html_url: storedText.nullable(),
-	credential_sha256: storedDigest.nullable(),
-	recovery_secret_ref: storedVaultRef.nullable(),
+	app_credential_ref: storedVaultRef.nullable(),
 	webhook_secret_ref: storedVaultRef.nullable(),
 })
 const connectionFieldsSchema = z.object({
@@ -50,7 +48,7 @@ const connectionFieldsSchema = z.object({
 	app_owner: storedText,
 	app_name: storedText,
 	app_public: storedBoolean,
-	credential_sha256: storedDigest,
+	app_credential_ref: storedVaultRef,
 	webhook_url: storedText,
 	webhook_secret_ref: storedVaultRef,
 	installation_account_login: storedText,
@@ -69,8 +67,7 @@ const storedFieldLabels: Readonly<Record<string, string>> = {
 	app_id: 'app id',
 	app_slug: 'app slug',
 	app_html_url: 'app HTML URL',
-	credential_sha256: 'credential digest',
-	recovery_secret_ref: 'vault ref',
+	app_credential_ref: 'vault ref',
 	webhook_secret_ref: 'vault ref',
 	connection_id: 'connection id',
 	app_owner: 'app owner',
@@ -115,8 +112,7 @@ export function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 		appId: fields.app_id,
 		appSlug: fields.app_slug,
 		appHtmlUrl: fields.app_html_url,
-		credentialSha256: fields.credential_sha256,
-		recoverySecretRef: fields.recovery_secret_ref,
+		appCredentialRef: fields.app_credential_ref,
 		webhookSecretRef: fields.webhook_secret_ref,
 		lastErrorCode: parseOptionalErrorCode(row.last_error_code),
 		createdAt: row.created_at,
@@ -127,39 +123,22 @@ export function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 }
 
 function validatePhaseFields(row: GitHubSetupAttemptRow, phase: GitHubSetupPhase): void {
-	const sourceWritten = phaseIndex(phase) >= phaseIndex('source_bundle_written')
-	const sourceActivated = phaseIndex(phase) >= phaseIndex('source_activated')
+	const credentialStored = phaseIndex(phase) >= phaseIndex('credential_stored')
+	const appVerified = phaseIndex(phase) >= phaseIndex('app_verified')
 	const webhookStored = phaseIndex(phase) >= phaseIndex('webhook_secret_stored')
-	const recoveryExpected = phaseIndex(phase) >= phaseIndex('recovery_stored') && phaseIndex(phase) < phaseIndex('installation_required')
-	if (sourceWritten && row.credential_sha256 === null) throw new Error('invalid GitHub setup credential state')
-	if (sourceActivated && (row.app_id === null || row.app_slug === null || row.app_html_url === null)) {
-		throw new Error('invalid GitHub setup App state')
-	}
-	if (sourceActivated) {
+	if (appVerified) {
 		if (row.app_id === null || !/^[1-9][0-9]*$/.test(row.app_id)) throw new Error('invalid GitHub setup App id')
 		if (row.app_slug === null || !/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(row.app_slug)) {
 			throw new Error('invalid GitHub setup App slug')
 		}
 		if (row.app_html_url !== `https://github.com/apps/${row.app_slug}`) throw new Error('invalid GitHub setup App URL')
 	}
-	if (recoveryExpected !== (row.recovery_secret_ref !== null)) throw new Error('invalid GitHub setup recovery state')
+	if (credentialStored !== (row.app_credential_ref !== null)) throw new Error('invalid GitHub setup credential state')
 	if (webhookStored !== (row.webhook_secret_ref !== null)) throw new Error('invalid GitHub setup webhook state')
 }
 
 function phaseIndex(phase: GitHubSetupPhase): number {
-	const phases: readonly GitHubSetupPhase[] = [
-		'awaiting_manifest_callback',
-		'exchange_claimed',
-		'recovery_stored',
-		'source_bundle_written',
-		'source_activated',
-		'webhook_secret_stored',
-		'webhook_configured',
-		'configuration_verified',
-		'installation_required',
-		'connected',
-	]
-	return phases.indexOf(phase)
+	return PHASES.indexOf(phase)
 }
 
 export function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceConnection {
@@ -172,14 +151,13 @@ export function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceCo
 	const fields = parsed.data
 	return {
 		connectionId: fields.connection_id,
-		transportKind: parseTransportKind(row.transport_kind),
 		appId: fields.app_id,
 		appSlug: fields.app_slug,
 		appHtmlUrl: fields.app_html_url,
 		appOwner: fields.app_owner,
 		appName: fields.app_name,
 		appPublic: fields.app_public,
-		credentialSha256: fields.credential_sha256,
+		appCredentialRef: fields.app_credential_ref,
 		webhookUrl: fields.webhook_url,
 		webhookSecretRef: fields.webhook_secret_ref,
 		installationId: row.installation_id,
@@ -192,12 +170,6 @@ export function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceCo
 		verifiedAt: row.verified_at,
 		version: row.version,
 	}
-}
-
-function parseTransportKind(value: string): GitHubSourceTransportKind {
-	const parsed = z.literal('keyed-v2').safeParse(value)
-	if (parsed.success) return parsed.data
-	throw new Error('invalid GitHub source transport kind')
 }
 
 function parseStatus(value: string): GitHubSetupStatus {
@@ -216,12 +188,10 @@ function parsePhase(value: string): GitHubSetupPhase {
 	const parsed = z.enum([
 		'awaiting_manifest_callback',
 		'exchange_claimed',
-		'recovery_stored',
-		'source_bundle_written',
-		'source_activated',
+		'credential_stored',
+		'app_verified',
 		'webhook_secret_stored',
 		'webhook_configured',
-		'configuration_verified',
 		'installation_required',
 		'connected',
 	]).safeParse(value)
@@ -230,13 +200,11 @@ function parsePhase(value: string): GitHubSetupPhase {
 }
 
 export function canTransition(current: GitHubSetupPhase, next: GitHubSetupPhase): boolean {
-	if (current === 'exchange_claimed') return next === 'recovery_stored'
-	if (current === 'recovery_stored') return next === 'source_bundle_written'
-	if (current === 'source_bundle_written') return next === 'source_activated'
-	if (current === 'source_activated') return next === 'webhook_secret_stored'
+	if (current === 'exchange_claimed') return next === 'credential_stored'
+	if (current === 'credential_stored') return next === 'app_verified'
+	if (current === 'app_verified') return next === 'webhook_secret_stored'
 	if (current === 'webhook_secret_stored') return next === 'webhook_configured'
-	if (current === 'webhook_configured') return next === 'configuration_verified'
-	if (current === 'configuration_verified') return next === 'installation_required'
+	if (current === 'webhook_configured') return next === 'installation_required'
 	return false
 }
 

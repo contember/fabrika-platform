@@ -101,7 +101,7 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
 	return crypto.subtle.verify('HMAC', key, provided, utf8(rawBody))
 }
 
-/** Keep webhook authentication local while delegating installation ownership to the source service. */
+/** Keep webhook authentication local while delegating installation lookup to the composition. */
 export class LocalGitHubRepoEvents implements RepoEvents {
 	private readonly webhookSecrets: WebhookSecretProvider
 

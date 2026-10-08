@@ -1,8 +1,8 @@
 import type { StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse } from '@fabrika/control-contract'
 import { buildGitHubAppManifest, exchangeGitHubAppManifestCode } from '@fabrika/github-app'
-import { githubManifestStateSecretLabel, githubRecoverySecretLabel, type GitHubSetupAttempt } from '../github-connection-store'
+import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, type GitHubSetupAttempt } from '../github-connection-store'
 import { vault } from '../services'
-import type { SourceConnectionPort } from '../source-connection-port'
+import { encodeGitHubAppCredential } from '../source/credentials'
 import { uuidv7 } from '../uuid'
 import { advanceWithDeadline, errorForPhase } from './configuration'
 import {
@@ -30,7 +30,7 @@ const MAX_CONNECTION_ID_LENGTH = 128
 
 const MAX_CALLBACK_QUERY_LENGTH = 1024
 
-const RECOVERY_DEADLINE_MS = 30_000
+const PERSISTENCE_DEADLINE_MS = 30_000
 
 const FAILURE_SETTLE_ATTEMPTS = 10
 
@@ -52,23 +52,13 @@ export async function startSourceConnection(
 	const repositories = canonicalRepositories(input.organization, input.repositories)
 	const attemptId = uuidv7()
 	buildManifest(owner, input.appName, origin, attemptId)
-	const [existing, workflow, sameOwner] = await Promise.all([
-		deps.env.REPOSITORIES.githubConnections.listConnections({ limit: 1 }),
+	// The App key has nowhere to go without the vault, and GitHub hands it over exactly once.
+	if (!deps.source.available || deps.env.FABRIKA_CONTROL_VAULT_KEY === undefined) throw new SourceConnectionWorkflowError(503)
+	const [workflow, sameOwner] = await Promise.all([
 		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
 		deps.env.REPOSITORIES.githubConnections.getConnectionByOwner(owner),
 	])
 	if (workflow !== null || sameOwner !== null) throw new SourceConnectionWorkflowError(409)
-	if (existing.items.length === 0) {
-		let inspection: Awaited<ReturnType<SourceConnectionPort['inspect']>>
-		try {
-			inspection = await deps.source.inspect(deps.request.signal)
-		} catch {
-			throwIfAborted(deps.request.signal)
-			throw new SourceConnectionWorkflowError(503)
-		}
-		if (inspection.state === 'unavailable') throw new SourceConnectionWorkflowError(503)
-		if (inspection.state !== 'anonymous') throw new SourceConnectionWorkflowError(409)
-	}
 	const state = randomToken(STATE_BYTES, deps.randomBytes)
 	const stateHash = await sha256(state)
 	const secretVault = await vault(deps.env)
@@ -158,18 +148,15 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 		throw new SourceConnectionWorkflowError(502, 'the GitHub App manifest exchange failed')
 	}
 
-	let preparedCredential: Awaited<ReturnType<SourceConnectionPort['prepareCredential']>>
 	try {
-		const persistence = serverDeadline(RECOVERY_DEADLINE_MS)
+		// ADR-0029: the key is in the vault, in the same transaction as the checkpoint, before anything reports success.
+		const persistence = serverDeadline(PERSISTENCE_DEADLINE_MS)
 		let stored: GitHubSetupAttempt | null
 		try {
-			preparedCredential = await abortable(
-				deps.source.prepareCredential({ connectionId: claimed.id, appId: String(created.id), privateKeyPem: created.pem }),
-				persistence.signal,
-			)
+			const credential = encodeGitHubAppCredential({ appId: String(created.id), privateKeyPem: created.pem })
 			const secretVault = await abortable(vault(deps.env), persistence.signal)
-			const recovery = await abortable(
-				secretVault.prepareSecret('platform', githubRecoverySecretLabel(claimed.id), preparedCredential.bundle),
+			const prepared = await abortable(
+				secretVault.prepareSecret('platform', githubAppCredentialSecretLabel(claimed.id), credential),
 				persistence.signal,
 			)
 			stored = await abortable(
@@ -177,9 +164,9 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 					claimed.id,
 					claimed.version,
 					'exchange_claimed',
-					'recovery_stored',
-					'recovery',
-					recovery,
+					'credential_stored',
+					'app-credential',
+					prepared,
 				),
 				persistence.signal,
 			)
@@ -187,7 +174,7 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 			persistence.dispose()
 		}
 		if (stored === null) throw new Error('checkpoint failed')
-		await advanceWithDeadline(deps, stored, preparedCredential)
+		await advanceWithDeadline(deps, stored)
 	} catch {
 		const disposition = await settleCallbackFailure(deps, claimed)
 		throwIfAborted(deps.request.signal)
@@ -254,7 +241,7 @@ async function settleCallbackFailure(
 		if (current === null || current.status === 'failed') return 'failed'
 		if (current.status === 'repair_required') return 'repair_required'
 		if (current.status !== 'active') throw new SourceConnectionWorkflowError(503)
-		if (current.recoverySecretRef !== null) {
+		if (current.appCredentialRef !== null) {
 			const repair = await deps.env.REPOSITORIES.githubConnections.markRepairRequired(
 				current.id,
 				current.version,

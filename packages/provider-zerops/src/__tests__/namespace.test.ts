@@ -43,6 +43,7 @@ import {
 } from '../namespace'
 import { decodeZeropsNamespaceProxySource } from '../namespace/proxy-source'
 import type { ZeropsNamespaceProxySource } from '../namespace/types'
+import type { ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
 
 interface FakeState {
@@ -218,7 +219,7 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		versions.push(version)
 		state.versions.set(serviceId, versions)
 		state.calls.push(`createAppVersion:${serviceId}`)
-		return { id: version.id, uploadUrl: 'https://upload.test/archive?signature=test' }
+		return { id: version.id, uploadUrl: `https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?version=${version.id}&signature=test` }
 	},
 	buildAndDeployAppVersion: async ({ appVersionId }) => {
 		state.triggerCount++
@@ -326,17 +327,23 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	readBuildLog: async () => [],
 })
 
+const uploadedVersion = (uploadUrl: string): string | null => new URL(uploadUrl).searchParams.get('version')
+
+const uploaded = (input: ZeropsSourceUploadInput) => ({
+	commitSha: input.commitSha,
+	descriptorSha256: input.descriptorSha256,
+	entryCount: 1,
+	expandedBytes: 1,
+})
+
 const options = (state: FakeState): ZeropsNamespaceOptions => ({
 	proxySource: PIN,
 	source: {
-		resolve: async (input) => ({ runId: input.runId, commitSha: input.requestedRef, descriptorSha256: input.descriptorSha256 }),
+		resolve: async (input) => ({ commitSha: input.requestedRef, descriptorSha256: input.descriptorSha256 }),
 		upload: async (input) => {
-			state.calls.push(`upload:${input.appVersionId}`)
-			expect(input.archiveKind).toBe('platform')
-			return { runId: input.runId, appVersionId: input.appVersionId, commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }
-		},
-		cancel: async (input) => {
-			state.calls.push(`cancelSource:${input.appVersionId}`)
+			state.calls.push(`upload:${uploadedVersion(input.uploadUrl)}`)
+			expect(input.archive).toEqual({ kind: 'platform' })
+			return uploaded(input)
 		},
 	},
 	clientId: 'client-1',
@@ -458,17 +465,15 @@ describe('immutable namespace proxy sources', () => {
 					expect(input.repository).toEqual(PIN.repository)
 					expect(input.requestedRef).toBe(PIN.commitSha)
 					expect(input.expectedCommitSha).toBe(PIN.commitSha)
-					expect(input.githubInstallationId).toBeUndefined()
-					return { runId: input.runId, commitSha: PIN.commitSha, descriptorSha256: PIN.descriptor.sha256 }
+					expect(input.privateBinding).toBeUndefined()
+					return { commitSha: PIN.commitSha, descriptorSha256: PIN.descriptor.sha256 }
 				},
 				upload: async (input) => {
 					expect(input.commitSha).toBe(PIN.commitSha)
-					expect(input.archiveKind).toBe('platform')
-					expect(input.githubInstallationId).toBeUndefined()
-					state.calls.push(`upload:${input.appVersionId}`)
-					return { runId: input.runId, appVersionId: input.appVersionId, commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }
+					expect(input.archive).toEqual({ kind: 'platform' })
+					state.calls.push(`upload:${uploadedVersion(input.uploadUrl)}`)
+					return uploaded(input)
 				},
-				cancel: async () => {},
 			},
 			api: {
 				...base.api,
@@ -528,7 +533,7 @@ describe('immutable namespace proxy sources', () => {
 		if (source === undefined) throw new Error('source missing')
 		const wrongResolve = createZeropsNamespaceCapabilities({
 			...base,
-			source: { ...source, resolve: async (input) => ({ runId: input.runId, commitSha: 'b'.repeat(40), descriptorSha256: input.descriptorSha256 }) },
+			source: { ...source, resolve: async (input) => ({ commitSha: 'b'.repeat(40), descriptorSha256: input.descriptorSha256 }) },
 		})
 		await expect(run(wrongResolve, namespace({}), [])).rejects.toThrow('resolution identity mismatch')
 		expect(state.calls).toEqual([])
@@ -536,7 +541,7 @@ describe('immutable namespace proxy sources', () => {
 			...base,
 			source: {
 				...source,
-				upload: async (input) => ({ runId: input.runId, appVersionId: 'other', commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }),
+				upload: async (input) => ({ ...uploaded(input), commitSha: 'b'.repeat(40) }),
 			},
 		})
 		const checkpoints: ProviderDeploymentNamespace[] = []

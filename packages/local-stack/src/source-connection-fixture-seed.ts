@@ -1,27 +1,20 @@
-import { githubWebhookSecretLabel } from '@fabrika/control/github-connection-store'
+import { githubAppCredentialSecretLabel, githubWebhookSecretLabel } from '@fabrika/control/github-connection-store'
+import { encodeGitHubAppCredential } from '@fabrika/control/source'
 import { Vault } from '@fabrika/control/vault'
 import { PostgresDatabase } from '@fabrika/platform-node'
-import {
-	decodeZeropsSourceCredentialBundleV2,
-	sha256ZeropsSourceCredentialBundleV2,
-	ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX,
-} from '@fabrika/provider-zerops'
-import { randomBytes } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { LOCAL_SOURCE_CONNECTIONS, type LocalSourceConnectionFixture } from './source-connection-fixture'
-
-const SOURCE_ENV = resolve(import.meta.dir, '..', '.state', 'source.env')
 
 interface ExistingConnectionRow {
 	connection_id: string
 }
 
+/** Two keyed connections whose App keys live in Control's vault, as a console setup would leave them (ADR-0029). */
 async function seed(): Promise<void> {
 	const databaseUrl = required('FABRIKA_CONTROL_DATABASE_URL')
 	const vaultKey = required('FABRIKA_CONTROL_VAULT_KEY')
-	const sourceEnv = parseEnv(await readFile(SOURCE_ENV, 'utf8'))
-	const credentials = await credentialDigests(sourceEnv)
+	// No GitHub App is reachable locally, so one throwaway key serves every connection.
+	const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } })
 	const database = PostgresDatabase.connect(databaseUrl, { max: 1 })
 	try {
 		const vault = await Vault.create(database, vaultKey)
@@ -30,6 +23,11 @@ async function seed(): Promise<void> {
 				.bind(connection.connectionId)
 				.first<ExistingConnectionRow>()
 			if (existing !== null) continue
+			const appCredentialRef = await vault.putSecret(
+				'platform',
+				githubAppCredentialSecretLabel(connection.connectionId),
+				encodeGitHubAppCredential({ appId: connection.githubAppId, privateKeyPem: privateKey }),
+			)
 			// The smoke signs its push with control's own `GITHUB_WEBHOOK_SECRET`, so the first connection
 			// holds exactly that value; every other connection gets an unrelated one.
 			const webhookSecretRef = await vault.putSecret(
@@ -37,35 +35,25 @@ async function seed(): Promise<void> {
 				githubWebhookSecretLabel(connection.connectionId),
 				index === 0 ? required('GITHUB_WEBHOOK_SECRET') : randomBytes(32).toString('base64url'),
 			)
-			await insertConnection(database, connection, requiredMapValue(credentials, connection.connectionId), webhookSecretRef)
+			await insertConnection(database, connection, appCredentialRef, webhookSecretRef)
 		}
 	} finally {
 		await database.close()
 	}
 }
 
-async function credentialDigests(sourceEnv: Record<string, string>): Promise<Map<string, string>> {
-	const values = new Map<string, string>()
-	for (const [name, value] of Object.entries(sourceEnv)) {
-		if (!name.startsWith(ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX)) continue
-		const bundle = decodeZeropsSourceCredentialBundleV2(value)
-		values.set(bundle.connectionId, await sha256ZeropsSourceCredentialBundleV2(value))
-	}
-	return values
-}
-
 async function insertConnection(
 	database: PostgresDatabase,
 	connection: LocalSourceConnectionFixture,
-	credentialSha256: string,
+	appCredentialRef: string,
 	webhookSecretRef: string,
 ): Promise<void> {
 	await database.prepare(`INSERT INTO github_source_connections_keyed (
-		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 		installation_account_login, installation_selection, verified_repositories_json,
 		requested_repositories_json, connected_by, connected_at, verified_at, version
-	) VALUES (?, 'keyed-v2', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '[]', '[]', 'local-fixture', 1, 1, 1)`)
+	) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '[]', '[]', 'local-fixture', 1, 1, 1)`)
 		.bind(
 			connection.connectionId,
 			connection.githubAppId,
@@ -73,7 +61,7 @@ async function insertConnection(
 			`https://github.com/apps/fabrika-${connection.connectionId}`,
 			connection.owner,
 			`fabrika-${connection.connectionId}`,
-			credentialSha256,
+			appCredentialRef,
 			`http://control.fabrika.localhost:18080/webhooks/github/${connection.connectionId}`,
 			webhookSecretRef,
 			connection.installationId,
@@ -82,28 +70,9 @@ async function insertConnection(
 		.run()
 }
 
-function parseEnv(source: string): Record<string, string> {
-	const values: Record<string, string> = {}
-	for (const line of source.split('\n')) {
-		if (line === '') continue
-		const separator = line.indexOf('=')
-		if (separator <= 0) throw new Error('the local source fixture is invalid')
-		const key = line.slice(0, separator)
-		if (values[key] !== undefined) throw new Error('the local source fixture is invalid')
-		values[key] = line.slice(separator + 1)
-	}
-	return values
-}
-
 function required(name: string): string {
 	const value = process.env[name]
 	if (value === undefined || value === '') throw new Error(`${name} is required`)
-	return value
-}
-
-function requiredMapValue(values: ReadonlyMap<string, string>, key: string): string {
-	const value = values.get(key)
-	if (value === undefined || value === '') throw new Error('the local source fixture is incomplete')
 	return value
 }
 

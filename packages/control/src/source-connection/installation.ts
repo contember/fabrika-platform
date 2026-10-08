@@ -1,9 +1,9 @@
 import type { GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
 import { type GitHubSetupAttempt, type GitHubSetupPhase, githubWebhookSecretLabel } from '../github-connection-store'
 import { vault } from '../services'
-import type { SourceConnectionPort, SourceConnectionRuntimeStatus, SourceInstallationScope } from '../source-connection-port'
-import { advanceWithDeadline, errorForPhase, matchesConnectionIdentity, webhookUrl } from './configuration'
-import { audit, requireHuman, requireSameOrigin, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
+import type { SourceGitHubAppIdentity, SourceInstallationScope, SourceInstallationVerification } from '../source/connections'
+import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, errorForPhase, matchesConnectionIdentity, webhookUrl } from './configuration'
+import { audit, linkedDeadline, requireHuman, requireSameOrigin, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
 import { reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
 import { connectionDto, splitRepository, workflowDto } from './status'
 
@@ -11,19 +11,22 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
 	requireHuman(deps.auth)
 	requireSameOrigin(deps.env, deps.request)
 	const attempt = await requireAttempt(deps, connectionId, 'installation_required')
-	if (attempt.credentialSha256 === null) throw new SourceConnectionWorkflowError(409)
+	if (attempt.appCredentialRef === null) throw new SourceConnectionWorkflowError(409)
 	const scope = installationScope(attempt)
-	let verification: Awaited<ReturnType<SourceConnectionPort['verifyInstallations']>>
+	let verification: SourceInstallationVerification
+	const deadline = linkedDeadline(deps.request.signal, CONFIGURATION_DEADLINE_MS)
 	try {
 		verification = await deps.source.verifyInstallations({
+			credentialRef: attempt.appCredentialRef,
 			connectionId: attempt.id,
-			credentialSha256: attempt.credentialSha256,
 			scope,
-			signal: deps.request.signal,
+			signal: deadline.signal,
 		})
 	} catch (error) {
 		throwIfAborted(deps.request.signal)
 		throw sourceUnavailable(error)
+	} finally {
+		deadline.dispose()
 	}
 	if (verification.status === 'missing' || verification.accountLogin.toLowerCase() !== attempt.desiredOwner.toLowerCase()) {
 		throw new SourceConnectionWorkflowError(409, 'GitHub App installation is incomplete')
@@ -72,69 +75,41 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	return workflowDto(deps.source.provider, current)
 }
 
-/** Recover one stable connection from its verified durable credential and reapply its webhook binding. */
+/** Re-verify one stable connection's App with its vault key and reapply its webhook; nothing about the binding changes. */
 export async function reconcileSourceConnection(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
 	requireSameOrigin(deps.env, deps.request)
 	const connection = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
 	if (connection === null) throw new SourceConnectionWorkflowError(404)
-	let status: SourceConnectionRuntimeStatus
+	const deadline = linkedDeadline(deps.request.signal, CONFIGURATION_DEADLINE_MS)
 	try {
-		status = await deps.source.status({
-			connectionId: connection.connectionId,
-			signal: deps.request.signal,
-		})
-	} catch (error) {
-		throwIfAborted(deps.request.signal)
-		throw reconcileUnavailable('inspect', error)
-	}
-	if (status.state !== 'active') throw new SourceConnectionWorkflowError(409, 'the durable source credential is not active')
-	if (!matchesConnectionIdentity(connection, status.githubApp)) {
-		throw new SourceConnectionWorkflowError(409, 'the durable source credential belongs to a different GitHub App')
-	}
-	const secretVault = await vault(deps.env)
-	const webhookSecret = await secretVault.getSecretForPurpose(connection.webhookSecretRef, {
-		scope: 'platform',
-		label: githubWebhookSecretLabel(connection.connectionId),
-	})
-	let configured: Awaited<ReturnType<SourceConnectionPort['configureWebhook']>>
-	try {
-		configured = await deps.source.configureWebhook({
-			connectionId: connection.connectionId,
-			credentialSha256: status.credentialSha256,
-			url: connection.webhookUrl,
-			secret: webhookSecret,
-			signal: deps.request.signal,
-		})
-	} catch (error) {
-		throwIfAborted(deps.request.signal)
-		throw reconcileUnavailable('configure', error)
-	}
-	if (
-		configured.connectionId !== connection.connectionId || configured.credentialSha256 !== status.credentialSha256
-		|| configured.webhook.url !== connection.webhookUrl
-		|| configured.webhook.contentType !== 'json' || configured.webhook.insecureSsl !== '0'
-	) throw new SourceConnectionWorkflowError(503, 'the source service returned a mismatched webhook binding')
-	let reconciled = connection
-	if (status.credentialSha256 !== connection.credentialSha256) {
-		const rebound = await deps.env.REPOSITORIES.githubConnections.rebindCredential(
-			connection.connectionId,
-			connection.version,
-			connection.credentialSha256,
-			status.credentialSha256,
-		)
-		if (rebound === null) {
-			const current = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connection.connectionId)
-			if (current === null || current.credentialSha256 !== status.credentialSha256) {
-				throw new SourceConnectionWorkflowError(409, 'the source connection changed while it was being reconciled')
-			}
-			reconciled = current
-		} else {
-			reconciled = rebound
+		const credential = { credentialRef: connection.appCredentialRef, connectionId: connection.connectionId, signal: deadline.signal }
+		let app: SourceGitHubAppIdentity
+		try {
+			app = await deps.source.verifyApp(credential)
+		} catch (error) {
+			throwIfAborted(deps.request.signal)
+			throw reconcileUnavailable('verify', error)
 		}
+		if (!matchesConnectionIdentity(connection, app)) {
+			throw new SourceConnectionWorkflowError(409, 'the vault-held key belongs to a different GitHub App')
+		}
+		const secretVault = await vault(deps.env)
+		const webhookSecret = await secretVault.getSecretForPurpose(connection.webhookSecretRef, {
+			scope: 'platform',
+			label: githubWebhookSecretLabel(connection.connectionId),
+		})
+		try {
+			await deps.source.configureWebhook({ ...credential, url: connection.webhookUrl, secret: webhookSecret })
+		} catch (error) {
+			throwIfAborted(deps.request.signal)
+			throw reconcileUnavailable('configure', error)
+		}
+	} finally {
+		deadline.dispose()
 	}
 	await audit(deps.auth, 'source.connection.reconcile', connection.connectionId)
-	return connectionDto(deps.source.provider, reconciled)
+	return connectionDto(deps.source.provider, connection)
 }
 
 function installationScope(attempt: GitHubSetupAttempt): SourceInstallationScope {

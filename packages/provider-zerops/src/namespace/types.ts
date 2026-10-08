@@ -2,7 +2,8 @@ import type { ProviderNamespaceHost } from '@fabrika/provider-contract'
 import type { ZeropsApi, ZeropsProjectMode } from '../api'
 import type { Sleeper } from '../collaborators'
 import type { ZeropsArtifactSourceDescriptor } from '../manifest'
-import type { ZeropsSourceClient, ZeropsSourceRepository } from '../source'
+import type { ZeropsSourceRepository } from '../source'
+import type { ZeropsSourcePort } from '../source/port'
 import type { ZeropsSourceTarget } from '../types'
 
 export type ZeropsNamespacePublicAccess = 'custom-domain' | 'zerops-subdomain'
@@ -74,7 +75,7 @@ export interface NormalizedZeropsNamespaceTarget extends ZeropsNamespaceTarget {
 
 export interface ZeropsNamespaceOptions {
 	readonly proxySource?: ZeropsNamespaceProxySource
-	readonly source?: ZeropsSourceClient
+	readonly source?: ZeropsSourcePort
 	readonly clientId: string
 	readonly proxyBuildFromGit?: string
 	/** Public IAM origin reachable from an app project. */

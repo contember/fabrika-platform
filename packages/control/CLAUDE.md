@@ -133,6 +133,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   a full origin mean the same thing; stating no origin is supported and means no claim.
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
+- **Zerops GitHub sources run in process (`src/source/`, ADR-0029).** Each connection's App id and key are a
+  platform vault entry (`platform:github-source:<id>:app-credential`), written in the callback's checkpoint
+  transaction and read per operation; nothing caches them. A private operation names `(connectionId,
+  installationId)` and never falls back to another connection. Origins are fixed; `createRuntime` takes
+  transport seams only from code (the local stack's `control-server.ts`), never from env. `archive.ts`,
+  `repository.ts`, `transport.ts`, `metadata.ts` are process-only; the shared layer reaches only
+  `connections.ts` and `credentials.ts`. Every gzip stage goes through `pullThrough` (`src/source/streams.ts`):
+  Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.
   An unknown / unresolvable ref THROWS — never deploy with an empty credential. The resolver handles ONLY
   per-app `pipeline.secrets`; platform creds are fabrika's own Worker config (below).

@@ -107,14 +107,14 @@ function insertSourceConnection(
 	input: { connectionId: string; installationId: number },
 ): void {
 	sqlite.query(`INSERT INTO github_source_connections_keyed (
-		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 		installation_account_login, installation_selection, verified_repositories_json,
 		requested_repositories_json, connected_by, connected_at, verified_at, version
-	) VALUES (?, ?, 'github-app', 'github-app', 'https://github.com/apps/github-app', 'acme', 'github-app', 0,
+	) VALUES (?, 'github-app', 'github-app', 'https://github.com/apps/github-app', 'acme', 'github-app', 0,
 		?, 'https://control.example.test/webhooks/github', 'vault:webhook', ?,
 		'acme', 'all', '[]', '[]', 'operator', 1, 1, 1)`)
-		.run(input.connectionId, 'keyed-v2', 'c'.repeat(64), input.installationId)
+		.run(input.connectionId, 'vault:credential', input.installationId)
 }
 
 async function activateOperationsIngest(db: ControlRepositories): Promise<string> {

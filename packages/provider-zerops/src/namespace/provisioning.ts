@@ -217,16 +217,14 @@ const readProxyHosts = async (
 const resolveProxySource = async (source: ZeropsNamespaceProxySource, options: ZeropsNamespaceOptions, signal: AbortSignal): Promise<void> => {
 	if (options.source === undefined) throw new Error('Zerops namespace source client is required')
 	signal.throwIfAborted()
-	const runId = crypto.randomUUID()
 	const resolved = await options.source.resolve({
-		runId,
 		repository: source.repository,
 		requestedRef: source.commitSha,
 		expectedCommitSha: source.commitSha,
 		descriptorSha256: source.descriptor.sha256,
 		signal,
 	})
-	if (resolved.runId !== runId || resolved.commitSha !== source.commitSha || resolved.descriptorSha256 !== source.descriptor.sha256) {
+	if (resolved.commitSha !== source.commitSha || resolved.descriptorSha256 !== source.descriptor.sha256) {
 		throw new Error('Proxy source resolution identity mismatch')
 	}
 }

@@ -22,9 +22,9 @@ import { runMaintenance } from '../cron'
 import { type ControlRepositories, createControlRepositories, uuidv7 } from '../db'
 import type { Env } from '../env'
 import {
+	githubAppCredentialSecretLabel,
 	GitHubConnectionStore,
 	githubManifestStateSecretLabel,
-	githubRecoverySecretLabel,
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
 } from '../github-connection-store'
@@ -32,7 +32,7 @@ import { applyMigrations, postgresMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
 import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
-import { unavailableSourceConnection } from '../source-connection-port'
+import { unavailableSourceConnection } from '../source/connections'
 import { Vault } from '../vault'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
@@ -158,6 +158,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0017_keyed_github_source_connections.sql' },
 			{ bundle: 'control', name: '0018_retire_legacy_github_source.sql' },
 			{ bundle: 'control', name: '0019_builder_connection_receipts.sql' },
+			{ bundle: 'control', name: '0020_github_app_credentials_in_vault.sql' },
 		])
 	})
 
@@ -688,7 +689,7 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 })
 
 describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres', () => {
-	test('copies singleton evidence, then drops it with every legacy row, leaving a legacy-bound app closed', async () => {
+	test('drops every pre-vault connection, setup and GitHub vault entry, leaving a legacy-bound app closed', async () => {
 		if (postgresUrl === null) throw new Error('Postgres fixture is unavailable')
 		const schema = `github_upgrade_${Math.random().toString(36).slice(2, 10)}`
 		const admin = PostgresDatabase.connect(postgresUrl, { max: 1 })
@@ -729,6 +730,10 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			) VALUES ('repair', 'repair_required', 'awaiting_manifest_callback', 1, 'principal-1',
 				'https://control.example', 'repair-owner', 'repair-app', 0, '[]', 1, 1, 2)`)
 				.run()
+			const masterKey = kek()
+			const preVault = await Vault.create(upgrade, masterKey)
+			await preVault.putSecret('platform', 'platform:github-source:repair:recovery', 'one-time-bundle')
+			const unrelated = await preVault.putSecret('platform', 'platform:other', 'kept')
 
 			await applyMigrations(upgrade, migrations)
 
@@ -748,11 +753,15 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			])
 			await expect(upgraded.registry.getSourceBinding('zerops-match', 'connection')).rejects.toThrow('incomplete')
 			expect(await upgraded.registry.getSourceBinding('cloudflare-only', 'installation')).toEqual({ installationId: 45 })
-			// 0018 removes only adoption attempts; repair evidence survives and still blocks a new setup.
-			const vault = await Vault.create(upgrade, kek())
-			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('blocked-by-repair'), 'opaque-state')
+			// 0020 (ADR-0029, D2): no setup and no GitHub key from the source-service layout survives.
+			expect(await upgraded.githubConnections.getWorkflowAttempt()).toBeNull()
+			const { results: vaultLabels } = await upgrade.prepare('SELECT label FROM vault ORDER BY label').all<{ label: string }>()
+			expect(vaultLabels).toEqual([{ label: 'platform:other' }])
+			const vault = await Vault.create(upgrade, masterKey)
+			expect(await vault.getSecret(unrelated)).toBe('kept')
+			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('after-upgrade'), 'opaque-state')
 			await expect(upgraded.githubConnections.beginAttemptWithManifestState({
-				id: 'blocked-by-repair',
+				id: 'after-upgrade',
 				stateHash: 'a'.repeat(64),
 				initiatedBy: 'principal-1',
 				expectedOrigin: 'https://control.example',
@@ -761,25 +770,22 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				desiredPublic: false,
 				requestedRepositories: [],
 				expiresAt: now() + 60,
-			}, manifestState)).rejects.toThrow('could not be started')
-			expect(await upgraded.githubConnections.getAttempt('blocked-by-repair')).toBeNull()
-			expect((await upgraded.githubConnections.getWorkflowAttempt())?.id).toBe('repair')
-			await expect(vault.getSecret(manifestState.ref)).rejects.toThrow('unresolvable vault ref')
+			}, manifestState)).resolves.toMatchObject({ id: 'after-upgrade', phase: 'awaiting_manifest_callback' })
 
 			const insertKeyedConnection = (connectionId: string, owner: string, installationId: number) =>
 				upgradeDatabase.prepare(`INSERT INTO github_source_connections_keyed (
-					connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-					credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+					connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+					app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 					installation_account_login, installation_selection, verified_repositories_json,
 					requested_repositories_json, connected_by, connected_at, verified_at, version
-				) VALUES (?, 'keyed-v2', '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 1)`)
+				) VALUES (?, '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 1)`)
 					.bind(
 						connectionId,
 						`${connectionId}-app`,
 						`https://github.com/apps/${connectionId}-app`,
 						owner,
 						`${connectionId}-app`,
-						'c'.repeat(64),
+						`vault:${connectionId}-credential`,
 						`https://control.example/webhooks/github/${connectionId}`,
 						`vault:${connectionId}-webhook`,
 						installationId,
@@ -794,11 +800,6 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			expect(firstPage.nextCursor).toBe('keyed-beta')
 			expect((await upgraded.githubConnections.listConnections({ cursor: firstPage.nextCursor ?? '', limit: 2 })).items
 				.map((connection) => connection.connectionId)).toEqual(['keyed-gamma'])
-			await expect(
-				upgrade.prepare(
-					`UPDATE github_source_connections_keyed SET transport_kind = 'legacy-v1' WHERE connection_id = 'keyed-beta'`,
-				).run(),
-			).rejects.toThrow('immutable')
 			expect(
 				await upgraded.registry.replaceAppGitHubSourceBinding('cloudflare-only', { connectionId: null, installationId: 45 }),
 			).toMatchObject({ github_connection_id: null, github_installation_id: 45 })
@@ -827,18 +828,18 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 		}, manifestState)
 		const claimed = await db.githubConnections.claimCallback('a'.repeat(64), 'principal-1')
 		if (claimed === null) throw new Error('callback claim failed')
-		const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'one-time-credential')
+		const credential = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'app-credential')
 		const stored = await db.githubConnections.storeSecretAndCheckpoint(
 			started.id,
 			claimed.version,
 			'exchange_claimed',
-			'recovery_stored',
-			'recovery',
-			recovery,
+			'credential_stored',
+			'app-credential',
+			credential,
 		)
-		expect(stored?.phase).toBe('recovery_stored')
-		expect(await vault.getSecretForPurpose(recovery.ref, { scope: 'platform', label: githubRecoverySecretLabel(started.id) })).toBe(
-			'one-time-credential',
+		expect(stored?.phase).toBe('credential_stored')
+		expect(await vault.getSecretForPurpose(credential.ref, { scope: 'platform', label: githubAppCredentialSecretLabel(started.id) })).toBe(
+			'app-credential',
 		)
 		expect(await db.githubConnections.claimCallback('a'.repeat(64), 'principal-1')).toBeNull()
 	})
@@ -865,19 +866,19 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			}, manifestState)
 			const claimed = await db.githubConnections.claimCallback('b'.repeat(64), 'principal-1')
 			if (claimed === null) throw new Error('callback claim failed')
-			const first = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'first')
-			const second = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'second')
+			const first = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'first')
+			const second = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'second')
 			const barrier = new TwoConnectionBarrier()
 			const left = new GitHubConnectionStore(new PostgresBarrierDatabase(raw, barrier))
 			const right = new GitHubConnectionStore(new PostgresBarrierDatabase(secondRaw, barrier))
 			const outcomes = await Promise.allSettled([
-				left.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', first),
-				right.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', second),
+				left.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'credential_stored', 'app-credential', first),
+				right.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'credential_stored', 'app-credential', second),
 			])
 			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
 			expect((await raw.prepare('SELECT COUNT(*)::int AS count FROM vault').first<{ count: number }>())?.count).toBe(1)
-			expect((await db.githubConnections.getAttempt(started.id))?.phase).toBe('recovery_stored')
+			expect((await db.githubConnections.getAttempt(started.id))?.phase).toBe('credential_stored')
 		} finally {
 			await secondRaw.close()
 		}
@@ -905,31 +906,27 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			}, manifestState)
 			const claimed = await store.claimCallback('c'.repeat(64), 'principal-1')
 			if (claimed === null) throw new Error('callback claim failed')
-			const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'recovery')
-			const recovered = await store.storeSecretAndCheckpoint(
+			const credential = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'app-credential')
+			const stored = await store.storeSecretAndCheckpoint(
 				started.id,
 				claimed.version,
 				'exchange_claimed',
-				'recovery_stored',
-				'recovery',
-				recovery,
+				'credential_stored',
+				'app-credential',
+				credential,
 			)
-			if (recovered === null) throw new Error('recovery checkpoint failed')
-			const written = await store.checkpoint(started.id, recovered.version, 'recovery_stored', 'source_bundle_written', {
-				credentialSha256: 'd'.repeat(64),
-			})
-			if (written === null) throw new Error('source write checkpoint failed')
-			const activated = await store.checkpoint(started.id, written.version, 'source_bundle_written', 'source_activated', {
+			if (stored === null) throw new Error('credential checkpoint failed')
+			const verified = await store.checkpoint(started.id, stored.version, 'credential_stored', 'app_verified', {
 				appId: '123',
 				appSlug: 'fabrika-source',
 				appHtmlUrl: 'https://github.com/apps/fabrika-source',
 			})
-			if (activated === null) throw new Error('source activation checkpoint failed')
+			if (verified === null) throw new Error('App verification checkpoint failed')
 			const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(started.id), 'webhook')
 			const webhookStored = await store.storeSecretAndCheckpoint(
 				started.id,
-				activated.version,
-				'source_activated',
+				verified.version,
+				'app_verified',
 				'webhook_secret_stored',
 				'webhook',
 				webhook,
@@ -937,10 +934,8 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			if (webhookStored === null) throw new Error('webhook checkpoint failed')
 			const webhookConfigured = await store.checkpoint(started.id, webhookStored.version, 'webhook_secret_stored', 'webhook_configured')
 			if (webhookConfigured === null) throw new Error('webhook config checkpoint failed')
-			const verified = await store.checkpoint(started.id, webhookConfigured.version, 'webhook_configured', 'configuration_verified')
-			if (verified === null) throw new Error('configuration verification checkpoint failed')
-			const ready = await store.discardRecoveryAndCheckpoint(started.id, verified.version)
-			if (ready === null) throw new Error('recovery discard failed')
+			const ready = await store.checkpoint(started.id, webhookConfigured.version, 'webhook_configured', 'installation_required')
+			if (ready === null) throw new Error('installation checkpoint failed')
 
 			const barrier = new TwoConnectionBarrier()
 			const left = new GitHubConnectionStore(new PostgresBarrierDatabase(raw, barrier))
@@ -959,10 +954,10 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
 			expect(
-				await raw.prepare('SELECT transport_kind FROM github_source_connections_keyed WHERE connection_id = ?')
+				await raw.prepare('SELECT app_credential_ref FROM github_source_connections_keyed WHERE connection_id = ?')
 					.bind(started.id)
-					.first<{ transport_kind: string }>(),
-			).toEqual({ transport_kind: 'keyed-v2' })
+					.first<{ app_credential_ref: string }>(),
+			).toEqual({ app_credential_ref: credential.ref })
 			expect((await store.getAttempt(started.id))?.status).toBe('completed')
 		} finally {
 			await secondRaw.close()

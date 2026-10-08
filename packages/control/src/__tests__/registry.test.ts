@@ -126,18 +126,18 @@ const zeropsProvider: ControlProvider = {
 
 function insertSourceConnection(sqlite: Harness['sqlite'], connectionId: string, owner: string, installationId: number): void {
 	sqlite.query(`INSERT INTO github_source_connections_keyed (
-		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 		installation_account_login, installation_selection, verified_repositories_json,
 		requested_repositories_json, connected_by, connected_at, verified_at, version
-	) VALUES (?, 'keyed-v2', '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'selected', '[]', '[]', 'user-1', 1, 1, 1)`)
+	) VALUES (?, '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'selected', '[]', '[]', 'user-1', 1, 1, 1)`)
 		.run(
 			connectionId,
 			`${connectionId}-app`,
 			`https://github.com/apps/${connectionId}-app`,
 			owner,
 			`${connectionId}-app`,
-			'c'.repeat(64),
+			`vault:${connectionId}-credential`,
 			`https://control.example/webhooks/github/${connectionId}`,
 			`vault:${connectionId}`,
 			installationId,

@@ -174,6 +174,25 @@ describe('entrypoint isolation', () => {
 		}
 	})
 
+	test('the Worker and the shared layer never reach the process-only source modules', () => {
+		const processOnly = ['source/archive.ts', 'source/repository.ts', 'source/transport.ts', 'source/metadata.ts', 'source/index.ts']
+		for (const entry of ['index.ts', ...SHARED]) {
+			expect(`${entry} → ${walk(entry).files.filter((file) => processOnly.includes(file)).join(',')}`).toBe(`${entry} → `)
+		}
+		// Not vacuous: the shared workflows do reach the vault-backed connection port, and the process reaches the rest.
+		expect(walk('control-rpc.ts').files).toContain('source/connections.ts')
+		expect(walk('node/server.ts').files).toEqual(expect.arrayContaining(processOnly))
+	})
+
+	test('no source module names a provider package', () => {
+		const sourceFiles = walk('node/server.ts').files.filter((file) => file.startsWith('source/'))
+		expect(sourceFiles.length).toBeGreaterThan(5)
+		for (const file of sourceFiles) {
+			const named = specifiersOf(readFileSync(resolve(SRC, file), 'utf8')).map(packageOf).filter((name) => PROVIDERS.has(name))
+			expect(`${file}: ${named.join(',')}`).toBe(`${file}: `)
+		}
+	})
+
 	test('the Zerops process graph does not read or expose GitHub App credentials', () => {
 		for (const file of walk('node/server.ts').files) {
 			const source = readFileSync(resolve(SRC, file), 'utf8')

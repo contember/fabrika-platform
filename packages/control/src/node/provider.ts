@@ -14,22 +14,19 @@
 // the local stack read the same code and are not subject to the platform's reservation, so one name
 // works everywhere.
 
+import type { GitHubAppFetch } from '@fabrika/github-app'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import {
-	createZeropsApi,
 	createZeropsControlProvider,
-	createZeropsSourceConnectionAdmin,
 	decodeZeropsNamespaceProxySource,
-	type SourceConnectionAdmin,
-	SourceConnectionAdminError,
-	type SourceConnectionZeropsApi,
+	isZeropsUploadDestination,
+	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 	type ZeropsNamespaceProxySource,
-	type ZeropsSourceClient,
-	type ZeropsSourceCredentialManager,
-	type ZeropsSourceCredentialManagerV2,
+	type ZeropsSourcePort,
 } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
-import { HttpZeropsSourceClient } from './source-client'
+import { createGitHubSource, type GitHubMetadataFetch, type SourceDownloadFetch, type SourceUploadFetch } from '../source'
+import { gitHubAppClientFactory, vaultGitHubCredentials } from '../source/credentials'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]
@@ -67,40 +64,23 @@ function readProxySource(raw: string): ZeropsNamespaceProxySource {
 	}
 }
 
-/** Construct and validate the one source transport shared by Zerops provider and onboarding. */
-export function zeropsSourceClient(source: Record<string, string | undefined>): HttpZeropsSourceClient {
-	return new HttpZeropsSourceClient({
-		origin: required(source, 'FABRIKA_ZEROPS_SOURCE_URL'),
-		rpcKey: required(source, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY'),
-	})
+/** Transport seams only the local stack and tests inject; the GitHub and Zerops origins stay fixed (ADR-0029). */
+export interface GitHubSourceSeams {
+	readonly metadataFetch?: GitHubMetadataFetch
+	readonly downloadFetch?: SourceDownloadFetch
+	readonly uploadFetch?: SourceUploadFetch
+	readonly githubAppFetch?: GitHubAppFetch
 }
 
-/** Compose the privileged installation connection seam without exposing it to provider-neutral core. */
-export function zeropsSourceConnectionAdmin(
-	source: Record<string, string | undefined>,
-	sourceClient: ZeropsSourceCredentialManager & ZeropsSourceCredentialManagerV2 = zeropsSourceClient(source),
-	api: SourceConnectionZeropsApi = createZeropsApi({
-		token: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
-		...((): { baseUrl?: string } => {
-			const baseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
-			return baseUrl === undefined ? {} : { baseUrl }
-		})(),
-	}),
-): SourceConnectionAdmin {
-	const projectId = source['FABRIKA_ZEROPS_PROJECT_ID']?.trim()
-	if (projectId === undefined || projectId === '') {
-		return {
-			inspect: () => Promise.resolve({ state: 'unavailable' }),
-			activateV2: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
-			statusV2: () => Promise.resolve({ state: 'unavailable' }),
-			configureWebhook: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
-			verifyInstallations: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
-		}
-	}
-	return createZeropsSourceConnectionAdmin({
-		api,
-		source: sourceClient,
-		projectId,
+/** Control's in-process source: keys from the vault, the repository-root `zerops.yaml` as the descriptor. */
+export function zeropsGitHubSource(env: Env, seams: GitHubSourceSeams = {}): ZeropsSourcePort {
+	return createGitHubSource({
+		credentials: vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
+		descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
+		isUploadDestination: isZeropsUploadDestination,
+		...(seams.metadataFetch === undefined ? {} : { metadataFetch: seams.metadataFetch }),
+		...(seams.downloadFetch === undefined ? {} : { downloadFetch: seams.downloadFetch }),
+		...(seams.uploadFetch === undefined ? {} : { uploadFetch: seams.uploadFetch }),
 	})
 }
 
@@ -108,12 +88,12 @@ export function zeropsSourceConnectionAdmin(
 export function zeropsControlProvider(
 	env: Env,
 	source: Record<string, string | undefined>,
-	sourceClient: ZeropsSourceClient = zeropsSourceClient(source),
+	sourcePort: ZeropsSourcePort,
 ): ControlProvider {
 	const namespaces = zeropsNamespaceProcessConfig(source)
 	return createZeropsControlProvider({
 		accessToken: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
-		source: sourceClient,
+		source: sourcePort,
 		...((): { apiBaseUrl?: string } => {
 			const apiBaseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
 			return apiBaseUrl === undefined ? {} : { apiBaseUrl }

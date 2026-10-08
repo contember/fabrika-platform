@@ -18,7 +18,7 @@ import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
-import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
+import type { ZeropsSourcePort, ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
@@ -166,7 +166,7 @@ const makeApi = (
 		},
 		createAppVersion: async ({ serviceId }) => {
 			recorded.calls.push(`createAppVersion:${serviceId}`)
-			return { id: 'version-1', uploadUrl: 'https://upload.test/archive?signature=test' }
+			return { id: 'version-1', uploadUrl: UPLOAD_URL }
 		},
 		buildAndDeployAppVersion: async ({ appVersionId }) => {
 			recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
@@ -223,31 +223,28 @@ const makeApi = (
 	}
 }
 
-const makeSource = (calls: string[] = []): ZeropsSourceClient => ({
+const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
+
+const uploaded = (input: ZeropsSourceUploadInput) => ({
+	commitSha: input.commitSha,
+	descriptorSha256: input.descriptorSha256,
+	entryCount: 1,
+	expandedBytes: 1,
+})
+
+const makeSource = (calls: string[] = []): ZeropsSourcePort => ({
 	resolve: async (input) => {
 		calls.push(`resolve:${input.repository.owner}/${input.repository.name}:${input.requestedRef}`)
-		return {
-			runId: input.runId,
-			commitSha: input.expectedCommitSha ?? COMMIT_SHA,
-			descriptorSha256: input.descriptorSha256,
-		}
+		return { commitSha: input.expectedCommitSha ?? COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
 	},
 	upload: async (input) => {
-		calls.push(`upload:${input.runId}:${input.appVersionId}:${input.commitSha}`)
-		return {
-			runId: input.runId,
-			appVersionId: input.appVersionId,
-			commitSha: input.commitSha,
-			descriptorSha256: input.descriptor.sha256,
-		}
-	},
-	cancel: async (input) => {
-		calls.push(`sourceCancel:${input.runId}:${input.appVersionId}`)
+		calls.push(`upload:${input.archive.kind}:${input.commitSha}`)
+		return uploaded(input)
 	},
 })
 
 type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'source'> & {
-	readonly source?: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
+	readonly source?: ZeropsSourcePort
 }
 
 const createTestControlProvider = (options: TestControlProviderOptions) => {
@@ -1099,11 +1096,11 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('refuses a descriptor that drifted after registration before it resolves the source', async () => {
 		const resolutions: unknown[] = []
-		const source: ZeropsSourceClient = {
+		const source: ZeropsSourcePort = {
 			...makeSource([]),
 			resolve: async (input) => {
 				resolutions.push(input)
-				return { runId: input.runId, commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
+				return { commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
 			},
 		}
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
@@ -1130,26 +1127,20 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual([])
 	})
 
-	test('routes two keyed connections through exact v2 resolve and upload bindings', async () => {
+	test('routes two keyed connections through their exact resolve and upload bindings', async () => {
 		const calls: string[] = []
-		const source: ZeropsSourceClient & ZeropsSourceClientV2 = {
-			...makeSource(calls),
-			resolveV2: async (input) => {
+		const source: ZeropsSourcePort = {
+			resolve: async (input) => {
 				const binding = input.privateBinding
 				if (binding === undefined) throw new Error('missing private binding')
-				calls.push(`resolve-v2:${input.runId}:${binding.connectionId}:${binding.installationId}`)
-				return { runId: input.runId, commitSha: input.expectedCommitSha ?? COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
+				calls.push(`resolve:${binding.connectionId}:${binding.installationId}`)
+				return { commitSha: input.expectedCommitSha ?? COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
 			},
-			uploadV2: async (input) => {
-				const binding = input.privateBinding
+			upload: async (input) => {
+				const binding = input.archive.kind === 'application' ? input.archive.privateBinding : undefined
 				if (binding === undefined) throw new Error('missing private binding')
-				calls.push(`upload-v2:${input.runId}:${binding.connectionId}:${binding.installationId}`)
-				return {
-					runId: input.runId,
-					appVersionId: input.appVersionId,
-					commitSha: input.commitSha,
-					descriptorSha256: input.descriptor.sha256,
-				}
+				calls.push(`upload:${binding.connectionId}:${binding.installationId}`)
+				return uploaded(input)
 			},
 		}
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
@@ -1168,11 +1159,12 @@ describe('Zerops ControlProvider lifecycle', () => {
 			control.deploy({ ...deployInput(recorded), runId: 'run-2', sourceBinding: binding2 }),
 		])
 
-		expect(calls).toContain('resolve-v2:run-1:connection-1:41')
-		expect(calls).toContain('resolve-v2:run-2:connection-2:42')
-		expect(calls).toContain('upload-v2:run-1:connection-1:41')
-		expect(calls).toContain('upload-v2:run-2:connection-2:42')
-		expect(calls.some((call) => call.startsWith('resolve:') || call.startsWith('upload:'))).toBe(false)
+		expect([...calls].sort()).toEqual([
+			'resolve:connection-1:41',
+			'resolve:connection-2:42',
+			'upload:connection-1:41',
+			'upload:connection-2:42',
+		])
 	})
 
 	test('rejects an installation-only binding before source calls', async () => {
@@ -1224,8 +1216,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 			source: {
 				...makeSource(),
 				upload: async (input) => {
-					uploads.push({ runId: input.runId, repository: input.repository, commitSha: input.commitSha })
-					return { runId: input.runId, appVersionId: input.appVersionId, commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }
+					uploads.push({ repository: input.repository, commitSha: input.commitSha, uploadUrl: input.uploadUrl })
+					return uploaded(input)
 				},
 			},
 			reconcileSchema: async ({ url, app, adminKey }) => {
@@ -1241,7 +1233,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		})
 		expect(outcome).toEqual({ state: 'succeeded' })
 		expect(recorded.imports.map((entry) => entry.projectId)).toEqual(['project-1'])
-		expect(uploads).toEqual([{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA }])
+		expect(uploads).toEqual([{ repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA, uploadUrl: UPLOAD_URL }])
 		expect(reconciles).toEqual([{ url: 'https://iam.test', app: 'notes', adminKey: 'px-secret' }])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.triggers).toEqual([])
@@ -1253,23 +1245,13 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('uses the same credential-free runtime coordinates for public and explicitly bound private repositories', async () => {
 		const observed: unknown[] = []
-		const uploaded = (input: { runId: string; appVersionId: string; commitSha: string; descriptor: { sha256: string } }) => ({
-			runId: input.runId,
-			appVersionId: input.appVersionId,
-			commitSha: input.commitSha,
-			descriptorSha256: input.descriptor.sha256,
-		})
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			source: {
 				...makeSource(),
 				upload: async (input) => {
-					observed.push({ runId: input.runId, repository: input.repository, commitSha: input.commitSha })
-					return uploaded(input)
-				},
-				uploadV2: async (input) => {
-					observed.push({ runId: input.runId, repository: input.repository, commitSha: input.commitSha, privateBinding: input.privateBinding })
+					observed.push({ repository: input.repository, commitSha: input.commitSha, archive: input.archive })
 					return uploaded(input)
 				},
 			},
@@ -1286,12 +1268,11 @@ describe('Zerops ControlProvider lifecycle', () => {
 		})
 
 		expect(observed).toEqual([
-			{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA },
+			{ repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA, archive: { kind: 'application' } },
 			{
-				runId: 'run-1',
 				repository: { owner: 'acme', name: 'notes' },
 				commitSha: COMMIT_SHA,
-				privateBinding: { connectionId: 'connection-1', installationId: 42 },
+				archive: { kind: 'application', privateBinding: { connectionId: 'connection-1', installationId: 42 } },
 			},
 		])
 		expect(environment().target.payload).toEqual({ serviceId: 'service-1' })

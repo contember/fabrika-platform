@@ -8,7 +8,7 @@ import { projectSingletonSourceConnectionPage } from '../control-rpc'
 import type { Env } from '../env'
 import { githubWebhookSecretLabel } from '../github-connection-store'
 import { FakeRepoSource } from '../repo-source'
-import { unavailableSourceConnection } from '../source-connection-port'
+import { unavailableSourceConnection } from '../source/connections'
 import { Vault } from '../vault'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
 import { fakeControlProvider, TEST_PROVIDER_ID } from './helpers/provider'
@@ -289,14 +289,12 @@ describe('controlApp', () => {
 		const secretRefB = await vault.putSecret('platform', githubWebhookSecretLabel('connection-b'), 'secret-b')
 		insertConnection(harness, {
 			connectionId: 'connection-a',
-			transportKind: 'keyed-v2',
 			owner: 'acme',
 			installationId: 42,
 			webhookSecretRef: secretRefA,
 		})
 		insertConnection(harness, {
 			connectionId: 'connection-b',
-			transportKind: 'keyed-v2',
 			owner: 'beta',
 			installationId: 43,
 			webhookSecretRef: secretRefB,
@@ -340,7 +338,6 @@ describe('controlApp', () => {
 		const keyedRef = await vault.putSecret('platform', githubWebhookSecretLabel('keyed'), 'keyed-secret')
 		insertConnection(harness, {
 			connectionId: 'keyed',
-			transportKind: 'keyed-v2',
 			owner: 'beta',
 			installationId: 43,
 			webhookSecretRef: keyedRef,
@@ -393,26 +390,24 @@ describe('controlApp', () => {
 
 function insertConnection(harness: Harness, input: {
 	connectionId: string
-	transportKind: 'keyed-v2'
 	owner: string
 	installationId: number
 	webhookSecretRef: string
 }): void {
 	harness.sqlite.query(`INSERT INTO github_source_connections_keyed (
-		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 		installation_account_login, installation_selection, verified_repositories_json,
 		requested_repositories_json, connected_by, connected_at, verified_at, version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '[]', '[]', 'test', 1, 1, 1)`)
+	) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '[]', '[]', 'test', 1, 1, 1)`)
 		.run(
 			input.connectionId,
-			input.transportKind,
 			`${input.connectionId}-app-id`,
 			`${input.connectionId}-app`,
 			`https://github.com/apps/${input.connectionId}-app`,
 			input.owner,
 			`${input.connectionId}-app`,
-			'a'.repeat(64),
+			`vault:${input.connectionId}-credential`,
 			`https://control.test/webhooks/github/${input.connectionId}`,
 			input.webhookSecretRef,
 			input.installationId,

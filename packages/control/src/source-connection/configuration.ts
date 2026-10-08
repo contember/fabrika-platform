@@ -1,5 +1,4 @@
 import {
-	githubRecoverySecretLabel,
 	type GitHubSetupAttempt,
 	type GitHubSetupErrorCode,
 	type GitHubSetupPhase,
@@ -7,69 +6,31 @@ import {
 	githubWebhookSecretLabel,
 } from '../github-connection-store'
 import { vault } from '../services'
-import type { SourceGitHubAppIdentity } from '../source-connection-port'
-import { linkedDeadline, randomToken, sha256, type SourceConnectionWorkflowDeps } from './context'
+import type { SourceGitHubAppIdentity } from '../source/connections'
+import { linkedDeadline, randomToken, type SourceConnectionWorkflowDeps } from './context'
 
-const CONFIGURATION_DEADLINE_MS = 5 * 60_000
+/** Bounds every request-driven run of GitHub App calls, so a stalled GitHub cannot hold a request open. */
+export const CONFIGURATION_DEADLINE_MS = 5 * 60_000
 
 const WEBHOOK_SECRET_BYTES = 32
 
-async function advanceConfiguration(
-	deps: SourceConnectionWorkflowDeps,
-	initial: GitHubSetupAttempt,
-	prepared?: { readonly bundle: string; readonly sha256: string },
-	signal: AbortSignal = deps.request.signal,
-): Promise<void> {
+/** Resume a setup from its durable checkpoint; every step reads the App key from the vault. */
+async function advanceConfiguration(deps: SourceConnectionWorkflowDeps, initial: GitHubSetupAttempt, signal: AbortSignal): Promise<void> {
 	let attempt = initial
-	let credential = prepared
-	if ((attempt.phase === 'recovery_stored' || attempt.phase === 'source_bundle_written') && credential === undefined) {
-		credential = await readRecoveryCredential(deps, attempt)
-	}
-	if (attempt.phase === 'recovery_stored') {
-		if (credential === undefined) throw new Error('setup recovery is unavailable')
-		const activated = await deps.source.activate({
-			connectionId: attempt.id,
-			credentialBundle: credential.bundle,
-			credentialSha256: credential.sha256,
-			signal,
-		})
-		if (activated.connectionId !== attempt.id) throw new Error('source activation binding does not match setup')
-		validateIdentity(attempt, activated.githubApp, credential.sha256, activated.credentialSha256)
+	if (attempt.phase === 'credential_stored') {
+		const app = await deps.source.verifyApp({ credentialRef: requiredCredentialRef(attempt), connectionId: attempt.id, signal })
+		validateIdentity(attempt, app)
 		attempt = requiredCheckpoint(
 			await deps.env.REPOSITORIES.githubConnections.checkpoint(
 				attempt.id,
 				attempt.version,
-				'recovery_stored',
-				'source_bundle_written',
-				{ credentialSha256: credential.sha256 },
-			),
-		)
-		attempt = requiredCheckpoint(
-			await deps.env.REPOSITORIES.githubConnections.checkpoint(
-				attempt.id,
-				attempt.version,
-				'source_bundle_written',
-				'source_activated',
-				{ appId: String(activated.githubApp.id), appSlug: activated.githubApp.slug, appHtmlUrl: activated.githubApp.htmlUrl },
+				'credential_stored',
+				'app_verified',
+				{ appId: String(app.id), appSlug: app.slug, appHtmlUrl: app.htmlUrl },
 			),
 		)
 	}
-	if (attempt.phase === 'source_bundle_written') {
-		if (credential === undefined) throw new Error('setup recovery is unavailable')
-		const status = await deps.source.status({ connectionId: attempt.id, signal })
-		if (status.state !== 'active') throw new Error('source activation is incomplete')
-		validateIdentity(attempt, status.githubApp, credential.sha256, status.credentialSha256)
-		attempt = requiredCheckpoint(
-			await deps.env.REPOSITORIES.githubConnections.checkpoint(
-				attempt.id,
-				attempt.version,
-				'source_bundle_written',
-				'source_activated',
-				{ appId: String(status.githubApp.id), appSlug: status.githubApp.slug, appHtmlUrl: status.githubApp.htmlUrl },
-			),
-		)
-	}
-	if (attempt.phase === 'source_activated') {
+	if (attempt.phase === 'app_verified') {
 		const webhookSecret = randomToken(WEBHOOK_SECRET_BYTES, deps.randomBytes)
 		const secretVault = await vault(deps.env)
 		const preparedSecret = await secretVault.prepareSecret('platform', githubWebhookSecretLabel(attempt.id), webhookSecret)
@@ -77,7 +38,7 @@ async function advanceConfiguration(
 			await deps.env.REPOSITORIES.githubConnections.storeSecretAndCheckpoint(
 				attempt.id,
 				attempt.version,
-				'source_activated',
+				'app_verified',
 				'webhook_secret_stored',
 				'webhook',
 				preparedSecret,
@@ -85,81 +46,47 @@ async function advanceConfiguration(
 		)
 	}
 	if (attempt.phase === 'webhook_secret_stored') {
-		if (attempt.webhookSecretRef === null || attempt.credentialSha256 === null) throw new Error('setup state is incomplete')
+		if (attempt.webhookSecretRef === null) throw new Error('setup state is incomplete')
 		const secretVault = await vault(deps.env)
 		const webhookSecret = await secretVault.getSecretForPurpose(attempt.webhookSecretRef, {
 			scope: 'platform',
 			label: githubWebhookSecretLabel(attempt.id),
 		})
-		const configured = await deps.source.configureWebhook({
+		await deps.source.configureWebhook({
+			credentialRef: requiredCredentialRef(attempt),
 			connectionId: attempt.id,
-			credentialSha256: attempt.credentialSha256,
 			url: webhookUrl(attempt),
 			secret: webhookSecret,
 			signal,
 		})
-		if (
-			configured.connectionId !== attempt.id || configured.credentialSha256 !== attempt.credentialSha256
-			|| configured.webhook.url !== webhookUrl(attempt)
-			|| configured.webhook.contentType !== 'json' || configured.webhook.insecureSsl !== '0'
-		) throw new Error('webhook configuration binding does not match setup')
 		attempt = requiredCheckpoint(
-			await deps.env.REPOSITORIES.githubConnections.checkpoint(
-				attempt.id,
-				attempt.version,
-				'webhook_secret_stored',
-				'webhook_configured',
-			),
+			await deps.env.REPOSITORIES.githubConnections.checkpoint(attempt.id, attempt.version, 'webhook_secret_stored', 'webhook_configured'),
 		)
 	}
 	if (attempt.phase === 'webhook_configured') {
-		if (attempt.credentialSha256 === null) throw new Error('setup state is incomplete')
-		const status = await deps.source.status({ connectionId: attempt.id, signal })
-		if (status.state !== 'active') throw new Error('source configuration is incomplete')
-		validateIdentity(attempt, status.githubApp, attempt.credentialSha256, status.credentialSha256)
 		attempt = requiredCheckpoint(
-			await deps.env.REPOSITORIES.githubConnections.checkpoint(
-				attempt.id,
-				attempt.version,
-				'webhook_configured',
-				'configuration_verified',
-			),
+			await deps.env.REPOSITORIES.githubConnections.checkpoint(attempt.id, attempt.version, 'webhook_configured', 'installation_required'),
 		)
-	}
-	if (attempt.phase === 'configuration_verified') {
-		attempt = requiredCheckpoint(await deps.env.REPOSITORIES.githubConnections.discardRecoveryAndCheckpoint(attempt.id, attempt.version))
 	}
 }
 
-export async function advanceWithDeadline(
-	deps: SourceConnectionWorkflowDeps,
-	attempt: GitHubSetupAttempt,
-	prepared?: { readonly bundle: string; readonly sha256: string },
-): Promise<void> {
+export async function advanceWithDeadline(deps: SourceConnectionWorkflowDeps, attempt: GitHubSetupAttempt): Promise<void> {
 	const deadline = linkedDeadline(deps.request.signal, CONFIGURATION_DEADLINE_MS)
 	try {
-		await advanceConfiguration(deps, attempt, prepared, deadline.signal)
+		await advanceConfiguration(deps, attempt, deadline.signal)
 	} finally {
 		deadline.dispose()
 	}
 }
 
-async function readRecoveryCredential(
-	deps: SourceConnectionWorkflowDeps,
-	attempt: GitHubSetupAttempt,
-): Promise<{ readonly bundle: string; readonly sha256: string }> {
-	if (attempt.recoverySecretRef === null) throw new Error('setup recovery is unavailable')
-	const secretVault = await vault(deps.env)
-	const bundle = await secretVault.getSecretForPurpose(attempt.recoverySecretRef, {
-		scope: 'platform',
-		label: githubRecoverySecretLabel(attempt.id),
-	})
-	return { bundle, sha256: await sha256(bundle) }
+function requiredCredentialRef(attempt: GitHubSetupAttempt): string {
+	if (attempt.appCredentialRef === null) throw new Error('setup state is incomplete')
+	return attempt.appCredentialRef
 }
 
-function validateIdentity(attempt: GitHubSetupAttempt, app: SourceGitHubAppIdentity, expectedDigest: string, actualDigest: string): void {
+function validateIdentity(attempt: GitHubSetupAttempt, app: SourceGitHubAppIdentity): void {
 	if (
-		!validRemoteIdentity(app) || actualDigest !== expectedDigest
+		!validRemoteIdentity(app)
 		|| app.owner.type !== 'Organization' || app.owner.login.toLowerCase() !== attempt.desiredOwner.toLowerCase()
 		|| app.public !== attempt.desiredPublic || app.permissions.contents !== 'read'
 		|| app.events.length !== 1 || app.events[0] !== 'push'
@@ -182,8 +109,8 @@ function validRemoteIdentity(app: SourceGitHubAppIdentity): boolean {
 }
 
 export function errorForPhase(phase: GitHubSetupPhase): GitHubSetupErrorCode {
-	if (phase === 'recovery_stored' || phase === 'source_bundle_written') return 'credential_activation'
-	if (phase === 'source_activated') return 'credential_persistence'
+	if (phase === 'credential_stored') return 'credential_activation'
+	if (phase === 'app_verified') return 'credential_persistence'
 	if (phase === 'webhook_secret_stored' || phase === 'webhook_configured') return 'webhook_configuration'
 	if (phase === 'installation_required') return 'installation_verification'
 	return 'configuration_verification'

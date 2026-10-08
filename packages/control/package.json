@@ -48,6 +48,21 @@
 			"bun": "./src/vault.ts",
 			"types": "./src/vault.ts",
 			"default": "./src/vault.ts"
+		},
+		"./source": {
+			"bun": "./src/source/index.ts",
+			"types": "./src/source/index.ts",
+			"default": "./src/source/index.ts"
+		},
+		"./node/runtime": {
+			"bun": "./src/node/runtime.ts",
+			"types": "./src/node/runtime.ts",
+			"default": "./src/node/runtime.ts"
+		},
+		"./node/server": {
+			"bun": "./src/node/server.ts",
+			"types": "./src/node/server.ts",
+			"default": "./src/node/server.ts"
 		}
 	},
 	"scripts": {

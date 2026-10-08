@@ -10,7 +10,7 @@ import { forwardOperationsApi } from './operations-gateway'
 import { controlOriginGuard } from './origin-guard'
 import { repositories, type WebhookRoute, webhookRoute } from './services'
 import { manifestCallback, manifestHandoff, SourceConnectionWorkflowError } from './source-connection'
-import type { SourceConnectionPort } from './source-connection-port'
+import type { SourceConnectionPort } from './source/connections'
 import { handleWebhook } from './webhook'
 
 export interface ControlAppEnv {

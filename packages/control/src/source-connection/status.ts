@@ -8,8 +8,9 @@ import type {
 	GitHubSourceConnectionWorkflowDto,
 } from '@fabrika/control-contract'
 import { type GitHubSetupAttempt, type GitHubSetupErrorCode, type GitHubSetupPhase, type GitHubSourceConnection } from '../github-connection-store'
-import { matchesConnectionIdentity } from './configuration'
-import { requireHuman, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
+import { vault } from '../services'
+import { readGitHubAppCredential } from '../source/credentials'
+import { requireHuman, type SourceConnectionWorkflowDeps } from './context'
 import { SourceConnectionWorkflowError } from './errors'
 
 export async function sourceConnectionStatus(deps: SourceConnectionWorkflowDeps): Promise<GitHubSourceConnectionStatusDto> {
@@ -25,23 +26,16 @@ export async function sourceConnectionStatus(deps: SourceConnectionWorkflowDeps)
 		connection = published
 	}
 	if (connection !== null) {
+		// The status is the vault's word, not GitHub's: the key decrypts under its purpose and names the stored App.
 		try {
-			const remote = await deps.source.status({
-				connectionId: connection.connectionId,
-				signal: deps.request.signal,
-			})
-			if (
-				remote.state !== 'active' || remote.credentialSha256 !== connection.credentialSha256 || !matchesConnectionIdentity(connection, remote.githubApp)
-			) {
-				return baseStatus(deps.source.provider, 'unavailable')
-			}
-			return connectionDto(deps.source.provider, connection)
+			const credential = await readGitHubAppCredential(await vault(deps.env), connection.appCredentialRef, connection.connectionId)
+			if (credential.appId !== connection.appId) return baseStatus(deps.source.provider, 'unavailable')
 		} catch {
-			throwIfAborted(deps.request.signal)
 			return baseStatus(deps.source.provider, 'unavailable')
 		}
+		return connectionDto(deps.source.provider, connection)
 	}
-	return inspectEmptySource(deps)
+	return emptySourceStatus(deps)
 }
 
 export async function sourceConnectionList(
@@ -62,7 +56,7 @@ export async function sourceConnectionList(
 	if (projectedWorkflow === null) {
 		const hasConnections = publishedWorkflowConnection !== null || page.items.length > 0
 			|| (input.cursor !== undefined && (await deps.env.REPOSITORIES.githubConnections.listConnections({ limit: 1 })).items.length > 0)
-		if (!hasConnections) projectedWorkflow = await inspectEmptySource(deps)
+		if (!hasConnections) projectedWorkflow = emptySourceStatus(deps)
 	}
 	return {
 		items: page.items.map((connection) => connectionDto(deps.source.provider, connection)),
@@ -71,14 +65,9 @@ export async function sourceConnectionList(
 	}
 }
 
-async function inspectEmptySource(deps: SourceConnectionWorkflowDeps): Promise<GitHubSourceConnectionWorkflowDto> {
-	try {
-		const inspection = await deps.source.inspect(deps.request.signal)
-		return baseStatus(deps.source.provider, inspection.state === 'anonymous' ? 'anonymous' : 'unavailable')
-	} catch {
-		throwIfAborted(deps.request.signal)
-		return baseStatus(deps.source.provider, 'unavailable')
-	}
+function emptySourceStatus(deps: SourceConnectionWorkflowDeps): GitHubSourceConnectionWorkflowDto {
+	const available = deps.source.available && deps.env.FABRIKA_CONTROL_VAULT_KEY !== undefined
+	return baseStatus(deps.source.provider, available ? 'anonymous' : 'unavailable')
 }
 
 export const MANIFEST_PATH = '/api/source/github/manifest'
@@ -176,7 +165,7 @@ function appDto(state: {
 function publicPhase(phase: GitHubSetupPhase): 'starting' | 'awaiting-manifest-callback' | 'persisting' | 'activating' {
 	if (phase === 'awaiting_manifest_callback') return 'awaiting-manifest-callback'
 	if (phase === 'exchange_claimed') return 'starting'
-	if (phase === 'recovery_stored' || phase === 'source_bundle_written') return 'persisting'
+	if (phase === 'credential_stored') return 'persisting'
 	return 'activating'
 }
 

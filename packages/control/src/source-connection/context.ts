@@ -3,7 +3,7 @@ import type { exchangeGitHubAppManifestCode, GitHubAppFetch } from '@fabrika/git
 import { ACTIONS } from '../actions'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
-import type { SourceConnectionPort } from '../source-connection-port'
+import type { SourceConnectionPort } from '../source/connections'
 import { SourceConnectionWorkflowError } from './errors'
 
 export interface SourceConnectionWorkflowDeps {

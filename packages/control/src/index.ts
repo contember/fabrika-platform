@@ -7,7 +7,7 @@ import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './pl
 import { reconcileProviderRuns } from './provider-reconcile'
 import type { ControlJobMessage } from './run-lifecycle'
 import { locks, operationsReleaseDeps } from './services'
-import { unavailableSourceConnection } from './source-connection-port'
+import { unavailableSourceConnection } from './source/connections'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`

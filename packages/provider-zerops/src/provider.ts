@@ -42,7 +42,7 @@ import {
 import { type FabrikaImportDocument, type FabrikaManifest, manifestServiceHostnames, verifyZeropsArtifactSourceDescriptor } from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsStep } from './plan'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
-import type { ZeropsSourceUploadInputV2, ZeropsSourceUploadResult } from './source'
+import { isZeropsUploadDestination } from './source'
 import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 import { deleteVersion } from './version-attempt'
 
@@ -69,11 +69,6 @@ export interface ZeropsDeployResult {
 	readonly env: string
 	readonly status: 'succeeded' | 'failed'
 	readonly steps: readonly DeployStepResult[]
-}
-
-/** The keyed upload a private source takes; the binding itself rides on the run's runtime source. */
-export interface ZeropsSourceTransportRouting {
-	uploadV2(input: ZeropsSourceUploadInputV2): Promise<ZeropsSourceUploadResult>
 }
 
 /** How often `await-version` asks Zerops for the version's status. */
@@ -263,7 +258,6 @@ interface StepEnv {
 	log: (line: string) => void
 	signal: AbortSignal
 	dryRun: boolean
-	sourceTransport?: ZeropsSourceTransportRouting
 	attempt: Attempt
 	managedValues: ManagedValues
 	/** `await-version` gives up at this instant. */
@@ -517,35 +511,23 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			const appVersionId = requireVersion(env, 'upload-source')
 			const uploadUrl = attempt.uploadUrl
 			if (uploadUrl === undefined) throw new Error('zerops: upload-source has no upload URL')
+			// The upload URL carries its own credential; it is checked here and never put in an error.
+			if (!isZeropsUploadDestination(uploadUrl)) throw new Error('zerops: the reserved app version has an unexpected upload destination')
 			assertRunning(signal)
-			const uploadInput = {
-				runId: source.runtime.runId,
-				appVersionId,
+			const binding = source.runtime.privateBinding
+			const uploaded = await source.client.upload({
 				repository: source.runtime.repository,
 				commitSha: source.runtime.commitSha,
-				uploadUrl,
-				descriptor: {
-					path: artifact.target.sourceDescriptor.path,
-					sha256: artifact.target.sourceDescriptor.sha256,
+				descriptorSha256: artifact.target.sourceDescriptor.sha256,
+				archive: {
+					kind: 'application',
+					...(binding === undefined ? {} : { privateBinding: { connectionId: binding.connectionId, installationId: binding.installationId } }),
 				},
+				uploadUrl,
 				signal,
-			}
-			const binding = source.runtime.privateBinding
-			let uploaded: ZeropsSourceUploadResult
-			if (binding === undefined) {
-				uploaded = await source.client.upload(uploadInput)
-			} else {
-				const sourceTransport = env.sourceTransport
-				if (sourceTransport === undefined) throw new Error('zerops: keyed source transport is unavailable')
-				uploaded = await sourceTransport.uploadV2({
-					...uploadInput,
-					privateBinding: { connectionId: binding.connectionId, installationId: binding.installationId },
-				})
-			}
+			})
 			if (
-				uploaded.runId !== source.runtime.runId
-				|| uploaded.appVersionId !== appVersionId
-				|| uploaded.commitSha !== source.runtime.commitSha
+				uploaded.commitSha !== source.runtime.commitSha
 				|| uploaded.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
 			) {
 				throw new Error('zerops: source upload returned different coordinates')
@@ -643,7 +625,6 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
  */
 export const createZeropsDeployer = (
 	collaborators: ZeropsCollaboratorFactory = defaultZeropsCollaborators,
-	sourceTransport?: ZeropsSourceTransportRouting,
 ) =>
 async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 	if (run.artifact.app.id !== run.appId) {
@@ -666,7 +647,6 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		log: run.events.log,
 		signal: run.signal,
 		dryRun: run.dryRun,
-		...(sourceTransport === undefined ? {} : { sourceTransport }),
 		attempt: { triggered: false },
 		managedValues,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,

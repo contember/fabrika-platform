@@ -34,9 +34,9 @@ import {
 	type GitHubWebhookSecretBinding,
 	type PublishGitHubConnectionInput,
 } from './model'
-import { githubManifestStateSecretLabel, githubRecoverySecretLabel, githubWebhookSecretLabel } from './secrets'
+import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from './secrets'
 
-// Exceeds the bounded source activation/configuration sequence; crash recovery appears after this lease.
+// Exceeds the bounded App verification and webhook configuration sequence; crash recovery appears after this lease.
 const DEFAULT_OPERATION_LEASE_SECONDS = 10 * 60
 
 export class GitHubConnectionStore {
@@ -145,25 +145,6 @@ export class GitHubConnectionStore {
 		return row === null ? null : decodeConnection(row)
 	}
 
-	/** Bind a stable row to a verified durable credential without changing its source slot or App identity. */
-	async rebindCredential(
-		connectionId: string,
-		expectedVersion: number,
-		expectedCredentialSha256: string,
-		credentialSha256: string,
-	): Promise<GitHubSourceConnection | null> {
-		validateConnectionId(connectionId)
-		validateSafePositive(expectedVersion, 'connection version')
-		validateSha256(expectedCredentialSha256, 'expected credential digest')
-		validateSha256(credentialSha256, 'credential digest')
-		const row = await this.db.prepare(`UPDATE github_source_connections_keyed SET
-			credential_sha256 = ?, version = version + 1
-			WHERE connection_id = ? AND version = ? AND credential_sha256 = ? RETURNING *`)
-			.bind(credentialSha256, connectionId, expectedVersion, expectedCredentialSha256)
-			.first<GitHubSourceConnectionRow>()
-		return row === null ? null : decodeConnection(row)
-	}
-
 	async getConnectionByOwner(owner: string): Promise<GitHubSourceConnection | null> {
 		validateGitHubOwner(owner)
 		const row = await this.db.prepare(
@@ -220,7 +201,7 @@ export class GitHubConnectionStore {
 		if (
 			attempt === null || !['active', 'repair_required'].includes(attempt.status)
 			|| attempt.webhookSecretRef === null
-			|| !['webhook_configured', 'configuration_verified', 'installation_required'].includes(attempt.phase)
+			|| !['webhook_configured', 'installation_required'].includes(attempt.phase)
 		) return null
 		return { connectionId: attempt.id, webhookSecretRef: attempt.webhookSecretRef }
 	}
@@ -236,7 +217,7 @@ export class GitHubConnectionStore {
 		if (attempt.phase === 'awaiting_manifest_callback' && attempt.manifestStateSecretRef !== null) {
 			return await this.expireManifestCallback(attempt, now)
 		}
-		if (attempt.recoverySecretRef === null) {
+		if (attempt.appCredentialRef === null) {
 			return await this.markExpired(attempt, now, 'failed', 'callback_expired')
 		}
 		return await this.markExpired(attempt, now, 'repair_required', errorForExpiredPhase(attempt.phase))
@@ -314,7 +295,7 @@ export class GitHubConnectionStore {
 	async resumeRepair(id: string, expectedVersion: number): Promise<GitHubSetupAttempt | null> {
 		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
 			status = 'active', last_error_code = NULL, version = version + 1, updated_at = ?, expires_at = ?
-			WHERE id = ? AND version = ? AND status = 'repair_required' AND recovery_secret_ref IS NOT NULL
+			WHERE id = ? AND version = ? AND status = 'repair_required' AND app_credential_ref IS NOT NULL
 			RETURNING *`).bind(this.now(), this.leaseExpiresAt(), id, expectedVersion).first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
 	}
@@ -327,25 +308,18 @@ export class GitHubConnectionStore {
 		patch: GitHubSetupPatch = {},
 	): Promise<GitHubSetupAttempt | null> {
 		if (!canTransition(expectedPhase, nextPhase)) throw new Error('invalid GitHub setup transition')
-		if (patch.credentialSha256 !== undefined) validateSha256(patch.credentialSha256, 'credential digest')
-		if (nextPhase === 'source_bundle_written' && patch.credentialSha256 === undefined) {
-			throw new Error('source bundle checkpoint requires a credential digest')
-		}
-		if (nextPhase === 'source_activated' && (patch.appId === undefined || patch.appSlug === undefined || patch.appHtmlUrl === undefined)) {
-			throw new Error('source activation checkpoint requires verified App identity')
-		}
 		if (
-			nextPhase === 'source_activated'
+			nextPhase === 'app_verified'
 			&& (
 				patch.appId === undefined || !/^[1-9][0-9]*$/.test(patch.appId)
 				|| patch.appSlug === undefined || !/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(patch.appSlug)
 				|| patch.appHtmlUrl !== `https://github.com/apps/${patch.appSlug}`
 			)
-		) throw new Error('source activation checkpoint requires verified App identity')
+		) throw new Error('App verification checkpoint requires verified App identity')
 		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
 			phase = ?, version = version + 1, updated_at = ?, expires_at = ?,
 			app_id = COALESCE(?, app_id), app_slug = COALESCE(?, app_slug), app_html_url = COALESCE(?, app_html_url),
-			credential_sha256 = COALESCE(?, credential_sha256), last_error_code = COALESCE(?, last_error_code)
+			last_error_code = COALESCE(?, last_error_code)
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = ? RETURNING *`)
 			.bind(
 				nextPhase,
@@ -354,7 +328,6 @@ export class GitHubConnectionStore {
 				patch.appId ?? null,
 				patch.appSlug ?? null,
 				patch.appHtmlUrl ?? null,
-				patch.credentialSha256 ?? null,
 				patch.lastErrorCode ?? null,
 				id,
 				expectedVersion,
@@ -379,7 +352,7 @@ export class GitHubConnectionStore {
 		) {
 			throw new Error('invalid GitHub setup secret checkpoint')
 		}
-		const refColumn = kind === 'recovery' ? 'recovery_secret_ref' : 'webhook_secret_ref'
+		const refColumn = kind === 'app-credential' ? 'app_credential_ref' : 'webhook_secret_ref'
 		const update = this.db.prepare(`UPDATE github_source_setup_attempts SET
 			phase = ?, ${refColumn} = ?, version = version + 1, updated_at = ?, expires_at = ?
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = ? RETURNING *`)
@@ -428,39 +401,6 @@ export class GitHubConnectionStore {
 		return this.markTerminalLike(id, expectedVersion, 'repair_required', errorCode, false)
 	}
 
-	/** Delete one-time recovery material with the durable installation-required checkpoint. */
-	async discardRecoveryAndCheckpoint(id: string, expectedVersion: number): Promise<GitHubSetupAttempt | null> {
-		const attempt = await this.getAttempt(id)
-		if (
-			attempt === null || attempt.version !== expectedVersion || attempt.status !== 'active'
-			|| attempt.phase !== 'configuration_verified' || attempt.recoverySecretRef === null
-		) return null
-		const vaultId = attempt.recoverySecretRef.slice('vault:'.length)
-		const recoveryLabel = githubRecoverySecretLabel(id)
-		const advance = this.db.prepare(`UPDATE github_source_setup_attempts SET
-			phase = 'installation_required', version = version + 1, updated_at = ?, expires_at = ?
-			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'configuration_verified'
-				AND recovery_secret_ref = ? AND EXISTS (
-					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
-				) RETURNING id`)
-			.bind(this.now(), this.leaseExpiresAt(), id, expectedVersion, attempt.recoverySecretRef, vaultId, recoveryLabel)
-		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
-			SELECT 1 FROM github_source_setup_attempts
-			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'installation_required'
-				AND recovery_secret_ref = ?
-		) RETURNING id`).bind(vaultId, recoveryLabel, id, expectedVersion + 1, attempt.recoverySecretRef)
-		const clear = this.db.prepare(`UPDATE github_source_setup_attempts SET recovery_secret_ref = NULL
-			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'installation_required'
-				AND recovery_secret_ref = ? AND NOT EXISTS (
-					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
-				) RETURNING *`)
-			.bind(id, expectedVersion + 1, attempt.recoverySecretRef, vaultId, recoveryLabel)
-		const results = await this.db.batch<GitHubSetupAttemptRow>([advance, remove, clear])
-		if (results[0]?.results.length !== 1 || results[1]?.results.length !== 1 || results[2]?.results.length !== 1) return null
-		const row = results[2]?.results[0]
-		return row === undefined ? null : decodeAttempt(row)
-	}
-
 	async markFailed(id: string, expectedVersion: number, errorCode: GitHubSetupErrorCode): Promise<GitHubSetupAttempt | null> {
 		return this.markTerminalLike(id, expectedVersion, 'failed', errorCode, true)
 	}
@@ -472,7 +412,7 @@ export class GitHubConnectionStore {
 		const attempt = await this.getAttempt(input.attemptId)
 		if (
 			attempt === null || attempt.version !== input.expectedVersion || attempt.status !== 'active' || attempt.phase !== 'installation_required'
-			|| attempt.appId === null || attempt.appSlug === null || attempt.appHtmlUrl === null || attempt.credentialSha256 === null
+			|| attempt.appId === null || attempt.appSlug === null || attempt.appHtmlUrl === null || attempt.appCredentialRef === null
 			|| attempt.webhookSecretRef === null || input.installationAccountLogin.toLowerCase() !== attempt.desiredOwner.toLowerCase()
 			|| JSON.stringify(verifiedRepositories) !== JSON.stringify(attempt.requestedRepositories)
 			|| input.webhookUrl !== `${attempt.expectedOrigin}/webhooks/github/${encodeURIComponent(attempt.id)}`
@@ -481,30 +421,30 @@ export class GitHubConnectionStore {
 		const webhookLabel = githubWebhookSecretLabel(input.attemptId)
 		const terminalAt = this.now()
 		const attemptUpdate = this.db.prepare(`UPDATE github_source_setup_attempts SET
-			status = 'completed', phase = 'connected', state_hash = NULL, recovery_secret_ref = NULL,
+			status = 'completed', phase = 'connected', state_hash = NULL,
 			version = version + 1, updated_at = ?, terminal_at = ?
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'installation_required'
 				AND webhook_secret_ref = ? AND EXISTS (
 					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
 				) RETURNING *`)
 			.bind(terminalAt, terminalAt, input.attemptId, input.expectedVersion, attempt.webhookSecretRef, webhookVaultId, webhookLabel)
+		// When the attempt did not complete, the sentinel row breaks the `app_credential_ref` CHECK and rolls the batch back.
 		const connectionInsert = this.db.prepare(`INSERT INTO github_source_connections_keyed (
-			connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+			connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+			app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 			installation_account_login, installation_selection, verified_repositories_json,
 			requested_repositories_json, connected_by, connected_at, verified_at, version
-		) SELECT id, 'keyed-v2',
+		) SELECT id,
 			app_id, app_slug, app_html_url, desired_owner, desired_app_name, desired_public,
-			credential_sha256, ?, webhook_secret_ref, ?, ?, ?, ?, requested_repositories_json,
+			app_credential_ref, ?, webhook_secret_ref, ?, ?, ?, ?, requested_repositories_json,
 			initiated_by, ?, ?, 1 FROM github_source_setup_attempts
 			WHERE id = ? AND version = ? AND status = 'completed' AND phase = 'connected'
 				AND app_id IS NOT NULL AND app_slug IS NOT NULL AND app_html_url IS NOT NULL
-				AND credential_sha256 IS NOT NULL AND webhook_secret_ref = ?
+				AND app_credential_ref IS NOT NULL AND webhook_secret_ref = ?
 				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
 			UNION ALL SELECT
-				'invalid', 'invalid', '1', 'invalid', 'https://github.com/apps/invalid', 'invalid', 'invalid', 0,
-				'0000000000000000000000000000000000000000000000000000000000000000',
-				'https://invalid.example/webhooks/github', 'vault:invalid', 1, 'invalid', 'selected', '[]', '[]', 'invalid', 0, 0, 1
+				'invalid', '1', 'invalid', 'https://github.com/apps/invalid', 'invalid', 'invalid', 0,
+				'invalid', 'https://invalid.example/webhooks/github', 'vault:invalid', 1, 'invalid', 'selected', '[]', '[]', 'invalid', 0, 0, 1
 			WHERE (
 				SELECT COUNT(*) FROM github_source_setup_attempts
 				WHERE id = ? AND version = ? AND status = 'completed' AND phase = 'connected'
@@ -551,7 +491,7 @@ export class GitHubConnectionStore {
 			status = ?, state_hash = NULL, last_error_code = ?, version = version + 1,
 			updated_at = ?, terminal_at = ?
 			WHERE id = ? AND version = ? AND status = 'active'
-				AND (? = 'repair_required' OR recovery_secret_ref IS NULL) RETURNING *`)
+				AND (? = 'repair_required' OR app_credential_ref IS NULL) RETURNING *`)
 			.bind(status, errorCode, now, terminal ? now : null, id, expectedVersion, status)
 			.first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
@@ -629,12 +569,12 @@ export class GitHubConnectionStore {
 }
 
 function expectedSecretLabel(id: string, kind: GitHubSetupSecretKind): string {
-	return kind === 'recovery' ? githubRecoverySecretLabel(id) : githubWebhookSecretLabel(id)
+	return kind === 'app-credential' ? githubAppCredentialSecretLabel(id) : githubWebhookSecretLabel(id)
 }
 
 function errorForExpiredPhase(phase: GitHubSetupPhase): GitHubSetupErrorCode {
-	if (phase === 'recovery_stored' || phase === 'source_bundle_written') return 'credential_activation'
-	if (phase === 'source_activated') return 'credential_persistence'
+	if (phase === 'credential_stored') return 'credential_activation'
+	if (phase === 'app_verified') return 'credential_persistence'
 	if (phase === 'webhook_secret_stored' || phase === 'webhook_configured') return 'webhook_configuration'
 	if (phase === 'installation_required') return 'installation_verification'
 	return 'configuration_verification'

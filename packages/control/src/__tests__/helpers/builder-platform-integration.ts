@@ -16,7 +16,7 @@ import { runControlJob } from '../../consumer'
 import type { Env as ControlEnv } from '../../env'
 import { FakeRepoSource } from '../../repo-source'
 import type { ControlJobMessage } from '../../run-lifecycle'
-import { unavailableSourceConnection } from '../../source-connection-port'
+import { unavailableSourceConnection } from '../../source/connections'
 import { createHarness as createControlHarness } from './harness'
 
 export async function integrationFixture() {

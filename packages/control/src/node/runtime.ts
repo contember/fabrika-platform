@@ -18,18 +18,18 @@ import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
-import type { SourceConnectionAdmin } from '@fabrika/provider-zerops'
 import { z } from 'zod'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { LocalGitHubRepoEvents } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
-import type { SourceConnectionPort } from '../source-connection-port'
+import { vault } from '../services'
+import { createSourceConnections, type SourceConnectionPort } from '../source/connections'
+import { gitHubAppClientFactory } from '../source/credentials'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
-import { zeropsControlProvider, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
-import { zeropsSourceConnectionPort } from './source-connection'
+import { type GitHubSourceSeams, zeropsControlProvider, zeropsGitHubSource } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -43,9 +43,7 @@ export interface Runtime {
 	env: Env
 	/** The single provider selected by this process composition root. */
 	provider: ControlProvider
-	/** Privileged provider-owned GitHub connection lifecycle, consumed by the authenticated admin route. */
-	sourceConnectionAdmin: SourceConnectionAdmin
-	/** Provider-neutral adapter consumed by the shared authenticated workflow. */
+	/** GitHub App administration over vault-held keys, consumed by the shared authenticated workflow. */
 	sourceConnection: SourceConnectionPort
 	config: ProcessConfig
 	/** The control queue (deploys + namespace jobs), as the concrete producer the consumer is built from. */
@@ -81,7 +79,12 @@ export const DEPLOY_MAX_ATTEMPTS = 4
  * here ever logs a value — the database URL, the S3 credentials, the IAM key and the vault KEK are all
  * credentials, and only their ABSENCE is reportable.
  */
-export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
+export interface RuntimeOverrides {
+	/** The local stack's fixture transports; never read from the environment. */
+	readonly sourceSeams?: GitHubSourceSeams
+}
+
+export function createRuntime(source: Record<string, string | undefined> = process.env, overrides: RuntimeOverrides = {}): Runtime {
 	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
 	// The console's own public origin is the fact this root states about where it runs; `local` is
 	// refused against it. Control does not branch on the name today, and that is exactly why it must not
@@ -105,9 +108,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const bootstrapAdmins = source['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']
 	const iamProvisioningKey = source['FABRIKA_IAM_PROVISIONING_KEY']
 	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
-	const sourceClient = zeropsSourceClient(source)
-	const sourceConnectionAdmin = zeropsSourceConnectionAdmin(source, sourceClient)
-	const sourceConnection = zeropsSourceConnectionPort(sourceConnectionAdmin)
+	const sourceSeams = overrides.sourceSeams ?? {}
 	const controlRepositories = createControlRepositories(db)
 
 	const env: Env = {
@@ -118,7 +119,10 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
-		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], sourceClient),
+		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], {
+			// Zerops selects a GitHub credential by connection, never by installation id (ADR-0029).
+			resolveInstallationId: () => Promise.reject(new Error('Zerops does not resolve GitHub installation ids; pass connectionId and installationId')),
+		}),
 		IAM: iamRpc(source),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,
@@ -141,9 +145,12 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	return {
 		env,
-		provider: zeropsControlProvider(env, source, sourceClient),
-		sourceConnectionAdmin,
-		sourceConnection,
+		provider: zeropsControlProvider(env, source, zeropsGitHubSource(env, sourceSeams)),
+		sourceConnection: createSourceConnections({
+			provider: 'zerops',
+			vault: () => vault(env),
+			createClient: gitHubAppClientFactory(sourceSeams.githubAppFetch),
+		}),
 		config,
 		queue,
 		async shutdown(): Promise<void> {

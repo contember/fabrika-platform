@@ -1,7 +1,7 @@
 import { reconcileSchema } from '@fabrika/auth'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, type ZeropsApi } from './api'
-import type { ZeropsSourceClient } from './source'
+import type { ZeropsSourcePort } from './source/port'
 import type { ZeropsRuntimeTarget } from './types'
 
 export type Sleeper = (ms: number, signal: AbortSignal) => Promise<void>
@@ -26,7 +26,7 @@ export const defaultSleep: Sleeper = (ms, signal) =>
 export interface ZeropsCollaborators {
 	api: ZeropsApi
 	/** Injected by the Zerops control composition; dry runs do not require it. */
-	source?: ZeropsSourceClient
+	source?: ZeropsSourcePort
 	reconcileSchema: SchemaReconciler
 	sleep: Sleeper
 }

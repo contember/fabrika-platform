@@ -39,13 +39,8 @@ import {
 } from './namespace'
 import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
 import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
-import {
-	normalizeZeropsSourceRepository,
-	type ZeropsSourceClient,
-	type ZeropsSourceClientV2,
-	type ZeropsSourcePrivateBindingV2,
-	type ZeropsSourceResolveResult,
-} from './source'
+import { normalizeZeropsSourceRepository } from './source'
+import type { ZeropsSourcePort, ZeropsSourcePrivateBinding } from './source/port'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
 import { deleteVersion, isVersionNotFound } from './version-attempt'
 
@@ -78,7 +73,7 @@ export interface ZeropsControlProviderOptions {
 	readonly propustkaUrl?: string
 	readonly adminKey?: string
 	readonly api?: ZeropsApi
-	readonly source: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
+	readonly source: ZeropsSourcePort
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
 	readonly namespaces?: {
@@ -167,7 +162,7 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 const abortSignal = (): AbortSignal => new AbortController().signal
 
 /** Every private Zerops source names its keyed connection; an installation id alone selects no credential (ADR-0029). */
-const privateBinding = (binding: ProviderSourceBinding | undefined): ZeropsSourcePrivateBindingV2 | undefined => {
+const privateBinding = (binding: ProviderSourceBinding | undefined): ZeropsSourcePrivateBinding | undefined => {
 	if (binding === undefined) return undefined
 	if (binding.connectionId === undefined) throw new Error('Zerops private source requires a connection binding')
 	return { connectionId: binding.connectionId, installationId: binding.installationId }
@@ -215,12 +210,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			reconcileSchema: options.reconcileSchema ?? defaults.reconcileSchema,
 			sleep: options.sleep ?? defaultSleep,
 		}
-	}, {
-		uploadV2: async (input) => {
-			const uploadV2 = options.source.uploadV2
-			if (uploadV2 === undefined) throw new Error('Zerops keyed source transport is unavailable')
-			return uploadV2.call(options.source, input)
-		},
 	})
 	const namespaceCapabilities = options.namespaces === undefined
 		? undefined
@@ -297,28 +286,16 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		decodeEnvironment(input.environment)
 		const artifact = artifactFor(input.environment)
 		await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
-		const base = {
-			runId: input.runId,
+		const result = await options.source.resolve({
 			repository: normalizeZeropsSourceRepository(input.app.source.repoUrl),
 			requestedRef: input.app.source.ref,
 			...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
+			...(binding === undefined ? {} : { privateBinding: binding }),
 			descriptorSha256: artifact.target.sourceDescriptor.sha256,
 			signal: input.signal,
-		}
-		let result: ZeropsSourceResolveResult
-		if (binding === undefined) {
-			result = await options.source.resolve(base)
-		} else {
-			const resolveV2 = options.source.resolveV2
-			if (resolveV2 === undefined) throw new Error('Zerops keyed source transport is unavailable')
-			result = await resolveV2.call(options.source, {
-				...base,
-				privateBinding: binding,
-			})
-		}
+		})
 		if (
-			result.runId !== input.runId
-			|| result.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
+			result.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
 			|| (input.expectedCommitSha !== undefined && result.commitSha !== input.expectedCommitSha)
 		) throw new Error('Zerops source resolution returned different coordinates')
 		return { commitSha: result.commitSha }

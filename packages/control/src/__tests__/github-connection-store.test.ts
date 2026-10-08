@@ -1,11 +1,11 @@
 import type { SqlDatabase, SqlQueryResult, SqlStatement } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import {
+	githubAppCredentialSecretLabel,
 	GitHubConnectionCasError,
 	GitHubConnectionStore,
 	GitHubConnectionWebhookSecretProvider,
 	githubManifestStateSecretLabel,
-	githubRecoverySecretLabel,
 	type GitHubSetupAttempt,
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
@@ -22,22 +22,22 @@ function testKey(): string {
 
 const STATE_DIGEST = 'a'.repeat(64)
 const OTHER_STATE_DIGEST = 'b'.repeat(64)
-const CREDENTIAL_DIGEST = 'c'.repeat(64)
+const LEGACY_DIGEST = 'c'.repeat(64)
 
 function insertKeyedConnection(sqlite: Harness['sqlite'], connectionId: string, owner: string, installationId: number): void {
 	sqlite.query(`INSERT INTO github_source_connections_keyed (
-		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
-		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		app_credential_ref, webhook_url, webhook_secret_ref, installation_id,
 		installation_account_login, installation_selection, verified_repositories_json,
 		requested_repositories_json, connected_by, connected_at, verified_at, version
-	) VALUES (?, 'keyed-v2', '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 1)`)
+	) VALUES (?, '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 1)`)
 		.run(
 			connectionId,
 			`${connectionId}-app`,
 			`https://github.com/apps/${connectionId}-app`,
 			owner,
 			`${connectionId}-app`,
-			CREDENTIAL_DIGEST,
+			`vault:${connectionId}-credential`,
 			`https://control.example/webhooks/github/${connectionId}`,
 			`vault:${connectionId}-webhook`,
 			installationId,
@@ -45,8 +45,8 @@ function insertKeyedConnection(sqlite: Harness['sqlite'], connectionId: string, 
 		)
 }
 
-/** Drive one manifest attempt to `source_activated`, which is where every post-activation test starts. */
-async function attemptAtSourceActivated(
+/** Drive one manifest attempt to `app_verified`, which is where every post-verification test starts. */
+async function attemptAtAppVerified(
 	store: GitHubConnectionStore,
 	vault: Vault,
 	id: string,
@@ -69,18 +69,16 @@ async function attemptAtSourceActivated(
 	}, state)
 	const claimed = await store.claimCallback(STATE_DIGEST, 'alice')
 	if (claimed === null) throw new Error('claim failed')
-	const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(id), 'bundle')
-	const stored = await store.storeSecretAndCheckpoint(id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', recovery)
-	if (stored === null) throw new Error('recovery checkpoint failed')
-	const written = await store.checkpoint(id, stored.version, 'recovery_stored', 'source_bundle_written', { credentialSha256: CREDENTIAL_DIGEST })
-	if (written === null) throw new Error('bundle checkpoint failed')
-	const activated = await store.checkpoint(id, written.version, 'source_bundle_written', 'source_activated', {
+	const credential = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(id), 'credential')
+	const stored = await store.storeSecretAndCheckpoint(id, claimed.version, 'exchange_claimed', 'credential_stored', 'app-credential', credential)
+	if (stored === null) throw new Error('credential checkpoint failed')
+	const verified = await store.checkpoint(id, stored.version, 'credential_stored', 'app_verified', {
 		appId: options.appId ?? '123',
 		appSlug,
 		appHtmlUrl: `https://github.com/apps/${appSlug}`,
 	})
-	if (activated === null) throw new Error('activation checkpoint failed')
-	return activated
+	if (verified === null) throw new Error('App verification checkpoint failed')
+	return verified
 }
 
 class TwoPartyBarrier {
@@ -154,24 +152,27 @@ async function configuredAttempt() {
 	}, stateSecret)
 	const claimed = await store.claimCallback(STATE_DIGEST, 'principal-1')
 	if (claimed === null) throw new Error('claim failed')
-	const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'one-time-pem')
-	const recovered = await store.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', recovery)
-	if (recovered === null) throw new Error('recovery checkpoint failed')
-	const written = await store.checkpoint(started.id, recovered.version, 'recovery_stored', 'source_bundle_written', {
-		credentialSha256: CREDENTIAL_DIGEST,
-	})
-	if (written === null) throw new Error('source write checkpoint failed')
-	const activated = await store.checkpoint(started.id, written.version, 'source_bundle_written', 'source_activated', {
+	const credential = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'app-credential')
+	const credentialStored = await store.storeSecretAndCheckpoint(
+		started.id,
+		claimed.version,
+		'exchange_claimed',
+		'credential_stored',
+		'app-credential',
+		credential,
+	)
+	if (credentialStored === null) throw new Error('credential checkpoint failed')
+	const verified = await store.checkpoint(started.id, credentialStored.version, 'credential_stored', 'app_verified', {
 		appId: '123',
 		appSlug: 'fabrika-source',
 		appHtmlUrl: 'https://github.com/apps/fabrika-source',
 	})
-	if (activated === null) throw new Error('source activation checkpoint failed')
+	if (verified === null) throw new Error('App verification checkpoint failed')
 	const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(started.id), 'webhook-value')
 	const webhookStored = await store.storeSecretAndCheckpoint(
 		started.id,
-		activated.version,
-		'source_activated',
+		verified.version,
+		'app_verified',
 		'webhook_secret_stored',
 		'webhook',
 		webhook,
@@ -179,9 +180,9 @@ async function configuredAttempt() {
 	if (webhookStored === null) throw new Error('webhook checkpoint failed')
 	const webhookConfigured = await store.checkpoint(started.id, webhookStored.version, 'webhook_secret_stored', 'webhook_configured')
 	if (webhookConfigured === null) throw new Error('webhook config checkpoint failed')
-	const verified = await store.checkpoint(started.id, webhookConfigured.version, 'webhook_configured', 'configuration_verified')
-	if (verified === null) throw new Error('verification checkpoint failed')
-	return { ...harness, store, vault, started, claimed, recovery, webhook, verified }
+	const ready = await store.checkpoint(started.id, webhookConfigured.version, 'webhook_configured', 'installation_required')
+	if (ready === null) throw new Error('installation checkpoint failed')
+	return { ...harness, store, vault, started, claimed, credential, webhook, ready }
 }
 
 describe('GitHubConnectionStore', () => {
@@ -196,7 +197,7 @@ describe('GitHubConnectionStore', () => {
 		) VALUES (1, ?, '123', 'legacy-app', 'https://github.com/apps/legacy-app', 'Acme', 'legacy-app', 0,
 			?, 'https://control.example/webhooks/github', 'vault:legacy-webhook', 45,
 			'acme', 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 3)`)
-			.run('legacy-connection', CREDENTIAL_DIGEST)
+			.run('legacy-connection', LEGACY_DIGEST)
 		for (const [id, installationId] of [['zerops-match', 45], ['cloudflare-only', 45]] as const) {
 			sqlite.query('INSERT INTO apps (id, repo_url, github_installation_id) VALUES (?, ?, ?)')
 				.run(id, `github.com/acme/${id}`, installationId)
@@ -214,7 +215,7 @@ describe('GitHubConnectionStore', () => {
 		) VALUES ('adopted', 'adoption', 'active', 'webhook_configured', 1, 'principal-1',
 			'https://control.example', 'acme', 'legacy-app', 0, '[]', '123', 'legacy-app',
 			'https://github.com/apps/legacy-app', ?, 'vault:adopted-webhook', 1, 1, 9999)`)
-			.run(CREDENTIAL_DIGEST)
+			.run(LEGACY_DIGEST)
 
 		sqlite.exec(migrationsAfter('0020_github_manifest_state.sql'))
 
@@ -231,7 +232,7 @@ describe('GitHubConnectionStore', () => {
 		expect(await harness.repositories.registry.getSourceBinding('cloudflare-only', 'installation')).toEqual({ installationId: 45 })
 	})
 
-	test('keeps keyed connections unique per owner, paged, and immutable in transport', async () => {
+	test('keeps keyed connections unique per owner and paged', async () => {
 		const harness = createHarness(() => 1_000)
 		const { sqlite } = harness
 		insertKeyedConnection(sqlite, 'keyed-alpha', 'Acme', 45)
@@ -239,8 +240,6 @@ describe('GitHubConnectionStore', () => {
 		insertKeyedConnection(sqlite, 'keyed-gamma', 'Gamma', 47)
 		expect(() => insertKeyedConnection(sqlite, 'keyed-beta-duplicate', 'beta', 48)).toThrow()
 		expect((await harness.repositories.githubConnections.getConnectionByOwner('ACME'))?.connectionId).toBe('keyed-alpha')
-		expect(() => sqlite.query(`UPDATE github_source_connections_keyed SET transport_kind = 'legacy-v1' WHERE connection_id = ?`).run('keyed-beta'))
-			.toThrow('immutable')
 
 		const firstPage = await harness.repositories.githubConnections.listConnections({ limit: 2 })
 		expect(firstPage.items.map((connection) => connection.connectionId)).toEqual(['keyed-alpha', 'keyed-beta'])
@@ -367,7 +366,7 @@ describe('GitHubConnectionStore', () => {
 		expect(await store.getAttempt('claimed')).toMatchObject({ status: 'failed', phase: 'exchange_claimed' })
 	})
 
-	test('turns a crashed durable manifest or adoption phase into repair after its lease', async () => {
+	test('turns a crashed durable phase into repair after its lease', async () => {
 		let clock = 100
 		const { d1 } = createHarness(() => clock)
 		const store = new GitHubConnectionStore(d1, () => clock, 10)
@@ -386,93 +385,49 @@ describe('GitHubConnectionStore', () => {
 		}, stateSecret)
 		const claimed = await store.claimCallback(STATE_DIGEST, 'alice')
 		if (claimed === null) throw new Error('claim failed')
-		const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel('manifest-crash'), 'bundle')
-		const recovered = await store.storeSecretAndCheckpoint(
+		const credential = await vault.prepareSecret('platform', githubAppCredentialSecretLabel('manifest-crash'), 'credential')
+		const stored = await store.storeSecretAndCheckpoint(
 			'manifest-crash',
 			claimed.version,
 			'exchange_claimed',
-			'recovery_stored',
-			'recovery',
-			recovery,
+			'credential_stored',
+			'app-credential',
+			credential,
 		)
-		if (recovered === null) throw new Error('recovery failed')
+		if (stored === null) throw new Error('credential checkpoint failed')
 		clock = 110
-		expect(await store.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'manifest-crash', phase: 'recovery_stored' })
+		expect(await store.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'manifest-crash', phase: 'credential_stored' })
 
 		const { d1: activatedDb } = createHarness(() => clock)
 		const activatedStore = new GitHubConnectionStore(activatedDb, () => clock, 10)
 		const activatedVault = await Vault.create(activatedDb, testKey(), () => clock)
-		await attemptAtSourceActivated(activatedStore, activatedVault, 'activation-crash', 120)
+		await attemptAtAppVerified(activatedStore, activatedVault, 'verification-crash', 120)
 		clock = 120
-		expect(await activatedStore.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'activation-crash', phase: 'source_activated' })
-
-		let writtenClock = 100
-		const { d1: writtenDb } = createHarness(() => writtenClock)
-		const writtenStore = new GitHubConnectionStore(writtenDb, () => writtenClock, 10)
-		const writtenVault = await Vault.create(writtenDb, testKey(), () => writtenClock)
-		const writtenState = await writtenVault.prepareSecret('platform', githubManifestStateSecretLabel('written-crash'), 'opaque-state')
-		await writtenStore.beginAttemptWithManifestState({
-			id: 'written-crash',
-			stateHash: STATE_DIGEST,
-			initiatedBy: 'alice',
-			expectedOrigin: 'https://control.example',
-			desiredOwner: 'acme',
-			desiredAppName: 'source',
-			desiredPublic: false,
-			requestedRepositories: [],
-			expiresAt: 110,
-		}, writtenState)
-		const writtenClaim = await writtenStore.claimCallback(STATE_DIGEST, 'alice')
-		if (writtenClaim === null) throw new Error('claim failed')
-		const writtenRecovery = await writtenVault.prepareSecret('platform', githubRecoverySecretLabel('written-crash'), 'bundle')
-		const writtenRecovered = await writtenStore.storeSecretAndCheckpoint(
-			'written-crash',
-			writtenClaim.version,
-			'exchange_claimed',
-			'recovery_stored',
-			'recovery',
-			writtenRecovery,
-		)
-		if (writtenRecovered === null) throw new Error('recovery failed')
-		const written = await writtenStore.checkpoint(
-			'written-crash',
-			writtenRecovered.version,
-			'recovery_stored',
-			'source_bundle_written',
-			{ credentialSha256: CREDENTIAL_DIGEST },
-		)
-		if (written === null) throw new Error('source checkpoint failed')
-		writtenClock = 110
-		expect(await writtenStore.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'written-crash', phase: 'source_bundle_written' })
+		expect(await activatedStore.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'verification-crash', phase: 'app_verified' })
 	})
 
-	test('reaps every post-activation checkpoint, including remote-call-before-checkpoint windows', async () => {
-		for (const target of ['webhook_secret_stored', 'webhook_configured', 'configuration_verified']) {
+	test('reaps every post-verification checkpoint, including remote-call-before-checkpoint windows', async () => {
+		for (const target of ['webhook_secret_stored', 'webhook_configured']) {
 			let clock = 100
 			const { d1 } = createHarness(() => clock)
 			const store = new GitHubConnectionStore(d1, () => clock, 10)
 			const vault = await Vault.create(d1, testKey(), () => clock)
-			let attempt = await attemptAtSourceActivated(store, vault, `crash-${target}`, 110)
+			let attempt = await attemptAtAppVerified(store, vault, `crash-${target}`, 110)
 			const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(attempt.id), 'webhook')
 			const stored = await store.storeSecretAndCheckpoint(
 				attempt.id,
 				attempt.version,
-				'source_activated',
+				'app_verified',
 				'webhook_secret_stored',
 				'webhook',
 				webhook,
 			)
 			if (stored === null) throw new Error('webhook checkpoint failed')
 			attempt = stored
-			if (target === 'webhook_configured' || target === 'configuration_verified') {
+			if (target === 'webhook_configured') {
 				const configured = await store.checkpoint(attempt.id, attempt.version, 'webhook_secret_stored', 'webhook_configured')
 				if (configured === null) throw new Error('webhook configuration checkpoint failed')
 				attempt = configured
-			}
-			if (target === 'configuration_verified') {
-				const verified = await store.checkpoint(attempt.id, attempt.version, 'webhook_configured', 'configuration_verified')
-				if (verified === null) throw new Error('verification checkpoint failed')
-				attempt = verified
 			}
 			clock = 110
 			expect(await store.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: attempt.id, phase: target })
@@ -537,25 +492,23 @@ describe('GitHubConnectionStore', () => {
 
 	test('uses CAS transitions and commits a platform secret with its checkpoint', async () => {
 		const flow = await configuredAttempt()
-		expect(flow.verified.requestedRepositories).toEqual(['acme/a', 'acme/z'])
-		expect(await flow.store.checkpoint(flow.started.id, flow.claimed.version, 'exchange_claimed', 'recovery_stored')).toBeNull()
+		expect(flow.ready.requestedRepositories).toEqual(['acme/a', 'acme/z'])
+		expect(await flow.store.checkpoint(flow.started.id, flow.claimed.version, 'exchange_claimed', 'credential_stored')).toBeNull()
 		expect(
-			await flow.vault.getSecretForPurpose(flow.recovery.ref, {
+			await flow.vault.getSecretForPurpose(flow.credential.ref, {
 				scope: 'platform',
-				label: githubRecoverySecretLabel(flow.started.id),
+				label: githubAppCredentialSecretLabel(flow.started.id),
 			}),
-		).toBe('one-time-pem')
-		await expect(flow.vault.getSecretForPurpose(flow.recovery.ref, {
+		).toBe('app-credential')
+		await expect(flow.vault.getSecretForPurpose(flow.credential.ref, {
 			scope: 'platform',
 			label: githubWebhookSecretLabel(flow.started.id),
 		})).rejects.toThrow('purpose mismatch')
 	})
 
-	test('removes recovery before publishing and exposes only redacted state', async () => {
+	test('keeps the App credential in the vault through publishing and exposes only redacted state', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
-		await expect(flow.vault.getSecret(flow.recovery.ref)).rejects.toThrow()
+		const ready = flow.ready
 		const installationAttempt = await flow.store.getWorkflowAttempt()
 		if (installationAttempt === null) throw new Error('installation workflow missing')
 		const installationState = workflowDto('harbor', installationAttempt)
@@ -566,7 +519,6 @@ describe('GitHubConnectionStore', () => {
 		})
 		expect(JSON.stringify(installationState)).not.toContain('vault:')
 		expect(JSON.stringify(installationState)).not.toContain(STATE_DIGEST)
-		expect(JSON.stringify(installationState)).not.toContain(CREDENTIAL_DIGEST)
 		const connection = await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
@@ -577,7 +529,11 @@ describe('GitHubConnectionStore', () => {
 			verifiedRepositories: ['acme/a', 'acme/z'],
 			verifiedAt: 1_000,
 		})
-		expect(connection).toMatchObject({ appOwner: 'acme', transportKind: 'keyed-v2' })
+		expect(connection).toMatchObject({ appOwner: 'acme', appCredentialRef: flow.credential.ref })
+		expect(await flow.store.getAttempt(flow.started.id)).toMatchObject({ status: 'completed', appCredentialRef: flow.credential.ref })
+		expect(
+			await flow.vault.getSecretForPurpose(flow.credential.ref, { scope: 'platform', label: githubAppCredentialSecretLabel(flow.started.id) }),
+		).toBe('app-credential')
 		const published = await flow.store.getConnectionById(flow.started.id)
 		if (published === null) throw new Error('published connection missing')
 		const state = connectionDto('harbor', published)
@@ -585,7 +541,6 @@ describe('GitHubConnectionStore', () => {
 		const serialized = JSON.stringify(state)
 		expect(serialized).not.toContain('vault:')
 		expect(serialized).not.toContain(STATE_DIGEST)
-		expect(serialized).not.toContain(CREDENTIAL_DIGEST)
 
 		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, flow.started.id)
 		expect(await provider.getSecret()).toBe('webhook-value')
@@ -596,12 +551,12 @@ describe('GitHubConnectionStore', () => {
 		const { d1 } = createHarness(() => clock)
 		const store = new GitHubConnectionStore(d1, () => clock, 10)
 		const vault = await Vault.create(d1, testKey(), () => clock)
-		const adopted = await attemptAtSourceActivated(store, vault, 'installation-wait', 110, { appSlug: 'fabrika-source' })
+		const adopted = await attemptAtAppVerified(store, vault, 'installation-wait', 110, { appSlug: 'fabrika-source' })
 		const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(adopted.id), 'webhook-value')
 		const stored = await store.storeSecretAndCheckpoint(
 			adopted.id,
 			adopted.version,
-			'source_activated',
+			'app_verified',
 			'webhook_secret_stored',
 			'webhook',
 			webhook,
@@ -609,9 +564,7 @@ describe('GitHubConnectionStore', () => {
 		if (stored === null) throw new Error('webhook checkpoint failed')
 		const configured = await store.checkpoint(stored.id, stored.version, 'webhook_secret_stored', 'webhook_configured')
 		if (configured === null) throw new Error('webhook configuration failed')
-		const verified = await store.checkpoint(configured.id, configured.version, 'webhook_configured', 'configuration_verified')
-		if (verified === null) throw new Error('configuration verification failed')
-		const waiting = await store.discardRecoveryAndCheckpoint(verified.id, verified.version)
+		const waiting = await store.checkpoint(configured.id, configured.version, 'webhook_configured', 'installation_required')
 		if (waiting === null) throw new Error('installation checkpoint failed')
 
 		clock = 1_000
@@ -646,8 +599,7 @@ describe('GitHubConnectionStore', () => {
 
 	test('refuses to publish mismatched webhook, installation owner, or verified repository scope', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		const base: PublishGitHubConnectionInput = {
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
@@ -671,7 +623,7 @@ describe('GitHubConnectionStore', () => {
 			flow.store.storeSecretAndCheckpoint(
 				flow.started.id,
 				1,
-				'source_activated',
+				'app_verified',
 				'webhook_secret_stored',
 				'webhook',
 				stale,
@@ -697,25 +649,24 @@ describe('GitHubConnectionStore', () => {
 		}, stateSecret)
 		const claimed = await harness.repositories.githubConnections.claimCallback(STATE_DIGEST, 'principal-1')
 		if (claimed === null) throw new Error('callback claim failed')
-		const first = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'first')
-		const second = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'second')
+		const first = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'first')
+		const second = await vault.prepareSecret('platform', githubAppCredentialSecretLabel(started.id), 'second')
 		const barrier = new TwoPartyBarrier()
 		const left = new GitHubConnectionStore(new BarrierDatabase(harness.d1, barrier), () => 1_000)
 		const right = new GitHubConnectionStore(new BarrierDatabase(harness.d1, barrier), () => 1_000)
 		const outcomes = await Promise.allSettled([
-			left.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', first),
-			right.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', second),
+			left.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'credential_stored', 'app-credential', first),
+			right.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'credential_stored', 'app-credential', second),
 		])
 		expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 		expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
 		expect(queryRows(harness.sqlite, 'SELECT id FROM vault')).toHaveLength(1)
-		expect((await harness.repositories.githubConnections.getAttempt(started.id))?.phase).toBe('recovery_stored')
+		expect((await harness.repositories.githubConnections.getAttempt(started.id))?.phase).toBe('credential_stored')
 	})
 
 	test('a batch barrier gives exactly one connection-publish CAS winner', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		const barrier = new TwoPartyBarrier()
 		const left = new GitHubConnectionStore(new BarrierDatabase(flow.d1, barrier), () => 1_000)
 		const right = new GitHubConnectionStore(new BarrierDatabase(flow.d1, barrier), () => 1_000)
@@ -738,8 +689,7 @@ describe('GitHubConnectionStore', () => {
 
 	test('a publish between owner preflight and atomic start rolls back the attempt and manifest secret', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		const gate = new FirstBatchGateDatabase(flow.d1)
 		const delayedStart = new GitHubConnectionStore(gate, () => 1_000)
 		expect(await delayedStart.getConnectionByOwner('ACME')).toBeNull()
@@ -773,27 +723,9 @@ describe('GitHubConnectionStore', () => {
 		expect((await flow.store.getConnectionByOwner('acme'))?.connectionId).toBe(flow.started.id)
 	})
 
-	test('recovery deletion requires the exact platform purpose', async () => {
-		const flow = await configuredAttempt()
-		const recoveryId = flow.recovery.ref.slice('vault:'.length)
-		flow.sqlite.query(`UPDATE vault SET scope = 'app' WHERE id = ?`).run(recoveryId)
-		expect(await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)).toBeNull()
-		expect((await flow.store.getAttempt(flow.started.id))?.phase).toBe('configuration_verified')
-		expect(queryRows(flow.sqlite, 'SELECT id FROM vault WHERE id = ?', recoveryId)).toHaveLength(1)
-
-		const tampered = await configuredAttempt()
-		tampered.sqlite.query(`UPDATE github_source_setup_attempts SET recovery_secret_ref = ? WHERE id = ?`).run(
-			tampered.webhook.ref,
-			tampered.started.id,
-		)
-		expect(await tampered.store.discardRecoveryAndCheckpoint(tampered.started.id, tampered.verified.version)).toBeNull()
-		expect(queryRows(tampered.sqlite, 'SELECT id FROM vault')).toHaveLength(2)
-	})
-
 	test('connection publish requires the exact webhook platform purpose and rolls back', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		const webhookId = flow.webhook.ref.slice('vault:'.length)
 		flow.sqlite.query(`UPDATE vault SET label = 'platform:github-source:other:webhook' WHERE id = ?`).run(webhookId)
 		await expect(flow.store.publishConnection({
@@ -810,25 +742,17 @@ describe('GitHubConnectionStore', () => {
 		expect(await flow.store.getConnection()).toBeNull()
 	})
 
-	test('does not advance when encrypted recovery is missing', async () => {
+	test('requires repair state instead of hiding a vault-held App credential in a failed row', async () => {
 		const flow = await configuredAttempt()
-		await flow.vault.delete(flow.recovery.ref)
-		expect(await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)).toBeNull()
-		expect((await flow.store.getAttempt(flow.started.id))?.phase).toBe('configuration_verified')
-	})
-
-	test('requires repair state instead of hiding a durable recovery secret in a failed row', async () => {
-		const flow = await configuredAttempt()
-		expect(await flow.store.markFailed(flow.started.id, flow.verified.version, 'configuration_verification')).toBeNull()
-		const repair = await flow.store.markRepairRequired(flow.started.id, flow.verified.version, 'configuration_verification')
+		expect(await flow.store.markFailed(flow.started.id, flow.ready.version, 'installation_verification')).toBeNull()
+		const repair = await flow.store.markRepairRequired(flow.started.id, flow.ready.version, 'installation_verification')
 		expect(repair?.status).toBe('repair_required')
-		expect(repair?.recoverySecretRef).toBe(flow.recovery.ref)
+		expect(repair?.appCredentialRef).toBe(flow.credential.ref)
 	})
 
 	test('dynamic provider honors caller cancellation without returning a secret', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
@@ -845,12 +769,10 @@ describe('GitHubConnectionStore', () => {
 		await expect(provider.getSecret(controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
 	})
 
-	test('switches webhook authority after structural verification and keeps it after publish', async () => {
+	test('switches webhook authority once the webhook is configured and keeps it after publish', async () => {
 		const flow = await configuredAttempt()
 		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, flow.started.id)
-		expect(await provider.getSecret()).toBe('webhook-value')
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		expect(await provider.getSecret()).toBe('webhook-value')
 		await flow.store.publishConnection({
 			attemptId: flow.started.id,
@@ -867,8 +789,7 @@ describe('GitHubConnectionStore', () => {
 
 	test('fails a connected webhook whose stored secret is gone instead of resolving another', async () => {
 		const flow = await configuredAttempt()
-		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
-		if (ready === null) throw new Error('recovery discard failed')
+		const ready = flow.ready
 		await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,

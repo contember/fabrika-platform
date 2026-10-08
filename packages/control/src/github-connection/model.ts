@@ -1,7 +1,5 @@
 export type GitHubSetupStatus = 'active' | 'repair_required' | 'completed' | 'failed'
 
-export type GitHubSourceTransportKind = 'keyed-v2'
-
 export type GitHubSetupErrorCode =
 	| 'callback_expired'
 	| 'manifest_exchange'
@@ -15,12 +13,10 @@ export type GitHubSetupErrorCode =
 export type GitHubSetupPhase =
 	| 'awaiting_manifest_callback'
 	| 'exchange_claimed'
-	| 'recovery_stored'
-	| 'source_bundle_written'
-	| 'source_activated'
+	| 'credential_stored'
+	| 'app_verified'
 	| 'webhook_secret_stored'
 	| 'webhook_configured'
-	| 'configuration_verified'
 	| 'installation_required'
 	| 'connected'
 
@@ -40,8 +36,7 @@ export interface GitHubSetupAttempt {
 	appId: string | null
 	appSlug: string | null
 	appHtmlUrl: string | null
-	credentialSha256: string | null
-	recoverySecretRef: string | null
+	appCredentialRef: string | null
 	webhookSecretRef: string | null
 	lastErrorCode: GitHubSetupErrorCode | null
 	createdAt: number
@@ -52,14 +47,13 @@ export interface GitHubSetupAttempt {
 
 export interface GitHubSourceConnection {
 	connectionId: string
-	transportKind: GitHubSourceTransportKind
 	appId: string
 	appSlug: string
 	appHtmlUrl: string
 	appOwner: string
 	appName: string
 	appPublic: boolean
-	credentialSha256: string
+	appCredentialRef: string
 	webhookUrl: string
 	webhookSecretRef: string
 	installationId: number
@@ -94,8 +88,7 @@ export interface GitHubSetupAttemptRow {
 	app_id: string | null
 	app_slug: string | null
 	app_html_url: string | null
-	credential_sha256: string | null
-	recovery_secret_ref: string | null
+	app_credential_ref: string | null
 	webhook_secret_ref: string | null
 	last_error_code: string | null
 	created_at: number
@@ -106,14 +99,13 @@ export interface GitHubSetupAttemptRow {
 
 export interface GitHubSourceConnectionRow {
 	connection_id: string
-	transport_kind: string
 	app_id: string
 	app_slug: string
 	app_html_url: string
 	app_owner: string
 	app_name: string
 	app_public: number
-	credential_sha256: string
+	app_credential_ref: string
 	webhook_url: string
 	webhook_secret_ref: string
 	installation_id: number
@@ -153,7 +145,6 @@ export interface GitHubSetupPatch {
 	appId?: string
 	appSlug?: string
 	appHtmlUrl?: string
-	credentialSha256?: string
 	lastErrorCode?: GitHubSetupErrorCode
 }
 
@@ -168,7 +159,7 @@ export interface PublishGitHubConnectionInput {
 	verifiedAt: number
 }
 
-export type GitHubSetupSecretKind = 'recovery' | 'webhook'
+export type GitHubSetupSecretKind = 'app-credential' | 'webhook'
 
 export class GitHubConnectionCasError extends Error {
 	constructor() {

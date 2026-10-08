@@ -1,13 +1,8 @@
-import {
-	createZeropsArtifactSourceDescriptor,
-	decodeZeropsSourceCredentialBundleV2,
-	type SourceConnectionAdmin,
-	type ZeropsSourceGitHubAppIdentityV1,
-} from '@fabrika/provider-zerops'
+import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { zeropsControlProvider, zeropsNamespaceProcessConfig, zeropsSourceConnectionAdmin } from '../node/provider'
+import type { Env } from '../env'
+import { zeropsControlProvider, zeropsGitHubSource, zeropsNamespaceProcessConfig } from '../node/provider'
 import { createRuntime } from '../node/runtime'
-import { zeropsSourceConnectionPort } from '../node/source-connection'
 import { FakeRepoSource } from '../repo-source'
 import { buildControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
@@ -44,168 +39,7 @@ describe('the Zerops namespace process configuration', () => {
 			})
 		).toThrow('FABRIKA_ZEROPS_PROXY_SOURCE_JSON is required')
 	})
-	test('builds connection-bound v2 credentials and routes keyed activation and status only through v2', async () => {
-		const calls: string[] = []
-		const identity: ZeropsSourceGitHubAppIdentityV1 = {
-			id: 123,
-			slug: 'fabrika-source',
-			htmlUrl: 'https://github.com/apps/fabrika-source',
-			public: false,
-			owner: { login: 'acme', type: 'Organization' },
-			permissions: { contents: 'read' },
-			events: ['push'],
-		}
-		const admin: SourceConnectionAdmin = {
-			inspect: () => Promise.resolve({ state: 'anonymous' }),
-			activateV2: (input) => {
-				calls.push('activate-v2')
-				return Promise.resolve({
-					protocolVersion: 2,
-					connectionId: input.connectionId,
-					credentialVersion: 2,
-					credentialSha256: input.credentialSha256,
-					githubApp: identity,
-				})
-			},
-			statusV2: () => {
-				calls.push('status-v2')
-				return Promise.resolve({ state: 'anonymous' })
-			},
-			configureWebhook: (input) =>
-				Promise.resolve({
-					protocolVersion: 1,
-					connectionId: input.connectionId,
-					credentialSha256: input.credentialSha256,
-					webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
-				}),
-			verifyInstallations: (input) =>
-				Promise.resolve({
-					protocolVersion: 1,
-					connectionId: input.connectionId,
-					credentialSha256: input.credentialSha256,
-					installation: { status: 'missing' },
-				}),
-		}
-		const port = zeropsSourceConnectionPort(admin)
-		const privateKeyPem = '-----BEGIN PRIVATE KEY-----\nMAMCAQE=\n-----END PRIVATE KEY-----\n'
-		const prepared = await port.prepareCredential({ connectionId: 'connection-1', appId: '123', privateKeyPem })
-		expect(decodeZeropsSourceCredentialBundleV2(prepared.bundle)).toEqual({
-			version: 2,
-			connectionId: 'connection-1',
-			githubAppId: '123',
-			privateKeyPem,
-		})
-		await port.activate({
-			connectionId: 'connection-1',
-			credentialBundle: prepared.bundle,
-			credentialSha256: prepared.sha256,
-			signal: new AbortController().signal,
-		})
-		await port.status({ connectionId: 'connection-1', signal: new AbortController().signal })
-		expect(calls).toEqual(['activate-v2', 'status-v2'])
-	})
-
-	test('calls configureWebhook and verifyInstallations without a preflight status round trip', async () => {
-		const calls: string[] = []
-		const credentialSha256 = 'a'.repeat(64)
-		const admin: SourceConnectionAdmin = {
-			inspect: () => Promise.resolve({ state: 'anonymous' }),
-			activateV2: () => Promise.reject(new Error('not called')),
-			statusV2: (input) => {
-				calls.push(`status:${input.connectionId}`)
-				return Promise.resolve({ state: 'unavailable' })
-			},
-			configureWebhook: (input) => {
-				calls.push(`configure:${input.connectionId}`)
-				return Promise.resolve({
-					protocolVersion: 1,
-					connectionId: input.connectionId,
-					credentialSha256: input.credentialSha256,
-					webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
-				})
-			},
-			verifyInstallations: (input) => {
-				calls.push(`verify:${input.connectionId}`)
-				return Promise.resolve({
-					protocolVersion: 1,
-					connectionId: input.connectionId,
-					credentialSha256: input.credentialSha256,
-					installation: { status: 'missing' },
-				})
-			},
-		}
-		const port = zeropsSourceConnectionPort(admin)
-		const signal = new AbortController().signal
-		await port.configureWebhook({
-			connectionId: 'connection-1',
-			credentialSha256,
-			url: 'https://control.example.test/webhooks/github/connection-1',
-			secret: 'webhook-secret-at-least-32-characters',
-			signal,
-		})
-		await port.verifyInstallations({
-			connectionId: 'connection-1',
-			credentialSha256,
-			scope: { kind: 'organization', organization: 'acme' },
-			signal,
-		})
-		expect(calls).toEqual(['configure:connection-1', 'verify:connection-1'])
-	})
-
-	test('binds source connection administration to the exact configured platform project', async () => {
-		const projects: string[] = []
-		const admin = zeropsSourceConnectionAdmin(
-			{
-				FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
-				FABRIKA_ZEROPS_PROJECT_ID: 'platform-project-1',
-			},
-			{
-				activateV2: () => Promise.reject(new Error('not called')),
-				statusV2: () => Promise.reject(new Error('not called')),
-				configureWebhook: () => Promise.reject(new Error('not called')),
-				verifyInstallations: () => Promise.reject(new Error('not called')),
-			},
-			{
-				findService: ({ projectId }) => {
-					projects.push(projectId)
-					return Promise.resolve({ id: 'source-1', name: 'source', projectId })
-				},
-				listServiceEnv: () => Promise.resolve([]),
-				createServiceEnv: () => Promise.reject(new Error('not called')),
-			},
-		)
-		expect(await admin.inspect(new AbortController().signal)).toEqual({ state: 'anonymous' })
-		expect(projects).toEqual(['platform-project-1'])
-	})
-
-	test('keeps legacy installations bootable and reports connection repair when project identity is absent', async () => {
-		const admin = zeropsSourceConnectionAdmin(
-			{ FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder' },
-			{
-				activateV2: () => Promise.reject(new Error('not called')),
-				statusV2: () => Promise.reject(new Error('not called')),
-				configureWebhook: () => Promise.reject(new Error('not called')),
-				verifyInstallations: () => Promise.reject(new Error('not called')),
-			},
-			{
-				findService: () => Promise.resolve(null),
-				listServiceEnv: () => Promise.resolve([]),
-				createServiceEnv: () => Promise.resolve(),
-			},
-		)
-		expect(await admin.inspect(new AbortController().signal)).toEqual({ state: 'unavailable' })
-		expect(await admin.statusV2({ connectionId: 'connection-1', signal: new AbortController().signal })).toEqual({ state: 'unavailable' })
-		await expect(
-			admin.activateV2({
-				connectionId: 'connection-1',
-				credentialBundle: 'must-not-be-read',
-				credentialSha256: 'a'.repeat(64),
-				signal: new AbortController().signal,
-			}),
-		).rejects.toMatchObject({ code: 'invalid_configuration' })
-	})
-
-	test('boots the legacy process environment without a platform project id', async () => {
+	test('boots with no source service, and administers GitHub connections in process', async () => {
 		const runtime = createRuntime({
 			...namespaceEnvironment(),
 			FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
@@ -215,11 +49,10 @@ describe('the Zerops namespace process configuration', () => {
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
-			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
-			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
 			ENVIRONMENT: 'stage',
 		})
-		expect(await runtime.sourceConnectionAdmin.inspect(new AbortController().signal)).toEqual({ state: 'unavailable' })
+		expect(runtime.sourceConnection).toMatchObject({ provider: 'zerops', available: true })
+		expect(runtime.provider.source).toEqual({ binding: 'connection' })
 		await runtime.shutdown()
 	})
 
@@ -233,8 +66,6 @@ describe('the Zerops namespace process configuration', () => {
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
-			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
-			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
 			ENVIRONMENT: 'stage',
 		})
 		const deps = buildControlRpcDeps(runtime.env, runtime.provider, allowAllAuth())
@@ -250,7 +81,7 @@ describe('the Zerops namespace process configuration', () => {
 
 	test('enables namespace lifecycle on the composed provider', () => {
 		const harness = createHarness()
-		const provider = zeropsControlProvider({
+		const env: Env = {
 			DB: harness.d1,
 			REPOSITORIES: harness.repositories,
 			ASSETS: { fetch: () => Promise.resolve(new Response()) },
@@ -263,12 +94,11 @@ describe('the Zerops namespace process configuration', () => {
 			WAIT_UNTIL: () => {},
 			REPO_EVENTS: new FakeRepoSource(),
 			ENVIRONMENT: 'prod',
-		}, {
+		}
+		const provider = zeropsControlProvider(env, {
 			...namespaceEnvironment(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
-			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
-			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
-		})
+		}, zeropsGitHubSource(env))
 
 		if (provider.namespaces === undefined) {
 			throw new Error('Zerops provider did not enable namespace capabilities')
@@ -288,32 +118,6 @@ describe('the Zerops namespace process configuration', () => {
 		})
 		harness.sqlite.close()
 	})
-
-	for (const name of ['FABRIKA_ZEROPS_SOURCE_URL', 'FABRIKA_ZEROPS_SOURCE_RPC_KEY']) {
-		test(`${name} is required by the composed provider`, () => {
-			const source: Record<string, string | undefined> = {
-				...namespaceEnvironment(),
-				FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
-				FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
-				FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
-			}
-			source[name] = ' '
-			const harness = createHarness()
-			expect(() =>
-				zeropsControlProvider({
-					DB: harness.d1,
-					REPOSITORIES: harness.repositories,
-					ASSETS: { fetch: () => Promise.resolve(new Response()) },
-					RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
-					DEPLOY_QUEUE: { send: () => Promise.resolve() },
-					WAIT_UNTIL: () => {},
-					REPO_EVENTS: new FakeRepoSource(),
-					ENVIRONMENT: 'prod',
-				}, source)
-			).toThrow(`${name} is required by the Zerops provider`)
-			harness.sqlite.close()
-		})
-	}
 
 	for (
 		const name of [

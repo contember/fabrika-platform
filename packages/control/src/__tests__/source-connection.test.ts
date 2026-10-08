@@ -2,6 +2,7 @@ import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import type { Env } from '../env'
 import {
+	githubAppCredentialSecretLabel,
 	GitHubConnectionStore,
 	type GitHubSetupAttempt,
 	type GitHubSourceConnection,
@@ -19,20 +20,19 @@ import {
 	verifySourceInstallation,
 } from '../source-connection'
 import type {
+	SourceConnectionCredential,
 	SourceConnectionPort,
-	SourceConnectionRuntimeStatus,
-	SourceCredentialActivation,
-	SourceCredentialActivationInput,
-	SourceCredentialInput,
+	SourceGitHubAppIdentity,
 	SourceInstallationVerification,
-	SourceInstallationVerificationInput,
-	SourceWebhookConfiguration,
 	SourceWebhookConfigurationInput,
-} from '../source-connection-port'
+} from '../source/connections'
+import { readGitHubAppCredential } from '../source/credentials'
+import { SourceFailure } from '../source/failure'
+import type { PreparedVaultSecret } from '../vault'
+import { Vault } from '../vault'
 import { createHarness } from './helpers/harness'
 
 const ORIGIN = 'https://control.example'
-const CREDENTIAL_DIGEST = 'c'.repeat(64)
 
 function testKey(): string {
 	let binary = ''
@@ -57,7 +57,7 @@ function auth(type: 'user' | 'service' = 'user', allowed = true, auditFails = fa
 
 class FakeSourceConnection implements SourceConnectionPort {
 	readonly provider = 'zerops'
-	inspection: Awaited<ReturnType<SourceConnectionPort['inspect']>> = { state: 'anonymous' }
+	available = true
 	installation: SourceInstallationVerification = {
 		status: 'installed',
 		installationId: 456,
@@ -65,69 +65,45 @@ class FakeSourceConnection implements SourceConnectionPort {
 		repositorySelection: 'selected',
 	}
 	readonly calls: string[] = []
-	readonly preparedConnectionIds: string[] = []
-	readonly credentialDigests = new Map<string, string>()
+	readonly credentialRefs: string[] = []
 	githubOwner = 'acme'
 	githubAppId = 123
 	githubAppSlug = 'fabrika-source'
-	prepareFails = false
-	activateFails = false
+	verifyFails = false
 	webhookFailure: unknown | undefined
 	readonly webhookSecrets: string[] = []
 	readonly webhookUrls: string[] = []
-	readonly webhookCredentialDigests: string[] = []
-	abortAdoption: (() => void) | undefined
 
-	inspect(): Promise<typeof this.inspection> {
-		this.calls.push('inspect')
-		return Promise.resolve(this.inspection)
-	}
-
-	prepareCredential(input: SourceCredentialInput): Promise<{ bundle: string; sha256: string }> {
-		this.calls.push('prepare')
-		this.preparedConnectionIds.push(input.connectionId)
-		if (this.prepareFails) return Promise.reject(new Error('prepare failed with private material'))
-		return Promise.resolve({ bundle: 'bounded-credential-bundle', sha256: CREDENTIAL_DIGEST })
-	}
-
-	activate(input: SourceCredentialActivationInput): Promise<SourceCredentialActivation> {
-		this.calls.push('activate')
+	verifyApp(input: SourceConnectionCredential): Promise<SourceGitHubAppIdentity> {
+		this.calls.push('verify')
 		if (input.signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'))
-		if (this.activateFails) return Promise.reject(new Error('activate failed with private material'))
-		this.credentialDigests.set(input.connectionId, input.credentialSha256)
-		return Promise.resolve({ ...this.activation(input.connectionId), credentialSha256: input.credentialSha256 })
+		if (this.verifyFails) return Promise.reject(new Error('verify failed with private material'))
+		this.credentialRefs.push(input.credentialRef)
+		return Promise.resolve(identity(this.githubOwner, this.githubAppId, this.githubAppSlug))
 	}
 
-	status(input: { connectionId: string }): Promise<SourceConnectionRuntimeStatus> {
-		this.calls.push('status')
-		return Promise.resolve({
-			state: 'active',
-			credentialSha256: this.credentialDigests.get(input.connectionId) ?? CREDENTIAL_DIGEST,
-			githubApp: this.activation(input.connectionId).githubApp,
-		})
-	}
-
-	configureWebhook(input: SourceWebhookConfigurationInput): Promise<SourceWebhookConfiguration> {
+	configureWebhook(input: SourceWebhookConfigurationInput): Promise<void> {
 		this.calls.push('webhook')
 		if (input.signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'))
 		if (this.webhookFailure !== undefined) return Promise.reject(this.webhookFailure)
+		this.credentialRefs.push(input.credentialRef)
 		this.webhookSecrets.push(input.secret)
 		this.webhookUrls.push(input.url)
-		this.webhookCredentialDigests.push(input.credentialSha256)
-		return Promise.resolve({
-			connectionId: input.connectionId,
-			credentialSha256: input.credentialSha256,
-			webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
-		})
+		return Promise.resolve()
 	}
 
-	verifyInstallations(input: SourceInstallationVerificationInput): Promise<SourceInstallationVerification> {
+	verifyInstallations(): Promise<SourceInstallationVerification> {
 		this.calls.push('installation')
 		return Promise.resolve(this.installation)
 	}
+}
 
-	private activation(connectionId: string): SourceCredentialActivation {
-		return activation(connectionId, this.githubOwner, this.githubAppId, this.githubAppSlug)
+/** The vault row and the checkpoint share one transaction; failing it is a failed vault write. */
+class FailingCredentialStore extends GitHubConnectionStore {
+	override storeSecretAndCheckpoint(...args: Parameters<GitHubConnectionStore['storeSecretAndCheckpoint']>): Promise<GitHubSetupAttempt | null> {
+		const secret: PreparedVaultSecret = args[5]
+		if (secret.label === githubAppCredentialSecretLabel(args[0])) return Promise.reject(new Error('vault write failed'))
+		return super.storeSecretAndCheckpoint(...args)
 	}
 }
 
@@ -163,19 +139,15 @@ class StaleSourceConnectionPreflightStore extends GitHubConnectionStore {
 	}
 }
 
-function activation(connectionId: string, owner = 'acme', appId = 123, appSlug = 'fabrika-source'): SourceCredentialActivation {
+function identity(owner = 'acme', appId = 123, appSlug = 'fabrika-source'): SourceGitHubAppIdentity {
 	return {
-		connectionId,
-		credentialSha256: CREDENTIAL_DIGEST,
-		githubApp: {
-			id: appId,
-			slug: appSlug,
-			htmlUrl: `https://github.com/apps/${appSlug}`,
-			public: false,
-			owner: { login: owner, type: 'Organization' },
-			permissions: { contents: 'read' },
-			events: ['push'],
-		},
+		id: appId,
+		slug: appSlug,
+		htmlUrl: `https://github.com/apps/${appSlug}`,
+		public: false,
+		owner: { login: owner, type: 'Organization' },
+		permissions: { contents: 'read' },
+		events: ['push'],
 	}
 }
 
@@ -302,7 +274,7 @@ describe('GitHub source connection workflow', () => {
 		expect(await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)).toMatchObject({ expiresAt: 2_199 })
 	})
 
-	test('consumes callback state once and leaves durable repair when the caller aborts after recovery', async () => {
+	test('consumes callback state once and leaves durable repair when the caller aborts after the key is stored', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const caller = auth()
@@ -330,8 +302,8 @@ describe('GitHub source connection workflow', () => {
 		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
 		expect(attempt?.stateHash).toBeNull()
 		expect(attempt?.manifestStateSecretRef).toBeNull()
-		expect(attempt?.recoverySecretRef).toStartWith('vault:')
-		expect(source.calls).toEqual(['inspect', 'prepare', 'activate'])
+		expect(attempt?.appCredentialRef).toStartWith('vault:')
+		expect(source.calls).toEqual(['verify'])
 		expect(
 			await manifestCallback({
 				...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=two&state=${token(32)}`), caller),
@@ -364,7 +336,7 @@ describe('GitHub source connection workflow', () => {
 		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
 		expect(attempt?.status).toBe('failed')
 		expect(attempt?.phase).toBe('exchange_claimed')
-		expect(attempt?.recoverySecretRef).toBeNull()
+		expect(attempt?.appCredentialRef).toBeNull()
 	})
 
 	test('strictly rejects callback extras and cross-organization repositories before effects', async () => {
@@ -409,10 +381,13 @@ describe('GitHub source connection workflow', () => {
 		expect((await queryRowsFromEnv(env, 'SELECT * FROM vault')).length).toBe(0)
 	})
 
-	test('fails terminally before recovery but redirects to durable repair after recovery', async () => {
-		const beforeEnv = environment()
+	test('fails terminally when the App key cannot be stored but redirects to durable repair once it is', async () => {
+		const harness = environment()
+		const beforeEnv: Env = {
+			...harness,
+			REPOSITORIES: { ...harness.REPOSITORIES, githubConnections: new FailingCredentialStore(harness.DB, () => 1_000) },
+		}
 		const before = new FakeSourceConnection()
-		before.prepareFails = true
 		const beforeStarted = await startSourceConnection(
 			deps(beforeEnv, before, mutationRequest('/api/rpc')),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
@@ -422,12 +397,13 @@ describe('GitHub source connection workflow', () => {
 			exchangeManifest: () => Promise.resolve(createdApp()),
 		})).rejects.toMatchObject({ httpStatus: 503 })
 		const failed = await beforeEnv.REPOSITORIES.githubConnections.getAttempt(beforeStarted.connectionId)
-		expect(failed?.status).toBe('failed')
-		expect(failed?.recoverySecretRef).toBeNull()
+		expect(failed).toMatchObject({ status: 'failed', lastErrorCode: 'credential_persistence', appCredentialRef: null })
+		expect(await queryRowsFromEnv(beforeEnv, `SELECT label FROM vault WHERE label LIKE '%:app-credential'`)).toEqual([])
+		expect(before.calls).toEqual([])
 
 		const afterEnv = environment()
 		const after = new FakeSourceConnection()
-		after.activateFails = true
+		after.verifyFails = true
 		const afterStarted = await startSourceConnection(
 			deps(afterEnv, after, mutationRequest('/api/rpc')),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
@@ -439,29 +415,95 @@ describe('GitHub source connection workflow', () => {
 		expect(response.status).toBe(303)
 		const repair = await afterEnv.REPOSITORIES.githubConnections.getAttempt(afterStarted.connectionId)
 		expect(repair?.status).toBe('repair_required')
-		expect(repair?.recoverySecretRef).toStartWith('vault:')
+		if (repair === null || repair.appCredentialRef === null) throw new Error('repair fixture is incomplete')
+		expect(await readGitHubAppCredential(await vaultOf(afterEnv), repair.appCredentialRef, repair.id)).toEqual({
+			appId: '123',
+			privateKeyPem: 'private-pem',
+		})
 	})
 
-	test('reports unavailable when the source service cannot be inspected', async () => {
+	test('writes the App key into the vault under its purpose before the callback reports success, and keeps it', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		source.inspection = { state: 'unavailable' }
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const callback = await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		expect(callback.status).toBe(303)
+		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
+		if (attempt === null || attempt.appCredentialRef === null) throw new Error('credential checkpoint missing')
+		// Every remote step authenticated with the stored key, never with the value the callback held.
+		expect(source.credentialRefs).toEqual([attempt.appCredentialRef, attempt.appCredentialRef])
+		const vault = await vaultOf(env)
+		expect(await readGitHubAppCredential(vault, attempt.appCredentialRef, attempt.id)).toEqual({ appId: '123', privateKeyPem: 'private-pem' })
+		await expect(vault.getSecretForPurpose(attempt.appCredentialRef, { scope: 'platform', label: `platform:github-source:${attempt.id}:webhook` }))
+			.rejects.toThrow('purpose mismatch')
+		await expect(readGitHubAppCredential(vault, attempt.appCredentialRef, 'other-connection')).rejects.toThrow()
+		expect(JSON.stringify(await queryRowsFromEnv(env, 'SELECT * FROM vault'))).not.toContain('private-pem')
+
+		await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)
+		const connection = await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)
+		expect(connection?.appCredentialRef).toBe(attempt.appCredentialRef)
+		expect(await readGitHubAppCredential(vault, attempt.appCredentialRef, attempt.id)).toEqual({ appId: '123', privateKeyPem: 'private-pem' })
+	})
+
+	test('reports unavailable and refuses to start without connection support or a vault', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		source.available = false
 		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
 		await expect(startSourceConnection(
 			deps(env, source, mutationRequest('/api/rpc')),
 			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
 		)).rejects.toMatchObject({ httpStatus: 503 })
-		expect(source.calls).toEqual(['inspect', 'inspect'])
+
+		const { FABRIKA_CONTROL_VAULT_KEY: _vaultKey, ...withoutVault } = environment()
+		const available = new FakeSourceConnection()
+		expect(await sourceConnectionStatus(deps(withoutVault, available, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
+		await expect(startSourceConnection(
+			deps(withoutVault, available, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)).rejects.toMatchObject({ httpStatus: 503 })
+		expect(await sourceConnectionStatus(deps(environment(), available, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'anonymous' })
+		expect(available.calls).toEqual([])
 	})
 
-	test('publishes only an exact installation and verifies connected state remotely', async () => {
+	test('reports connected from the vault-held key without calling GitHub, and unavailable once it cannot be read', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const connectionId = await connectKeyed(env, source)
+		source.calls.splice(0)
 		const connected = await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))
 		expect(connected).toMatchObject({ state: 'connected', connectionId })
-		expect((await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).state).toBe('connected')
+		expect(source.calls).toEqual([])
+		await env.DB.prepare(`UPDATE vault SET label = 'platform:github-source:other:app-credential' WHERE label LIKE '%:app-credential'`).run()
+		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
+	})
+
+	test('refuses an installation owned by another account', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		await manifestCallback({
+			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
+			exchangeManifest: () => Promise.resolve(createdApp()),
+		})
+		source.installation = { status: 'installed', installationId: 456, accountLogin: 'other', repositorySelection: 'all' }
+		await expect(verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)).rejects.toMatchObject({
+			httpStatus: 409,
+		})
 		source.installation = { status: 'missing' }
+		await expect(verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)).rejects.toMatchObject({
+			httpStatus: 409,
+		})
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)).toBeNull()
 	})
 
 	test('adds a second private organization and pages stable rows separately from workflow', async () => {
@@ -503,16 +545,17 @@ describe('GitHub source connection workflow', () => {
 			exchangeManifest: () => Promise.resolve(createdApp(234, 'fabrika-beta')),
 		})
 		expect(callback.status).toBe(303)
-		expect(source.preparedConnectionIds).toContain(started.connectionId)
 		const pendingPage = await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), { limit: 10 })
 		expect(pendingPage.items.map((item) => item.connectionId)).toEqual([firstId])
 		expect(pendingPage.workflow).toMatchObject({ state: 'installation-required', connectionId: started.connectionId })
 
 		const attemptBeforePublish = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
-		expect(attemptBeforePublish?.recoverySecretRef).toBeNull()
-		expect(JSON.stringify(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:recovery'`))).toBe('[]')
-		expect(JSON.stringify(pendingPage)).not.toContain(CREDENTIAL_DIGEST)
-		expect(JSON.stringify(await queryRowsFromEnv(env, 'SELECT * FROM github_source_connections_keyed'))).not.toContain('bounded-credential-bundle')
+		expect(attemptBeforePublish?.appCredentialRef).toStartWith('vault:')
+		expect(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:app-credential' ORDER BY label`)).toEqual(
+			[firstId, started.connectionId].sort().map((id) => ({ label: `platform:github-source:${id}:app-credential` })),
+		)
+		expect(JSON.stringify(pendingPage)).not.toContain('vault:')
+		expect(JSON.stringify(await queryRowsFromEnv(env, 'SELECT * FROM github_source_connections_keyed'))).not.toContain('private-pem')
 		const connected = await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)
 		expect(connected).toMatchObject({ state: 'connected', connectionId: started.connectionId })
 		const published = await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)
@@ -541,7 +584,7 @@ describe('GitHub source connection workflow', () => {
 		expect(first.workflow).toBeNull()
 		expect(second.workflow).toBeNull()
 		expect(await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)).toMatchObject({
-			transportKind: 'keyed-v2',
+			appCredentialRef: attemptBeforePublish.appCredentialRef,
 			webhookUrl: `${ORIGIN}/webhooks/github/${started.connectionId}`,
 		})
 		await expect(startSourceConnection(
@@ -554,10 +597,11 @@ describe('GitHub source connection workflow', () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const firstId = await connectKeyed(env, source)
+		const firstBefore = await env.REPOSITORIES.githubConnections.getConnectionById(firstId)
 		source.githubOwner = 'beta'
 		source.githubAppId = 234
 		source.githubAppSlug = 'fabrika-beta'
-		source.activateFails = true
+		source.verifyFails = true
 		const started = await startSourceConnection(
 			deps(env, source, mutationRequest('/api/rpc')),
 			{ organization: 'beta', appName: 'fabrika-beta', visibility: 'private', repositories: [] },
@@ -572,12 +616,11 @@ describe('GitHub source connection workflow', () => {
 		expect(interrupted.items.map((item) => item.connectionId)).toEqual([firstId])
 		expect(interrupted.workflow).toMatchObject({ state: 'repair-required', connectionId: started.connectionId })
 
-		source.activateFails = false
+		source.verifyFails = false
 		const repaired = await repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)
 		expect(repaired).toMatchObject({ state: 'installation-required', connectionId: started.connectionId })
-		expect((await env.REPOSITORIES.githubConnections.getConnectionById(firstId))?.transportKind).toBe('keyed-v2')
-		expect((await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))?.recoverySecretRef).toBeNull()
-		expect(JSON.stringify(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:recovery'`))).toBe('[]')
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(firstId)).toEqual(firstBefore)
+		expect((await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))?.appCredentialRef).toStartWith('vault:')
 	})
 
 	test('reports why a repair stopped instead of answering 200 with the same red lamp', async () => {
@@ -587,7 +630,7 @@ describe('GitHub source connection workflow', () => {
 		source.githubOwner = 'beta'
 		source.githubAppId = 234
 		source.githubAppSlug = 'fabrika-beta'
-		source.activateFails = true
+		source.verifyFails = true
 		const started = await startSourceConnection(
 			deps(env, source, mutationRequest('/api/rpc')),
 			{ organization: 'beta', appName: 'fabrika-beta', visibility: 'private', repositories: [] },
@@ -615,16 +658,16 @@ describe('GitHub source connection workflow', () => {
 		source.calls.splice(0)
 		source.webhookSecrets.splice(0)
 		source.webhookUrls.splice(0)
-		source.webhookCredentialDigests.splice(0)
+		source.credentialRefs.splice(0)
 		const caller = auth()
 
 		const reconciled = await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc'), caller), connectionId)
 
 		expect(reconciled).toMatchObject({ state: 'connected', connectionId })
-		expect(source.calls).toEqual(['status', 'webhook'])
+		expect(source.calls).toEqual(['verify', 'webhook'])
 		expect(source.webhookSecrets).toEqual([setupSecret])
 		expect(source.webhookUrls).toEqual([`${ORIGIN}/webhooks/github/${connectionId}`])
-		expect(source.webhookCredentialDigests).toEqual([CREDENTIAL_DIGEST])
+		expect(source.credentialRefs).toEqual([before.appCredentialRef, before.appCredentialRef])
 		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toEqual(before)
 		expect(caller.events.at(-1)).toEqual({
 			action: 'source.connection.reconcile',
@@ -633,42 +676,19 @@ describe('GitHub source connection workflow', () => {
 		})
 	})
 
-	test('recovers a stable connection from a different credential for the same durable GitHub App', async () => {
-		const env = environment()
-		const source = new FakeSourceConnection()
-		const connectionId = await connectKeyed(env, source)
-		const before = await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
-		const replacementDigest = 'd'.repeat(64)
-		if (before === null) throw new Error('keyed connection fixture is incomplete')
-		source.credentialDigests.set(connectionId, replacementDigest)
-		source.calls.splice(0)
-		source.webhookCredentialDigests.splice(0)
-
-		const reconciled = await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)
-
-		expect(reconciled).toMatchObject({ state: 'connected', connectionId })
-		expect(source.calls).toEqual(['status', 'webhook'])
-		expect(source.webhookCredentialDigests).toEqual([replacementDigest])
-		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toMatchObject({
-			credentialSha256: replacementDigest,
-			version: before.version + 1,
-		})
-	})
-
 	test('refuses to recover a stable connection from a different GitHub App', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const connectionId = await connectKeyed(env, source)
 		const before = await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
-		source.credentialDigests.set(connectionId, 'd'.repeat(64))
 		source.githubAppId = 999
 		source.calls.splice(0)
 
 		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({
 			httpStatus: 409,
-			message: 'the durable source credential belongs to a different GitHub App',
+			message: 'the vault-held key belongs to a different GitHub App',
 		})
-		expect(source.calls).toEqual(['status'])
+		expect(source.calls).toEqual(['verify'])
 		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toEqual(before)
 	})
 
@@ -676,11 +696,15 @@ describe('GitHub source connection workflow', () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const connectionId = await connectKeyed(env, source)
-		source.webhookFailure = { code: 'credentials_conflict', status: 409, message: 'must not reach the browser' }
-
+		source.webhookFailure = new SourceFailure('credentials_invalid', 'credentials')
 		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({
 			httpStatus: 503,
-			message: 'the source service could not configure the GitHub webhook: credentials_conflict, status 409',
+			message: 'could not configure the GitHub webhook: credentials_invalid',
+		})
+		source.webhookFailure = new Error('must not reach the browser')
+		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({
+			httpStatus: 503,
+			message: 'could not configure the GitHub webhook',
 		})
 		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), 'missing')).rejects.toMatchObject({ httpStatus: 404 })
 	})
@@ -704,7 +728,6 @@ describe('GitHub source connection workflow', () => {
 		const source = new FakeSourceConnection()
 		await connectKeyed(env, source)
 		const vaultBefore = await queryRowsFromEnv(env, 'SELECT id FROM vault')
-		source.inspection = { state: 'anonymous' }
 		const staleEnv: Env = {
 			...env,
 			REPOSITORIES: {
@@ -773,4 +796,8 @@ function token(length: number): string {
 
 function queryRowsFromEnv(env: Env, sql: string): Promise<Record<string, unknown>[]> {
 	return env.DB.prepare(sql).all<Record<string, unknown>>().then((result) => result.results)
+}
+
+function vaultOf(env: Env): Promise<Vault> {
+	return Vault.create(env.DB, testKey())
 }

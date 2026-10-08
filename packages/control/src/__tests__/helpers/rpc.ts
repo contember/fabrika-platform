@@ -2,7 +2,7 @@ import { defineApp, route } from '@fabrika/app'
 import { createControlRpcRouter } from '../../control-rpc'
 import type { Env } from '../../env'
 import type { ControlRpcDeps } from '../../services'
-import { unavailableSourceConnection } from '../../source-connection-port'
+import { unavailableSourceConnection } from '../../source/connections'
 
 export function rpcRequest(method: string, input: unknown = null, signal?: AbortSignal): Request {
 	return new Request('https://control.test/api/rpc', {

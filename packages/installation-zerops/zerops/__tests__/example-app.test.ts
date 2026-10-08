@@ -26,7 +26,7 @@ import {
 	type ZeropsCollaborators,
 	type ZeropsDeployRun,
 	type ZeropsRuntimeTarget,
-	type ZeropsSourceClient,
+	type ZeropsSourcePort,
 } from '@fabrika/provider-zerops'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
@@ -45,9 +45,9 @@ interface Recorded {
 	/** Every collaborator method invoked, in order — the sequence these tests assert on. */
 	calls: string[]
 	imports: Array<{ projectId: string; yaml: string }>
-	resolves: Array<{ runId: string; requestedRef: string; descriptorSha256: string }>
+	resolves: Array<{ requestedRef: string; descriptorSha256: string }>
 	creates: Array<{ serviceId: string; name?: string }>
-	uploads: Array<{ runId: string; appVersionId: string; commitSha: string; descriptorSha256: string }>
+	uploads: Array<{ appVersionId: string | null; commitSha: string; descriptorSha256: string }>
 	builds: Array<{ appVersionId: string; zeropsYaml: string; zeropsYamlSetup?: string }>
 	externalIds: string[]
 	externalStates: unknown[]
@@ -88,7 +88,12 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		triggerPipeline: () => Promise.reject(new Error('the upload-backed deploy must not trigger a Git pipeline')),
 		createAppVersion: ({ serviceId, name }) => {
 			rec.creates.push({ serviceId, ...(name === undefined ? {} : { name }) })
-			return Promise.resolve(record('createAppVersion', { id: 'ver-1', uploadUrl: 'https://upload.test/archive?signature=test' }))
+			return Promise.resolve(
+				record('createAppVersion', {
+					id: 'ver-1',
+					uploadUrl: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?version=ver-1&signature=test',
+				}),
+			)
 		},
 		buildAndDeployAppVersion: ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
 			rec.builds.push({ appVersionId, zeropsYaml, ...(zeropsYamlSetup === undefined ? {} : { zeropsYamlSetup }) })
@@ -131,31 +136,24 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 	}
 }
 
-const makeSource = (rec: Recorded): ZeropsSourceClient => ({
+const makeSource = (rec: Recorded): ZeropsSourcePort => ({
 	resolve: (input) => {
 		rec.calls.push('sourceResolve')
-		rec.resolves.push({ runId: input.runId, requestedRef: input.requestedRef, descriptorSha256: input.descriptorSha256 })
-		return Promise.resolve({ runId: input.runId, commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 })
+		rec.resolves.push({ requestedRef: input.requestedRef, descriptorSha256: input.descriptorSha256 })
+		return Promise.resolve({ commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 })
 	},
 	upload: (input) => {
 		rec.calls.push('sourceUpload')
 		rec.uploads.push({
-			runId: input.runId,
-			appVersionId: input.appVersionId,
+			appVersionId: new URL(input.uploadUrl).searchParams.get('version'),
 			commitSha: input.commitSha,
-			descriptorSha256: input.descriptor.sha256,
+			descriptorSha256: input.descriptorSha256,
 		})
-		return Promise.resolve({
-			runId: input.runId,
-			appVersionId: input.appVersionId,
-			commitSha: input.commitSha,
-			descriptorSha256: input.descriptor.sha256,
-		})
+		return Promise.resolve({ commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 })
 	},
-	cancel: () => Promise.resolve(),
 })
 
-const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[], source: ZeropsSourceClient): ZeropsCollaborators => ({
+const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[], source: ZeropsSourcePort): ZeropsCollaborators => ({
 	api: makeApi(rec, statuses),
 	source,
 	reconcileSchema: (input) => {
@@ -237,7 +235,6 @@ const deployExample = (
 	const deploy = createZeropsDeployer(() => makeCollaborators(recorded, statuses, source))
 	if (overrides.dryRun === true) return deploy(makeRun(recorded, TARGET, overrides))
 	return source.resolve({
-		runId: RUN_ID,
 		repository: REPOSITORY,
 		requestedRef: 'refs/heads/main',
 		expectedCommitSha: COMMIT_SHA,
@@ -410,10 +407,9 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// N+1. the one portable step: reconcile the authz vocabulary into IAM
 			'reconcileSchema',
 		])
-		expect(rec.resolves).toEqual([{ runId: RUN_ID, requestedRef: 'refs/heads/main', descriptorSha256: SOURCE_DESCRIPTOR.sha256 }])
+		expect(rec.resolves).toEqual([{ requestedRef: 'refs/heads/main', descriptorSha256: SOURCE_DESCRIPTOR.sha256 }])
 		expect(rec.creates).toEqual([{ serviceId: TARGET.serviceId, name: RUN_ID }])
 		expect(rec.uploads).toEqual([{
-			runId: RUN_ID,
 			appVersionId: 'ver-1',
 			commitSha: COMMIT_SHA,
 			descriptorSha256: SOURCE_DESCRIPTOR.sha256,

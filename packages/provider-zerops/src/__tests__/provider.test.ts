@@ -17,8 +17,9 @@ import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } fr
 import { parseZeropsCheckpoint } from '../control'
 import type { ManagedValues } from '../managed-env'
 import { compileFabrikaManifest } from '../manifest'
-import { CANCELLED, createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun, type ZeropsSourceTransportRouting } from '../provider'
+import { CANCELLED, createZeropsDeployer, type ZeropsDeployResult, type ZeropsDeployRun } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
+import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 
@@ -35,8 +36,7 @@ interface Recorded {
 	checkpoints: JsonValue[]
 	creates: Array<{ serviceId: string; name?: string }>
 	builds: Array<{ appVersionId: string; zeropsYaml: string; zeropsYamlSetup?: string }>
-	uploads: Array<{ runId: string; appVersionId: string; commitSha: string; descriptorSha256: string; githubInstallationId?: number }>
-	v2Uploads: Array<{ connectionId: string; installationId: number }>
+	uploads: Array<{ uploadUrl: string; commitSha: string; descriptorSha256: string; archive: ZeropsSourceArchive }>
 	timeline: string[]
 	envWrites: Array<{ key: string; value: string }>
 	envDeletes: string[]
@@ -56,13 +56,15 @@ const fresh = (): Recorded => ({
 	creates: [],
 	builds: [],
 	uploads: [],
-	v2Uploads: [],
 	timeline: [],
 	envWrites: [],
 	envDeletes: [],
 })
 
+const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test'
+
 interface Overrides {
+	uploadUrl?: string
 	statuses?: Array<ZeropsAppVersion['status']>
 	processStatuses?: Array<ZeropsProcess['status']>
 	triggerVersionId?: string
@@ -109,7 +111,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push(`createAppVersion:${serviceId}`)
 			recorded.timeline.push('create')
 			recorded.creates.push({ serviceId, ...(name === undefined ? {} : { name }) })
-			return { id: overrides.triggerVersionId ?? 'version-1', uploadUrl: 'https://upload.test/archive?signature=test' }
+			return { id: overrides.triggerVersionId ?? 'version-1', uploadUrl: overrides.uploadUrl ?? UPLOAD_URL }
 		},
 		buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
 			recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
@@ -187,30 +189,20 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 	api: makeApi(recorded, overrides),
 	source: {
 		resolve: async (input) => ({
-			runId: input.runId,
 			commitSha: input.expectedCommitSha ?? input.requestedRef,
 			descriptorSha256: input.descriptorSha256,
 		}),
 		upload: async (input) => {
-			recorded.calls.push(`sourceUpload:${input.appVersionId}`)
+			recorded.calls.push('sourceUpload')
 			recorded.timeline.push('upload')
 			if (overrides.uploadError !== undefined) throw overrides.uploadError
 			recorded.uploads.push({
-				runId: input.runId,
-				appVersionId: input.appVersionId,
+				uploadUrl: input.uploadUrl,
 				commitSha: input.commitSha,
-				descriptorSha256: input.descriptor.sha256,
-				...(input.githubInstallationId === undefined ? {} : { githubInstallationId: input.githubInstallationId }),
+				descriptorSha256: input.descriptorSha256,
+				archive: input.archive,
 			})
-			return {
-				runId: input.runId,
-				appVersionId: input.appVersionId,
-				commitSha: input.commitSha,
-				descriptorSha256: input.descriptor.sha256,
-			}
-		},
-		cancel: async ({ appVersionId }) => {
-			recorded.calls.push(`sourceCancel:${appVersionId}`)
+			return { commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 }
 		},
 	},
 	reconcileSchema: async ({ app, signal }) => {
@@ -357,7 +349,7 @@ describe('Zerops provider', () => {
 			'importServices',
 			'listServiceEnv',
 			'createAppVersion:service-1',
-			'sourceUpload:version-1',
+			'sourceUpload',
 			'buildAndDeployAppVersion:version-1',
 			'getProcess',
 			'getAppVersion',
@@ -371,10 +363,10 @@ describe('Zerops provider', () => {
 		expect(recorded.timeline).toEqual(['create', 'external-id', 'upload', 'checkpoint:triggered=true', 'build-call'])
 		expect(recorded.creates).toEqual([{ serviceId: 'service-1', name: 'run-1' }])
 		expect(recorded.uploads).toEqual([{
-			runId: 'run-1',
-			appVersionId: 'version-1',
+			uploadUrl: UPLOAD_URL,
 			commitSha: '0123456789abcdef0123456789abcdef01234567',
 			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+			archive: { kind: 'application' },
 		}])
 		expect(recorded.builds).toEqual([{ appVersionId: 'version-1', zeropsYaml: CANONICAL_DESCRIPTOR, zeropsYamlSetup: 'api' }])
 		expect(recorded.sleeps).toEqual([3000])
@@ -457,7 +449,7 @@ describe('Zerops provider', () => {
 			'importServices',
 			'listServiceEnv',
 			'createAppVersion:service-1',
-			'sourceUpload:version-1',
+			'sourceUpload',
 			'deleteAppVersion:version-1',
 		])
 		expect(recorded.checkpoints).toEqual([])
@@ -619,7 +611,7 @@ describe('Zerops provider', () => {
 			'importServices',
 			'listServiceEnv',
 			'createAppVersion:service-1',
-			'sourceUpload:version-1',
+			'sourceUpload',
 			'buildAndDeployAppVersion:version-1',
 			'getProcess',
 			'getAppVersion',
@@ -654,28 +646,8 @@ describe('Zerops provider', () => {
 		expect(recorded.builds).toEqual([])
 	})
 
-	test('routes an upload through v2 only when the runtime source carries a keyed binding', async () => {
-		const routing: ZeropsSourceTransportRouting = {
-			uploadV2: async (input) => {
-				const privateBinding = input.privateBinding
-				if (privateBinding === undefined) throw new Error('missing private binding')
-				recorded.v2Uploads.push(privateBinding)
-				return {
-					runId: input.runId,
-					appVersionId: input.appVersionId,
-					commitSha: input.commitSha,
-					descriptorSha256: input.descriptor.sha256,
-				}
-			},
-		}
-		const provider = createZeropsDeployer(() => makeCollaborators(recorded), routing)
-		const publicTarget = target({
-			source: {
-				runId: 'run-1',
-				repository: { owner: 'acme', name: 'demo' },
-				commitSha: '0123456789abcdef0123456789abcdef01234567',
-			},
-		})
+	test('names the runtime binding in an application archive, and none for a public repository', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		const privateTarget = target({
 			source: {
 				runId: 'run-1',
@@ -685,14 +657,23 @@ describe('Zerops provider', () => {
 			},
 		})
 
-		// No binding is the anonymous public-repository path, and it is the only remaining v1 upload.
-		await execute(deployRun(recorded, publicTarget), provider)
-		expect(recorded.uploads).toHaveLength(1)
-		expect(recorded.v2Uploads).toHaveLength(0)
-
+		await execute(deployRun(recorded, target()), provider)
 		await execute(deployRun(recorded, privateTarget), provider)
-		expect(recorded.uploads).toHaveLength(1)
-		expect(recorded.v2Uploads).toEqual([{ connectionId: 'keyed-connection', installationId: 42 }])
+		expect(recorded.uploads.map((upload) => upload.archive)).toEqual([
+			{ kind: 'application' },
+			{ kind: 'application', privateBinding: { connectionId: 'keyed-connection', installationId: 42 } },
+		])
+	})
+
+	test('refuses an upload destination outside the Zerops object-storage endpoint without naming it', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded, { uploadUrl: 'https://attacker.test/upload?signature=test' }))
+		const result = await provider(deployRun(recorded))
+
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'upload-source')).toBe('zerops: the reserved app version has an unexpected upload destination')
+		expect(recorded.uploads).toEqual([])
+		expect(recorded.calls).toContain('deleteAppVersion:version-1')
+		expect(recorded.logs.join('\n')).not.toContain('signature=test')
 	})
 
 	test('waits for the import processes before anything else, because an import answers before its services exist', async () => {

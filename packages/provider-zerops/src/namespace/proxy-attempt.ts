@@ -3,7 +3,8 @@ import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifes
 import { ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, ZeropsApiError, type ZeropsAppVersion } from '../api'
 import type { Sleeper } from '../collaborators'
 import { prepareZeropsDescriptor } from '../descriptor'
-import type { ZeropsSourceClient } from '../source'
+import { isZeropsUploadDestination } from '../source'
+import type { ZeropsSourcePort } from '../source/port'
 import { deleteVersion } from '../version-attempt'
 import { ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, ZEROPS_NAMESPACE_IAM_KEY_VARIABLE } from './constants'
 import { verifyZeropsNamespaceProxySource } from './proxy-source'
@@ -17,7 +18,7 @@ export type ZeropsProxyApi = Pick<
 export interface ZeropsProxyRepublishInput {
 	readonly target: ZeropsNamespaceTarget
 	readonly manifest: ProxyManifest
-	readonly source?: ZeropsSourceClient
+	readonly source?: ZeropsSourcePort
 	readonly api: ZeropsProxyApi
 	readonly iamUrl: string
 	readonly iamKey: string
@@ -141,14 +142,13 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 	if (input.source === undefined) throw new Error('Zerops namespace source client is required')
 	const runId = crypto.randomUUID()
 	const resolved = await input.source.resolve({
-		runId,
 		repository: pin.repository,
 		requestedRef: pin.commitSha,
 		expectedCommitSha: pin.commitSha,
 		descriptorSha256: pin.descriptor.sha256,
 		signal: input.signal,
 	})
-	if (resolved.runId !== runId || resolved.commitSha !== pin.commitSha || resolved.descriptorSha256 !== pin.descriptor.sha256) {
+	if (resolved.commitSha !== pin.commitSha || resolved.descriptorSha256 !== pin.descriptor.sha256) {
 		throw new Error('Proxy source resolution identity mismatch')
 	}
 	await input.boundary()
@@ -161,20 +161,18 @@ export async function republishProxy(input: ZeropsProxyRepublishInput): Promise<
 	try {
 		await save({ ...target, proxyBuild: build })
 		input.signal.throwIfAborted()
+		if (!isZeropsUploadDestination(reserved.uploadUrl)) throw new Error(`Proxy version ${reserved.id} has an unexpected upload destination`)
 		const uploaded = await input.source.upload({
-			runId,
-			appVersionId: reserved.id,
 			repository: pin.repository,
 			commitSha: pin.commitSha,
-			descriptor: { path: pin.descriptor.path, sha256: pin.descriptor.sha256 },
+			descriptorSha256: pin.descriptor.sha256,
+			archive: { kind: 'platform' },
 			uploadUrl: reserved.uploadUrl,
-			archiveKind: 'platform',
 			signal: input.signal,
 		})
-		if (
-			uploaded.runId !== runId || uploaded.appVersionId !== reserved.id || uploaded.commitSha !== pin.commitSha
-			|| uploaded.descriptorSha256 !== pin.descriptor.sha256
-		) throw new Error('Proxy source upload identity mismatch')
+		if (uploaded.commitSha !== pin.commitSha || uploaded.descriptorSha256 !== pin.descriptor.sha256) {
+			throw new Error('Proxy source upload identity mismatch')
+		}
 		const descriptor = prepareZeropsDescriptor(pin.descriptor.contents, 'proxy')
 		// Once triggered, only a lost lease stops the build request; a cancelled deploy leaves it to reconcile.
 		const buildSignal = followLeaseLoss(input.signal)

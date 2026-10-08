@@ -1,8 +1,11 @@
+import { createGitHubSource } from '@fabrika/control/source'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
 	createZeropsArtifactSourceDescriptor,
+	isZeropsUploadDestination,
 	republishProxy,
+	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 	ZeropsApiError,
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
@@ -12,10 +15,15 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
-import { HttpZeropsSourceClient } from '../../../../control/src/node/source-client'
-import { LOCAL_SOURCE_EMULATOR_ORIGIN, LOCAL_SOURCE_PLATFORM_REPOSITORY } from '../../local-source-contract'
+import {
+	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
+	LOCAL_SOURCE_APPLICATION_REPOSITORY,
+	LOCAL_SOURCE_EMULATOR_ORIGIN,
+	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
+	LOCAL_SOURCE_PLATFORM_REPOSITORY,
+} from '../../local-source-contract'
 import { prepareLocalSourceFixtures } from '../../local-source-fixtures/fixture'
-import { createLocalSourceRuntime } from '../../local-source-runtime/runtime'
+import { createFixtureTransports } from '../../local-source-transports'
 import { createZeropsEmulator } from '../../zerops-emulator'
 import { parseSnapshot } from '../../zerops-emulator/snapshot'
 
@@ -47,20 +55,28 @@ async function fixture() {
 	const service = imported.services[0]
 	if (service === undefined) throw new Error('proxy service missing')
 	const uploads: Uint8Array[] = []
-	const rpcKey = 'namespace-source-integration-key-00000000'
-	const runtime = await createLocalSourceRuntime({
-		fixtureDirectory: join(directory, 'source'),
-		env: { FABRIKA_SOURCE_RPC_KEY: rpcKey },
-		uploadFetch: async (url, init) => {
+	const fixtureDirectory = join(directory, 'source')
+	// Control's own in-process source, over the same fixture transports the local stack's Control uses.
+	const source = createGitHubSource({
+		credentials: { repositoryToken: () => Promise.reject(new Error('a platform archive is anonymous')) },
+		descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
+		isUploadDestination: isZeropsUploadDestination,
+		...createFixtureTransports([
+			{
+				repository: LOCAL_SOURCE_PLATFORM_REPOSITORY,
+				fixture: manifest.platform,
+				archive: Bun.file(join(fixtureDirectory, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE)),
+			},
+			{
+				repository: LOCAL_SOURCE_APPLICATION_REPOSITORY,
+				fixture: manifest.application,
+				archive: Bun.file(join(fixtureDirectory, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE)),
+			},
+		], async (url, init) => {
 			const request = new Request(url, init)
 			uploads.push(new Uint8Array(await request.clone().arrayBuffer()))
 			return handler(request)
-		},
-	})
-	const source = new HttpZeropsSourceClient({
-		origin: 'http://source:3000',
-		rpcKey,
-		fetch: (url, init) => runtime.service.fetch(new Request(url, init)),
+		}),
 	})
 	let persisted: ZeropsNamespaceTarget = {
 		projectId: imported.projectId,
@@ -108,7 +124,7 @@ async function fixture() {
 	}
 }
 
-test('real authenticated namespace source attempt settles its durable triggered version by polling, without reserving or building again', async () => {
+test('real in-process namespace source attempt settles its durable triggered version by polling, without reserving or building again', async () => {
 	const f = await fixture()
 	const submitted = await republishProxy({ ...f.input(), wait: 'started' })
 	const build = submitted.proxyBuild

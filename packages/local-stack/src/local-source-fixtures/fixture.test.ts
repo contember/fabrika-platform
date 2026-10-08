@@ -1,4 +1,5 @@
-import { createTarRewrite } from '@fabrika/source-zerops'
+import { createTarRewrite } from '@fabrika/control/source'
+import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES } from '@fabrika/provider-zerops'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -53,6 +54,7 @@ describe('local immutable source fixtures', () => {
 			const rewrite = createTarRewrite({
 				...(kind === 'platform' ? { archiveKind: 'platform' } : {}),
 				commitSha: fixture.commitSha,
+				descriptor: { path: 'zerops.yaml', maxBytes: ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES },
 				descriptorSha256: fixture.descriptorSha256,
 			})
 			await new Response(new Blob([tar]).stream().pipeThrough(rewrite.transform)).arrayBuffer()
