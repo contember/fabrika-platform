@@ -48,6 +48,22 @@ export interface IamGateway {
 }
 
 /**
+ * Issues the single-use delegation grant a membership or scope-creating endpoint spends (ADR-0022 rule 6). A
+ * structural subset of IAM's membership RPC, so its binding drops in like `IamGateway`'s does. `credential` is the
+ * token the proxy just minted for this request; the grant is bound to `endpoint` and `requestId`.
+ */
+export interface DelegationIssuer {
+	requestDelegation(input: DelegationRequest): Promise<{ ok: true; grant: string; expiresAt: number } | { ok: false; reason: string }>
+}
+
+export interface DelegationRequest {
+	app: string
+	credential: string
+	requestId: string
+	endpoint: string
+}
+
+/**
  * IAM could not be consulted — network failure, timeout, non-200, or a body we cannot read. Distinct
  * from a decided denial: we do not know the answer, so the request is denied with 503 rather than
  * being told it is unauthorized.

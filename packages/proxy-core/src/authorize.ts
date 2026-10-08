@@ -1,11 +1,15 @@
 /**
  * The proxy authorization core ([ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
  *
- * Same four steps, same order, same fail-closed posture:
+ * An installation service is protected by gates — four steps, same order, same fail-closed posture:
  *   1. match the request path against the app's ordered gate rules;
  *   2. resolve the credential the matched rule requires (cookie session or `px_` key);
  *   3. exchange it with IAM once, cache the result, and thereafter verify LOCALLY against the JWKS;
  *   4. deny unless a rule was satisfied.
+ *
+ * A contract application is protected by its endpoint table instead, in one pass over ONE selected endpoint:
+ * `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session when `human` may call →
+ * the requirement (`satisfies`) → admission → the delegation grant. There is no fall-through to another endpoint.
  *
  * A human miss becomes a bounce to IAM's `/auth/login`, in whichever shape the caller can act on: a
  * 302 for a document navigation, a 401 carrying the same URL in a JSON body for everything else (see
@@ -17,10 +21,16 @@
  */
 
 import {
+	type AccessTokenClaims,
 	API_KEY_PREFIX,
 	AUTH_CODE_PARAM,
 	AUTH_HANDOFF_STATE_PARAM,
+	callerOf,
+	type CompiledEndpointTable,
+	formatEndpointHeader,
 	type GateRule,
+	planEndpoint,
+	satisfies,
 	SESSION_COOKIE,
 	TOKEN_REFRESH_SKEW_SECONDS,
 } from '@fabrika/auth-core'
@@ -28,8 +38,8 @@ import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
 import { applicableGates, type CompiledGate, readBearer, readCookie, readServiceCredential } from './gates'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
-import { type IamGateway, IamUnavailableError } from './iam'
-import type { OAuthBearerChallenge, ProxyApp } from './manifest'
+import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
+import type { ContractProxyApp, GateProxyApp, OAuthBearerChallenge, ProxyApp, ProxyEndpointRow } from './manifest'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
@@ -50,6 +60,18 @@ export type DenyReason =
 	| 'disabled'
 	/** IAM refused to sign a token above its size bound: the principal holds more than fits in a header. */
 	| 'token_too_large'
+	/** A contract application's table has no endpoint for the method and path. No fall-through. */
+	| 'no_endpoint'
+	/** The credential's caller kind is not one of the endpoint's callers, or is no caller kind at all. */
+	| 'caller_kind'
+	/** The token does not satisfy the endpoint's requirement. */
+	| 'insufficient_permission'
+	/** A session request that is not a `GET` did not come from the app's own origin. */
+	| 'cross_site'
+	/** The request's `Content-Type` is not one the endpoint admits. */
+	| 'content_type'
+	/** IAM refused the delegation grant a membership or scope-creating endpoint needs. */
+	| 'delegation_refused'
 	/** The `Host` maps to no app in the manifest. */
 	| 'no_app'
 	/** The forwarded-request headers are missing or malformed — we cannot know what was asked for. */
@@ -64,11 +86,16 @@ export type DenyReason =
 export type Decision =
 	| {
 		outcome: 'allow'
-		gate: 'public' | 'service' | 'human' | 'oauth'
-		/** The verified token to inject upstream. `null` on a `public` gate — no credential, no token. */
+		/** The gate kind that admitted the request, or `endpoint` for a contract application's table. */
+		gate: 'public' | 'service' | 'human' | 'oauth' | 'endpoint'
+		/** The verified token to inject upstream. `null` on a `public` gate or an anonymous endpoint — no credential, no token. */
 		token: string | null
 		/** Principal id (or credential id) for the log line. Never a secret. */
 		subject: string | null
+		/** `<id>@<digest>` of the selected endpoint, for `X-Fabrika-Endpoint`; `null` for a gate. */
+		endpoint: string | null
+		/** The single-use delegation grant for `X-Fabrika-Delegation`, when the endpoint spends one. */
+		delegation: string | null
 	}
 	| {
 		outcome: 'deny'
@@ -93,20 +120,21 @@ export type Decision =
 
 /** The original request, reconstructed from what `forward_auth` forwarded. */
 export interface ForwardedRequest {
-	/** Original method. Informational — gates are path-only — but logged. */
+	/** Original method. Gates are path-only; an endpoint table selects by it. */
 	method: string
 	/** Original absolute URL. Its `pathname` drives gate matching; the whole URL is the login return. */
 	url: URL
+	/** The forwarded path exactly as the upstream receives it, already checked by `isCanonicalPath`. */
+	rawPath: string
 	/** The original request's headers, forwarded verbatim by Caddy. */
 	headers: Headers
 	requestId: string
 }
 
-/** An app plus its precompiled gates, built once at startup. */
-export interface ResolvedApp {
-	app: ProxyApp
-	gates: CompiledGate[]
-}
+/** An app plus its precompiled gates or endpoint table, built once at startup. */
+export type ResolvedApp =
+	| { kind: 'gates'; app: GateProxyApp; gates: CompiledGate[] }
+	| { kind: 'endpoints'; app: ContractProxyApp; table: CompiledEndpointTable<ProxyEndpointRow> }
 
 export interface AuthorizerOptions {
 	iam: IamGateway
@@ -116,6 +144,11 @@ export interface AuthorizerOptions {
 	cache?: TokenCache | null
 	/** Unix seconds. Injectable for tests. */
 	now?: () => number
+	/**
+	 * Issues the single-use grant a membership or scope-creating endpoint spends at IAM. Unset, such a request is
+	 * forwarded without one and IAM refuses the membership operation unless the framework obtained a grant itself.
+	 */
+	delegations?: DelegationIssuer | null
 }
 
 /**
@@ -125,8 +158,21 @@ export interface AuthorizerOptions {
  */
 const FETCH_MODE_HEADER = 'Sec-Fetch-Mode'
 
+/** Fetch metadata the browser writes and page script cannot: `same-origin` only for a request from this origin. */
+const FETCH_SITE_HEADER = 'Sec-Fetch-Site'
+
 /** Why a `human` attempt failed — mirrors `mintToken`'s reasons. */
 type SessionFailureReason = 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled'
+
+type Denial = Extract<Decision, { outcome: 'deny' }>
+
+/** A `px_` key exchanged and verified, or the denial that ends the request. */
+type KeyAttempt = { ok: true; token: string; claims: AccessTokenClaims } | { ok: false; denial: Denial }
+
+/** Who is behind a request to a credentialed endpoint, or the decision that ends it (a denial or the login bounce). */
+type EndpointCaller =
+	| { ok: true; token: string; claims: AccessTokenClaims; session: boolean }
+	| { ok: false; decision: Extract<Decision, { outcome: 'deny' | 'login' }> }
 
 /**
  * The outcome of resolving the human behind a request. Three arms, not two: "there is no usable
@@ -135,7 +181,7 @@ type SessionFailureReason = 'no_session' | 'invalid_session' | 'unknown_principa
  * incident.
  */
 type SessionAttempt =
-	| { ok: true; token: string; subject: string }
+	| { ok: true; token: string; claims: AccessTokenClaims }
 	| { ok: false; status: 'miss'; reason: SessionFailureReason }
 	| { ok: false; status: 'refused'; reason: 'token_too_large' }
 	| { ok: false; status: 'unavailable' }
@@ -167,6 +213,9 @@ export class Authorizer {
 	}
 
 	private async decide(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
+		if (resolved.kind === 'endpoints') {
+			return await this.decideEndpoint(resolved.app, resolved.table, request)
+		}
 		const matching = applicableGates(resolved.gates, request.url.pathname)
 		if (matching.length === 0) {
 			// Fail closed — the app has no public route of its own, so an unmatched path is denied.
@@ -185,7 +234,7 @@ export class Authorizer {
 				return await this.authorizeOAuth(resolved.app, rule, request) // terminal, with or without a token
 			}
 			if (rule.kind === 'public') {
-				return { outcome: 'allow', gate: 'public', token: null, subject: null }
+				return { outcome: 'allow', gate: 'public', token: null, subject: null, endpoint: null, delegation: null }
 			}
 			if (rule.kind === 'service') {
 				const raw = readServiceCredential(request.headers, request.url, rule.credential)
@@ -196,7 +245,7 @@ export class Authorizer {
 			}
 			session ??= await this.authorizeSession(resolved.app, request)
 			if (session.ok) {
-				return { outcome: 'allow', gate: 'human', token: session.token, subject: session.subject }
+				return { outcome: 'allow', gate: 'human', token: session.token, subject: session.claims.sub, endpoint: null, delegation: null }
 			}
 			if (session.status === 'unavailable') {
 				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
@@ -223,7 +272,99 @@ export class Authorizer {
 	 * app, carrying every scope the rule names. Verified locally — no IAM call, no cache. A refusal is a
 	 * bearer challenge pointing at the resource metadata, never a login bounce.
 	 */
-	private async authorizeOAuth(app: ProxyApp, rule: Extract<GateRule, { kind: 'oauth' }>, request: ForwardedRequest): Promise<Decision> {
+	/**
+	 * One pass over the endpoint `planEndpoint` selects (ADR-0022 rule 3). An anonymous kind reads no credential and
+	 * mints no token. A credentialed one takes a `px_` key when one is presented — terminal, whatever its verdict —
+	 * and the session only when `human` may call; then the requirement, then admission.
+	 */
+	private async decideEndpoint(app: ContractProxyApp, table: CompiledEndpointTable<ProxyEndpointRow>, request: ForwardedRequest): Promise<Decision> {
+		const plan = planEndpoint(table, request.method, request.rawPath)
+		if (plan.outcome === 'non-canonical') {
+			return { outcome: 'deny', status: 400, reason: 'non_canonical_path' }
+		}
+		if (plan.outcome === 'no-endpoint') {
+			return { outcome: 'deny', status: 403, reason: 'no_endpoint' }
+		}
+		const row = plan.endpoint
+		const endpoint = formatEndpointHeader(row.id, row.digest)
+		if (row.requirement === null) {
+			return admitBody(row, request.headers) ?? { outcome: 'allow', gate: 'endpoint', token: null, subject: null, endpoint, delegation: null }
+		}
+		const caller = await this.endpointCaller(app, row.callers.includes('human'), request)
+		if (!caller.ok) {
+			return caller.decision
+		}
+		const kind = callerOf(caller.claims)
+		if (kind === null || !row.callers.includes(kind)) {
+			return { outcome: 'deny', status: 403, reason: 'caller_kind' }
+		}
+		if (!satisfies(row.requirement, caller.claims.perms)) {
+			return { outcome: 'deny', status: 403, reason: 'insufficient_permission' }
+		}
+		if (caller.session && request.method !== 'GET' && request.headers.get(FETCH_SITE_HEADER) !== 'same-origin') {
+			return { outcome: 'deny', status: 403, reason: 'cross_site' }
+		}
+		const refused = admitBody(row, request.headers)
+		if (refused !== null) {
+			return refused
+		}
+		const delegation = row.delegation === null ? null : await this.obtainDelegation(app, row.id, caller.token, request.requestId)
+		if (delegation !== null && !delegation.ok) {
+			return delegation.denial
+		}
+		return {
+			outcome: 'allow',
+			gate: 'endpoint',
+			token: caller.token,
+			subject: caller.claims.sub,
+			endpoint,
+			delegation: delegation?.grant ?? null,
+		}
+	}
+
+	/** A `px_` key wherever the request carries an `Authorization` header; otherwise the session, if `human` may call. */
+	private async endpointCaller(app: ContractProxyApp, humanMayCall: boolean, request: ForwardedRequest): Promise<EndpointCaller> {
+		const authorization = request.headers.get('Authorization')
+		if (authorization !== null && authorization.trim() !== '') {
+			const bearer = readBearer(authorization)
+			const key = bearer === null ? { ok: false, denial: invalidKey() } satisfies KeyAttempt : await this.exchangeKey(app, bearer, request.requestId)
+			return key.ok ? { ok: true, token: key.token, claims: key.claims, session: false } : { ok: false, decision: key.denial }
+		}
+		if (!humanMayCall) {
+			// No session reaches an endpoint a person may not call, so there is nothing to sign in to.
+			return { ok: false, decision: { outcome: 'deny', status: 401, reason: 'no_credential' } }
+		}
+		const session = await this.authorizeSession(app, request)
+		if (session.ok) {
+			return { ok: true, token: session.token, claims: session.claims, session: true }
+		}
+		if (session.status === 'unavailable') {
+			return { ok: false, decision: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
+		}
+		if (session.status === 'refused') {
+			return { ok: false, decision: { outcome: 'deny', status: 403, reason: session.reason } }
+		}
+		return { ok: false, decision: await this.loginDecision(app, request, session.reason) }
+	}
+
+	/** A fresh grant for every request, never cached: IAM spends it once, for this request id. */
+	private async obtainDelegation(
+		app: ContractProxyApp,
+		endpoint: string,
+		token: string,
+		requestId: string,
+	): Promise<{ ok: true; grant: string | null } | { ok: false; denial: Denial }> {
+		const issuer = this.options.delegations
+		if (issuer === undefined || issuer === null) {
+			return { ok: true, grant: null }
+		}
+		const result = await this.callIam('requestDelegation', () => issuer.requestDelegation({ app: app.id, credential: token, requestId, endpoint }))
+		return result.ok && result.grant !== ''
+			? { ok: true, grant: result.grant }
+			: { ok: false, denial: { outcome: 'deny', status: 403, reason: 'delegation_refused' } }
+	}
+
+	private async authorizeOAuth(app: GateProxyApp, rule: Extract<GateRule, { kind: 'oauth' }>, request: ForwardedRequest): Promise<Decision> {
 		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
 		if (resource === undefined) {
 			// The manifest parser refuses an unregistered oauth rule; reaching this is a composition bug.
@@ -249,7 +390,7 @@ export class Authorizer {
 				challenge: { ...challenge, error: 'insufficient_scope', scope: rule.scopes.join(' ') },
 			}
 		}
-		return { outcome: 'allow', gate: 'oauth', token: bearer, subject: verified.claims.sub }
+		return { outcome: 'allow', gate: 'oauth', token: bearer, subject: verified.claims.sub, endpoint: null, delegation: null }
 	}
 
 	/**
@@ -258,8 +399,16 @@ export class Authorizer {
 	 * present-but-invalid credential fails closed — no fall-through.
 	 */
 	private async authorizeBearer(app: ProxyApp, bearer: string, requestId: string): Promise<Decision> {
+		const key = await this.exchangeKey(app, bearer, requestId)
+		return key.ok
+			? { outcome: 'allow', gate: 'service', token: key.token, subject: key.claims.sub, endpoint: null, delegation: null }
+			: key.denial
+	}
+
+	/** Exchange a `px_` key for a verified token, through the cache. A non-`px_` bearer is refused with no IAM call. */
+	private async exchangeKey(app: ProxyApp, bearer: string, requestId: string): Promise<KeyAttempt> {
 		if (!bearer.startsWith(API_KEY_PREFIX)) {
-			return { outcome: 'deny', status: 401, reason: 'invalid_key' }
+			return { ok: false, denial: invalidKey() }
 		}
 
 		const key = cacheKey(app.id, 'key', bearer)
@@ -267,12 +416,12 @@ export class Authorizer {
 		if (cached !== undefined && cached.expiresAt - this.now() > TOKEN_REFRESH_SKEW_SECONDS) {
 			const verified = await this.verifier.verify(cached.token, app.id)
 			if (verified.ok) {
-				return { outcome: 'allow', gate: 'service', token: cached.token, subject: verified.claims.sub }
+				return { ok: true, token: cached.token, claims: verified.claims }
 			}
 			if (verified.reason === 'unavailable') {
 				// Nothing is wrong with the entry — we simply cannot check it. Keep it; a re-mint could
 				// not be verified either, so it would only add an IAM call to the same 503.
-				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
+				return { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
 			}
 			// A cached entry that PROVED bad (rotated key, revoked issuer) is dropped, and we fall
 			// through to a fresh mint rather than trusting it.
@@ -281,18 +430,16 @@ export class Authorizer {
 
 		const minted = await this.callIam('mintFromKey', () => this.options.iam.mintFromKey({ app: app.id, key: bearer, requestId }))
 		if (!minted.ok) {
-			return { outcome: 'deny', status: minted.reason === 'invalid_key' ? 401 : 403, reason: minted.reason }
+			return { ok: false, denial: { outcome: 'deny', status: minted.reason === 'invalid_key' ? 401 : 403, reason: minted.reason } }
 		}
 		const verified = await this.verifier.verify(minted.token, app.id)
 		if (!verified.ok) {
 			// We just minted it, so a verification miss is a config/clock/key problem — not a client
 			// error. Either way: deny.
-			return verified.reason === 'unavailable'
-				? { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
-				: { outcome: 'deny', status: 401, reason: 'invalid_key' }
+			return { ok: false, denial: verified.reason === 'unavailable' ? { outcome: 'deny', status: 503, reason: 'iam_unavailable' } : invalidKey() }
 		}
 		this.cache?.set(key, { token: minted.token, expiresAt: minted.expiresAt })
-		return { outcome: 'allow', gate: 'service', token: minted.token, subject: verified.claims.sub }
+		return { ok: true, token: minted.token, claims: verified.claims }
 	}
 
 	/**
@@ -320,7 +467,7 @@ export class Authorizer {
 		if (cached !== undefined && cached.expiresAt - now > TOKEN_REFRESH_SKEW_SECONDS) {
 			const verified = await this.verifier.verify(cached.token, app.id)
 			if (verified.ok && verified.claims.ptype === 'user') {
-				return { ok: true, token: cached.token, subject: verified.claims.sub }
+				return { ok: true, token: cached.token, claims: verified.claims }
 			}
 			if (!verified.ok && verified.reason === 'unavailable') {
 				// Nothing is wrong with the entry — we simply cannot check it. Keep it and say so.
@@ -347,7 +494,7 @@ export class Authorizer {
 			return { ok: false, status: 'miss', reason: 'invalid_session' }
 		}
 		this.cache?.set(key, { token: minted.token, expiresAt: minted.expiresAt })
-		return { ok: true, token: minted.token, subject: verified.claims.sub }
+		return { ok: true, token: minted.token, claims: verified.claims }
 	}
 
 	/**
@@ -409,7 +556,11 @@ export class Authorizer {
 		return { outcome: 'handoff', status: 302, location: result.returnUrl, session: result.session, expiresAt: result.expiresAt, handoffState: state }
 	}
 
-	private async loginDecision(app: ProxyApp, request: ForwardedRequest, reason: SessionFailureReason): Promise<Decision> {
+	private async loginDecision(
+		app: ProxyApp,
+		request: ForwardedRequest,
+		reason: SessionFailureReason,
+	): Promise<Extract<Decision, { outcome: 'login' }>> {
 		const handoff = await createHandoffAttempt()
 		return {
 			outcome: 'login',
@@ -439,6 +590,19 @@ export class Authorizer {
 		setHandoffParams(login, handoff)
 		return login.toString()
 	}
+}
+
+function invalidKey(): Denial {
+	return { outcome: 'deny', status: 401, reason: 'invalid_key' }
+}
+
+/** An endpoint that admits a body admits only its declared media types (ADR-0022 rule 3, admission). */
+function admitBody(row: ProxyEndpointRow, headers: Headers): Denial | null {
+	if (row.admission === null) {
+		return null
+	}
+	const type = headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? ''
+	return row.admission.contentTypes.includes(type) ? null : { outcome: 'deny', status: 400, reason: 'content_type' }
 }
 
 /**

@@ -65,7 +65,12 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   rejected human session therefore never falls through to a later public or service rule. **This holds
   for installation gates only.** A contract application's endpoint table selects the most specific
   endpoint, array order means nothing, and an absent credential falls through to no other endpoint
-  (ADR-0022; decided, not built yet — B2).
+  (ADR-0022 rule 3; the steps are in `../proxy-core/CLAUDE.md`).
+- **The endpoint and the delegation grant are proxy-asserted like the token.** Step 1 deletes a
+  client's `X-Fabrika-Endpoint` and `X-Fabrika-Delegation`; the 2xx branch copies them back from the
+  auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
+  `Authorization`, so a key the proxy did not read never reaches the app. A gate app keeps it: IAM's
+  `/admin/*` reads its own bearer.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay

@@ -1,9 +1,18 @@
 import type { AppGates } from '@fabrika/auth'
-import { buildResourceAccessClaims, type Jwks, RESOURCE_ACCESS_TOKEN_TYP } from '@fabrika/auth-core'
+import {
+	buildResourceAccessClaims,
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
+	type EndpointRules,
+	formatEndpointHeader,
+	type Jwks,
+	requirementDigest,
+	RESOURCE_ACCESS_TOKEN_TYP,
+} from '@fabrika/auth-core'
 import { encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
-import { APP, FakeIam, HOST, ISSUER, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
+import { APP, FakeIam, HOST, ISSUER, signToken, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
 
@@ -382,3 +391,83 @@ class RecordingUpstream {
 		return Promise.resolve(new Response('ok'))
 	}
 }
+
+describe('Cloudflare proxy Worker — a contract app', () => {
+	const health = { id: 'health', kind: 'health', method: 'GET', path: '/healthz', callers: [], requirement: null, admission: null } satisfies
+		& EndpointRules
+		& {
+			id: string
+		}
+	const me = {
+		id: 'api.me',
+		kind: 'query',
+		method: 'POST',
+		path: '/api/me',
+		callers: ['human', 'machine'],
+		requirement: { kind: 'member' },
+		admission: { contentTypes: ['application/json'], maxBytes: null },
+	} satisfies EndpointRules & { id: string }
+	const contractEnvironment = (iam: FakeIam, seen: Request[]): CloudflareProxyEnv => ({
+		IAM: iam,
+		FABRIKA_IAM_ISSUER: ISSUER,
+		FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
+			apps: [{
+				id: APP,
+				hosts: [HOST],
+				upstream: 'APP',
+				scheme: 'https',
+				endpoints: [
+					{ ...health, digest: requirementDigest(health), delegation: null },
+					{ ...me, digest: requirementDigest(me), delegation: null },
+				],
+				reservedPrefixes: ['/api'],
+				snapshot: `sha256:${'0'.repeat(64)}`,
+			}],
+		}),
+		APP: {
+			fetch: (request: Request) => {
+				seen.push(request)
+				return Promise.resolve(new Response('ok'))
+			},
+		},
+	})
+
+	test('an anonymous endpoint reaches the app with its endpoint header and without the key or a client-sent endpoint', async () => {
+		const seen: Request[] = []
+		const iam = new FakeIam()
+		const response = await createCloudflareProxyHandler(contractEnvironment(iam, seen))(
+			new Request(`https://${HOST}/healthz`, {
+				headers: { Authorization: 'Bearer px_key', [ENDPOINT_HEADER]: 'api.me@forged', [DELEGATION_HEADER]: 'forged' },
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(seen[0]?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(health.id, requirementDigest(health)))
+		expect(seen[0]?.headers.get('Authorization')).toBeNull()
+		expect(seen[0]?.headers.get(DELEGATION_HEADER)).toBeNull()
+		expect(seen[0]?.headers.get('X-Fabrika-Token')).toBeNull()
+		expect(iam.mintFromKeyCalls).toBe(0)
+	})
+
+	test('a key request reaches the app with the token, the endpoint, and its own Authorization header', async () => {
+		const seen: Request[] = []
+		const iam = new FakeIam({ mintFromKey: { ok: true, token: await signToken({ type: 'service' }), expiresAt: Math.floor(Date.now() / 1000) + 300 } })
+		const response = await createCloudflareProxyHandler(contractEnvironment(iam, seen))(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'POST',
+				body: '{}',
+				headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json', [ENDPOINT_HEADER]: 'forged' },
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(seen[0]?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(me.id, requirementDigest(me)))
+		expect(seen[0]?.headers.get('X-Fabrika-Token')).not.toBeNull()
+		expect(seen[0]?.headers.get('Authorization')).toBe('Bearer px_key')
+	})
+
+	test('no endpoint is a 403 that never reaches the app', async () => {
+		const seen: Request[] = []
+		const response = await createCloudflareProxyHandler(contractEnvironment(new FakeIam(), seen))(new Request(`https://${HOST}/api/unknown`))
+		expect(response.status).toBe(403)
+		expect(seen).toEqual([])
+	})
+})

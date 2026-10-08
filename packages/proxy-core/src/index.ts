@@ -20,6 +20,8 @@ export {
 	DEFAULT_HEALTH_PATH,
 	DEFAULT_IAM_TIMEOUT_MS,
 	DEFAULT_VERIFY_PATH,
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -34,7 +36,7 @@ export { applicableGates, compileGates, readBearer, readCookie, readServiceCrede
 export type { CompiledGate } from './gates'
 export { stripFabrikaCookies } from './handoff'
 export { HttpIamGateway, IamUnavailableError } from './iam'
-export type { HttpIamGatewayOptions, IamGateway } from './iam'
+export type { DelegationIssuer, DelegationRequest, HttpIamGatewayOptions, IamGateway } from './iam'
 export { consoleLogger, redactPath, redactUrl, silentLogger } from './log'
 export type { LogFields, LogValue, ProxyLogger } from './log'
 export { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'

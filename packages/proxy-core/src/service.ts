@@ -21,7 +21,16 @@
  *      back on a 2xx, so the edge is the only thing that mints either.
  */
 
-import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, isCanonicalPath, SESSION_COOKIE, splitRequestTarget } from '@fabrika/auth-core'
+import {
+	AUTH_CALLBACK_PATH,
+	compileEndpointTable,
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
+	HANDOFF_COOKIE_TTL_SECONDS,
+	isCanonicalPath,
+	SESSION_COOKIE,
+	splitRequestTarget,
+} from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'
@@ -38,9 +47,9 @@ import {
 } from './constants'
 import { compileGates } from './gates'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
-import type { IamGateway } from './iam'
+import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
-import { formatOAuthBearerChallenge, type ProxyManifest } from './manifest'
+import { formatOAuthBearerChallenge, isContractProxyApp, type ProxyApp, type ProxyManifest } from './manifest'
 import { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
 
 export interface VerifyServiceConfig {
@@ -55,6 +64,8 @@ export interface VerifyServiceConfig {
 	healthPath?: string
 	/** Unix seconds. Injectable for tests. */
 	now?: () => number
+	/** Issues delegation grants for membership and scope-creating endpoints; see `AuthorizerOptions.delegations`. */
+	delegations?: DelegationIssuer | null
 }
 
 export type VerifyService = (request: Request) => Promise<Response>
@@ -63,8 +74,8 @@ export type VerifyService = (request: Request) => Promise<Response>
 const HOST_PATTERN = /^[a-z0-9.\-[\]]+(:\d{1,5})?$/i
 
 /**
- * Build the `/verify` service. Gates are compiled once here, not per request — the matcher is on the
- * hot path of every request to every app.
+ * Build the `/verify` service. Gates and endpoint tables are compiled once here, not per request — the
+ * matcher is on the hot path of every request to every app.
  */
 export function createVerifyService(config: VerifyServiceConfig): VerifyService {
 	const logger = config.logger ?? silentLogger
@@ -73,7 +84,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	const byId = new Map<string, ResolvedApp>()
 	const byHost = new Map<string, ResolvedApp>()
 	for (const app of config.manifest.apps) {
-		const resolved: ResolvedApp = { app, gates: compileGates(app.gates) }
+		const resolved = resolveApp(app)
 		byId.set(app.id, resolved)
 		for (const host of app.hosts) {
 			// Normalized exactly as a forwarded host is, so the two sides cannot disagree about a port.
@@ -87,6 +98,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	}
 	if (config.now !== undefined) {
 		authorizerOptions.now = config.now
+	}
+	if (config.delegations !== undefined) {
+		authorizerOptions.delegations = config.delegations
 	}
 	const authorizer = new Authorizer(authorizerOptions)
 
@@ -143,10 +157,16 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				path: redactPath(forwarded.url.pathname),
 			}
 			if (decision.outcome === 'allow') {
-				logger.info('allow', { ...fields, gate: decision.gate, subject: decision.subject })
+				logger.info('allow', { ...fields, gate: decision.gate, subject: decision.subject, endpoint: decision.endpoint })
 				const headers = new Headers({ 'cache-control': 'no-store', [REQUEST_ID_HEADER]: requestId })
 				if (decision.token !== null) {
 					headers.set(PROXY_TOKEN_HEADER, decision.token)
+				}
+				if (decision.endpoint !== null) {
+					headers.set(ENDPOINT_HEADER, decision.endpoint)
+				}
+				if (decision.delegation !== null) {
+					headers.set(DELEGATION_HEADER, decision.delegation)
 				}
 				return new Response(null, { status: 204, headers })
 			}
@@ -358,7 +378,7 @@ function readForwardedRequest(request: Request, requestId: string): ForwardedRea
 		return { ok: false, reason: 'bad_forward' }
 	}
 
-	return { ok: true, request: { method, url, headers: request.headers, requestId } }
+	return { ok: true, request: { method, url, rawPath: target.pathname, headers: request.headers, requestId } }
 }
 
 /**
@@ -383,6 +403,13 @@ function selectApp(verifyUrl: URL, host: string, byId: Map<string, ResolvedApp>,
 		return resolved
 	}
 	return byHost.get(hostname) ?? null
+}
+
+/** The compiled form an app is protected by. The manifest parser already refused an ambiguous table. */
+function resolveApp(app: ProxyApp): ResolvedApp {
+	return isContractProxyApp(app)
+		? { kind: 'endpoints', app, table: compileEndpointTable(app) }
+		: { kind: 'gates', app, gates: compileGates(app.gates) }
 }
 
 /** Lower-case, port stripped — the one normalization every host comparison in this file uses. */

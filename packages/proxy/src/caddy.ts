@@ -38,6 +38,8 @@ import {
 	APP_QUERY_PARAM,
 	CLIENT_ADDRESS_HEADER,
 	DEFAULT_VERIFY_PATH,
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_URI_HEADER,
 	LOGIN_REDIRECT_PARAM,
@@ -46,7 +48,7 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { isContractProxyApp, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before
@@ -340,12 +342,12 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 					handle: [{
 						handler: 'headers',
 						request: {
-							delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
+							delete: [...PROXY_ASSERTED_HEADERS, CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
 							set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] },
 						},
 					}],
 				},
-				...(app.oauthResources ?? []).map((resource): CaddyRoute => ({
+				...(isContractProxyApp(app) ? [] : (app.oauthResources ?? [])).map((resource): CaddyRoute => ({
 					match: [{ path: [new URL(resource.resourceMetadata).pathname] }],
 					handle: [authRequest(app, authUpstream, OAUTH_METADATA_VERIFY_PATH)],
 					terminal: true,
@@ -391,10 +393,29 @@ function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHand
 			match: { status_code: [2] },
 			routes: [
 				{ handle: [{ handler: 'vars' }] },
-				copyResponseHeader(PROXY_TOKEN_HEADER),
-				copyResponseHeader(REQUEST_ID_HEADER),
+				...(isContractProxyApp(app) ? [withoutCredentialUnlessMinted()] : []),
+				...PROXY_ASSERTED_HEADERS.map(copyResponseHeader),
 			],
 		}],
+	}
+}
+
+/**
+ * The headers only the auth service may assert to the app: deleted from the inbound request in step 1 and copied
+ * back from a 2xx auth response. A gate app never gets the endpoint or the delegation header; deleting it is still
+ * what keeps a client's own copy from reaching the upstream.
+ */
+const PROXY_ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]
+
+/**
+ * A contract app's anonymous endpoint mints no token, and the proxy forwards no `px_` key it read nothing from
+ * (ADR-0022 rule 3). An allow without a token is exactly that case, so the key header goes; the session cookie
+ * is stripped on every upstream hop anyway.
+ */
+function withoutCredentialUnlessMinted(): CaddyRoute {
+	return {
+		match: [{ vars: { [`{http.reverse_proxy.header.${PROXY_TOKEN_HEADER}}`]: [''] } }],
+		handle: [{ handler: 'headers', request: { delete: ['Authorization'] } }],
 	}
 }
 
@@ -441,6 +462,8 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
 	const pattern = uriRedactionPattern(manifest)
 	return {
 		[`request>headers>${PROXY_TOKEN_HEADER}`]: { filter: 'delete' },
+		// A single-use grant, but a credential until IAM spends it.
+		[`request>headers>${DELEGATION_HEADER}`]: { filter: 'delete' },
 		// Not a credential — dropped because Caddy's record already carries `client_ip` natively, and one
 		// copy of a client address per line is enough.
 		[`request>headers>${CLIENT_ADDRESS_HEADER}`]: { filter: 'delete' },
@@ -473,7 +496,9 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
 export function uriRedactionPattern(manifest: ProxyManifest): string {
 	const names = new Set<string>()
 	for (const app of manifest.apps) {
-		for (const rule of app.gates.rules) {
+		// A contract app reads a key only as a bearer, never from the URL.
+		const rules = isContractProxyApp(app) ? [] : app.gates.rules
+		for (const rule of rules) {
 			const name = queryCredentialName(rule)
 			if (name !== null) {
 				names.add(name)

@@ -10,11 +10,13 @@ import {
 	type AppGates,
 	buildAccessClaims,
 	buildResourceAccessClaims,
+	type EndpointRequirement,
 	type ExchangeAuthCodeResult,
 	type Jwks,
 	type MintFromKeyResult,
 	type MintTokenResult,
 	type PermissionEntry,
+	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
@@ -28,7 +30,7 @@ import {
 } from '../constants'
 import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
-import type { OAuthProtectedResource, ProxyApp, ProxyManifest } from '../manifest'
+import type { ContractProxyApp, GateProxyApp, OAuthProtectedResource, ProxyEndpointRow, ProxyManifest } from '../manifest'
 
 export const ISSUER = 'https://iam.test'
 export const APP = 'example-app'
@@ -75,6 +77,7 @@ export interface SignOptions {
 	issuer?: string
 	key?: KeyLike
 	kid?: string
+	permissions?: PermissionEntry[]
 }
 
 export async function signToken(options: SignOptions = {}): Promise<string> {
@@ -85,7 +88,7 @@ export async function signToken(options: SignOptions = {}): Promise<string> {
 		subject: options.subject ?? 'user-1',
 		...(options.type === undefined ? {} : { type: options.type }),
 		label: 'a@b.cz',
-		permissions: PERMS,
+		permissions: options.permissions ?? PERMS,
 		issuedAt: now,
 		expiresAt: now + (options.ttlSeconds ?? 300),
 	})
@@ -204,12 +207,47 @@ export class FakeIam implements IamGateway {
 
 // ── Manifest + request construction ────────────────────────────────────────────
 
-export function appWith(gates: AppGates, overrides: Partial<ProxyApp> = {}): ProxyApp {
+export function appWith(gates: AppGates, overrides: Partial<GateProxyApp> = {}): GateProxyApp {
 	return { id: APP, hosts: [HOST], upstream: 'app:3000', scheme: 'https', gates, ...overrides }
 }
 
-export function manifestWith(gates: AppGates, overrides: Partial<ProxyApp> = {}): ProxyManifest {
+export function manifestWith(gates: AppGates, overrides: Partial<GateProxyApp> = {}): ProxyManifest {
 	return { apps: [appWith(gates, overrides)] }
+}
+
+type CredentialedRow = Extract<ProxyEndpointRow, { requirement: EndpointRequirement }>
+type AnonymousRow = Extract<ProxyEndpointRow, { requirement: null }>
+
+/** A credentialed manifest row with its true digest; `delegation` defaults to none. */
+export function endpointRow(
+	fields: Omit<CredentialedRow, 'digest' | 'delegation'>,
+	delegation: CredentialedRow['delegation'] = null,
+): ProxyEndpointRow {
+	return { ...fields, delegation, digest: requirementDigest(fields) }
+}
+
+/** An anonymous manifest row (health, form, webhook, link shell) with its true digest. */
+export function anonymousRow(fields: Omit<AnonymousRow, 'digest' | 'delegation' | 'callers' | 'requirement'>): ProxyEndpointRow {
+	const callers: [] = []
+	const rules = { ...fields, callers, requirement: null }
+	return { ...rules, delegation: null, digest: requirementDigest(rules) }
+}
+
+export function contractAppWith(
+	endpoints: ProxyEndpointRow[],
+	reservedPrefixes: string[] = [],
+	overrides: Partial<ContractProxyApp> = {},
+): ContractProxyApp {
+	return {
+		id: APP,
+		hosts: [HOST],
+		upstream: 'app:3000',
+		scheme: 'https',
+		endpoints,
+		reservedPrefixes,
+		snapshot: `sha256:${'0'.repeat(64)}`,
+		...overrides,
+	}
 }
 
 export interface VerifyRequestOptions {

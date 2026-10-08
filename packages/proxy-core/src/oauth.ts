@@ -1,4 +1,4 @@
-import { type OAuthProtectedResource, oauthProtectedResourceMetadata, type ProxyApp } from './manifest'
+import { isContractProxyApp, type OAuthProtectedResource, oauthProtectedResourceMetadata, type ProxyApp } from './manifest'
 
 /**
  * The auth service's RFC 9728 metadata endpoint. Separate from `/verify` because a 2xx from `/verify`
@@ -6,8 +6,9 @@ import { type OAuthProtectedResource, oauthProtectedResourceMetadata, type Proxy
  */
 export const OAUTH_METADATA_VERIFY_PATH = '/oauth-metadata'
 
-/** The app's protected resource whose metadata URL is this request's host and exact raw pathname. */
+/** The app's protected resource whose metadata URL is this request's host and exact raw pathname. A contract app has none. */
 export function findOAuthMetadata(app: ProxyApp, url: URL): OAuthProtectedResource | null {
+	if (isContractProxyApp(app)) return null
 	const hostname = url.hostname.toLowerCase()
 	return app.oauthResources?.find((resource) => {
 		const metadata = new URL(resource.resourceMetadata)

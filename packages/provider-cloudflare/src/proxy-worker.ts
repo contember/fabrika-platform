@@ -1,10 +1,12 @@
 import { rawRequestTarget } from '@fabrika/auth-core'
-import type { IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
+import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
 	consoleLogger,
 	createVerifyService,
 	DEFAULT_VERIFY_PATH,
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
 	FORWARDED_HOST_HEADER,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_PROTO_HEADER,
@@ -16,7 +18,7 @@ import {
 	stripFabrikaCookies,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { isContractProxyApp, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Cloudflare's managed client address — this composition's answer to "who is the client".
@@ -94,6 +96,8 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 		issuer,
 		cache: new MemoryTokenCache(),
 		logger,
+		// Until IAM's binding serves `requestDelegation`, no delegation grant is obtained here.
+		delegations: isDelegationIssuer(env.IAM) ? env.IAM : null,
 	})
 	const handler = proxyHandler(env, manifest, verify)
 	cached = { manifestJson, iam: env.IAM, issuer, handler }
@@ -138,19 +142,23 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		stripClientAsserted(upstreamHeaders)
 		stripFabrikaCookies(upstreamHeaders)
 		if (clientAddress !== null && clientAddress !== '') upstreamHeaders.set(CLIENT_ADDRESS_HEADER, clientAddress)
-		const token = verification.headers.get(PROXY_TOKEN_HEADER)
-		if (token !== null && token !== '') upstreamHeaders.set(PROXY_TOKEN_HEADER, token)
-		const requestId = verification.headers.get(REQUEST_ID_HEADER)
-		if (requestId !== null && requestId !== '') upstreamHeaders.set(REQUEST_ID_HEADER, requestId)
+		for (const header of PROXY_ASSERTED_HEADERS) {
+			const value = verification.headers.get(header)
+			if (value !== null && value !== '') upstreamHeaders.set(header, value)
+		}
+		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3).
+		if (isContractProxyApp(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
 
 		return upstream.fetch(new Request(request, { headers: upstreamHeaders }))
 	}
 }
 
+/** What only the decision may assert to the app; each is copied from an allow, the way Caddy's `copy_headers` does. */
+const PROXY_ASSERTED_HEADERS = [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, ENDPOINT_HEADER, DELEGATION_HEADER]
+
 /** Delete every header only this hop may assert, so nothing downstream can read a caller's version. */
 function stripClientAsserted(headers: Headers): void {
-	headers.delete(PROXY_TOKEN_HEADER)
-	headers.delete(REQUEST_ID_HEADER)
+	for (const header of PROXY_ASSERTED_HEADERS) headers.delete(header)
 	headers.delete(CLIENT_ADDRESS_HEADER)
 	for (const header of UNTRUSTED_FORWARD_HEADERS) headers.delete(header)
 }
@@ -166,6 +174,7 @@ function findApp(manifest: ProxyManifest, url: URL): ProxyApp | null {
  * answered by the metadata endpoint, which compares exactly and 404s a mismatch, and never reaches the gates.
  */
 function isOAuthMetadataPath(app: ProxyApp, url: URL): boolean {
+	if (isContractProxyApp(app)) return false
 	const path = url.pathname.toLowerCase()
 	return app.oauthResources?.some((resource) => new URL(resource.resourceMetadata).pathname.toLowerCase() === path) ?? false
 }
@@ -188,6 +197,10 @@ function isIamGateway(value: unknown): value is IamGateway {
 		&& typeof value['mintFromKey'] === 'function'
 		&& typeof value['exchangeAuthCode'] === 'function'
 		&& typeof value['getJwks'] === 'function'
+}
+
+function isDelegationIssuer(value: unknown): value is DelegationIssuer {
+	return isObject(value) && typeof value['requestDelegation'] === 'function'
 }
 
 function isWorkerService(value: unknown): value is WorkerService {

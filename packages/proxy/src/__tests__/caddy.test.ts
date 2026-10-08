@@ -10,8 +10,15 @@
  */
 
 import type { AppGates } from '@fabrika/auth-core'
-import { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, UNTRUSTED_FORWARD_HEADERS } from '@fabrika/proxy-core'
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
+import {
+	CLIENT_ADDRESS_HEADER,
+	DELEGATION_HEADER,
+	ENDPOINT_HEADER,
+	PROXY_TOKEN_HEADER,
+	REQUEST_ID_HEADER,
+	UNTRUSTED_FORWARD_HEADERS,
+} from '@fabrika/proxy-core'
+import type { ContractProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import {
 	buildCaddyConfig,
@@ -134,7 +141,14 @@ describe('the per-app chain is fail-closed by construction', () => {
 			expect(first).toEqual({
 				handler: 'headers',
 				request: {
-					delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
+					delete: [
+						PROXY_TOKEN_HEADER,
+						REQUEST_ID_HEADER,
+						ENDPOINT_HEADER,
+						DELEGATION_HEADER,
+						CLIENT_ADDRESS_HEADER,
+						...UNTRUSTED_FORWARD_HEADERS,
+					],
 					set: { [CLIENT_ADDRESS_HEADER]: ['{http.request.client_ip}'] },
 				},
 			})
@@ -335,6 +349,56 @@ describe('the forward_auth expansion matches Caddy v2.10.2', () => {
 			handler: 'headers',
 			request: { set: { [REQUEST_ID_HEADER]: [placeholder] } },
 		})
+	})
+})
+
+describe('a contract app — the endpoint table', () => {
+	const contract: ContractProxyApp = {
+		id: 'notes@prod',
+		hosts: ['notes.example.com'],
+		upstream: 'notes:3000',
+		scheme: 'https',
+		endpoints: [],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+	}
+	const defined = <T>(value: T | undefined): T => {
+		if (value === undefined) throw new Error('missing fixture')
+		return value
+	}
+	const [contractRoute, gateRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
+		?.routes ?? []
+	const steps = subrouteOf(defined(contractRoute)).routes
+	const auth = proxyHandler(steps[1])
+	const copies = auth.handle_response?.[0]?.routes ?? []
+	const placeholder = (header: string) => `{http.reverse_proxy.header.${header}}`
+
+	test('a client-sent X-Fabrika-Endpoint or X-Fabrika-Delegation is deleted before the auth service runs', () => {
+		const first = steps[0]?.handle[0]
+		if (first?.handler !== 'headers') throw new Error('expected a headers handler')
+		expect(first.request?.delete).toContain(ENDPOINT_HEADER)
+		expect(first.request?.delete).toContain(DELEGATION_HEADER)
+	})
+
+	test('the endpoint and the delegation grant are copied back only from a 2xx, and only when set', () => {
+		for (const header of [ENDPOINT_HEADER, DELEGATION_HEADER]) {
+			expect(copies).toContainEqual({
+				match: [{ not: [{ vars: { [placeholder(header)]: [''] } }] }],
+				handle: [{ handler: 'headers', request: { set: { [header]: [placeholder(header)] } } }],
+			})
+		}
+	})
+
+	test('an allow without a token — an anonymous endpoint — forwards no Authorization header', () => {
+		expect(copies[1]).toEqual({
+			match: [{ vars: { [placeholder(PROXY_TOKEN_HEADER)]: [''] } }],
+			handle: [{ handler: 'headers', request: { delete: ['Authorization'] } }],
+		})
+	})
+
+	test('a gate app keeps its Authorization header: IAM reads its own bearer', () => {
+		const gateCopies = proxyHandler(subrouteOf(defined(gateRoute)).routes[1]).handle_response?.[0]?.routes ?? []
+		expect(JSON.stringify(gateCopies)).not.toContain('Authorization')
 	})
 })
 

@@ -18,7 +18,7 @@ session handoff. They are properties of the decision, so they apply here; that f
 ## Commands (this package)
 
 ```bash
-bun test   # deny-matrix.test.ts is the authorization truth table — keep it exhaustive
+bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint tables) are the truth tables — keep them exhaustive
 ```
 
 ## Invariants
@@ -55,9 +55,25 @@ bun test   # deny-matrix.test.ts is the authorization truth table — keep it ex
 - **There is exactly one gate evaluator, in `@fabrika/auth-core`.** This package composes it; it
   does not reimplement or extend gate semantics. A gate path is a glob: `*` crosses `/`, and a whole
   `:name` segment matches exactly one non-empty segment, the rule endpoint tables use. Array order
-  is precedence for installation gates only; a contract application's endpoint table selects the
-  most specific endpoint with `planEndpoint`, also from `@fabrika/auth-core` (ADR-0022; decided, not
-  built yet — B2).
+  is precedence for installation gates only.
+- **A manifest app is a gate app or a contract app, never both.** `endpoints` (with
+  `reservedPrefixes` and `snapshot`) instead of `gates` makes a contract app; an app carrying both, or
+  OAuth resources beside a table, is refused whole. A contract app's request is one pass over the row
+  `planEndpoint` selects (ADR-0022 rule 3): no row → 403; a presented `Authorization` header is a
+  `px_` key and terminal, and its caller kind (`callerOf`, re-checked on cached tokens) must be one
+  of the row's callers → 403; no key and no `human` caller → 401, never a bounce; the session or the
+  login bounce; `satisfies` → 403; admission (a session non-`GET` needs `Sec-Fetch-Site:
+  same-origin` → 403, the media type must be one the row admits → 400). An anonymous kind reads no
+  credential and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`.
+- **A row's digest is checked where the manifest is parsed.** The parser recomputes
+  `requirementDigest` and refuses a row whose digest differs, so the digest the proxy sends always
+  describes the rules it applied. Producers build rows with `contractProxyTable(artifact)`, never by
+  hand.
+- **A delegation grant is fresh per request.** A row marked `members` or `creates` gets a single-use
+  grant from `delegations` (a structural subset of IAM's membership RPC) after every other check
+  passed, also on a warm token cache, and it rides in `X-Fabrika-Delegation`. A refused grant is a
+  403, an unreachable IAM a 503. Without an issuer no grant is obtained and IAM refuses the membership
+  operation unless the framework obtained one itself; wire the issuer where the binding serves it.
 - **Test helpers are imported across packages.** `src/__tests__/helpers.ts` fakes IAM at the
   `IamGateway` seam and signs real ES256 tokens; `provider-cloudflare` and `local-stack` import it by
   relative path so the two enforcement points are tested against the same doubles. It is excluded

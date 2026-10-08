@@ -3,7 +3,7 @@
  * (`caddy.ts` reads the same constants the service does), so a rename cannot desynchronise them.
  */
 
-export { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, UNTRUSTED_FORWARD_HEADERS } from '@fabrika/auth-core'
+export { CLIENT_ADDRESS_HEADER, DELEGATION_HEADER, ENDPOINT_HEADER, PROXY_TOKEN_HEADER, UNTRUSTED_FORWARD_HEADERS } from '@fabrika/auth-core'
 
 // ── What Caddy's `forward_auth` sends us ───────────────────────────────────────
 //

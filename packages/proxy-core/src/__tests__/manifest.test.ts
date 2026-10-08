@@ -4,10 +4,26 @@
  * nobody wrote.
  */
 
+import { type ContractArtifact, contractDigest, type EndpointRow, isDigest } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { encodeProxyManifestJson, isProxyHost, parseProxyManifest, parseProxyManifestJson } from '../manifest'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import {
+	contractProxyTable,
+	encodeProxyManifestJson,
+	isContractProxyApp,
+	isProxyHost,
+	parseProxyManifest,
+	parseProxyManifestJson,
+	type ProxyManifest,
+} from '../manifest'
 import { createVerifyService } from '../service'
 import { FakeIam, ISSUER, verifyRequest } from './helpers'
+
+/** The gate rules of the first app; a contract app or no app has none. */
+const rulesOf = (manifest: ProxyManifest | null) => {
+	const app = manifest?.apps[0]
+	return app === undefined || isContractProxyApp(app) ? undefined : app.gates.rules
+}
 
 const withHost = (host: string) => ({ apps: [{ id: 'a', hosts: [host], upstream: 'a:1', gates: { rules: [] } }] })
 
@@ -29,8 +45,8 @@ const VALID = {
 describe('parseProxyManifest — accepts', () => {
 	test('a well-formed manifest, preserving rule order exactly', () => {
 		const manifest = parseProxyManifest(VALID)
-		expect(manifest?.apps[0]?.gates.rules.map((rule) => rule.kind)).toEqual(['public', 'service', 'human'])
-		expect(manifest?.apps[0]?.gates.rules.map((rule) => rule.path)).toEqual(['/public/*', '/api/*', '/*'])
+		expect(rulesOf(manifest)?.map((rule) => rule.kind)).toEqual(['public', 'service', 'human'])
+		expect(rulesOf(manifest)?.map((rule) => rule.path)).toEqual(['/public/*', '/api/*', '/*'])
 	})
 
 	test('an application environment id <app>@<env>, the audience the proxy mints for', () => {
@@ -42,7 +58,7 @@ describe('parseProxyManifest — accepts', () => {
 	})
 
 	test('an empty rule list seals an app', () => {
-		expect(parseProxyManifest({ apps: [{ id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] } }] })?.apps[0]?.gates.rules)
+		expect(rulesOf(parseProxyManifest({ apps: [{ id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] } }] })))
 			.toEqual([])
 	})
 
@@ -160,7 +176,7 @@ describe('parseProxyManifest — rejects', () => {
 		const manifest = parseProxyManifest({
 			apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'public', credential: { in: 'query', name: 't' } }] } }],
 		})
-		expect(manifest?.apps[0]?.gates.rules[0]).toEqual({ path: '/*', kind: 'public' })
+		expect(rulesOf(manifest)?.[0]).toEqual({ path: '/*', kind: 'public' })
 	})
 
 	test('malformed JSON', () => {
@@ -205,5 +221,70 @@ describe('isProxyHost', () => {
 	test('judges the lower-cased form: the predicate refuses uppercase, the parser normalises before asking', () => {
 		expect(isProxyHost('EXAMPLE.com')).toBe(false)
 		expect(parseProxyManifest(withHost('EXAMPLE.com'))?.apps[0]?.hosts).toEqual(['example.com'])
+	})
+})
+
+describe('contract apps — the endpoint table', () => {
+	const invite = {
+		id: 'api.workspaces.invite',
+		source: { kind: 'mount', name: 'api' },
+		kind: 'mutation',
+		method: 'POST',
+		path: '/api/workspaces.invite',
+		callers: ['human'],
+		requirement: { kind: 'action', action: 'notes.admin', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
+		admission: { contentTypes: ['application/json'], maxBytes: null },
+		input: null,
+		output: null,
+	} satisfies EndpointRow
+	const artifact: ContractArtifact = { ...notesArtifact, endpoints: [...notesArtifact.endpoints, invite] }
+	const app = { id: 'notes@prod', hosts: ['notes.example.com'], upstream: 'notes:3000', ...contractProxyTable(artifact) }
+
+	test('contractProxyTable carries every row with its digest, the reserved prefixes and the contract digest', () => {
+		const table = contractProxyTable(artifact)
+		expect(table.endpoints.map((row) => row.id)).toEqual(artifact.endpoints.map((row) => row.id))
+		expect(table.endpoints.every((row) => isDigest(row.digest))).toBe(true)
+		expect(table.reservedPrefixes).toEqual([...artifact.reservedPrefixes])
+		expect(table.snapshot).toBe(contractDigest(artifact))
+	})
+
+	test('a delegation marks exactly the members.manage and creates endpoints', () => {
+		const delegated = contractProxyTable(artifact).endpoints.filter((row) => row.delegation !== null).map((row) => [row.id, row.delegation])
+		expect(delegated).toEqual([['api.workspaces.create', 'creates'], ['api.workspaces.invite', 'members']])
+	})
+
+	test('a table the producer emitted parses unchanged', () => {
+		const parsed = parseProxyManifest({ apps: [app] })
+		const parsedApp = parsed?.apps[0]
+		expect(parsedApp !== undefined && isContractProxyApp(parsedApp)).toBe(true)
+		expect(parsed).toEqual({ apps: [{ ...app, scheme: 'https' }] })
+	})
+
+	const [first, ...rest] = app.endpoints
+	if (first === undefined) throw new Error('fixture has no endpoint')
+	test.each<[string, unknown]>([
+		['a digest that does not match its rules', { ...app, endpoints: [{ ...first, path: '/api/other' }, ...rest] }],
+		['a digest that is not a digest', { ...app, endpoints: [{ ...first, digest: 'abc' }, ...rest] }],
+		['a field the proxy does not understand', { ...app, endpoints: [{ ...first, extra: true }, ...rest] }],
+		['a row without its delegation', {
+			...app,
+			endpoints: [Object.fromEntries(Object.entries(first).filter(([key]) => key !== 'delegation')), ...rest],
+		}],
+		['callers on an anonymous kind', {
+			...app,
+			endpoints: app.endpoints.map((row) => row.requirement === null ? { ...row, callers: ['human'] } : row),
+		}],
+		['a duplicate endpoint', { ...app, endpoints: [first, ...app.endpoints] }],
+		['an invalid reserved prefix', { ...app, reservedPrefixes: ['/api/'] }],
+		['a snapshot that is not a digest', { ...app, snapshot: 'v1' }],
+		['gates beside the table', { ...app, gates: { rules: [] } }],
+		['OAuth resources on a contract app', { ...app, oauthResources: [] }],
+		['an unknown caller kind', { ...app, endpoints: [{ ...first, callers: ['job'] }, ...rest] }],
+	])('refuses %s', (_name, candidate) => {
+		expect(parseProxyManifest({ apps: [candidate] })).toBeNull()
+	})
+
+	test('refuses an endpoint table beside gates on a gate app', () => {
+		expect(parseProxyManifest({ apps: [{ ...VALID.apps[0], endpoints: [] }] })).toBeNull()
 	})
 })
