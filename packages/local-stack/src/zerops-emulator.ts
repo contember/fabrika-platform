@@ -34,6 +34,7 @@ import {
 	serviceStackNotFound,
 } from './zerops-emulator/protocol'
 import {
+	autoscalingRequestSchema,
 	buildRequestSchema,
 	integrationTokenRequestSchema,
 	parseImportRequest,
@@ -265,6 +266,24 @@ class ZeropsEmulator {
 			const started = this.createProcess('stack.enableSubdomainAccess', { serviceStackId: found.id })
 			await this.persist()
 			return json(this.processResponse(started))
+		}
+
+		// The one way a live profile moves; a re-import with a changed `profile` changes nothing (see the
+		// import route). The action name is ours — no live run has recorded the platform's.
+		const autoscaling = path.match(/^\/service-stack\/([^/]+)\/autoscaling$/)
+		if (autoscaling !== null && request.method === 'PUT') {
+			const found = this.service(decodeURIComponent(autoscaling[1] ?? ''))
+			if (found === undefined) {
+				return serviceStackNotFound()
+			}
+			const body = autoscalingRequestSchema.safeParse(await parseJsonBody(request))
+			if (!body.success) {
+				return error(400, 'invalidUserInput', 'autoscalingProfileId is required')
+			}
+			found.autoscalingProfileId = body.data.autoscalingProfileId
+			const started = this.createProcess('stack.autoscaling', { serviceStackId: found.id })
+			await this.persist()
+			return json({ process: this.processResponse(started) })
 		}
 
 		const serviceByName = path.match(/^\/service-stack-by-name\/([^/]+)\/([^/]+)$/)

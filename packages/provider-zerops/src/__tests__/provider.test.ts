@@ -154,6 +154,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		enableSubdomainAccess: async () => {
 			recorded.calls.push('enableSubdomainAccess')
 		},
+		configureAutoscaling: () => Promise.reject(new Error('the deploy driver must not change autoscaling')),
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'api' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),

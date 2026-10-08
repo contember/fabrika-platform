@@ -109,6 +109,7 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		getProcess: ({ processId }) => Promise.resolve(record('getProcess', { id: processId, status: 'FINISHED' })),
 		createIntegrationToken: () => Promise.reject(new Error('an application deploy must not mint a Zerops token')),
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
+		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change autoscaling')),
 		getService: ({ serviceId }) => Promise.resolve(record('getService', { id: serviceId, name: NOTES_SERVICE })),
 		findService: ({ hostname }) => Promise.resolve(record('findService', { id: 'svc-api', name: hostname })),
 		getProject: ({ projectId }) => Promise.resolve(record('getProject', { id: projectId, name: 'apps-prod' })),

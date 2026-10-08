@@ -1,4 +1,7 @@
 import {
+	type JsonValue,
+	PROVIDER_NAMESPACE_IMMUTABLE,
+	PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED,
 	type ProviderDeploymentNamespace,
 	ProviderInvocationAbort,
 	ProviderNamespaceError,
@@ -67,6 +70,12 @@ interface FakeState {
 	serviceEnvError: ZeropsApiError | null
 	/** A platform refusal of the variable LISTING, armed only once the proxy subdomain is published. */
 	failServiceEnvListAfterPublish: boolean
+	/** The autoscaling PUT is accepted and the live profile never moves. */
+	autoscalingIgnored: boolean
+	/** The autoscaling PUT is refused outright, before anything is accepted. */
+	autoscalingRefused: boolean
+	/** The PUT applies, then the connection drops while its process is polled — the ambiguous case. */
+	autoscalingProcessLost: boolean
 }
 
 const freshState = (): FakeState => ({
@@ -85,6 +94,9 @@ const freshState = (): FakeState => ({
 	importProjectError: null,
 	serviceEnvError: null,
 	failServiceEnvListAfterPublish: false,
+	autoscalingIgnored: false,
+	autoscalingRefused: false,
+	autoscalingProcessLost: false,
 })
 
 const projectId = 'project-1'
@@ -258,6 +270,10 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	cancelBuild: async () => {},
 	getProcess: async ({ processId }) => {
 		state.calls.push(`wait:${processId}`)
+		if (state.autoscalingProcessLost && processId.startsWith('autoscaling-')) {
+			state.autoscalingProcessLost = false
+			throw new Error('socket hang up')
+		}
 		return { id: processId, status: 'FINISHED' }
 	},
 	createIntegrationToken: async () => {
@@ -273,6 +289,19 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 			const service = services.find((candidate) => candidate.id === serviceId)
 			if (service !== undefined) service.subdomainAccess = true
 		}
+	},
+	configureAutoscaling: async ({ serviceId, autoscalingProfileId }) => {
+		state.calls.push(`autoscaling:${serviceId}:${autoscalingProfileId}`)
+		if (state.autoscalingRefused) {
+			throw new ZeropsApiError('zerops: configure autoscaling failed (400) — invalidUserInput: bad profile', 400, 'invalidUserInput')
+		}
+		if (!state.autoscalingIgnored) {
+			for (const services of state.services.values()) {
+				const service = services.find((candidate) => candidate.id === serviceId)
+				if (service !== undefined) service.autoscalingProfileId = autoscalingProfileId
+			}
+		}
+		return { id: `autoscaling-${serviceId}`, status: 'PENDING', actionName: 'stack.autoscaling' }
 	},
 	getService: async ({ serviceId }) => {
 		for (const services of state.services.values()) {
@@ -1650,5 +1679,167 @@ describe('Zerops namespace failure classes', () => {
 
 		expect(error.code).toBe('zeropsHttp503')
 		expect(error.retryable).toBe(true)
+	})
+})
+
+describe('Zerops namespace update', () => {
+	const cheapTarget = (): ZeropsNamespaceTarget =>
+		zeropsNamespacePreset({
+			proxySource: PIN,
+			preset: 'cheap',
+			env: 'prod',
+			projectName: 'cheap-prod',
+		})
+
+	const provisioned = async (state: FakeState): Promise<ProviderDeploymentNamespace> =>
+		run(createZeropsNamespaceCapabilities(options(state)), namespace(cheapTarget(), { id: 'cheap-prod' }), [])
+
+	const requested = (payload: JsonValue) => ({ provider: 'zerops', version: zeropsNamespaceTargetCodec.version, payload })
+
+	const toProduction = requested({ postgres: { type: 'postgresql:single@18', profile: 'oltp-production' } })
+
+	const updates = (state: FakeState) => {
+		const found = createZeropsNamespaceCapabilities(options(state)).updates
+		if (found === undefined) throw new Error('the Zerops provider must offer namespace updates')
+		return found
+	}
+
+	const update = (state: FakeState, current: ProviderDeploymentNamespace, target = toProduction) => {
+		const plan = updates(state).plan(current, target)
+		return updates(state).apply({ namespace: current, next: plan.namespace, signal: new AbortController().signal })
+	}
+
+	const liveService = (state: FakeState): ZeropsService => {
+		const found = (state.services.get(projectId) ?? []).find((service) => service.id === postgresId)
+		if (found === undefined) throw new Error('missing postgres')
+		return found
+	}
+
+	const failure = async (promise: Promise<unknown>): Promise<ProviderNamespaceError> => {
+		const error = await promise.then(() => null, (cause: unknown) => cause)
+		if (!(error instanceof ProviderNamespaceError)) throw new Error('expected a ProviderNamespaceError')
+		return error
+	}
+
+	const autoscalingCalls = (state: FakeState): string[] => state.calls.filter((call) => call.startsWith('autoscaling:'))
+
+	test('plans a partial target by merging it over the stored one', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+
+		const plan = updates(state).plan(current, toProduction)
+
+		expect(plan.change).toEqual({ field: 'postgres.profile', from: 'oltp-hobby', to: 'oltp-production' })
+		expect(zeropsNamespaceTargetCodec.decode(plan.namespace.target.payload)).toEqual({
+			...zeropsNamespaceTargetCodec.decode(current.target.payload),
+			postgres: { type: 'postgresql:single@18', profile: 'oltp-production' },
+		})
+		expect(updates(state).plan(current, current.target).change).toBeNull()
+	})
+
+	test('moves the live PostgreSQL service through the autoscaling endpoint and returns the planned target', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		const importsBefore = state.calls.filter((call) => call.startsWith('import')).length
+
+		const result = await update(state, current)
+
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload)).toMatchObject({
+			postgres: { type: 'postgresql:single@18', profile: 'oltp-production' },
+			postgresServiceId: postgresId,
+			ready: true,
+		})
+		expect(liveService(state).autoscalingProfileId).toBe('oltp-production')
+		expect(autoscalingCalls(state)).toEqual([`autoscaling:${postgresId}:oltp-production`])
+		// Never a re-import: the platform silently ignores a changed profile there.
+		expect(state.calls.filter((call) => call.startsWith('import')).length).toBe(importsBefore)
+		// The stored result and the live service agree, so a reconcile of it passes the profile check.
+		await run(createZeropsNamespaceCapabilities(options(state)), result, [], 'reconcile')
+	})
+
+	test('refuses a PostgreSQL type change in the plan, before anything is called', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		const callsBefore = state.calls.length
+
+		const error = await failure(
+			Promise.resolve().then(() => updates(state).plan(current, requested({ postgres: { type: 'postgresql:ha@18', profile: 'oltp-production' } }))),
+		)
+
+		expect(error.code).toBe(PROVIDER_NAMESPACE_IMMUTABLE)
+		expect(error.message).toContain('from postgresql:single@18 to postgresql:ha@18')
+		expect(state.calls.length).toBe(callsBefore)
+	})
+
+	test('names every other changed field and refuses it', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+
+		expect(() => updates(state).plan(current, requested({ publicAccess: 'zerops-subdomain', corePackage: 'SERIOUS' }))).toThrow(
+			'cannot change corePackage, publicAccess in place',
+		)
+		expect(() => updates(state).plan(current, requested({ postgres: { type: 'postgresql:single@18' } }))).toThrow('platform default profile')
+	})
+
+	test('refuses a payload that is not an object or does not decode', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+
+		expect(() => updates(state).plan(current, requested(['postgres']))).toThrow('payload must be an object')
+		expect(() => updates(state).plan(current, requested({ postgres: { type: 'postgresql:single@18', profile: 'oltp-enterprise' } }))).toThrow(
+			'profile is not supported',
+		)
+	})
+
+	test('refuses to move a live service that already disagrees with what the namespace declares', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		liveService(state).autoscalingProfileId = 'oltp-staging'
+
+		const error = await failure(update(state, current))
+
+		expect(error.code).not.toBe(PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED)
+		expect(error.message).toContain('uses profile oltp-staging, but its namespace declares oltp-hobby')
+		expect(autoscalingCalls(state)).toEqual([])
+	})
+
+	test('a platform refusal of the PUT is definite, not unconfirmed', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		state.autoscalingRefused = true
+
+		const error = await failure(update(state, current))
+
+		expect(error.code).toBe('invalidUserInput')
+		expect(liveService(state).autoscalingProfileId).toBe('oltp-hobby')
+	})
+
+	test('a lost process after an accepted PUT is unconfirmed, and applying the same plan again converges', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		state.autoscalingProcessLost = true
+
+		const error = await failure(update(state, current))
+
+		expect(error.code).toBe(PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED)
+		expect(error.retryable).toBe(true)
+		expect(liveService(state).autoscalingProfileId).toBe('oltp-production')
+
+		// The stored target still declares the old profile; the live service is the change in progress.
+		const result = await update(state, current)
+
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).postgres?.profile).toBe('oltp-production')
+		expect(autoscalingCalls(state)).toHaveLength(1)
+	})
+
+	test('a profile the platform accepts but never reads back is unconfirmed', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		state.autoscalingIgnored = true
+
+		const error = await failure(update(state, current))
+
+		expect(error.code).toBe(PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED)
+		expect(error.detail).toContain('still reads oltp-hobby')
 	})
 })

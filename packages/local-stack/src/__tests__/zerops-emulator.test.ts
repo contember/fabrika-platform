@@ -182,6 +182,40 @@ describe('local Zerops emulator', () => {
 		expect((await api.getService({ serviceId, signal })).subdomainAccess).toBe(true)
 	})
 
+	test('moves a profile only through the autoscaling endpoint, never through a re-import', async () => {
+		const api = await client()
+		const services = (profile: string): string[] => [
+			'services:',
+			'  - hostname: postgres',
+			'    type: postgresql:single@18',
+			'    override: true',
+			`    profile: ${profile}`,
+		]
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: ['project:', '  name: sized', ...services('oltp-hobby')].join('\n'),
+			signal,
+		})
+		const serviceId = imported.services[0]?.id
+		if (serviceId === undefined) {
+			throw new Error('postgres service id is missing')
+		}
+
+		await api.importServices({ projectId: imported.projectId, yaml: services('oltp-production').join('\n'), signal })
+		expect((await api.getService({ serviceId, signal })).autoscalingProfileId).toBe('oltp-hobby')
+
+		const process = await api.configureAutoscaling({ serviceId, autoscalingProfileId: 'oltp-production', signal })
+		if (process === null) {
+			throw new Error('the autoscaling change returned no process')
+		}
+		expect(process.actionName).toBe('stack.autoscaling')
+		await waitForProcess({ api, processId: process.id, sleep: async () => {}, signal })
+		expect((await api.getService({ serviceId, signal })).autoscalingProfileId).toBe('oltp-production')
+		await expect(api.configureAutoscaling({ serviceId: 'missing', autoscalingProfileId: 'oltp-production', signal })).rejects.toThrow(
+			'serviceStackNotFound',
+		)
+	})
+
 	test('hands an import a process per service it CREATED, and none for one it only re-applied', async () => {
 		const api = await client()
 		const imported = await api.importProject({

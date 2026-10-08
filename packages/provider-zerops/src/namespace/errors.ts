@@ -39,7 +39,7 @@ const splitApiMessage = (message: string, code: string): { summary: string; deta
 }
 
 /** Every namespace lifecycle failure leaves this provider as one typed, coded error. */
-export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile'): ProviderNamespaceError => {
+export const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile' | 'update'): ProviderNamespaceError => {
 	if (cause instanceof ProviderNamespaceError) return cause
 	if (cause instanceof ZeropsApiError) {
 		const { summary, detail } = splitApiMessage(cause.message, cause.code)

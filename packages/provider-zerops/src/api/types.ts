@@ -410,6 +410,19 @@ export interface ZeropsApi {
 	 */
 	enableSubdomainAccess(input: { serviceId: string; signal: AbortSignal }): Promise<void>
 
+	// ── service-stack: autoscaling ────────────────────────────────────────────────
+
+	/**
+	 * Move a managed service to another autoscaling profile. VERIFIED AS A SHAPE: `PUT
+	 * /service-stack/{id}/autoscaling` (`ConfigureAutoscaling`), body `RequestAutoscaling`, response
+	 * `ResponseProcessNil` — `null` when the platform hands back no process.
+	 *
+	 * The ONLY way to change a live profile: a re-import with a changed `profile` is silently ignored
+	 * (`docs/reference/zerops-platform.md`). UNVERIFIED: whether omitting `customAutoscaling` keeps or
+	 * resets custom overrides, and how soon `getService().autoscalingProfileId` reads the new value.
+	 */
+	configureAutoscaling(input: { serviceId: string; autoscalingProfileId: string; signal: AbortSignal }): Promise<ZeropsProcess | null>
+
 	// ── service-stack / project: reading state ────────────────────────────────────
 
 	/** One service by id. VERIFIED: `GET /service-stack/{id}`. */

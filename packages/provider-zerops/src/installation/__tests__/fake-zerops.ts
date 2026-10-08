@@ -171,6 +171,7 @@ export const fakeZerops = (options: {
 			effect(`delete:${appVersionId}`)
 		},
 		cancelBuild: NEVER('cancelBuild'),
+		configureAutoscaling: NEVER('configureAutoscaling'),
 		deleteServiceEnv: NEVER('deleteServiceEnv'),
 		getProjectEnv: NEVER('getProjectEnv'),
 		getLogAccess: NEVER('getLogAccess'),

@@ -35,7 +35,8 @@ const appVersionReservationSchema = z.object({
 	uploadUrl: z.string().refine((value) => value.trim() !== ''),
 	serviceStackId: z.string().refine((value) => value.trim() !== ''),
 })
-const triggerPipelineSchema = z.object({ process: processSchema.nullish() })
+/** `ResponseProcessNil`: a process, or none. */
+const processNilSchema = z.object({ process: processSchema.nullish() })
 const deleteAppVersionSchema = z.object({ success: z.literal(true) })
 
 // ── default (real) implementation ───────────────────────────────────────────────
@@ -282,7 +283,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				body['zeropsSetup'] = zeropsSetup
 			}
 			const payload = await request('trigger-pipeline', 'PUT', `/service-stack/${serviceId}/trigger-pipeline`, { body, signal })
-			return readResponse('trigger-pipeline', triggerPipelineSchema, payload).process ?? null
+			return readResponse('trigger-pipeline', processNilSchema, payload).process ?? null
 		},
 
 		createAppVersion: async ({ serviceId, name, signal }) => {
@@ -350,6 +351,14 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		enableSubdomainAccess: async ({ serviceId, signal }) => {
 			// No body: the operation takes none, and sending one would add a content-type the platform did not ask for.
 			await request('enable subdomain access', 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`, { signal })
+		},
+
+		configureAutoscaling: async ({ serviceId, autoscalingProfileId, signal }) => {
+			const payload = await request('configure autoscaling', 'PUT', `/service-stack/${serviceId}/autoscaling`, {
+				body: { autoscalingProfileId },
+				signal,
+			})
+			return readResponse('configure autoscaling', processNilSchema, payload).process ?? null
 		},
 
 		getService: async ({ serviceId, signal }) =>

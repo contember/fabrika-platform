@@ -18,6 +18,8 @@ import { republishProxy } from './proxy-attempt'
 import { verifyZeropsNamespaceProxySource } from './proxy-source'
 import { compileZeropsNamespaceTopology, projectMarker, PROXY_TYPE } from './topology'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource } from './types'
+import { createZeropsNamespaceUpdates } from './update'
+import { validateService } from './validation'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -109,33 +111,6 @@ const uniqueService = (services: ZeropsService[], hostname: string): ZeropsServi
 	return matches[0] ?? null
 }
 
-const validateService = (
-	service: ZeropsService,
-	projectId: string,
-	expectedBase: string,
-	adopting: boolean,
-	expectedPublic?: boolean,
-	expectedProfile?: string,
-): void => {
-	if (service.id === '') {
-		throw new Error(`Zerops namespace service \`${service.name}\` returned an empty id`)
-	}
-	if (service.projectId !== undefined && service.projectId !== projectId) {
-		throw new Error(`Zerops namespace service \`${service.name}\` belongs to another project`)
-	}
-	if ((adopting || service.base !== undefined) && service.base !== expectedBase) {
-		throw new Error(`Zerops namespace service \`${service.name}\` uses ${service.base ?? 'an unknown type'}, expected ${expectedBase}`)
-	}
-	if (expectedPublic !== undefined && adopting && service.subdomainAccess !== expectedPublic) {
-		throw new Error(`Zerops namespace service \`${service.name}\` has incompatible public access`)
-	}
-	if (expectedProfile !== undefined && service.autoscalingProfileId !== expectedProfile) {
-		throw new Error(
-			`Zerops namespace service \`${service.name}\` uses profile ${service.autoscalingProfileId ?? 'unknown'}, expected ${expectedProfile}`,
-		)
-	}
-}
-
 const resolveServices = async (
 	namespace: ProviderDeploymentNamespace,
 	target: NormalizedZeropsNamespaceTarget,
@@ -167,7 +142,9 @@ const resolveServices = async (
 		if (postgres === null) {
 			throw new Error(`Zerops namespace project ${projectId} has no shared PostgreSQL service`)
 		}
-		validateService(postgres, projectId, target.postgres.type, adopting, undefined, target.postgres.profile)
+		validateService(postgres, projectId, target.postgres.type, adopting, undefined, {
+			...(target.postgres.profile === undefined ? {} : { declared: target.postgres.profile }),
+		})
 	}
 	if (adopting && namespace.exclusiveAppId !== undefined) {
 		const reserved = new Set([
@@ -477,6 +454,7 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 		republish: (input) => republishNamespace(input, options),
+		updates: createZeropsNamespaceUpdates(options),
 		operator: createZeropsNamespaceOperator({ proxySource: options.proxySource }),
 	}
 }

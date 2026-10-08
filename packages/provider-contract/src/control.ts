@@ -295,6 +295,49 @@ export interface ProviderNamespaceRepublishInput extends ProviderNamespaceMutati
 	readonly wait: 'started' | 'active'
 }
 
+/**
+ * The `code` of a `ProviderNamespaceError` an update plan throws when the requested target changes
+ * something the provider cannot move in place. Core answers it as a conflict that names the supported path.
+ */
+export const PROVIDER_NAMESPACE_IMMUTABLE = 'namespaceImmutable'
+
+/**
+ * The `code` of a `ProviderNamespaceError` an update apply throws when the live change MAY have been made
+ * and is not confirmed. Any other failure means nothing changed. Applying the same plan again must converge.
+ */
+export const PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED = 'namespaceUpdateUnconfirmed'
+
+/** One provider-described change, safe to audit: names and values only, never a credential. */
+export interface ProviderNamespaceChange {
+	readonly field: string
+	readonly from: string | null
+	readonly to: string
+}
+
+/** The validated result of merging a requested target over the stored one. `change` is null for a no-op. */
+export interface ProviderNamespaceUpdatePlan {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly change: ProviderNamespaceChange | null
+}
+
+/** Apply one plan. `next` is the planned namespace, with the same coordinates as `namespace`. */
+export interface ProviderNamespaceUpdateInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly next: ProviderDeploymentNamespace
+	readonly signal: AbortSignal
+}
+
+/** In-place change of a settled namespace. */
+export interface ProviderNamespaceUpdates {
+	/**
+	 * Merge `requested` — whose payload may name only what changes — over the stored `namespace` and
+	 * validate the result. Pure. A change that cannot be made in place throws `PROVIDER_NAMESPACE_IMMUTABLE`.
+	 */
+	plan(namespace: ProviderDeploymentNamespace, requested: ProviderEnvelope): ProviderNamespaceUpdatePlan
+	/** Move the live resources to `next` and return the target core stores. */
+	apply(input: ProviderNamespaceUpdateInput): Promise<ProviderDeploymentNamespace>
+}
+
 /** One registration whose provider coordinates do not exist until namespace services are prepared. */
 export interface ProviderRegistrationPreparationInput {
 	readonly registration: ProviderRegistration
@@ -382,6 +425,8 @@ export interface ProviderNamespaceCapabilities {
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	/** Absent means the namespace has no entry point that follows its members. */
 	republish?(input: ProviderNamespaceRepublishInput): Promise<ProviderNamespaceRepublishResult>
+	/** Absent means the provider changes no namespace in place. */
+	readonly updates?: ProviderNamespaceUpdates
 	readonly operator?: ProviderNamespaceOperator
 }
 

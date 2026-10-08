@@ -255,10 +255,11 @@ to fetch JWKS. It cannot resolve or reach the private control, platform
 PostgreSQL, SeaweedFS, IAM RPC, or Operations services.
 
 The stateful Zerops emulator implements only the REST calls used by
-`@fabrika/provider-zerops`: projects, services, service variables, imports, and
-app-version lifecycle. A delayed `BUILDING` to `ACTIVE` transition provides a
-restart-reconciliation witness. The emulator does not build code, run
-containers, bind domains, autoscale, provide HA, or reproduce Zerops logs.
+`@fabrika/provider-zerops`: projects, services, service variables, imports, a
+service's autoscaling profile, and app-version lifecycle. A delayed `BUILDING` to
+`ACTIVE` transition provides a restart-reconciliation witness. The emulator does
+not build code, run containers, bind domains, autoscale (a profile change only
+records the new profile id), provide HA, or reproduce Zerops logs.
 
 ## Cloudflare Worker proxy witness
 

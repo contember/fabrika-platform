@@ -47,6 +47,15 @@ bun test
   existing service is left exactly as it is, so a changed `profile`/`maxContainers`/`objectStorageSize`
   is silently ignored. `assertZeropsInvariants` refuses a document missing it. Never describe the
   steady-state import as "reconciling"; change a live field through the API that owns it.
+- **A namespace's PostgreSQL profile moves only through `updates` (`src/namespace/update.ts`).** `plan`
+  lays the requested payload's top-level fields over the stored target and refuses every other change, the
+  PostgreSQL type included, as `PROVIDER_NAMESPACE_IMMUTABLE` (`FIXED_FIELDS` lists every target field, so
+  a new one fails to compile until it is classified). `apply` calls `configureAutoscaling` and decides by
+  reading `autoscalingProfileId` back, within ~90 s. A platform 4xx on the PUT is a definite failure;
+  anything once the PUT is sent is `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED`, and a retry must converge:
+  `validateService` (`src/namespace/validation.ts`) tells a live service that disagrees with the declared
+  profile (drift, refused) from one already on the profile being applied (the change in progress).
+  UNVERIFIED: how soon the read-back shows the new profile live.
 - **`compileProvisioningYaml`'s output is first-bring-up only.** Re-applying it at a service that carries
   code activates an EMPTY app version and demotes the running one to `BACKUP`.
 - Application registration uses `renderFabrikaProvisioningYaml` with `override: false` to refuse
