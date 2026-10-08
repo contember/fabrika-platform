@@ -48,6 +48,8 @@ export type DenyReason =
 	| 'invalid_session'
 	| 'unknown_principal'
 	| 'disabled'
+	/** IAM refused to sign a token above its size bound: the principal holds more than fits in a header. */
+	| 'token_too_large'
 	/** The `Host` maps to no app in the manifest. */
 	| 'no_app'
 	/** The forwarded-request headers are missing or malformed — we cannot know what was asked for. */
@@ -135,6 +137,7 @@ type SessionFailureReason = 'no_session' | 'invalid_session' | 'unknown_principa
 type SessionAttempt =
 	| { ok: true; token: string; subject: string }
 	| { ok: false; status: 'miss'; reason: SessionFailureReason }
+	| { ok: false; status: 'refused'; reason: 'token_too_large' }
 	| { ok: false; status: 'unavailable' }
 
 export class Authorizer {
@@ -197,6 +200,10 @@ export class Authorizer {
 			}
 			if (session.status === 'unavailable') {
 				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
+			}
+			if (session.status === 'refused') {
+				// A new login would mint the same token again, so this is a denial, never a bounce.
+				return { outcome: 'deny', status: 403, reason: session.reason }
 			}
 			if (session.reason !== 'no_session') {
 				return await this.loginDecision(resolved.app, request, session.reason)
@@ -325,7 +332,9 @@ export class Authorizer {
 
 		const minted = await this.callIam('mintToken', () => this.options.iam.mintToken({ app: app.id, session, requestId: request.requestId }))
 		if (!minted.ok) {
-			return { ok: false, status: 'miss', reason: minted.reason }
+			return minted.reason === 'token_too_large'
+				? { ok: false, status: 'refused', reason: minted.reason }
+				: { ok: false, status: 'miss', reason: minted.reason }
 		}
 		const verified = await this.verifier.verify(minted.token, app.id)
 		if (!verified.ok) {

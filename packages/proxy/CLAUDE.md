@@ -73,7 +73,8 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
   different denials. Both deny; only the second is an incident — including on the human path, where a
   503 must NOT degrade into a bounce to login (that is a login loop hiding an outage). A cache entry
-  is dropped only when it PROVED bad, never when it merely could not be checked.
+  is dropped only when it PROVED bad, never when it merely could not be checked. A session whose token
+  IAM refuses as `token_too_large` is a 403 too, never a bounce: a new login would mint the same token.
 - **Refusing to boot beats booting misconfigured** (`src/env.ts`). `FABRIKA_IAM_ISSUER` and
   `FABRIKA_IAM_KEY` are both REQUIRED — IAM's mint surface 404s without the key, so a proxy that boots
   without one 503s everything. The key is the only secret here: read once, never logged, never echoed,

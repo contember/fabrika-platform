@@ -121,7 +121,10 @@ export class HttpIamGateway implements IamGateway {
 		if (parsed.ok) {
 			return parsed
 		}
-		return { ok: false, reason: reasonOf(parsed.reason, ['no_session', 'invalid_session', 'unknown_principal', 'disabled'], 'invalid_session') }
+		return {
+			ok: false,
+			reason: reasonOf(parsed.reason, ['no_session', 'invalid_session', 'unknown_principal', 'disabled', 'token_too_large'], 'invalid_session'),
+		}
 	}
 
 	async mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
@@ -133,7 +136,7 @@ export class HttpIamGateway implements IamGateway {
 		if (parsed.ok) {
 			return parsed
 		}
-		return { ok: false, reason: reasonOf(parsed.reason, ['invalid_key', 'unknown_principal', 'disabled'], 'invalid_key') }
+		return { ok: false, reason: reasonOf(parsed.reason, ['invalid_key', 'unknown_principal', 'disabled', 'token_too_large'], 'invalid_key') }
 	}
 
 	async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {

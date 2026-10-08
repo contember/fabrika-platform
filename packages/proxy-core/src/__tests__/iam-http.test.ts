@@ -69,6 +69,11 @@ describe('happy path', () => {
 		expect(await gateway.mintToken({ app: 'a', session: 's', requestId: 'r' })).toEqual({ ok: false, reason: 'disabled' })
 	})
 
+	test('a token above the size bound keeps its reason over HTTP', async () => {
+		const { gateway } = gatewayReturning(200, { ok: false, reason: 'token_too_large' })
+		expect(await gateway.mintToken({ app: 'a', session: 's', requestId: 'r' })).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
 	test('exchangeAuthCode posts to the exchange endpoint and reads the result', async () => {
 		const { gateway, recorded } = gatewayReturning(200, { ok: true, session: 'px_child', returnUrl: 'https://app.test/private', expiresAt: 99 })
 		const result = await gateway.exchangeAuthCode({ app: 'a', code: 'handoff', verifier: 'verifier', requestId: 'r' })

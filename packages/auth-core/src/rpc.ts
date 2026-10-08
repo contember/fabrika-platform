@@ -30,7 +30,8 @@ export interface MintTokenInput {
 export type MintTokenResult =
 	/** `expiresAt` (unix seconds) lets the SDK refresh ahead of expiry. */
 	| { ok: true; token: string; expiresAt: number }
-	| { ok: false; reason: 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled' }
+	/** `token_too_large`: the principal holds more than fits in one header; a decided refusal, never a login bounce. */
+	| { ok: false; reason: 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled' | 'token_too_large' }
 
 // ── propustka-native key auth (mint an access token from an opaque `px_` credential) ──
 //
@@ -50,7 +51,7 @@ export interface MintFromKeyInput {
 
 export type MintFromKeyResult =
 	| { ok: true; token: string; expiresAt: number }
-	| { ok: false; reason: 'invalid_key' | 'unknown_principal' | 'disabled' }
+	| { ok: false; reason: 'invalid_key' | 'unknown_principal' | 'disabled' | 'token_too_large' }
 
 // ── Session handoff (ADR-0022, ADR-0023) ──────────────────────────────────────
 //

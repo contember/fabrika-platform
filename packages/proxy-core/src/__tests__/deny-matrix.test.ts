@@ -214,6 +214,14 @@ describe('deny — human gate', () => {
 		expect((await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))).status).toBe(302)
 	})
 
+	test("a token above IAM's size bound → 403, never a login bounce", async () => {
+		const iam = iamWith({ mintToken: { ok: false, reason: 'token_too_large' } })
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))
+		expect(response.status).toBe(403)
+		expect(response.headers.get('location')).toBeNull()
+		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+	})
+
 	test('a malformed Cookie header is treated as no cookie, not as a match', async () => {
 		const iam = iamWith({})
 		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session; =; ;;; px_token' }))
@@ -346,6 +354,11 @@ describe('deny — service gate', () => {
 	test('a disabled service principal → 403', async () => {
 		const iam = iamWith({ mintFromKey: { ok: false, reason: 'disabled' } })
 		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_dead' }))).status).toBe(403)
+	})
+
+	test("a key whose token is above IAM's size bound → 403", async () => {
+		const iam = iamWith({ mintFromKey: { ok: false, reason: 'token_too_large' } })
+		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_wide' }))).status).toBe(403)
 	})
 
 	test('an unknown principal → 403', async () => {

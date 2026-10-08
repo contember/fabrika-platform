@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
-import { mintFromKey, mintToken } from '../tokens'
+import { MAX_ACCESS_TOKEN_BYTES, mintFromKey, mintToken } from '../tokens'
 import { createHarness, seedInlineGrant, seedUser } from './helpers/harness'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
@@ -195,5 +195,49 @@ describe('mintFromKey', () => {
 		)
 		// It mints, but it carries nothing: the grant belongs to app-a.
 		expect(claims?.perms).toEqual([])
+	})
+})
+
+describe('the access token size bound', () => {
+	/** A user in enough workspaces that the token would not fit in one proxy header. */
+	async function memberOfManyWorkspaces() {
+		const h = createHarness()
+		const principalId = seedUser(h.sqlite, { sub: 'g-wide', email: 'wide@b.cz' })
+		for (let index = 0; index < 200; index++) {
+			seedInlineGrant(h.sqlite, principalId, ['note.read', 'note.write'], { type: 'workspace', value: `workspace-${index}` }, 'example-app')
+		}
+		return { h, principalId }
+	}
+
+	test('mintToken refuses a token above MAX_ACCESS_TOKEN_BYTES with its own reason', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces()
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const session = await h.signSession(principalId)
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'wide' })
+		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('mintFromKey refuses the same token for a key of that principal', async () => {
+		const { h, principalId } = await memberOfManyWorkspaces()
+		const key = 'px_wide-key'
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			principalId,
+			app: 'example-app',
+			issuedBy: principalId,
+			grants: [],
+		})
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const { result } = await mintFromKey(services, ENV, { app: 'example-app', key, requestId: 'wide-key' })
+		expect(result).toEqual({ ok: false, reason: 'token_too_large' })
+	})
+
+	test('a token at the bound still mints', async () => {
+		const { h, principalId } = await setup()
+		const services = h.makeServices({ issuer: 'https://propustka.test' })
+		const session = await h.signSession(principalId)
+		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'narrow' })
+		expect(result.ok).toBe(true)
+		if (result.ok) expect(result.token.length).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
 	})
 })

@@ -161,7 +161,10 @@ export class HttpIamRpc implements IamRpc {
 		const body = await this.call('mintToken', input)
 		const failure = readFailure(body)
 		if (failure !== null) {
-			return { ok: false, reason: oneOf(failure, ['no_session', 'invalid_session', 'unknown_principal', 'disabled'], 'invalid_session') }
+			return {
+				ok: false,
+				reason: oneOf(failure, ['no_session', 'invalid_session', 'unknown_principal', 'disabled', 'token_too_large'], 'invalid_session'),
+			}
 		}
 		return readMintSuccess(body, 'mintToken')
 	}
@@ -170,7 +173,7 @@ export class HttpIamRpc implements IamRpc {
 		const body = await this.call('mintFromKey', input)
 		const failure = readFailure(body)
 		if (failure !== null) {
-			return { ok: false, reason: oneOf(failure, ['invalid_key', 'unknown_principal', 'disabled'], 'invalid_key') }
+			return { ok: false, reason: oneOf(failure, ['invalid_key', 'unknown_principal', 'disabled', 'token_too_large'], 'invalid_key') }
 		}
 		return readMintSuccess(body, 'mintFromKey')
 	}

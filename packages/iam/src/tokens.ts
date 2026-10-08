@@ -36,6 +36,14 @@ import { getSigner } from './signing'
 /** The env slice minting needs (the signing keys + environment for `getSigner`). */
 type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
+/**
+ * The largest access token IAM signs, in bytes (a JWT is ASCII). The proxy forwards it as one header,
+ * and Bun's server, the application's runtime on Zerops, refuses a request whose headers exceed 16 KiB
+ * in total; 8 KiB leaves the rest for the request's own headers and cookies. Caddy (1 MiB) and
+ * Cloudflare (128 KiB) allow more.
+ */
+export const MAX_ACCESS_TOKEN_BYTES = 8192
+
 /** `principalId` (resolved session subject, or null on failure) is surfaced for the auth_log row. */
 export interface MintOutcome {
 	result: MintTokenResult
@@ -87,6 +95,9 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 		issuedAt: now,
 		expiresAt,
 	})
+	if (exceedsTokenBound(token, input.app, principal.id)) {
+		return { result: { ok: false, reason: 'token_too_large' }, principalId: principal.id }
+	}
 	return { result: { ok: true, token, expiresAt }, principalId: principal.id }
 }
 
@@ -132,6 +143,9 @@ export async function mintFromKey(
 		issuedAt: now,
 		expiresAt,
 	})
+	if (exceedsTokenBound(token, input.app, effective.subject)) {
+		return { result: { ok: false, reason: 'token_too_large' }, principalId: cred.principal_id, credentialId: cred.id }
+	}
 	return { result: { ok: true, token, expiresAt }, principalId: cred.principal_id, credentialId: cred.id }
 }
 
@@ -194,6 +208,15 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry {
 	const scope: Scope | null = row.scope_type === null || row.scope_value === null ? null : { type: row.scope_type, value: row.scope_value }
 	return { action: row.action, scope, source: 'grant' }
+}
+
+/** True, with a warning naming the subject and the size, when `token` is above `MAX_ACCESS_TOKEN_BYTES`. */
+function exceedsTokenBound(token: string, app: string, subject: string): boolean {
+	if (token.length <= MAX_ACCESS_TOKEN_BYTES) {
+		return false
+	}
+	console.warn(`access token for '${subject}' at app '${app}' is ${token.length} bytes, above the ${MAX_ACCESS_TOKEN_BYTES}-byte bound; refused`)
+	return true
 }
 
 /** Sign an access token with the isolate's active signing key. Shared by every mint front. */

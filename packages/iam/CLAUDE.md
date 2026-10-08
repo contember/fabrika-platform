@@ -158,6 +158,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   caller whose verified app is not a platform audience, the provisioning key included, on the binding
   and over `/rpc/*` alike (one `createIamRpc` object serves both). `listPrincipals` for an application
   lists only holders of a grant in that app id, never a cross-app holder.
+- **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, `src/tokens.ts`).** The proxy
+  forwards the token as one header and Bun, the application runtime on Zerops, refuses more than
+  16 KiB of headers per request. Both mint fronts answer `token_too_large`, a decided refusal the
+  proxy turns into a 403 — never a login bounce, because a new login mints the same token.
 - **`revokeKey` ACTS ONLY ON A CREDENTIAL OF THE CALLER'S VERIFIED APP.** Any other credential,
   including a cross-app (`app IS NULL`) one, is `not_found` — the answer for an unknown id — so one
   app can neither end nor probe another app's keys.
