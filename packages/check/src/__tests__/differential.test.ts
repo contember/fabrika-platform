@@ -13,6 +13,8 @@ import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
 import { contract as scopedContract } from '../../../app/src/__tests__/fixtures/scoped-notes/fabrika.contract'
 import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scoped-notes/src/db/tables'
+import { contract as organizationsContract } from '../../../app/src/__tests__/fixtures/scoped-organizations/fabrika.contract'
+import { tables as organizationsTables } from '../../../app/src/__tests__/fixtures/scoped-organizations/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource } from '../contract'
 import { contract as cleanContract } from './fixtures/clean-app/fabrika.contract'
@@ -90,6 +92,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app scoped-notes (src/db/tables.ts read from source)',
 		root: join(APP_TESTS, 'fixtures', 'scoped-notes'),
 		evaluated: () => compileContract(scopedContract, scopedTables),
+	},
+	{
+		name: '@fabrika/app scoped-organizations (src/db/tables.ts read from source)',
+		root: join(APP_TESTS, 'fixtures', 'scoped-organizations'),
+		evaluated: () => compileContract(organizationsContract, organizationsTables),
 	},
 ]
 

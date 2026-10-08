@@ -3,8 +3,22 @@
 
 import type { DataLayerRuntime } from './store'
 
-/** Answers what the framework's access check reads from the database: an object's containers, by dimension. */
-export type Locator = (dimension: string, id: string) => Promise<ReadonlyMap<string, string> | null>
+/** Scope values of one container dimension: `organization → [o1, o2]`. */
+export interface ContainerValues {
+	readonly dimension: string
+	readonly values: readonly string[]
+}
+
+/**
+ * What the framework's access check reads from the database, generated from the table policies. It reads without
+ * a capability, so only the framework holds it.
+ */
+export interface Locator {
+	/** The containers one object lies in, by dimension, or `null` when the table that owns `dimension` has no such row. */
+	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
+	/** The values of `dimension` that lie in any of `containers`: what a grant on a container reaches. */
+	contained(dimension: string, containers: readonly ContainerValues[]): Promise<readonly string[]>
+}
 
 export interface FrameworkSide {
 	/** Connects the layer once and answers its locator; a second call throws. */

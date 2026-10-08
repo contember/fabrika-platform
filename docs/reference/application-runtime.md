@@ -150,7 +150,7 @@ export const notes = defineStore('notes', (t) => ({
 
 // src/app.ts
 export default implement(contract, {
-	database, // the policies, and the locator `on` and `in` use, generated from them
+	database, // the policies, and the locators `on`, `in` and `over` use, generated from them
 	deps: () => ({}),
 	handlers: () => ({
 		api: {
@@ -192,7 +192,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
 (ADR-0022 rule 5), when the contract
 declares something this version cannot serve yet (link, form and webhook mounts,
-files, jobs, exports, imports, `creates`), when an `on` dimension has no table, or
+files, jobs, exports, imports, `creates`), when an `on` dimension has no table, when an
+access form reaches a dimension that lies in a container no table can locate it in, or
 when a handler is missing or undeclared.
 
 Per request, in this order:
@@ -221,8 +222,18 @@ Per request, in this order:
 | ---------------------- | ----------------------------------------- | ---------------------------------- |
 | `{ member: true }`     | nothing                                   | —                                  |
 | `{ action, over }`     | `ctx.within`, or `all` for a global grant | 403 when no value holds the action |
-| `{ action, in, from }` | `ctx.target` for the value                | 403 not held, 404 missing          |
+| `{ action, in, from }` | `ctx.target` with its containment chain   | 403 not held, 404 missing          |
 | `{ action, on, from }` | `ctx.target` with its containment chain   | 404 when missing or not held       |
+
+A grant on a container reaches every value inside it. The framework reads where an
+object lies from the database on every request, with locators generated from the table
+policies: `on` and `in` read the chain of the object or scope and accept the action on
+any link of it; `over` adds the values that lie in a container where the caller holds
+the action (`notes.read` in `organization:o1` lists every workspace of `o1`). A missing
+`in` scope is 404 only to a caller who holds the action on that value itself; to anyone
+else it is the same 403 as a scope they may not act in. Because the chain is read per
+request, a moved object's next `Ref` carries its new chain, and a `Ref` minted before
+the move reaches nothing.
 
 Errors share one envelope, `{ error: { type, message, issues? } }`: 400, 401, 403,
 404, 409, 500 and 503. Every 5xx and every refused capability answers a fixed message

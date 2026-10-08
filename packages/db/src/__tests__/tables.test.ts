@@ -151,8 +151,8 @@ describe('only the framework binds the layer, once', () => {
 
 	test('the locator, which only the binder receives, selects the containment columns of one object by key, guarded', async () => {
 		const dialect = new RecordingDialect()
-		const locate = bindScopedDatabase(scoped(tables), runtime(dialect))
-		expect(await locate('note', 'n1')).toBeNull()
+		const locator = bindScopedDatabase(scoped(tables), runtime(dialect))
+		expect(await locator.locate('note', 'n1')).toBeNull()
 		expect(dialect.log.map((statement) => statement.sql)).toEqual([
 			'select "notes"."id", "notes"."workspace_id", "notes"."organization_id" from "notes" where "notes"."id" = $1 limit $2',
 		])
@@ -161,9 +161,34 @@ describe('only the framework binds the layer, once', () => {
 
 	test('the locator refuses a dimension no table owns and an empty id, before any statement', async () => {
 		const dialect = new RecordingDialect()
-		const locate = bindScopedDatabase(scoped(tables), runtime(dialect))
-		await expect(locate('project', 'p1')).rejects.toBeInstanceOf(QueryRefusedError)
-		await expect(locate('note', '')).rejects.toBeInstanceOf(QueryRefusedError)
+		const locator = bindScopedDatabase(scoped(tables), runtime(dialect))
+		await expect(locator.locate('project', 'p1')).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(locator.locate('note', '')).rejects.toBeInstanceOf(QueryRefusedError)
+		expect(dialect.log).toEqual([])
+	})
+
+	test('the locator selects the keys of a dimension inside container values, over each chain column, guarded', async () => {
+		const dialect = new RecordingDialect()
+		const locator = bindScopedDatabase(scoped(tables), runtime(dialect))
+		expect(await locator.contained('note', [{ dimension: 'workspace', values: ['w1', 'w2'] }, { dimension: 'organization', values: ['o1'] }]))
+			.toEqual([])
+		expect(dialect.log.map((statement) => statement.sql)).toEqual([
+			'select "notes"."id" from "notes" where "notes"."workspace_id" in ($1, $2) or "notes"."organization_id" in ($3)',
+		])
+		expect(dialect.log[0]?.parameters).toEqual(['w1', 'w2', 'o1'])
+	})
+
+	test('a container without values is no query, and a container the owner carries no column for is refused', async () => {
+		const dialect = new RecordingDialect()
+		const locator = bindScopedDatabase(scoped(tables), runtime(dialect))
+		expect(await locator.contained('workspace', [])).toEqual([])
+		expect(await locator.contained('workspace', [{ dimension: 'organization', values: [] }])).toEqual([])
+		await expect(locator.contained('workspace', [{ dimension: 'workspace', values: ['w1'] }])).rejects.toThrow(
+			'workspaces carries no column for workspace, so nothing in it can be located',
+		)
+		await expect(locator.contained('organization', [{ dimension: 'workspace', values: ['w1'] }])).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(locator.contained('project', [{ dimension: 'organization', values: ['o1'] }])).rejects.toBeInstanceOf(QueryRefusedError)
+		await expect(locator.contained('workspace', [{ dimension: 'organization', values: [''] }])).rejects.toBeInstanceOf(QueryRefusedError)
 		expect(dialect.log).toEqual([])
 	})
 

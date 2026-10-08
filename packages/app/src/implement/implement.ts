@@ -4,18 +4,22 @@
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
 import type { DataLayer } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
+import type { ContainerValues } from '@fabrika/db/framework'
 import type { AnyContract } from '../contract/define'
 import type { ExactHandlers, HandlersOf } from './types'
 
 /**
  * What the framework reads from the application's tables before a handler runs. The table policies are what
- * `compileContract` takes; `locate` resolves an object's containment chain for `on` and checks that an `in` scope
- * exists. For `@fabrika/db`'s `scoped(tables)`, `boot` builds one from the locator only it receives when it binds.
+ * `compileContract` takes; `locate` resolves the containment chain of an `on` object or an `in` scope, and
+ * `contained` the values of an `over` dimension that a grant on one of its containers reaches. For `@fabrika/db`'s
+ * `scoped(tables)`, `boot` builds one from the locator only it receives when it binds.
  */
 export interface ContractDatabase {
 	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
 	/** The containers an object lies in, by dimension, or `null` when the table that owns `dimension` has no such row. */
 	locate(dimension: string, id: string): Promise<ReadonlyMap<string, string> | null>
+	/** The values of `dimension` that lie in any of `containers`. */
+	contained(dimension: string, containers: readonly ContainerValues[]): Promise<readonly string[]>
 }
 
 /** `scoped(tables)` of `@fabrika/db`, which `boot` binds, or a `ContractDatabase` of the application's own. */

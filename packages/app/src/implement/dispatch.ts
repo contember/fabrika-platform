@@ -18,6 +18,7 @@ import {
 	satisfies,
 	scopedValues,
 } from '@fabrika/auth-core'
+import type { ContainerValues } from '@fabrika/db/framework'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { z } from 'zod/v4'
 import type { Schema } from '../contract/define'
@@ -65,6 +66,8 @@ export interface RuntimeParts {
 	readonly database: ContractDatabase | null
 	/** Dimensions a table owns, so `in` and `on` must find the object. */
 	readonly ownedDimensions: ReadonlySet<string>
+	/** Each dimension's containers, nearest first; a grant on one reaches every value inside it. */
+	readonly containers: ReadonlyMap<string, readonly string[]>
 	readonly assets: SpaAssets | null
 }
 
@@ -209,26 +212,38 @@ export class ContractRuntime {
 		const { action, access } = row.requirement
 		switch (access.form) {
 			case 'over': {
-				const values = scopedValues(caller.perms, action, access.dimension)
-				if (values !== null && values.length === 0) {
+				const direct = scopedValues(caller.perms, action, access.dimension)
+				if (direct === null) {
+					return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, 'all') }, input }
+				}
+				const held = this.#heldContainers(caller.perms, action, access.dimension)
+				if (direct.length === 0 && held.length === 0) {
 					throw new ForbiddenError(`The caller holds '${action}' in no ${access.dimension}`)
 				}
-				return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, values ?? 'all') }, input }
+				const values = held.length === 0 ? direct : [...new Set([...direct, ...await this.#contained(access.dimension, held)])]
+				return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, values) }, input }
 			}
 			case 'in': {
 				const { value, rest } = takeField(input, access.from)
-				if (!permits(caller.perms, action, { type: access.dimension, value })) {
+				const direct = permits(caller.perms, action, { type: access.dimension, value })
+				// Without a grant on the value or on a container of its dimension, nothing is read: 403 whether it exists or not.
+				if (!direct && this.#heldContainers(caller.perms, action, access.dimension).length === 0) {
 					throw new ForbiddenError(`The caller does not hold '${action}' in this ${access.dimension}`)
 				}
-				const chain = await this.#locate(access.dimension, value)
+				const chain = await this.#chain(access.dimension, value)
+				if (!holdsOnChain(caller.perms, action, access.dimension, value, chain ?? new Map())) {
+					throw new ForbiddenError(`The caller does not hold '${action}' in this ${access.dimension}`)
+				}
+				if (chain === null) {
+					throw new NotFoundError('Not found')
+				}
 				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
 			}
 			case 'on': {
 				const { value, rest } = takeField(input, accessField(row, access))
-				const chain = await this.#locate(access.dimension, value)
-				const scopes: (readonly [string, string])[] = [[access.dimension, value], ...chain]
+				const chain = await this.#chain(access.dimension, value)
 				// An object the caller may not act on is indistinguishable from a missing one.
-				if (!scopes.some(([type, scope]) => permits(caller.perms, action, { type, value: scope }))) {
+				if (chain === null || !holdsOnChain(caller.perms, action, access.dimension, value, chain)) {
 					throw new NotFoundError('Not found')
 				}
 				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
@@ -238,18 +253,36 @@ export class ContractRuntime {
 		}
 	}
 
-	/** The object's containers; a missing object of a dimension a table owns is 404. */
-	async #locate(dimension: string, value: string): Promise<ReadonlyMap<string, string>> {
+	/** The object's containers, read now, so a Ref carries where it lies today; `null` for a missing object a table owns. */
+	async #chain(dimension: string, value: string): Promise<ReadonlyMap<string, string> | null> {
 		const database = this.#parts.database
 		if (database === null || !this.#parts.ownedDimensions.has(dimension)) {
 			return new Map()
 		}
-		const chain = await database.locate(dimension, value)
-		if (chain === null) {
-			throw new NotFoundError('Not found')
-		}
-		return chain
+		return await database.locate(dimension, value)
 	}
+
+	/** The container values of `dimension` in which the caller holds `action`. */
+	#heldContainers(perms: PermissionEntry[], action: string, dimension: string): ContainerValues[] {
+		return (this.#parts.containers.get(dimension) ?? []).flatMap((container) => {
+			const values = scopedValues(perms, action, container) ?? []
+			return values.length === 0 ? [] : [{ dimension: container, values }]
+		})
+	}
+
+	async #contained(dimension: string, held: readonly ContainerValues[]): Promise<readonly string[]> {
+		const database = this.#parts.database
+		if (database === null || !this.#parts.ownedDimensions.has(dimension)) {
+			throw new ServerFault(`no table owns '${dimension}', so a grant on its containers reaches nothing`)
+		}
+		return await database.contained(dimension, held)
+	}
+}
+
+/** Whether the caller holds `action` on the value or on any container of its chain; IAM evaluates each as a flat scope. */
+function holdsOnChain(perms: PermissionEntry[], action: string, dimension: string, value: string, chain: ReadonlyMap<string, string>): boolean {
+	const scopes: (readonly [string, string])[] = [[dimension, value], ...chain]
+	return scopes.some(([type, scope]) => permits(perms, action, { type, value: scope }))
 }
 
 function accessField(row: CredentialedEndpoint, access: Extract<AccessForm, { form: 'on' }>): string {

@@ -109,8 +109,29 @@ function checkContractDigest(framework: Readonly<Record<string, string>>, artifa
 	}
 }
 
+/** Every dimension's containers, nearest first (`note → [workspace, organization]`); `buildArtifact` refuses a cycle. */
+function containersOf(artifact: ContractArtifact): ReadonlyMap<string, readonly string[]> {
+	const containers = new Map<string, readonly string[]>()
+	for (const dimension of Object.keys(artifact.dimensions)) {
+		const chain: string[] = []
+		let next = artifact.dimensions[dimension]?.in ?? null
+		while (next !== null && !chain.includes(next)) {
+			chain.push(next)
+			next = artifact.dimensions[next]?.in ?? null
+		}
+		containers.set(dimension, chain)
+	}
+	return containers
+}
+
 /** What this version cannot serve yet; a contract that declares it does not boot rather than answer nothing. */
-function unservable(artifact: ContractArtifact, assets: SpaAssets | undefined, owned: ReadonlySet<string>, problems: string[]): void {
+function unservable(
+	artifact: ContractArtifact,
+	assets: SpaAssets | undefined,
+	owned: ReadonlySet<string>,
+	containers: ReadonlyMap<string, readonly string[]>,
+	problems: string[],
+): void {
 	for (const [name, mount] of Object.entries(artifact.mounts)) {
 		if (mount.kind === 'link' || mount.kind === 'form' || mount.kind === 'webhook') {
 			problems.push(`mount '${name}' is a ${mount.kind} mount, which this version of @fabrika/app does not serve yet`)
@@ -138,9 +159,25 @@ function unservable(artifact: ContractArtifact, assets: SpaAssets | undefined, o
 		const { access } = row.requirement
 		if (access.form === 'creates') {
 			problems.push(`'${row.id}' creates a '${access.dimension}', and this version cannot ask IAM for a new scope yet`)
+			continue
 		}
-		if (access.form === 'on' && access.from !== null && !owned.has(access.dimension)) {
+		if (access.form === 'on' && access.from === null) {
+			continue
+		}
+		if (access.form === 'on' && !owned.has(access.dimension)) {
 			problems.push(`'${row.id}' acts on a '${access.dimension}', but no table in src/db/tables.ts owns that dimension to locate it`)
+		} else {
+			// A grant on a container reaches a value only through the table that records which container holds it.
+			const unlocated = [access.dimension, ...(containers.get(access.dimension) ?? [])].find((dimension) =>
+				(artifact.dimensions[dimension]?.in ?? null) !== null && !owned.has(dimension)
+			)
+			if (unlocated !== undefined) {
+				problems.push(
+					`'${row.id}' reaches a '${access.dimension}'; '${unlocated}' lies in '${
+						artifact.dimensions[unlocated]?.in
+					}', but no table in src/db/tables.ts owns '${unlocated}' to locate it`,
+				)
+			}
 		}
 	}
 }
@@ -201,7 +238,8 @@ function contractDatabase(database: ImplementationDatabase | null, connection: D
 		return null
 	}
 	try {
-		return { tables: database.tables, locate: bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities }) }
+		const locator = bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities })
+		return { tables: database.tables, locate: locator.locate, contained: locator.contained }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null
@@ -218,7 +256,8 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
-	unservable(artifact, options.assets, owned, problems)
+	const containers = containersOf(artifact)
+	unservable(artifact, options.assets, owned, containers, problems)
 	const database = contractDatabase(app.database, options.database, problems)
 	if (problems.length > 0) {
 		throw new BootError(problems)
@@ -277,6 +316,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		policy: headerPolicy(artifact.csp, framework.operationsOrigin),
 		database,
 		ownedDimensions: owned,
+		containers,
 		assets: options.assets ?? null,
 	})
 }

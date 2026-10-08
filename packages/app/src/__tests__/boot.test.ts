@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
 import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource } from './fixtures/implement/harness'
+import { noteDatabase } from './fixtures/implement/stores'
 
 function problemsOf(start: () => unknown): readonly string[] {
 	try {
@@ -142,6 +143,36 @@ describe('an access form the framework cannot resolve stops the boot', () => {
 		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets }))).toEqual([
 			"'api.notes.get' acts on a 'note', but no table in src/db/tables.ts owns that dimension to locate it",
 			"'api.notes.remove' acts on a 'note', but no table in src/db/tables.ts owns that dimension to locate it",
+		])
+	})
+
+	test('in, over and on, when a container the dimension lies in cannot be located', () => {
+		const nested = defineContract({
+			app: 'notes',
+			dimensions: { organization: {}, workspace: { in: 'organization' }, note: { in: 'workspace' } },
+			actions: { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.delete': 'Delete' },
+			roles: { reader: { grants: ['notes.read'] } },
+		}, (c) => ({
+			api: c.rpc('/api', { callers: ['human'] }, {
+				list: c.query({ output: Ok, access: { action: 'notes.read', over: 'workspace' } }),
+				add: c.mutation({
+					input: z.strictObject({ workspaceId: z.string() }),
+					output: Ok,
+					access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' },
+				}),
+				get: c.query({ input: ById, output: Ok, access: { action: 'notes.read', on: 'note', from: 'id' } }),
+			}),
+		}))
+		// The note's table is owned, its workspace's is not: a grant on the organization would reach nothing.
+		const app = implement(nested, {
+			database: noteDatabase(new Map()),
+			deps: () => null,
+			handlers: () => ({ api: { list: () => ({ ok: true }), add: () => ({ ok: true }), get: () => ({ ok: true }) } }),
+		})
+		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))).toEqual([
+			"'api.add' reaches a 'workspace'; 'workspace' lies in 'organization', but no table in src/db/tables.ts owns 'workspace' to locate it",
+			"'api.get' reaches a 'note'; 'workspace' lies in 'organization', but no table in src/db/tables.ts owns 'workspace' to locate it",
+			"'api.list' reaches a 'workspace'; 'workspace' lies in 'organization', but no table in src/db/tables.ts owns 'workspace' to locate it",
 		])
 	})
 })

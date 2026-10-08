@@ -23,6 +23,7 @@ bun test src/__tests__/implement.test.ts        # boot's request pipeline, with 
 bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
+bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 ## Structure
@@ -214,20 +215,27 @@ src/
 - **`@fabrika/db` is bound by `boot`, once.** An application passes `scoped(tables)`
   as `implement({ database })`. `boot` binds only an object `scoped` created
   (`@fabrika/db/framework`'s `bindScopedDatabase`), with the adapter's connection and
-  `requestCapabilities`, and keeps the locator the bind answers for `on` and `in`. The
-  application never receives the connection or the locator; a copy or a wrapper of
-  the layer does not boot. A `ContractDatabase` (`tables` and `locate`) of the
-  application's own is served as it is and gets no connection.
+  `requestCapabilities`, and keeps the locator the bind answers for `on`, `in` and
+  `over`. The application never receives the connection or the locator; a copy or a
+  wrapper of the layer does not boot. A `ContractDatabase` (`tables`, `locate` and
+  `contained`) of the application's own is served as it is and gets no connection.
   `serveContract` imports `@fabrika/db` before the application (it captures its
   built-ins and freezes the Kysely compiler at load) and opens `Database.postgres` on
   `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
   or a layer bound before boot is a `BootError`. `boot.ts` imports only
   `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter
   imports `boot`.
-- **`on` needs a table that owns its dimension** (`ContractDatabase.tables`); `boot`
-  refuses the contract otherwise. `on` checks the action on the object or any
-  container of its chain and answers 404 for both "missing" and "not yours"; `in`
-  checks the action on the value itself, then that it exists when a table owns it.
+- **`on` needs a table that owns its dimension** (`ContractDatabase.tables`), and every
+  access form needs a table for each dimension on its containment path that lies in
+  another; `boot` refuses the contract otherwise, because a grant on that container
+  would reach nothing. The chain is read per request (`locate`), never cached, so a
+  moved object's next `Ref` carries its new chain. `on` checks the action on the
+  object or any container of its chain and answers 404 for both "missing" and "not
+  yours". `in` does the same check but answers 403 when not held; it reads the
+  database only when the caller holds the action on the value or in a container
+  dimension, and a missing scope is 404 only to a caller holding the value itself.
+  `over` adds the values that lie in a container where the caller holds the action
+  (`contained`).
 - **Output is projected, then validated:** `project` walks the output's zod schema
   and keeps the fields it declares; a union takes the first branch, in order, whose
   schema accepts the value reduced to it. The strict output schema then validates
@@ -241,7 +249,8 @@ src/
   `CapabilityRefusedError`) or only the error's name, never the error object.
 - **`boot` refuses to start rather than answer nothing**: a link, form or webhook
   mount, files, jobs, exports, imports, `creates`, an SPA without an asset server, a
-  handler outside the contract, a missing handler. Each refusal lifts when its work
+  handler outside the contract, a missing handler, an access form whose containment
+  no table locates. Each refusal lifts when its work
   unit ships the runtime.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
   before any application module loads.** The runtime adapter calls

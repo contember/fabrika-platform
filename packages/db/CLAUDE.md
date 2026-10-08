@@ -35,8 +35,10 @@ An application calls `scoped(tables)` once (its own `src/db/database.ts`), defin
 `defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
 `Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
 `requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request, through
-`@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
-table's containment columns. Not built yet:
+`@fabrika/db/framework`. The bind answers the locator the access forms use, generated from the policies: `locate`
+(one guarded select by key of the owning table's containment columns, for `on` and `in`) and `contained` (one
+guarded select of the keys whose containment column holds a container value the caller holds the action in, for
+`over`). Not built yet:
 `@fabrika/db/testing`, and stores for `reference` and `inbox` tables (`defineTables` accepts their policies; no store
 reaches them).
 

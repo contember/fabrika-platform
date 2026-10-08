@@ -39,6 +39,7 @@ import {
 	type AggregateColumns,
 	aggregateNode,
 	allOf,
+	anyOf,
 	column,
 	deleteNode,
 	equals,
@@ -46,6 +47,7 @@ import {
 	existsNode,
 	inList,
 	insertNode,
+	keysNode,
 	locateNode,
 	lockNode,
 	scopedWhere,
@@ -75,7 +77,7 @@ import {
 	type UpdateValues,
 	type VersionArguments,
 } from './policy'
-import { type Locator, register } from './registry'
+import { type ContainerValues, type Locator, register } from './registry'
 import { type TablePolicies, tablePolicies } from './tables'
 
 export interface DataLayerRuntime {
@@ -819,7 +821,10 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			}
 			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities })
 			connection.runtime = bound
-			return async (dimension, id) => locateObject(models, bound, dimension, id)
+			return freeze({
+				locate: async (dimension: string, id: string) => locateObject(models, bound, dimension, id),
+				contained: async (dimension: string, containers: readonly ContainerValues[]) => containedObjects(models, bound, dimension, containers),
+			})
 		},
 	})
 	return database
@@ -837,6 +842,15 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 	return undefined
 }
 
+/** The table that owns `dimension`, which the locator reads; a dimension no table owns is located by nothing. */
+function locatedOwner(models: TableModels, dimension: unknown): TableModel {
+	const owner = typeof dimension === 'string' ? ownerOf(models, dimension) : undefined
+	if (owner === undefined) {
+		throw new QueryRefusedError(`no table owns the dimension ${String(dimension)}, so nothing locates it`)
+	}
+	return owner
+}
+
 /** One guarded select by key of the containment columns the policy declares; the generated locator of the dimension. */
 async function locateObject(
 	models: TableModels,
@@ -844,10 +858,7 @@ async function locateObject(
 	dimension: string,
 	id: string,
 ): Promise<ReadonlyMap<string, string> | null> {
-	const owner = typeof dimension === 'string' ? ownerOf(models, dimension) : undefined
-	if (owner === undefined) {
-		throw new QueryRefusedError(`no table owns the dimension ${String(dimension)}, so nothing locates it`)
-	}
+	const owner = locatedOwner(models, dimension)
 	if (typeof id !== 'string' || id.length === 0) {
 		throw new QueryRefusedError(`a ${dimension} is located by its ${keyOf(owner)}, a non-empty string`)
 	}
@@ -872,4 +883,85 @@ async function locateObject(
 		chain.set(link.dimension, value)
 	}
 	return chain
+}
+
+interface ContainerLink {
+	readonly link: Container
+	readonly values: readonly string[]
+}
+
+/** An own data property of a framework-built record; an accessor is never run. */
+function dataProperty(value: unknown, key: string): unknown {
+	if (typeof value !== 'object' || value === null) {
+		return undefined
+	}
+	const descriptor = ownDescriptor(value, key)
+	return descriptor !== undefined && hasOwn(descriptor, 'value') ? descriptor.value : undefined
+}
+
+function scopeValue(value: unknown): string {
+	if (typeof value !== 'string' || value.length === 0) {
+		throw new QueryRefusedError('a scope value is a non-empty string')
+	}
+	return value
+}
+
+function chainLink(owner: TableModel, dimension: unknown): Container | undefined {
+	for (let index = 0; index < owner.chain.length; index++) {
+		const link = owner.chain[index]
+		if (link !== undefined && link.dimension === dimension) {
+			return link
+		}
+	}
+	return undefined
+}
+
+/** Each container against the owner's column for that dimension; a container it carries no column for is refused. */
+function containerLinks(owner: TableModel, containers: unknown): readonly ContainerLink[] {
+	const links = parseList(containers, (item): ContainerLink => {
+		const dimension = dataProperty(item, 'dimension')
+		const link = chainLink(owner, dimension)
+		if (link === undefined) {
+			throw new QueryRefusedError(`${owner.name} carries no column for ${String(dimension)}, so nothing in it can be located`)
+		}
+		const values = parseList(dataProperty(item, 'values'), scopeValue)
+		if (values === undefined) {
+			throw new QueryRefusedError(`the values of ${link.dimension} are a plain array of scope values`)
+		}
+		return freeze({ link, values: freeze(values) })
+	})
+	if (links === undefined) {
+		throw new QueryRefusedError('containers are a plain array of { dimension, values }')
+	}
+	return freeze(links)
+}
+
+/** One guarded select of the keys whose chain column holds one of the container values; nothing to match is no query. */
+async function containedObjects(models: TableModels, runtime: DataLayerRuntime, dimension: string, containers: unknown): Promise<readonly string[]> {
+	const owner = locatedOwner(models, dimension)
+	const links = containerLinks(owner, containers)
+	const predicates: OperationNode[] = []
+	for (let index = 0; index < links.length; index++) {
+		const container = links[index]
+		if (container !== undefined && container.values.length > 0) {
+			predicates[predicates.length] = inList(owner.name, container.link.column, container.values)
+		}
+	}
+	if (predicates.length === 0) {
+		return freeze([])
+	}
+	const key = keyOf(owner)
+	const scope = anyOf(predicates)
+	const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope }
+	const rows = await sessionOf(runtime.database).run<Readonly<Record<string, unknown>>>(keysNode(owner.name, key, scope), context)
+	const keys: string[] = []
+	for (let index = 0; index < rows.length; index++) {
+		const row = rows[index]
+		const value = row === undefined ? undefined : ownEntry(row, key)
+		if (typeof value !== 'string') {
+			throw new PolicyError(`${owner.name}.${key} came back as ${typeof value}; a scope key holds its value as text`)
+		}
+		keys[keys.length] = value
+	}
+	return freeze(keys)
 }
