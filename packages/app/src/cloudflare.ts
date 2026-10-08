@@ -4,6 +4,7 @@ import { parseJwks } from '@fabrika/jwks'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
 import { boot, type ContractApp, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
+import { captureEnvironment } from './implement/environment.js'
 import type { ContractImplementation } from './implement/implement.js'
 
 /** Minimal structural view of a Workers `ExecutionContext`. */
@@ -94,23 +95,34 @@ function bindingAssets(binding: unknown): SpaAssets | undefined {
 	}
 }
 
+/** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
+export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
+
 /**
  * A Worker module for a contract application, called only by the generated entrypoint. A Worker receives its
- * environment with the first request, so `boot` runs then, once per environment object.
+ * environment with the first request, so the framework captures it, scrubs the process environment and only then
+ * imports the application and boots it, once per environment object.
  */
-export function createContractWorker(app: ContractImplementation): {
+export function createContractWorker(load: ImplementationLoader): {
 	fetch(request: Request, env: Readonly<Record<string, unknown>>, exec: CloudflareExecutionContext): Promise<Response>
 } {
-	const booted = new WeakMap<object, ContractApp>()
-	const bootFor = (env: Readonly<Record<string, unknown>>): ContractApp => {
-		const existing = booted.get(env)
-		if (existing !== undefined) {
-			return existing
-		}
+	const booted = new WeakMap<object, Promise<ContractApp>>()
+	const bootFor = async (env: Readonly<Record<string, unknown>>): Promise<ContractApp> => {
 		const variables = Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name)))
-		const contractApp = boot(app, { env: variables, iam: bindingKeySource(env['IAM']), assets: bindingAssets(env['ASSETS']) })
-		booted.set(env, contractApp)
-		return contractApp
+		const environment = captureEnvironment(variables)
+		const { default: app } = await load()
+		return boot(app, { environment, iam: bindingKeySource(env['IAM']), assets: bindingAssets(env['ASSETS']) })
 	}
-	return { fetch: (request, env) => bootFor(env).fetch(request) }
+	return {
+		async fetch(request, env) {
+			let contractApp = booted.get(env)
+			if (contractApp === undefined) {
+				contractApp = bootFor(env)
+				booted.set(env, contractApp)
+				// A failed boot is not cached: the next request boots again and fails with the same problems.
+				contractApp.catch(() => booted.delete(env))
+			}
+			return (await contractApp).fetch(request)
+		},
+	}
 }

@@ -11,6 +11,7 @@ import { join, resolve, sep } from 'node:path'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
 import { boot, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
+import { captureEnvironment } from './implement/environment.js'
 import type { ContractImplementation } from './implement/implement.js'
 
 export interface ManagedBunHandlerOptions {
@@ -109,23 +110,31 @@ export function diskAssets(root: string): SpaAssets {
 }
 
 export interface ContractServer {
+	/** The port the server listens on; `PORT=0` picks a free one. */
+	readonly port: number
 	/** Stops accepting requests and waits for the ones in flight. */
 	stop(): Promise<void>
 }
 
+/** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
+export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
+
 /**
- * Boots a contract application and serves it on `PORT` (default 3000), on every interface: the project's private
- * network is how the proxy reaches it. Called only by the generated entrypoint, with `process.env`. SIGTERM drains.
+ * Captures the framework's variables and scrubs them from the process, then imports the application, boots it and
+ * serves it on `PORT` (default 3000), on every interface: the project's private network is how the proxy reaches
+ * it. Called only by the generated entrypoint, with `process.env`. SIGTERM drains.
  */
-export function serveContract(app: ContractImplementation, env: Readonly<Record<string, string | undefined>>): ContractServer {
-	const port = Number.parseInt(env['PORT'] ?? '3000', 10)
-	if (!Number.isInteger(port) || port < 1 || port > 65535) {
-		throw new Error('PORT must be an integer between 1 and 65535')
+export async function serveContract(load: ImplementationLoader, env: Readonly<Record<string, string | undefined>>): Promise<ContractServer> {
+	const environment = captureEnvironment(env)
+	const port = Number.parseInt(environment.application['PORT'] === undefined ? '3000' : String(environment.application['PORT']), 10)
+	if (!Number.isInteger(port) || port < 0 || port > 65535) {
+		throw new Error('PORT must be an integer between 0 and 65535')
 	}
-	const iam = issuerJwks(env['FABRIKA_IAM_ISSUER'])
-	const served = boot(app, { env, iam, assets: diskAssets(process.cwd()) })
+	const { default: app } = await load()
+	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
+	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()) })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
 	const stop = (): Promise<void> => server.stop(false)
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))
-	return { stop }
+	return { port: server.port ?? port, stop }
 }

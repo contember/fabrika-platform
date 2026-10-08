@@ -1,16 +1,25 @@
-// `boot(app, { env, iam })`: called once, by the generated entrypoint through its runtime adapter. It reads the
-// framework's variables and removes them from `process.env`, compiles the contract, binds every handler to its
-// endpoint and refuses to start when anything declared cannot be served.
+// `boot(app, { environment, iam })`: called once, by the generated entrypoint through its runtime adapter, after the
+// adapter captured the framework's variables and scrubbed them from the process. It compiles the contract, binds
+// every handler to its endpoint and refuses to start when anything declared cannot be served.
 
-import { compileEndpointTable, type ContractArtifact, type CredentialedEndpoint, type EndpointRow, type Jwks } from '@fabrika/auth-core'
+import {
+	compileEndpointTable,
+	type ContractArtifact,
+	type CredentialedEndpoint,
+	type EndpointRow,
+	FABRIKA_IAM_APP_ID,
+	type Jwks,
+	parseAppEnvironmentId,
+} from '@fabrika/auth-core'
 import { TokenVerifier } from '@fabrika/jwks'
 import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { Schema } from '../contract/define'
 import { requestCapabilities } from './capability'
 import { ContractRuntime, type ServedEndpoint, type SpaAssets } from './dispatch'
+import type { CapturedEnvironment } from './environment'
 import { headerPolicy } from './headers'
-import type { ApplicationEnvironment, ContractImplementation } from './implement'
+import type { ContractImplementation } from './implement'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
 export interface IamKeySource {
@@ -18,8 +27,8 @@ export interface IamKeySource {
 }
 
 export interface BootOptions {
-	/** Every variable the platform and the operator set. The framework takes the `FABRIKA_*` names; `deps` gets the rest. */
-	readonly env: Readonly<Record<string, unknown>>
+	/** The variables `captureEnvironment` took before the application's modules loaded. */
+	readonly environment: CapturedEnvironment
 	readonly iam: IamKeySource
 	/** Serves the SPA mounts. Without it, a contract that declares one does not boot. */
 	readonly assets?: SpaAssets
@@ -40,14 +49,11 @@ export class BootError extends Error {
 	}
 }
 
-/** Variables the framework reads; no application code sees them. */
-const FRAMEWORK_PREFIX = 'FABRIKA_'
-
 interface FrameworkVariables {
-	readonly appId: string
+	/** The token audience: this application's IAM id in this environment, `<app>@<env>`. */
+	readonly iamAppId: string
 	readonly issuer: string
 	readonly operationsOrigin: string | null
-	readonly application: ApplicationEnvironment
 }
 
 function httpOrigin(name: string, raw: unknown, problems: string[]): string | null {
@@ -67,28 +73,20 @@ function httpOrigin(name: string, raw: unknown, problems: string[]): string | nu
 	return null
 }
 
-function readFramework(env: Readonly<Record<string, unknown>>, problems: string[]): FrameworkVariables {
-	const appId = env['FABRIKA_APP_ID']
-	if (typeof appId !== 'string' || appId.trim() === '') {
-		problems.push('FABRIKA_APP_ID is not set; it is the audience every token must carry')
+function readFramework(framework: Readonly<Record<string, string>>, contractApp: string, problems: string[]): FrameworkVariables {
+	const iamAppId = framework[FABRIKA_IAM_APP_ID]?.trim() ?? ''
+	const parsed = parseAppEnvironmentId(iamAppId)
+	if (iamAppId === '') {
+		problems.push(`${FABRIKA_IAM_APP_ID} is not set; it is the audience every token must carry, <app>@<env>`)
+	} else if (parsed === null) {
+		problems.push(`${FABRIKA_IAM_APP_ID} '${iamAppId}' is not an application environment id (allowed: <app>@<env>)`)
+	} else if (parsed.app !== contractApp) {
+		problems.push(`${FABRIKA_IAM_APP_ID} names the application '${parsed.app}', but the contract declares '${contractApp}'`)
 	}
-	const issuer = httpOrigin('FABRIKA_IAM_ISSUER', env['FABRIKA_IAM_ISSUER'], problems)
-	const dsn = env['FABRIKA_OPERATIONS_DSN']
+	const issuer = httpOrigin('FABRIKA_IAM_ISSUER', framework['FABRIKA_IAM_ISSUER'], problems)
+	const dsn = framework['FABRIKA_OPERATIONS_DSN']
 	const operationsOrigin = dsn === undefined ? null : httpOrigin('FABRIKA_OPERATIONS_DSN', dsn, problems)
-	const application = Object.freeze(Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith(FRAMEWORK_PREFIX))))
-	return { appId: typeof appId === 'string' ? appId.trim() : '', issuer: issuer ?? '', operationsOrigin, application }
-}
-
-/** Deletes every framework variable from `process.env`, so that application code cannot read one later. */
-function removeFrameworkVariables(): void {
-	if (typeof process === 'undefined') {
-		return
-	}
-	for (const name of Object.keys(process.env)) {
-		if (name.startsWith(FRAMEWORK_PREFIX)) {
-			delete process.env[name]
-		}
-	}
+	return { iamAppId, issuer: issuer ?? '', operationsOrigin }
 }
 
 /** What this version cannot serve yet; a contract that declares it does not boot rather than answer nothing. */
@@ -169,8 +167,7 @@ function isCredentialed(row: EndpointRow | undefined): row is CredentialedEndpoi
 
 export function boot(app: ContractImplementation, options: BootOptions): ContractApp {
 	const problems: string[] = []
-	const framework = readFramework(options.env, problems)
-	removeFrameworkVariables()
+	const framework = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	unservable(artifact, options.assets, owned, problems)
@@ -180,7 +177,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 
 	const rows = new Map(artifact.endpoints.map((row) => [row.id, row]))
 	const endpoints = new Map<string, ServedEndpoint>()
-	const handlers = app.handlers(framework.application, { capabilities: requestCapabilities })
+	const handlers = app.handlers(options.environment.application, { capabilities: requestCapabilities })
 	const declared = new Set<string>()
 	for (const [name, mount] of Object.entries(app.contract.surface)) {
 		if (SURFACE_SECTIONS.some((section) => section === name) || typeof mount !== 'object' || !('kind' in mount)) {
@@ -226,7 +223,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		table: compileEndpointTable(artifact),
 		endpoints,
 		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: framework.issuer }),
-		appId: framework.appId,
+		audience: framework.iamAppId,
 		policy: headerPolicy(artifact.csp, framework.operationsOrigin),
 		database: app.database,
 		ownedDimensions: owned,

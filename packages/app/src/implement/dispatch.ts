@@ -14,7 +14,6 @@ import {
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
 	satisfies,
-	type SchemaShape,
 	scopedValues,
 } from '@fabrika/auth-core'
 import type { TokenVerifier } from '@fabrika/jwks'
@@ -30,11 +29,11 @@ import {
 	toErrorResponse,
 	UnauthorizedError,
 } from '../errors'
-import { mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
+import { CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { presentedBy, type Principal } from './principal'
-import { project } from './project'
+import { project, ProjectionRefusedError } from './project'
 
 /** Serves the files of an SPA mount. The runtime adapter supplies it: Workers Assets, or the build output on disk. */
 export interface SpaAssets {
@@ -56,8 +55,8 @@ export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
 	readonly endpoints: ReadonlyMap<string, ServedEndpoint>
 	readonly verifier: TokenVerifier
-	/** The token audience: this application's IAM id. */
-	readonly appId: string
+	/** The token audience: this application's IAM id in this environment, `<app>@<env>`. */
+	readonly audience: string
 	readonly policy: HeaderPolicy
 	readonly database: ContractDatabase | null
 	/** Dimensions a table owns, so `in` and `on` must find the object. */
@@ -103,6 +102,7 @@ export class ContractRuntime {
 	}
 
 	async #answer(request: Request): Promise<Response> {
+		let where = 'request'
 		try {
 			const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
 			if (plan.outcome === 'non-canonical') {
@@ -112,6 +112,7 @@ export class ContractRuntime {
 			if (served === undefined) {
 				throw new NotFoundError(`No endpoint serves ${request.method} ${rawRequestTarget(request.url).pathname}`)
 			}
+			where = served.row.id
 			switch (served.kind) {
 				case 'health':
 					return jsonResponse({ status: 'ok' }, 200)
@@ -119,7 +120,7 @@ export class ContractRuntime {
 					await this.#authorize(served.row, request)
 					const assets = this.#parts.assets
 					if (assets === null) {
-						throw new HttpError(500, 'internal', 'No asset server serves the SPA')
+						throw new ServerFault('no asset server serves the SPA')
 					}
 					return await assets.serve({ prefix: served.prefix, dir: served.dir }, request)
 				}
@@ -127,7 +128,7 @@ export class ContractRuntime {
 					return await this.#procedure(served, request)
 			}
 		} catch (error) {
-			return errorResponse(error)
+			return errorResponse(error, where)
 		}
 	}
 
@@ -137,10 +138,10 @@ export class ContractRuntime {
 		if (token === '') {
 			throw new UnauthorizedError('This endpoint needs a credential, and the request carries none')
 		}
-		const verified = await this.#parts.verifier.verify(token, this.#parts.appId)
+		const verified = await this.#parts.verifier.verify(token, this.#parts.audience)
 		if (!verified.ok) {
 			if (verified.reason === 'unavailable') {
-				throw new HttpError(503, 'unavailable', 'The IAM key set could not be fetched; nothing was checked')
+				throw new ServerFault('the IAM key set could not be fetched; nothing was checked', 503)
 			}
 			throw new UnauthorizedError('The credential does not verify')
 		}
@@ -169,9 +170,9 @@ export class ContractRuntime {
 		} finally {
 			frame.end()
 		}
-		const output = z.safeParse(served.output, project(outputShape(served.row), result))
+		const output = z.safeParse(served.output, projectOutput(served, result))
 		if (!output.success) {
-			throw new HttpError(500, 'internal', `'${served.row.id}' returned a value its output schema refuses`)
+			throw new ServerFault(`'${served.row.id}' returned a value its output schema refuses`)
 		}
 		return jsonResponse({ result: output.data }, 200)
 	}
@@ -208,7 +209,7 @@ export class ContractRuntime {
 				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
 			}
 			case 'creates':
-				throw new HttpError(500, 'internal', `'${row.id}' creates a scope, which this version does not serve`)
+				throw new ServerFault(`'${row.id}' creates a scope, which this version does not serve`)
 		}
 	}
 
@@ -228,16 +229,20 @@ export class ContractRuntime {
 
 function accessField(row: CredentialedEndpoint, access: Extract<AccessForm, { form: 'on' }>): string {
 	if (access.from === null) {
-		throw new HttpError(500, 'internal', `'${row.id}' is bound to a link's object, which this version does not serve`)
+		throw new ServerFault(`'${row.id}' is bound to a link's object, which this version does not serve`)
 	}
 	return access.from
 }
 
-function outputShape(row: CredentialedEndpoint): SchemaShape {
-	if (row.output === null) {
-		throw new HttpError(500, 'internal', `'${row.id}' declares no output`)
+function projectOutput(served: Extract<ServedEndpoint, { kind: 'procedure' }>, result: unknown): unknown {
+	try {
+		return project(served.output, result)
+	} catch (error) {
+		if (error instanceof ProjectionRefusedError) {
+			throw new ServerFault(`'${served.row.id}' returned a value no branch of its output union accepts`)
+		}
+		throw error
 	}
-	return row.output
 }
 
 /**
@@ -299,22 +304,54 @@ function takeField(
 	return { value, rest: Object.freeze(rest) }
 }
 
-/** One envelope, `{ error: { type, message, issues? } }`. An unexpected error says nothing about itself. */
-export function errorResponse(error: unknown): Response {
-	if (isStructuralError(error)) {
+/** A failure the framework itself describes; its message is safe for the server log, never for the response. */
+class ServerFault extends Error {
+	override readonly name = 'ServerFault'
+	readonly status: number
+
+	constructor(message: string, status = 500) {
+		super(message)
+		this.status = status
+	}
+}
+
+/** The only body a 5xx carries: what failed stays on the server, because it may quote a credential. */
+function serverError(status: number): Response {
+	return status === 503
+		? jsonResponse({ error: { type: 'unavailable', message: 'Service unavailable' } }, 503)
+		: jsonResponse({ error: { type: 'internal', message: 'Internal error' } }, status)
+}
+
+/**
+ * A short line for the server log, never the error object: a framework-authored message, or only the name of
+ * anything else, whose message the application or a driver wrote.
+ */
+function logFailure(where: string, error: unknown): void {
+	const detail = error instanceof ServerFault || error instanceof CapabilityRefusedError
+		? error.message
+		: `${error instanceof Error ? error.name : typeof error} thrown`
+	console.error(`fabrika: ${where}: ${detail}`)
+}
+
+/**
+ * One envelope, `{ error: { type, message, issues? } }`. A client error keeps its own message and issues; every
+ * 5xx and every refused capability answers a fixed message, and its detail goes to the server log only.
+ */
+export function errorResponse(error: unknown, where: string): Response {
+	if (isStructuralError(error) && error.httpStatus < 500) {
 		return toErrorResponse(error)
 	}
 	const name = error instanceof Error ? error.name : ''
-	switch (name) {
-		// `@fabrika/db` errors carry no status; they are read by name, never by a cross-package `instanceof`.
-		case 'NotFoundError':
-			return toErrorResponse(new NotFoundError('Not found'))
-		case 'ConflictError':
-			return toErrorResponse(new HttpError(409, 'conflict', 'The object changed since it was read'))
-		case 'CapabilityError':
-		case 'CapabilityRefusedError':
-			return toErrorResponse(new HttpError(500, 'capability', error instanceof Error ? error.message : 'A capability was refused'))
-		default:
-			return toErrorResponse(new HttpError(500, 'internal', 'Internal error'))
+	// `@fabrika/db` errors carry no status; they are read by name, never by a cross-package `instanceof`.
+	if (name === 'NotFoundError') {
+		return toErrorResponse(new NotFoundError('Not found'))
 	}
+	if (name === 'ConflictError') {
+		return toErrorResponse(new HttpError(409, 'conflict', 'The object changed since it was read'))
+	}
+	logFailure(where, error)
+	if (error instanceof ServerFault) {
+		return serverError(error.status)
+	}
+	return serverError(isStructuralError(error) ? error.httpStatus : 500)
 }

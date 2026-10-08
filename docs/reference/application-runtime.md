@@ -138,10 +138,13 @@ declare, and a `Ref` passed to an operation of another action are type errors.
 authority; `handlers` receives what it returned.
 
 `fabrika app build` writes `fabrika/entry.generated.ts` for an application with a
-`fabrika.contract.ts`: `serveContract(app, process.env)` on Zerops,
-`createContractWorker(app)` on Cloudflare. Both call `boot(app, { env, iam, assets })`.
-It reads `FABRIKA_APP_ID`, `FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, deletes
-every `FABRIKA_*` name from `process.env`, and refuses to start when the contract
+`fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
+Zerops, `createContractWorker(() => import('../src/app'))` on Cloudflare. The adapter
+first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
+the application, so no module of it can copy one, and calls
+`boot(app, { environment, iam, assets })`. `boot` verifies tokens for the audience
+`FABRIKA_IAM_APP_ID` (`<app>@<env>`, whose application must be the contract's), reads
+`FABRIKA_IAM_ISSUER` and `FABRIKA_OPERATIONS_DSN`, and refuses to start when the contract
 declares something this version cannot serve yet (link, form and webhook mounts,
 files, jobs, exports, imports, `creates`), when an `on` dimension has no table, or
 when a handler is missing or undeclared.
@@ -150,8 +153,9 @@ Per request, in this order:
 
 1. refuse a non-canonical path (400) and select the endpoint with `planEndpoint`; no
    endpoint is 404, never the SPA;
-2. verify the proxy-injected token with the shared verifier: none or invalid is 401,
-   an unreachable IAM is 503;
+2. verify the proxy-injected token with the shared verifier, for this application in
+   this environment: none, invalid, or minted for another environment or application
+   is 401, an unreachable IAM is 503;
 3. the token's caller kind must be one of the mount's callers: a user token is
    `human`, a service token `machine`, an anonymous token (a share link) `link` (403);
 4. the requirement: `member` is any permission, an action is that action in some
@@ -160,7 +164,8 @@ Per request, in this order:
    `Sec-Fetch-Site: same-origin` (403), and RPC needs `Content-Type: application/json`
    (400);
 6. parse the body strictly (400), run the access form, remove the `from` field, call
-   the handler, project the output through its schema, answer `{ result }`.
+   the handler, project the output through its schema (a union through its first
+   branch that accepts the value), answer `{ result }`.
 
 | Form                   | Hands the handler                         | Refuses with                       |
 | ---------------------- | ----------------------------------------- | ---------------------------------- |
@@ -170,13 +175,15 @@ Per request, in this order:
 | `{ action, on, from }` | `ctx.target` with its containment chain   | 404 when missing or not held       |
 
 Errors share one envelope, `{ error: { type, message, issues? } }`: 400, 401, 403,
-404, 409, 500 and 503. An unexpected error is a 500 that says nothing about itself.
+404, 409, 500 and 503. Every 5xx and every refused capability answers a fixed message
+with no metadata; the server log gets one short line without the error object.
 Every response carries the header policy of ADR-0022.
 
 A `Ref` and a `Within` are classes with private fields, bound to their request with
 `AsyncLocalStorage`. `requestCapabilities` — the `CapabilityAuthority` of
 `@fabrika/db` — refuses one the framework did not mint, one whose request has ended
-and one from another live request.
+and one from another live request. Each resolution returns a fresh frozen copy of the
+facts fixed at mint, so changing a returned chain changes nothing the data layer sees.
 
 ## Runtime boundary
 

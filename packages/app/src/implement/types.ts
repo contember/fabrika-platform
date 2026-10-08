@@ -61,8 +61,12 @@ export type HandlersOf<C> = {
 /** An `any` comes from an error elsewhere in the handler; reporting it here too would only add noise. */
 type IsAny<T> = 0 extends 1 & T ? true : false
 
+/** Fields of `R` that the output `O` does not declare. When `O` is a union, a value that fits one branch has none. */
 type ExtraKeys<R, O> = IsAny<R> extends true ? never
-	: R extends readonly (infer RE)[] ? (O extends readonly (infer OE)[] ? ExtraKeys<RE, OE> : never)
+	: true extends (O extends unknown ? ([ExtraKeysOf<R, O>] extends [never] ? true : false) : never) ? never
+	: ExtraKeysOf<R, O>
+
+type ExtraKeysOf<R, O> = R extends readonly (infer RE)[] ? (O extends readonly (infer OE)[] ? ExtraKeys<RE, OE> : never)
 	: R extends object ? O extends object ? Exclude<keyof R, keyof O> | { [Q in keyof R & keyof O]: ExtraKeys<R[Q], O[Q]> }[keyof R & keyof O]
 		: never
 	: never

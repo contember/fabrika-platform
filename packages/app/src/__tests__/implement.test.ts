@@ -1,11 +1,14 @@
 // `boot`'s request pipeline, driven through real tokens and the fixture contract: every access form allowed, denied
 // and missing; caller kinds; admission; capabilities bound to their request; output projection; the header policy.
 
+import { HttpError } from '@fabrika/app'
+import { defineContract } from '@fabrika/app/contract'
 import { implement, type Ref, requestCapabilities } from '@fabrika/app/implement'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/contract'
-import { bootApp, errorType, grant, resultOf, send, type Sent, token, unreachableIam } from './fixtures/implement/harness'
+import { bootApp, environment, errorType, FRAMEWORK_ENV, grant, resultOf, send, type Sent, token, unreachableIam } from './fixtures/implement/harness'
 import { noteDatabase, type NoteRow, notesStore } from './fixtures/implement/stores'
 
 const N1 = '0190a0a0-0000-7000-8000-000000000001'
@@ -23,6 +26,21 @@ const inW1 = (action: string) => grant(action, { type: 'workspace', value: 'w1' 
 
 /** The declared fields of a note; every other field of the row stays in the store. */
 const view = (note: NoteRow) => ({ id: note.id, title: note.title })
+
+const INTERNAL = { error: { type: 'internal', message: 'Internal error' } }
+
+/** The lines written to the server log while `work` runs. */
+async function capturingLog(work: () => Promise<void>): Promise<string[]> {
+	const lines: string[] = []
+	const original = console.error
+	console.error = (...args: unknown[]) => void lines.push(args.map(String).join(' '))
+	try {
+		await work()
+	} finally {
+		console.error = original
+	}
+	return lines
+}
 
 describe('access forms', () => {
 	const app = bootApp(notesApp(seed()))
@@ -158,9 +176,16 @@ describe('the SPA', () => {
 describe('the token', () => {
 	const app = bootApp(notesApp(seed()))
 
-	test('no token is 401, a token for another application is 401', async () => {
+	test('no token is 401', async () => {
 		expect((await send(app, '/api/me', { body: {} })).status).toBe(401)
-		expect((await send(app, '/api/me', { token: await token('user', [grant('notes.read')], 'other-app'), body: {} })).status).toBe(401)
+	})
+
+	test('at notes@prod, a token for another environment, the bare application or another application is 401', async () => {
+		expect(resultOf(await send(app, '/api/me', { token: await token('user', [grant('notes.read')], 'notes@prod'), body: {} }))).toBeDefined()
+		for (const audience of ['notes@stage', 'notes', 'other@prod']) {
+			const sent = await send(app, '/api/me', { token: await token('user', [grant('notes.read')], audience), body: {} })
+			expect(`${audience} ${sent.status}`).toBe(`${audience} 401`)
+		}
 	})
 
 	test('an unreachable IAM is 503, never a 401', async () => {
@@ -266,11 +291,14 @@ describe('capabilities are bound to their request', () => {
 				machine: { importNotes: ({ input }) => ({ imported: input.titles.length }) },
 			}),
 		}))
-		const refused = await send(thief, '/api/me', { token: user, body: {} })
+		const logged = await capturingLog(async () => {
+			const refused = await send(thief, '/api/me', { token: user, body: {} })
+			expect(refused.status).toBe(500)
+			expect(refused.body).toEqual(INTERNAL)
+		})
 		finish()
 		expect(resultOf(await first)).toEqual({ id: N1, title: 'first' })
-		expect(refused.status).toBe(500)
-		expect(errorType(refused)).toBe('capability')
+		expect(logged.join('\n')).toContain('not to the one running now')
 	})
 
 	test('a value the framework did not mint is refused', () => {
@@ -312,6 +340,54 @@ describe('output projection', () => {
 	})
 })
 
+describe('union projection', () => {
+	const unions = defineContract({
+		app: 'notes',
+		dimensions: { note: {} },
+		actions: { 'notes.read': 'Read' },
+		roles: { reader: { grants: ['notes.read'] } },
+	}, (c) => ({
+		api: c.rpc('/api', { callers: ['human'] }, {
+			measure: c.query({
+				output: z.union([z.strictObject({ value: z.string() }), z.strictObject({ value: z.number(), count: z.number() })]),
+				access: { member: true },
+			}),
+			short: c.query({
+				output: z.union([z.strictObject({ value: z.string().min(5) }), z.strictObject({ value: z.number(), count: z.number() })]),
+				access: { member: true },
+			}),
+		}),
+	}))
+	const app = bootApp(implement(unions, {
+		database: null,
+		deps: () => null,
+		handlers: () => ({
+			api: {
+				measure: () => {
+					// Widened without a cast: the value still carries an undeclared field at runtime.
+					const value: { value: number; count: number } = { value: 1, count: 2, ...{ secret: 'internal' } }
+					return value
+				},
+				short: () => ({ value: 'abc' }),
+			},
+		}),
+	}))
+
+	test('takes the first branch that accepts the value, and drops what it does not declare', async () => {
+		const sent = await send(app, '/api/measure', { token: await token('user', [grant('notes.read')]), body: {} })
+		expect(resultOf(sent)).toEqual({ value: 1, count: 2 })
+	})
+
+	test('a value no branch accepts is a 500 with the fixed message', async () => {
+		const logged = await capturingLog(async () => {
+			const sent = await send(app, '/api/short', { token: await token('user', [grant('notes.read')]), body: {} })
+			expect(sent.status).toBe(500)
+			expect(sent.body).toEqual(INTERNAL)
+		})
+		expect(logged).toEqual(["fabrika: api.short: 'api.short' returned a value no branch of its output union accepts"])
+	})
+})
+
 describe('errors', () => {
 	function throwing(error: unknown) {
 		return implement(contract, {
@@ -350,10 +426,29 @@ describe('errors', () => {
 		expect((await answer(new ConflictError('version'))).status).toBe(409)
 	})
 
-	test('an unexpected error is 500 and says nothing about itself', async () => {
-		const sent = await answer(new Error('postgres://user:secret@db/notes refused'))
-		expect(sent.status).toBe(500)
-		expect(JSON.stringify(sent.body)).not.toContain('secret')
+	const CONNECTION = 'postgres://notes:s3cret-password@db.internal:5432/notes'
+
+	test('a 5xx answers a fixed message, and the log line carries no credential', async () => {
+		const thrown: unknown[] = [
+			new Error(`connect ECONNREFUSED ${CONNECTION}`),
+			new HttpError(500, 'internal', `query failed on ${CONNECTION}`, { issues: [CONNECTION] }),
+			new HttpError(502, 'upstream', CONNECTION),
+			Object.assign(new Error(CONNECTION), { name: 'CapabilityError' }),
+		]
+		for (const error of thrown) {
+			const logged = await capturingLog(async () => {
+				const sent = await answer(error)
+				expect(sent.status).toBeGreaterThanOrEqual(500)
+				expect(sent.body).toEqual(INTERNAL)
+			})
+			expect(logged.length).toBe(1)
+			expect(logged.join('\n')).not.toContain('s3cret')
+		}
+	})
+
+	test('a client error keeps its own message', async () => {
+		const sent = await answer(new HttpError(400, 'bad_request', 'title is too long'))
+		expect(sent.body).toEqual({ error: { type: 'bad_request', message: 'title is too long' } })
 	})
 
 	test('a non-canonical path is 400; an unknown procedure is 404 and never the SPA', async () => {
@@ -402,7 +497,7 @@ describe('the response header policy', () => {
 
 	test('the Operations ingest origin joins connect-src', async () => {
 		const reporting = bootApp(notesApp(seed()), {
-			env: { FABRIKA_APP_ID: 'notes', FABRIKA_IAM_ISSUER: 'https://iam.test', FABRIKA_OPERATIONS_DSN: 'https://key@ops.test/42' },
+			environment: environment({ ...FRAMEWORK_ENV, FABRIKA_OPERATIONS_DSN: 'https://key@ops.test/42' }),
 		})
 		const sent = await send(reporting, '/healthz')
 		expect(sent.headers.get('Content-Security-Policy')).toContain("connect-src 'self' https://ops.test;")

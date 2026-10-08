@@ -1,12 +1,21 @@
 // Signs tokens the way IAM does and sends requests the way the proxy forwards them, so the tests drive `boot`'s
 // real pipeline: the shared verifier, the endpoint table and the handlers.
 
-import { boot, type BootOptions, type ContractApp, type ContractImplementation, type IamKeySource, type SpaAssets } from '@fabrika/app/implement'
+import {
+	boot,
+	type BootOptions,
+	type CapturedEnvironment,
+	type ContractApp,
+	type ContractImplementation,
+	type IamKeySource,
+	type SpaAssets,
+} from '@fabrika/app/implement'
 import { buildAccessClaims, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 
 export const ISSUER = 'https://iam.test'
-export const APP_ID = 'notes'
+/** The token audience: the IAM id of the application in this environment. */
+export const APP_ID = 'notes@prod'
 export const ORIGIN = 'https://notes.test'
 
 const { publicKey, privateKey } = await generateKeyPair('ES256')
@@ -17,7 +26,28 @@ export const keySource: IamKeySource = { getJwks: () => Promise.resolve(JWKS) }
 
 export const unreachableIam: IamKeySource = { getJwks: () => Promise.reject(new Error('IAM is down')) }
 
-export const FRAMEWORK_ENV = { FABRIKA_APP_ID: APP_ID, FABRIKA_IAM_ISSUER: ISSUER }
+export const FRAMEWORK_ENV = { FABRIKA_IAM_APP_ID: APP_ID, FABRIKA_IAM_ISSUER: ISSUER }
+
+/** What `captureEnvironment` would return for `variables`, without scrubbing this test process's environment. */
+export function environment(variables: Readonly<Record<string, unknown>>): CapturedEnvironment {
+	const entries = Object.entries(variables)
+	return {
+		framework: Object.fromEntries(entries.flatMap(([name, value]) => name.startsWith('FABRIKA_') && typeof value === 'string' ? [[name, value]] : [])),
+		application: Object.fromEntries(entries.filter(([name]) => !name.startsWith('FABRIKA_'))),
+	}
+}
+
+/** Runs `work`, then puts back every `FABRIKA_*` variable it scrubbed: the test backends travel under that prefix. */
+export async function keepingProcessEnvironment<T>(work: () => Promise<T>): Promise<T> {
+	const saved = Object.entries(process.env).filter(([name]) => name.startsWith('FABRIKA_'))
+	try {
+		return await work()
+	} finally {
+		for (const [name, value] of saved) {
+			process.env[name] = value
+		}
+	}
+}
 
 /** Answers every SPA request with the mount's directory and the path, and a cache header the policy must replace. */
 export const echoAssets: SpaAssets = {
@@ -48,7 +78,7 @@ export async function token(kind: TokenKind, perms: PermissionEntry[], audience 
 }
 
 export function bootApp(app: ContractImplementation, options: Partial<BootOptions> = {}): ContractApp {
-	return boot(app, { env: FRAMEWORK_ENV, iam: keySource, assets: echoAssets, ...options })
+	return boot(app, { environment: environment(FRAMEWORK_ENV), iam: keySource, assets: echoAssets, ...options })
 }
 
 export interface Sent {

@@ -1,5 +1,6 @@
 // @fabrika/app/build — the generated entrypoint of a contract application, which `fabrika app build` writes. It is
-// the only module that reads `process.env` and the only caller of `boot`, through the runtime adapter.
+// the only module that reads `process.env` and the only caller of `boot`, through the runtime adapter, and it imports
+// the application only after the adapter took the framework's variables out of the process.
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -24,18 +25,18 @@ export function generatedEntry(runtime: EntryRuntime): string {
 			return [
 				HEADER,
 				"import { serveContract } from '@fabrika/app/bun'",
-				"import app from '../src/app'",
 				'',
-				'serveContract(app, process.env)',
+				'// The application is imported only after the framework took its variables out of the process.',
+				"await serveContract(() => import('../src/app'), process.env)",
 				'',
 			].join('\n')
 		case 'cloudflare':
 			return [
 				HEADER,
 				"import { createContractWorker } from '@fabrika/app/cloudflare'",
-				"import app from '../src/app'",
 				'',
-				'export default createContractWorker(app)',
+				'// The application is imported only after the framework took its variables out of the process.',
+				"export default createContractWorker(() => import('../src/app'))",
 				'',
 			].join('\n')
 	}

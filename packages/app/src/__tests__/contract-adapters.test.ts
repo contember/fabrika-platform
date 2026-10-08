@@ -1,19 +1,19 @@
 // The runtime adapters of a contract application: a Worker that boots with its first request's environment, the
 // Bun asset server, and the issuer's key set for a process without an IAM binding.
 
-import { diskAssets, issuerJwks } from '@fabrika/app/bun'
+import { diskAssets, issuerJwks, serveContract } from '@fabrika/app/bun'
 import { createContractWorker } from '@fabrika/app/cloudflare'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesApp } from './fixtures/implement/app'
-import { FRAMEWORK_ENV, grant, keySource, ORIGIN, token } from './fixtures/implement/harness'
+import { FRAMEWORK_ENV, grant, keepingProcessEnvironment, keySource, ORIGIN, token } from './fixtures/implement/harness'
 
 const exec = { waitUntil() {}, passThroughOnException() {} }
 
 describe('createContractWorker', () => {
-	const worker = createContractWorker(notesApp(new Map()))
+	const worker = createContractWorker(() => Promise.resolve({ default: notesApp(new Map()) }))
 	const assets = { fetch: (request: Request) => Promise.resolve(new Response(`asset ${new URL(request.url).pathname}`)) }
 
 	test('boots with the environment of the first request and serves through the IAM binding', async () => {
@@ -23,19 +23,44 @@ describe('createContractWorker', () => {
 			headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]), 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
 			body: '{}',
 		})
-		const response = await worker.fetch(request, env, exec)
+		const response = await keepingProcessEnvironment(() => worker.fetch(request, env, exec))
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ result: { id: 'user-1', label: 'user@notes.test' } })
-		const page = await worker.fetch(
-			new Request(`${ORIGIN}/`, { headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]) } }),
-			env,
-			exec,
-		)
+		const pageRequest = new Request(`${ORIGIN}/`, { headers: { 'X-Fabrika-Token': await token('user', [grant('notes.read')]) } })
+		const page = await keepingProcessEnvironment(() => worker.fetch(pageRequest, env, exec))
 		expect(await page.text()).toBe('asset /')
 	})
 
 	test('refuses to serve without the IAM binding', async () => {
-		expect(() => worker.fetch(new Request(`${ORIGIN}/healthz`), { ...FRAMEWORK_ENV, ASSETS: assets }, exec)).toThrow('the IAM binding is missing')
+		const refused = keepingProcessEnvironment(() => worker.fetch(new Request(`${ORIGIN}/healthz`), { ...FRAMEWORK_ENV, ASSETS: assets }, exec))
+		await expect(refused).rejects.toThrow('the IAM binding is missing')
+	})
+})
+
+describe('serveContract', () => {
+	test('imports the application only after the framework variables left the process', async () => {
+		await keepingProcessEnvironment(async () => {
+			const port = process.env['PORT']
+			Object.assign(process.env, { ...FRAMEWORK_ENV, FABRIKA_TEST_SECRET: 'database-password', PORT: '0' })
+			let loaded: readonly string[] = []
+			const server = await serveContract(async () => {
+				const module = await import('./fixtures/implement/snapshot-app')
+				loaded = module.snapshotKeys
+				return module
+			}, process.env)
+			try {
+				expect(loaded.filter((name) => name.startsWith('FABRIKA_'))).toEqual([])
+				expect(loaded).toContain('PORT')
+				expect((await fetch(`http://localhost:${server.port}/healthz`)).status).toBe(200)
+			} finally {
+				await server.stop()
+				if (port === undefined) {
+					delete process.env['PORT']
+				} else {
+					process.env['PORT'] = port
+				}
+			}
+		})
 	})
 })
 

@@ -53,7 +53,8 @@ src/
     capability.ts     Ref, Within, requestCapabilities (the CapabilityAuthority)
     principal.ts      caller kinds and principals from a verified token
     headers.ts        the response header policy
-    project.ts        output projection over the endpoint's SchemaShape
+    project.ts        output projection over the output's zod schema
+    environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
 ```
 
 ## Invariants
@@ -175,26 +176,42 @@ src/
   dimension and action itself. Both classes keep their grant in private fields and
   need a module-private token to construct; never export that token or the mint
   functions from `implement/index.ts`.
+- **A capability's facts are frozen at mint, and every resolution is a fresh copy.**
+  The chain is stored as frozen pairs, copied into a new `Map` through built-ins
+  captured at load, and `resolve` returns a new frozen grant each time. Whoever
+  changes a returned chain changes only their copy; the data layer's next
+  resolution still carries the chain that was checked. Never hand out the stored
+  chain itself (`capability-chain.test.ts`).
 - **`on` needs a table that owns its dimension** (`ContractDatabase.tables`); `boot`
   refuses the contract otherwise. `on` checks the action on the object or any
   container of its chain and answers 404 for both "missing" and "not yours"; `in`
   checks the action on the value itself, then that it exists when a table owns it.
-- **Output is projected, then validated:** `project` keeps the fields the endpoint's
-  `SchemaShape` declares, and the strict zod output schema validates the rest. A
-  value it refuses is a 500 that names the endpoint and nothing else.
-- **One error envelope**, `{ error: { type, message, issues? } }`. Structural errors
-  keep their status; `@fabrika/db`'s `NotFoundError` and `ConflictError` are read by
-  `name` (404, 409); any other error is a 500 whose message says nothing about it,
-  because it may quote a connection string.
+- **Output is projected, then validated:** `project` walks the output's zod schema
+  and keeps the fields it declares; a union takes the first branch, in order, whose
+  schema accepts the value reduced to it. The strict output schema then validates
+  the result. No accepting branch, or a refused value, is a 500.
+- **One error envelope**, `{ error: { type, message, issues? } }`. A client error
+  (4xx) keeps its message and issues; `@fabrika/db`'s `NotFoundError` and
+  `ConflictError` are read by `name` (404, 409). Every 5xx and every refused
+  capability answers the fixed `Internal error` (or `Service unavailable` for 503)
+  with no metadata, because a message may quote a connection string. The server log
+  gets one line: a framework-authored message (`ServerFault`,
+  `CapabilityRefusedError`) or only the error's name, never the error object.
 - **`boot` refuses to start rather than answer nothing**: a link, form or webhook
   mount, files, jobs, exports, imports, `creates`, an SPA without an asset server, a
   handler outside the contract, a missing handler. Each refusal lifts when its work
   unit ships the runtime.
-- **The framework's variables are every `FABRIKA_*` name.** `boot` reads
-  `FABRIKA_APP_ID` (the token audience), `FABRIKA_IAM_ISSUER` and
-  `FABRIKA_OPERATIONS_DSN` (its origin joins `connect-src`), deletes every
-  `FABRIKA_*` name from `process.env`, and hands `deps` the rest. The Worker adapter
-  also keeps the `IAM` and `ASSETS` bindings from it.
+- **The framework's variables are every `FABRIKA_*` name, and they leave the process
+  before any application module loads.** The runtime adapter calls
+  `captureEnvironment`, which keeps them in a frozen record and deletes them from
+  `process.env` and `Bun.env`; only then does the generated entrypoint's `import()`
+  load `src/app.ts`, so a dependency that copies the environment at module load
+  copies none of them. Never import the application statically from the entrypoint.
+  `boot` reads `FABRIKA_IAM_APP_ID` — the token audience `<app>@<env>`, whose
+  application part must equal `contract.app` — `FABRIKA_IAM_ISSUER` and
+  `FABRIKA_OPERATIONS_DSN` (its origin joins `connect-src`), and hands `deps` the
+  rest. `FABRIKA_APP_ID` is the Operations ingest coordinate, never an audience. The
+  Worker adapter also keeps the `IAM` and `ASSETS` bindings from `deps`.
 - **`handlers` is a function of what `deps` returned.** TypeScript cannot infer
   `deps`' type into `ctx` through the contract's conditional handler types, so a
   handler reaches its dependencies through that closure, not `ctx.deps`.
