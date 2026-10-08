@@ -33,7 +33,6 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
 - [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
 - [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
-- [78](78-register-a-zerops-app-from-local-config-in-one-command.md) — Compose the existing local manifest build and Control registration into one command without executing application code in Control.
 - [79](79-a-namespace-target-cannot-be-changed-after-creation.md) — A namespace's provider target is written once; no API takes a new one, and removing a namespace leaves its Zerops project behind.
 - [80](80-harmonize-the-admin-rpc-principal-inputs.md) — Two admin-RPC procedures name the same principal by two different keys, so the obvious call is refused.
 - [81](81-exercise-a-private-keyed-deploy-in-the-local-stack.md) — The local stack cannot exercise a keyed private deploy or a bound-app webhook: Control mints installation tokens against real GitHub.

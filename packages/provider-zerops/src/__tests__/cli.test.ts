@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { readZeropsSourceDescriptor, runZeropsCli } from '../cli'
+import { buildZeropsManifestText, readZeropsSourceDescriptor, runZeropsCli } from '../cli'
 import { parseFabrikaManifest, ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES } from '../manifest'
 
 const roots: string[] = []
@@ -99,5 +99,28 @@ describe('Zerops source descriptor loading', () => {
 		}
 		const manifest: unknown = JSON.parse(await Bun.file(join(root, 'fabrika.manifest.json')).text())
 		expect(parseFabrikaManifest(manifest).target.sourceDescriptor.contents).toBe(descriptor)
+	})
+
+	test('the in-memory build is byte-for-byte the file build writes, and writes nothing', async () => {
+		const root = await temporaryRoot()
+		const authoringUrl = pathToFileURL(join(import.meta.dir, '..', 'authoring.ts')).href
+		await writeFile(join(root, 'zerops.yaml'), 'zerops:\n  - setup: app\n')
+		await writeFile(
+			join(root, 'fabrika.config.ts'),
+			`import { defineApp } from ${
+				JSON.stringify(authoringUrl)
+			}\nexport default defineApp({ id: 'app', target: { platform: 'zerops', services: () => [{ hostname: 'app', type: 'alpine/bun@1.3' }] } })\n`,
+		)
+		const originalCwd = process.cwd()
+		let text: string
+		try {
+			process.chdir(root)
+			text = await buildZeropsManifestText({ config: './fabrika.config.ts', env: 'prod' })
+			expect(await Bun.file(join(root, 'fabrika.manifest.json')).exists()).toBe(false)
+			await runZeropsCli(['build', '--env=prod'])
+		} finally {
+			process.chdir(originalCwd)
+		}
+		expect(text).toBe(await Bun.file(join(root, 'fabrika.manifest.json')).text())
 	})
 })

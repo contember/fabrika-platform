@@ -21,6 +21,7 @@ import type {
 	PutAppEnvRequest,
 	PutAppVarRequest,
 	RegisterAppRequest,
+	RegisterAppResponse,
 	RunDto,
 } from '@fabrika/control-contract'
 import { z } from 'zod'
@@ -223,14 +224,18 @@ const readJsonFile = async (path: string): Promise<JsonValue> => {
 	if (!(await file.exists())) {
 		throw new Error(`No such file: ${path}`)
 	}
-	const text = await file.text()
+	return parseJsonText(await file.text(), path)
+}
+
+/** `label` names the source in errors: a file path, or what produced an in-memory manifest. */
+const parseJsonText = (text: string, label: string): JsonValue => {
 	try {
 		const parsed: unknown = JSON.parse(text)
 		const result = jsonValueSchema.safeParse(parsed)
-		if (!result.success) throw new Error(`${path} contains a value JSON cannot carry`)
+		if (!result.success) throw new Error(`${label} contains a value JSON cannot carry`)
 		return result.data
 	} catch (error) {
-		throw error instanceof SyntaxError ? new Error(`${path} is not valid JSON`) : error
+		throw error instanceof SyntaxError ? new Error(`${label} is not valid JSON`) : error
 	}
 }
 
@@ -324,15 +329,12 @@ const decodeIssueKeyResult = (value: unknown): IssueKeyResult => {
 	return result.data
 }
 
-const runRegister = async (flags: Flags, provider: string | undefined, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
-	if (provider === undefined || provider === '') {
-		throw new Error('--provider=<name> is required: it labels the envelope this registration carries.')
-	}
-	const manifestPath = required(flags, 'manifest')
-	const manifest = await readJsonFile(manifestPath)
-	// The envelope's version is the manifest's own, never a literal: `fabrika app build` writes the
-	// version its provider's codec accepts, and a hardcoded one goes stale the moment that codec moves.
-	const version = manifestVersion(manifest, manifestPath)
+const registrationLine = (result: RegisterAppResponse): string => `${result.app.id}\t${result.env.env}\t${result.env.provider}`
+
+/** Everything a registration carries except the manifest, read from flags before any manifest exists. */
+type RegistrationInputs = Omit<RegisterAppRequest, 'target' | 'artifact'>
+
+const registrationInputs = (flags: Flags): RegistrationInputs => {
 	const installationId = optional(flags, 'installation-id')
 	// Three states, because the registry has three: absent resolves from the connected GitHub App,
 	// `none` is the anonymous public-repository path, and a number names one installation outright.
@@ -341,13 +343,10 @@ const runRegister = async (flags: Flags, provider: string | undefined, env: Read
 	const publicOrigin = optional(flags, 'public-origin')
 	const triggerRef = optional(flags, 'trigger-ref')
 	const namespaceId = optional(flags, 'namespace')
-	const body: RegisterAppRequest = {
+	return {
 		id: required(flags, 'app'),
 		repoUrl: required(flags, 'repo'),
 		env: required(flags, 'env'),
-		// An empty placeholder: registration DISCOVERS the real target from the manifest and replaces this.
-		target: { provider, version, payload: {} },
-		artifact: { provider, version, payload: manifest },
 		...(installationId === undefined
 			// Blank → resolve from the installed GitHub App, which is what the console's empty field means.
 			? { resolveInstallationId: true }
@@ -359,8 +358,81 @@ const runRegister = async (flags: Flags, provider: string | undefined, env: Read
 		...(triggerRef === undefined ? {} : { triggerRef }),
 		...(namespaceId === undefined ? {} : { namespaceId }),
 	}
+}
+
+/** The one request both `control register` and `app register` send, so the two cannot differ on the wire. */
+const registrationRequest = (inputs: RegistrationInputs, provider: string, manifest: JsonValue, label: string): RegisterAppRequest => {
+	// The envelope's version is the manifest's own, never a literal: `fabrika app build` writes the
+	// version its provider's codec accepts, and a hardcoded one goes stale the moment that codec moves.
+	const version = manifestVersion(manifest, label)
+	const { id, repoUrl, env, ...placement } = inputs
+	return {
+		id,
+		repoUrl,
+		env,
+		// An empty placeholder: registration DISCOVERS the real target from the manifest and replaces this.
+		target: { provider, version, payload: {} },
+		artifact: { provider, version, payload: manifest },
+		...placement,
+	}
+}
+
+const runRegister = async (flags: Flags, provider: string | undefined, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	if (provider === undefined || provider === '') {
+		throw new Error('--provider=<name> is required: it labels the envelope this registration carries.')
+	}
+	const manifestPath = required(flags, 'manifest')
+	const manifest = await readJsonFile(manifestPath)
+	const body = registrationRequest(registrationInputs(flags), provider, manifest, manifestPath)
 	const result = await controlClient(flags, env).register(body)
-	emit(flags, result, () => `${result.app.id}\t${result.env.env}\t${result.env.provider}`)
+	emit(flags, result, () => registrationLine(result))
+}
+
+/** Compiles the app's manifest for one environment and returns the exact text `app build` would write. */
+export type ManifestTextCompiler = (environment: string) => Promise<string>
+
+const IN_MEMORY_MANIFEST = 'the compiled manifest'
+
+const failureMessage = (error: unknown): string => {
+	if (error instanceof RpcError) return `${error.type}: ${error.message}`
+	return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * `fabrika app register`: compile in memory, then send the SAME request `control register` sends for
+ * that manifest read from disk. Inputs, the control origin and the credential are checked before the
+ * compile; nothing is written locally in either phase.
+ */
+export const registerCompiledManifest = async (
+	argv: readonly string[],
+	provider: string,
+	compile: ManifestTextCompiler,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<void> => {
+	const flags = parseControlFlags(argv)
+	for (const refused of ['manifest', 'output']) {
+		if (flags.values.has(refused)) {
+			throw new Error(
+				`\`app register\` compiles the manifest in memory and takes no --${refused}; use \`control register --manifest=<path>\` for a built file.`,
+			)
+		}
+	}
+	const inputs = registrationInputs(flags)
+	const client = controlClient(flags, env)
+	let body: RegisterAppRequest
+	try {
+		const manifest = parseJsonText(await compile(inputs.env), IN_MEMORY_MANIFEST)
+		body = registrationRequest(inputs, provider, manifest, IN_MEMORY_MANIFEST)
+	} catch (error) {
+		throw new Error(`Compile phase failed; nothing was registered. ${failureMessage(error)}`)
+	}
+	let result: RegisterAppResponse
+	try {
+		result = await client.register(body)
+	} catch (error) {
+		throw new Error(`Register phase failed after a successful compile; no manifest file was written. ${failureMessage(error)}`)
+	}
+	emit(flags, result, () => registrationLine(result))
 }
 
 /**

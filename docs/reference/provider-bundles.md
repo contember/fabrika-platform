@@ -399,6 +399,11 @@ The resulting `fabrika.manifest.json` is the provider-owned artifact. The contro
 plane validates and stores it, then performs deployments without importing the
 app's TypeScript.
 
+`fabrika app register --env=<env> --app=<id> --repo=<url> [control register options]`
+builds the same artifact in memory and immediately sends the create-only
+`control register` request for it. It writes no file, and Control still never
+runs application code.
+
 The same public command exposes the provider-owned namespace operator:
 
 ```text

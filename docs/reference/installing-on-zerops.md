@@ -199,6 +199,17 @@ RPC contract ([ADR-0033](../decisions/0033-operate-the-control-plane-from-the-cl
    `--installation-id=none` registers an anonymous public repository; omitting the flag resolves the
    installation from the organization's connected GitHub App. A changed manifest is applied later with
    `fabrika control apps environments put`, never with a second `register`.
+
+   Steps 3 and 4 are also one command, run from the application's repository root:
+
+   ```bash
+   fabrika app register --app=<id> --repo=<url> --env=<name> --namespace=<id> --domain=<a free host from step 2>
+   ```
+
+   It compiles the manifest in memory exactly as `app build` does and sends the request `control register`
+   sends for that file, so it takes the same options except `--manifest`. It writes no file. The control
+   origin and `FABRIKA_CONTROL_KEY` come from the same places. A failure names its phase: a compile
+   failure registered nothing, and a register failure left nothing on disk.
 5. **Deploy.**
 
    ```bash

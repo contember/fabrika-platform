@@ -4,7 +4,7 @@ import { BUILDER_USAGE, runBuilderCli } from '@fabrika/builder'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
-import { CONTROL_USAGE, runControlCli } from './control.js'
+import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
 
 const USAGE = `fabrika — application platform CLI
 
@@ -17,12 +17,19 @@ Usage:
   fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>]
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
+  fabrika app register [--provider=zerops] --env=<env> --app=<id> --repo=<url> [--config=<path>]
+                       [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
+                       [--namespace=<id>] [--installation-id=<n|none>] [--url=<origin>] [--json]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
   fabrika control <key|apps|namespaces|register|deploy|runs> [options]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
+
+\`app register\` compiles the manifest in memory, exactly as \`app build\` would, and sends the request
+\`control register --manifest=<path>\` sends for it. It writes no file, CREATES only, and reads the
+control credential from FABRIKA_CONTROL_KEY alone; a changed manifest is \`control apps environments put\`.
 
 \`fabrika control\` is the operator's non-browser client for the control plane (ADR-0033). It is
 provider-neutral, loads no installation package, and speaks the same typed API the console does. Run
@@ -155,6 +162,12 @@ const runApp = async (parsed: ParsedCommand): Promise<void> => {
 		return
 	}
 	if (provider === 'zerops') {
+		if (parsed.command === 'register') {
+			const { buildZeropsManifestText } = await import('@fabrika/provider-zerops/cli')
+			const config = configPath(parsed.rest)
+			await registerCompiledManifest(parsed.rest, provider, (env) => buildZeropsManifestText({ config, env }))
+			return
+		}
 		if (parsed.command !== 'build') {
 			throw new Error(`Zerops app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
 		}

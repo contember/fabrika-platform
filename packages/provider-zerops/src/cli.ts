@@ -8,6 +8,7 @@ import { parseZeropsCliArgs } from './cli-args'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
+	type FabrikaManifest,
 	manifestServiceHostnames,
 	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 } from './manifest'
@@ -69,6 +70,24 @@ export const readZeropsSourceDescriptor = async (root: string = process.cwd()) =
 	}
 }
 
+export interface ZeropsManifestBuildOptions {
+	/** App config path, resolved against the working directory like `--config`. */
+	readonly config: string
+	readonly env: string
+}
+
+const compileManifest = async (options: ZeropsManifestBuildOptions): Promise<FabrikaManifest> => {
+	const config = await loadConfig(options.config)
+	const sourceDescriptor = await readZeropsSourceDescriptor()
+	return compileFabrikaManifest(config, options.env, sourceDescriptor)
+}
+
+const serializeManifest = (manifest: FabrikaManifest): string => `${JSON.stringify(manifest, null, '\t')}\n`
+
+/** The exact text `build` writes to `fabrika.manifest.json`, produced in memory and written nowhere. */
+export const buildZeropsManifestText = async (options: ZeropsManifestBuildOptions): Promise<string> =>
+	serializeManifest(await compileManifest(options))
+
 export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	const args = parseZeropsCliArgs(argv)
 	if (args.help || args.command === undefined) {
@@ -81,11 +100,9 @@ export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	if (args.env === undefined || args.env === '') {
 		throw new Error('`build` requires --env=<env>')
 	}
-	const config = await loadConfig(args.config)
-	const sourceDescriptor = await readZeropsSourceDescriptor()
-	const manifest = compileFabrikaManifest(config, args.env, sourceDescriptor)
+	const manifest = await compileManifest({ config: args.config, env: args.env })
 	const output = resolve(process.cwd(), args.output)
-	await Bun.write(output, `${JSON.stringify(manifest, null, '\t')}\n`)
+	await Bun.write(output, serializeManifest(manifest))
 	console.info(`wrote ${output} (${manifestServiceHostnames(manifest).length} service(s))`)
 }
 
