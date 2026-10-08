@@ -30,7 +30,10 @@ export interface ClientOptions {
 	readonly baseUrl?: string
 	/** Override `fetch` (tests, a script). Defaults to the global `fetch`. */
 	readonly fetch?: RpcFetch
-	/** A `px_` key, sent as `Authorization: Bearer`. A request with a key carries no cookie. */
+	/**
+	 * A `px_` key, sent as `Authorization: Bearer`. A request with a key carries no cookie. In a browser the key goes
+	 * only to the page's own origin.
+	 */
 	readonly key?: string
 	/** On a 401 that carries a login URL, send the browser to sign in instead of throwing. */
 	readonly bounceOnAuth?: BounceOption
@@ -56,12 +59,12 @@ function caller(target: CallTarget, options: ClientOptions, bounce: BounceConfig
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
-		const result = await exchange(options.fetch ?? fetch, target.url, {
+		const result = await exchange(options.fetch ?? fetch, target.url, () => ({
 			method: 'POST',
 			credentials: options.key === undefined ? 'same-origin' : 'omit',
 			headers,
 			body: JSON.stringify(input ?? {}),
-		}, bounce)
+		}), bounce)
 		const parsed = z.safeParse(target.output, result)
 		if (!parsed.success) {
 			throw new RpcError({ type: 'invalid-response', message: `'${target.id}' answered a value its output schema refuses`, httpStatus: 200 })
@@ -100,6 +103,13 @@ function coversTree(value: unknown, tree: ProcedureTreeDeclaration<Schema, unkno
 	})
 }
 
+/** The page's origin when the client runs in a browser, else `null`. */
+function pageOrigin(): string | null {
+	const location: unknown = Reflect.get(globalThis, 'location')
+	const origin: unknown = typeof location === 'object' && location !== null ? Reflect.get(location, 'origin') : undefined
+	return typeof origin === 'string' ? origin : null
+}
+
 /**
  * The client of mount `mount` of `contract`: one function per declared procedure. A link mount's client sends its
  * share key as a bearer, so `options.key` is required there.
@@ -121,6 +131,11 @@ export function createClient<const C extends AnyContract, const M extends Client
 	const base = node.kind === 'link' ? joinPath(node.prefix, LINK_API_SEGMENT) : node.prefix
 	const bounce = resolveBounce(`${contract.vocabulary.app}:${mount}`, options.bounceOnAuth)
 	const origin = (options.baseUrl ?? '').replace(/\/+$/, '')
+	const page = pageOrigin()
+	// A page's key goes only to the page's own application; a script names the application it calls.
+	if (options.key !== undefined && page !== null && origin !== '' && new URL(origin, page).origin !== page) {
+		throw new Error(`a client with a key in a browser calls only ${page}; baseUrl '${origin}' is another origin`)
+	}
 	const client = clientTree(node.procedures, { mount, origin, base, path: '' }, (target) => caller(target, options, bounce))
 	// The tree was built from this mount's declaration; the check ties the value to the type the contract derives.
 	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures)

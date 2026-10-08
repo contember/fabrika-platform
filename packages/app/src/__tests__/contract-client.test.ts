@@ -152,3 +152,35 @@ describe('a link mount client', () => {
 		expect(() => createClient(linkContract, 'shared', { key: '' })).toThrow("'shared' is a link mount; its client needs the share key")
 	})
 })
+
+describe('serialization and destinations', () => {
+	test('an input that does not serialize rejects with an RpcError', async () => {
+		const cyclic: Record<string, unknown> = { workspaceId: 'w1', title: 'x' }
+		cyclic['self'] = cyclic
+		const api = createClient(contract, 'api', { fetch: answering({ result: {} }) })
+		const pending = Reflect.apply(api.notes.create, undefined, [cyclic])
+		expect(pending).toBeInstanceOf(Promise)
+		expect((await failure(pending)).type).toBe('transport')
+	})
+
+	test('outside a browser, an explicit baseUrl names the application a script calls', async () => {
+		const { sent, fetch } = recording(answering({ result: { id: 'm', label: 'machine' } }))
+		await createClient(contract, 'api', { fetch, key: 'px_script', baseUrl: 'https://other.test' }).me()
+		expect(sent[0]?.url).toBe('https://other.test/api/me')
+	})
+
+	test('in a browser, a key goes only to the page origin', async () => {
+		const { sent, fetch } = recording(answering({ result: { id: 'm', label: 'machine' } }))
+		Reflect.set(globalThis, 'location', new URL('https://notes.test/app/'))
+		try {
+			expect(() => createClient(contract, 'api', { fetch, key: 'px_page', baseUrl: 'https://unrelated.test' })).toThrow(
+				"a client with a key in a browser calls only https://notes.test; baseUrl 'https://unrelated.test' is another origin",
+			)
+			await createClient(contract, 'api', { fetch, key: 'px_page', baseUrl: 'https://notes.test' }).me()
+			await createClient(contract, 'api', { fetch, key: 'px_page' }).me()
+		} finally {
+			Reflect.deleteProperty(globalThis, 'location')
+		}
+		expect(sent.map(({ url }) => url)).toEqual(['https://notes.test/api/me', 'https://notes.test/api/me'])
+	})
+})

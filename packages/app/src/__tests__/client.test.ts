@@ -121,4 +121,14 @@ describe('createRpcClient', () => {
 		expect(error.message).toBe('Network request failed')
 		expect(error.httpStatus).toBe(0)
 	})
+
+	test('an input that does not serialize rejects with RpcError instead of throwing', async () => {
+		const cyclic: Record<string, unknown> = {}
+		cyclic['self'] = cyclic
+		const client = createRpcClient<AppRouter>({ baseUrl: 'https://x/api/rpc', fetch: () => Promise.resolve(Response.json({ result: null })) })
+		const pending = Reflect.apply(client.echo, undefined, [cyclic])
+		expect(pending).toBeInstanceOf(Promise)
+		const error = await pending.then(() => null, (cause: unknown) => cause)
+		expect(error).toBeInstanceOf(RpcError)
+	})
 })

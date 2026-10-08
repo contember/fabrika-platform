@@ -4,6 +4,7 @@
 
 import { createClient, RpcError } from '@fabrika/app/client'
 import { testKit } from '@fabrika/app/testing'
+import { MAX_ACCESS_TOKEN_BYTES } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
@@ -195,5 +196,74 @@ describe('test callers', () => {
 		const alice = kit.testCaller([{ action: 'notes.read' }], { via: 'key', id: 'alice', label: 'alice@notes.test' })
 		const api = createClient(contract, 'api', { fetch: kit.fetch, key: alice.key ?? '' })
 		expect(await api.me()).toEqual({ id: 'alice', label: 'alice@notes.test' })
+	})
+})
+
+describe('the browser and the hop stay on the application', () => {
+	test('a destination other than the application is refused, not answered as the application', async () => {
+		const kit = testKit(notesApp(seed()))
+		const person = kit.testCaller([{ action: 'notes.read' }])
+		const elsewhere = createClient(contract, 'api', { fetch: kit.browser(person), baseUrl: 'https://unrelated.test' })
+		expect(await failure(elsewhere.me())).toMatchObject({ type: 'transport', httpStatus: 0 })
+		await expect(kit.fetch('https://unrelated.test/healthz')).rejects.toThrow('the test kit serves only https://notes.test')
+	})
+
+	test('credentials: omit sends no session', async () => {
+		const kit = testKit(notesApp(seed()))
+		const person = kit.testCaller([{ action: 'notes.read' }])
+		const fromString = await kit.browser(person)('/api/me', { ...post({}), credentials: 'omit' })
+		expect(fromString.status).toBe(401)
+		const fromRequest = await kit.browser(person)(new Request('https://notes.test/api/me', post({})), {
+			headers: post({}).headers,
+			credentials: 'omit',
+		})
+		expect(fromRequest.status).toBe(401)
+	})
+
+	test('the headers of a Request input are the ones sent', async () => {
+		const kit = testKit(notesApp(seed()))
+		const person = kit.testCaller([{ role: 'editor', scope: W1 }])
+		const crossSite = new Request('https://notes.test/api/notes.create', post({ workspaceId: 'w1', title: 'x' }, { 'Sec-Fetch-Site': 'cross-site' }))
+		const response = await kit.browser(person)(crossSite)
+		expect(response.status).toBe(403)
+		expect(await response.json()).toMatchObject({ error: { type: 'admission' } })
+	})
+})
+
+describe('the token size bound', () => {
+	test('a token up to MAX_ACCESS_TOKEN_BYTES is forwarded; one byte-step above it is 403', async () => {
+		const forwarded: number[] = []
+		const kit = testKit(notesApp(seed()), {
+			assets: {
+				serve: (_mount, request) => {
+					forwarded.push(request.headers.get('X-Fabrika-Token')?.length ?? 0)
+					return Promise.resolve(new Response('ok'))
+				},
+			},
+		})
+		const statusWith = async (length: number) => {
+			const caller = kit.testCaller([{ action: 'notes.read', scope: { type: 'workspace', value: 'w'.repeat(length) } }])
+			return (await kit.browser(caller)('/')).status
+		}
+		let fits = 0
+		let tooLarge = MAX_ACCESS_TOKEN_BYTES
+		expect(await statusWith(fits)).toBe(200)
+		expect(await statusWith(tooLarge)).toBe(403)
+		while (tooLarge - fits > 1) {
+			const middle = Math.floor((fits + tooLarge) / 2)
+			if ((await statusWith(middle)) === 200) {
+				fits = middle
+			} else {
+				tooLarge = middle
+			}
+		}
+		await statusWith(fits)
+		const largest = forwarded.at(-1) ?? 0
+		// One more character of the scope adds one or two characters of base64url to the token.
+		expect(largest).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
+		expect(largest).toBeGreaterThanOrEqual(MAX_ACCESS_TOKEN_BYTES - 1)
+		const refused = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: { type: 'workspace', value: 'w'.repeat(tooLarge) } }]))('/')
+		expect(refused.status).toBe(403)
+		expect(await refused.text()).toBe('forbidden')
 	})
 })

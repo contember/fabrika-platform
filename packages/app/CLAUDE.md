@@ -269,7 +269,10 @@ src/
   it. The tree's type is tied to the value by one structural check (`coversTree`),
   not a cast.
 - **A key client sends no cookie** (`credentials: 'omit'`): a request presents one
-  credential. A link mount's client requires its key.
+  credential. A link mount's client requires its key. In a browser (`location` set) a
+  client with a key refuses a `baseUrl` of another origin; a script names its target.
+- **The transport builds the request inside its guard** (`exchange` takes a builder):
+  an input that does not serialize rejects with `RpcError`, it never throws.
 - **The kit runs the real `boot` and dispatcher**; only the proxy and IAM are stand-ins.
   Its tokens are signed with a generated key and verified by the application's own
   verifier, so a test cannot reach a handler the production pipeline would refuse.
@@ -278,6 +281,12 @@ src/
   ADR-0022's endpoint steps with `planEndpoint` and `satisfies`; it is not a gate
   evaluator. A decision over generated gates plugs in through `options.proxy`, and the
   proxy's own decision function replaces both once the proxy decides per endpoint (B2).
+- **The kit answers only its own origin.** `kit.fetch` refuses another host, and
+  `kit.browser` reads the effective request (a `Request` input's headers, `init`'s
+  `credentials: 'omit'`) before it adds the session. A token above
+  `MAX_ACCESS_TOKEN_BYTES` (`@fabrika/auth-core`) is 403, as IAM and the proxy answer.
+- **Only test files load the kit.** `@fabrika/check`'s `test-only-import` refuses
+  `@fabrika/app/testing`, and any test module, in a non-test file.
 - **A forwarded request is stripped like the proxy strips it**: every `X-Fabrika-*`
   header, `UNTRUSTED_FORWARD_HEADERS` and the `__Host-px_*` cookies; an anonymous
   endpoint also loses `Authorization`.

@@ -78,11 +78,14 @@ function normalizeError(
 	return { type: 'error', message: `HTTP ${httpStatus}`, httpStatus }
 }
 
-/** Sends one request and answers the envelope's `result`; every failure is an `RpcError`. */
-export async function exchange(doFetch: RpcFetch, url: string, init: RequestInit, bounce: BounceConfig | null): Promise<unknown> {
+/**
+ * Sends one request and answers the envelope's `result`; every failure is an `RpcError`. `init` builds the request
+ * inside the guard, so an input that does not serialize rejects like a failed request instead of throwing.
+ */
+export async function exchange(doFetch: RpcFetch, url: string, init: () => RequestInit, bounce: BounceConfig | null): Promise<unknown> {
 	let response: Response
 	try {
-		response = await doFetch(url, init)
+		response = await doFetch(url, init())
 	} catch {
 		throw new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 })
 	}

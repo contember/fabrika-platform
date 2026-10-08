@@ -10,6 +10,7 @@ import {
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	type Jwks,
+	MAX_ACCESS_TOKEN_BYTES,
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
 	SESSION_COOKIE,
@@ -183,7 +184,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 	}
 
 	/** What the application receives: no header a client may assert, no proxy cookie, and the token when there is a caller. */
-	async function forwarded(request: Request, caller: TestCaller | null): Promise<Request> {
+	async function forwarded(request: Request, token: string | null): Promise<Request> {
 		const headers = new Headers(request.headers)
 		for (const header of [...headers.keys()]) {
 			if (header.toLowerCase().startsWith('x-fabrika-')) {
@@ -199,11 +200,11 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		} else {
 			headers.set('Cookie', cookies)
 		}
-		if (caller === null) {
+		if (token === null) {
 			// An anonymous endpoint never receives a credential that arrived with the request.
 			headers.delete('Authorization')
 		} else {
-			headers.set(PROXY_TOKEN_HEADER, await mint(caller))
+			headers.set(PROXY_TOKEN_HEADER, token)
 		}
 		const body = request.method === 'GET' || request.method === 'HEAD' ? null : await request.arrayBuffer()
 		return new Request(request.url, { method: request.method, headers, body })
@@ -211,11 +212,19 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 
 	const kitFetch: RpcFetch = async (input, init) => {
 		const request = toRequest(origin, input, init)
+		if (new URL(request.url).origin !== origin) {
+			throw new TypeError(`the test kit serves only ${origin}, not ${new URL(request.url).origin}`)
+		}
 		const verdict = decide({ method: request.method, rawPath: rawRequestTarget(request.url).pathname, credential: presented(request.headers) })
 		if (verdict.outcome !== 'forward') {
 			return refusal(verdict, request.headers)
 		}
-		return application.fetch(await forwarded(request, verdict.caller))
+		const token = verdict.caller === null ? null : await mint(verdict.caller)
+		if (token !== null && token.length > MAX_ACCESS_TOKEN_BYTES) {
+			// IAM refuses to sign it, and the proxy answers the refusal.
+			return refusal({ outcome: 'refuse', status: 403, reason: 'token_too_large' }, request.headers)
+		}
+		return application.fetch(await forwarded(request, token))
 	}
 
 	function browser(caller?: TestCaller): RpcFetch {
@@ -223,17 +232,20 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 			throw new Error(`a browser carries a session; pass the ${caller.kind}'s key to createClient instead`)
 		}
 		return (input, init) => {
-			const headers = new Headers(init?.headers)
+			const request = toRequest(origin, input, init)
+			// Bun's Request does not keep its credentials mode, so `init` is the only reliable reading of it.
+			const credentials = init?.credentials ?? (input instanceof Request ? input.credentials : undefined)
+			const headers = new Headers(request.headers)
 			if (!headers.has('Sec-Fetch-Site')) {
 				headers.set('Sec-Fetch-Site', 'same-origin')
 			}
 			if (!headers.has('Sec-Fetch-Mode')) {
 				headers.set('Sec-Fetch-Mode', 'cors')
 			}
-			if (caller !== undefined && caller.cookie !== null && init?.credentials !== 'omit') {
+			if (caller !== undefined && caller.cookie !== null && credentials !== 'omit') {
 				headers.set('Cookie', caller.cookie)
 			}
-			return kitFetch(input, { ...init, headers })
+			return kitFetch(new Request(request, { headers }))
 		}
 	}
 

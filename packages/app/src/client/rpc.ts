@@ -18,12 +18,12 @@ export interface RpcClientOptions {
 }
 
 function callRpc(opts: RpcClientOptions, bounce: BounceConfig | null, method: string, input: unknown): Promise<unknown> {
-	return exchange(opts.fetch ?? fetch, opts.baseUrl, {
+	return exchange(opts.fetch ?? fetch, opts.baseUrl, () => ({
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({ method, input: input ?? null }),
-	}, bounce)
+	}), bounce)
 }
 
 function makeProxy(opts: RpcClientOptions, bounce: BounceConfig | null, path: string): unknown {

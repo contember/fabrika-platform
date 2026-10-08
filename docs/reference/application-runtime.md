@@ -287,8 +287,10 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
   answer is parsed with the output schema; an answer it refuses is an `RpcError` of
   type `invalid-response`, never a value.
 - `key` sends a `px_` key as `Authorization: Bearer` and no cookie. A link mount's
-  client needs it: the share key is the caller. Without a key the request is
-  same-origin and carries the session cookie.
+  client needs it: the share key is the caller. In a browser, a client with a key
+  refuses a `baseUrl` of another origin. Without a key the request is same-origin and
+  carries the session cookie.
+- An input that does not serialize rejects with an `RpcError`.
 - An error envelope, or a proxy denial, is an `RpcError` with `type`, `httpStatus`,
   `issues` and `loginUrl`. `bounceOnAuth` sends the browser to sign in on a 401 that
   carries a login URL, as `createRpcClient` does.
@@ -314,8 +316,13 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   A human signs in with a session (`cookie`) or a `px_` key; `machine` and `link`
   callers present a key.
 - `kit.fetch` takes a request as it reaches the proxy; `kit.browser(caller?)` adds
-  what a page of the application sends: `Sec-Fetch-Site: same-origin` and the
-  caller's session cookie.
+  what a page of the application sends: `Sec-Fetch-Site: same-origin` and, unless the
+  request's credentials are `omit`, the caller's session cookie. Both refuse a host
+  other than the application's.
+- A caller whose token would exceed `MAX_ACCESS_TOKEN_BYTES` (8 KiB) is refused with
+  403, as IAM refuses to sign it.
+- Only test files may import the kit: `@fabrika/check` reports `test-only-import`
+  for `@fabrika/app/testing`, or a test module, loaded from any other file.
 - The proxy decision (`ProxyDecision`) runs first: by default `endpointDecision`,
   the steps of ADR-0022 over the endpoint table — canonical path (400),
   `planEndpoint` (no endpoint is 403), a `px_` key whose caller kind must be a caller
