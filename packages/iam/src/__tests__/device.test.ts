@@ -3,8 +3,8 @@ import {
 	parseStartDeviceAuthorizationResult,
 	permits,
 	type StartDeviceAuthorizationInput,
-	uuidv7,
 } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { HttpIamRpc } from '../../../auth/src/rpc-http'
 import { createIamApp } from '../app'

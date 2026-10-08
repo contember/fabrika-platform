@@ -9,10 +9,9 @@ import {
 	type RunTailResponse,
 	type TriggerDeployRequest,
 } from '@fabrika/control-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { type BlobStore, type JobQueue, uuidv7 } from '@fabrika/platform'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
-import { uuidv7 } from '../db'
 import { appScope, envScope } from '../iam'
 import { isRefPattern } from '../ref-match'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'

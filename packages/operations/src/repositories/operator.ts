@@ -1,6 +1,5 @@
 import type { IssueStatus } from '@fabrika/operations-contract'
-import type { SqlDatabase } from '@fabrika/platform'
-import { uuidv7 } from '../uuid.js'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import type { ReleaseRow } from './artifacts.js'
 import type { IssueRow } from './issue-row.js'
 import { issueRow } from './issue-row.js'

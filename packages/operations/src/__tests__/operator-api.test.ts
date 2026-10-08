@@ -1,39 +1,11 @@
 import type { AuthContext, DomainEvent, PrincipalList } from '@fabrika/auth'
-import type { IngestMessage } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { EmptyQueue, MemoryBlobs } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { SqliteHealthRepository } from '../health-repository.js'
 import { type OperationsOperatorOptions, OperationsOperatorUseCases } from '../operator-api.js'
 import { healthCheckSchema, issueMutationSchema } from '../operator-input.js'
 import { persistIngest } from '../pipeline.js'
 import { createHarness } from './helpers/sqlite.js'
-
-class MemoryBlobs implements BlobStore {
-	readonly values = new Map<string, string>()
-
-	put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<void> {
-		if (typeof value !== 'string') throw new Error('test blob store accepts strings only')
-		this.values.set(key, value)
-		return Promise.resolve()
-	}
-
-	get(key: string): Promise<{ body: ReadableStream; text(): Promise<string> } | null> {
-		const value = this.values.get(key)
-		if (value === undefined) return Promise.resolve(null)
-		return Promise.resolve({ body: new Blob([value]).stream(), text: () => Promise.resolve(value) })
-	}
-
-	delete(key: string): Promise<void> {
-		this.values.delete(key)
-		return Promise.resolve()
-	}
-}
-
-class EmptyQueue implements JobQueue<IngestMessage> {
-	send(): Promise<void> {
-		return Promise.resolve()
-	}
-}
 
 function auth(input: {
 	apps?: string[] | null

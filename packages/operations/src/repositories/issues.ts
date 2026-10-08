@@ -1,7 +1,6 @@
 import type { ActivityItem, IssueMutation, PriorIssueState } from '@fabrika/operations-contract'
-import type { SqlDatabase } from '@fabrika/platform'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { applyIssueMutation } from '../issues.js'
-import { uuidv7 } from '../uuid.js'
 import type { IssueRow } from './issue-row.js'
 import { issueRow } from './issue-row.js'
 import { number, parseObject } from './values.js'

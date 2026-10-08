@@ -4,10 +4,10 @@ import type {
 	OperationsHealthResponseDto,
 	OperationsSourceHealthDto,
 } from '@fabrika/operations-contract/operator-api'
+import { uuidv7 } from '@fabrika/platform'
 import type { HealthCheckRow } from '../health-repository.js'
 import { visibleHealthState } from '../health.js'
 import type { SourceRow } from '../repositories.js'
-import { uuidv7 } from '../uuid.js'
 import { authorizedSources, visibleSource } from './access.js'
 import type { OperationsOperatorOptions } from './context.js'
 import { notFoundError } from './errors.js'

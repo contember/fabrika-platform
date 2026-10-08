@@ -6,9 +6,8 @@
 // Decoupled from the Worker (takes repositories + RepoSource + queue) so it's unit-testable with FakeRepoSource
 // and an in-memory queue — no GitHub, no Cloudflare.
 
-import type { JobQueue } from '@fabrika/platform'
+import { type JobQueue, uuidv7 } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
-import { uuidv7 } from './db'
 import { error, json } from './http'
 import { refMatches } from './ref-match'
 import { normalizeRepoUrl, parseGitHubRepo, type PushEvent, type RepoEvents } from './repo-source'

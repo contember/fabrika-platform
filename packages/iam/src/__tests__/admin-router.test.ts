@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { handleAdmin } from '../admin/router'
 import { createIamApp } from '../app'
@@ -23,15 +23,6 @@ import { createHarness, type Harness, seedAppAction, seedGrant, seedRole, seedUs
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
-
 // The admin app id every native session is resolved against (see admin/router.ts).
 const IAM_APP = 'propustka'
 

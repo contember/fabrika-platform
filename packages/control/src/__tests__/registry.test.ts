@@ -2,6 +2,7 @@ import { ConflictError } from '@fabrika/app'
 import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
+import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -13,7 +14,6 @@ import {
 	updateAppUseCase,
 } from '../api/registry'
 import { normalizeRegistration } from '../api/registry/registration'
-import { uuidv7 } from '../db'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'

@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
 import {
 	DEFAULT_FAILURE_THRESHOLD,
@@ -15,7 +15,6 @@ import {
 	MAX_HEALTH_TIMEOUT_MS,
 	resolveHealthCheckUrl,
 } from './health.js'
-import { uuidv7 } from './uuid.js'
 
 export interface HealthCheckRow {
 	id: string

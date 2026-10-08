@@ -1,7 +1,6 @@
-// Ids are load-bearing twice over: the jobs table orders a claimed batch by id, and the repo-wide
-// convention is that ids are minted caller-side so an INSERT is identical on SQLite and Postgres.
-// The ordering the batch sort depends on is STRICT — two `send()` calls in one millisecond are
-// ordinary — so these tests pin the RFC 9562 §6.2 counter, not just the millisecond prefix.
+// Ids are keyset cursors (`ORDER BY id DESC` with `id < ?`) and claimed-batch order, on a TEXT
+// comparison, and two ids minted in one millisecond are ordinary — so these tests pin STRICT string
+// order, including the RFC 9562 §6.2 counter's overflow and backwards-clock branches.
 
 import { describe, expect, test } from 'bun:test'
 import { uuidv7 } from '../uuid'
@@ -16,7 +15,9 @@ function timestampOf(id: string): number {
 /** Index of the first id not strictly greater than its predecessor, or -1. String order is the test. */
 function firstNonAscending(ids: readonly string[]): number {
 	for (let i = 1; i < ids.length; i++) {
-		if (!(ids[i]! > ids[i - 1]!)) {
+		const previous = ids[i - 1]
+		const current = ids[i]
+		if (previous === undefined || current === undefined || !(current > previous)) {
 			return i
 		}
 	}
@@ -100,9 +101,9 @@ describe('uuidv7', () => {
 		const ids = Array.from({ length: 5_000 }, () => uuidv7(millis))
 		expect(firstNonAscending(ids)).toBe(-1)
 		expect(new Set(ids).size).toBe(ids.length)
-		expect(timestampOf(ids[0]!)).toBe(millis)
+		expect(timestampOf(ids[0] ?? '')).toBe(millis)
 		// Borrowed from the future rather than restarting the counter underneath the last id.
-		expect(timestampOf(ids.at(-1)!)).toBeGreaterThan(millis)
+		expect(timestampOf(ids.at(-1) ?? '')).toBeGreaterThan(millis)
 		expect(ids.every((id) => UUID_V7_RE.test(id))).toBe(true)
 	})
 })

@@ -1,6 +1,5 @@
-import type { DeployLocks } from '@fabrika/platform'
+import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
-import { uuidv7 } from './uuid'
 
 /** How long a dead holder blocks its key (ADR-0044). */
 export const LEASE_TTL_MS = 90_000

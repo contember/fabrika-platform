@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
@@ -6,14 +6,6 @@ import { prop } from '../json'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
 const exec = { waitUntil() {} }
 
 interface EnvOptions {

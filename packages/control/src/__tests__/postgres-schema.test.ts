@@ -14,12 +14,12 @@
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { type OperationsReleaseReconcileRequestV1, parseOperationsReleaseRequest } from '@fabrika/operations-contract/releases'
-import { type BlobStore, type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlStatement } from '@fabrika/platform'
+import { type BlobStore, type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
-import { type ControlRepositories, createControlRepositories, uuidv7 } from '../db'
+import { type ControlRepositories, createControlRepositories } from '../db'
 import type { Env } from '../env'
 import {
 	githubAppCredentialSecretLabel,

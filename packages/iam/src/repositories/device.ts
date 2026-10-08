@@ -1,5 +1,5 @@
-import { type DeviceAuthorizationConsent, type StartDeviceAuthorizationInput, uuidv7 } from '@fabrika/auth-core'
-import type { SqlDatabase } from '@fabrika/platform'
+import { type DeviceAuthorizationConsent, type StartDeviceAuthorizationInput } from '@fabrika/auth-core'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { unixNow } from './sql'
 
 export interface DeviceAuthorizationRow {

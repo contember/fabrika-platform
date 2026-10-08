@@ -1,5 +1,4 @@
-import { uuidv7 } from '@fabrika/auth-core'
-import { type SqlDatabase } from '@fabrika/platform'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { firstRow, unixNow } from './sql'
 
 export interface GrantRow {

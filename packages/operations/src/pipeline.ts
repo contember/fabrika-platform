@@ -1,8 +1,7 @@
 import type { IngestMessage, ParsedEvent } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { type BlobStore, type JobQueue, uuidv7 } from '@fabrika/platform'
 import { issueCulprit, issueTitle, resolveFingerprint, sha256Hex } from './ingest.js'
 import type { OperationsRepositories, RecordOccurrenceResult } from './repositories.js'
-import { uuidv7 } from './uuid.js'
 
 export interface OperationsDataEnv {
 	repositories: OperationsRepositories

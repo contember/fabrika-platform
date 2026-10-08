@@ -3,11 +3,10 @@
 // without `FABRIKA_OPERATIONS_DSN` and nothing anywhere recorded that it had.
 
 import { FABRIKA_OPERATIONS_DSN } from '@fabrika/operations-contract/ingest'
-import type { BlobStore } from '@fabrika/platform'
+import { type BlobStore, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ControlRepositories } from '../db'
-import { uuidv7 } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { EnvSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'

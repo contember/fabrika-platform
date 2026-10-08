@@ -1,15 +1,6 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createIamRepositories, PrincipalRepository, type PrincipalRow } from '../db'
-
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('query must not run')
-	},
-	batch() {
-		return Promise.reject(new Error('batch must not run'))
-	},
-}
 
 class SpecializedPrincipalRepository extends PrincipalRepository {
 	override listPrincipals(): Promise<PrincipalRow[]> {

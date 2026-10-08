@@ -1,7 +1,7 @@
 import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE, parseOperationsReleasePayload } from '@fabrika/operations-contract/releases'
-import type { BlobStore } from '@fabrika/platform'
+import { type BlobStore, uuidv7 } from '@fabrika/platform'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -15,7 +15,7 @@ import { type CloudflareRunnerJob, createCloudflareControlProvider } from '../..
 import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
-import { OperationsReleaseRepository, uuidv7 } from '../db'
+import { OperationsReleaseRepository } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'

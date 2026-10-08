@@ -21,7 +21,8 @@
  *      back on a 2xx, so the edge is the only thing that mints either.
  */
 
-import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, SESSION_COOKIE, uuidv7 } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, SESSION_COOKIE } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'

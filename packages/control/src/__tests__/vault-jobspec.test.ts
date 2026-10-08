@@ -1,7 +1,7 @@
+import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ControlRepositories } from '../db'
-import { uuidv7 } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'

@@ -1,5 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
-import { uuidv7 } from '../uuid.js'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import type { IssueRow } from './issue-row.js'
 import { issueRow } from './issue-row.js'
 import { number } from './values.js'

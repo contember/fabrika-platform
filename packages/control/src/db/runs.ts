@@ -154,7 +154,7 @@ export class RunRepository {
 
 	/**
 	 * List runs, newest first, optionally filtered by app and/or env. `id` is UUIDv7 with the RFC 9562
-	 * §6.2 monotonic counter (`src/uuid.ts`), so a TEXT `ORDER BY id DESC` is chronological down to the
+	 * §6.2 monotonic counter (`@fabrika/platform`), so a TEXT `ORDER BY id DESC` is chronological down to the
 	 * individual mint — two runs created in the SAME millisecond still order by which was created
 	 * first. That is what makes `before` a sound keyset cursor: no page can skip or repeat a row.
 	 */

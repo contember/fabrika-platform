@@ -1,6 +1,6 @@
 import type { AuthContext } from '@fabrika/auth'
+import { uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import { uuidv7 } from '../db'
 import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'

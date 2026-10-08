@@ -30,7 +30,8 @@
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/jwks": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
-		"jose": "^5.9.0"
+		"jose": "^5.9.0",
+		"@fabrika/platform": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"

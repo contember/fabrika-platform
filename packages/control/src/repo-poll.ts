@@ -11,8 +11,8 @@
 // the repo-source header describes; it is standalone (no webhook HMAC applies to a public feed) rather
 // than a `RepoSource` implementation.
 
-import type { JobQueue } from '@fabrika/platform'
-import { type ControlRepositories, uuidv7 } from './db'
+import { type JobQueue, uuidv7 } from '@fabrika/platform'
+import { type ControlRepositories } from './db'
 import { refMatches } from './ref-match'
 import { normalizeRepoUrl } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'

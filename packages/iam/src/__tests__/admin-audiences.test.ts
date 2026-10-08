@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createRuntime } from '../node/runtime'
 import { buildServices, DEFAULT_ADMIN_AUDIENCES } from '../services'
@@ -9,15 +9,6 @@ import { createHarness } from './helpers/harness'
 // wire: how the value parses at boot, and that the Bun composition passes it through unset.
 
 const ISSUER = 'https://iam.example.com'
-
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
 
 function audiences(adminAudiences?: string): ReadonlySet<string> {
 	const h = createHarness()

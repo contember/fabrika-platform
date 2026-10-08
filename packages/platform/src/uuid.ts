@@ -1,9 +1,8 @@
 /**
- * UUIDv7 generator — time-ordered ids, so a jobs table orders by id chronologically and a keyset
- * cursor works, monotonic WITHIN a millisecond as well as across one. Ids are minted CALLER-SIDE,
- * never by SQL (the repo-wide convention, and the one thing that keeps inserts identical across
- * SQLite and Postgres). Self-contained so this package has no dependencies beyond the port it
- * implements.
+ * UUIDv7 generator — time-ordered ids, so a table orders by id chronologically and a keyset cursor
+ * works, monotonic WITHIN a millisecond as well as across one. Ids are minted CALLER-SIDE, never by
+ * SQL (the repo-wide convention, and the one thing that keeps inserts identical across SQLite and
+ * Postgres). Runtime-neutral: Web Crypto's `crypto.getRandomValues` exists on Workers and Bun alike.
  *
  * RFC 9562 layout, with §6.2's "fixed bit-length dedicated counter" monotonic variant:
  *
@@ -28,19 +27,16 @@
  *   - the timestamp goes BACKWARDS → keep the last effective millisecond and keep counting, so the
  *     sequence never repeats and never decreases.
  *
- * The counter is per GENERATOR — one process. Two ids minted in the same millisecond by two processes
- * tie only if their independently seeded counters collide (~1/256), and the 62 random bits break
- * that; within one process the order is exact. That is the whole promise: strictly increasing per
+ * The counter is per GENERATOR — one process, one Worker isolate. Two ids minted in the same
+ * millisecond by two generators tie only if their independently seeded counters collide (~1/256), and
+ * the 62 random bits break that; within one generator the order is exact. That is the whole promise: strictly increasing per
  * generator, chronological to the millisecond across generators.
  *
- * `millis` is injectable so a caller that already has a clock (the job queue does) mints ids on THAT
+ * `millis` is injectable so a caller that already has a clock (a job queue, a repository) mints ids on THAT
  * clock, keeping id order and row order consistent. Because the generator is monotonic, the timestamp
  * actually embedded is `max(millis, last embedded)`: a supplied millisecond BEHIND one already used
  * is clamped, and the counter carries the ordering instead. Ordering is the promise; an exact
  * round-trip of an arbitrary past `millis` is not.
- *
- * `@fabrika/auth-core` and `@fabrika/control` carry deliberate copies of this same algorithm — see
- * the note in each.
  */
 
 /** `rand_a` is 12 bits, all of it counter. */

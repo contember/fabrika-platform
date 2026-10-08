@@ -7,6 +7,7 @@ import {
 	parseOperationsReleasePayload,
 	parseOperationsReleaseRequest,
 } from '@fabrika/operations-contract/releases'
+import { uuidv7 } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -14,7 +15,7 @@ import { pathToFileURL } from 'node:url'
 import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
 import { type ArtifactFetch, Runner, type SpawnSpec } from '../../../runner-container/src/runner'
 import { bunSpawner } from '../../../runner-container/src/spawn'
-import { type ControlRepositories, type RunTrigger, uuidv7 } from '../db'
+import { type ControlRepositories, type RunTrigger } from '../db'
 import { GitHubAppRepoSource } from '../repo-source'
 import { executeDeploy } from '../run-lifecycle'
 import { EnvSecretResolver } from '../secret-resolver'

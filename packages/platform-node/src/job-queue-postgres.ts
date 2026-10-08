@@ -25,8 +25,7 @@
 // `FOR UPDATE SKIP LOCKED` is the one Postgres-specific statement in this package; the DDL itself
 // (migrations/0001_jobs.sql) is in the SQLite ∩ Postgres common subset.
 
-import type { JobQueue, SqlDatabase } from '@fabrika/platform'
-import { uuidv7 } from './uuid'
+import { type JobQueue, type SqlDatabase, uuidv7 } from '@fabrika/platform'
 
 /** A claimed delivery. Raw claims carry stored JSON text; typed claims carry the caller's decoded payload. */
 export interface Job<T> {

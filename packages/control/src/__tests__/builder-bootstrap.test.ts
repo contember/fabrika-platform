@@ -4,12 +4,12 @@ import {
 	parseBuilderInstallationDiscovery,
 	parseBuilderPublicOrigin,
 } from '@fabrika/control-contract'
+import { uuidv7 } from '@fabrika/platform'
 import { expect, test } from 'bun:test'
 import { runInNewContext } from 'node:vm'
 import { CONTROL_PROXY_GATES } from '../../fabrika.gates'
 import { controlApp } from '../app'
 import { builderPublicResponse } from '../builder-bootstrap'
-import { uuidv7 } from '../db'
 import type { Env } from '../env'
 import { FakeRepoSource } from '../repo-source'
 import { unavailableSourceConnection } from '../source/connections'

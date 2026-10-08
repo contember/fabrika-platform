@@ -9,7 +9,7 @@
  */
 
 import type { SessionDto } from '@fabrika/iam-contract'
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { createIamApp } from '../app'
@@ -22,15 +22,6 @@ const ORIGIN = 'https://iam.example.com'
 const IAM_APP = 'propustka'
 const exec = { waitUntil() {} }
 const FUTURE = Math.floor(Date.now() / 1000) + 3600
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
-
 function env(h: Harness): Env {
 	return {
 		DB: unusedDatabase,

@@ -1,34 +1,9 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { EmptyQueue, MemoryBlobs } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { consumeDeliveries, type IngestDelivery } from '../consumer.js'
 import { OperationsMaintenance, WebhookNotificationSender } from '../maintenance.js'
 import { createHarness } from './helpers/sqlite.js'
-
-class MemoryBlobs implements BlobStore {
-	readonly values = new Map<string, string>()
-
-	put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<void> {
-		if (typeof value !== 'string') throw new Error('strings only')
-		this.values.set(key, value)
-		return Promise.resolve()
-	}
-
-	get(): Promise<null> {
-		return Promise.resolve(null)
-	}
-
-	delete(key: string): Promise<void> {
-		this.values.delete(key)
-		return Promise.resolve()
-	}
-}
-
-class EmptyQueue implements JobQueue<IngestMessage> {
-	send(): Promise<void> {
-		return Promise.resolve()
-	}
-}
 
 function message(index: number): IngestMessage {
 	return {

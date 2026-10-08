@@ -2,7 +2,6 @@
 export * from './device'
 export * from './environment'
 export * from './gates'
-export * from './ids'
 export { parseJsonStringArray } from './json'
 export * from './permissions'
 export * from './rpc'

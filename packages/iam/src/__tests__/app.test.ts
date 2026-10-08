@@ -1,17 +1,8 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createIamApp, iamApp } from '../app'
 import type { Env } from '../env'
 import { createHarness } from './helpers/harness'
-
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
 
 function env(): Env {
 	return {

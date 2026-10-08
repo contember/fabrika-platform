@@ -1,4 +1,5 @@
-import { type DeviceAuthorizationConsent, uuidv7 } from '@fabrika/auth-core'
+import { type DeviceAuthorizationConsent } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createIamRepositories, type IamRepositories } from '../db'

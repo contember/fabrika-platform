@@ -5,7 +5,7 @@
 // could stop being true.
 
 import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { resolveAdmin } from '../admin/router'
 import { createIamApp } from '../app'
@@ -28,15 +28,6 @@ const HANDOFF_CHALLENGE = await pkceChallenge(HANDOFF_VERIFIER)
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 /** The admin surface reaches the database only through `REPOSITORIES`; this proves it. */
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
-
 class TestContext implements RequestContext {
 	readonly waiting: Promise<unknown>[] = []
 	waitUntil(promise: Promise<unknown>): void {

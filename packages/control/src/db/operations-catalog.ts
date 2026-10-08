@@ -1,6 +1,5 @@
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from '@fabrika/operations-contract/catalog'
-import type { SqlDatabase } from '@fabrika/platform'
-import { uuidv7 } from '../uuid'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { firstRow } from './returning'
 
 export interface OperationsCatalogProjectionRow {

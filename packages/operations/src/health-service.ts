@@ -1,3 +1,4 @@
+import { uuidv7 } from '@fabrika/platform'
 import type { ClaimedHealthCheck, EnqueueHealthAlertsResult, HealthRepository } from './health-repository.js'
 import {
 	decideHttpHealth,
@@ -9,7 +10,6 @@ import {
 	type TelemetryHealthAdapter,
 	type TelemetryThresholds,
 } from './health.js'
-import { uuidv7 } from './uuid.js'
 
 const DEFAULT_HTTP_BATCH_SIZE = 25
 const DEFAULT_HTTP_CONCURRENCY = 5

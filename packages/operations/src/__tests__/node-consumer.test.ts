@@ -1,6 +1,6 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { type Job, PostgresDatabase } from '@fabrika/platform-node'
+import { EmptyQueue, MemoryBlobs } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import {
 	createOperationsIngestQueue,
@@ -12,31 +12,6 @@ import { applyMigrations } from '../node/migrate.js'
 import { eventBlobKey } from '../pipeline.js'
 import { createPostgresOperationsRepositories, type OperationsRepositories } from '../repositories.js'
 import { createHarness } from './helpers/sqlite.js'
-
-class MemoryBlobs implements BlobStore {
-	readonly values = new Map<string, string>()
-
-	put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<void> {
-		if (typeof value !== 'string') throw new Error('strings only')
-		this.values.set(key, value)
-		return Promise.resolve()
-	}
-
-	get(): Promise<null> {
-		return Promise.resolve(null)
-	}
-
-	delete(key: string): Promise<void> {
-		this.values.delete(key)
-		return Promise.resolve()
-	}
-}
-
-class EmptyProducer implements JobQueue<IngestMessage> {
-	send(): Promise<void> {
-		return Promise.resolve()
-	}
-}
 
 function ingest(): IngestMessage {
 	return {
@@ -67,7 +42,7 @@ describe('Postgres Operations consumer lifecycle', () => {
 		const logs: string[] = []
 		const consumer = new PostgresOperationsConsumer(
 			queue,
-			{ repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyProducer() },
+			{ repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyQueue() },
 			{
 				log: (message) => logs.push(message),
 				sleep: (_ms, signal) =>
@@ -122,7 +97,7 @@ describe('Postgres Operations consumer lifecycle', () => {
 		}
 		const consumer = new PostgresOperationsConsumer(
 			queue,
-			{ repositories: harness.repositories, payloads: blobs, ingestQueue: new EmptyProducer() },
+			{ repositories: harness.repositories, payloads: blobs, ingestQueue: new EmptyQueue() },
 		)
 		expect(await consumer.poll()).toBe(1)
 		expect(acked).toEqual(['job-a'])
@@ -158,7 +133,7 @@ describe('Postgres Operations consumer lifecycle', () => {
 		failingArchive.mockImplementation(() => Promise.reject(new Error('private archive failure')))
 		const consumer = new PostgresOperationsConsumer(
 			queue,
-			{ repositories: harness.repositories, payloads: blobs, ingestQueue: new EmptyProducer() },
+			{ repositories: harness.repositories, payloads: blobs, ingestQueue: new EmptyQueue() },
 			{ log: (message) => logs.push(message), retryDelayMs: (attempts) => attempts * 1_000 },
 		)
 		try {
@@ -220,7 +195,7 @@ describe('Postgres Operations consumer lifecycle', () => {
 		})
 		const consumer = new PostgresOperationsConsumer(
 			queue,
-			{ repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyProducer() },
+			{ repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyQueue() },
 		)
 
 		expect(await consumer.poll()).toBe(1)

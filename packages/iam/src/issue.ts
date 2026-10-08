@@ -23,8 +23,8 @@ import {
 	permits,
 	type RevokeKeyInput,
 	type RevokeKeyResult,
-	uuidv7,
 } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import type { CredentialGrantRow } from './db'
 import type { Env } from './env'
 import { generateToken, hashToken } from './secret'

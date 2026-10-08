@@ -1,10 +1,9 @@
 import { OPERATIONS_ARTIFACT_HEADERS, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
-import type { BlobStore } from '@fabrika/platform'
+import { type BlobStore, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
 import { sha256Hex } from './ingest.js'
 import type { ArtifactUploadCredentialResolution, OperationsRepositories } from './repositories.js'
 import { logicalAssetPath, type ObjectReader } from './source-maps.js'
-import { uuidv7 } from './uuid.js'
 
 export const MAX_SOURCE_MAP_BYTES = 8 * 1024 * 1024
 export const MAX_SOURCE_MAPS_PER_RUN = 256

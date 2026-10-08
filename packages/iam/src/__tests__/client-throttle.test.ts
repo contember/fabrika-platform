@@ -13,7 +13,7 @@
  */
 
 import { CLIENT_ADDRESS_HEADER } from '@fabrika/auth-core'
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
 import { handleAuth } from '../auth/routes'
@@ -240,15 +240,6 @@ describe('the limit cannot be crossed by concurrency', () => {
 })
 
 // ── The composition-level spoofing tests: one per provider shape ──────────────
-
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
 
 function appEnv(h: Harness): Env {
 	return {

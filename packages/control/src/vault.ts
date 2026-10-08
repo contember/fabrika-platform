@@ -27,8 +27,7 @@
 // it, then swap the binding (or run reencryptAll as a one-shot maintenance task) — see the management
 // API. Losing it makes every vault value unrecoverable (by design).
 
-import type { SqlStatement } from '@fabrika/platform'
-import { uuidv7 } from './uuid'
+import { type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 export type SecretScope = 'app' | 'app-env' | 'platform'
 

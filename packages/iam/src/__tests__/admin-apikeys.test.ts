@@ -1,6 +1,6 @@
 import { parseAccessClaims, permits } from '@fabrika/auth-core'
 import type { ProvisionApiKeyResponse, RotateApiKeyResponse } from '@fabrika/iam-contract'
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { handleAdmin } from '../admin/router'
@@ -56,15 +56,6 @@ function run(h: Harness, request: Request): Promise<Response> {
 }
 
 const exec = { waitUntil() {} }
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
-
 function env(h: Harness): Env {
 	return {
 		DB: unusedDatabase,

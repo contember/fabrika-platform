@@ -9,7 +9,6 @@ import {
 	parseStartDeviceAuthorizationInput,
 	parseStartDeviceAuthorizationResult,
 } from '../device'
-import { uuidv7 } from '../ids'
 
 const start = {
 	app: 'vozka',
@@ -20,13 +19,13 @@ const start = {
 	redemptionChallenge: 'b'.repeat(43),
 }
 const receipt = {
-	attemptId: uuidv7(),
-	credentialId: uuidv7(),
-	principalId: uuidv7(),
+	attemptId: '0199c3a0-0000-7000-8000-000000000001',
+	credentialId: '0199c3a0-0000-7000-8000-000000000002',
+	principalId: '0199c3a0-0000-7000-8000-000000000003',
 	issuedAt: 1800000000,
 	revokedAt: null,
 	consent: {
-		consentId: uuidv7(),
+		consentId: '0199c3a0-0000-7000-8000-000000000004',
 		app: 'vozka',
 		label: start.label,
 		permissions: start.permissions,
@@ -51,7 +50,13 @@ describe('device boundary parsers', () => {
 				{ ...start, label: 'x'.repeat(201) },
 			]
 		) expect(parseStartDeviceAuthorizationInput(invalid)).toBeNull()
-		const caller = { app: 'vozka', credential: 'signed-token', requestId: 'req', attemptId: uuidv7(), approvalVerifier: 'a'.repeat(43) }
+		const caller = {
+			app: 'vozka',
+			credential: 'signed-token',
+			requestId: 'req',
+			attemptId: '0199c3a0-0000-7000-8000-000000000005',
+			approvalVerifier: 'a'.repeat(43),
+		}
 		expect(parseApproveDeviceAuthorizationInput({ ...caller, scope: null })).toBeNull()
 		expect(parseApproveDeviceAuthorizationInput({ ...caller, scope: { type: 'app', value: '' } })).toBeNull()
 		expect(parseListOwnDeviceAuthorizationsInput({ ...caller, limit: 101 })).toBeNull()
@@ -72,7 +77,14 @@ describe('device boundary parsers', () => {
 		expect(parsePollDeviceAuthorizationResult({ ok: true, status: 'unknown' })).toBeNull()
 		expect(parseDeviceAuthorizationReceipt({ ...receipt, revokedAt: undefined })).toBeNull()
 		expect(parseDeviceAuthorizationReceipt({ ...receipt, consent: { ...receipt.consent, scope: null } })).toBeNull()
-		expect(parseStartDeviceAuthorizationResult({ ok: true, attemptId: uuidv7(), expiresAt: 1800000000, pollIntervalSeconds: 2 })).toBeNull()
+		expect(
+			parseStartDeviceAuthorizationResult({
+				ok: true,
+				attemptId: '0199c3a0-0000-7000-8000-000000000006',
+				expiresAt: 1800000000,
+				pollIntervalSeconds: 2,
+			}),
+		).toBeNull()
 		expect(parseListOwnDeviceAuthorizationsResult({ ok: true, items: [receipt], nextCursor: null })).toEqual({
 			ok: true,
 			items: [receipt],

@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # gates.test.ts · permissions.test.ts · token.test.ts · ids.test.ts
+bun test               # gates.test.ts · permissions.test.ts · token.test.ts
 ```
 
 | Module           | What it owns                                                                                  |
@@ -20,7 +20,6 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts �
 | `rpc.ts`         | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                            |
 | `types.ts`       | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                |
 | `wire.ts`        | The proxy→app header names: the verified token, the client address, and what to strip.        |
-| `ids.ts`         | UUIDv7 generation (RFC 9562 §6.2 monotonic variant).                                          |
 | `environment.ts` | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under. |
 | `json.ts`        | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                 |
 
@@ -68,9 +67,6 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts �
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.
-- **UUIDv7 is generated caller-side, never in SQL,** and its ordering promise is strict: ids sort
-  lexicographically in mint order within a generator, which is what makes keyset cursors over `id`
-  correct for rows written in the same millisecond.
 
 ## Notes
 

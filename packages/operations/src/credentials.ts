@@ -4,9 +4,9 @@ import {
 	operationsManagedEnvironment,
 	type OperationsManagedEnvironmentKey,
 } from '@fabrika/operations-contract/ingest'
+import { uuidv7 } from '@fabrika/platform'
 import { credentialVerifier } from './pipeline.js'
 import type { OperationsRepositories } from './repositories.js'
-import { uuidv7 } from './uuid.js'
 
 export const DEFAULT_INGEST_CREDENTIAL_OVERLAP_MS = 60 * 60 * 1_000
 export const MAX_INGEST_CREDENTIAL_OVERLAP_MS = 7 * 24 * 60 * 60 * 1_000

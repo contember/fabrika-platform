@@ -28,6 +28,11 @@ The Postgres/S3/Bun implementations live in `@fabrika/platform-node`.
   row and its `DO UPDATE` is skipped by the `expires_at <= ?` guard. `meta.changes` is the whole
   answer. Splitting it into a SELECT and an UPDATE reintroduces exactly the race the Durable Object
   existed to prevent. The lease is non-reentrant, TTL-bounded, and holder-checked on release.
+- **`uuidv7` is the one UUIDv7 generator; ids are minted caller-side, never in SQL.** Its ordering
+  promise is strict: ids sort lexicographically in mint order within a generator (RFC 9562 §6.2
+  counter), which is what makes keyset cursors over `id` correct for rows written in one millisecond.
+- **`@fabrika/platform/testing` holds the shared in-memory port doubles.** Never export them from the
+  package root.
 
 ## Patterns
 

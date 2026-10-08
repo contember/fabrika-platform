@@ -1,6 +1,6 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import type { EmailMessage, EmailSender } from '@fabrika/email'
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { type AdminContext, AdminUseCaseError, adminUseCases } from '../admin/handlers'
 import { createIamApp } from '../app'
@@ -10,14 +10,6 @@ import type { Services } from '../services'
 import { createHarness, type Harness, seedGrant, seedService, seedUser } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
 const exec = { waitUntil() {} }
 
 interface EnvOptions {

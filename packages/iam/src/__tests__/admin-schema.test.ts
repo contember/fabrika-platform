@@ -1,5 +1,5 @@
 import type { AppSchemaDto, GrantDto, PolicyDto, RoleDto } from '@fabrika/iam-contract'
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { handleAdmin } from '../admin/router'
@@ -26,15 +26,6 @@ const ADMIN_ENV: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONIN
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
-
 class FakeRequestContext implements RequestContext {
 	readonly pending: Promise<unknown>[] = []
 	waitUntil(promise: Promise<unknown>): void {

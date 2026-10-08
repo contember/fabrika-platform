@@ -1,5 +1,4 @@
-import { uuidv7 } from '@fabrika/auth-core'
-import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 import { unixNow } from './sql'
 

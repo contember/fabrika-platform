@@ -1,42 +1,9 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { MemoryBlobs, MemoryQueue } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { archiveDeadEvent, persistIngest } from '../pipeline.js'
 import { createSqliteOperationsRepositories } from '../repositories.js'
 import { createHarness } from './helpers/sqlite.js'
-
-class MemoryBlobs implements BlobStore {
-	readonly values = new Map<string, string>()
-
-	put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<void> {
-		if (typeof value !== 'string') throw new Error('test blob store accepts strings only')
-		this.values.set(key, value)
-		return Promise.resolve()
-	}
-
-	get(key: string): Promise<{ body: ReadableStream; text(): Promise<string> } | null> {
-		const value = this.values.get(key)
-		if (value === undefined) return Promise.resolve(null)
-		return Promise.resolve({
-			body: new Blob([value]).stream(),
-			text: () => Promise.resolve(value),
-		})
-	}
-
-	delete(key: string): Promise<void> {
-		this.values.delete(key)
-		return Promise.resolve()
-	}
-}
-
-class MemoryQueue<T> implements JobQueue<T> {
-	readonly messages: T[] = []
-
-	send(message: T): Promise<void> {
-		this.messages.push(message)
-		return Promise.resolve()
-	}
-}
 
 function message(input: { sourceId: string; eventId: string; fingerprint?: string; receivedAt?: number }): IngestMessage {
 	return {

@@ -1,5 +1,4 @@
-import { uuidv7 } from '@fabrika/auth-core'
-import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { normalizeEmailIdentity } from './email-identity'
 import type { StoredPasswordHash } from './password-crypto'
 import type { PrincipalRow } from './repositories/principals'

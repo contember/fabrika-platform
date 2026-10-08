@@ -1,5 +1,5 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { MemoryBlobs, MemoryQueue } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { consumeDeliveries, type IngestDelivery } from '../consumer.js'
 import { provisionSourceIngest } from '../credentials.js'
@@ -11,34 +11,6 @@ const PROJECT_ID = '123'
 const RELEASE = 'sdk-witness-1'
 const ENDPOINT =
 	`https://operations.test/api/${PROJECT_ID}/envelope/?sentry_version=7&sentry_key=${PUBLIC_KEY}&sentry_client=sentry.javascript.browser%2F10.69.0`
-
-class MemoryQueue implements JobQueue<IngestMessage> {
-	readonly messages: IngestMessage[] = []
-
-	send(message: IngestMessage): Promise<void> {
-		this.messages.push(message)
-		return Promise.resolve()
-	}
-}
-
-class MemoryBlobs implements BlobStore {
-	readonly values = new Map<string, string>()
-
-	put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<void> {
-		if (typeof value !== 'string') throw new Error('strings only')
-		this.values.set(key, value)
-		return Promise.resolve()
-	}
-
-	get(): Promise<null> {
-		return Promise.resolve(null)
-	}
-
-	delete(key: string): Promise<void> {
-		this.values.delete(key)
-		return Promise.resolve()
-	}
-}
 
 // Shape recorded from @sentry/browser 10.69.0 with default integrations disabled.
 function sdkEnvelope(eventId: string): string {
@@ -99,7 +71,7 @@ describe('@sentry/browser compatibility witness', () => {
 			{ sourceId: 'source-a', operationsOrigin: 'https://operations.test' },
 			{ now: () => now, publicKey: () => PUBLIC_KEY, ingestProjectId: () => PROJECT_ID },
 		)
-		const queue = new MemoryQueue()
+		const queue = new MemoryQueue<IngestMessage>()
 		const request = (eventId: string): Request =>
 			new Request(ENDPOINT, {
 				method: 'POST',

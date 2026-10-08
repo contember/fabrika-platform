@@ -14,7 +14,7 @@
  *      derived from the contract's own shape, not typed out.
  */
 
-import type { SqlDatabase } from '@fabrika/platform'
+import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { adminRpcRouter } from '../admin/rpc'
 import { createIamApp } from '../app'
@@ -24,15 +24,6 @@ import { createHarness, type Harness, seedGrant, seedUser } from './helpers/harn
 
 const ORIGIN = 'https://iam.example.com'
 const exec = { waitUntil() {} }
-const unusedDatabase: SqlDatabase = {
-	prepare() {
-		throw new Error('database access was not expected')
-	},
-	batch() {
-		return Promise.reject(new Error('database access was not expected'))
-	},
-}
-
 function env(h: Harness): Env {
 	return {
 		DB: unusedDatabase,

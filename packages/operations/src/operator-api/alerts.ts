@@ -4,8 +4,8 @@ import type {
 	OperationsNotificationChannelRequestDto,
 	OperationsSpikeAlertRequestDto,
 } from '@fabrika/operations-contract/operator-api'
+import { uuidv7 } from '@fabrika/platform'
 import { alertKind } from '../operator-input.js'
-import { uuidv7 } from '../uuid.js'
 import { isValidWebhookTarget } from '../webhook-target.js'
 import { visibleSource } from './access.js'
 import type { OperationsOperatorOptions } from './context.js'

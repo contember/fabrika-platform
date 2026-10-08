@@ -1,30 +1,9 @@
-import type { IngestMessage } from '@fabrika/operations-contract'
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { EmptyQueue, MemoryBlobs } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { evaluateSpike, OperationsAlertProducer, SPIKE_DEDUP_WINDOW_SECONDS } from '../alerts.js'
 import { OperationsMaintenance } from '../maintenance.js'
 import { persistIngest } from '../pipeline.js'
 import { createHarness } from './helpers/sqlite.js'
-
-class MemoryBlobs implements BlobStore {
-	put(): Promise<void> {
-		return Promise.resolve()
-	}
-
-	get(): Promise<null> {
-		return Promise.resolve(null)
-	}
-
-	delete(): Promise<void> {
-		return Promise.resolve()
-	}
-}
-
-class EmptyQueue implements JobQueue<IngestMessage> {
-	send(): Promise<void> {
-		return Promise.resolve()
-	}
-}
 
 describe('alert semantics', () => {
 	test('fires exactly at the threshold', () => {

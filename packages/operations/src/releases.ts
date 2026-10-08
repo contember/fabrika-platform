@@ -7,9 +7,9 @@ import {
 	type OperationsReleaseReconcileResponseV1,
 } from '@fabrika/operations-contract'
 import { OperationsReleaseDecodeError, parseOperationsReleaseRequest } from '@fabrika/operations-contract/releases'
+import { uuidv7 } from '@fabrika/platform'
 import type { OperationsRepositories, ReleaseRow } from './repositories.js'
 import { ArtifactProjectionConflictError } from './repositories.js'
-import { uuidv7 } from './uuid.js'
 
 const MAX_RELEASE_BODY_BYTES = 64 * 1024
 

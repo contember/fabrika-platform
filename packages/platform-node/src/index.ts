@@ -50,5 +50,4 @@ export {
 	type PostgresServiceMigrationsConfig,
 } from './service-postgres-migrations'
 export { PostgresDatabase, PostgresStatement, type SqlBindValue } from './sql-postgres'
-export { uuidv7 } from './uuid'
 export { type BackgroundTasks, type BackgroundTasksOptions, createBackgroundTasks } from './wait-until'

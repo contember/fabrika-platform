@@ -23,8 +23,8 @@ import {
 	permits,
 	type PollDeviceAuthorizationResult,
 	type StartDeviceAuthorizationResult,
-	uuidv7,
 } from '@fabrika/auth-core'
+import { uuidv7 } from '@fabrika/platform'
 import type { Env } from './env'
 import { pkceChallenge } from './oidc'
 import type { DeviceAuthorizationRow, DeviceReceiptRow } from './repositories/device'

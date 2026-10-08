@@ -1,7 +1,6 @@
 import type { CanonicalOperationsCatalogSourceV2, OperationsCatalogReconcileResponseV2 } from '@fabrika/operations-contract'
 import { OPERATIONS_CATALOG_PROTOCOL_VERSION } from '@fabrika/operations-contract'
-import type { SqlDatabase } from '@fabrika/platform'
-import { uuidv7 } from '../uuid.js'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import type { SourceRow } from './sources.js'
 import { number } from './values.js'
 
