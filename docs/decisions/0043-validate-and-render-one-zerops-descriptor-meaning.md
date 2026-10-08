@@ -87,9 +87,12 @@ proxy-secret, job and connector credentials. Control's `assertUnmanagedName` and
 `MANAGED_KEYS` both use that list. Both refuse an authored variable or a secret under one of those
 names. The framework reads these variables and removes them from `process.env`.
 
-Two platform facts this design needs are not verified yet: whether exec readiness gates a Zerops
-deploy, and whether a failed `initCommands` stops activation. Each gets a row in the
-[platform facts](../reference/zerops-platform.md) before the generated `run` section ships.
+The generated `run` section does not depend on two unverified platform facts: whether exec readiness
+gates a Zerops deploy, and whether a failed `initCommands` stops activation. Its readiness check is an
+`httpGet` of the contract's health endpoint, which is verified to gate a deploy. Its start script runs
+`fabrika db migrate` again before it starts the server, so a failed migration leaves nothing to answer
+the readiness check. Each fact has an `UNVERIFIED` row in the
+[platform facts](../reference/zerops-platform.md), probed when a live account is configured.
 
 ### Exposure is refused, with no approval path
 
@@ -102,18 +105,34 @@ The compiler refuses these fields on application services:
 - `mount`;
 - `enableCdn`.
 
-A bucket is accepted only when the platform created it as private and it carries that provenance.
-Before activation, Control reads back `subdomainAccess` from Zerops. A failed check blocks activation
-and raises an Operations alert.
+A bucket is accepted only when the platform created it as private and it carries that provenance. The
+provenance is the `FABRIKA_STORAGE_PROVENANCE` variable on the deploy service: the ids of the buckets a
+Fabrika import created, each from a document that carried `objectStoragePolicy: private`. A bucket that
+already existed under its hostname has none. Before activation, the deploy reads back `subdomainAccess`
+of every declared service from Zerops and checks every bucket's provenance. A failed check blocks
+activation and raises an Operations alert: an error event in the application's own Operations project,
+which its alert rules deliver.
 
 Only CSP extensions in the contract are approvable, through the approval diff of
 [ADR-0050](0050-approved-access.md). No other exposure has an approval path.
 
-The code does not render `run` or `build`, share the list of framework-only names, read back
-`subdomainAccess` or check bucket provenance yet (part B, work unit B7). The compiler refusals are in place:
-`parseFabrikaManifest` applies them to every application service, on build and on decode; an
-`enableSubdomainAccess` or `enableCdn` of `false` exposes nothing and is accepted. An object-storage
-service that omits its policy is given an explicit `private`, because Zerops' default is not established.
+The compiler refusals are in place: `parseFabrikaManifest` applies them to every application service,
+on build and on decode; an `enableSubdomainAccess` or `enableCdn` of `false` exposes nothing and is
+accepted. An object-storage service that omits its policy is given an explicit `private`, because
+Zerops' default is not established. Control and the providers refuse the names of
+`FRAMEWORK_VARIABLE_NAMES` in `@fabrika/auth-core`. Every application deploy reads back exposure and
+bucket provenance before it reserves a version.
+
+A contract application is a Zerops config that carries its compiled contract. For it the compiler
+refuses every setup key the platform owns and renders the generated setup, with the checker fetched at
+the provider's own version and recorded in the run log. Not built yet:
+
+- the migrations into a throwaway schema with codegen verification: the build container must reach a
+  database (an unverified platform fact) and `fabrika db` has no disposable schema;
+- the generated isolation tests (A11); the build runs the application's own tests;
+- `fabrika job run`, which the generated crontab calls (A15);
+- the checker version in the run's snapshot (B6), and the contract read from the commit (B6): until
+  then the config decides whether an application is a contract application.
 
 ## Consequences
 

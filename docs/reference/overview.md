@@ -280,15 +280,19 @@ service pipeline, polls its app-version, and reconciles the IAM schema.
 Control delivers the repository itself. Before the Operations release context
 exists, control resolves the requested ref and fails the run when the
 `zerops.yaml` digest at the resolved commit differs from the registered artifact.
-The deploy then runs `apply-import → write-service-env → reserve-version →
-upload-source → trigger-build → await-version → reconcile-schema`
+The deploy then runs `apply-import → verify-exposure → write-service-env →
+reserve-version → upload-source → trigger-build → await-version → reconcile-schema`
 (`packages/provider-zerops/src/plan.ts`). `reconcile-schema` runs only when the
-app declares a schema. Control streams the archive to the reserved version's
+app declares a schema. `verify-exposure` refuses the run, and raises an
+Operations alert, when a declared service has subdomain access or a bucket
+lacks the platform's provenance
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). Control streams the archive to the reserved version's
 presigned upload URL; the Zerops token never leaves control
 ([ADR-0029](../decisions/0029-github-app-sources.md)).
 
 Only `FABRIKA_RELEASE` is bound to the version: `trigger-build` writes it into the
-execution descriptor's `run.envVariables`. The other managed keys
+execution descriptor's `run.envVariables`. For a contract application `trigger-build`
+sends a generated setup instead, which also carries `FABRIKA_CONTRACT_DIGEST`. The other managed keys
 (`FABRIKA_OPERATIONS_DSN`, `FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID`, `FABRIKA_APP_ID`,
 `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are plain service variables that
 `write-service-env` overwrites

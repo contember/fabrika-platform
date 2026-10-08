@@ -160,7 +160,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   There is no AAD on the envelope, so the row's own scope+label is the whole ownership record; do not add a
   second way to address a vault row.
 - **The platform's own environment names are refused on the SECRET surface too**, not only on `vars`:
-  `assertUnmanagedName` (`src/api/registry/validation.ts`) guards `apps.secrets.put`, `vault.set` and `vault.rotate`, and
+  `assertUnmanagedName` (`src/api/registry/validation.ts`) guards `apps.secrets.put`, `vault.set` and `vault.rotate`
+  against `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`, the one list the providers refuse too), and
   `executeDeploy` re-checks the resolved secret names beside the variable names, before any provider effect.
   A Zerops managed-secret write reaches the live service at REQUEST time, so the API check is the only one
   that runs in time there.

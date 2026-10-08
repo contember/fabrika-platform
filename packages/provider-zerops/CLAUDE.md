@@ -98,11 +98,31 @@ bun test
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider's `deploy` decodes the artifact ONCE and runs `createZeropsDeployer` in-process**
   on that typed value.
-- **Only `FABRIKA_RELEASE` is bound to a version (ADR-0044).** `overlayRelease` (`src/managed-env.ts`)
-  writes it as a LITERAL into the selected setup's `run.envVariables` of the execution descriptor; it is
-  never a service variable, and `write-service-env` deletes a stray one. The other five managed keys are
-  plain service variables each deploy overwrites (null removes), all written before the build request so it
-  never meets `userDataSyncRunning`. App vars, secrets and descriptors may not author any of the six.
+- **Only `FABRIKA_RELEASE` (and, for a contract application, `FABRIKA_CONTRACT_DIGEST`) is bound to a
+  version (ADR-0044).** `overlayRelease` (`src/managed-env.ts`) writes the release as a LITERAL into the
+  selected setup's `run.envVariables` of the execution descriptor; it is never a service variable, and
+  `write-service-env` deletes a stray one. The other managed keys are plain service variables each deploy
+  overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
+  App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
+  the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.
+- **A contract application's setup is the platform's (ADR-0043, `src/execution.ts`).** A config with
+  `target.contract` compiles to a manifest with `target.contract` (digest, health path, jobs) and optional
+  `runtimePackages` from `ZEROPS_RUNTIME_PACKAGES`. `lockedAuthoredBuild` refuses every key of the selected
+  setup except `build.base`, `build.os` and `build.buildCommands`, in `parseFabrikaManifest`, so on build AND
+  decode. `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands first, then the
+  frozen install, the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`), the generated
+  entrypoint, `tsc` with the platform tsconfig, `bun test`, and the scripts. The start script runs
+  `fabrika db migrate` before `exec`-ing the server, so a failed migration fails the httpGet readiness check
+  whether or not a failed `initCommands` stops activation (UNVERIFIED). Generated file lines go through
+  `printf` single-quoted: they may hold no `'` and no `$`, which is why the app id must match
+  `[a-z0-9][a-z0-9-]*` and the health path is a literal path.
+- **Before a version can activate, `verify-exposure` reads every declared service back (`src/exposure.ts`).**
+  `subdomainAccess` must be exactly `false` (absent or unreadable is a refusal), and every object-storage
+  service must be created by this run's import (`stack.create`) or named by the `FABRIKA_STORAGE_PROVENANCE`
+  marker on the deploy service. The first registration writes that marker for the buckets its
+  collision-refusing import created; an adopted bucket never gets one. A refusal fails the run before a
+  version is reserved and raises an Operations alert through the application's own ingest DSN
+  (`alertExposure`, best-effort).
 - **The run checkpoint is `{ appVersionId, triggered }` and recovery never resumes (ADR-0044).** `appVersionId`
   is recorded before the upload and `triggered` before the build request; a failed write there means no
   build request. `triggered: false` → delete the exact version (`deleteVersion`, `src/version-attempt.ts`;

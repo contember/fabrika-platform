@@ -404,6 +404,22 @@ The failing container started cleanly, connected to Postgres and served `/health
 only `/ready` was 503, and that alone failed the deploy about 70s after container start with
 `failureTimeout: 60s`. `run.healthCheck` is a different mechanism and gates nothing at deploy time.
 
+#### UNVERIFIED: what stops an activation besides an httpGet readiness check
+
+Neither row below has been measured. Both are rows of the platform-facts table (`live: 'build'`), probed on
+the throwaway service when `FABRIKA_LIVE_ZEROPS_SLOW=1` is set beside a live account.
+
+| Behaviour                                                     | Expected if true    | Row                                               |
+| ------------------------------------------------------------- | ------------------- | ------------------------------------------------- |
+| A `deploy.readinessCheck` with an `exec` command that exits 1 | **`DEPLOY_FAILED`** | `unverified-exec-readiness-gates-a-deploy`        |
+| A `run.initCommands` entry that exits 1                       | **`DEPLOY_FAILED`** | `unverified-failed-init-command-stops-activation` |
+
+The generated run section of a contract application
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) does not depend on
+either. Its readiness check is the `httpGet` above, against the contract's health endpoint, and its start
+script runs `fabrika db migrate` before it starts the server, so a failed migration leaves nothing that
+answers the readiness check.
+
 #### The PostgreSQL connection target
 
 Read with `zops env show --service <svc> --json`, on a service deliberately NOT named `db`.
@@ -1073,10 +1089,21 @@ Each application deploy writes `FABRIKA_RELEASE` as a literal into the selected 
 descriptor's bytes and digest are unchanged. The other managed keys (`FABRIKA_OPERATIONS_DSN`,
 `FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are ordinary
 service variables, overwritten before the build. Application-authored inputs and secret writes may not
-use a managed name. The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
+use a framework-only name (`FRAMEWORK_VARIABLE_NAMES` in `@fabrika/auth-core`). The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered
 version and deletes an untriggered one
 ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md),
 `packages/provider-zerops/src/managed-env.ts`).
+
+A contract application's execution descriptor is generated whole (`packages/provider-zerops/src/execution.ts`):
+only the selected setup, with `FABRIKA_CONTRACT_DIGEST` beside `FABRIKA_RELEASE` as literals, an `httpGet`
+readiness check of the contract's health endpoint, and the build checks.
+
+Before any version is reserved, every application deploy reads back each declared service with
+`GET /service-stack-by-name/{projectId}/{hostname}`: `subdomainAccess` must be `false`. An import cannot set
+it, but an earlier enable survives every import. Zerops has no API to read a bucket policy back, so a bucket
+is accepted only when this run's import created it (a `stack.create` process for it) or the
+`FABRIKA_STORAGE_PROVENANCE` variable on the deploy service names its id. The first registration writes that
+variable for the buckets its collision-refusing import created.
 
 ## Alpine custom runtime
 
