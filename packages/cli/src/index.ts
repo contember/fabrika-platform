@@ -151,7 +151,24 @@ const runPlatform = async (parsed: ParsedCommand): Promise<void> => {
 	await installation.run(parsed.command, parsed.rest)
 }
 
+/** Provider inference imports the app config, so it belongs to the compile phase `app register` reports. */
+const runAppRegister = async (parsed: ParsedCommand): Promise<void> => {
+	const config = configPath(parsed.rest)
+	await registerCompiledManifest(parsed.rest, async (env) => {
+		const provider = await selectedAppProvider(parsed)
+		if (provider !== 'zerops') {
+			throw new Error(`${provider} app tooling does not support \`app register\``)
+		}
+		const { buildZeropsManifestText } = await import('@fabrika/provider-zerops/cli')
+		return { provider, text: await buildZeropsManifestText({ config, env }) }
+	})
+}
+
 const runApp = async (parsed: ParsedCommand): Promise<void> => {
+	if (parsed.command === 'register') {
+		await runAppRegister(parsed)
+		return
+	}
 	const provider = await selectedAppProvider(parsed)
 	if (provider === 'cloudflare') {
 		if (parsed.command !== 'deploy') {
@@ -162,12 +179,6 @@ const runApp = async (parsed: ParsedCommand): Promise<void> => {
 		return
 	}
 	if (provider === 'zerops') {
-		if (parsed.command === 'register') {
-			const { buildZeropsManifestText } = await import('@fabrika/provider-zerops/cli')
-			const config = configPath(parsed.rest)
-			await registerCompiledManifest(parsed.rest, provider, (env) => buildZeropsManifestText({ config, env }))
-			return
-		}
 		if (parsed.command !== 'build') {
 			throw new Error(`Zerops app tooling does not support \`app ${parsed.command ?? '(missing)'}\``)
 		}

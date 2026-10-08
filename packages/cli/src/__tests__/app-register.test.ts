@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { runCli } from '..'
-import { registerCompiledManifest, runControlCli } from '../control.js'
+import { type CompiledManifest, registerCompiledManifest, runControlCli } from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 const REGISTERED = { result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } }
@@ -45,16 +45,15 @@ const silenceStdout = (): void => {
 	console.info = () => {}
 }
 
+const NOTES_CONFIG = `import { defineApp } from ${
+	JSON.stringify(authoringUrl)
+}\nexport default defineApp({ id: 'notes', target: { platform: 'zerops', services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }] } })\n`
+
 /** A Zerops app repository root with its config and, optionally, its descriptor, made the working directory. */
-const appRepository = async (options: { descriptor: boolean }): Promise<string> => {
+const appRepository = async (options: { descriptor: boolean; config?: string }): Promise<string> => {
 	const root = await mkdtemp(join(tmpdir(), 'fabrika-app-register-'))
 	roots.push(root)
-	await writeFile(
-		join(root, 'fabrika.config.ts'),
-		`import { defineApp } from ${
-			JSON.stringify(authoringUrl)
-		}\nexport default defineApp({ id: 'notes', target: { platform: 'zerops', services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }] } })\n`,
-	)
+	await writeFile(join(root, 'fabrika.config.ts'), options.config ?? NOTES_CONFIG)
 	if (options.descriptor) {
 		await writeFile(join(root, 'zerops.yaml'), 'zerops:\r\n  - setup: notes\r\n')
 	}
@@ -114,6 +113,32 @@ describe('app register', () => {
 		expect((await readdir(root)).sort()).toEqual(['fabrika.config.ts'])
 	})
 
+	test('a config that throws while the provider is inferred names the compile phase and registers nothing', async () => {
+		await appRepository({ descriptor: true, config: "throw new Error('config evaluation failed')\n" })
+		useControlEnv()
+		const bodies = captureRawBodies(REGISTERED)
+
+		await expect(runCli(['app', 'register', '--provider=zerops', ...registrationFlags])).rejects.toThrow(
+			'Compile phase failed; nothing was registered. config evaluation failed',
+		)
+		expect(bodies).toEqual([])
+	})
+
+	test('a compile error that quotes the control key reaches the operator without it', async () => {
+		await appRepository({
+			descriptor: true,
+			config: 'throw new Error(`leaked ${process.env.FABRIKA_CONTROL_KEY} twice ${process.env.FABRIKA_CONTROL_KEY}`)\n',
+		})
+		useControlEnv()
+		captureRawBodies(REGISTERED)
+
+		const failure = await runCli(['app', 'register', ...registrationFlags]).then(
+			() => undefined,
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		)
+		expect(failure).toBe('Compile phase failed; nothing was registered. leaked [FABRIKA_CONTROL_KEY] twice [FABRIKA_CONTROL_KEY]')
+	})
+
 	test('a Control refusal names the register phase, keeps the RPC error type and writes nothing', async () => {
 		const root = await appRepository({ descriptor: true })
 		useControlEnv()
@@ -127,17 +152,17 @@ describe('app register', () => {
 
 	test('checks inputs and the environment-only credential before compiling', async () => {
 		let compiled = 0
-		const compile = async (): Promise<string> => {
+		const compile = async (): Promise<CompiledManifest> => {
 			compiled += 1
-			return '{"manifestVersion":2}\n'
+			return { provider: 'zerops', text: '{"manifestVersion":2}\n' }
 		}
-		await expect(registerCompiledManifest(registrationFlags, 'zerops', compile, { FABRIKA_CONTROL_URL: 'https://control.example' }))
+		await expect(registerCompiledManifest(registrationFlags, compile, { FABRIKA_CONTROL_URL: 'https://control.example' }))
 			.rejects.toThrow('FABRIKA_CONTROL_KEY is required (environment only')
-		await expect(registerCompiledManifest(['--app=notes', '--env=prod'], 'zerops', compile, CONTROL_ENV)).rejects.toThrow('--repo is required')
-		await expect(registerCompiledManifest([...registrationFlags, '--manifest=old.json'], 'zerops', compile, CONTROL_ENV)).rejects.toThrow(
+		await expect(registerCompiledManifest(['--app=notes', '--env=prod'], compile, CONTROL_ENV)).rejects.toThrow('--repo is required')
+		await expect(registerCompiledManifest([...registrationFlags, '--manifest=old.json'], compile, CONTROL_ENV)).rejects.toThrow(
 			'takes no --manifest',
 		)
-		await expect(registerCompiledManifest([...registrationFlags, '--output=out.json'], 'zerops', compile, CONTROL_ENV)).rejects.toThrow(
+		await expect(registerCompiledManifest([...registrationFlags, '--output=out.json'], compile, CONTROL_ENV)).rejects.toThrow(
 			'takes no --output',
 		)
 		expect(compiled).toBe(0)

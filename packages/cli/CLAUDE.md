@@ -40,7 +40,9 @@ label the envelope a registration carries.
   left out. Both are one procedure of the contract, so neither invents a merge.
 - `app register` compiles the manifest in memory and sends the create-only request `register`
   builds (`registerCompiledManifest` in `src/control.ts`). The router loads the app code in the `app`
-  area and hands over only the compiled text; the `control` area still loads no app code.
+  area — provider inference included — and hands over only the provider and the compiled text; the
+  `control` area still loads no app code. That code can read the environment, so either phase's
+  message has `FABRIKA_CONTROL_KEY`'s value cut out before it is reported.
 - **Do not add source-connection verbs.** Creating a GitHub App connection needs a
   human principal (ADR-0029); the console owns it.
 

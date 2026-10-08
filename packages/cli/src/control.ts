@@ -388,14 +388,21 @@ const runRegister = async (flags: Flags, provider: string | undefined, env: Read
 	emit(flags, result, () => registrationLine(result))
 }
 
-/** Compiles the app's manifest for one environment and returns the exact text `app build` would write. */
-export type ManifestTextCompiler = (environment: string) => Promise<string>
+/** The exact text `app build` would write, and the provider whose envelope carries it. */
+export interface CompiledManifest {
+	readonly provider: string
+	readonly text: string
+}
+
+/** Resolves the app's provider and compiles its manifest for one environment; both run the app's own code. */
+export type ManifestTextCompiler = (environment: string) => Promise<CompiledManifest>
 
 const IN_MEMORY_MANIFEST = 'the compiled manifest'
 
-const failureMessage = (error: unknown): string => {
-	if (error instanceof RpcError) return `${error.type}: ${error.message}`
-	return error instanceof Error ? error.message : String(error)
+/** The compile runs repository code that can read the environment, so its message may quote the key. */
+const failureMessage = (error: unknown, controlKey: string): string => {
+	const message = error instanceof RpcError ? `${error.type}: ${error.message}` : error instanceof Error ? error.message : String(error)
+	return message.replaceAll(controlKey, '[FABRIKA_CONTROL_KEY]')
 }
 
 /**
@@ -405,7 +412,6 @@ const failureMessage = (error: unknown): string => {
  */
 export const registerCompiledManifest = async (
 	argv: readonly string[],
-	provider: string,
 	compile: ManifestTextCompiler,
 	env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<void> => {
@@ -419,18 +425,20 @@ export const registerCompiledManifest = async (
 	}
 	const inputs = registrationInputs(flags)
 	const client = controlClient(flags, env)
+	const controlKey = secret('FABRIKA_CONTROL_KEY', env)
 	let body: RegisterAppRequest
 	try {
-		const manifest = parseJsonText(await compile(inputs.env), IN_MEMORY_MANIFEST)
-		body = registrationRequest(inputs, provider, manifest, IN_MEMORY_MANIFEST)
+		const compiled = await compile(inputs.env)
+		const manifest = parseJsonText(compiled.text, IN_MEMORY_MANIFEST)
+		body = registrationRequest(inputs, compiled.provider, manifest, IN_MEMORY_MANIFEST)
 	} catch (error) {
-		throw new Error(`Compile phase failed; nothing was registered. ${failureMessage(error)}`)
+		throw new Error(`Compile phase failed; nothing was registered. ${failureMessage(error, controlKey)}`)
 	}
 	let result: RegisterAppResponse
 	try {
 		result = await client.register(body)
 	} catch (error) {
-		throw new Error(`Register phase failed after a successful compile; no manifest file was written. ${failureMessage(error)}`)
+		throw new Error(`Register phase failed after a successful compile; no manifest file was written. ${failureMessage(error, controlKey)}`)
 	}
 	emit(flags, result, () => registrationLine(result))
 }
