@@ -2,7 +2,7 @@
 // both select with it, so a request reaches the endpoint whose rules the proxy applied.
 
 import { isCanonicalPath } from './canonical-path'
-import type { EndpointRow, EndpointTable } from './contract'
+import type { EndpointMethod, EndpointRow, EndpointTable } from './contract'
 import { parameterName } from './path-segment'
 
 type Segment = { readonly kind: 'literal'; readonly value: string } | { readonly kind: 'param'; readonly name: string } | {
@@ -80,14 +80,38 @@ export function planEndpoint(table: CompiledEndpointTable, method: string, rawPa
  * whose path matches is the one `planEndpoint` selects, so gates emitted in this order agree with the table.
  */
 export function orderBySpecificity(rows: readonly EndpointRow[]): EndpointRow[] {
-	const compiled = rows.map((row) => {
-		const pattern = parsePattern(row.path)
-		if (!pattern.ok) {
-			throw new EndpointTableError([`endpoint '${row.id}' has path '${row.path}': ${pattern.problem}`])
-		}
-		return { row, segments: pattern.segments }
-	})
+	const compiled = rows.map((row) => ({ row, segments: patternOrThrow(row.path, row.id) }))
 	return compiled.sort((a, b) => compareSpecificity(a.segments, b.segments)).map(({ row }) => row)
+}
+
+/**
+ * The rows of `method` that `planEndpoint` may select for a request whose most specific matching row path, over
+ * every method, is `path`. A gate knows no method, so the gate generated for `path` must admit all of them. When
+ * `path` has a row of `method`, that row is the answer; otherwise every overlapping row that is not more specific
+ * than `path` may be, so the result may name a row such a request never selects, but never misses one.
+ */
+export function selectableRows(table: EndpointTable, path: string, method: EndpointMethod): EndpointRow[] {
+	const target = patternOrThrow(path, path)
+	const reserved = longestPrefixOf(path, table.reservedPrefixes)
+	const candidates = table.endpoints
+		.filter((row) => row.method === method && (reserved === null || isUnder(row.path, reserved)))
+		.map((row) => ({ row, segments: patternOrThrow(row.path, row.id) }))
+	const shape = JSON.stringify(target.map(shapeOf))
+	const same = candidates.find(({ segments }) => JSON.stringify(segments.map(shapeOf)) === shape)
+	if (same !== undefined) {
+		return [same.row]
+	}
+	return candidates
+		.filter(({ segments }) => compareSpecificity(segments, target) >= 0 && overlaps(segments, target))
+		.map(({ row }) => row)
+}
+
+function patternOrThrow(path: string, id: string): readonly Segment[] {
+	const pattern = parsePattern(path)
+	if (!pattern.ok) {
+		throw new EndpointTableError([`endpoint '${id}' has path '${path}': ${pattern.problem}`])
+	}
+	return pattern.segments
 }
 
 function analyse(table: EndpointTable): CompiledEndpoint[] {
@@ -249,6 +273,34 @@ function matchSegments(segments: readonly Segment[], path: readonly string[]): R
 	}
 	// `fromEntries` defines own properties, so no name reaches a prototype setter.
 	return segments.length === path.length ? Object.fromEntries(params) : null
+}
+
+/** Whether some path matches both patterns, under the rules of `matchSegments`. */
+function overlaps(a: readonly Segment[], b: readonly Segment[]): boolean {
+	for (let index = 0;; index++) {
+		const left = a[index]
+		const right = b[index]
+		if (left?.kind === 'wildcard' || right?.kind === 'wildcard') {
+			// A non-root wildcard needs a segment at its own index; the other pattern supplies one unless it ends there.
+			const other = left?.kind === 'wildcard' ? b : a
+			return index === 0 || other.length > index
+		}
+		if (left === undefined || right === undefined) {
+			return left === right
+		}
+		if (!segmentsOverlap(left, right)) {
+			return false
+		}
+	}
+}
+
+/** A parameter takes any one non-empty segment, so it meets every literal but the empty last segment of a trailing `/`. */
+function segmentsOverlap(left: Segment, right: Segment): boolean {
+	if (left.kind === 'literal' && right.kind === 'literal') {
+		return left.value === right.value
+	}
+	const literal = left.kind === 'literal' ? left : right.kind === 'literal' ? right : null
+	return literal === null || literal.value !== ''
 }
 
 const RANK: Readonly<Record<Segment['kind'], number>> = { literal: 0, param: 1, wildcard: 2 }

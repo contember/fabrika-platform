@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { isCanonicalPath } from '../canonical-path'
 import type { EndpointMethod, EndpointRow } from '../contract'
 import { compileEndpointTable, orderBySpecificity, planEndpoint } from '../endpoints'
 import { applicableGates, compileGates } from '../gates'
+import { probesFor } from './fixtures/gate-probes'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 // Part A generates one gate per endpoint path in specificity order. The proxy then admits a path by the first
@@ -20,23 +20,6 @@ const row = (id: string, path: string, method: EndpointMethod = 'GET'): Endpoint
 	input: null,
 	output: null,
 })
-
-/** Instances and near misses of every path: each parameter and wildcard filled, literals swapped, segments added and dropped. */
-function probesFor(rows: readonly EndpointRow[]): string[] {
-	const probes = new Set(['/', '/zz', '/zz/', '/zz/zz'])
-	for (const { path } of rows) {
-		const segments = path === '/' ? [] : path.slice(1).split('/')
-		const fills = segments.map((segment) => (segment === '*' ? ['', 'a', 'a/b'] : segment.startsWith(':') ? ['x', ''] : [segment, 'zz']))
-		const combinations = fills.reduce<string[][]>((acc, options) => acc.flatMap((prefix) => options.map((option) => [...prefix, option])), [[]])
-		for (const combination of combinations) {
-			const base = `/${combination.join('/')}`
-			for (const probe of [base, `${base}/`, `${base}/extra`, `/${combination.slice(0, -1).join('/')}`]) {
-				probes.add(probe)
-			}
-		}
-	}
-	return [...probes].filter(isCanonicalPath)
-}
 
 function decisions(rows: readonly EndpointRow[], reservedPrefixes: readonly string[], method: EndpointMethod, probes: readonly string[]) {
 	const ofMethod = rows.filter((candidate) => candidate.method === method)
