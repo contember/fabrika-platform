@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · contract-canonical · endpoint-digest · endpoints · gate-parity · gates · permissions · requirement · sha256 · token
+bun test               # app-environment · canonical-path · contract-canonical · endpoint-digest · endpoints · gates · permissions · requirement · sha256 · token
 ```
 
 | Module                  | What it owns                                                                                                                   |
@@ -19,7 +19,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
 | `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
 | `endpoint-digest.ts`    | `requirementDigest`, `contractDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                          |
-| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`, `selectableRows`.              |
+| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                                            |
 | `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
 | `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
 | `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                                               |
@@ -110,17 +110,8 @@ bun test               # app-environment · canonical-path · contract-canonical
   only the endpoints declared under it compete, so an unknown procedure never reaches the SPA. There
   is no fall-through, and parameters come back raw. It evaluates no gate rule. Segments match like
   the gate glob: raw, case-sensitive, a trailing `/` literal, a non-root `*` only after its slash.
-  Until the proxy reads endpoint tables, it evaluates the gates generated from the same table with
-  `compileGates` / `applicableGates`, one per path in `orderBySpecificity` order; the first matching
-  gate and `planEndpoint` name the same row on every path (`gate-parity.test.ts`). A gate knows no
-  method, so `selectableRows` names the rows of the other method a request can reach through a path,
-  and `@fabrika/app`'s `gatesFromContract` admits their kinds there too. It may over-approximate,
-  never miss a row: a missed row is an endpoint the proxy refuses or admits without its credential.
-- **Part A only: under a reserved prefix the gates are coarser than the table.** Gates know no
-  reservation, so an unknown procedure (`GET /api/notes.export`) is admitted with the SPA's gate kind
-  and then refused by `planEndpoint` in the application with 404. The parity test asserts exactly this
-  case and excludes reserved-prefix paths from strict parity. B2 closes it: the proxy selects by the
-  table itself. Never widen this to paths outside a reserved prefix.
+  The proxy and the framework both select with it, so a contract application has no gates: a gate
+  list cannot express "no fall-through" or "the most specific endpoint wins" (ADR-0022 rule 3).
 - **`planEndpoint` takes only a `compileEndpointTable` result.** Compiling runs `assertNoAmbiguity`
   — an invalid path or reserved prefix, a duplicate id, a parameter named `__proto__`,
   `constructor` or `prototype`, or two endpoints of one method and one path shape — so a request

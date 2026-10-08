@@ -43,8 +43,8 @@ src/
     rpc.ts            createRpcClient: the defineApp() RPC client (exported from the root)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope
   testing/            @fabrika/app/testing — no test-runner dependency
-    kit.ts            testKit: boot behind a stand-in proxy and IAM
-    proxy.ts          gatesProxy (proxy-core's verify service, the default) and endpointsProxy
+    kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
+    proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
     conformance.ts    the cross-runtime conformance helper of defineApp() services
   contract/           @fabrika/app/contract — browser-safe
@@ -55,7 +55,7 @@ src/
     build.ts          buildArtifact: every check, default and generated endpoint
     defaults.ts       the defaults and generated paths, in one place
     artifact-schema.ts  parseContractArtifact, the zod parser of the artifact
-    platform.ts       gatesFromContract, schemaFromContract: today's proxy and IAM
+    platform.ts       schemaFromContract: the IAM vocabulary a deploy reconciles
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
@@ -157,14 +157,11 @@ src/
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`; a webhook
   appends `/:bindingId`. No authored path may lie under `/__fabrika`.
-- **`gatesFromContract` and `schemaFromContract` (`platform.ts`) read only the
-  artifact**, so the static reader's artifact compiles to the same gates and schema.
-  The gates come from the same endpoint table as the router: one rule per path and
-  kind in `orderBySpecificity` order, `service` before `human` before `public`, and a
-  path also admits what the other method can select through it (`selectableRows`).
-  Never hand-write gates for a contract application, and never emit a rule for a
-  path without an endpoint. `platform.test.ts` checks every fixture contract against
-  `planEndpoint` on the auth-core probe paths. `schemaFromContract` emits every
+- **A contract application has no gates.** The proxy reads its endpoint table,
+  `contractProxyTable(artifact)` from `@fabrika/proxy-core/manifest`, and both
+  providers refuse a contract application whose proxy carries gates (ADR-0022 rule 3).
+- **`schemaFromContract` (`platform.ts`) reads only the artifact**, so the static
+  reader's artifact compiles to the same schema. It emits every
   field of A12's `AppSchema`, and its output must parse unchanged with
   `@fabrika/auth`'s `appSchemaSchema`, which resolves every name it carries.
 - **What IAM would refuse is refused at the source, not in the generator.** `buildArtifact`
@@ -285,14 +282,15 @@ src/
 - **The transport builds the request inside its guard** (`exchange` takes a builder):
   an input that does not serialize rejects with `RpcError`, it never throws.
 - **The kit runs the real `boot` and dispatcher behind the real proxy decision**; only
-  IAM is a stand-in (`kit.iam`, an `IamGateway`). By default the decision is
-  proxy-core's `createVerifyService` over `gatesFromContract(artifact)`, asked the way
-  the Cloudflare proxy Worker asks it; its answer reaches the test verbatim. Never
-  re-implement gate semantics here: `test-kit-differential.test.ts` holds the kit to
-  proxy-core's `Authorizer` for every credential on every kind of path.
-- **`proxy: 'endpoints'` is an explicit opt-in**, for tests written ahead of B2:
-  ADR-0022's per-endpoint steps with `planEndpoint` and `satisfies`. It is a test
-  double, not a gate evaluator, and B2's proxy-core decision replaces it.
+  IAM is a stand-in (`kit.iam`, an `IamGateway`). The decision is production's:
+  proxy-core's `createVerifyService` over `contractProxyTable(artifact)`, asked the way
+  the Cloudflare proxy Worker asks it. Its answer reaches the test verbatim, and an
+  allow forwards what the proxy asserts — the token, the request id,
+  `X-Fabrika-Endpoint` — and drops `Authorization` on an anonymous endpoint. There is
+  one decision and no option to swap it. Never re-implement proxy semantics here:
+  `test-kit-differential.test.ts` holds the kit to proxy-core's `Authorizer` over the
+  same table for every credential on every kind of path. The kit's IAM issues no
+  delegation grants.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
 - Its tokens are signed with a generated key and verified by the application's own

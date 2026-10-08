@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { EndpointRow, EndpointTable } from '../contract'
-import { assertNoAmbiguity, compileEndpointTable, EndpointTableError, orderBySpecificity, planEndpoint, selectableRows } from '../endpoints'
+import { assertNoAmbiguity, compileEndpointTable, EndpointTableError, planEndpoint } from '../endpoints'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 const row = (id: string, method: 'GET' | 'POST', path: string): EndpointRow => ({
@@ -246,63 +246,5 @@ describe('assertNoAmbiguity', () => {
 
 	test('compileEndpointTable refuses the same tables', () => {
 		expect(() => compileEndpointTable(table([row('a', 'GET', '/x/:a'), row('b', 'GET', '/x/:b')]))).toThrow(EndpointTableError)
-	})
-})
-
-describe('orderBySpecificity', () => {
-	test('orders most specific first, keeping declaration order between paths that never overlap', () => {
-		const rows = [
-			row('root', 'GET', '/*'),
-			row('w', 'GET', '/a/*'),
-			row('p', 'GET', '/a/:x'),
-			row('b', 'GET', '/b'),
-			row('l', 'GET', '/a/l'),
-			row('i', 'GET', '/'),
-		]
-		expect(orderBySpecificity(rows).map(({ id }) => id)).toEqual(['i', 'b', 'l', 'p', 'w', 'root'])
-	})
-
-	test('refuses an invalid path', () => {
-		expect(() => orderBySpecificity([row('e', 'GET', '/a/*/b')])).toThrow(EndpointTableError)
-	})
-})
-
-describe('selectableRows: what a method-blind gate at one path must admit', () => {
-	const ids = (rows: readonly EndpointRow[]) => rows.map(({ id }) => id)
-
-	test('a row of the method at the same path shape is the only answer', () => {
-		const rows = table([row('get', 'GET', '/a/:x'), row('post', 'POST', '/a/:y'), row('any', 'POST', '/*')])
-		expect(ids(selectableRows(rows, '/a/:x', 'POST'))).toEqual(['post'])
-		expect(ids(selectableRows(rows, '/a/:y', 'GET'))).toEqual(['get'])
-	})
-
-	test('without one, every overlapping row of the method that is not more specific', () => {
-		const rows = table([
-			row('form', 'POST', '/contact'),
-			row('spa', 'GET', '/*'),
-			row('param', 'GET', '/:page'),
-			row('narrower', 'GET', '/contact/x'),
-			row('other', 'GET', '/about'),
-		])
-		expect(ids(selectableRows(rows, '/contact', 'GET'))).toEqual(['spa', 'param'])
-		expect(ids(selectableRows(rows, '/contact', 'POST'))).toEqual(['form'])
-	})
-
-	test('no row of a method that the path cannot reach', () => {
-		expect(selectableRows(table([row('get', 'GET', '/a')]), '/b', 'GET')).toEqual([])
-		expect(selectableRows(table([row('slash', 'GET', '/a/')]), '/a/:x', 'GET')).toEqual([])
-		expect(selectableRows(table([row('w', 'GET', '/a/*')]), '/a', 'GET')).toEqual([])
-		expect(ids(selectableRows(table([row('w', 'GET', '/a/*')]), '/a/', 'GET'))).toEqual(['w'])
-		expect(ids(selectableRows(table([row('root', 'GET', '/*')]), '/', 'GET'))).toEqual(['root'])
-	})
-
-	test('under a reserved prefix only the rows declared under it compete', () => {
-		const rows = table([row('spa', 'GET', '/*'), row('procedure', 'POST', '/api/notes.list'), row('file', 'GET', '/api/files/:id')], ['/api'])
-		expect(selectableRows(rows, '/api/notes.list', 'GET')).toEqual([])
-		expect(ids(selectableRows(rows, '/api/files/:id', 'GET'))).toEqual(['file'])
-	})
-
-	test('refuses an invalid path', () => {
-		expect(() => selectableRows(table([]), '/a/*/b', 'GET')).toThrow(EndpointTableError)
 	})
 })
