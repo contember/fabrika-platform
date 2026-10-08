@@ -90,8 +90,15 @@ covers:
 The rule has three outcomes:
 
 - **No change** passes.
-- **A change that only removes** passes.
+- **A change that only removes** passes, with one exception for endpoints (below).
 - **Everything else** waits for approval on a protected environment.
+
+**A removed endpoint can widen access.** The proxy selects the most specific endpoint
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)), so a literal endpoint can shadow a
+broader parameter or wildcard endpoint. Removing the literal would send its paths to the broader one.
+A removal of an endpoint therefore passes only when none of its former paths matches another endpoint
+in the candidate table: `planEndpoint` over the candidate table selects no endpoint for those paths, so
+they become denied. Otherwise Control classifies the removal as a widening, and it waits like any other.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".
@@ -137,7 +144,8 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
   reads the plain-language lines and approves.
-- A removal and a code-only change deploy without a prompt. Unprotected environments, including
+- A removal and a code-only change deploy without a prompt, unless the removal uncovers a broader
+  endpoint. Unprotected environments, including
   staging and MCP authoring targets by default, do not wait.
 - The first deploy to a protected environment always waits: against the empty snapshot, every item is
   an addition.
