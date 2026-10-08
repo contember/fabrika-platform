@@ -16,7 +16,14 @@
 
 import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
-import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
+import {
+	type BackgroundTasks,
+	createBackgroundTasks,
+	FileSystemAssetServer,
+	PostgresDatabase,
+	PostgresJobQueue,
+	S3BlobStore,
+} from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { createControlRepositories } from '../db'
@@ -153,11 +160,17 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		mcp: controlMcpRoute(env, githubWorkspaceSource(env, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))),
 		config,
 		queue,
-		async shutdown(): Promise<void> {
-			await tasks.drain()
-			await db.close()
-		},
+		shutdown: () => shutdownProcess(tasks, db),
 	}
+}
+
+/** Seconds. Background work has drained by then; a query still running is abandoned work, e.g. a stalled lease release. */
+const POOL_CLOSE_TIMEOUT_S = 2
+
+/** Drain background work, then close the pool, cutting off any query that outlives the bound. */
+export async function shutdownProcess(tasks: Pick<BackgroundTasks, 'drain'>, db: Pick<PostgresDatabase, 'close'>): Promise<void> {
+	await tasks.drain()
+	await db.close({ timeout: POOL_CLOSE_TIMEOUT_S })
 }
 
 interface OperationsProcessConfig {

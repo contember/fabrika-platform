@@ -1,13 +1,19 @@
-import { SqlDeployLocks } from '@fabrika/platform'
-import { createBackgroundTasks } from '@fabrika/platform-node'
+import { type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
+import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { describe, expect, jest, test } from 'bun:test'
 import { CATALOG_LEASE_KEY, LEASE_TTL_MS } from '../lease'
 import { projectOperationsCatalogChange, reopenCatalogProjection } from '../operations-catalog'
+import { shutdownProcess } from '../zerops/runtime'
 import { stopControlServer } from '../zerops/server'
 import { createHarness } from './helpers/harness'
+import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres'
 import { providerEnvironment } from './helpers/provider'
 
 const SYNC_KEY = 'catalog-sync-key-with-at-least-32-characters'
+
+if (!hasPostgres) {
+	console.warn(`zerops-server-shutdown.test.ts: the pool-closure case ${skipReason}`)
+}
 
 /** True when nobody holds the catalog lease; the probe that takes it gives it straight back. */
 async function leaseIsFree(locks: SqlDeployLocks): Promise<boolean> {
@@ -23,6 +29,20 @@ class StalledReleaseLocks extends SqlDeployLocks {
 	override release(): Promise<void> {
 		this.releasing = true
 		return new Promise<void>(() => {})
+	}
+}
+
+/** A lease store whose release runs one real query on the process pool that outlives every shutdown bound. */
+class PoolStalledReleaseLocks extends SqlDeployLocks {
+	releasing = false
+
+	constructor(db: SqlDatabase, private readonly pool: PostgresDatabase) {
+		super(db)
+	}
+
+	override async release(): Promise<void> {
+		this.releasing = true
+		await this.pool.prepare('SELECT pg_sleep(30)').run()
 	}
 }
 
@@ -143,4 +163,53 @@ describe('Zerops control server shutdown (backlog 84)', () => {
 		}
 		expect(warnings).toEqual(['operations catalog lock release timed out'])
 	})
+
+	test.skipIf(!hasPostgres)('a release query that stalls on the pool cannot hold up the pool closure', async () => {
+		if (postgresUrl === null) throw new Error('unreachable: guarded by skipIf')
+		const pool = PostgresDatabase.connect(postgresUrl)
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
+		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod'))
+		const [source] = (await harness.repositories.operationsCatalog.snapshot()).sources
+		if (source === undefined) throw new Error('expected one catalog source')
+		const locks = new PoolStalledReleaseLocks(harness.d1, pool)
+		const tasks = createBackgroundTasks({ label: 'shutdown test task' })
+		const service = {
+			fetch: async (): Promise<Response> =>
+				Response.json({
+					revision: 1,
+					outcome: 'applied',
+					ingest: [{
+						coordinate: { appId: 'app-a', environment: 'prod', serviceKey: 'default' },
+						credentialId: source.credential_id,
+						ingestProjectId: '100000000000000001',
+					}],
+				}),
+		}
+		const originalWarn = console.warn
+		console.warn = () => {}
+		try {
+			tasks.waitUntil(projectOperationsCatalogChange({
+				catalog: harness.repositories.operationsCatalog,
+				locks,
+				service,
+				syncKey: SYNC_KEY,
+				operationsOrigin: 'https://errors.example.test',
+			}))
+			while (!locks.releasing) await Bun.sleep(1)
+			const started = performance.now()
+			await stopControlServer({
+				server: { stop: async () => {} },
+				requests: { drain: async () => {} },
+				consumer: { stop: async () => {} },
+				runtime: { env: { WAIT_UNTIL: tasks.waitUntil }, shutdown: () => shutdownProcess(tasks, pool) },
+			}, 10)
+			// The 5 s release bound plus the 2 s pool-closure bound, well short of the 30 s query.
+			expect(performance.now() - started).toBeLessThan(10_000)
+		} finally {
+			console.warn = originalWarn
+			reopenCatalogProjection()
+			await pool.close({ timeout: 0 })
+		}
+	}, 20_000)
 })
