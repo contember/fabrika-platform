@@ -75,6 +75,11 @@ bun run test:browser  # the opice suites in tests/browser/
   `docs/reference/zerops-platform.md` for what is actually verified. Its behaviour is pinned by the
   shared `platform-facts` table (`packages/provider-zerops/src/__tests__/platform-facts.ts`), which
   the opt-in live suite runs against a real account — change a fact there, not here.
+- **The GitHub double is a test double for GitHub's API, not for GitHub.** Control reaches it only
+  through the `sourceSeams` that `src/control-server.ts` passes to `createRuntime` — a composition
+  input. Never give Control an environment variable or config field that moves its GitHub origins to
+  make this work: ADR-0029 fixes them, and control's `fixed-origins.test.ts` asserts it. The double
+  verifies every App JWT against that fixture App's own public key; keep it refusing what GitHub refuses.
 - **`local:smoke` is disruptive by design** — it hard-kills control mid-pipeline to prove that the
   maintenance cron (`control/src/zerops/cron.ts`, the production crontab command) reconciles the run once
   the dead holder's deploy lease expires, and exactly-once counting. Do not soften a step to make it pass; a failure there is

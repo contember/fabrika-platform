@@ -15,13 +15,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
-import {
-	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
-	LOCAL_SOURCE_APPLICATION_REPOSITORY,
-	LOCAL_SOURCE_EMULATOR_ORIGIN,
-	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
-	LOCAL_SOURCE_PLATFORM_REPOSITORY,
-} from '../../local-source-contract'
+import { LOCAL_SOURCE_EMULATOR_ORIGIN, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE, LOCAL_SOURCE_PLATFORM_REPOSITORY } from '../../local-source-contract'
 import { prepareLocalSourceFixtures } from '../../local-source-fixtures/fixture'
 import { createFixtureTransports } from '../../local-source-transports'
 import { createZeropsEmulator } from '../../zerops-emulator'
@@ -66,16 +60,14 @@ async function fixture() {
 				repository: LOCAL_SOURCE_PLATFORM_REPOSITORY,
 				fixture: manifest.platform,
 				archive: Bun.file(join(fixtureDirectory, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE)),
+				visibility: 'public',
 			},
-			{
-				repository: LOCAL_SOURCE_APPLICATION_REPOSITORY,
-				fixture: manifest.application,
-				archive: Bun.file(join(fixtureDirectory, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE)),
+		], {
+			privateUploadFetch: async (url, init) => {
+				const request = new Request(url, init)
+				uploads.push(new Uint8Array(await request.clone().arrayBuffer()))
+				return handler(request)
 			},
-		], async (url, init) => {
-			const request = new Request(url, init)
-			uploads.push(new Uint8Array(await request.clone().arrayBuffer()))
-			return handler(request)
 		}),
 	})
 	let persisted: ZeropsNamespaceTarget = {

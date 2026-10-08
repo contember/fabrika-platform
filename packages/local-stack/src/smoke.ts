@@ -53,6 +53,7 @@ import {
 	runViewSchema,
 	storageIdentitySchema,
 	storageRowsSchema,
+	webhookTriggeredSchema,
 } from './smoke-schemas'
 import { LOCAL_SOURCE_CONNECTIONS } from './source-connection-fixture'
 import { parseSnapshot } from './zerops-emulator/snapshot'
@@ -64,6 +65,7 @@ const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const NOTES_APP_ID = 'notes'
 const NOTES_ENVIRONMENT = 'prod'
 const NOTES_DEPLOY_SERVICE = 'notesapi'
+const NOTES_TRIGGER_REF = 'refs/heads/main'
 // The keyed connection the notes app is bound to; its scoped route is the only one that can trigger it.
 const NOTES_SOURCE_CONNECTION = LOCAL_SOURCE_CONNECTIONS[0]
 if (NOTES_SOURCE_CONNECTION === undefined) throw new Error('the local source connection fixture is empty')
@@ -256,8 +258,11 @@ const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest)
 	}
 	if (itemsResponseSchema.parse(apps).items.some((item) => namespaceViewSchema.parse(item).id === 'notes')) {
 		const app = appSourceSchema.parse(await controlRequest('apps.get', machineKey, { appId: NOTES_APP_ID }))
-		if (app.repoUrl !== normalizeRepoUrl(LOCAL_SOURCE_APPLICATION_REPOSITORY_URL) || app.workerDir !== '.') {
-			throw new Error('Local notes source uses legacy coordinates; reset the local stack explicitly')
+		if (
+			app.repoUrl !== normalizeRepoUrl(LOCAL_SOURCE_APPLICATION_REPOSITORY_URL) || app.workerDir !== '.'
+			|| app.githubConnectionId !== NOTES_SOURCE_CONNECTION.connectionId || app.githubInstallationId !== NOTES_SOURCE_CONNECTION.installationId
+		) {
+			throw new Error('Local notes source uses legacy coordinates or no keyed connection; reset the local stack explicitly')
 		}
 		const environments = await controlRequest('apps.environments.list', machineKey, { appId: NOTES_APP_ID })
 		const existing = itemsResponseSchema.parse(environments).items.map((item) => environmentViewSchema.parse(item)).find((item) => item.env === 'prod')
@@ -274,7 +279,7 @@ const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest)
 				environment: {
 					domain: 'notes.fabrika.localhost',
 					publicOrigin: 'http://notes.fabrika.localhost:18081',
-					triggerRef: existing?.triggerRef ?? 'refs/heads/main',
+					triggerRef: existing?.triggerRef ?? NOTES_TRIGGER_REF,
 					namespaceId: existing?.namespaceId ?? 'apps-prod',
 					target: existing?.target ?? target,
 					artifact: existing?.artifact ?? artifact,
@@ -288,8 +293,10 @@ const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest)
 		repoUrl: LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
 		defaultBranch: 'main',
 		workerDir: '.',
+		// Binds the keyed connection that owns the private repository; the registry resolves it by owner.
+		githubInstallationId: NOTES_SOURCE_CONNECTION.installationId,
 		env: 'prod',
-		triggerRef: 'refs/heads/main',
+		triggerRef: NOTES_TRIGGER_REF,
 		domain: 'notes.fabrika.localhost',
 		publicOrigin: 'http://notes.fabrika.localhost:18081',
 		namespaceId: 'apps-prod',
@@ -299,14 +306,13 @@ const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest)
 }
 
 /**
- * The scoped route resolves the connection's vault secret and verifies the HMAC before anything else,
- * so a 204 proves the signature was accepted. It cannot prove more here: `notes` is registered
- * anonymously because no local app can hold a keyed private binding (see backlog 81), so the delivery
- * matches no application and `handleWebhook` acknowledges it with an empty body.
+ * A signed push to the notes connection's scoped route is the deploy trigger: the route verifies the
+ * HMAC with that connection's vault secret and triggers exactly the apps bound to it. The run then
+ * resolves and archives the private repository through a token minted with the connection's own App key.
  */
-const proveScopedWebhookSignature = async (webhookSecret: string, commitSha: string): Promise<void> => {
+export const triggerByScopedWebhook = async (webhookSecret: string, commitSha: string): Promise<string> => {
 	const body = JSON.stringify({
-		ref: 'refs/heads/main',
+		ref: NOTES_TRIGGER_REF,
 		after: commitSha,
 		repository: { clone_url: LOCAL_SOURCE_APPLICATION_REPOSITORY_URL },
 		installation: { id: NOTES_SOURCE_CONNECTION.installationId },
@@ -320,10 +326,14 @@ const proveScopedWebhookSignature = async (webhookSecret: string, commitSha: str
 		},
 		body,
 	})
-	if (response.status !== 204) {
-		throw new Error(`the scoped local webhook answered ${response.status}, not the expected 204`)
+	if (response.status !== 200) {
+		throw new Error(`the scoped local webhook answered ${response.status}, not 200 with a triggered run`)
 	}
-	console.info(`Scoped webhook ${NOTES_SOURCE_CONNECTION.connectionId} verified the delivery signature`)
+	const triggered = webhookTriggeredSchema.parse(await response.json()).triggered
+	const runId = triggered[0]
+	if (triggered.length !== 1 || runId === undefined) throw new Error(`the scoped local webhook triggered ${triggered.length} runs, not exactly one`)
+	console.info(`Scoped webhook ${NOTES_SOURCE_CONNECTION.connectionId} triggered deploy ${runId}`)
+	return runId
 }
 
 const emulatorSnapshot = async () =>
@@ -382,12 +392,11 @@ const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceMan
 
 const proveRestartReconciliation = async (
 	machineKey: string,
+	webhookSecret: string,
 	fixtures: LocalSourceManifest,
 ): Promise<{ runId: string; commitSha: string; checkpoint: ZeropsRunState }> => {
-	// Manual, not webhook-driven: triggering by delivery needs an app bound to a keyed connection.
-	console.info(`Submitting immutable Notes deploy for ${fixtures.application.commitSha}`)
-	const triggered = await controlRequest('deploy', machineKey, { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: fixtures.application.commitSha })
-	const runId = idResponseSchema.parse(triggered).id
+	console.info(`Pushing immutable Notes commit ${fixtures.application.commitSha}`)
+	const runId = await triggerByScopedWebhook(webhookSecret, fixtures.application.commitSha)
 	console.info(`Deploy ${runId} accepted; waiting for its durable triggered checkpoint`)
 	let observed: string | undefined
 	const checkpoint = await poll(
@@ -858,8 +867,7 @@ const main = async (): Promise<void> => {
 	await proveNamespaceSource(machineKey, fixtures)
 	await ensureNotesApp(machineKey, fixtures)
 	const activeConfig = await activeOperationsConfig()
-	await proveScopedWebhookSignature(webhookSecret, fixtures.application.commitSha)
-	const deployment = await proveRestartReconciliation(machineKey, fixtures)
+	const deployment = await proveRestartReconciliation(machineKey, webhookSecret, fixtures)
 	const deployedConfig = await activeOperationsConfig()
 	if (
 		deployedConfig.dsn !== activeConfig.dsn

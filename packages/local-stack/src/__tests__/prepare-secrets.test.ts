@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from '../local-source-contract'
 import { loadLocalSourceFixtures } from '../local-source-fixtures/fixture'
 import { COMPOSE_FILE, prepareLocalSecrets, prepareLocalSourceConfiguration } from '../prepare'
+import { LOCAL_GITHUB_APPS_FILE, LOCAL_SOURCE_CONNECTIONS, readLocalGitHubApps } from '../source-connection-fixture'
 
 let directory: string
 
@@ -129,6 +130,20 @@ describe('local storage preparation', () => {
 		const conflicting = await snapshotEnvironment()
 		await expect(prepareLocalSourceConfiguration(directory)).rejects.toThrow('explicitly reset')
 		expect(await snapshotEnvironment()).toEqual(conflicting)
+	})
+
+	test('gives every fixture GitHub App its own key once, keeps it across preparation and refuses a stale key file', async () => {
+		await seedExistingState()
+		await prepareLocalSecrets(directory)
+		const file = resolve(directory, LOCAL_GITHUB_APPS_FILE)
+		const generated = await Bun.file(file).text()
+		const apps = await readLocalGitHubApps(directory)
+		expect(apps.apps.map((app) => app.connectionId)).toEqual(LOCAL_SOURCE_CONNECTIONS.map((connection) => connection.connectionId))
+		expect(new Set(apps.apps.map((app) => app.privateKeyPem)).size).toBe(LOCAL_SOURCE_CONNECTIONS.length)
+		await prepareLocalSecrets(directory)
+		expect(await Bun.file(file).text()).toBe(generated)
+		await Bun.write(file, JSON.stringify({ version: 1, apps: apps.apps.slice(1) }))
+		await expect(prepareLocalSecrets(directory)).rejects.toThrow('explicitly reset the local stack')
 	})
 
 	test('waits for both native startup buckets before starting storage consumers', async () => {

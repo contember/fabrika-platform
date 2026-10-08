@@ -16,7 +16,14 @@ export const environmentViewSchema = z.object({
 }).catch({})
 export const runViewSchema = z.object({ status: z.unknown(), externalRunId: z.string().optional().catch(undefined) }).catch({})
 export const completedRunSchema = z.object({ commitSha: text })
-export const appSourceSchema = z.object({ id: text, repoUrl: text, workerDir: z.string() })
+export const appSourceSchema = z.object({
+	id: text,
+	repoUrl: text,
+	workerDir: z.string(),
+	githubConnectionId: z.string().nullable(),
+	githubInstallationId: z.number().int().nullable(),
+})
+export const webhookTriggeredSchema = z.object({ triggered: z.array(text) })
 export const namespaceTargetViewSchema = z.object({ target: providerEnvelopeSchema })
 export const activeOperationsConfigSchema = z.object({ dsn: text, ingestProjectId: text, serviceKey: text })
 export const serviceViewSchema = z.object({ name: z.unknown(), id: z.unknown() }).catch({})

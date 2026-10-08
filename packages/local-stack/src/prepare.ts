@@ -9,6 +9,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
+import { ensureLocalGitHubApps } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
@@ -73,6 +74,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	const existingFiles = requiredFiles.filter((file) => existsSync(resolve(directory, file)))
 	if (existingFiles.length === requiredFiles.length) {
 		await ensureObjectStorageSecrets(directory)
+		await ensureLocalGitHubApps(directory)
 		return
 	}
 	if (existingFiles.length > 0) {
@@ -128,6 +130,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 		writeEnv(directory, 'emulator.env', { LOCAL_ZEROPS_TOKEN: emulatorToken }),
 	])
 	await ensureObjectStorageSecrets(directory)
+	await ensureLocalGitHubApps(directory)
 }
 
 async function ensureObjectStorageSecrets(directory: string): Promise<void> {

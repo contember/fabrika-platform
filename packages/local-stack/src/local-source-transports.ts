@@ -1,4 +1,5 @@
 import type { GitHubMetadataFetch, SourceDownloadFetch, SourceRepository, SourceUploadFetch } from '@fabrika/control/source'
+import { randomBytes } from 'node:crypto'
 import {
 	LOCAL_SOURCE_EMULATOR_ORIGIN,
 	LOCAL_SOURCE_UPLOAD_PATH,
@@ -7,29 +8,62 @@ import {
 	parseLocalSourceUploadSearch,
 } from './local-source-contract'
 
-interface FixtureTransportSource {
+/** Every fixture repository was committed on this branch (`local-source-fixtures/generate.ts`). */
+const FIXTURE_BRANCH = 'main'
+
+export interface FixtureTransportSource {
 	repository: SourceRepository
 	fixture: LocalSourceFixture
 	archive: Blob
+	/** A private repository answers only a caller holding a token the access check accepts; GitHub hides it as 404 otherwise. */
+	visibility: 'public' | 'private'
+}
+
+/** Decides whether a request's Authorization header may read a private repository (the GitHub double). */
+export interface FixtureRepositoryAccess {
+	canRead(authorization: string | null, repository: SourceRepository): boolean
+}
+
+export interface FixtureTransportOptions {
+	readonly privateUploadFetch?: SourceUploadFetch
+	readonly access?: FixtureRepositoryAccess
 }
 
 /** GitHub and the Zerops upload endpoint as served by the local fixtures; the source code addresses the production origins. */
 export function createFixtureTransports(
 	sources: readonly FixtureTransportSource[],
-	privateUploadFetch: SourceUploadFetch = (url, init) => fetch(url, init),
+	options: FixtureTransportOptions = {},
 ): {
 	metadataFetch: GitHubMetadataFetch
 	downloadFetch: SourceDownloadFetch
 	uploadFetch: SourceUploadFetch
 } {
+	const access = options.access
+	if (access === undefined && sources.some((source) => source.visibility === 'private')) {
+		throw new Error('a private fixture repository needs an access check')
+	}
+	const privateUploadFetch = options.privateUploadFetch ?? ((url, init) => fetch(url, init))
+	const readable = (source: FixtureTransportSource, authorization: string | null): boolean =>
+		source.visibility === 'public' || access?.canRead(authorization, source.repository) === true
+	// Codeload authorizes a private download by the one-time query token of the API's redirect, never by the installation token.
+	const codeloadGrants = new Set<string>()
+	const spendCodeloadGrant = (url: string, codeload: string): boolean => {
+		const grant = new URL(url).searchParams.get('token')
+		if (grant === null || url !== `${codeload}?token=${grant}`) return false
+		return codeloadGrants.delete(grant)
+	}
 	return {
 		metadataFetch: async (input, init) => {
 			init?.signal?.throwIfAborted()
 			const url = input instanceof Request ? input.url : String(input)
 			if ((init?.method ?? 'GET') !== 'GET') return missing()
-			for (const { repository, fixture } of sources) {
+			const authorization = new Headers(init?.headers).get('authorization')
+			for (const source of sources) {
+				const { repository, fixture } = source
 				const prefix = `https://api.github.com/repos/${repository.owner}/${repository.name}`
-				if (url === `${prefix}/commits/${fixture.commitSha}`) {
+				if (!url.startsWith(`${prefix}/`) || !readable(source, authorization)) continue
+				const commitRefs = [fixture.commitSha, FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`].map(encodeURIComponent)
+				if (commitRefs.some((ref) => url === `${prefix}/commits/${ref}`)) {
 					return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })
 				}
 				if (url === `${prefix}/git/trees/${fixture.treeSha}?recursive=1`) {
@@ -44,14 +78,22 @@ export function createFixtureTransports(
 		downloadFetch: async (url, init) => {
 			init.signal?.throwIfAborted()
 			if ((init.method ?? 'GET') !== 'GET') return missing()
-			for (const { repository, fixture, archive } of sources) {
+			const authorization = new Headers(init.headers).get('authorization')
+			for (const source of sources) {
+				const { repository, fixture, archive } = source
 				const codeload = `https://codeload.github.com/${repository.owner}/${repository.name}/legacy.tar.gz/${fixture.commitSha}`
-				if (url === `https://api.github.com/repos/${repository.owner}/${repository.name}/tarball/${fixture.commitSha}` && init.redirect === 'manual') {
-					return new Response(null, { status: 302, headers: { location: codeload } })
+				if (
+					url === `https://api.github.com/repos/${repository.owner}/${repository.name}/tarball/${fixture.commitSha}` && init.redirect === 'manual'
+					&& readable(source, authorization)
+				) {
+					if (source.visibility === 'public') return new Response(null, { status: 302, headers: { location: codeload } })
+					const grant = randomBytes(24).toString('base64url')
+					codeloadGrants.add(grant)
+					return new Response(null, { status: 302, headers: { location: `${codeload}?token=${grant}` } })
 				}
-				if (url === codeload && init.redirect === 'error' && !new Headers(init.headers).has('authorization')) {
-					return new Response(archive.stream(), { headers: { 'content-type': 'application/gzip' } })
-				}
+				if (!url.startsWith(codeload) || init.redirect !== 'error' || authorization !== null) continue
+				const authorized = source.visibility === 'public' ? url === codeload : spendCodeloadGrant(url, codeload)
+				if (authorized) return new Response(archive.stream(), { headers: { 'content-type': 'application/gzip' } })
 			}
 			return missing()
 		},

@@ -323,6 +323,7 @@
         "@fabrika/control": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/example-zerops-app": "workspace:*",
+        "@fabrika/github-app": "workspace:*",
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform-artifacts": "workspace:*",

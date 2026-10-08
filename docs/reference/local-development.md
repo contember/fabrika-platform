@@ -28,8 +28,11 @@ machine API key described below.
 `local:smoke` is intentionally disruptive. It:
 
 1. creates or reuses the cheap `apps-prod` namespace with shared PostgreSQL;
-2. registers the notes app from its compiled Zerops manifest;
-3. triggers a deploy and waits for an external app-version id;
+2. registers the notes app from its compiled Zerops manifest, bound to the keyed
+   source connection `local-keyed-alpha` that owns its private repository;
+3. signs a push with that connection's webhook secret, requires its scoped route
+   `/webhooks/github/local-keyed-alpha` to answer 200 with exactly one triggered
+   run, and waits for that run's external app-version id;
 4. hard-kills control while the emulated pipeline is `BUILDING`;
 5. starts control after the pipeline becomes `ACTIVE`, runs the maintenance cron until the dead
    holder's deploy lease expires, and verifies that it settles the run plus terminal release projection;
@@ -94,6 +97,29 @@ transports (`local-source-transports.ts`) serve only these exact fixture coordin
 The upload transport maps a capability-bearing logical Zerops HTTPS URL to the
 private emulator endpoint. Production destination validation is unchanged, and
 unknown coordinates or destinations have no network fallback.
+
+The platform fixture is a public repository, as a namespace proxy source must be.
+The application fixture is private: it belongs to `fabrika-local`, the installation
+owner of the keyed connection `local-keyed-alpha`, and without an installation token
+scoped to it every metadata and tarball request answers 404, as GitHub hides a
+private repository. `local:up` generates one RSA key per fixture GitHub App into
+`.state/github-apps.json`. The connection seed puts each key into Control's vault,
+exactly where a console setup leaves it. The GitHub double (`github-double.ts`)
+holds only the public halves. It verifies each App JWT against that App's own key
+and lifetime, checks that the installation belongs to the App, and mints a token
+scoped to the one requested repository. Codeload then takes a one-time query grant
+from the tarball redirect, never the installation token. A seeded connection whose
+key or coordinates differ from the fixture stops Control's start with a request to
+reset the stack. A deploy of notes therefore exercises the whole keyed path:
+credential selection by connection, the vault read, token minting, the private
+resolve and archive, and a webhook delivery that reaches a bound application.
+
+All of these transports are composition inputs of `createRuntime` in
+`control-server.ts`. Production reads no environment variable that could move a
+GitHub origin (ADR-0029); `fixed-origins.test.ts` in control pins that. The double
+models GitHub's API contract, not GitHub: App setup, installation discovery and
+webhook configuration answer 404, so the console's connection workflow still needs
+a live installation.
 
 The emulator models reservation, upload completion, build submission, activation
 and cleanup for one version identity. Its persisted upload receipt stores byte
