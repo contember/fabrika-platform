@@ -18,7 +18,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `canonical-path.ts`     | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
 | `contract.ts`           | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
 | `contract-canonical.ts` | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
-| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`.                                |
+| `endpoints.ts`          | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`, `orderBy…`, `selectableRows`.              |
 | `gates.ts`              | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
 | `path-segment.ts`       | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
 | `permissions.ts`        | `matchAction` and `permits` — the authorization decision itself.                                                               |
@@ -110,7 +110,10 @@ bun test               # app-environment · canonical-path · contract-canonical
   the gate glob: raw, case-sensitive, a trailing `/` literal, a non-root `*` only after its slash.
   Until the proxy reads endpoint tables, it evaluates the gates generated from the same table with
   `compileGates` / `applicableGates`, one per path in `orderBySpecificity` order; the first matching
-  gate and `planEndpoint` name the same row on every path (`gate-parity.test.ts`).
+  gate and `planEndpoint` name the same row on every path (`gate-parity.test.ts`). A gate knows no
+  method, so `selectableRows` names the rows of the other method a request can reach through a path,
+  and `@fabrika/app`'s `gatesFromContract` admits their kinds there too. It may over-approximate,
+  never miss a row: a missed row is an endpoint the proxy refuses or admits without its credential.
 - **Part A only: under a reserved prefix the gates are coarser than the table.** Gates know no
   reservation, so an unknown procedure (`GET /api/notes.export`) is admitted with the SPA's gate kind
   and then refused by `planEndpoint` in the application with 404. The parity test asserts exactly this

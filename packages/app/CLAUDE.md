@@ -45,6 +45,7 @@ src/
     build.ts          buildArtifact: every check, default and generated endpoint
     defaults.ts       the defaults and generated paths, in one place
     artifact-schema.ts  parseContractArtifact, the zod parser of the artifact
+    platform.ts       gatesFromContract, schemaFromContract: today's proxy and IAM
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
@@ -145,9 +146,15 @@ src/
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`; a webhook
   appends `/:bindingId`. No authored path may lie under `/__fabrika`.
-- Still to come: `gatesFromContract` and `schemaFromContract` (A4), the typed
-  client (A5). The router and the generated gates both come from the artifact's one
-  endpoint table.
+- **`gatesFromContract` and `schemaFromContract` (`platform.ts`) read only the
+  artifact**, so the static reader's artifact compiles to the same gates and schema.
+  The gates come from the same endpoint table as the router: one rule per path and
+  kind in `orderBySpecificity` order, `service` before `human` before `public`, and a
+  path also admits what the other method can select through it (`selectableRows`).
+  Never hand-write gates for a contract application, and never emit a rule for a
+  path without an endpoint. `platform.test.ts` checks every fixture contract against
+  `planEndpoint` on the auth-core probe paths.
+- Still to come: the typed client (A5).
 - Later (A12, A13): membership, scopes and share links are requests to IAM through
   `@fabrika/auth`. The framework writes no grant and mints no credential.
 

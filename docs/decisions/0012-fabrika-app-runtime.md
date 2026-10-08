@@ -112,7 +112,9 @@ proxy and IAM already consume:
 - **`gatesFromContract(contract)`** produces the gates for `fabrika.config.ts`: one rule per endpoint
   path, in order of specificity. `human` becomes a `human` gate; `machine`, `link` and `app:<id>`
   become a `service` gate; a mount with both gets the `service` rule first; the anonymous kinds become
-  `public`. A path with no endpoint has no rule, so the proxy denies it.
+  `public`, after every other rule of the path. A gate knows no method, so a path also admits the
+  kinds of the rows that the other method can select through it. A path with no endpoint has no
+  rule, so the proxy denies it.
 - **`schemaFromContract(contract)`** produces the `AppSchema` (actions and roles) that the deploy
   reconciles into IAM today.
 

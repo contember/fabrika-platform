@@ -109,6 +109,24 @@ types cannot, applies every default, generates the endpoint rows and returns the
 normalized `ContractArtifact` of `@fabrika/auth-core`; `parseContractArtifact` reads
 one back from JSON. Schemas are the zod 4 subset that `@fabrika/check` accepts.
 
+Until the proxy reads endpoint tables (B2), the artifact compiles to what today's proxy
+and IAM consume, and `fabrika.config.ts` hands both to its provider: the Zerops
+`target.proxy.gates` and `schema`, or the Cloudflare `createCloudflareProxyWorker({ gates })`
+and `schema`.
+
+- `gatesFromContract(artifact)` emits one rule per endpoint path and kind, most specific
+  path first: `human` is a `human` rule; `machine`, `link` and `app:<id>` a `service`
+  rule, before the `human` one; an anonymous kind a `public` rule, last. A gate knows no
+  method, so a path also admits the kinds of the rows the other method can select
+  through it: with a form at `POST /contact`, `GET /contact` still reaches the SPA for a
+  signed-in person. A path with no endpoint has no rule, so the proxy denies it. The
+  gates are coarser than the table: an absent key falls through to a broader path's
+  rules, and an unknown procedure under an RPC prefix is admitted with the SPA's kind.
+  The framework refuses both (caller kind 403, unknown endpoint 404).
+- `schemaFromContract(artifact)` emits the dimensions as scopes, the actions, the roles
+  with the scope a membership role is granted in, and `contract: true`, which makes IAM
+  refuse every wildcard written for the application.
+
 ## Serving a contract
 
 `@fabrika/app/implement` serves a contract. An application writes `src/app.ts`:
