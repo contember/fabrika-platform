@@ -24,6 +24,7 @@ bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (ne
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
 bun test src/__tests__/client-types.test.ts     # the client and test-kit mistakes, compiled by tsc
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
 ```
 
 ## Structure
@@ -67,6 +68,10 @@ src/
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
     environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
+  files/              c.files: served by implement, never imported by an application
+    collections.ts    the upload, download and remove endpoints, the file locator, the sweep
+    sniff.ts          the declared type checked against the first bytes
+    treatment.ts      FileDownload and the file treatment of ADR-0022
 ```
 
 ## Invariants
@@ -257,7 +262,7 @@ src/
   gets one line: a framework-authored message (`ServerFault`,
   `CapabilityRefusedError`) or only the error's name, never the error object.
 - **`boot` refuses to start rather than answer nothing**: a link, form or webhook
-  mount, files, jobs, exports, imports, `creates`, an SPA without an asset server, a
+  mount, a file collection with `link: true`, jobs, exports, imports, `creates`, an SPA without an asset server, a
   handler outside the contract, a missing handler, an access form whose containment
   no table locates. Each refusal lifts when its work
   unit ships the runtime.
@@ -284,6 +289,30 @@ src/
   `contract-scale.test.ts`; both generate their source in `scale-fixture.ts`.
 - The header policy (`headers.ts`) is ADR-0022's; B4 sets the same policy at the
   proxy and decides the final `Permissions-Policy`. Keep the two equal.
+
+## File collections
+
+- **The generated file endpoints are framework code** (`src/files/`), dispatched like every
+  row: the dispatcher checks the caller, the requirement, admission and the access form, and
+  only then hands the minted `Ref` to the files runtime, which resolves it through
+  `requestCapabilities` and checks its dimension and action again. The access value of an
+  upload or a download is the path parameter its `from` names; `remove` is a procedure.
+- **A file has no access of its own.** `file:<name>` is located through its live row and then
+  its owner row, on every request; never store or cache an owner's containers in the file
+  row, or a moved owner would leave its files reachable from the old container.
+- **A download answers a `FileDownload`, never a `Response`.** `ContractRuntime.fetch` gives
+  it the file treatment (`files/treatment.ts`) instead of the header policy, so no handler or
+  store can set a download's headers. Keep the treatment equal to ADR-0022's.
+- **The type is the sniffed one.** An upload is stored only when its first `SNIFF_BYTES`
+  are the declared type, and the recorded type is what a download sends; `boot` refuses a
+  collection that admits a type `sniff.ts` cannot verify. The size bound is the object
+  store's (`FileObjectStore.write`), enforced while the body streams.
+- **Deletion is retry-safe, never a cascade.** `remove` marks the row; the sweep deletes the
+  object first and the row after it, so a failed delete is retried by the next sweep, and an
+  owner's deletion only orphans its rows (`ON DELETE SET NULL`). `FileCollections.sweep()` is
+  the seam a framework job calls on a schedule.
+- `serveContract` opens the object storage from `FABRIKA_APP_STORAGE_*` (all or none);
+  without it a contract with files does not boot. Never return a storage URL or presign one.
 
 ## The typed client and the test kit
 

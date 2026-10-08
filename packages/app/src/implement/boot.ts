@@ -18,9 +18,11 @@ import {
 import type { Database } from '@fabrika/db'
 import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
 import { TokenVerifier } from '@fabrika/jwks'
+import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { Schema } from '../contract/define'
+import { fileCollections } from '../files/collections'
 import { requestCapabilities } from './capability'
 import { ContractRuntime, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
@@ -46,6 +48,8 @@ export interface BootOptions {
 	 * authenticated hop (ADR-0022 rule 1). A secret that is set is checked either way.
 	 */
 	readonly requireProxySecret?: boolean
+	/** The object storage of the file collections, which the Bun adapter opens. Without it, a contract with files does not boot. */
+	readonly files?: FileObjectStore
 }
 
 export interface ContractApp {
@@ -168,7 +172,6 @@ function unservable(
 	}
 	for (
 		const [section, entries] of Object.entries({
-			files: artifact.files,
 			jobs: artifact.jobs,
 			exports: artifact.exports,
 			imports: artifact.imports,
@@ -282,9 +285,15 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	checkContractDigest(options.environment.framework, artifact, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
+	// A file collection's dimension is located through its own table and its owner's.
+	for (const name of Object.keys(artifact.files)) {
+		owned.add(`file:${name}`)
+	}
 	const containers = containersOf(artifact)
 	unservable(artifact, options.assets, owned, containers, problems)
-	const database = contractDatabase(app.database, options.database, problems)
+	const files = fileCollections(artifact, app.database, options.files, problems)
+	const bound = contractDatabase(app.database, options.database, problems)
+	const database = files === null || bound === null ? bound : files.locating(bound)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -327,6 +336,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 				}
 			}
 		}
+	}
+	for (const [id, served] of files?.endpoints(rows, problems) ?? []) {
+		endpoints.set(id, served)
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	if (problems.length > 0) {

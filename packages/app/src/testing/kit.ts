@@ -20,6 +20,7 @@ import {
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
+import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import type { RpcFetch } from '../client/transport'
@@ -44,6 +45,8 @@ export interface TestKitOptions {
 	readonly assets?: SpaAssets
 	/** The connection a `scoped(tables)` database is bound to, as the runtime adapter supplies it to `boot`. */
 	readonly database?: Database
+	/** The object storage of the file collections, as the runtime adapter supplies it to `boot`. */
+	readonly files?: FileObjectStore
 }
 
 export interface TestKit<C extends AnyContract> {
@@ -111,6 +114,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		iam: { getJwks: () => jwks },
 		assets: options.assets ?? defaultAssets,
 		database: options.database,
+		files: options.files,
 	})
 
 	const byKey = new Map<string, TestCaller>()

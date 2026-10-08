@@ -82,6 +82,8 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/db": "workspace:*",
         "@fabrika/jwks": "workspace:*",
+        "@fabrika/platform": "workspace:*",
+        "@fabrika/platform-node": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
         "jose": "^5.9.0",
       },

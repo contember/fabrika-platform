@@ -34,6 +34,7 @@ import {
 	toErrorResponse,
 	UnauthorizedError,
 } from '../errors'
+import { FileDownload, fileResponse } from '../files/treatment'
 import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
@@ -60,6 +61,12 @@ export type ServedEndpoint =
 	}
 	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
+	| {
+		/** A file collection's upload or download, served by `src/files` once the access form minted its target. */
+		readonly kind: 'file'
+		readonly row: CredentialedEndpoint
+		readonly serve: (request: Request, target: unknown) => Promise<Response | FileDownload>
+	}
 
 export interface RuntimeParts {
 	readonly table: CompiledEndpointTable
@@ -114,10 +121,11 @@ export class ContractRuntime {
 	}
 
 	async fetch(request: Request): Promise<Response> {
-		return withHeaderPolicy(await this.#answer(request), this.#parts.policy)
+		const answer = await this.#answer(request)
+		return answer instanceof FileDownload ? fileResponse(answer) : withHeaderPolicy(answer, this.#parts.policy)
 	}
 
-	async #answer(request: Request): Promise<Response> {
+	async #answer(request: Request): Promise<Response | FileDownload> {
 		let where = 'request'
 		try {
 			const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
@@ -147,6 +155,8 @@ export class ContractRuntime {
 				}
 				case 'procedure':
 					return await this.#procedure(served, request)
+				case 'file':
+					return await this.#file(served, request, plan.outcome === 'endpoint' ? plan.params : {})
 			}
 		} catch (error) {
 			return errorResponse(error, where)
@@ -229,6 +239,30 @@ export class ContractRuntime {
 			throw new ServerFault(`'${served.row.id}' returned a value its output schema refuses`)
 		}
 		return jsonResponse({ result: output.data }, 200)
+	}
+
+	/** The access form reads its value from the path parameter it names: `:owner` of an upload, `:fileId` of a download. */
+	async #file(
+		served: Extract<ServedEndpoint, { kind: 'file' }>,
+		request: Request,
+		params: Readonly<Record<string, string>>,
+	): Promise<Response | FileDownload> {
+		const caller = await this.#authorize(served.row, request)
+		const access = served.row.requirement.kind === 'action' ? served.row.requirement.access : null
+		const from = access?.form === 'on' ? access.from : null
+		const raw = from === null ? undefined : params[from]
+		if (from === null || raw === undefined) {
+			throw new ServerFault(`'${served.row.id}' names no path parameter for its access form`)
+		}
+		const frame = new RequestFrame(crypto.randomUUID())
+		try {
+			return await runInRequest(frame, async () => {
+				const { context } = await this.#access(served.row, caller, { [from]: decodePathParameter(raw) }, frame)
+				return await served.serve(request, context['target'])
+			})
+		} finally {
+			frame.end()
+		}
 	}
 
 	async #access(row: CredentialedEndpoint, caller: Caller, input: Readonly<Record<string, unknown>>, frame: RequestFrame): Promise<Access> {
@@ -366,6 +400,15 @@ async function readInput(served: Extract<ServedEndpoint, { kind: 'procedure' }>,
 	return parsed.data
 }
 
+/** A canonical path's segments all decode; a value that does not is no id of anything. */
+function decodePathParameter(raw: string): string {
+	try {
+		return decodeURIComponent(raw)
+	} catch {
+		throw new BadRequestError('A path parameter does not decode')
+	}
+}
+
 /** Removes the `from` field: the only copy of that id the handler gets is the checked capability. */
 function takeField(
 	input: Readonly<Record<string, unknown>>,
@@ -380,7 +423,7 @@ function takeField(
 }
 
 /** A failure the framework itself describes; its message is safe for the server log, never for the response. */
-class ServerFault extends Error {
+export class ServerFault extends Error {
 	override readonly name = 'ServerFault'
 	readonly status: number
 

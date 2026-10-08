@@ -10,6 +10,8 @@ import type * as DataLayer from '@fabrika/db'
 import type { Database } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
 import { parseJwks } from '@fabrika/jwks'
+import type { FileObjectStore } from '@fabrika/platform'
+import { S3BlobStore } from '@fabrika/platform-node'
 import { join, resolve, sep } from 'node:path'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
@@ -142,6 +144,37 @@ function openApplicationDatabase(data: typeof DataLayer, framework: Readonly<Rec
 	return data.Database.postgres({ url, schema })
 }
 
+const STORAGE_VARIABLES = {
+	endpoint: 'FABRIKA_APP_STORAGE_ENDPOINT',
+	bucket: 'FABRIKA_APP_STORAGE_BUCKET',
+	accessKeyId: 'FABRIKA_APP_STORAGE_ACCESS_KEY_ID',
+	secretAccessKey: 'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY',
+} as const
+
+/**
+ * The file collections' object storage (Zerops object storage, path-style), when the platform wrote its variables;
+ * a partial set stops the boot. The credentials are never quoted in a message.
+ */
+export function openFileStorage(framework: Readonly<Record<string, string>>): FileObjectStore | undefined {
+	const value = (name: string) => framework[name]?.trim() ?? ''
+	const names = Object.values(STORAGE_VARIABLES)
+	const missing = names.filter((name) => value(name) === '')
+	if (missing.length === names.length) {
+		return undefined
+	}
+	if (missing.length > 0) {
+		throw new BootError(missing.map((name) => `${name} is not set; the platform writes every FABRIKA_APP_STORAGE_* variable together`))
+	}
+	return S3BlobStore.connect({
+		endpoint: value(STORAGE_VARIABLES.endpoint),
+		bucket: value(STORAGE_VARIABLES.bucket),
+		accessKeyId: value(STORAGE_VARIABLES.accessKeyId),
+		secretAccessKey: value(STORAGE_VARIABLES.secretAccessKey),
+		region: 'us-east-1',
+		virtualHostedStyle: false,
+	})
+}
+
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
@@ -162,7 +195,8 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
-	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, requireProxySecret: true })
+	const files = openFileStorage(environment.framework)
+	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, files, requireProxySecret: true })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
 	const stop = async (): Promise<void> => {
 		await server.stop(false)

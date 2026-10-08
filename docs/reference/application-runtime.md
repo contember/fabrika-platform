@@ -181,7 +181,7 @@ own, on the `scoped(tables)` result of `@fabrika/db`; nothing reaches the databa
 Zerops, `createContractWorker(() => import('../src/app'))` on Cloudflare. The adapter
 first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
 the application, so no module of it can copy one, and calls
-`boot(app, { environment, iam, assets, database })`. For an application on `@fabrika/db`,
+`boot(app, { environment, iam, assets, database, files })`. For an application on `@fabrika/db`,
 `serveContract` loads the data layer before the application and opens its connection on
 `FABRIKA_APP_DATABASE_URL`, in the schema `app_<FABRIKA_APP_ID>` its migrations created;
 `boot` binds the layer to it and to `requestCapabilities`, once, and keeps the locator the
@@ -194,7 +194,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
 (ADR-0022 rule 5), when the contract
 declares something this version cannot serve yet (link, form and webhook mounts,
-files, jobs, exports, imports, `creates`), when an `on` dimension has no table, when an
+a file collection with `link: true`, jobs, exports, imports, `creates`), when a file
+collection cannot be served (below), when an `on` dimension has no table, when an
 access form reaches a dimension that lies in a container no table can locate it in, or
 when a handler is missing or undeclared.
 
@@ -256,6 +257,46 @@ Errors share one envelope, `{ error: { type, message, issues? } }`: 400, 401, 40
 404, 409, 500 and 503. Every 5xx and every refused capability answers a fixed message
 with no metadata; the server log gets one short line without the error object.
 Every response carries the header policy of ADR-0022.
+
+### File collections
+
+A `c.files` collection serves three generated endpoints, for signed-in people only, through
+the same pipeline:
+
+| Endpoint                               | Access                                       | Behaviour                                                                                                                             |
+| -------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/files.<name>.upload/:owner` | `write` `on` the owner's dimension, `:owner` | the body is the file; `Content-Type` must be a declared type; `?name=` is the file name, metadata only. Answers `{ result: { id } }`  |
+| `GET /api/files.<name>/:fileId`        | `read` `on` `file:<name>`, `:fileId`         | streams the object with the file treatment                                                                                            |
+| `POST /api/files.<name>.remove`        | `delete` `on` `file:<name>`, body `{ id }`   | marks the row removed, then sweeps: deletes the objects of removed and orphaned files of the collection (at most 20), then their rows |
+
+- **A file reaches what its owner reaches.** The locator of `file:<name>` reads the live
+  file row, then its owner row through the owner table's locator, on every request: a
+  file is 404 when it is removed, when its owner is gone, and to a caller who may not act
+  on the owner; after the owner moves, the old container reaches it no more.
+- **The upload is checked while it streams.** A `Content-Length` over `maxBytes` is 413
+  before the body is read; otherwise the object store stops reading past `maxBytes`, keeps
+  nothing and the answer is 413. The first 512 bytes must be the declared type (415):
+  each binary type by its signature, a text type (`text/plain`, `text/csv`,
+  `text/markdown`, `application/json`, `image/svg+xml`) as UTF-8 without NUL bytes or a
+  binary signature. `maxPerOwner` is counted before and again after the insert (409), so
+  concurrent uploads never leave more. The object key is `<name>/<uuidv7>`.
+- **The file treatment** replaces the header policy on a download: `Content-Type` from the
+  recorded type, `Content-Disposition: inline` for PNG, JPEG, GIF and WebP and `attachment`
+  for every other type, the file name as RFC 8187 `filename*`, `X-Content-Type-Options:
+  nosniff`, `Content-Security-Policy: sandbox; default-src 'none'` and `Cache-Control:
+  private, no-store`. Errors of the endpoint carry the ordinary policy.
+- **One table per collection**, `fabrika_files_<name>`, created by an application migration
+  with `fileTableSql(name, { table, key, keyType })` of `@fabrika/db`. Its foreign key is on
+  the owner's key with `ON DELETE SET NULL`: deleting an owner orphans its files, and the
+  next sweep deletes their objects. Codegen leaves the table out; only the framework reads
+  it (`@fabrika/db/framework`'s `fileTablesOf`).
+- `boot` refuses a collection whose name is not lowercase snake_case of at most 39
+  characters, which admits a type the framework cannot sniff, which sets `link: true`, or
+  which has no object storage or no `scoped(tables)` data layer. `serveContract` opens the
+  storage (path-style S3, `@fabrika/platform-node`'s `S3BlobStore`) from
+  `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a
+  partial set stops the boot. Downloads always go through the application: there are no
+  presigned URLs.
 
 A `Ref` and a `Within` are classes with private fields, bound to their request with
 `AsyncLocalStorage`. `requestCapabilities` — the `CapabilityAuthority` of
