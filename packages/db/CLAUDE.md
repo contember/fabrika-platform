@@ -10,7 +10,7 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · postgres (needs FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · testing · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 | Module                | What it owns                                                                                                                                   |
@@ -33,6 +33,7 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | `job-leases.ts`       | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                     |
 | `migrations.ts`       | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
 | `codegen.ts`          | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                                         |
+| `testing.ts`          | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
@@ -47,7 +48,13 @@ appends one row to its inbox table (the declared columns only, answering nothing
 bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. The job runner of
 `@fabrika/app` takes a job's lease in `fabrika_job_leases` (`frameworkTablesOf(…).jobs`). `fabrika db migrate`
 applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle. Not
-built yet: `@fabrika/db/testing`, a store for `reference` tables, and reading an inbox.
+built yet: a store for `reference` tables, and reading an inbox.
+
+`@fabrika/db/testing` is the database half of the generated isolation tests (`fabrika db test-scaffold`, A11):
+`testDatabase` migrates a fresh `app_test_<hex>` schema through `@fabrika/platform-node`'s application runner, or
+answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
+chains that share no value, every container row a table owns first; `tableProbe` reaches one table of a layer by
+name. `@fabrika/app/testing/isolation` builds the requests on them.
 
 ## Invariants
 
@@ -62,6 +69,14 @@ built yet: `@fabrika/db/testing`, a store for `reference` tables, and reading an
   the locator, which reads existence without a capability and so stays with the framework's access check. A second
   bind throws. Until then every store throws. The checker refuses an application import of `@fabrika/db/framework`.
   Never add another way to set the runtime of a `scoped` result, nor an application-facing locator.
+- **The table probe is a store without the types, never without a check.** `tableProbe` reaches the registry's
+  `probe`, which calls the same internals as `DimensionTable` and `ChildTable` (`insertIntoDimension`,
+  `objectPredicate`, …), so kind, dimension, action and the authority run on every call. It exists for the generated
+  tests, which address a table by name; add no operation to it that a store does not have.
+- **`@fabrika/db/testing` is for test files only.** It refuses to load when `FABRIKA_RELEASE` is set, and
+  `@fabrika/check`'s `test-only-import` refuses it outside a test file: it seeds rows past the data layer, through a
+  raw connection of its own. Its seeding fills a required column it does not place with a sample of the column's type,
+  and refuses a type codegen refuses.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.
 - **A file row carries its owner's whole chain**, under a composite foreign key with `ON UPDATE CASCADE` and

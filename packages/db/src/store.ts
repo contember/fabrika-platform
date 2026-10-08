@@ -569,6 +569,36 @@ async function aggregateRows<Row, O>(context: TableContext, scope: OperationNode
 	return session(context).run<O>(node, guard(context, 'SelectQueryNode', scope))
 }
 
+/** `DimensionTable.insert` over a capability nobody type-checked; the table probe of `@fabrika/db/testing` calls it too. */
+function insertIntoDimension<O>(context: TableContext, target: unknown, values: unknown): Promise<O> {
+	const scope = dimensionScope(context.model)
+	const grant = refGrant(context, target, listDimension(scope), 'insert')
+	const row = readValues(values, context.model.insert, 'insert', context.model.name)
+	if (scope.container === undefined) {
+		// The object does not exist yet; this only refuses a chain the table has no column for.
+		linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
+		stampInsert(context, grant, row, scope.key, grant.id)
+		return insertRow(context, row, undefined)
+	}
+	stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
+	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
+		row.set(link.column, value)
+	}
+	return insertRow(context, row, grant)
+}
+
+/** `ChildTable.insert` over a capability nobody type-checked. */
+function insertIntoChild<O>(context: TableContext, parent: unknown, values: unknown): Promise<O> {
+	const scope = childScope(context)
+	const grant = refGrant(context, parent, scope.parent.dimension, 'insert')
+	const row = readValues(values, context.model.insert, 'insert', context.model.name)
+	stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
+	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
+		row.set(link.column, value)
+	}
+	return insertRow(context, row, grant)
+}
+
 type ReadAction<P, T> = ActionOf<P, T, 'read'>
 type Row<DB, P, T> = RowOf<DB, P, T>
 type Joinable<DB, P, T> = JoinableChildren<DB, P, T>
@@ -604,21 +634,7 @@ export class DimensionTable<DB, P, T extends string> {
 	 * the database), or for a top-level table the object the `Ref` names. Answers an acknowledgement, not the row.
 	 */
 	async insert(target: Ref<ListDimensionOf<P, T>, ActionOf<P, T, 'insert'>>, values: InsertValues<DB, P, T>): Promise<Acknowledgement<P, T>> {
-		const context = this.#context
-		const scope = dimensionScope(context.model)
-		const grant = refGrant(context, target, listDimension(scope), 'insert')
-		const row = readValues(values, context.model.insert, 'insert', context.model.name)
-		if (scope.container === undefined) {
-			// The object does not exist yet; this only refuses a chain the table has no column for.
-			linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
-			stampInsert(context, grant, row, scope.key, grant.id)
-			return insertRow(context, row, undefined)
-		}
-		stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
-		for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
-			row.set(link.column, value)
-		}
-		return insertRow(context, row, grant)
+		return insertIntoDimension(this.#context, target, values)
 	}
 
 	async update(
@@ -700,15 +716,7 @@ export class ChildTable<DB, P, T extends string> {
 
 	/** Under the parent the Ref names, whose chain is checked against the database. Answers an acknowledgement. */
 	async insert(parent: Ref<ParentDimension<P, T>, ActionOf<P, T, 'insert'>>, values: InsertValues<DB, P, T>): Promise<Acknowledgement<P, T>> {
-		const context = this.#context
-		const scope = childScope(context)
-		const grant = refGrant(context, parent, scope.parent.dimension, 'insert')
-		const row = readValues(values, context.model.insert, 'insert', context.model.name)
-		stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
-		for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
-			row.set(link.column, value)
-		}
-		return insertRow(context, row, grant)
+		return insertIntoChild(this.#context, parent, values)
 	}
 
 	async update(
@@ -733,6 +741,58 @@ export class ChildTable<DB, P, T extends string> {
 	}
 }
 Object.freeze(ChildTable.prototype)
+
+/**
+ * One table's operations without the store types, for `@fabrika/db/testing` only: the generated isolation tests address
+ * a table by name. Every runtime check of a store applies; a child row is addressed by its parent's capability and
+ * `key`, a dimension row by its capability alone.
+ */
+export interface TableProbe {
+	readonly mode: 'dimension' | 'child'
+	get(capability: unknown, key?: string): Promise<Readonly<Record<string, unknown>>>
+	select(capability: unknown): Promise<readonly Readonly<Record<string, unknown>>[]>
+	/** `aggregate(capability, { count: true })`; zero rows when the capability reaches none. */
+	count(capability: unknown): Promise<string>
+	insert(capability: unknown, values: unknown): Promise<unknown>
+	update(capability: unknown, key: string | undefined, values: unknown, expectVersion?: number): Promise<unknown>
+	remove(capability: unknown, key?: string): Promise<void>
+}
+
+function probeOf(context: TableContext): TableProbe {
+	const child = context.model.scope.mode === 'child'
+	const object = (capability: unknown, key: string | undefined, operation: Operation): OperationNode => {
+		if (child) {
+			return childObjectPredicate(context, capability, key, operation)
+		}
+		if (key !== undefined) {
+			throw new QueryRefusedError(`a ${context.model.name} row is addressed by its Ref alone`)
+		}
+		return objectPredicate(context, capability, operation)
+	}
+	const list = (capability: unknown): OperationNode | undefined =>
+		child ? childListPredicate(context, capability, 'read') : dimensionListPredicate(context, capability, 'read')
+	return freeze({
+		mode: child ? 'child' : 'dimension',
+		get: async (capability: unknown, key?: string) => selectOne<Readonly<Record<string, unknown>>>(context, object(capability, key, 'read')),
+		select: async (capability: unknown) => {
+			const start = startSelect<Readonly<Record<string, unknown>>, NoColumns>(context.shape)
+			return selectRows<Readonly<Record<string, unknown>>>(context, list(capability), finishSelect(start, start), requiredAction(context, 'read'))
+		},
+		count: async (capability: unknown) => {
+			const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(context, list(capability), { count: true })
+			const count = row === undefined ? '0' : ownEntry(row, 'count')
+			return typeof count === 'string' ? count : '0'
+		},
+		insert: async (capability: unknown, values: unknown) =>
+			child ? insertIntoChild(context, capability, values) : insertIntoDimension(context, capability, values),
+		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
+			const scope = object(capability, key, 'update')
+			const changes = readValues(values, context.model.update, 'update', context.model.name)
+			return updateRow(context, scope, changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
+		},
+		remove: async (capability: unknown, key?: string) => removeRow(context, object(capability, key, 'delete')),
+	})
+}
 
 function destinationOf(models: TableModels, model: TableModel, parent: TableModel | undefined): TableModel | undefined {
 	if (model.scope.mode === 'child') {
@@ -830,6 +890,13 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		},
 	})
 	register(database, {
+		probe(table: string): TableProbe {
+			const mode = modelOf(models, table)?.scope.mode
+			if (mode !== 'dimension' && mode !== 'child') {
+				throw new QueryRefusedError(`${String(table)} is not a dimension or child table; no store reaches it`)
+			}
+			return probeOf(contextFor(table, mode))
+		},
 		bind(runtime: DataLayerRuntime): Locator {
 			if (connection.runtime !== undefined) {
 				throw new CapabilityError('the data layer is already connected; only the framework connects it, once, at boot')

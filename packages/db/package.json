@@ -44,6 +44,11 @@
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",
 			"default": "./src/codegen.ts"
+		},
+		"./testing": {
+			"bun": "./src/testing.ts",
+			"types": "./src/testing.ts",
+			"default": "./src/testing.ts"
 		}
 	},
 	"scripts": {
@@ -52,6 +57,7 @@
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/platform-node": "workspace:*",
 		"kysely": "0.29.6",
 		"kysely-postgres-js": "5.0.1",
 		"zod": "^3.25.76"

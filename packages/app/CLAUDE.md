@@ -52,6 +52,7 @@ src/
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
+    isolation.ts      @fabrika/app/testing/isolation: the kit behind the generated isolation tests
     conformance.ts    the cross-runtime conformance helper of defineApp() services
   contract/           @fabrika/app/contract — browser-safe
     define.ts         defineContract, the c.* kit and every type an agent meets
@@ -413,6 +414,13 @@ src/
   cookies before the application. The proxy's token and request id are then set.
 - The client and test-kit type witnesses live in `src/__tests__/client-mistakes/`,
   compiled by `client-types.test.ts` like the contract mistakes.
+- **The isolation kit (`@fabrika/app/testing/isolation`) adds a probe contract, never a
+  second pipeline.** It defines a contract over the application's vocabulary whose
+  procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, and serves it
+  with `testKit` on a `scoped(tables)` layer of its own (the application's layer binds once
+  per process). A subpath of its own, because it loads `@fabrika/db/testing` (Bun SQL, the
+  migration runner) and the root kit does not. Its API is what `fabrika db test-scaffold`
+  writes against: a change regenerates `packages/cli`'s fixture tests.
 
 ## Jobs
 

@@ -55,6 +55,11 @@
 			"bun": "./src/testing/index.ts",
 			"types": "./src/testing/index.ts",
 			"default": "./src/testing/index.ts"
+		},
+		"./testing/isolation": {
+			"bun": "./src/testing/isolation.ts",
+			"types": "./src/testing/isolation.ts",
+			"default": "./src/testing/isolation.ts"
 		}
 	},
 	"scripts": {
