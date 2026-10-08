@@ -18,8 +18,8 @@ import {
 	rawRequestTarget,
 	satisfies,
 	scopedValues,
-	sha256Hex,
 } from '@fabrika/auth-core'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { z } from 'zod/v4'
@@ -39,6 +39,11 @@ import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
+
+/** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
+export function proxySecretDigest(secret: string): Uint8Array {
+	return createHash('sha256').update(secret).digest()
+}
 
 /** Serves the files of an SPA mount. The runtime adapter supplies it: Workers Assets, or the build output on disk. */
 export interface SpaAssets {
@@ -64,8 +69,8 @@ export interface RuntimeParts {
 	readonly verifier: TokenVerifier
 	/** The token audience: this application's IAM id in this environment, `<app>@<env>`. */
 	readonly audience: string
-	/** `sha256Hex` of the proxy secret every request must carry; `null` where the hop is a service binding. */
-	readonly proxySecretDigest: string | null
+	/** `proxySecretDigest` of the proxy secret every request must carry; `null` where the hop is a service binding. */
+	readonly proxySecretDigest: Uint8Array | null
 	readonly policy: HeaderPolicy
 	readonly database: ContractDatabase | null
 	/** Dimensions a table owns, so `in` and `on` must find the object. */
@@ -150,7 +155,7 @@ export class ContractRuntime {
 
 	/**
 	 * The proxy proves it sent the request with the secret of this application environment (ADR-0022 rule 5). The
-	 * digests are compared, so the comparison's timing says nothing about the secret.
+	 * fixed-size digests are compared in constant time, so neither the length nor a prefix of the secret leaks.
 	 */
 	#throughProxy(request: Request): boolean {
 		const expected = this.#parts.proxySecretDigest
@@ -158,7 +163,7 @@ export class ContractRuntime {
 			return true
 		}
 		const presented = request.headers.get(PROXY_SECRET_HEADER) ?? ''
-		return presented !== '' && sha256Hex(presented) === expected
+		return presented !== '' && timingSafeEqual(proxySecretDigest(presented), expected)
 	}
 
 	/**

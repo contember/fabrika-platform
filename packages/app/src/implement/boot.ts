@@ -14,7 +14,6 @@ import {
 	FABRIKA_PROXY_SECRET,
 	type Jwks,
 	parseAppEnvironmentId,
-	sha256Hex,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import { bindScopedDatabase, isScopedDatabase } from '@fabrika/db/framework'
@@ -23,7 +22,7 @@ import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { Schema } from '../contract/define'
 import { requestCapabilities } from './capability'
-import { ContractRuntime, type ServedEndpoint, type SpaAssets } from './dispatch'
+import { ContractRuntime, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { headerPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
@@ -136,7 +135,7 @@ function containersOf(artifact: ContractArtifact): ReadonlyMap<string, readonly 
 const MIN_PROXY_SECRET_LENGTH = 32
 
 /** The digest of the proxy secret the application compares every request's with, or `null` when it has none. */
-function proxySecretDigest(framework: Readonly<Record<string, string>>, required: boolean, problems: string[]): string | null {
+function readProxySecret(framework: Readonly<Record<string, string>>, required: boolean, problems: string[]): Uint8Array | null {
 	const secret = framework[FABRIKA_PROXY_SECRET] ?? ''
 	if (secret === '') {
 		if (required) {
@@ -148,7 +147,7 @@ function proxySecretDigest(framework: Readonly<Record<string, string>>, required
 		problems.push(`${FABRIKA_PROXY_SECRET} is shorter than ${MIN_PROXY_SECRET_LENGTH} characters`)
 		return null
 	}
-	return sha256Hex(secret)
+	return proxySecretDigest(secret)
 }
 
 /** What this version cannot serve yet; a contract that declares it does not boot rather than answer nothing. */
@@ -281,7 +280,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const framework = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(options.environment.framework, artifact, problems)
-	const proxySecret = proxySecretDigest(options.environment.framework, options.requireProxySecret === true, problems)
+	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
 	const owned = new Set(Object.values(artifact.tables).flatMap((table) => table.scope.mode === 'dimension' ? [table.scope.dimension] : []))
 	const containers = containersOf(artifact)
 	unservable(artifact, options.assets, owned, containers, problems)
