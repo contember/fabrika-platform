@@ -189,6 +189,7 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/builder": "workspace:*",
+        "@fabrika/check": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/db": "workspace:*",
         "@fabrika/platform-node": "workspace:*",

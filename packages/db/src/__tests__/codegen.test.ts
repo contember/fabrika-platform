@@ -161,7 +161,14 @@ describe('the generated module under the checker', () => {
 import { columns, type DB } from './schema.generated'
 
 export const tables = defineTables<DB, 'countries.read'>(columns)({
+	contact_messages: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	countries: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	note_comments: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	note_flags: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	notes: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	organizations: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	secrets: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
+	workspaces: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 })
 `
 	const check = async (generated: string): Promise<string[]> =>

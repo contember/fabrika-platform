@@ -78,11 +78,14 @@ const packageName = (specifier: string): string => {
 
 const ALLOWED_ENV = 'values the framework hands the handler through deps or ctx'
 
-/** The test kit signs tokens with its own key and boots the application a second way; production never loads it. */
-const TEST_KIT = '@fabrika/app/testing'
+/**
+ * The test kits: the application's signs tokens with its own key and boots the application a second way; the
+ * database's reaches tables by name and seeds rows past the data layer. Production never loads either.
+ */
+const TEST_KITS = ['@fabrika/app/testing', '@fabrika/db/testing']
 const TEST_ONLY_ALLOWED = 'the kit in a test file (*.test.ts, *.spec.ts or a __tests__ directory) only'
 
-const isTestKit = (specifier: string): boolean => specifier === TEST_KIT || specifier.startsWith(`${TEST_KIT}/`)
+const isTestKit = (specifier: string): boolean => TEST_KITS.some((kit) => specifier === kit || specifier.startsWith(`${kit}/`))
 
 /**
  * A non-test module may reach neither the kit nor a test module: a test helper may load the kit, so a production

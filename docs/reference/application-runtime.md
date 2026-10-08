@@ -525,7 +525,8 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 - A caller whose token would exceed `MAX_ACCESS_TOKEN_BYTES` (8 KiB) is refused with
   403, as IAM refuses to sign it.
 - Only test files may import the kit: `@fabrika/check` reports `test-only-import`
-  for `@fabrika/app/testing`, or a test module, loaded from any other file.
+  for `@fabrika/app/testing` (and its subpaths), `@fabrika/db/testing`, or a test
+  module, loaded from any other file.
 - The proxy decision runs first, and it is production's: proxy-core's verify service
   over `contractProxyTable(kit.artifact)`, with the kit's IAM (`kit.iam`) behind it. A
   denial or a login answer reaches the test as the proxy sends it: canonical path (400),
@@ -537,6 +538,40 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   headers before the decision, and the `__Host-px_*` cookies before the application.
   It carries the proxy's token, signed by the kit the way IAM signs, and the real
   verifier and dispatcher answer it.
+
+### The generated isolation tests
+
+`fabrika db test-scaffold` writes `src/db/__tests__/<table>.isolation.test.ts` for every
+dimension and child table of `src/db/tables.ts`, from the policies alone, and deletes
+the generated test of a table that is gone. A reference or inbox table gets none: no
+store reaches it.
+
+- Each test opens a test database with `@fabrika/db/testing`'s `testDatabase`: a fresh
+  schema `app_test_<hex>` that the real migration runner fills from `db/migrations/`.
+  Without `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and registers
+  no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The module
+  refuses to load when `FABRIKA_RELEASE` is set.
+- `@fabrika/app/testing/isolation`'s `isolationKit(contract, tables, table, postgres)`
+  serves the table through a probe contract over the application's own vocabulary,
+  booted by `testKit` on a data layer of its own. A request takes the production path;
+  only the handler is the kit's. Every attempt seeds two fresh rows in containment
+  chains that share no value, with each container row a table owns, and asks as a
+  caller holding every action of the table in the grant dimension of one of them: a
+  dimension table's container, or its own dimension at the top; a child's parent's.
+- The cases: the own row is read, updated and removed, and a list and a count reach
+  it alone; the other row is 404 for get, update and remove; insert into the other
+  scope is 403; a child row is also 404 through the caller's own parent with the other
+  key; a `Ref` for the read action is refused by update and remove; a column with its
+  own read action is never returned. Insert into a top-level table is checked only for
+  the other scope: the `in` form answers 404 for an object that does not exist yet.
+- `move` has no case: an access form hands a handler one capability, and a move needs
+  the source and the target `Ref`.
+- `@fabrika/check` regenerates the tests from the policies it reads statically. A test
+  whose content differs from its header hash, a missing one, one written for another
+  policy and a generated test of no table are `generated-test-hash` findings. The fixture
+  fills a required column the test does not name with a sample of its type; a required
+  foreign key outside the containment chain cannot be filled, so such a column needs a
+  default or must be nullable.
 
 ## What the platform writes into an application
 

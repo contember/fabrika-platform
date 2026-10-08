@@ -19,6 +19,7 @@ import { type ImportMappings, readImportMappings } from './resolution'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkClientIdentity } from './rules/identity'
+import { checkIsolationTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
 import { checkMigrationNames } from './rules/migrations'
@@ -89,7 +90,8 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const modules = new Map<string, ParsedModule>()
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
-	findings.push(...checkTrustedResolution(tree.files))
+	const trust = checkTrustedResolution(tree.files)
+	findings.push(...trust)
 	findings.push(...checkPackageReplacement(tree.files))
 
 	for (const link of tree.links) {
@@ -121,6 +123,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const contract = modules.get(CONTRACT_FILE)
 	if (contract !== undefined && literal.length === 0) findings.push(...checkContractRead(graph))
 	if (contract !== undefined) findings.push(...checkClientIdentity(contract, graph))
+	findings.push(...(await checkIsolationTests(tree.files, literal.length === 0 && trust.length === 0)))
 	findings.push(...checkMigrationNames(checkedPaths))
 	const jobs = contract === undefined ? [] : contractJobs(contract, graph)
 	for (const name of ZEROPS_FILES) {

@@ -38,7 +38,8 @@
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/db": "workspace:*",
-		"@fabrika/platform-node": "workspace:*"
+		"@fabrika/platform-node": "workspace:*",
+		"@fabrika/check": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

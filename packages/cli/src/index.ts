@@ -25,7 +25,7 @@ Usage:
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
   fabrika control <key|apps|namespaces|register|deploy|runs> [options]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
-  fabrika db <new|migrate|codegen> [options]
+  fabrika db <new|migrate|codegen|test-scaffold> [options]
   fabrika job run <name>
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
@@ -39,7 +39,7 @@ to its config); on Cloudflare that is all it does.
 control credential from FABRIKA_CONTROL_KEY alone; a changed manifest is \`control apps environments put\`.
 
 \`fabrika db\` manages an application's Postgres schema: migration files, applying them (the template's
-\`run.initCommands\`), and the generated types. Run \`fabrika db --help\` for its surface.
+\`run.initCommands\`), the generated types and the generated isolation tests. Run \`fabrika db --help\` for its surface.
 
 \`fabrika job run <name>\` runs one c.cron job of a contract application: the command each crontab entry runs. Run
 \`fabrika job --help\` for its surface.

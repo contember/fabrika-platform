@@ -62,6 +62,11 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   framework's tables (`@fabrika/db/migrations`, bundle `fabrika`) before `db/migrations/`.
 - `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema;
   `--verify` writes nothing and fails when the file differs.
+- `db test-scaffold` writes `@fabrika/check`'s `isolationTests` of the policies the static reader reads from
+  `src/db/tables.ts` (the checker's own read) and deletes the generated test of a table that is gone; a hand-written
+  test is never touched. It connects to nothing. `src/__tests__/fixtures/isolation-app/` is an application whose
+  generated tests are committed and run with this package's suite; `db.test.ts` fails when they differ from what the
+  scaffold writes, and when its `schema.generated.ts` differs from codegen's.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message or a server-reported
   Postgres error; any other driver error is replaced, because it may quote the URL.
