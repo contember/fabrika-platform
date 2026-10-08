@@ -324,6 +324,8 @@ export interface ProviderNamespaceUpdatePlan {
 export interface ProviderNamespaceUpdateInput {
 	readonly namespace: ProviderDeploymentNamespace
 	readonly next: ProviderDeploymentNamespace
+	/** The namespace an earlier, unconfirmed update planned; the live resources may already match it. */
+	readonly unconfirmed?: ProviderDeploymentNamespace
 	readonly signal: AbortSignal
 }
 

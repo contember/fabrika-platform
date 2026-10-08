@@ -1,13 +1,14 @@
 import type { ZeropsService } from '../api'
 
 /**
- * The profile a service is checked against. `declared` is what the stored target says; `changingTo` is
- * set only while an update moves the service, so a live service already on the new profile reads as the
- * change in progress rather than as drift.
+ * The profile a service is checked against. `declared` is what the stored target says. `changingTo` is
+ * set only while an update moves the service, and `unconfirmed` while it retries an earlier update whose
+ * outcome is unknown: a live service already on either reads as the change in progress, not as drift.
  */
 export interface ZeropsExpectedProfile {
 	readonly declared?: string
 	readonly changingTo?: string
+	readonly unconfirmed?: string
 }
 
 export const validateService = (
@@ -31,7 +32,7 @@ export const validateService = (
 		throw new Error(`Zerops namespace service \`${service.name}\` has incompatible public access`)
 	}
 	const live = service.autoscalingProfileId
-	if (expectedProfile.changingTo !== undefined && live === expectedProfile.changingTo) {
+	if (live !== undefined && (live === expectedProfile.changingTo || live === expectedProfile.unconfirmed)) {
 		return
 	}
 	if (expectedProfile.declared !== undefined && live !== expectedProfile.declared) {

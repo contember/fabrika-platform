@@ -9,7 +9,7 @@ import {
 } from '@fabrika/provider-contract'
 import { waitForProcess, ZeropsApiError, type ZeropsProcess } from '../api'
 import { defaultSleep } from '../collaborators'
-import { envelope, normalizeTarget, zeropsNamespaceTargetCodec } from './codec'
+import { envelope, namespaceUpdatePayloadSchema, normalizeTarget, zeropsNamespaceTargetCodec } from './codec'
 import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED } from './errors'
 import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespacePostgres, ZeropsNamespaceTarget } from './types'
 import { validateService } from './validation'
@@ -54,6 +54,16 @@ const mergedTarget = (
 	const payload = requested.payload
 	if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
 		throw new Error('Zerops namespace update payload must be an object')
+	}
+	const checked = namespaceUpdatePayloadSchema.safeParse(payload)
+	if (!checked.success) {
+		const issue = checked.error.issues[0]
+		const path = issue?.path.join('.') ?? ''
+		if (issue?.code === 'unrecognized_keys') {
+			const field = [path, issue.keys[0] ?? ''].filter((part) => part !== '').join('.')
+			throw new Error(`Zerops namespace update field ${field} is not a namespace target field`)
+		}
+		throw new Error(`Zerops namespace update field ${path === '' ? 'payload' : path} is invalid`)
 	}
 	const stored = zeropsNamespaceTargetCodec.encode(current)
 	if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) {
@@ -128,6 +138,7 @@ const applyProfile = async (
 	current: NormalizedZeropsNamespaceTarget,
 	wanted: ZeropsNamespacePostgres,
 	profile: string,
+	unconfirmedProfile: string | undefined,
 	options: ZeropsNamespaceOptions,
 	signal: AbortSignal,
 ): Promise<void> => {
@@ -140,6 +151,7 @@ const applyProfile = async (
 	validateService(service, projectId, wanted.type, false, undefined, {
 		...(current.postgres?.profile === undefined ? {} : { declared: current.postgres.profile }),
 		changingTo: profile,
+		...(unconfirmedProfile === undefined ? {} : { unconfirmed: unconfirmedProfile }),
 	})
 	if (service.autoscalingProfileId !== profile) {
 		let process: ZeropsProcess | null
@@ -182,7 +194,8 @@ const applyUpdate = async (input: ProviderNamespaceUpdateInput, options: ZeropsN
 	// Checked even with no planned change: after an unconfirmed update, confirming the live service is
 	// what lets core return the namespace to ready.
 	if (wanted?.profile === undefined) return plan.namespace
-	await applyProfile(current, wanted, wanted.profile, options, input.signal)
+	const unconfirmedProfile = input.unconfirmed === undefined ? undefined : normalizeTarget(input.unconfirmed, options).postgres?.profile
+	await applyProfile(current, wanted, wanted.profile, unconfirmedProfile, options, input.signal)
 	return plan.namespace
 }
 

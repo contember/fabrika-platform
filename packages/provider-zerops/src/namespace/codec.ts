@@ -30,21 +30,21 @@ const proxyDeploymentSchema = z.object({
 	descriptorSha256: sha256Schema,
 }).strict().superRefine(rejectExplicitUndefined)
 
-export const postgresSchema = z.discriminatedUnion('type', [
-	z.object({
-		type: z.literal('postgresql:ha@18'),
-		profile: z.enum(['oltp-staging', 'oltp-production', 'oltp-enterprise', 'olap-production', 'writeheavy-production']).optional(),
-	}),
-	z.object({
-		type: z.literal('postgresql:single@18'),
-		profile: z.enum(['oltp-hobby', 'oltp-staging', 'oltp-production', 'olap-production', 'writeheavy-production']).optional(),
-	}),
-]).transform((value) => {
+const haPostgresSchema = z.object({
+	type: z.literal('postgresql:ha@18'),
+	profile: z.enum(['oltp-staging', 'oltp-production', 'oltp-enterprise', 'olap-production', 'writeheavy-production']).optional(),
+})
+const singlePostgresSchema = z.object({
+	type: z.literal('postgresql:single@18'),
+	profile: z.enum(['oltp-hobby', 'oltp-staging', 'oltp-production', 'olap-production', 'writeheavy-production']).optional(),
+})
+
+export const postgresSchema = z.discriminatedUnion('type', [haPostgresSchema, singlePostgresSchema]).transform((value) => {
 	if (value.profile === undefined) delete value.profile
 	return value
 })
 
-const namespaceTargetSchema = z.object({
+const namespaceTargetShape = z.object({
 	proxyDeployment: proxyDeploymentSchema.optional(),
 	proxySource: namespaceProxySourceSchema,
 	proxyBuild: proxyBuildSchema.optional(),
@@ -61,12 +61,23 @@ const namespaceTargetSchema = z.object({
 	proxyAppVersionId: z.string().min(1).optional(),
 	proxyHosts: z.array(z.object({ host: z.string().min(1), port: z.number().int().positive() })).optional(),
 	ready: z.boolean().optional(),
-}).transform((target) => {
+})
+
+const namespaceTargetSchema = namespaceTargetShape.transform((target) => {
 	for (const key of Object.keys(target)) {
 		if (Reflect.get(target, key) === undefined) Reflect.deleteProperty(target, key)
 	}
 	return target
 })
+
+/**
+ * What an update request's payload may name: any target field, each optional, and no field the target
+ * does not have — at the top level or inside `postgres`. The target schema STRIPS an unknown key, which
+ * would turn a misspelt field into a silent no-op.
+ */
+export const namespaceUpdatePayloadSchema = namespaceTargetShape.partial().extend({
+	postgres: z.discriminatedUnion('type', [haPostgresSchema.strict(), singlePostgresSchema.strict()]).optional(),
+}).strict()
 
 export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = {
 	version: 1,

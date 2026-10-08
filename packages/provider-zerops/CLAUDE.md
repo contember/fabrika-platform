@@ -48,14 +48,16 @@ bun test
   is silently ignored. `assertZeropsInvariants` refuses a document missing it. Never describe the
   steady-state import as "reconciling"; change a live field through the API that owns it.
 - **A namespace's PostgreSQL profile moves only through `updates` (`src/namespace/update.ts`).** `plan`
-  lays the requested payload's top-level fields over the stored target and refuses every other change, the
-  PostgreSQL type included, as `PROVIDER_NAMESPACE_IMMUTABLE` (`FIXED_FIELDS` lists every target field, so
-  a new one fails to compile until it is classified). `apply` calls `configureAutoscaling` and decides by
-  reading `autoscalingProfileId` back, within ~90 s. A platform 4xx on the PUT is a definite failure;
-  anything once the PUT is sent is `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED`, and a retry must converge:
-  `validateService` (`src/namespace/validation.ts`) tells a live service that disagrees with the declared
-  profile (drift, refused) from one already on the profile being applied (the change in progress).
-  UNVERIFIED: how soon the read-back shows the new profile live.
+  checks the requested payload STRICTLY (`namespaceUpdatePayloadSchema`: the target schema strips unknown
+  keys, which would make a misspelt field a silent no-op), lays its top-level fields over the stored target,
+  and refuses every other change, the PostgreSQL type included, as `PROVIDER_NAMESPACE_IMMUTABLE`
+  (`FIXED_FIELDS` lists every target field, so a new one fails to compile until it is classified). `apply`
+  calls `configureAutoscaling` and decides by reading `autoscalingProfileId` back, within ~90 s. A platform
+  4xx on the PUT is a definite failure; anything once the PUT is sent is
+  `PROVIDER_NAMESPACE_UPDATE_UNCONFIRMED`, and a retry must converge: `validateService`
+  (`src/namespace/validation.ts`) reads a live service on the profile being applied, or on the one an
+  earlier unconfirmed update planned (`input.unconfirmed`), as the change in progress, and any other
+  profile than the declared one as drift. UNVERIFIED: how soon the read-back shows the new profile live.
 - **`compileProvisioningYaml`'s output is first-bring-up only.** Re-applying it at a service that carries
   code activates an EMPTY app version and demotes the running one to `BACKUP`.
 - Application registration uses `renderFabrikaProvisioningYaml` with `override: false` to refuse

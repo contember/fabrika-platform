@@ -1787,8 +1787,18 @@ describe('Zerops namespace update', () => {
 
 		expect(() => updates(state).plan(current, requested(['postgres']))).toThrow('payload must be an object')
 		expect(() => updates(state).plan(current, requested({ postgres: { type: 'postgresql:single@18', profile: 'oltp-enterprise' } }))).toThrow(
-			'profile is not supported',
+			'field postgres.profile is invalid',
 		)
+	})
+
+	test('refuses a misspelt or unsupported field instead of dropping it', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+
+		expect(() => updates(state).plan(current, requested({ corePakage: 'SERIOUS' }))).toThrow('field corePakage is not a namespace target field')
+		expect(() => updates(state).plan(current, requested({ postgres: { type: 'postgresql:single@18', profile: 'oltp-production', maxContainers: 3 } })))
+			.toThrow('field postgres.maxContainers is not a namespace target field')
+		expect(autoscalingCalls(state)).toEqual([])
 	})
 
 	test('refuses to move a live service that already disagrees with what the namespace declares', async () => {
@@ -1830,6 +1840,26 @@ describe('Zerops namespace update', () => {
 
 		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).postgres?.profile).toBe('oltp-production')
 		expect(autoscalingCalls(state)).toHaveLength(1)
+	})
+
+	test('a retry that names the unconfirmed target reads a live service already on it as the change in progress', async () => {
+		const state = freshState()
+		const current = await provisioned(state)
+		const planned = updates(state).plan(current, toProduction).namespace
+		liveService(state).autoscalingProfileId = 'oltp-staging'
+
+		// Neither the declared nor the unconfirmed profile: drift, refused before the PUT.
+		const drift = await failure(
+			updates(state).apply({ namespace: current, next: current, unconfirmed: planned, signal: new AbortController().signal }),
+		)
+		expect(drift.message).toContain('uses profile oltp-staging, but its namespace declares oltp-hobby')
+
+		liveService(state).autoscalingProfileId = 'oltp-production'
+		const back = await updates(state).apply({ namespace: current, next: current, unconfirmed: planned, signal: new AbortController().signal })
+
+		expect(zeropsNamespaceTargetCodec.decode(back.target.payload).postgres?.profile).toBe('oltp-hobby')
+		expect(liveService(state).autoscalingProfileId).toBe('oltp-hobby')
+		expect(autoscalingCalls(state)).toEqual([`autoscaling:${postgresId}:oltp-hobby`])
 	})
 
 	test('a profile the platform accepts but never reads back is unconfirmed', async () => {
