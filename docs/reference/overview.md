@@ -350,8 +350,9 @@ proxy is publicly routed; app services stay internal, so bypassing auth stops be
 possible rather than merely discouraged. It is Caddy plus a loopback-bound Bun auth
 service on Zerops, and a thin Worker calling the same code in-process on Cloudflare.
 Caddy owns HTTP correctness and gets no vote on authorization: its configuration is a
-fixed three-step chain per app — delete the headers only the proxy may assert (token, request id, endpoint, delegation grant),
-`forward_auth`, proxy to the private upstream — and gate rules are never compiled into
+fixed three-step chain per app — delete every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` in `@fabrika/auth-core`:
+token, client address, endpoint, delegation grant, proxy secret), the request id and the forwarding headers;
+`forward_auth`; proxy to the private upstream, with a contract app's proxy secret set — and gate rules are never compiled into
 route matchers. Gates and endpoint tables are evaluated once, in TypeScript, against the
 manifest. Before any gate or endpoint is matched, the proxy refuses a non-canonical raw path with 400 and a request without a
 forwarded method; the application router refuses the same paths.
@@ -360,7 +361,9 @@ Nothing downstream of the proxy enforces. An application reads the proxy-injecte
 `X-Fabrika-Token`, verifies it locally against IAM's JWKS, and builds its
 `AuthContext`. A contract application also serves only the endpoint
 `X-Fabrika-Endpoint` names, with the digest of its own rules, and answers 503
-otherwise; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
+otherwise. On Zerops it first refuses, with 403, a request without its proxy secret
+(`X-Fabrika-Proxy-Secret`), because a sibling service in the namespace can dial it
+directly; on Cloudflare the service binding is the authenticated hop; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
 cookie.
 
 A browser that authenticated at IAM reaches an app through a one-time code the proxy

@@ -198,25 +198,37 @@ files, jobs, exports, imports, `creates`), when an `on` dimension has no table, 
 access form reaches a dimension that lies in a container no table can locate it in, or
 when a handler is missing or undeclared.
 
+Where the hop is not a service binding, `boot` also takes the proxy secret
+`FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, refuses
+to start without one or with one shorter than 32 characters; the Worker adapter needs
+none. Control generates the secret once per application environment and keeps it in its
+vault; the Zerops provider writes it to the application service and, under
+`proxySecretVariable('<app>@<env>')`, to the namespace proxy, whose Caddy sends it as
+`X-Fabrika-Proxy-Secret`.
+
 Per request, in this order:
 
-1. refuse a non-canonical path (400) and select the endpoint with `planEndpoint`; no
+1. when the application has a proxy secret, a request without it, or with another, is
+   403 before any other answer — also for a path no endpoint serves and a non-canonical
+   one. Only a `health` endpoint is served without it, because the platform probe dials
+   the application directly;
+2. refuse a non-canonical path (400) and select the endpoint with `planEndpoint`; no
    endpoint is 404, never the SPA;
-2. `X-Fabrika-Endpoint` must be `<id>@<digest>` of that endpoint, with this version's
+3. `X-Fabrika-Endpoint` must be `<id>@<digest>` of that endpoint, with this version's
    `requirementDigest` of its row: the proxy names what it selected and the rules it
    applied, and any other value — or none — is 503. Only a `health` endpoint may arrive
    without it;
-3. verify the proxy-injected token with the shared verifier, for this application in
+4. verify the proxy-injected token with the shared verifier, for this application in
    this environment: none, invalid, or minted for another environment or application
    is 401, an unreachable IAM is 503;
-4. the token's caller kind must be one of the mount's callers: a user token is
+5. the token's caller kind must be one of the mount's callers: a user token is
    `human`, a service token `machine`, an anonymous token (a share link) `link` (403);
-5. the requirement: `member` is any permission, an action is that action in some
+6. the requirement: `member` is any permission, an action is that action in some
    scope (403);
-6. admission: a request without `Authorization` that is not a `GET` needs
+7. admission: a request without `Authorization` that is not a `GET` needs
    `Sec-Fetch-Site: same-origin` (403), and RPC needs `Content-Type: application/json`
    (400);
-7. parse the body strictly (400), run the access form, remove the `from` field, call
+8. parse the body strictly (400), run the access form, remove the `from` field, call
    the handler, project the output through its schema (a union through its first
    branch that accepts the value), answer `{ result }`.
 

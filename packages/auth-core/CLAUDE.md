@@ -29,7 +29,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `rpc.ts`                | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
 | `membership.ts`         | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
 | `types.ts`              | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
-| `wire.ts`               | The proxy→app header names: the verified token, the endpoint, the delegation grant, the client address, and what to strip.     |
+| `wire.ts`               | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.       |
 | `environment.ts`        | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
 | `json.ts`               | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                  |
 
@@ -130,6 +130,10 @@ bun test               # app-environment · canonical-path · contract-canonical
   new rule the proxy enforces must join the digest in the same change, or the two can disagree unnoticed.
   `contractDigest` is the digest of `canonicalArtifactJson`. Both are synchronous on purpose (`sha256.ts`): the
   manifest parser and `boot` check them, and neither can await WebCrypto.
+- **`FABRIKA_HOP_HEADERS` lists every `X-Fabrika-*` name a proxy hop carries.** Caddy's first step and
+  the Cloudflare proxy Worker delete exactly that list, so a header the proxy starts to set joins it in
+  the same change; `wire.test.ts` fails on an `X-Fabrika-*` constant of `wire.ts` missing from it. The
+  Operations upload headers stay out: a client sends them to Operations through the platform proxy.
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.

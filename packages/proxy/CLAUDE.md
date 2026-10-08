@@ -48,9 +48,9 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read this
   request's own method or path; a missing `X-Forwarded-Uri` or `X-Forwarded-Method` must deny, not
   fall back. A non-canonical raw path (`isCanonicalPath`) is a 400 before any gate is matched.
-- **The generated Caddy config strips the token header, the request id AND every name a client address
-  travels under from the inbound request before `forward_auth` runs** (the Cloudflare Worker does the
-  same). Caddy's `copy_headers` skips empty values rather than deleting, so without the strip a client
+- **The generated Caddy config deletes every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` in
+  `@fabrika/auth-core`), the request id AND every name a client address travels under from the inbound
+  request before `forward_auth` runs** (the Cloudflare Worker deletes the same list). Caddy's `copy_headers` skips empty values rather than deleting, so without the strip a client
   could present its own token header on a `public` path and have it reach the app — and the request id
   it chose would land in IAM's `auth_log` and `audit_events`. The token and the request id are written
   back from the auth response on a 2xx; the client address is not, because it describes the request as
@@ -71,6 +71,11 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
   `Authorization`, so a key the proxy did not read never reaches the app. A gate app keeps it: IAM's
   `/admin/*` reads its own bearer.
+- **A contract app's upstream hop carries its proxy secret on Zerops** (ADR-0022 rule 5): step 3 sets
+  `X-Fabrika-Proxy-Secret` from `{env.<proxySecretVariable(app.id)>}`, so the secret is in no generated
+  file. An unset variable sends an empty secret, which the application refuses; the auth service only
+  warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. A gate app gets
+  no secret, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay

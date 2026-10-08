@@ -193,6 +193,13 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   empty: fabrika leaves an environment it has no address for unregistered rather than guessing,
   and an empty set would read as "clear the registry". Nothing else here calls IAM's
   admin surface per deploy; do not add a second lifecycle for this.
+- **A namespace proxy authenticates itself to each application with a proxy secret (ADR-0022 rule 5).**
+  `src/proxy-secret.ts` generates it the first time an environment is handed to a namespace (a republish's
+  members, or a deploy's `FABRIKA_PROXY_SECRET`), seals it in the vault under
+  `proxySecretPurpose(app, env)`, and records only the ref in `app_env_proxy_secrets`; a lost insert race
+  deletes its own vault row and answers the recorded one. Every follow goes through
+  `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out and the provider
+  refuses a contract application. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,

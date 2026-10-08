@@ -64,8 +64,8 @@ per service. Both forms are evaluated only by the proxy, with the matchers in `@
 
 The proxy evaluates gates for every app whose manifest entry carries gates, and the endpoint table for
 every app whose entry carries one; an entry carrying both is refused. Part A generates an application's
-gates from its contract as an intermediate path. Work unit B2 built the endpoint tables; the
-authenticated hop (B3) and the response headers (B4) are not built yet.
+gates from its contract as an intermediate path. Work unit B2 built the endpoint tables and B3 the
+authenticated hop; the response headers (B4) are not built yet.
 
 ### 1. Only the proxy is publicly routed
 
@@ -261,6 +261,16 @@ For a contract application, the hop carries more facts, and the application chec
   equals its own; a missing header or any disagreement is a 503. A request is therefore never served by
   code that expects different rules than the proxy applied. A health endpoint alone may arrive without
   the header, because the platform's liveness probe dials the application directly.
+
+Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the one list of every
+`X-Fabrika-*` name a hop carries; Caddy and the Cloudflare proxy Worker delete exactly it. The secret
+travels as `X-Fabrika-Proxy-Secret`. Control seals it in its vault the first time an environment
+joins a namespace proxy and never rotates it on its own. The proxy service holds one variable per
+application, `proxySecretVariable('<app>@<env>')`, because one proxy fronts a whole namespace; the
+application holds `FABRIKA_PROXY_SECRET`. The Bun adapter refuses to start without it. A health
+endpoint is served without the secret, for the same reason it may arrive without the endpoint
+header. The Operations upload headers are not hop headers: a client sends them to Operations
+through the platform proxy.
 
 At startup the application compares its contract digest with `FABRIKA_CONTRACT_DIGEST`, a literal in
 the execution descriptor ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). It

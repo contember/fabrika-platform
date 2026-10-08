@@ -101,7 +101,7 @@ bun test
 - **Only `FABRIKA_RELEASE` (and, for a contract application, `FABRIKA_CONTRACT_DIGEST`) is bound to a
   version (ADR-0044).** `overlayRelease` (`src/managed-env.ts`) writes the release as a LITERAL into the
   selected setup's `run.envVariables` of the execution descriptor; it is never a service variable, and
-  `write-service-env` deletes a stray one. The other managed keys are plain service variables each deploy
+  `write-service-env` deletes a stray one. The other managed keys (`FABRIKA_PROXY_SECRET` among them) are plain service variables each deploy
   overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
   the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.
@@ -145,6 +145,12 @@ bun test
   manifest (compiled from the members core passes, `src/namespace/manifest.ts`) and the IAM variables,
   records the version untriggered, uploads, records `triggered`, then sends the build on a signal that only
   a lost lease aborts. A cancelled deploy never cancels the proxy build; it stays recorded for `reconcile`.
+- **A contract application gets the proxy secret on both sides, or nothing deploys** (ADR-0022 rule 5).
+  `namespaceProxySecrets` (`src/namespace/proxy-secrets.ts`) maps each contract member of the manifest to
+  `proxySecretVariable(id)` and refuses a member Control handed no `proxySecret`; the attempt writes each
+  one to the proxy service, without read-back, before the version is reserved, and the attempt identity
+  covers their digest. The deployer refuses a non-dry-run contract deploy whose managed
+  `FABRIKA_PROXY_SECRET` is null. Never log either value.
 
 ## Platform installation (`./installation`, `src/installation/`)
 

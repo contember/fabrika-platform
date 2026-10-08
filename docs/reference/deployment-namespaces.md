@@ -201,9 +201,20 @@ Before an app deploy, the control plane:
 1. verifies namespace coordinates and claims;
 2. compiles the proxy manifest from every assigned app;
 3. writes it to the proxy service-level
-   `FABRIKA_PROXY_MANIFEST_JSON` variable;
+   `FABRIKA_PROXY_MANIFEST_JSON` variable, and writes each contract application's
+   proxy secret under `proxySecretVariable('<app>@<env>')`;
 4. rolls the proxy and waits for its app version;
-5. applies and deploys the application import.
+5. applies and deploys the application import, with the same secret as the
+   application's `FABRIKA_PROXY_SECRET`.
+
+The proxy secret authenticates the hop from the proxy to the application, because
+every service of a namespace shares one private network (ADR-0022 rule 5). Control
+generates it once per application environment, the first time it hands the
+environment to its namespace, seals it in the vault, and records only the vault ref
+(`app_env_proxy_secrets`). Caddy sends it as `X-Fabrika-Proxy-Secret` through an
+`{env.…}` placeholder, so it is in no generated file. Without a vault Control hands no
+secret, and the provider refuses a contract application rather than deploy one that
+would refuse every request. There is no rotation verb yet.
 
 Custom domains are bound to the namespace's `proxy` service manually in Zerops.
 App services do not receive public domains. Zerops subdomain access is available

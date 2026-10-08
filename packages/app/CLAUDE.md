@@ -177,7 +177,12 @@ src/
 - **`boot` dispatches only through `planEndpoint`** over the compiled artifact's
   table. There is no second router: an unknown procedure under an RPC prefix is 404
   and never the SPA, and a non-canonical path is 400.
-- **Per request, in this order** (ADR-0012 §5): canonical path → `planEndpoint` →
+- **The proxy secret comes first** (ADR-0022 rule 5). When `FABRIKA_PROXY_SECRET` is set, a request
+  without `X-Fabrika-Proxy-Secret` equal to it is a 403 before any other answer — also for an unknown or
+  non-canonical path — and only a `health` endpoint is served without it. The digests are compared,
+  never the secrets. `serveContract` passes `requireProxySecret`, so on Zerops the application does not
+  boot without one (or with one under 32 characters); the Worker adapter and the test kit set none.
+- **Per request, in this order** (ADR-0012 §5): proxy secret → canonical path → `planEndpoint` →
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
   requirement (`satisfies`) → admission → strict input → access form → remove the
   `from` field → handler → output projection → the header policy. Caller kind,
