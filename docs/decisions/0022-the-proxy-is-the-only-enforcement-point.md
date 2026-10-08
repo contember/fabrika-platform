@@ -77,6 +77,9 @@ Zerops the proxy therefore authenticates itself to the application with a **secr
 environment** (rule 5). On Cloudflare the service binding is the authenticated hop: the application
 Worker has no public route, and nothing else can bind it
 ([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)). Cloudflare has no proxy secret.
+This holds only against code without the account credential: until backlog 86 lands, repository code
+holds `CLOUDFLARE_API_TOKEN` and can bind or expose the application Worker directly
+([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md#on-cloudflare-these-are-a-strong-default-not-a-security-boundary)).
 
 IAM stays **global**: one identity database, one audit log, one console. The proxy is **stateless**
 and per deployment boundary: one per namespace on Zerops, one per app environment on Cloudflare. An
