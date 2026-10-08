@@ -138,7 +138,15 @@ bun test
 - **A contract application's proxy target carries its endpoint table, never gates.** `target.proxy` is
   `{ upstream, gates }` or `{ upstream, ...contractProxyTable(artifact) }`; the artifact parser refuses
   both forms at once and a row whose digest does not describe its rules, and the manifest compiler refuses
-  gates when the schema says `contract: true`. `src/namespace/manifest.ts` passes the table through.
+  gates when the schema says `contract: true`. The artifact's table is the build's self-report, so nothing
+  publishes it.
+- **Published access comes from Control's approved snapshot (ADR-0050), never from the artifact.**
+  `src/namespace/manifest.ts` builds a member's endpoint table from `member.access`
+  (`contractProxyTable(access.contract)`, the upstream from the artifact) and routes a member whose artifact
+  claims a contract (`claimsContract`) but has no `access` not at all. `lockedExecutionFor` locks the descriptor
+  down whenever `environment.access` is present — a config that drops `target.contract` cannot drop it — and
+  refuses an artifact that claims a contract without one. `approvedSchemaOf` gives the IAM schema of deploy,
+  cancel and reconcile: `access.schema`, or the artifact's only for an application that claims no contract.
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
   refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with

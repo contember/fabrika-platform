@@ -1,6 +1,6 @@
 import { appSchemaSchema } from '@fabrika/auth'
 import { type AppSchema, isDigest } from '@fabrika/auth-core'
-import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
+import type { JsonValue, ProviderApprovedAccess, ProviderCodec } from '@fabrika/provider-contract'
 import { normalizeGateRule, proxyEndpointRowSchema, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
@@ -414,6 +414,38 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 	}
+}
+
+/** Whether the uploaded artifact describes a contract application, whichever of its parts says so. */
+export const claimsContract = (manifest: FabrikaManifest): boolean =>
+	manifest.target.contract !== undefined || manifest.app.schema?.contract === true
+	|| (manifest.target.proxy !== undefined && 'endpoints' in manifest.target.proxy)
+
+/**
+ * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
+ * so a configuration cannot drop it. An artifact that claims a contract Control did not approve is refused.
+ */
+export function lockedExecutionFor(manifest: FabrikaManifest, access: ProviderApprovedAccess | undefined): ZeropsLockedExecution | null {
+	if (access === undefined) {
+		if (claimsContract(manifest)) throw new Error('zerops: a contract application deploys only with the contract Control approved at its commit')
+		return null
+	}
+	if (!LOCKED_APP_ID_PATTERN.test(manifest.app.id)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
+	return {
+		appId: manifest.app.id,
+		contract: zeropsContractRun(access.contract),
+		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
+		runtimePackages: manifest.target.runtimePackages ?? [],
+	}
+}
+
+/**
+ * The IAM schema a deploy, cancel or reconcile applies: a contract application's comes only from the approved access;
+ * an application without a contract keeps the schema its artifact declares. `undefined` reconciles nothing.
+ */
+export function approvedSchemaOf(manifest: FabrikaManifest, access: ProviderApprovedAccess | undefined): AppSchema | undefined {
+	if (access !== undefined) return access.schema
+	return claimsContract(manifest) ? undefined : manifest.app.schema
 }
 
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>

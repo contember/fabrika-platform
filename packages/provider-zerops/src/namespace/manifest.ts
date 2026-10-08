@@ -1,7 +1,7 @@
 import { appEnvironmentId } from '@fabrika/auth-core'
 import { decodeEnvelope, type ProviderNamespaceMember } from '@fabrika/provider-contract'
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
-import { assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
+import { contractProxyTable, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { assertFabrikaManifestCoordinates, claimsContract, zeropsArtifactCodec } from '../manifest'
 
 /** Compile every public member of one deployment namespace into its strict proxy manifest. */
 export function compileNamespaceProxyManifest(namespaceId: string, members: readonly ProviderNamespaceMember[]): ProxyManifest {
@@ -26,20 +26,14 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 		// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
 		// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0022).
 		const scheme: ProxyApp['scheme'] = 'https'
-		// A contract application is protected by its endpoint table; every other app by its gates (ADR-0022 rule 3).
-		apps.push(
-			'endpoints' in proxy
-				? {
-					id,
-					hosts: [host],
-					upstream: proxy.upstream,
-					scheme,
-					endpoints: proxy.endpoints,
-					reservedPrefixes: proxy.reservedPrefixes,
-					snapshot: proxy.snapshot,
-				}
-				: { id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates, scheme },
-		)
+		// A contract application is protected by the endpoint table of its approved contract, never the artifact's
+		// (ADR-0050); one with nothing approved is not routed. Every other app keeps its gates (ADR-0022 rule 3).
+		const access = member.access
+		if (access !== undefined) {
+			apps.push({ id, hosts: [host], upstream: proxy.upstream, scheme, ...contractProxyTable(access.contract) })
+		} else if (!claimsContract(manifest) && 'gates' in proxy) {
+			apps.push({ id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates, scheme })
+		}
 	}
 	return { apps }
 }

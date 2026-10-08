@@ -1,8 +1,9 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { type AppEnvironment, appEnvironmentId, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, type AppSchema, appEnvironmentId, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
+	ProviderApprovedAccess,
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderEnvelope,
@@ -286,6 +287,8 @@ interface IamReconcileTarget {
 	readonly appId: string
 	readonly env: string
 	readonly returnOrigins?: readonly string[]
+	/** Control's approved access (ADR-0050): a contract application's IAM schema comes from it, never from the runner. */
+	readonly access?: ProviderApprovedAccess
 	readonly signal: AbortSignal
 }
 
@@ -299,8 +302,26 @@ class InvalidIamReport extends Error {}
 const applyIamReconcile = async (
 	options: CloudflareControlOptions,
 	target: IamReconcileTarget,
-	report: RunnerIamReconcile,
+	report: RunnerIamReconcile | undefined,
 ): Promise<void> => {
+	const schema = target.access?.schema ?? reportedSchema(target, report)
+	if (options.propustkaUrl === undefined) return
+	// Return origins ride this call because `apps.setReturnOrigins` 404s for an app IAM has never heard
+	// of, and the schema reconcile is what registers it. Separate call, same moment.
+	const returnOrigins = target.returnOrigins !== undefined && target.returnOrigins.length > 0 ? target.returnOrigins : undefined
+	await (options.reconcileSchema ?? defaultReconcileSchema)({
+		url: options.propustkaUrl,
+		app: appEnvironmentId(target.appId, target.env),
+		schema,
+		...(returnOrigins === undefined ? {} : { returnOrigins }),
+		...(options.propustkaProvisioningKey === undefined ? {} : { adminKey: options.propustkaProvisioningKey }),
+		signal: target.signal,
+	})
+}
+
+/** The schema the runner compiled, for an application without an approved contract; a contract schema is refused. */
+const reportedSchema = (target: IamReconcileTarget, report: RunnerIamReconcile | undefined): AppSchema => {
+	if (report === undefined) throw new InvalidIamReport('reported no authz schema')
 	const parsedReport = runnerIamReconcileSchema.safeParse(report)
 	if (!parsedReport.success) {
 		throw new InvalidIamReport('reported an authz schema whose app id or body is not a string')
@@ -322,18 +343,10 @@ const applyIamReconcile = async (
 	if (!schema.ok) {
 		throw new InvalidIamReport(`reported a malformed authz schema: ${schema.message}`)
 	}
-	if (options.propustkaUrl === undefined) return
-	// Return origins ride this call because `apps.setReturnOrigins` 404s for an app IAM has never heard
-	// of, and the schema reconcile is what registers it. Separate call, same moment.
-	const returnOrigins = target.returnOrigins !== undefined && target.returnOrigins.length > 0 ? target.returnOrigins : undefined
-	await (options.reconcileSchema ?? defaultReconcileSchema)({
-		url: options.propustkaUrl,
-		app: appEnvironmentId(target.appId, target.env),
-		schema: schema.schema,
-		...(returnOrigins === undefined ? {} : { returnOrigins }),
-		...(options.propustkaProvisioningKey === undefined ? {} : { adminKey: options.propustkaProvisioningKey }),
-		signal: target.signal,
-	})
+	if (schema.schema.contract === true) {
+		throw new InvalidIamReport('reported a contract schema, which comes only from the contract Control approved')
+	}
+	return schema.schema
 }
 
 /**
@@ -352,11 +365,13 @@ const settleOutcome = async (
 ): Promise<ProviderTerminalOutcome | { readonly state: 'running' }> => {
 	const failed: ProviderTerminalOutcome = { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
 	const reconcile = outcome.iamReconcile
-	if (reconcile === undefined) return outcome
-	if (outcome.dryRun === true) {
+	if (reconcile !== undefined && outcome.dryRun === true) {
 		await log('reconcile-schema refused: a dry run reported an authz schema')
 		return failed
 	}
+	// An approved contract reconciles its own schema once the deploy succeeded, whatever the runner reported.
+	const approved = target.access !== undefined && outcome.state === 'succeeded' && outcome.dryRun !== true
+	if (reconcile === undefined && !approved) return outcome
 	try {
 		await applyIamReconcile(options, target, reconcile)
 	} catch (error) {
@@ -419,6 +434,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			env: input.environment.env,
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+			...(input.environment.access === undefined ? {} : { access: input.environment.access }),
 		}
 		const log = async (line: string): Promise<void> => input.events.log(line)
 		return settleOutcome(options, target, outcome, log, false)
@@ -434,6 +450,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			env: input.environment.env,
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+			...(input.environment.access === undefined ? {} : { access: input.environment.access }),
 		}
 		const log = async (line: string): Promise<void> => {
 			if (input.log === undefined) console.error(`run ${input.runId}: ${line}`)

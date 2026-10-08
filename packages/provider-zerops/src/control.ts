@@ -25,6 +25,7 @@ import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collab
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
 import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference, parseManagedValues } from './managed-env'
 import {
+	approvedSchemaOf,
 	assertFabrikaManifestCoordinates,
 	type FabrikaManifest,
 	manifestServiceHostnames,
@@ -253,7 +254,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		signal: AbortSignal,
 	): Promise<void> => {
 		const artifact = artifactFor(input.environment)
-		if (artifact.app.schema === undefined || options.propustkaUrl === undefined) return
+		const schema = approvedSchemaOf(artifact, input.environment.access)
+		if (schema === undefined || options.propustkaUrl === undefined) return
 		const placement = resolvedEnvironment(input.environment, { requireReady: false })
 		const runtimeTarget: ZeropsRuntimeTarget = {
 			projectId: placement.projectId,
@@ -268,7 +270,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		await reconcileSchema({
 			url: options.propustkaUrl,
 			app: appEnvironmentId(artifact.app.id, artifact.app.env),
-			schema: artifact.app.schema,
+			schema,
 			...(input.returnOrigins === undefined || input.returnOrigins.length === 0 ? {} : { returnOrigins: input.returnOrigins }),
 			adminKey: options.adminKey,
 			signal,
@@ -367,6 +369,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				managedEnvironment,
 				target: runtimeTarget,
 				artifact,
+				...(input.environment.access === undefined ? {} : { access: input.environment.access }),
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: input.events,

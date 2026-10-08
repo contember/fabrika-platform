@@ -1,6 +1,8 @@
-import type { ProviderNamespaceMember } from '@fabrika/provider-contract'
+import { type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import type { ProviderApprovedAccess, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { contractProxyTable, parseProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { defineApp } from '../authoring'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
@@ -18,7 +20,7 @@ const TABLE = contractProxyTable(notesArtifact)
 const member = (
 	appId: string,
 	domain: string | undefined,
-	options: { manifestId?: string; manifestEnv?: string; proxy?: boolean; contract?: boolean } = {},
+	options: { manifestId?: string; manifestEnv?: string; proxy?: boolean; contract?: boolean; access?: ProviderApprovedAccess } = {},
 ): ProviderNamespaceMember => {
 	const manifest = compileFabrikaManifest(
 		defineApp({
@@ -40,8 +42,15 @@ const member = (
 		env: 'prod',
 		...(domain === undefined ? {} : { domain }),
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
+		...(options.access === undefined ? {} : { access: options.access }),
 	}
 }
+
+const approved = (artifact: ContractArtifact): ProviderApprovedAccess => ({
+	contract: artifact,
+	contractDigest: contractDigest(artifact),
+	schema: schemaFromContract(artifact),
+})
 
 describe('namespace proxy manifest', () => {
 	test('routes every public member on its lowercased domain over https and skips members without a proxy', () => {
@@ -59,11 +68,29 @@ describe('namespace proxy manifest', () => {
 
 	test('a contract application gets its endpoint table instead of gates, in a manifest the proxy accepts', () => {
 		const manifest = compileNamespaceProxyManifest('apps-prod', [
-			member('notes', 'notes.example.com', { contract: true }),
+			member('notes', 'notes.example.com', { contract: true, access: approved(notesArtifact) }),
 			member('beta', 'beta.example.com'),
 		])
 		expect(manifest.apps[0]).toEqual({ id: 'notes@prod', hosts: ['notes.example.com'], upstream: 'notes:3000', scheme: 'https', ...TABLE })
 		expect(parseProxyManifest(manifest)).toEqual(manifest)
+	})
+
+	test('the table comes from the approved contract, never the artifact; a contract without approval is not routed', () => {
+		const narrowed: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
+		const routed = compileNamespaceProxyManifest('apps-prod', [member('notes', 'notes.example.com', { contract: true, access: approved(narrowed) })])
+		expect(routed.apps[0]).toEqual({
+			id: 'notes@prod',
+			hosts: ['notes.example.com'],
+			upstream: 'notes:3000',
+			scheme: 'https',
+			...contractProxyTable(narrowed),
+		})
+		expect(compileNamespaceProxyManifest('apps-prod', [member('notes', 'notes.example.com', { contract: true })])).toEqual({ apps: [] })
+	})
+
+	test('a configuration that drops its contract still gets the approved table, not its gates', () => {
+		const manifest = compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com', { access: approved(notesArtifact) })])
+		expect(manifest.apps[0]).toEqual({ id: 'alpha@prod', hosts: ['alpha.example.com'], upstream: 'alpha:3000', scheme: 'https', ...TABLE })
 	})
 
 	test('the artifact refuses an endpoint row whose digest does not describe its rules', () => {

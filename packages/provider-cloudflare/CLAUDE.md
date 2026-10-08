@@ -26,7 +26,10 @@ this one import.
   validates both fields after the runner validates the container's `/status` envelope, requires the
   reported app to be the deploying app, bounds and parses the JSON with `parseAppSchema` — which
   applies IAM's own `isActionAllowed` rule to every role permission — and only then calls the
-  `SchemaReconciler` with its own key and the projected return origins.
+  `SchemaReconciler` with its own key and the projected return origins. With Control's approved access
+  (`environment.access`, ADR-0050) the deploy and the reconcile apply `access.schema` instead, whatever the
+  runner reported; without it a reported `contract: true` schema fails the run, because a contract
+  application's IAM vocabulary comes only from the contract Control read at the commit.
 - **`cloudflareRunnerJobSchema` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading
   `-` and no whitespace, `[a-z0-9-]` env, contained relative `workerDir`/`configPath`, literal
   `domain`. Every field becomes an argv element, a path or a hostname inside the container.

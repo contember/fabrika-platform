@@ -1,8 +1,9 @@
-import type { AppSchema } from '@fabrika/auth-core'
-import type { JsonValue } from '@fabrika/provider-contract'
+import { type AppSchema, contractDigest } from '@fabrika/auth-core'
+import type { JsonValue, ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	createZeropsApi,
@@ -36,6 +37,7 @@ interface Recorded {
 	externalIds: string[]
 	logs: string[]
 	schemas: string[]
+	schemaBodies: AppSchema[]
 	schemaSignals: AbortSignal[]
 	sleeps: number[]
 	externalStates: Array<JsonValue | undefined>
@@ -56,6 +58,7 @@ const fresh = (): Recorded => ({
 	externalIds: [],
 	logs: [],
 	schemas: [],
+	schemaBodies: [],
 	schemaSignals: [],
 	sleeps: [],
 	externalStates: [],
@@ -223,9 +226,10 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 			return { commitSha: input.commitSha, descriptorSha256: input.descriptorSha256, entryCount: 1, expandedBytes: 1 }
 		},
 	},
-	reconcileSchema: async ({ app, signal }) => {
+	reconcileSchema: async ({ app, schema, signal }) => {
 		recorded.calls.push('reconcileSchema')
 		recorded.schemas.push(app)
+		recorded.schemaBodies.push(schema)
 		recorded.schemaSignals.push(signal)
 	},
 	alertExposure: async ({ alert }) => {
@@ -1036,27 +1040,51 @@ describe('the exposure read-back before activation', () => {
 })
 
 describe('a contract application deploy', () => {
-	test('sends the generated execution descriptor with the contract digest and release as literals', async () => {
-		const contents = 'zerops:\n  - setup: api\n'
+	const approved: ProviderApprovedAccess = {
+		contract: notesArtifact,
+		contractDigest: contractDigest(notesArtifact),
+		schema: schemaFromContract(notesArtifact),
+	}
+	const contractArtifact = async (contract: boolean) => {
 		const config: ZeropsAppConfig = {
 			...app([API]),
 			id: 'notes',
-			target: { ...app([API]).target, contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } },
+			target: {
+				...app([API]).target,
+				...(contract ? { contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } } : {}),
+			},
 		}
-		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor(contents))
-		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const result = await provider({
+		return compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
+	}
+	const contractRun = async (contract: boolean, access: ProviderApprovedAccess | undefined): Promise<ZeropsDeployResult> =>
+		createZeropsDeployer(() => makeCollaborators(recorded))({
 			...deployRun(recorded),
 			appId: 'notes',
 			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
-			artifact,
+			artifact: await contractArtifact(contract),
+			...(access === undefined ? {} : { access }),
 		})
+
+	test('an artifact that claims a contract Control did not approve is refused before the build', async () => {
+		const result = await contractRun(true, undefined)
+		expect(stepError(result, 'trigger-build')).toBe('zerops: a contract application deploys only with the contract Control approved at its commit')
+		expect(recorded.builds).toEqual([])
+	})
+
+	test('the approved contract locks the descriptor down even when the configuration declares none', async () => {
+		expect((await contractRun(false, approved)).status).toBe('succeeded')
+		expect(recorded.builds[0]?.zeropsYaml).toContain(`FABRIKA_CONTRACT_DIGEST: "${approved.contractDigest}"`)
+		expect(recorded.schemaBodies).toEqual([approved.schema])
+	})
+
+	test('sends the generated execution descriptor with the contract digest and release as literals', async () => {
+		const result = await contractRun(true, approved)
 
 		expect(result.status).toBe('succeeded')
 		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' })
 		expect(recorded.logs.join('\n')).not.toContain('private-proxy-secret')
 		const sent = recorded.builds[0]?.zeropsYaml ?? ''
-		expect(sent).toContain(`FABRIKA_CONTRACT_DIGEST: "${artifact.target.contract?.digest ?? 'missing'}"`)
+		expect(sent).toContain(`FABRIKA_CONTRACT_DIGEST: "${approved.contractDigest}"`)
 		expect(sent).toContain(`FABRIKA_RELEASE: ${RELEASE}\n`)
 		expect(sent).toContain('start: "sh /var/www/fabrika/start.generated.sh"')
 		expect(recorded.logs).toContain(

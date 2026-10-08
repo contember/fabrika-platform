@@ -1,4 +1,5 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
+import { contractDigest } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -8,6 +9,8 @@ import type {
 } from '@fabrika/provider-contract'
 import { abortableWait, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { schemaFromContract } from '../../../app/src/contract/platform'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	cloudflareArtifact,
 	cloudflareArtifactCodec,
@@ -752,6 +755,44 @@ describe('Cloudflare control provider', () => {
 		expect(calls).toEqual([])
 		expect(logs.join('\n')).toContain('reconcile-schema failed')
 		expect(logs.join('\n')).toContain('"vozka"')
+	})
+
+	test('an approved contract reconciles its own schema, never the one the runner reports (ADR-0050)', async () => {
+		const schemas: unknown[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			propustkaUrl: 'https://iam.example.com',
+			reconcileSchema: async (input) => {
+				schemas.push(input.schema)
+			},
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => ({ state: 'succeeded', iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[{"action":"*"}],"roles":{}}' } }),
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		const access = { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) }
+		const outcome = await provider.deploy({ ...input, dryRun: false, environment: { ...input.environment, access } })
+
+		expect(outcome).toMatchObject({ state: 'succeeded' })
+		expect(schemas).toEqual([access.schema])
+	})
+
+	test('a contract schema the runner reports without an approved contract fails the run without touching IAM', async () => {
+		const calls: string[] = []
+		const logs: string[] = []
+		const input = deployInput()
+		const outcome = await reconcilingProvider({ app: 'api', schemaJson: '{"scopes":[],"actions":[],"roles":{},"contract":true}' }, calls).deploy({
+			...input,
+			dryRun: false,
+			events: { ...input.events, log: (line) => logs.push(line) },
+		})
+
+		expect(outcome).toEqual({ state: 'failed' })
+		expect(calls).toEqual([])
+		expect(logs.join('\n')).toContain('comes only from the contract Control approved')
 	})
 
 	test('fails the run when the reported schema is malformed or oversized', async () => {
