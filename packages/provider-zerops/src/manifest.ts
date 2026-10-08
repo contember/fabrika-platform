@@ -458,6 +458,16 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		// A contract application is served only behind its endpoint table; behind gates it would answer 503.
 		throw new Error('invalid fabrika manifest: a contract application is protected by its endpoint table (`contractProxyTable(artifact)`), not gates')
 	}
+	const endpointTable = proxy !== undefined && 'endpoints' in proxy ? proxy : undefined
+	if (contract === undefined && (endpointTable !== undefined || schema?.contract === true)) {
+		// An endpoint table without the contract would deploy a contract application with an authored run section.
+		throw new Error('invalid fabrika manifest: a contract application carries its contract (`target.contract`), which locks its setup down')
+	}
+	if (contract !== undefined && endpointTable?.snapshot !== contract.digest) {
+		throw new Error(
+			'invalid fabrika manifest: a contract application is served behind the endpoint table of the same contract (`proxy: { upstream, ...contractProxyTable(artifact) }`)',
+		)
+	}
 	if (contract !== undefined) {
 		if (!LOCKED_APP_ID_PATTERN.test(id)) throw new Error('invalid fabrika manifest: a contract application id must match [a-z0-9][a-z0-9-]*')
 		applicationDatabaseUrl(importDocument.services, namespaceResources)

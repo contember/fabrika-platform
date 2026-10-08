@@ -26,6 +26,7 @@ const member = (
 			target: {
 				platform: 'zerops',
 				services: () => [{ hostname: appId, type: 'alpine/bun@1.3' }],
+				...(options.contract === true ? { contract: notesArtifact } : {}),
 				...(options.proxy === false
 					? {}
 					: { proxy: options.contract === true ? { upstream: `${appId}:3000`, ...TABLE } : { upstream: `${appId}:3000`, gates: GATES } }),

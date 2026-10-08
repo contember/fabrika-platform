@@ -2,7 +2,7 @@
 // runs. Of the authored setup only `build.base`, `build.os` and the SPA's `build.buildCommands` survive; the rest of
 // the build, the deploy gate and the whole `run` section are generated here. PURE — no network, no filesystem.
 
-import { canonicalArtifactJson, type ContractArtifact } from '@fabrika/auth-core'
+import { type ContractArtifact, contractDigest, FABRIKA_CONTRACT_DIGEST } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
 import { renderYaml } from './compile'
@@ -57,10 +57,6 @@ export const LOCKED_APP_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 
 export const CONTRACT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
-// The digest of the canonical artifact; the same bytes B2's application startup check hashes.
-const digestOf = (artifact: ContractArtifact): string =>
-	`sha256:${new Bun.CryptoHasher('sha256').update(canonicalArtifactJson(artifact)).digest('hex')}`
-
 const byName = <T extends { readonly name: string }>(left: T, right: T): number => left.name < right.name ? -1 : left.name > right.name ? 1 : 0
 
 /** The run facts of a contract. A contract without a health endpoint has nothing a readiness check can request. */
@@ -72,7 +68,7 @@ export function zeropsContractRun(artifact: ContractArtifact): ZeropsContractRun
 		)
 	}
 	return {
-		digest: digestOf(artifact),
+		digest: contractDigest(artifact),
 		readinessPath: health.path,
 		jobs: Object.entries(artifact.jobs).map(([name, job]) => ({ name, schedule: job.schedule })).sort(byName),
 	}
@@ -235,7 +231,7 @@ export function renderLockedSetup(
 	const probe = { port: ZEROPS_APPLICATION_PORT, path: contract.readinessPath }
 	const envVariables: Record<string, string> = {
 		PORT: String(ZEROPS_APPLICATION_PORT),
-		FABRIKA_CONTRACT_DIGEST: contract.digest,
+		[FABRIKA_CONTRACT_DIGEST]: contract.digest,
 		...(release === null ? {} : { FABRIKA_RELEASE: release }),
 		...(execution.databaseUrl === null ? {} : { FABRIKA_APP_DATABASE_URL: execution.databaseUrl }),
 	}

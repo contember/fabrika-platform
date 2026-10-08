@@ -1,3 +1,7 @@
+import { FABRIKA_IAM_APP_ID } from './app-environment'
+import { FABRIKA_CONTRACT_DIGEST } from './endpoint-digest'
+import { FABRIKA_IAM_ISSUER } from './environment'
+
 /**
  * The environment names only the platform writes into an application
  * ([ADR-0043](../../../docs/decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). Control refuses an
@@ -6,9 +10,9 @@
  */
 export const FRAMEWORK_VARIABLE_NAMES = [
 	'FABRIKA_RELEASE',
-	'FABRIKA_CONTRACT_DIGEST',
-	'FABRIKA_IAM_ISSUER',
-	'FABRIKA_IAM_APP_ID',
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_IAM_ISSUER,
+	FABRIKA_IAM_APP_ID,
 	'FABRIKA_OPERATIONS_DSN',
 	'FABRIKA_APP_ID',
 	'FABRIKA_ENVIRONMENT',

@@ -1,6 +1,7 @@
 import type { AppSchema } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
@@ -1010,7 +1011,11 @@ describe('the exposure read-back before activation', () => {
 describe('a contract application deploy', () => {
 	test('sends the generated execution descriptor with the contract digest and release as literals', async () => {
 		const contents = 'zerops:\n  - setup: api\n'
-		const config: ZeropsAppConfig = { ...app([API]), id: 'notes', target: { ...app([API]).target, contract: notesArtifact } }
+		const config: ZeropsAppConfig = {
+			...app([API]),
+			id: 'notes',
+			target: { ...app([API]).target, contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } },
+		}
 		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor(contents))
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		const result = await provider({

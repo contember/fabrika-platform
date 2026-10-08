@@ -1,5 +1,6 @@
 import { canonicalArtifactJson, type ContractArtifact } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import checkManifest from '../../../check/package.json'
@@ -28,6 +29,7 @@ const contractApp = (target: Partial<ZeropsAppConfig['target']> = {}, id = 'note
 		services: () => [DATABASE, API],
 		deployService: 'notesapi',
 		contract: notesArtifact,
+		proxy: { upstream: 'notesapi:3000', ...contractProxyTable(target.contract ?? notesArtifact) },
 		...target,
 	},
 })
@@ -187,6 +189,23 @@ describe('a contract application is refused at compile time', () => {
 
 	test('for a contract of another application', async () => {
 		await expect(compile(contractApp({}, 'other'))).rejects.toThrow('the contract declares app `notes`, but the config is app `other`')
+	})
+
+	test('unless it is served behind the endpoint table of the same contract', async () => {
+		const other: ContractArtifact = { ...notesArtifact, actions: { ...notesArtifact.actions, 'notes.export': 'Export notes' } }
+		const sameContract = 'endpoint table of the same contract'
+		await expect(compile(contractApp({ proxy: { upstream: 'notesapi:3000', ...contractProxyTable(other) } }))).rejects.toThrow(sameContract)
+		await expect(compile(contractApp({ proxy: undefined }))).rejects.toThrow(sameContract)
+		await expect(compile(contractApp({ proxy: { upstream: 'notesapi:3000', gates: { rules: [{ path: '/*', kind: 'human' }] } } }))).rejects
+			.toThrow(sameContract)
+	})
+
+	test('when it ships an endpoint table without its contract', async () => {
+		const withoutContract: ZeropsAppConfig = {
+			id: 'notes',
+			target: { platform: 'zerops', services: () => [API], proxy: { upstream: 'notesapi:3000', ...contractProxyTable(notesArtifact) } },
+		}
+		await expect(compile(withoutContract)).rejects.toThrow('carries its contract (`target.contract`)')
 	})
 
 	test('with two databases', async () => {
