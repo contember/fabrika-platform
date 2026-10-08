@@ -256,7 +256,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 					return { ok: false, reason: res.reason }
 				}
 				if (res.caller.type === undefined || isApplicationCaller(services, res.verifiedApp)) {
-					// An anonymous credential cannot revoke — there is no accountable principal.
+					// An anonymous credential has no accountable principal; an application issues no credentials.
 					return { ok: false, reason: 'not_allowed' }
 				}
 				const revoker = res.caller
@@ -305,7 +305,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 					return { ok: false, reason: res.reason }
 				}
 				if (res.caller.type === undefined || isApplicationCaller(services, res.verifiedApp)) {
-					// An anonymous credential cannot issue — delegation + audit require an accountable principal.
+					// Delegation + audit require an accountable principal; an application issues no credentials.
 					return { ok: false, reason: 'not_allowed' }
 				}
 				const issuer = res.caller
