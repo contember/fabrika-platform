@@ -44,7 +44,8 @@ describe('Operations boundary compatibility', () => {
 		})
 		expect(event?.tags).toEqual({ same: '2', null: 'null' })
 		expect(event?.sdkFingerprint).toEqual(['kept'])
-		expect(event?.raw).toBe(payload)
+		// The raw payload is a redacted copy; nothing in this one is redacted.
+		expect(event?.raw).toEqual(payload)
 		expect(event).not.toHaveProperty('release')
 		const detail = await parseEventDetail(JSON.stringify(payload), 'source', { get: async () => null })
 		expect(detail.exceptions.map(({ type, value, handled }) => ({ type, value, handled }))).toEqual([
