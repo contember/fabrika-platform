@@ -11,9 +11,15 @@ decided work or status.
 
 - [Operations plane](operations-plane.md) — broad target for runtime feedback,
   observability, alerting, and response beyond the initial Errors capability.
-- [Secure-by-default application runtime](secure-by-default-app-runtime.md) — mandatory
-  caller and permission on every endpoint, an access manifest, and approval of widening.
+- [Secure-by-default application runtime](secure-by-default-app-runtime.md) — one
+  pure-data contract per app, enforced per endpoint by the proxy, with approval of
+  every widening.
 - [Scoped database access](scoped-database-access.md) — `@fabrika/db` over Kysely:
-  per-table access policy, scoped handles, and app-owned Postgres migrations.
-- [Declarative application connectors](declarative-app-connectors.md) — typed data
-  exchange between applications, on behalf of the user, through the owner's proxy.
+  per-table access policy, stores reachable only through authorized refs, app-owned
+  Postgres migrations.
+- [Application file storage](app-file-storage.md) — files that belong to an object and
+  inherit its access; private buckets only.
+- [Scheduled jobs](app-scheduled-jobs.md) — cron jobs, each with its own narrow
+  credential and a platform-generated schedule; enqueued tasks later.
+- [Declarative application connectors](declarative-app-connectors.md) — typed, read-only
+  exports and imports between applications through the owner's proxy.
