@@ -9,7 +9,7 @@
  *                                 [--trusted-proxies 10.0.0.0/8,…]
  *
  * `--trusted-proxies` (or `FABRIKA_PROXY_TRUSTED_PROXIES`, so an operator can set it as a build
- * variable without a code change) is what turns `{http.request.client_ip}` from the socket peer into
+ * variable without a code change) is what turns `{http.vars.client_ip}` from the socket peer into
  * the real client. It is EMPTY by default on purpose — see `CaddyBuildOptions.trustedProxies`.
  */
 

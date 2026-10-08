@@ -76,7 +76,7 @@ the **balancer** as its socket peer, not the client. Whether the balancer
 forwards a client address, whether it drops a caller-supplied `X-Forwarded-For`
 prefix, and what source range it dials from are **all unconfirmed** — the public
 docs say nothing, and no live run has measured it. Fabrika therefore configures
-no Caddy `trusted_proxies` range, so `{http.request.client_ip}` is the balancer
+no Caddy `trusted_proxies` range, so `{http.vars.client_ip}` is the balancer
 and every client shares one abuse bucket. Settling it is a live-account question
 ([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)); until then do
 not promote a forwarded address to a limiter key.

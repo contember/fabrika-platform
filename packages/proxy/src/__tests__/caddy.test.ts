@@ -47,12 +47,21 @@ const MANIFEST: ProxyManifest = {
 
 const OPTIONS = { authUpstream: '127.0.0.1:9000' }
 
-function subrouteOf(route: CaddyRoute): CaddySubrouteHandler {
+function rawSubrouteOf(route: CaddyRoute): CaddySubrouteHandler {
 	const handler = route.handle[0]
 	if (handler === undefined || handler.handler !== 'subroute') {
 		throw new Error('expected a subroute')
 	}
 	return handler
+}
+
+/** The app's chain after its `Connection` refusal, which every chain starts with (tested on its own below). */
+function subrouteOf(route: CaddyRoute): CaddySubrouteHandler {
+	const [refusal, ...routes] = rawSubrouteOf(route).routes
+	if (refusal?.match?.[0]?.header_regexp?.['Connection'] === undefined) {
+		throw new Error('expected the chain to start with the Connection refusal')
+	}
+	return { handler: 'subroute', routes }
 }
 
 function proxyHandler(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
@@ -132,27 +141,50 @@ describe('the per-app chain is fail-closed by construction', () => {
 
 	test('every app route strips the client-assertable headers BEFORE anything else', () => {
 		for (const route of routes.slice(0, 2)) {
-			const first = subrouteOf(route).routes[0]?.handle[0]
+			const strip = subrouteOf(route).routes[0]?.handle
 			// The token, or a `public` path would carry a client's own to the app; the request id, which is
 			// written to IAM's auth log and audit trail; and every name a client address travels under, so
-			// the only one an upstream can read is the one this hop writes below. Deletes run BEFORE sets
-			// within one HeaderOps (caddyhttp/headers.go ApplyTo, v2.10.2), which is why both fit in one
+			// the only one an upstream can read is the one this hop writes below. Within one HeaderOps a
+			// named delete runs AFTER the set (caddyhttp/headers.go ApplyTo, v2.10.2), so the set is a second
 			// handler. The token and the request id are restored from the decision.
-			expect(first).toEqual({
-				handler: 'headers',
-				request: {
-					delete: [
-						PROXY_TOKEN_HEADER,
-						CLIENT_ADDRESS_HEADER,
-						ENDPOINT_HEADER,
-						DELEGATION_HEADER,
-						PROXY_SECRET_HEADER,
-						REQUEST_ID_HEADER,
-						...UNTRUSTED_FORWARD_HEADERS,
-					],
-					set: { [CLIENT_ADDRESS_HEADER]: ['{http.request.client_ip}'] },
+			expect(strip).toEqual([
+				{
+					handler: 'headers',
+					request: {
+						delete: [
+							PROXY_TOKEN_HEADER,
+							CLIENT_ADDRESS_HEADER,
+							ENDPOINT_HEADER,
+							DELEGATION_HEADER,
+							PROXY_SECRET_HEADER,
+							REQUEST_ID_HEADER,
+							...UNTRUSTED_FORWARD_HEADERS,
+						],
+					},
 				},
-			})
+				{ handler: 'headers', request: { set: { [CLIENT_ADDRESS_HEADER]: ['{http.vars.client_ip}'] } } },
+			])
+		}
+	})
+
+	test('a Connection header naming an asserted header is refused before anything else', () => {
+		// reverse_proxy deletes every header Connection names after the asserted ones are set (v2.10.2
+		// removeConnectionHeaders), so a client could strip the client address, the token or the endpoint.
+		for (const route of routes.slice(0, 2)) {
+			const first = rawSubrouteOf(route).routes[0]
+			expect(first?.handle).toEqual([{ handler: 'static_response', status_code: 400, body: 'bad request' }])
+			expect(first?.terminal).toBe(true)
+			const pattern = first?.match?.[0]?.header_regexp?.['Connection']?.pattern ?? ''
+			expect(pattern.startsWith('(?i)')).toBe(true)
+			const re = new RegExp(pattern.slice('(?i)'.length), 'i')
+			for (const header of [...FABRIKA_HOP_HEADERS, REQUEST_ID_HEADER]) {
+				expect(re.test(header)).toBe(true)
+				expect(re.test(`keep-alive, ${header.toLowerCase()}`)).toBe(true)
+				expect(re.test(`${header} ,Upgrade`)).toBe(true)
+			}
+			for (const harmless of ['keep-alive', 'Upgrade', 'close', 'X-Fabrika-Tokenized', 'x-request-identity']) {
+				expect(re.test(harmless)).toBe(false)
+			}
 		}
 	})
 
@@ -161,12 +193,15 @@ describe('the per-app chain is fail-closed by construction', () => {
 		// resolved in PrepareRequest, before any handler runs, from the socket peer and — only for a peer
 		// inside `trusted_proxies` — the client-IP header chain. So the injected value cannot be a
 		// caller's, and every name a caller could have used to smuggle one is deleted first.
-		const ops = subrouteOf(routes[0] as CaddyRoute).routes[0]?.handle[0]
-		if (ops === undefined || ops.handler !== 'headers') throw new Error('expected a headers handler')
+		const [ops, set] = subrouteOf(routes[0] as CaddyRoute).routes[0]?.handle ?? []
+		if (ops?.handler !== 'headers' || set?.handler !== 'headers') throw new Error('expected two headers handlers')
 		for (const spoofable of [CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS]) {
 			expect(ops.request?.delete).toContain(spoofable)
 		}
-		expect(ops.request?.set?.[CLIENT_ADDRESS_HEADER]).toEqual(['{http.request.client_ip}'])
+		// The set is never in the same HeaderOps as a delete of the same name, which would undo it.
+		expect(ops.request?.set).toBeUndefined()
+		expect(set.request?.delete).toBeUndefined()
+		expect(set.request?.set?.[CLIENT_ADDRESS_HEADER]).toEqual(['{http.vars.client_ip}'])
 		// Never copied back from the auth response either: the decision service is downstream of the edge
 		// and gets no vote on who the client was.
 		expect(JSON.stringify(proxyHandler(subrouteOf(routes[0] as CaddyRoute).routes[1]).handle_response))

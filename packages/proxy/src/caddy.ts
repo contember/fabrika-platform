@@ -65,9 +65,10 @@ import { isContractProxyApp, isProxyHost, type ProxyApp, type ProxyManifest } fr
  * resolved before handlers, the ingress strip below cannot affect it.
  *
  * With no `trusted_proxies` it IS the socket peer, which behind a balancer is the balancer — every
- * client collapses into one bucket, which is exactly today's behaviour and the safe fallback.
+ * client collapses into one bucket, which is exactly today's behaviour and the safe fallback. It is a
+ * request VAR (`ClientIPVarKey`); `{http.request.client_ip}` is no placeholder and is sent literally.
  */
-const CLIENT_IP_PLACEHOLDER = '{http.request.client_ip}'
+const CLIENT_IP_PLACEHOLDER = '{http.vars.client_ip}'
 
 // ── The subset of Caddy's JSON schema we emit (field names verified against v2.10.2) ──────────────
 
@@ -126,6 +127,7 @@ export type CaddyHandler =
 export interface CaddyMatcherSet {
 	host?: string[]
 	path?: string[]
+	header_regexp?: Record<string, { pattern: string }>
 	not?: CaddyMatcherSet[]
 	vars?: Record<string, string[]>
 }
@@ -183,7 +185,7 @@ export interface CaddyBuildOptions {
 	/** Health route path on `healthListen`. Default `/healthz`. */
 	healthPath?: string
 	/**
-	 * CIDR ranges of the balancer(s) in front of this proxy, so `{http.request.client_ip}` resolves to
+	 * CIDR ranges of the balancer(s) in front of this proxy, so `{http.vars.client_ip}` resolves to
 	 * the real client instead of the socket peer. **Empty by default, and that default is a decision:**
 	 * whether the Zerops project balancer appends a forwarded address a downstream may trust is a
 	 * live-account question nobody has settled, and trusting the wrong range turns the per-client limit
@@ -309,9 +311,11 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 /**
  * One app = one host-matched, terminal route whose subroute is a fixed three-step chain:
  *
- *   1. `headers` — DELETE the headers a client must not be able to assert from the inbound request,
- *      then SET the one coordinate only this hop can know. Deletes run before sets within one
- *      `HeaderOps` (`caddyhttp/headers.go` `ApplyTo`, v2.10.2), so the two live in one handler.
+ *   1. Refuse with 400 a `Connection` header that names a header this hop asserts
+ *      (`connectionNominationPattern`). Then `headers` twice — DELETE the headers a client must not be
+ *      able to assert from the inbound request, then SET the one coordinate only this hop can know. They
+ *      are two handlers because within one `HeaderOps` a named delete runs AFTER the set
+ *      (`caddyhttp/headers.go` `ApplyTo`, v2.10.2) and would delete the value just set.
  *
  *      Deleted: every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` — the TOKEN, the CLIENT ADDRESS,
  *      the endpoint, the delegation grant, the proxy secret), the REQUEST ID, and the caller's
@@ -351,13 +355,16 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 			handler: 'subroute',
 			routes: [
 				{
-					handle: [{
-						handler: 'headers',
-						request: {
-							delete: [...FABRIKA_HOP_HEADERS, REQUEST_ID_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
-							set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] },
-						},
-					}],
+					match: [{ header_regexp: { Connection: { pattern: connectionNominationPattern() } } }],
+					handle: [{ handler: 'static_response', status_code: 400, body: 'bad request' }],
+					terminal: true,
+				},
+				{
+					// Two handlers: within one `HeaderOps` Caddy runs a named delete AFTER the set.
+					handle: [
+						{ handler: 'headers', request: { delete: [...FABRIKA_HOP_HEADERS, REQUEST_ID_HEADER, ...UNTRUSTED_FORWARD_HEADERS] } },
+						{ handler: 'headers', request: { set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] } } },
+					],
 				},
 				...(isContractProxyApp(app) ? [] : (app.oauthResources ?? [])).map((resource): CaddyRoute => ({
 					match: [{ path: [new URL(resource.resourceMetadata).pathname] }],
@@ -411,6 +418,16 @@ function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHand
 			],
 		}],
 	}
+}
+
+/**
+ * A `Connection` value naming a header the proxy asserts. `reverse_proxy` deletes every header `Connection` names
+ * (`removeConnectionHeaders`, v2.10.2) after the asserted ones are already set and before its own header operations,
+ * so a client could otherwise strip the client address, the token or the endpoint on the way upstream.
+ */
+function connectionNominationPattern(): string {
+	const names = [...FABRIKA_HOP_HEADERS, REQUEST_ID_HEADER].map(escapeRe2).join('|')
+	return `(?i)(?:^|,)[ \\t]*(?:${names})[ \\t]*(?:,|$)`
 }
 
 /**

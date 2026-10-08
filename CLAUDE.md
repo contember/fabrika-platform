@@ -44,8 +44,10 @@ Suites that need a real backend **skip cleanly** when it is absent and say what 
 `FABRIKA_TEST_S3_*` (the S3 blob store) each print the `docker run` that supplies one;
 `FABRIKA_LIVE_ZEROPS_TOKEN` + `FABRIKA_LIVE_ZEROPS_PROJECT_ID` run the platform-facts table against a
 real Zerops account, which no container can stand in for — it creates and deletes throwaway services in
-that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. A green `bun test` with
-everything skipped proves nothing about any of the three — run them before trusting those halves.
+that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. `FABRIKA_TEST_CADDY_BIN` names a
+caddy 2.10.2 binary (copy it out of the `caddy:2.10.2-alpine` image) and runs the generated proxy chain in a real
+Caddy (`packages/proxy/src/__tests__/caddy.live.test.ts`). A green `bun test` with everything skipped proves
+nothing about any of them — run them before trusting those halves.
 
 `release:validate` enforces that every package is either `private: true` or declares
 `publishConfig.access: "public"`, and that no public package depends on a private one.

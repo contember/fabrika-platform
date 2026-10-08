@@ -509,7 +509,7 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		expect(serialized).toContain(
 			`"delete":["${PROXY_TOKEN_HEADER}","X-Fabrika-Client-Ip","X-Fabrika-Endpoint","X-Fabrika-Delegation","X-Fabrika-Proxy-Secret","X-Request-Id","X-Forwarded-For","CF-Connecting-IP"]`,
 		)
-		expect(serialized).toContain('"set":{"X-Fabrika-Client-Ip":["{http.request.client_ip}"]}')
+		expect(serialized).toContain('"set":{"X-Fabrika-Client-Ip":["{http.vars.client_ip}"]}')
 		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.
 		expect(config.admin.disabled).toBe(true)
 	})

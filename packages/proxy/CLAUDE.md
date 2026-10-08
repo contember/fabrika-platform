@@ -22,6 +22,7 @@ bun run dev           # run src/main.ts directly
 bun run build         # generate caddy.json + compile the fabrika-proxy binary (musl, static)
 bun run build:check   # the same against fixtures/empty.manifest.json
 bun test              # deny-matrix.test.ts is the authorization truth table — keep it exhaustive
+FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the chain in a real caddy 2.10.2
 ```
 
 ## Invariants
@@ -71,6 +72,11 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
   `Authorization`, so a key the proxy did not read never reaches the app. A gate app keeps it: IAM's
   `/admin/*` reads its own bearer.
+- **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).
+  Within one `HeaderOps` a named delete runs AFTER the set, so the strip and the client-address set are two
+  handlers. `reverse_proxy` deletes every header `Connection` names after the asserted headers are set, so a
+  `Connection` value naming one (`FABRIKA_HOP_HEADERS` or the request id) is a 400 before anything else. The
+  client address is the request var `{http.vars.client_ip}`; an unknown placeholder is sent as literal text.
 - **A contract app's upstream hop carries its proxy secret on Zerops** (ADR-0022 rule 5): step 3 sets
   `X-Fabrika-Proxy-Secret` from `{env.<proxySecretVariable(app.id)>}`, so the secret is in no generated
   file. An unset variable sends an empty secret, which the application refuses; the auth service only
@@ -117,7 +123,7 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
 | Caddy (`appRoute`, step 1) | **deleted, then set** from `{client_ip}`      | deleted                        | deleted                    |
 | app / IAM upstream         | trust it — nothing else could have written it | the previous hop's socket peer | absent                     |
 
-- **`{http.request.client_ip}` is the socket peer unless `trusted_proxies` names the balancer.** Caddy
+- **`{http.vars.client_ip}` is the socket peer unless `trusted_proxies` names the balancer.** Caddy
   resolves it once in `PrepareRequest`, before any handler, so the strip above cannot affect it. With
   no range configured every client behind the balancer shares one bucket — which is exactly what
   happened before this existed, and the only safe fallback. `CaddyBuildOptions.trustedProxies` /
