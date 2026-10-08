@@ -176,7 +176,7 @@ describe('POST /admin/rpc typed operations', () => {
 			return getPrincipal(id)
 		}
 
-		const response = await fetchRpc(h, request)
+		const response = await createIamApp({ requestIdHeader: 'X-Request-Id' }).fetch(request, env(h), exec)
 		const row = h.sqlite.query<{ request_id: string }, []>("SELECT request_id FROM audit_events WHERE action = 'iam.principal.invite'").get()
 
 		expect(response.status).toBe(200)

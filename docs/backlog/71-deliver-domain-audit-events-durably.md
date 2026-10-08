@@ -24,9 +24,9 @@ flow follows the same established audit semantics as the other Control mutations
 authorization and secret durability remain valid; this item does not make that feature privately
 blocked or justify a one-off audit mechanism inside it.
 
-[Item 57](./57-stop-the-caller-choosing-its-own-audit-correlation-id.md) concerns the provenance and
-bound of a request correlation value. This item concerns durable, exactly-once-visible delivery of a
-domain event and needs a separate stable event id.
+The request correlation value (`request_id`) is a different thing: IAM bounds it and its composition
+roots name where it may come from (`packages/iam/src/request-id.ts`). This item concerns durable,
+exactly-once-visible delivery of a domain event and needs a separate stable event id.
 
 ## Approach / acceptance
 

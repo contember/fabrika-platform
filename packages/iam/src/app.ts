@@ -7,7 +7,7 @@ import { readClientAddress } from './client-address'
 import { handleDeviceAuthorization } from './device-http'
 import type { Env } from './env'
 import { handleOAuth, OAUTH_METADATA_PATH } from './oauth-http'
-import { requestId } from './request-id'
+import { readRequestId } from './request-id'
 import { createIamRpc } from './rpc'
 import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath } from './rpc-http'
 import { buildServices, type Services } from './services'
@@ -37,6 +37,11 @@ export interface IamAppOptions {
 	 * buckets — never a guess. See `src/client-address.ts`.
 	 */
 	readonly clientAddressHeader?: string
+	/**
+	 * The ONE header this composition's ingress overwrites with its own correlation id. Omitted means
+	 * every request gets a generated id. See `src/request-id.ts`.
+	 */
+	readonly requestIdHeader?: string
 }
 
 /**
@@ -52,7 +57,7 @@ export function createIamApp(options: IamAppOptions = {}) {
 			request,
 			exec,
 			services: buildServices(env),
-			requestId: requestId(request),
+			requestId: readRequestId(request, options.requestIdHeader),
 			clientAddress: readClientAddress(request, options.clientAddressHeader),
 			auth: anonymousAuth(),
 			admin: null,
@@ -61,14 +66,14 @@ export function createIamApp(options: IamAppOptions = {}) {
 			...(options.health === true
 				? [route.all<IamAppContext, '/healthz'>('/healthz', () => Response.json({ status: 'ok' }))]
 				: []),
-			route.all('/.well-known/jwks.json', (ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress)),
+			route.all('/.well-known/jwks.json', (ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId)),
 			route.all(OAUTH_METADATA_PATH, (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
 			route.all('/oauth/*path', (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
 			route.all('/auth', (ctx) => handleIamAuth(ctx, options)),
 			route.all('/auth/*path', (ctx) => handleIamAuth(ctx, options)),
 			route.rpc('/admin/rpc', adminRpcRouter, { use: [adminRpcAuth] }),
-			route.all('/admin', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec)),
-			route.all('/admin/*path', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec)),
+			route.all('/admin', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
+			route.all('/admin/*path', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
 			route.all('/rpc', (ctx) => handleIamRpc(ctx, options)),
 			route.all('/rpc/*method', (ctx) => handleIamRpc(ctx, options)),
 			route.all('/*path', () =>
@@ -105,7 +110,7 @@ async function handleIamAuth(ctx: IamAppContext, options: IamAppOptions): Promis
 	if (isMintPath(pathname)) {
 		return handleMintHttp(ctx.request, createIamRpc(ctx.env, ctx.exec), options.proxyKey ?? '')
 	}
-	return handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress)
+	return handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId)
 }
 
 function handleIamRpc(ctx: IamAppContext, options: IamAppOptions): Promise<Response> {
@@ -119,6 +124,6 @@ function handleIamRpc(ctx: IamAppContext, options: IamAppOptions): Promise<Respo
 /**
  * The bare application, with no composition options at all — routing only. Neither entrypoint serves
  * it: `src/index.ts` and `src/node/server.ts` each build their own, because each has to name the one
- * header its own ingress guarantees (see `IamAppOptions.clientAddressHeader`).
+ * headers its own ingress guarantees (see `IamAppOptions.clientAddressHeader` and `requestIdHeader`).
  */
 export const iamApp = createIamApp()

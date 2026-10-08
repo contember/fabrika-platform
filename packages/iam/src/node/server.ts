@@ -27,10 +27,12 @@ export function createFetchHandler(runtime: Runtime): (request: Request) => Prom
 		proxyKey: runtime.config.proxyKey,
 		health: true,
 		// This process is not publicly routed (ADR-0022 rule 1): the Caddy proxy is the only thing that
-		// can reach the port, and it deletes a caller's copy before writing its own. Same trust the
-		// request-id header already runs on, and the same one that fails safe — an installation whose
-		// balancer hides the client makes every client share one bucket, not a forgeable one.
+		// can reach the port, and it deletes a caller's copy before writing its own. It fails safe — an
+		// installation whose balancer hides the client makes every client share one bucket, not a forgeable one.
 		clientAddressHeader: CLIENT_ADDRESS_HEADER,
+		// `REQUEST_ID_HEADER` in `@fabrika/proxy-core`: the proxy deletes a caller's copy at ingress and
+		// injects its own, on the same trust as the client address above.
+		requestIdHeader: 'X-Request-Id',
 	})
 	return createBunHandler(app, runtime.env, { executionContext: runtime.ctx }).fetch
 }

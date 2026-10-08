@@ -460,3 +460,32 @@ describe('the IAM Worker environment', () => {
 		expect((await worker.getJwks()).keys.length).toBeGreaterThan(0)
 	})
 })
+
+// Backlog 57: the Worker is edge-routed, so no proxy strips a caller's `X-Request-Id` before it gets here.
+describe('the Worker root chooses the audit correlation id', () => {
+	async function localLoginRequestIds(headers: Record<string, string>): Promise<string[]> {
+		const db = freshDb()
+		const ctx = makeCtx()
+		const worker = makeEntrypoint(ctx, { ...makeEnv(db), LOCAL_DEV_LOGIN: 'true' })
+
+		const response = await worker.fetch(new Request('http://localhost:18191/auth/login', { headers }))
+		await settle(ctx)
+
+		expect(response.status).toBe(302)
+		return authLogRows(db).map((row) => row.request_id)
+	}
+
+	test('writes the edge-written cf-ray, not a caller-supplied X-Request-Id', async () => {
+		const ids = await localLoginRequestIds({ 'X-Request-Id': 'caller-chosen', 'cf-ray': '8f1c2a3b4c5d6e7f-PRG' })
+
+		expect(ids).toEqual(['8f1c2a3b4c5d6e7f-PRG'])
+	})
+
+	test('generates an id when only a caller-supplied X-Request-Id is present', async () => {
+		const ids = await localLoginRequestIds({ 'X-Request-Id': 'caller-chosen' })
+
+		expect(ids).toHaveLength(1)
+		expect(ids[0]).not.toBe('caller-chosen')
+		expect(ids[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+	})
+})

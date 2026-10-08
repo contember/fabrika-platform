@@ -28,7 +28,7 @@ import { resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
 import { logError } from '../log'
-import { requestId } from '../request-id'
+import { generateRequestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import type { Services } from '../services'
 import { getSigner, verifyAccessToken } from '../signing'
@@ -49,8 +49,8 @@ export const IAM_APP = 'propustka'
  * The admin credential read off the request: an `Authorization: Bearer` holding a `px_` admin or
  * provisioning key, or a proxy-injected access JWT forwarded by a first-party gateway.
  */
-export function extractCredentials(request: Request, correlationId?: string): { bearer: string | null; requestId: string } {
-	return { bearer: readBearer(request.headers.get('Authorization')), requestId: correlationId ?? requestId(request) }
+export function extractCredentials(request: Request, requestId: string): { bearer: string | null; requestId: string } {
+	return { bearer: readBearer(request.headers.get('Authorization')), requestId }
 }
 
 /** Read the token out of an `Authorization: Bearer <token>` header. Null when absent/non-bearer. */
@@ -141,16 +141,18 @@ export async function resolveAdmin(
 /**
  * Handle a `/admin/*` PROVISIONING request. The caller is resolved from its bearer and every handler runs only after `can('iam.admin')`
  * passes in-Worker (scope-less → global only). Returns 401 when the caller can't be authenticated,
- * 403 when authenticated but not an admin.
+ * 403 when authenticated but not an admin. `requestId` is the correlation id the composition root
+ * allowed (`src/request-id.ts`); a caller that supplies none gets a generated one.
  */
 export async function handleAdmin(
 	request: Request,
 	services: Services,
 	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	ctx: RequestContext,
+	requestId: string = generateRequestId(),
 ): Promise<Response> {
 	const url = new URL(request.url)
-	const creds = extractCredentials(request)
+	const creds = extractCredentials(request, requestId)
 
 	// Backstop: resolution and the handlers touch D1, which can throw on a transient
 	// error. Map any unexpected throw to a 500 (never leak internals) so the admin

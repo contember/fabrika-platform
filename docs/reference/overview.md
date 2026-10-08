@@ -359,8 +359,13 @@ UI. The proxy is stateless and horizontally scalable. Zerops owns one proxy per
 deployment namespace; the current Cloudflare app graph owns one proxy root per
 app environment. Cloudflare application children have no routes and disable
 `workers.dev`. For correlation, the proxy preserves or creates `X-Request-Id`
-and copies it onto the allowed upstream request. IAM prefers that value, then
-`cf-ray`, then a locally generated UUID for audit records.
+and copies it onto the allowed upstream request. IAM does not choose which header
+it trusts for its audit records: each composition root names the one its ingress
+overwrites. The Worker names `cf-ray`, because it is edge-routed and no proxy
+strips a caller's `X-Request-Id` in front of it. The Bun process names the proxy's
+`X-Request-Id`. An accepted value is at most 64 characters from `[A-Za-z0-9._:-]`.
+IAM replaces any other value with a generated UUID and does not truncate it. The
+same rule applies to the `requestId` that apps pass to `IamRpc`.
 
 On Zerops the proxy manifest is a baked deploy artefact. Before an app deploy, the
 control plane compiles every registered app manifest assigned to that namespace,

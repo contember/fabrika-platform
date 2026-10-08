@@ -62,6 +62,7 @@ export async function handleCallback(
 	services: Services,
 	env: AuthEnv,
 	ctx: RequestContext,
+	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
@@ -126,6 +127,7 @@ export async function handleCallback(
 		email: identity.email,
 		redirect: safeRedirect(flight.redirect, services.config),
 		reason: 'login',
+		requestId,
 		clearOidc: true,
 		handoff: handoffOf(reading),
 	})

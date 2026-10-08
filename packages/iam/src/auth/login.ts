@@ -12,7 +12,13 @@ import { startOidc } from './oidc'
 import { type AuthEnv } from './oidc-flight'
 import { currentSession, issueSession } from './sessions'
 
-export async function handleLogin(request: Request, services: Services, env: AuthEnv, ctx: RequestContext): Promise<Response> {
+export async function handleLogin(
+	request: Request,
+	services: Services,
+	env: AuthEnv,
+	ctx: RequestContext,
+	requestId: string,
+): Promise<Response> {
 	const url = new URL(request.url)
 	const reading = await readHandoff(
 		services,
@@ -40,7 +46,7 @@ export async function handleLogin(request: Request, services: Services, env: Aut
 	}
 
 	if (services.config.localDevLogin) {
-		return handleLocalLogin(request, services, ctx, redirect, handoff)
+		return handleLocalLogin(request, services, ctx, requestId, redirect, handoff)
 	}
 	if (services.config.authentication.password.enabled) {
 		return loginPage({
@@ -57,6 +63,7 @@ async function handleLocalLogin(
 	request: Request,
 	services: Services,
 	ctx: RequestContext,
+	requestId: string,
 	redirect: string,
 	handoff: Handoff | null = null,
 ): Promise<Response> {
@@ -72,6 +79,7 @@ async function handleLocalLogin(
 		authenticationMethod: 'local_dev',
 		redirect,
 		reason: 'local_login',
+		requestId,
 		handoff,
 	})
 }

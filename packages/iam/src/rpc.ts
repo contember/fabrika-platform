@@ -43,6 +43,7 @@ import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
 import { issueKey, revokeKey } from './issue'
 import { logError } from './log'
+import { acceptRequestId } from './request-id'
 import { buildServices } from './services'
 import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
@@ -64,7 +65,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * proxy's own surface — see `IamHandoffRpc` for why it is not part of `IamRpc`. Fails closed
 		 * like every mint front: an unusable code is a decided `{ ok: false }`, never a throw.
 		 */
-		async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
+		async exchangeAuthCode(raw: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
+			const input = withAcceptedRequestId(raw)
 			try {
 				const { result, principalId } = await exchangeAuthCode(services, input)
 				ctx.waitUntil(
@@ -99,7 +101,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * short-lived token signed; the SDK then authorizes locally off it until it expires. Never
 		 * throws — fails closed to `invalid_session` (the SDK then bounces the user to /auth/login).
 		 */
-		async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
+		async mintToken(raw: MintTokenInput): Promise<MintTokenResult> {
+			const input = withAcceptedRequestId(raw)
 			try {
 				const { result, principalId } = await mintToken(services, env, input)
 				ctx.waitUntil(
@@ -135,7 +138,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * front over the same resolve→sign core as `mintToken`. Validates the credential, resolves its
 		 * effective permissions, signs a short-lived token. Never throws — fails closed to `invalid_key`.
 		 */
-		async mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
+		async mintFromKey(raw: MintFromKeyInput): Promise<MintFromKeyResult> {
+			const input = withAcceptedRequestId(raw)
 			try {
 				const { result, principalId, credentialId } = await mintFromKey(services, env, input)
 				ctx.waitUntil(
@@ -178,7 +182,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * caller — a failed audit write must not fail or delay the user-facing op. The
 		 * `app` here is self-asserted (no token on this call); audit labeling only.
 		 */
-		audit(event: AuditInput): Promise<void> {
+		audit(raw: AuditInput): Promise<void> {
+			const event = withAcceptedRequestId(raw)
 			ctx.waitUntil(
 				services.repositories.audit
 					.writeAuditEvent({
@@ -200,7 +205,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			return Promise.resolve()
 		},
 
-		async listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult> {
+		async listPrincipals(raw: ListPrincipalsInput): Promise<ListPrincipalsResult> {
+			const input = withAcceptedRequestId(raw)
 			try {
 				// Resolve the CALLER from the forwarded native credential — never a self-asserted principal.
 				// The app we list is the credential's verified app, so an operator only ever enumerates the
@@ -230,7 +236,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			}
 		},
 
-		async revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
+		async revokeKey(raw: RevokeKeyInput): Promise<RevokeKeyResult> {
+			const input = withAcceptedRequestId(raw)
 			try {
 				// Resolve + authorize the REVOKER from the forwarded native credential — like the issue path.
 				const res = await resolveCaller(services, env, { app: input.app, credential: input.credential, requestId: input.requestId })
@@ -278,7 +285,8 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			}
 		},
 
-		async issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
+		async issueKey(raw: IssueKeyInput): Promise<IssueKeyResult> {
+			const input = withAcceptedRequestId(raw)
 			try {
 				// Resolve the ISSUER from the forwarded native credential.
 				const res = await resolveCaller(services, env, { app: input.app, credential: input.credential, requestId: input.requestId })
@@ -333,4 +341,12 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 			}
 		},
 	}
+}
+
+/**
+ * The caller's `requestId` held to the same rule as a header one (`src/request-id.ts`). A value that
+ * fails is replaced, not refused: `audit` is fire-and-forget, and refusing would drop the event.
+ */
+function withAcceptedRequestId<T extends { requestId: string }>(input: T): T {
+	return { ...input, requestId: acceptRequestId(input.requestId) }
 }

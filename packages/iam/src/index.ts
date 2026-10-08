@@ -47,14 +47,14 @@ import { createIamRpc } from './rpc'
  */
 
 /**
- * The one composition fact this root supplies: which header carries the client address.
+ * The composition facts this root supplies: which headers carry the client address and the request id.
  *
  * IAM's Worker holds its OWN Custom Domain — it is not behind a proxy Worker — so the hop in front of
- * it is Cloudflare's edge, which writes `CF-Connecting-IP` on every request and replaces a caller's.
- * That makes it the only address here a limiter may key on; see `src/client-address.ts` for why IAM
- * refuses to pick one itself.
+ * it is Cloudflare's edge, which writes `CF-Connecting-IP` and `cf-ray` on every request and replaces
+ * a caller's. No proxy strips `X-Request-Id` here, so it is caller-chosen and never trusted. See
+ * `src/client-address.ts` and `src/request-id.ts` for why IAM refuses to pick either itself.
  */
-const workerApp = createIamApp({ clientAddressHeader: 'CF-Connecting-IP' })
+const workerApp = createIamApp({ clientAddressHeader: 'CF-Connecting-IP', requestIdHeader: 'cf-ray' })
 export interface WorkerBindings
 	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_API_KEY'>
 {

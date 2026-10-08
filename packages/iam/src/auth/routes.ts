@@ -4,6 +4,7 @@
  */
 import type { RequestContext } from '../env'
 import { logoutPage } from '../password-pages'
+import { generateRequestId } from '../request-id'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { methodNotAllowed, safeRedirect } from './http'
@@ -19,6 +20,9 @@ import { handleLogout } from './sessions'
  * identity, never a credential, and never stored in the clear. Defaulting to `null` is deliberate: a
  * caller that has not been given a trustworthy coordinate gets the account and deployment-wide buckets
  * alone, which is what existed before, rather than one keyed on a guess.
+ *
+ * `requestId` is the correlation id the composition root allowed (`src/request-id.ts`); a caller that
+ * supplies none gets a generated one, never a header read here.
  */
 export async function handleAuth(
 	request: Request,
@@ -26,6 +30,7 @@ export async function handleAuth(
 	env: AuthEnv,
 	ctx: RequestContext,
 	clientAddress: string | null = null,
+	requestId: string = generateRequestId(),
 ): Promise<Response> {
 	const url = new URL(request.url)
 
@@ -33,24 +38,24 @@ export async function handleAuth(
 		return handleJwks(env)
 	}
 	if (url.pathname === '/auth/login') {
-		if (request.method === 'POST') return handlePasswordLogin(request, services, ctx, clientAddress)
-		if (request.method === 'GET') return handleLogin(request, services, env, ctx)
+		if (request.method === 'POST') return handlePasswordLogin(request, services, ctx, clientAddress, requestId)
+		if (request.method === 'GET') return handleLogin(request, services, env, ctx, requestId)
 		return methodNotAllowed()
 	}
 	if (url.pathname === '/auth/oidc/start') {
 		return request.method === 'GET' ? handleOidcStart(request, services, env) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/callback') {
-		return request.method === 'GET' ? handleCallback(request, services, env, ctx) : methodNotAllowed()
+		return request.method === 'GET' ? handleCallback(request, services, env, ctx, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/forgot-password') {
 		return handleForgotPassword(request, services, ctx, clientAddress)
 	}
 	if (url.pathname === '/auth/password/enroll') {
-		return handlePasswordAction(request, services, ctx, 'enrollment')
+		return handlePasswordAction(request, services, ctx, 'enrollment', requestId)
 	}
 	if (url.pathname === '/auth/password/reset') {
-		return handlePasswordAction(request, services, ctx, 'reset')
+		return handlePasswordAction(request, services, ctx, 'reset', requestId)
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

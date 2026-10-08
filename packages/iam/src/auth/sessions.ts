@@ -3,7 +3,6 @@ import { sessionUsable } from '../auth'
 import { type AuthenticationMethod } from '../db'
 import { type RequestContext } from '../env'
 import { randomToken } from '../oidc'
-import { requestId } from '../request-id'
 import { hashToken } from '../secret'
 import { type Services } from '../services'
 import { clearCookie, readCookie, serializeCookie } from './cookies'
@@ -45,6 +44,8 @@ export async function issueSession(
 		authenticationMethod?: AuthenticationMethod
 		redirect: string
 		reason: string
+		/** The correlation id the composition root allowed; see `src/request-id.ts`. */
+		requestId: string
 		clearOidc?: boolean
 		/** When set, land on the app's callback with a code instead of on `redirect` (ADR-0022). */
 		handoff?: Handoff | null
@@ -62,7 +63,7 @@ export async function issueSession(
 	})
 	ctx.waitUntil(
 		services.repositories.audit.writeAuthLog({
-			requestId: requestId(request),
+			requestId: input.requestId,
 			app: 'propustka',
 			kind: 'authenticate',
 			principalId: input.principalId,

@@ -7,7 +7,6 @@ import { type PasswordActionPurpose } from '../password-db'
 import { forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
 import { PASSWORD_MAX_CODE_POINTS, validatePassword } from '../password-policy'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
-import { requestId } from '../request-id'
 import { hashToken } from '../secret'
 import { type Config, type Services } from '../services'
 import { handoffOf, handoffRedirectOr, loginHandoffFields, readHandoff } from './handoff'
@@ -79,6 +78,7 @@ export async function handlePasswordLogin(
 	services: Services,
 	ctx: RequestContext,
 	clientAddress: string | null,
+	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
@@ -149,6 +149,7 @@ export async function handlePasswordLogin(
 			authenticationMethod: 'password',
 			redirect,
 			reason: 'password_login',
+			requestId,
 			handoff,
 		})
 	}
@@ -161,7 +162,7 @@ export async function handlePasswordLogin(
 	}
 	ctx.waitUntil(
 		services.repositories.audit.writeAuthLog({
-			requestId: requestId(request),
+			requestId,
 			app: 'propustka',
 			kind: 'authenticate',
 			principalId: lookup.status === 'found' ? lookup.principal.id : null,
@@ -263,6 +264,7 @@ export async function handlePasswordAction(
 	services: Services,
 	ctx: RequestContext,
 	purpose: PasswordActionPurpose,
+	requestId: string,
 ): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
 	if (request.method === 'GET') return setPasswordPage({ purpose })
@@ -294,6 +296,7 @@ export async function handlePasswordAction(
 		authenticationMethod: 'password',
 		redirect: services.config.issuer,
 		reason: purpose === 'enrollment' ? 'password_enrollment' : 'password_reset',
+		requestId,
 	})
 }
 
