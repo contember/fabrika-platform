@@ -58,7 +58,8 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
 - `db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`, the name the
   checker's `migration-name` rule accepts, and never overwrites.
 - `db migrate` is the template's `run.initCommands` entry. It validates the files before
-  it connects, over ONE connection (the advisory lock is session state).
+  it connects, over ONE connection (the advisory lock is session state). It applies the
+  framework's tables (`@fabrika/db/migrations`, bundle `fabrika`) before `db/migrations/`.
 - `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema;
   `--verify` writes nothing and fails when the file differs.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.

@@ -47,7 +47,9 @@ Read this before moving a service onto this driver.
   checksum column, bundle `app`, lock key from SHA-256(`fabrika-db:<appId>`). Changing a derivation
   orphans every deployed ledger or lets two containers migrate at once; the tests pin each one. Only an
   application plan (`plan.application`) records checksums, sets `lock_timeout`/`statement_timeout` and
-  may name a schema-qualified ledger; service ledgers keep `(bundle, name, applied_at)`.
+  may name a schema-qualified ledger; service ledgers keep `(bundle, name, applied_at)`. The optional
+  `framework` bundle (the framework's `fabrika_*` tables, which the CLI passes from `@fabrika/db/migrations`)
+  runs before `app` in the same ledger and under the same checksum rule.
 - **The runner owns each migration's transaction and settings.** `migration-sql.ts` refuses a file with
   a top-level transaction-control or setting statement before any SQL runs (`validateBundle`, every
   plan); `guardCheck` then fails the transaction when the file ended it or loosened `lock_timeout`,

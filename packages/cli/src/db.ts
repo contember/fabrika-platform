@@ -1,4 +1,5 @@
 import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
+import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import {
 	applicationDatabaseSchema,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
@@ -20,7 +21,7 @@ export const DB_USAGE = `fabrika db — an application's Postgres schema
 
 Usage:
   fabrika db new <slug>           Write ${MIGRATIONS_DIR}/<UTC YYYYMMDDHHMMSS>_<slug>.sql; the slug is lowercase snake_case.
-  fabrika db migrate              Apply ${MIGRATIONS_DIR} to the application's schema app_<id>.
+  fabrika db migrate              Apply the framework's tables, then ${MIGRATIONS_DIR}, to the application's schema app_<id>.
   fabrika db codegen [--verify]   Write ${SCHEMA_FILE} from the migrated schema; --verify only fails when it is stale.
 
 Run from the application root. \`migrate\` and \`codegen\` read FABRIKA_APP_ID and FABRIKA_APP_DATABASE_URL from
@@ -88,7 +89,11 @@ const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	refuseArguments('migrate', argv)
 	const appId = required(deps.source, 'FABRIKA_APP_ID')
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
-	const migrations = definePostgresApplicationMigrations({ appId, directory: join(deps.cwd, MIGRATIONS_DIR) })
+	const migrations = definePostgresApplicationMigrations({
+		appId,
+		directory: join(deps.cwd, MIGRATIONS_DIR),
+		framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS },
+	})
 	const files = migrations.read()
 	migrations.plan(files)
 	// One connection: the advisory lock is session state.

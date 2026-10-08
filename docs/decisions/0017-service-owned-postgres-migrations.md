@@ -115,7 +115,10 @@ carries three additions that service plans do not:
   `search_path`. The ledger is `app_<id>.fabrika_migrations` with the columns
   `(bundle, name, checksum, applied_at)`; the bundle is `app`. Only an
   application's plan may name a schema-qualified ledger, and only in its own
-  schema. Tables named `fabrika_*` belong to the framework.
+  schema. Tables named `fabrika_*` belong to the framework: `fabrika db migrate`
+  applies them (`@fabrika/db/migrations`) as the bundle `fabrika`, in the same
+  ledger and before the bundle `app`, so an application's migration may
+  reference them.
 - **Each applied migration has a checksum**, the SHA-256 of the file's text.
   The runner compares every applied file before it applies anything, and a
   changed file fails the run. A ledger row without a file is the database

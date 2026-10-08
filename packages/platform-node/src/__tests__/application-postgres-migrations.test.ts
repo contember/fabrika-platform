@@ -164,6 +164,24 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 		expect(results).toEqual(files.map((file) => ({ bundle: 'app', name: file.name, checksum: migrationChecksum(file.sql) })))
 	})
 
+	test('applies the framework bundle before the application bundle, in the same ledger and under the same checksums', async () => {
+		const appId = `t${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+		const framework = { bundle: 'fabrika', migrations: [migration('0001_framework.sql', 'CREATE TABLE fabrika_things (id TEXT PRIMARY KEY)')] }
+		const migrations = definePostgresApplicationMigrations({ appId, directory: '/unused', framework })
+		schemas.push(migrations.schema)
+		const db = PostgresDatabase.connect(requireUrl(), { max: 1 })
+		openDatabases.push(db)
+		// The application's first migration may reference a framework table: the framework bundle runs first.
+		const files = [migration('20261008120000_init.sql', 'CREATE TABLE notes (thing TEXT REFERENCES fabrika_things (id))')]
+		expect(await migrations.apply(db, files)).toEqual(['fabrika/0001_framework.sql', 'app/20261008120000_init.sql'])
+		const changed = definePostgresApplicationMigrations({
+			appId,
+			directory: '/unused',
+			framework: { bundle: 'fabrika', migrations: [migration('0001_framework.sql', 'CREATE TABLE fabrika_things (id TEXT)')] },
+		})
+		expect((await failureOf(changed.apply(db, files))).message).toContain('fabrika/0001_framework.sql')
+	})
+
 	test('a changed applied migration fails the run before anything else is applied', async () => {
 		const { migrations, db } = application()
 		await migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)')])

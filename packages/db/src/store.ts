@@ -33,6 +33,7 @@ import {
 } from './description'
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { fileTables } from './file-tables'
+import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
 import { linksPredicate, linkValues } from './links'
 import {
@@ -826,8 +827,55 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			return async (dimension, id) => locateObject(models, bound, dimension, id)
 		},
 		files: fileTables(models, () => runtimeOf(connection)),
+		framework: freeze({
+			inboxProblems: (form: string, fields: readonly string[]) => inboxProblems(models, form, fields),
+			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>) => appendToInbox(models, runtimeOf(connection), form, values),
+			webhooks: webhookTables(() => runtimeOf(connection)),
+		}),
 	})
 	return database
+}
+
+/** The inbox table of `form`: the one table whose scope is `{ inbox: form }`. */
+function inboxOf(models: TableModels, form: string): TableModel | undefined {
+	const names = ownKeys(models)
+	for (let index = 0; index < names.length; index++) {
+		const model = modelOf(models, names[index] ?? '')
+		if (model?.scope.mode === 'inbox' && model.scope.form === form) {
+			return model
+		}
+	}
+	return undefined
+}
+
+function inboxProblems(models: TableModels, form: string, fields: readonly string[]): readonly string[] {
+	const inbox = inboxOf(models, form)
+	if (inbox === undefined) {
+		return [`no table in src/db/tables.ts is the inbox of '${form}' (scope: { inbox: '${form}', read })`]
+	}
+	const problems: string[] = []
+	for (let index = 0; index < fields.length; index++) {
+		const field = fields[index] ?? ''
+		if (!inSet(inbox.columns, field)) {
+			problems[problems.length] = `the input field '${field}' of '${form}' is not a column of its inbox ${inbox.name}`
+		}
+	}
+	return problems
+}
+
+/** One row of the form's declared fields; an inbox answers nothing, so the form reads nothing back. */
+async function appendToInbox(models: TableModels, runtime: DataLayerRuntime, form: string, values: Readonly<Record<string, unknown>>): Promise<void> {
+	const inbox = inboxOf(models, form)
+	if (inbox === undefined) {
+		throw new QueryRefusedError(`no table is the inbox of ${form}`)
+	}
+	const row = readValues(values, inbox.columns, 'insert', inbox.name)
+	await sessionOf(runtime.database).run(insertNode(inbox.name, row, undefined), {
+		root: 'InsertQueryNode',
+		table: inbox.name,
+		joins: {},
+		scope: undefined,
+	})
 }
 
 /** The table that owns `dimension`: the one dimension table scoped by it (`defineTables` refuses a second). */

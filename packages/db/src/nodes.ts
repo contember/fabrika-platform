@@ -198,14 +198,15 @@ export function aggregateNode(table: string, columns: AggregateColumns, conditio
 	return Object.freeze(node)
 }
 
-export function insertNode(table: string, values: ReadonlyMap<string, Primitive | null>, answer: ReturningNode): InsertQueryNode {
+/** `answer` is `undefined` only for an inbox append, which answers nothing. */
+export function insertNode(table: string, values: ReadonlyMap<string, Primitive | null>, answer: ReturningNode | undefined): InsertQueryNode {
 	const names = [...values.keys()]
 	const node: InsertQueryNode = {
 		kind: 'InsertQueryNode',
 		into: TableNode.create(table),
 		columns: names.map((name) => ColumnNode.create(name)),
 		values: ValuesNode.create([ValueListNode.create(names.map((name) => ValueNode.create(values.get(name) ?? null)))]),
-		returning: answer,
+		...(answer === undefined ? {} : { returning: answer }),
 	}
 	return Object.freeze(node)
 }

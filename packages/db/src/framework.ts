@@ -3,12 +3,13 @@
 // hands the framework the locator its access check uses. Browser- and Worker-safe: the Worker adapter imports `boot`.
 
 import type { FileTables } from './file-tables'
-import { frameworkSideOf, type Locator } from './registry'
+import { frameworkSideOf, type FrameworkTables, type Locator } from './registry'
 import type { DataLayerRuntime } from './store'
 
 export { fileTableName } from './file-table-sql'
 export type { FileCollectionSpec, FileCollectionTable, FileTables, LiveFile, PendingFile, RemovableFile } from './file-tables'
-export type { Locator } from './registry'
+export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
+export type { FrameworkTables, Locator } from './registry'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */
 export function isScopedDatabase(value: unknown): boolean {
@@ -34,4 +35,16 @@ export function fileTablesOf(value: unknown): FileTables {
 		throw new TypeError('not a data layer scoped(tables) created')
 	}
 	return side.files
+}
+
+/**
+ * The framework's own writes over the layer `scoped(tables)` created: inbox appends for `c.form` and the webhook
+ * tables. Each operation needs the layer bound first. Throws for any other value.
+ */
+export function frameworkTablesOf(value: unknown): FrameworkTables {
+	const side = frameworkSideOf(value)
+	if (side === undefined) {
+		throw new TypeError('not a data layer scoped(tables) created')
+	}
+	return side.framework
 }

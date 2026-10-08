@@ -31,6 +31,11 @@ export interface PostgresApplicationMigrationsConfig {
 	readonly directory: string
 	readonly lockTimeoutMs?: number
 	readonly statementTimeoutMs?: number
+	/**
+	 * The framework's own tables (`fabrika_*`, `@fabrika/db/migrations`), applied as their own bundle before the
+	 * application's, in the same ledger and under the same checksum rule.
+	 */
+	readonly framework?: { readonly bundle: string; readonly migrations: readonly PostgresMigration[] }
 }
 
 export interface PostgresApplicationMigrations {
@@ -78,7 +83,10 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 		return definePostgresMigrationPlan({
 			ledgerTable: `${schema}.${APPLICATION_MIGRATION_LEDGER}`,
 			lockKey,
-			bundles: [{ name: APPLICATION_MIGRATION_BUNDLE, migrations }],
+			bundles: [
+				...(config.framework === undefined ? [] : [{ name: config.framework.bundle, migrations: config.framework.migrations }]),
+				{ name: APPLICATION_MIGRATION_BUNDLE, migrations },
+			],
 			application: {
 				schema,
 				lockTimeoutMs: config.lockTimeoutMs ?? DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,

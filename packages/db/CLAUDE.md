@@ -13,23 +13,25 @@ bun run typecheck
 bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
-| Module              | What it owns                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `builtins.ts`       | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                         |
-| `capability.ts`     | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                          |
-| `policy.ts`         | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.                  |
-| `tables.ts`         | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                     |
-| `description.ts`    | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                   |
-| `nodes.ts`          | Kysely operation nodes built from a description and a scope predicate.                                                    |
-| `guard.ts`          | The allowlist over the final operation tree, run immediately before compiling.                                            |
-| `database.ts`       | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).                   |
-| `store.ts`          | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                          |
-| `registry.ts`       | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                  |
-| `framework.ts`      | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`; browser-safe. |
-| `file-table-sql.ts` | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                               |
-| `file-tables.ts`    | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                     |
-| `links.ts`          | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                           |
-| `codegen.ts`        | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                    |
+| Module                | What it owns                                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `builtins.ts`         | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                              |
+| `capability.ts`       | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                               |
+| `policy.ts`           | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.                                       |
+| `tables.ts`           | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                          |
+| `description.ts`      | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                        |
+| `nodes.ts`            | Kysely operation nodes built from a description and a scope predicate.                                                                         |
+| `guard.ts`            | The allowlist over the final operation tree, run immediately before compiling.                                                                 |
+| `database.ts`         | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).                                        |
+| `store.ts`            | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                               |
+| `registry.ts`         | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                       |
+| `framework.ts`        | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`; browser-safe. |
+| `file-table-sql.ts`   | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                    |
+| `file-tables.ts`      | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                          |
+| `links.ts`            | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                |
+| `framework-tables.ts` | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                          |
+| `migrations.ts`       | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
+| `codegen.ts`          | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                                         |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
@@ -39,9 +41,11 @@ An application calls `scoped(tables)` once (its own `src/db/database.ts`), defin
 `Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
 `requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request, through
 `@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
-table's containment columns. Not built yet:
-`@fabrika/db/testing`, and stores for `reference` and `inbox` tables (`defineTables` accepts their policies; no store
-reaches them).
+table's containment columns. `frameworkTablesOf` gives the framework the writes no store makes: a `c.form`
+appends one row to its inbox table (the declared columns only, answering nothing), and `c.webhook` keeps its
+bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. `fabrika db migrate`
+applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle. Not
+built yet: `@fabrika/db/testing`, a store for `reference` tables, and reading an inbox.
 
 ## Invariants
 
@@ -65,6 +69,13 @@ reaches them).
   owner `Ref`'s chain in their transaction. Only a removed, orphaned or stale pending row is ever purged, after its
   object. Timestamps are bound as ISO strings: a bound `Date` reaches Postgres as `Date#toString()` through this
   driver.
+  `framework-tables.ts` needs `bun` too (it reads a unique violation off `SQL.PostgresError`); `framework.ts` imports
+  only its types, and `store.ts` builds the implementation.
+- **A delivery id is recorded by its primary key.** Two concurrent copies of one delivery insert the same
+  `(binding_id, delivery_id)`; exactly one succeeds and the other answers "already recorded". Never replace this with
+  a read before the insert.
+- **The framework migrations are migration identity** (ADR-0017): never edit an entry of `FRAMEWORK_MIGRATIONS`,
+  add one.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);
   `tables.test.ts` compares them. Change both together.
 

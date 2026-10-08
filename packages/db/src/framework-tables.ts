@@ -1,0 +1,134 @@
+// The framework's side of its own tables (`@fabrika/db/migrations`): webhook bindings and the delivery ids that
+// make a replay a no-op. Only `@fabrika/app`'s webhook runtime reaches them, through `frameworkTablesOf`. Every
+// statement is a guarded tree like a store's, keyed by equalities on the framework table itself.
+
+import { SQL } from 'bun'
+import type { OperationNode } from 'kysely'
+import { sessionOf } from './database'
+import { QueryRefusedError } from './errors'
+import type { GuardContext } from './guard'
+import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
+import { acknowledgement, allOf, deleteNode, equals, insertNode, locateNode, scopedWhere } from './nodes'
+import type { DataLayerRuntime } from './store'
+
+/** One webhook binding: the scope value it reaches, the provider account it accepts, and its signing secret. */
+export interface WebhookBinding {
+	readonly id: string
+	/** The webhook mount's name. */
+	readonly webhook: string
+	readonly scope: { readonly type: string; readonly value: string }
+	/** `installation:<id>` or `repository:<id>`: the GitHub account a delivery must name. */
+	readonly account: string
+	readonly secret: string
+}
+
+export interface NewWebhookBinding extends WebhookBinding {
+	readonly createdBy: string
+	readonly createdAt: number
+}
+
+export interface WebhookTables {
+	createBinding(binding: NewWebhookBinding): Promise<void>
+	/** The binding `id` of `webhook`, or `null`. */
+	binding(webhook: string, id: string): Promise<WebhookBinding | null>
+	/** Removes the binding when it belongs to `webhook` and `scope`; `false` when there was none. */
+	removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }): Promise<boolean>
+	/** Records a delivery id; `false` when the binding already received it. */
+	recordDelivery(bindingId: string, deliveryId: string, receivedAt: number): Promise<boolean>
+	/** Forgets a delivery whose handler failed, so the provider's redelivery runs it again. */
+	forgetDelivery(bindingId: string, deliveryId: string): Promise<void>
+}
+
+const BINDING_COLUMNS = ['id', 'webhook', 'scope_type', 'scope_value', 'account', 'secret']
+const UNIQUE_VIOLATION = '23505'
+
+function guard(root: GuardContext['root'], table: string, scope: OperationNode | undefined): GuardContext {
+	return { root, table, joins: {}, scope }
+}
+
+function text(row: Readonly<Record<string, unknown>>, column: string): string {
+	const value = row[column]
+	if (typeof value !== 'string') {
+		throw new QueryRefusedError(`${WEBHOOK_BINDINGS_TABLE}.${column} came back as ${typeof value}`)
+	}
+	return value
+}
+
+function isUniqueViolation(error: unknown): boolean {
+	return error instanceof SQL.PostgresError && error.errno === UNIQUE_VIOLATION
+}
+
+export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
+	const session = () => sessionOf(runtime().database)
+	return Object.freeze({
+		async createBinding(binding: NewWebhookBinding): Promise<void> {
+			const values = new Map<string, string | number>([
+				['id', binding.id],
+				['webhook', binding.webhook],
+				['scope_type', binding.scope.type],
+				['scope_value', binding.scope.value],
+				['account', binding.account],
+				['secret', binding.secret],
+				['created_by', binding.createdBy],
+				['created_at', binding.createdAt],
+			])
+			const node = insertNode(WEBHOOK_BINDINGS_TABLE, values, acknowledgement(WEBHOOK_BINDINGS_TABLE, 'id', undefined))
+			await session().run(node, guard('InsertQueryNode', WEBHOOK_BINDINGS_TABLE, undefined))
+		},
+
+		async binding(webhook: string, id: string): Promise<WebhookBinding | null> {
+			const scope = allOf([equals(WEBHOOK_BINDINGS_TABLE, 'id', id), equals(WEBHOOK_BINDINGS_TABLE, 'webhook', webhook)])
+			const [row] = await session().run<Readonly<Record<string, unknown>>>(
+				locateNode(WEBHOOK_BINDINGS_TABLE, BINDING_COLUMNS, scope),
+				guard('SelectQueryNode', WEBHOOK_BINDINGS_TABLE, scope),
+			)
+			if (row === undefined) {
+				return null
+			}
+			return Object.freeze({
+				id: text(row, 'id'),
+				webhook: text(row, 'webhook'),
+				scope: Object.freeze({ type: text(row, 'scope_type'), value: text(row, 'scope_value') }),
+				account: text(row, 'account'),
+				secret: text(row, 'secret'),
+			})
+		},
+
+		async removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }): Promise<boolean> {
+			const predicate = allOf([
+				equals(WEBHOOK_BINDINGS_TABLE, 'id', id),
+				equals(WEBHOOK_BINDINGS_TABLE, 'webhook', webhook),
+				equals(WEBHOOK_BINDINGS_TABLE, 'scope_type', scope.type),
+				equals(WEBHOOK_BINDINGS_TABLE, 'scope_value', scope.value),
+			])
+			const removed = await session().run(
+				deleteNode(WEBHOOK_BINDINGS_TABLE, scopedWhere(undefined, predicate), 'id'),
+				guard('DeleteQueryNode', WEBHOOK_BINDINGS_TABLE, predicate),
+			)
+			return removed.length > 0
+		},
+
+		async recordDelivery(bindingId: string, deliveryId: string, receivedAt: number): Promise<boolean> {
+			const values = new Map<string, string | number>([['binding_id', bindingId], ['delivery_id', deliveryId], ['received_at', receivedAt]])
+			const node = insertNode(WEBHOOK_DELIVERIES_TABLE, values, acknowledgement(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', undefined))
+			try {
+				await session().run(node, guard('InsertQueryNode', WEBHOOK_DELIVERIES_TABLE, undefined))
+				return true
+			} catch (error) {
+				// The primary key decides between two concurrent copies of one delivery: exactly one insert wins.
+				if (isUniqueViolation(error)) {
+					return false
+				}
+				throw error
+			}
+		},
+
+		async forgetDelivery(bindingId: string, deliveryId: string): Promise<void> {
+			const predicate = allOf([equals(WEBHOOK_DELIVERIES_TABLE, 'binding_id', bindingId), equals(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', deliveryId)])
+			await session().run(
+				deleteNode(WEBHOOK_DELIVERIES_TABLE, scopedWhere(undefined, predicate), 'delivery_id'),
+				guard('DeleteQueryNode', WEBHOOK_DELIVERIES_TABLE, predicate),
+			)
+		},
+	})
+}

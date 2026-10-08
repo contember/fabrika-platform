@@ -35,6 +35,11 @@
 			"types": "./src/framework.ts",
 			"default": "./src/framework.ts"
 		},
+		"./migrations": {
+			"bun": "./src/migrations.ts",
+			"types": "./src/migrations.ts",
+			"default": "./src/migrations.ts"
+		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",
