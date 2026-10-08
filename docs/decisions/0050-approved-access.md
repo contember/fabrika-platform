@@ -102,9 +102,10 @@ Each environment has a `protected` flag, a column of Control's `app_envs`. `prod
 default; every other environment is not. Changing the flag requires `access.approve` from a human user
 principal, the same rule as approving (section 5). Control's audit log records every change.
 
-On an unprotected environment (staging, an MCP authoring target) a change applies at once. When the
-same commit is deployed to a protected environment, Control classifies it again against that
-environment's active snapshot.
+Unprotected environments do not wait. Every environment with `protected = true` requires approval
+for a widening, whatever its name or role. Staging and MCP authoring targets are unprotected by
+default, so a change applies there at once. When the same commit is deployed to a protected
+environment, Control classifies it again against that environment's active snapshot.
 
 Staging must not hold production data. This is a rule for operators; the platform does not enforce it.
 
@@ -136,8 +137,8 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
 
 - An agent can no longer widen production access silently. A widening on `prod` waits until a human
   reads the plain-language lines and approves.
-- A removal and a code-only change deploy without a prompt. Staging and MCP authoring targets never
-  wait.
+- A removal and a code-only change deploy without a prompt. Unprotected environments, including
+  staging and MCP authoring targets by default, do not wait.
 - The first deploy to a protected environment always waits: against the empty snapshot, every item is
   an addition.
 - An agent cannot unprotect an environment to avoid the prompt: the flag change needs the same human
@@ -168,8 +169,8 @@ environment's active snapshot. Publishing an older run's snapshot again is not a
   to approve without reading.
 - **Recognize harmless additions automatically.** Deferred: it needs a reachability classifier. v1
   gives it up and treats every addition as a widening.
-- **Protect every environment.** Rejected: staging and MCP authoring targets must apply at once, or the
-  authoring loop stalls.
+- **Protect every environment by default.** Rejected: staging and MCP authoring targets must apply at
+  once by default, or the authoring loop stalls. A human can still protect any environment.
 - **Let the deploy permission approve.** Rejected: every operator holds `deploy.*`, and the builder key
   holds `deploy.trigger`.
 - **Let a service principal, the builder key or an MCP token approve.** Rejected: the agent holds those
