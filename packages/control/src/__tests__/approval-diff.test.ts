@@ -5,29 +5,8 @@ import { readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess, pathsOverlap } from '../approval/diff'
 import { type AccessSnapshot, EMPTY_SNAPSHOT, type MigrationEntry } from '../approval/snapshot'
+import { BASE, edited } from './helpers/contracts'
 
-const BASE = `import { defineContract } from '@fabrika/app/contract'
-import { z } from 'zod/v4'
-
-const Note = z.strictObject({ id: z.uuid(), title: z.string() })
-
-export const contract = defineContract({
-	app: 'notes',
-	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
-	actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes', 'notes.delete': 'Delete notes' },
-	roles: {
-		owner: { grants: ['notes.read', 'notes.write', 'notes.delete'], member: { scope: 'workspace', assignableBy: ['owner'] } },
-		editor: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } },
-	},
-}, (c) => ({
-	api: c.rpc('/api', { callers: ['human'] }, {
-		get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),
-		remove: c.mutation({ input: z.strictObject({ id: z.uuid() }), output: z.strictObject({ id: z.uuid() }), access: { action: 'notes.delete', on: 'note', from: 'id' } }),
-	}),
-	health: c.health('/healthz'),
-	app: c.spa('/', { dir: 'dist/app', access: { member: true } }),
-}))
-`
 
 const NOTES_TABLE: TablePolicyArtifact = {
 	scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },
@@ -37,11 +16,6 @@ const NOTES_TABLE: TablePolicyArtifact = {
 	version: null,
 	createdBy: null,
 	columns: { secret: { read: 'notes.delete' } },
-}
-
-const edited = (search: string, replacement: string, text = BASE): string => {
-	if (!text.includes(search)) throw new Error(`the base has no '${search}'`)
-	return text.replace(search, replacement)
 }
 
 function snapshot(
