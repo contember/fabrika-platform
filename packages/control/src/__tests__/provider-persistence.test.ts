@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { parseProviderJson, serializeProviderJson } from '../db/runs'
-import { createHarness, queryRows } from './helpers/harness'
+import { createHarness } from './helpers/harness'
 import { fixtureNamespaceWrite, fixtureRuns, makeFakeLock } from './helpers/lock'
 
 const targetJson = JSON.stringify({ provider: 'harbor', version: 2, payload: { region: 'eu-west' } })
@@ -14,8 +14,6 @@ const appEnvironment = (appId: string, env: string) => ({
 	providerTargetJson: targetJson,
 	providerArtifactJson: artifactJson,
 })
-
-const rowValue = (row: Record<string, unknown> | undefined, key: string): unknown => row?.[key]
 
 describe('generic provider persistence', () => {
 	test('round-trips a third provider without changing the schema or query surface', async () => {

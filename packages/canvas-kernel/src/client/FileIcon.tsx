@@ -1,5 +1,3 @@
-import React from 'react'
-
 interface FileIconProps {
 	name: string
 	type: 'file' | 'dir'

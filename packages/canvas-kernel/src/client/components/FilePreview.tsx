@@ -1,5 +1,6 @@
 import { ActiveViewCtx, SessionContext } from '#canvas/runtime'
-import React, { useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
+import { pageHighlighter } from '../pageGlobals'
 import { filePreviewResponseSchema } from '../persistenceSchemas'
 
 interface FilePreviewProps {
@@ -74,7 +75,7 @@ export function FilePreview({ path, lines, __content }: FilePreviewProps) {
 	// Highlight after content loads
 	useEffect(() => {
 		const el = codeRef.current
-		const hljs = (window as any).hljs
+		const hljs = pageHighlighter()
 		if (!el || !hljs || !content) return
 		el.removeAttribute('data-highlighted')
 		el.className = language ? `language-${language}` : ''

@@ -36,7 +36,6 @@ import type {
 	RunDto,
 	RunLogResponse,
 	RunTailResponse,
-	SetSecretValueRequest,
 	StartGitHubSourceConnectionRequest,
 	StartGitHubSourceConnectionResponse,
 	TriggerDeployRequest,

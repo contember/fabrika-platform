@@ -4,7 +4,7 @@ import { shareLinkState } from '../access/lib/format'
 import { Icon } from '../components/Icon'
 import { Chip, namespaceLamp, RunStatus, Status, StatusLamp } from '../components/Status'
 import { EmptyState } from '../components/Table'
-import { api, type AppDto, type DeploymentNamespaceDto, type RunDto } from '../lib/api'
+import { api, type DeploymentNamespaceDto, type RunDto } from '../lib/api'
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
 import { type IamAuditEventDto, type IamSnapshot, iamSnapshot } from '../lib/iam'
 

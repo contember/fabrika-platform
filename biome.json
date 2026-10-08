@@ -28,11 +28,11 @@
 				"useArrowFunction": "off"
 			},
 			"correctness": {
-				"noUnusedImports": "off",
+				"noUnusedImports": "error",
 				"noChildrenProp": "off",
 				"noUnusedFunctionParameters": "off",
 				"noUnusedPrivateClassMembers": "off",
-				"noUnusedVariables": "off",
+				"noUnusedVariables": "error",
 				"noEmptyPattern": "off",
 				"useParseIntRadix": "off",
 				"useExhaustiveDependencies": "off",
@@ -52,7 +52,7 @@
 			"suspicious": {
 				"noTemplateCurlyInString": "off",
 				"noShadowRestrictedNames": "off",
-				"noExplicitAny": "off",
+				"noExplicitAny": "error",
 				"noConfusingVoidType": "off",
 				"noArrayIndexKey": "off",
 				"noAssignInExpressions": "off",

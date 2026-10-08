@@ -1,6 +1,6 @@
 import { useAnnotations, useResponseRegistration } from '#canvas/runtime'
 import { autoResizeTextarea } from '@fabrika/annotations'
-import React, { useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ResponseNote } from './ResponseNote'
 
 /** Free text input from user */

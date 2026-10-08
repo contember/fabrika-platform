@@ -1,6 +1,6 @@
 import { type AnnotationContextValue, type AnnotationState, useAnnotations } from '@fabrika/annotations/runtime'
 import { afterEach, describe, expect, test } from 'bun:test'
-import React, { act } from 'react'
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnnotationProvider } from './AnnotationProvider'
 import { mountContainer } from './testing/dom'

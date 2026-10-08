@@ -1,5 +1,4 @@
 import { autoResizeTextarea } from '@fabrika/annotations'
-import React from 'react'
 
 /** Seamless note input for response components */
 export function ResponseNote({ note, onChange }: { show?: boolean; note: string; onToggle?: () => void; onChange: (n: string) => void }) {

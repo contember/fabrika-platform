@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react'
+import { type ComponentType, createContext, useContext } from 'react'
 
 /**
  * What the annotation surface needs from the host serving it.
@@ -20,7 +20,12 @@ export interface CanvasHost {
 	 *  into the void. Required, not optional, so no host can be silent about it. */
 	uploadUrl: (() => string) | null
 	/** Fetch and `import()` a compiled canvas module. */
-	loadCanvasModule: (filename: string, revision?: number) => Promise<any>
+	loadCanvasModule: (filename: string, revision?: number) => Promise<CanvasModule>
+}
+
+/** What the canvas compiler emits: one module whose default export renders the canvas. */
+export interface CanvasModule {
+	default: ComponentType
 }
 
 /** Local mode carries the session id as the `/s/:id` path suffix. */

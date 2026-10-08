@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react'
+import { pageHighlighter } from '../pageGlobals'
 
 interface CodeBlockProps {
 	language?: string
@@ -11,7 +12,7 @@ export function CodeBlock({ language, children }: CodeBlockProps) {
 
 	useEffect(() => {
 		const el = codeRef.current
-		const hljs = (window as any).hljs
+		const hljs = pageHighlighter()
 		if (!el || !hljs) return
 		// Reset previous highlighting
 		el.removeAttribute('data-highlighted')

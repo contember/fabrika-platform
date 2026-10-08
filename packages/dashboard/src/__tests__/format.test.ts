@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fmtAgo, fmtDuration, qs, shortRef, shortSha } from '../lib/format'
+import { fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
 
 // Pure formatting helpers used across the dashboard. No DOM — just the deterministic transforms.
 
@@ -42,18 +42,6 @@ describe('fmtDuration', () => {
 		expect(fmtDuration(null, 100)).toBe('—')
 		expect(fmtDuration(100, null)).toBe('—')
 		expect(fmtDuration(undefined, undefined)).toBe('—')
-	})
-})
-
-describe('qs', () => {
-	test('builds a query string, skipping empty/null/undefined values', () => {
-		expect(qs({ app: 'acme', env: '', limit: 50, before: null, cursor: undefined })).toBe('?app=acme&limit=50')
-	})
-	test('is empty when nothing meaningful is set', () => {
-		expect(qs({ a: '', b: null, c: undefined })).toBe('')
-	})
-	test('url-encodes values', () => {
-		expect(qs({ env: 'a b' })).toBe('?env=a+b')
 	})
 })
 

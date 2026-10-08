@@ -1,5 +1,3 @@
-import React from 'react'
-
 interface TableProps {
 	headers: string[]
 	rows: string[][]

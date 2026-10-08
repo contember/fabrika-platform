@@ -1,5 +1,5 @@
 import { SessionContext } from '#canvas/runtime'
-import React, { useContext, useState } from 'react'
+import { useContext, useState } from 'react'
 
 interface ImageProps {
 	src: string

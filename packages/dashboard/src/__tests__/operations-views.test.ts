@@ -1,33 +1,9 @@
 import type { ActivityItem, DisplayFrame } from '@fabrika/operations-contract'
-import type { OperationsIssueSummaryDto } from '@fabrika/operations-contract/operator-api'
 import { describe, expect, test } from 'bun:test'
 import { fmtDate } from '../lib/format'
 import { activityPayloadLabel, frameLocation } from '../operations/views/ErrorDetail'
 import { DEFAULT_ISSUE_FILTERS, issueQuery, trendPoints } from '../operations/views/Errors'
 import { aggregateHealth } from '../routes/operations/health/index'
-
-const issue: OperationsIssueSummaryDto = {
-	id: 'opaque-issue-id',
-	source: {
-		id: 'opaque-source-id',
-		appId: 'worker-api',
-		environment: 'production',
-		serviceKey: 'default',
-		displayName: 'Worker API',
-		publicOrigin: 'https://worker.example.test',
-		enabled: true,
-	},
-	title: 'Cannot read properties of undefined',
-	culprit: 'handleJob',
-	level: 'error',
-	status: 'open',
-	assignedTo: null,
-	regressedAt: null,
-	firstSeen: 1_700_000_000_000,
-	lastSeen: 1_700_000_100_000,
-	count: 12,
-	trend: [1, 3, 8],
-}
 
 describe('issue views', () => {
 	test('builds a bounded server-side query from visible filters', () => {

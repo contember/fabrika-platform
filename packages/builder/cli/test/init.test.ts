@@ -36,7 +36,6 @@ test('init is idempotent: never clobbers existing artifacts', () => {
 	fx = makeFixture(false)
 	scaffold(fx.root, { profile: 'cf-lightweight', sessionId: 's_first' })
 
-	const cfgPath = join(fx.root, '.fabrika', 'config.json')
 	const briefPath = join(fx.root, '.fabrika', 'intent', 'brief.md')
 	writeFileSync(briefPath, '# my brief')
 

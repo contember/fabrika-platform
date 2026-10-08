@@ -124,7 +124,6 @@ const SECTION_2026_08_05 = 'Verified live (2026-08-05) — the user-data write p
 const SECTION_OVERRIDE = '`override` is a name-collision escape, not an update — docs/reference/zerops-platform.md:298'
 const SECTION_SUBDOMAIN = 'An import document cannot establish a subdomain — docs/reference/zerops-platform.md:429'
 const SECTION_SUBDOMAIN_NAME = '`zeropsSubdomain` is a NAME, not a state — docs/reference/zerops-platform.md:461'
-const SECTION_PROXY_FIRST = 'Verified live (2026-08-08) — a proxy before it fronts anything — docs/reference/zerops-platform.md:477'
 const SECTION_SERVICES_IMPORT =
 	'Verified live (2026-08-10) — a services-only import into an operator-created project — docs/reference/zerops-platform.md:505'
 const SECTION_BUILD_SOURCE = 'Verified live (2026-08-11) — where a build source lives — docs/reference/zerops-platform.md:543'

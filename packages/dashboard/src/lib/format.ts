@@ -54,16 +54,3 @@ export function shortSha(sha: string | null | undefined): string {
 export function shortRef(ref: string): string {
 	return ref.replace(/^refs\/(heads|tags)\//, '')
 }
-
-/** Build a query string from an object, skipping empty / undefined / null values. */
-export function qs(params: Record<string, string | number | null | undefined>): string {
-	const search = new URLSearchParams()
-	for (const [key, value] of Object.entries(params)) {
-		if (value === null || value === undefined) continue
-		const str = String(value).trim()
-		if (str === '') continue
-		search.set(key, str)
-	}
-	const out = search.toString()
-	return out ? `?${out}` : ''
-}

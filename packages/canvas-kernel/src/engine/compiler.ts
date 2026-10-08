@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { parse as parseMermaid } from 'mermaid-parser-bundle'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
-import { type ComponentChildren, Fragment, h } from 'preact'
+import { type ComponentChildren, type ComponentType, Fragment, h, isValidElement, type Key } from 'preact'
 import renderToString from 'preact-render-to-string'
 import { assertCanvasFileReadable, type AssertReadable, CanvasFileAdmissionError, readCanvasFile } from './file-admission'
 
@@ -85,15 +85,31 @@ const { ${Object.keys(components).join(', ')} } = C;
 // and actually render the component tree.  Any runtime error (undefined vars,
 // broken template literals, …) is caught and reported back to the CLI.
 
-/** jsxDEV(type, props, key, isStaticChildren, source, self) → VNode */
-function mockJsxDEV(type: any, props: any, key?: any) {
-	const { children, ...rest } = props || {}
-	return h(type, { ...rest, key }, children)
-}
-
 interface StubProps {
 	children?: ComponentChildren
 	[key: string]: unknown
+}
+
+/** jsxDEV(type, props, key, isStaticChildren, source, self) → VNode */
+function mockJsxDEV(type: ComponentType<StubProps> | string, props: StubProps | null, key?: Key) {
+	const { children, ...rest } = props ?? {}
+	return h(type, { ...rest, key }, children)
+}
+
+function isObject(value: unknown): value is object {
+	return typeof value === 'object' && value !== null
+}
+
+function isIterable(value: unknown): value is Iterable<unknown> {
+	return isObject(value) && Symbol.iterator in value && typeof value[Symbol.iterator] === 'function'
+}
+
+function errorMessage(error: unknown): string | undefined {
+	return isObject(error) && 'message' in error && typeof error.message === 'string' ? error.message : undefined
+}
+
+function childArray<T>(children: T | T[]): T[] {
+	return Array.isArray(children) ? children : [children]
 }
 
 /** Passthrough component — just renders its children */
@@ -117,8 +133,8 @@ let collectedMermaidSources: string[] = []
 
 /** Names whose stub does more than check props, so a manifest entry cannot
  *  describe them. Hooks return shapes that survive destructuring. */
-const SPECIAL_STUBS: Record<string, any> = {
-	Mermaid: ({ children }: any) => {
+const SPECIAL_STUBS: Record<string, unknown> = {
+	Mermaid: ({ children }: StubProps) => {
 		const source = typeof children === 'string' ? children : String(children ?? '')
 		if (source.trim()) collectedMermaidSources.push(source.trim())
 		return null
@@ -127,8 +143,8 @@ const SPECIAL_STUBS: Record<string, any> = {
 	useAnnotations: () => ({ annotations: [], addAnnotation: () => {} }),
 }
 
-function buildStubs(components: CanvasComponents): Record<string, any> {
-	const stubs: Record<string, any> = {}
+function buildStubs(components: CanvasComponents): Record<string, unknown> {
+	const stubs: Record<string, unknown> = {}
 	for (const [name, spec] of Object.entries(components)) {
 		const special = SPECIAL_STUBS[name]
 		stubs[name] = special ?? (spec.requiredProps ? validatingStub(name, spec.requiredProps) : Stub)
@@ -139,32 +155,35 @@ function buildStubs(components: CanvasComponents): Record<string, any> {
 const MOCK_REACT = {
 	createElement: h,
 	Fragment,
-	useState: (init: any) => [init, () => {}],
+	useState: <T>(init: T) => [init, () => {}],
 	useEffect: () => {},
-	useRef: (init: any) => ({ current: init }),
-	useMemo: (fn: any) => fn(),
-	useCallback: (fn: any) => fn,
-	useReducer: (r: any, init: any) => [init, () => {}],
+	useRef: <T>(init: T) => ({ current: init }),
+	useMemo: <T>(fn: () => T) => fn(),
+	useCallback: <T>(fn: T) => fn,
+	useReducer: <S>(_reducer: unknown, init: S) => [init, () => {}],
 	useContext: () => ({}),
 	createContext: () => ({ Provider: Stub, Consumer: Stub }),
 	useLayoutEffect: () => {},
 	useImperativeHandle: () => {},
 	useDebugValue: () => {},
-	useDeferredValue: (v: any) => v,
-	useTransition: () => [false, (fn: any) => fn()],
+	useDeferredValue: <T>(v: T) => v,
+	useTransition: () => [false, (fn: () => void) => fn()],
 	useId: () => 'mock',
-	useSyncExternalStore: (sub: any, get: any) => get(),
-	memo: (c: any) => c,
-	forwardRef: (c: any) => c,
-	lazy: (c: any) => c,
-	Children: { map: (c: any, fn: any) => (Array.isArray(c) ? c : [c]).map(fn), toArray: (c: any) => (Array.isArray(c) ? c : [c]) },
+	useSyncExternalStore: <T>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
+	memo: <T>(c: T) => c,
+	forwardRef: <T>(c: T) => c,
+	lazy: <T>(c: T) => c,
+	Children: {
+		map: <T, R>(c: T | T[], fn: (child: T, index: number) => R) => childArray(c).map(fn),
+		toArray: <T>(c: T | T[]) => childArray(c),
+	},
 	isValidElement: () => true,
 	cloneElement: h,
 	Suspense: Stub,
 	StrictMode: Stub,
 }
 
-async function validateCompiledPlan(js: string, stubs: Record<string, any>): Promise<{ ok: true } | { ok: false; error: string }> {
+async function validateCompiledPlan(js: string, stubs: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
 	let code = js
 
 	// Strip ESM import statements
@@ -192,18 +211,19 @@ async function validateCompiledPlan(js: string, stubs: Record<string, any>): Pro
 	try {
 		collectedMermaidSources = []
 		const fn = new Function('React', 'C', 'jsxDEV', 'jsx', 'Fragment', code + callDefault)
-		const vnode = fn(MOCK_REACT, stubs, mockJsxDEV, mockJsxDEV, Fragment)
-		if (vnode) renderToString(vnode)
-	} catch (e: any) {
-		return { ok: false, error: e?.message || String(e) }
+		const rendered: unknown = fn(MOCK_REACT, stubs, mockJsxDEV, mockJsxDEV, Fragment)
+		const tree = Array.isArray(rendered) ? h(Fragment, null, rendered) : rendered
+		if (isValidElement(tree)) renderToString(tree)
+	} catch (e) {
+		return { ok: false, error: errorMessage(e) || String(e) }
 	}
 
 	// Validate collected Mermaid diagram sources
 	for (const source of collectedMermaidSources) {
 		try {
 			await parseMermaid(source)
-		} catch (e: any) {
-			const msg = (e?.message || 'Invalid diagram').split('\n')[0]
+		} catch (e) {
+			const msg = (errorMessage(e) || 'Invalid diagram').split('\n')[0]
 			return { ok: false, error: `Mermaid syntax error: ${msg}` }
 		}
 	}
@@ -228,29 +248,40 @@ async function validateCompiledPlan(js: string, stubs: Record<string, any>): Pro
  * with a caret — that suffix is also what lets the CLI classify the error as a
  * user error and skip a pointless daemon restart (see push.ts).
  */
-function formatBuildError(err: any, lineOffset: number): string {
+function formatBuildError(err: unknown, lineOffset: number): string {
 	// Collect every candidate that might carry a `.position`, most specific first.
-	const candidates: any[] = []
-	if (err?.position) candidates.push(err)
-	if (Array.isArray(err?.errors)) candidates.push(...err.errors)
-	if (!candidates.length && err && typeof err[Symbol.iterator] === 'function') {
+	const candidates: unknown[] = []
+	if (positionOf(err)) candidates.push(err)
+	candidates.push(...nestedErrors(err))
+	if (!candidates.length && isIterable(err)) {
 		try {
 			candidates.push(...err)
 		} catch {}
 	}
-	const detail = candidates.find((c) => c?.position) ?? candidates[0] ?? err
-	const [message = 'Syntax error'] = String(detail?.message || err?.message || 'Syntax error').split('\n')
+	const detail = candidates.find((candidate) => positionOf(candidate)) ?? candidates[0] ?? err
+	const [message = 'Syntax error'] = (errorMessage(detail) || errorMessage(err) || 'Syntax error').split('\n')
 
-	const pos = detail?.position
-	if (!pos || typeof pos.line !== 'number') return message
+	const pos = positionOf(detail)
+	if (!pos || !('line' in pos) || typeof pos.line !== 'number') return message
 
-	const loc = ` (line ${pos.line - lineOffset}, col ${pos.column})`
+	const column = 'column' in pos && typeof pos.column === 'number' ? pos.column : undefined
+	const loc = ` (line ${pos.line - lineOffset}, col ${column})`
 	let frame = ''
-	if (typeof pos.lineText === 'string') {
-		const caret = ' '.repeat(Math.max(0, pos.column ?? 0)) + '^'
+	if ('lineText' in pos && typeof pos.lineText === 'string') {
+		const caret = ' '.repeat(Math.max(0, column ?? 0)) + '^'
 		frame = `\n  ${pos.lineText}\n  ${caret}`
 	}
 	return `${message}${loc}${frame}`
+}
+
+/** A Bun `BuildMessage` carries its source location as `.position`. */
+function positionOf(value: unknown): object | undefined {
+	return isObject(value) && 'position' in value && isObject(value.position) ? value.position : undefined
+}
+
+/** An `AggregateError` thrown by `Bun.build()` carries its `BuildMessage`s as `.errors`. */
+function nestedErrors(value: unknown): unknown[] {
+	return isObject(value) && 'errors' in value && Array.isArray(value.errors) ? value.errors : []
 }
 
 export async function compileJsx(jsx: string, options: CompileOptions = {}): Promise<CompileResult> {
@@ -306,7 +337,7 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 			const transpiler = new Bun.Transpiler({ loader: 'jsx' })
 			transpiler.transformSync(source)
 		}
-	} catch (syntaxError: any) {
+	} catch (syntaxError) {
 		return { ok: false, error: formatBuildError(syntaxError, lineOffset) }
 	}
 
@@ -378,7 +409,7 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 				return { ok: false, error: `Runtime error: ${validation.error}` }
 			}
 			return { ok: true, js }
-		} catch (buildError: any) {
+		} catch (buildError) {
 			if (admissionFailed) return { ok: false, error: new CanvasFileAdmissionError().message }
 			if (options.assertReadable) return { ok: false, error: 'Canvas compilation failed' }
 			// A real syntax error surfaces as an AggregateError carrying BuildMessages
@@ -386,16 +417,15 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 			// corruption case (internal bundler state gets corrupted in long-running
 			// processes) has no sub-errors; pass it through so the CLI restarts the
 			// daemon and retries.
-			const hasDetail = buildError?.position
-				|| (Array.isArray(buildError?.errors) && buildError.errors.length > 0)
+			const hasDetail = positionOf(buildError) || nestedErrors(buildError).length > 0
 			if (hasDetail) {
 				return { ok: false, error: formatBuildError(buildError, lineOffset) }
 			}
-			return { ok: false, error: buildError?.message || 'Unknown Error' }
+			return { ok: false, error: errorMessage(buildError) || 'Unknown Error' }
 		}
-	} catch (e: any) {
+	} catch (e) {
 		if (options.assertReadable) return { ok: false, error: 'Canvas compilation failed' }
-		return { ok: false, error: e.message }
+		return { ok: false, error: errorMessage(e) ?? String(e) }
 	} finally {
 		try {
 			unlinkSync(tmpFile)

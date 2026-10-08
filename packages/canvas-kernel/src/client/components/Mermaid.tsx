@@ -4,6 +4,7 @@ import type { Annotation } from '#canvas/runtime'
 import { AnnotationCreatePopover } from '@fabrika/annotations'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
+import { pageMermaid } from '../pageGlobals'
 
 interface MermaidProps {
 	children?: React.ReactNode
@@ -216,7 +217,7 @@ export function Mermaid({ children }: MermaidProps) {
 		let cancelled = false
 		const render = async () => {
 			try {
-				const mermaid = (window as any).mermaid
+				const mermaid = pageMermaid()
 				if (!mermaid) {
 					setError('Mermaid library not loaded')
 					return
@@ -232,8 +233,8 @@ export function Mermaid({ children }: MermaidProps) {
 					highlightAnnotatedNodes(containerRef.current, annotationsRef.current)
 				}
 				setError(null)
-			} catch (e: any) {
-				if (!cancelled) setError(e.message || 'Invalid diagram')
+			} catch (e) {
+				if (!cancelled) setError((e instanceof Error && e.message) || 'Invalid diagram')
 			}
 		}
 		render()

@@ -1,5 +1,5 @@
 import { useAnnotations, useResponseRegistration } from '#canvas/runtime'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ResponseNote } from './ResponseNote'
 
 export type ChoiceOption = string | { value: string; label?: string }

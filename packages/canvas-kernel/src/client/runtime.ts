@@ -11,7 +11,7 @@ export interface PlanResponse {
 	id: string
 	type: 'select' | 'radio' | 'checkbox' | 'text' | 'range'
 	label: string
-	value: any
+	value: unknown
 	options?: string[]
 	required?: boolean
 	note?: string

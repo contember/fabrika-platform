@@ -1,4 +1,4 @@
-import { createZeropsApi, type FetchLike, waitForProcess } from '@fabrika/provider-zerops'
+import { createZeropsApi, type FetchLike } from '@fabrika/provider-zerops'
 import { afterEach, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'

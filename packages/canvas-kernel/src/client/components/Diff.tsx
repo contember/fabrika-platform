@@ -1,4 +1,3 @@
-import React from 'react'
 import { buildDiffLines } from '../diffLines'
 
 interface DiffProps {
