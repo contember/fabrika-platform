@@ -45,6 +45,7 @@ import { logError } from './log'
 import { randomToken } from './oidc'
 import { unixNow } from './repositories/sql'
 import { resolvePermissionsAt } from './resolve'
+import { BUILTIN_ROLES } from './roles'
 import { generateToken, hashToken } from './secret'
 import type { Services } from './services'
 import { parseStoredChain } from './stored-chain'
@@ -81,8 +82,9 @@ interface MemberCaller {
 type CallerOutcome = { ok: true; caller: MemberCaller } | MembershipFailure
 
 /**
- * Resolve the caller and its LIVE permissions. A token's `perms` are a snapshot up to five minutes old, so
- * they are resolved again; a `px_` key is already resolved live, downscoped by its own grants. An
+ * Resolve the caller and its LIVE permissions, never more than its credential carries. A token's `perms`
+ * are a snapshot up to five minutes old, so only the entries the principal still holds count; a `px_` key
+ * is already resolved live, downscoped by its own grants. An
  * anonymous credential, a share link included, is never a member caller. `userOnly` refuses a service
  * principal: a workload creates no scope and manages no member, so a form plus a job cannot sign anyone up.
  */
@@ -102,9 +104,12 @@ async function resolveMemberCaller(services: Services, env: CallerEnv, input: Me
 	if (principalStatus(principal) === 'disabled') {
 		return { ok: false, reason: 'disabled' }
 	}
-	const permissions = input.credential?.startsWith(API_KEY_PREFIX) === true
-		? caller.permissions
-		: await resolvePermissionsAt(services, principal, verifiedApp)
+	if (input.credential?.startsWith(API_KEY_PREFIX) === true) {
+		return { ok: true, caller: { principal, permissions: caller.permissions, app: verifiedApp } }
+	}
+	// A token is a ceiling too: one minted from a downscoped key carries only that key's grants.
+	const live = await resolvePermissionsAt(services, principal, verifiedApp)
+	const permissions = caller.permissions.filter((entry) => permits(live, entry.action, entry.scope ?? undefined))
 	return { ok: true, caller: { principal, permissions, app: verifiedApp } }
 }
 
@@ -167,7 +172,7 @@ async function roleAuthorityProblem(
 	scope: Scope,
 	role: RoleRow,
 ): Promise<MembershipFailure | null> {
-	if (role.member_scope !== scope.type) {
+	if (role.member_scope !== scope.type || Object.hasOwn(BUILTIN_ROLES, role.role_key)) {
 		return invalid(`role '${role.role_key}' is not a membership role of scope '${scope.type}'`)
 	}
 	const assigners = role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
@@ -257,9 +262,15 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
 		return NOT_ALLOWED
 	}
 	const role = await services.repositories.appSchema.getRole(caller.app, dimension.creator_role)
-	if (role === null || role.member_scope !== input.dimension) {
+	if (role === null || role.member_scope !== input.dimension || Object.hasOwn(BUILTIN_ROLES, role.role_key)) {
 		return invalid(`the creator role '${dimension.creator_role}' is not a membership role of scope '${input.dimension}'`)
 	}
+	const contract = await contractGrantProblem(services.repositories.appSchema, caller.app, {
+		roleKey: role.role_key,
+		permissions: null,
+		scopeType: input.dimension,
+	})
+	if (contract !== null) return invalid(contract)
 	const scope: Scope = { type: input.dimension, value: uuidv7() }
 	await services.repositories.membership.createScope({ app: caller.app, scope, createdBy: caller.principal.id, roleKey: role.role_key })
 	audit(services, ctx, caller, input.requestId, {
@@ -299,12 +310,11 @@ export async function assignMember(services: Services, env: CallerEnv, ctx: Requ
 		if (target === null || target.type !== 'user') {
 			return NOT_FOUND
 		}
-		const created = await services.repositories.grants.createRoleGrantUnlessHeld({
-			principalId: target.id,
+		const created = await services.repositories.membership.grantMembershipRole({
 			app: caller.app,
+			principalId: target.id,
 			roleKey: role.role_key,
-			scopeType: input.scope.type,
-			scopeValue: input.scope.value,
+			scope: input.scope,
 			grantedBy: caller.principal.id,
 		})
 		if (created !== null) {
@@ -590,16 +600,19 @@ export async function issueLink(services: Services, env: CallerEnv, ctx: Request
 	if (object === undefined) return invalid('a link chain names its object first')
 	const key = `${API_KEY_PREFIX}${generateToken()}`
 	const expiresAt = unixNow() + input.days * DAY_SECONDS
-	const id = await services.repositories.credentials.createCredential({
+	const id = await services.repositories.credentials.createLinkCredential({
 		tokenHash: await hashToken(key),
 		label: `link:${mount.mount}`,
-		principalId: null,
 		app: caller.app,
 		issuedBy: caller.principal.id,
 		expiresAt,
 		grants: grants.map((action) => ({ action, scopeType: object.type, scopeValue: object.value })),
 		link: { mount: mount.mount, chain: input.chain.map((scope) => ({ type: scope.type, value: scope.value })) },
 	})
+	if (id === null) {
+		// A reconcile removed the mount between the checks above and the write.
+		return invalid(`unknown link mount '${input.mount}'`)
+	}
 	audit(services, ctx, caller, input.requestId, {
 		action: 'iam.link.issue',
 		resourceType: 'credential',

@@ -53,16 +53,12 @@ export class CredentialRepository {
 		issuedBy: string
 		expiresAt?: number | null
 		grants: { action: string; scopeType?: string | null; scopeValue?: string | null }[]
-		/** A share link's mount and chain; only on an anonymous credential. */
-		link?: { mount: string; chain: Scope[] }
 	}): Promise<string> {
 		const id = uuidv7()
 		const statements: SqlStatement[] = [
 			this.db
-				.prepare(
-					`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at, link_mount, link_dimension, link_chain)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
+				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 				.bind(
 					id,
 					input.tokenHash,
@@ -72,9 +68,6 @@ export class CredentialRepository {
 					input.issuedBy,
 					input.expiresAt ?? null,
 					unixNow(),
-					input.link?.mount ?? null,
-					input.link?.chain[0]?.type ?? null,
-					input.link === undefined ? null : JSON.stringify(input.link.chain),
 				),
 		]
 		for (const grant of input.grants) {
@@ -86,6 +79,63 @@ export class CredentialRepository {
 		}
 		await this.db.batch(statements)
 		return id
+	}
+
+	/**
+	 * Insert a share link and its grants only while its mount still exists with the dimension it was
+	 * issued for, in one transaction. The first statement locks the mount row with the one row lock
+	 * SQLite and Postgres share (D1 runs a batch serially anyway): a reconcile that is deleting the row
+	 * makes this wait and then insert nothing, and one that comes later waits for this key and revokes
+	 * it. Returns the id, or null when the mount is gone.
+	 */
+	async createLinkCredential(input: {
+		tokenHash: string
+		label: string
+		app: string
+		issuedBy: string
+		expiresAt: number
+		grants: { action: string; scopeType: string; scopeValue: string }[]
+		link: { mount: string; chain: Scope[] }
+	}): Promise<string | null> {
+		const id = uuidv7()
+		const dimension = input.link.chain[0]?.type ?? ''
+		const statements: SqlStatement[] = [
+			this.db
+				.prepare('UPDATE app_link_mounts SET max_days = max_days WHERE app = ? AND mount = ? AND dimension = ?')
+				.bind(input.app, input.link.mount, dimension),
+			this.db
+				.prepare(
+					`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at, link_mount, link_dimension, link_chain)
+					SELECT ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?
+					WHERE EXISTS (SELECT 1 FROM app_link_mounts WHERE app = ? AND mount = ? AND dimension = ?)
+					RETURNING id`,
+				)
+				.bind(
+					id,
+					input.tokenHash,
+					input.label,
+					input.app,
+					input.issuedBy,
+					input.expiresAt,
+					unixNow(),
+					input.link.mount,
+					dimension,
+					JSON.stringify(input.link.chain),
+					input.app,
+					input.link.mount,
+					dimension,
+				),
+		]
+		for (const grant of input.grants) {
+			statements.push(
+				this.db
+					.prepare(`INSERT INTO credential_grants (credential_id, action, scope_type, scope_value)
+						SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM credentials WHERE id = ?)`)
+					.bind(id, grant.action, grant.scopeType, grant.scopeValue, id),
+			)
+		}
+		const [, inserted] = await this.db.batch<{ id: string }>(statements)
+		return (inserted?.results.length ?? 0) > 0 ? id : null
 	}
 
 	/**

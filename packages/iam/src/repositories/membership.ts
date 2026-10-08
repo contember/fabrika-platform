@@ -29,6 +29,7 @@ export interface InvitationRow {
 	expires_at: number
 	accepted_at: number | null
 	accepted_by: string | null
+	acceptance_id: string | null
 	revoked_at: number | null
 	created_at: number
 }
@@ -47,6 +48,16 @@ export interface MemberGrantRow {
  * so a group assignment (backlog 91) can sit next to them later; this repository adds the values IAM
  * created, the single-use delegation grants and the invitations.
  */
+/**
+ * The conflict clause of every membership-role grant write. An ACTIVE grant of the role in the value is
+ * kept as it is, which makes a repeated assignment answer the same result; an EXPIRED one is renewed in
+ * the same statement, so it never reads as held while it grants nothing. Memberships do not expire.
+ */
+const RENEW_EXPIRED_MEMBERSHIP = `ON CONFLICT (principal_id, role_key, scope_type, scope_value, COALESCE(app, '*'))
+	WHERE role_key IS NOT NULL AND scope_value IS NOT NULL
+	DO UPDATE SET expires_at = NULL, granted_by = excluded.granted_by, created_at = excluded.created_at
+	WHERE grants.expires_at IS NOT NULL AND grants.expires_at <= ?`
+
 export class MembershipRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
@@ -121,6 +132,16 @@ export class MembershipRepository {
 		return results
 	}
 
+	/** Grant a membership role in `scope`. Returns the row when this call granted or renewed it, null when it was held. */
+	async grantMembershipRole(input: { app: string; principalId: string; roleKey: string; scope: Scope; grantedBy: string }): Promise<GrantRow | null> {
+		const now = unixNow()
+		return this.db
+			.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
+				VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?) ${RENEW_EXPIRED_MEMBERSHIP} RETURNING *`)
+			.bind(uuidv7(), input.principalId, input.app, input.roleKey, input.scope.type, input.scope.value, input.grantedBy, now, now)
+			.first<GrantRow>()
+	}
+
 	/** Remove one role grant of a principal in `scope`. Returns whether a row went. */
 	async deleteRoleGrant(app: string, principalId: string, roleKey: string, scope: Scope): Promise<boolean> {
 		const result = await this.db
@@ -132,12 +153,18 @@ export class MembershipRepository {
 
 	/**
 	 * Remove a principal's creator-role grant in `scope` only while another principal still holds the role
-	 * there. The first statement locks the value's `membership_scopes` row, so two revokes of the last two
-	 * holders run one after the other and the second sees the first's delete. Answers whether a row went.
+	 * there. The value's `membership_scopes` row is the lock: created on demand, because an administrator
+	 * may have granted the role without `createScope`, then taken with a row-locking UPDATE — the one lock
+	 * statement SQLite and Postgres share; D1 runs a batch serially anyway. Two revokes of the last two
+	 * holders therefore run one after the other, and the second sees the first's delete.
 	 */
 	async deleteCreatorGrantUnlessLast(app: string, principalId: string, roleKey: string, scope: Scope): Promise<boolean> {
 		const now = unixNow()
-		const [, deleted] = await this.db.batch<{ id: string }>([
+		const [, , deleted] = await this.db.batch<{ id: string }>([
+			this.db
+				.prepare(`INSERT INTO membership_scopes (app, scope_type, scope_value, created_by, created_at) VALUES (?, ?, ?, NULL, ?)
+					ON CONFLICT (app, scope_type, scope_value) DO NOTHING`)
+				.bind(app, scope.type, scope.value, now),
 			this.db
 				.prepare('UPDATE membership_scopes SET created_at = created_at WHERE app = ? AND scope_type = ? AND scope_value = ?')
 				.bind(app, scope.type, scope.value),
@@ -220,24 +247,26 @@ export class MembershipRepository {
 	}
 
 	/**
-	 * Accept an invitation for `principalId` and write its grant, in one transaction. The UPDATE is the
-	 * guard; the grant is inserted only when this call is the one that accepted it, and a role already
-	 * held is left as it is. Answers whether this call accepted the invitation.
+	 * Accept an invitation for `principalId` and write its grant, in one transaction. The guarded UPDATE
+	 * stamps a fresh acceptance id on the invitation only when it was still open, and the grant is written
+	 * only for the attempt holding that id — never on the strength of a timestamp another attempt can share.
+	 * An expired grant of the role is renewed; an active one is left as it is. Answers whether this call
+	 * accepted the invitation.
 	 */
 	async acceptInvitation(invitation: InvitationRow, principalId: string): Promise<boolean> {
 		const now = unixNow()
+		const acceptanceId = uuidv7()
 		const [accepted] = await this.db.batch<{ id: string }>([
 			this.db
-				.prepare(`UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?
+				.prepare(`UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
 					WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
 					RETURNING id`)
-				.bind(now, principalId, invitation.id, now),
+				.bind(now, principalId, acceptanceId, invitation.id, now),
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
 					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?
-					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND accepted_by = ? AND accepted_at = ?)
-					ON CONFLICT (principal_id, role_key, scope_type, scope_value, COALESCE(app, '*'))
-						WHERE role_key IS NOT NULL AND scope_value IS NOT NULL DO NOTHING`)
+					WHERE EXISTS (SELECT 1 FROM membership_invitations WHERE id = ? AND acceptance_id = ?)
+					${RENEW_EXPIRED_MEMBERSHIP}`)
 				.bind(
 					uuidv7(),
 					principalId,
@@ -248,7 +277,7 @@ export class MembershipRepository {
 					invitation.invited_by,
 					now,
 					invitation.id,
-					principalId,
+					acceptanceId,
 					now,
 				),
 		])

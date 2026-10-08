@@ -217,14 +217,21 @@ describe('Db.reconcileAppSchema — membership metadata and link mounts', () => 
 		await h.repositories.appSchema.reconcileAppSchema(vocabulary)
 		const issuer = 'provisioning-admin'
 		const chain = [{ type: 'note', value: 'n1' }, { type: 'workspace', value: 'w1' }]
-		const link = await h.repositories.credentials.createCredential({
-			tokenHash: 'h-link',
-			app,
-			issuedBy: issuer,
-			grants: [],
-			link: { mount: 'shared', chain },
-		})
 		const plain = await h.repositories.credentials.createCredential({ tokenHash: 'h-plain', app, issuedBy: issuer, grants: [] })
+		async function linkCredential(tokenHash: string, linkChain: { type: string; value: string }[]): Promise<string> {
+			const id = await h.repositories.credentials.createLinkCredential({
+				tokenHash,
+				label: 'link:shared',
+				app,
+				issuedBy: issuer,
+				expiresAt: Math.floor(Date.now() / 1000) + 60,
+				grants: [],
+				link: { mount: 'shared', chain: linkChain },
+			})
+			if (id === null) throw new Error('the mount is gone')
+			return id
+		}
+		const link = await linkCredential('h-link', chain)
 
 		await h.repositories.appSchema.reconcileAppSchema(vocabulary)
 		expect((await h.repositories.credentials.getCredentialById(link))?.revoked_at).toBeNull()
@@ -236,15 +243,28 @@ describe('Db.reconcileAppSchema — membership metadata and link mounts', () => 
 		expect((await h.repositories.credentials.getCredentialById(link))?.revoked_at).not.toBeNull()
 		expect((await h.repositories.credentials.getCredentialById(plain))?.revoked_at).toBeNull()
 
-		const second = await h.repositories.credentials.createCredential({
-			tokenHash: 'h-link-2',
-			app,
-			issuedBy: issuer,
-			grants: [],
-			link: { mount: 'shared', chain: [{ type: 'workspace', value: 'w1' }] },
-		})
+		const second = await linkCredential('h-link-2', [{ type: 'workspace', value: 'w1' }])
 		await h.repositories.appSchema.reconcileAppSchema({ ...vocabulary, links: [] })
 		expect((await h.repositories.credentials.getCredentialById(second))?.revoked_at).not.toBeNull()
 		expect((await h.repositories.credentials.getCredentialById(link))?.link_chain).toBe(JSON.stringify(chain))
+	})
+
+	test('a link write whose mount is gone, or names another dimension, inserts nothing', async () => {
+		const h = createHarness()
+		await h.repositories.appSchema.reconcileAppSchema(vocabulary)
+		const write = (chain: { type: string; value: string }[]) =>
+			h.repositories.credentials.createLinkCredential({
+				tokenHash: `h-${chain[0]?.type}`,
+				label: 'link:shared',
+				app,
+				issuedBy: 'provisioning-admin',
+				expiresAt: Math.floor(Date.now() / 1000) + 60,
+				grants: [{ action: 'notes.read', scopeType: chain[0]?.type ?? '', scopeValue: chain[0]?.value ?? '' }],
+				link: { mount: 'shared', chain },
+			})
+		expect(await write([{ type: 'workspace', value: 'w1' }])).toBeNull()
+		await h.repositories.appSchema.reconcileAppSchema({ ...vocabulary, links: [] })
+		expect(await write([{ type: 'note', value: 'n1' }, { type: 'workspace', value: 'w1' }])).toBeNull()
+		expect(h.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM credential_grants').get()?.n).toBe(0)
 	})
 })

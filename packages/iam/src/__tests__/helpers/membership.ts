@@ -1,9 +1,11 @@
-import type { AppSchema } from '@fabrika/auth-core'
+import { type AppSchema, buildAccessClaims } from '@fabrika/auth-core'
 import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
 import { handleAdmin } from '../../admin/router'
-import type { IamRepositories } from '../../db'
+import type { IamRepositories, PrincipalRow } from '../../db'
 import type { RequestContext } from '../../env'
+import { resolvePermissionsAt } from '../../resolve'
 import type { Services } from '../../services'
+import { getSigner } from '../../signing'
 import { adminTokenFor, makeServicesFor, TEST_SIGNING_ENV } from './harness'
 
 // A multi-tenant application for the membership witnesses (the framework document, section 6), reconciled
@@ -90,8 +92,24 @@ export const CALLER_ENV = { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '
 
 export interface Person {
 	readonly id: string
-	/** A native access token for `APP` (or `app`), signed the way the proxy's would be. */
+	/** A native access token for `APP` (or `app`) carrying the person's permissions now, as a mint would sign it. */
 	token(app?: string): Promise<string>
+}
+
+/** Sign what `mintToken` would: the principal's permissions at `app` as they are now. */
+export async function mintedToken(services: Services, principal: PrincipalRow, app: string): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const signer = await getSigner(TEST_SIGNING_ENV)
+	return signer.sign(buildAccessClaims({
+		iss: ORIGIN,
+		app,
+		subject: principal.id,
+		type: principal.type,
+		label: principal.label,
+		permissions: await resolvePermissionsAt(services, principal, app),
+		issuedAt: now,
+		expiresAt: now + 300,
+	}))
 }
 
 export interface MembershipFixture {
@@ -132,7 +150,7 @@ export async function membershipFixture(repositories: IamRepositories, options: 
 		putSchema,
 		async person(name: string): Promise<Person> {
 			const principal = await repositories.principals.createUser(`sub-${name}`, `${name}@example.test`)
-			return { id: principal.id, token: (app = APP) => adminTokenFor(repositories, principal.id, { issuer: ORIGIN, app }) }
+			return { id: principal.id, token: (app = APP) => mintedToken(services, principal, app) }
 		},
 	}
 }

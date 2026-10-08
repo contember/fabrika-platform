@@ -171,15 +171,20 @@ fails if that stops being true — it is the guard, not documentation of one.
   dimension is a 409 naming the grants, and a guard statement in the reconcile batch rolls it back if
   one was written after the check. Resolution is the third lock: such a grant contributes nothing.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
-  Every `IamMembershipRpc` operation resolves the caller from its own credential and re-resolves a
-  token's permissions with `resolvePermissionsAt` — a token's `perms` are up to five minutes old. An
+  Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
+  more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and
+  a token's `perms` (up to five minutes old) count only where `resolvePermissionsAt` still holds them —
+  so a token minted from a read-only key stays read-only. An
   anonymous credential, a share link included, is never a member caller; a service principal creates
   no scope and manages no member (`userOnly`), which closes "a form plus a job that invites the
   submitted email". Membership is ordinary role grants scoped to a value (compatible with backlog 91);
   a value is checked as itself, flat — "there" means that exact `(type, value)`, global grants included.
   Assigning needs the dimension's `members.manage` there, a role there that the target role's
   `assignableBy` names, and every action of the target role there; revoking needs the same for every
-  role it removes. Repeating an assign or a revoke answers the same result (backlog 82's 409 stays for
+  role it removes. A built-in role key (`BUILTIN_ROLE_KEYS`, `admin`) is never a membership role: the
+  schema parser refuses it, and scope creation also applies `contractGrantProblem` to the creator role.
+  Repeating an assign or a revoke answers the same result — an active grant is kept, an expired one is
+  renewed in the same statement (backlog 82's 409 stays for
   the admin grant API). `listMembers` needs `members.list` there and shows labels, emails and open
   invitations only to `members.manage` — a user's label is its address.
 - **A MEMBERSHIP WRITE SPENDS A DELEGATION GRANT** (`delegation_grants`, ADR-0022 rule 6). IAM issues
@@ -190,21 +195,25 @@ fails if that stops being true — it is the guard, not documentation of one.
   `listMembers` and the link operations take none: they spend no membership authority.
 - **THE LAST CREATOR STAYS.** `createScope` records the value in `membership_scopes` and grants the
   creator role in one batch; a revoke removes a creator grant only while another principal holds the
-  role there, and its first statement locks the value's `membership_scopes` row so two concurrent
-  revokes of the last two holders serialize (`membership-postgres.test.ts` fails without the lock).
-  A value an administrator granted without `createScope` has no row to lock.
+  role there. Its batch first creates the value's `membership_scopes` row on demand (an administrator
+  may have granted the role without `createScope`), then locks it with a row-locking UPDATE — the one
+  lock statement both dialects share; D1 runs a batch serially anyway — so two concurrent revokes of
+  the last two holders serialize (`membership-postgres.test.ts` fails without the lock).
 - **AN INVITATION IS ACCEPTED ONLY BY THE OWNER OF THE INVITED MAILBOX.** Assigning by email always
   opens an invitation, also for an address a principal already has; IAM mails a one-time link
   (`#token=`, never in a log) and stores its hash. `/auth/invitations/accept` accepts it, same-origin,
   for the principal signed in on IAM's host whose normalized `email` equals the invitation's — the
   token proves the mailbox, the session the principal. The inviter's authority is checked again at
-  acceptance. Without an email service, an invitation is `invitations_disabled`; assigning an existing
+  acceptance. The guarded UPDATE stamps a fresh `acceptance_id`, and the grant is written in the same
+  batch only for the attempt holding it — never on a timestamp a replay can share. Without an email service, an invitation is `invitations_disabled`; assigning an existing
   principal by id still works. Invitations live `INVITATION_TTL_SECONDS` (7 days).
 - **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,
   `link_chain`). `issueLink` checks the chain against the schema's containment, requires an expiry of
   at most the mount's `maxDays`, and requires the issuer to hold `issuedBy` and every granted action on
   some link of the chain; the grants are frozen on the object. Its token carries `link: { mount, chain }`
-  and no `ptype`, and the framework re-checks the chain per request. The issuer or a holder of
+  and no `ptype`, and the framework re-checks the chain per request. `createLinkCredential` locks the
+  mount row and inserts only while the mount still exists, so a reconcile removing it either makes the
+  write insert nothing or revokes the committed key. The issuer or a holder of
   `members.manage` on a value of the chain revokes it; a reconcile that removes the mount, or moves it
   to another dimension, revokes its keys in the same batch.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id

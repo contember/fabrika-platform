@@ -8,6 +8,7 @@ import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createIamRepositories, type IamRepositories } from '../db'
 import { acceptInvitation, assignMember, createScope, issueLink, listMembers, requestDelegation, revokeMember } from '../membership'
+import { hashToken } from '../secret'
 import {
 	CALLER_ENV,
 	CapturingEmail,
@@ -15,6 +16,7 @@ import {
 	INVITE_ENDPOINT,
 	type MembershipFixture,
 	membershipFixture,
+	NOTES_SCHEMA,
 	type Person,
 } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
@@ -127,5 +129,71 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 			await revokeMember(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, survivor)), scope, member: { principalId: survivor.id } })
 			await assignMember(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, survivor)), scope, role: 'owner', member: { principalId: leaver.id } })
 		}
+	})
+
+	test('two concurrent revokes of the last two creators an administrator granted leave one', async () => {
+		const f = await membershipFixture(repositories)
+		for (let round = 0; round < 5; round++) {
+			fixtureSeq += 1
+			const scope = { type: 'workspace', value: `admin-made-${fixtureSeq}` }
+			const owners = [await f.person(`admin-a-${fixtureSeq}`), await f.person(`admin-b-${fixtureSeq}`)]
+			for (const owner of owners) {
+				await repositories.grants.createGrant({ principalId: owner.id, app: APP, roleKey: 'owner', scopeType: scope.type, scopeValue: scope.value })
+			}
+			const outcomes = await Promise.all(owners.map((owner) => concurrent.membership.deleteCreatorGrantUnlessLast(APP, owner.id, 'owner', scope)))
+			expect(outcomes.filter(Boolean)).toHaveLength(1)
+			expect((await repositories.membership.listMemberGrants(APP, scope)).filter((grant) => grant.role_key === 'owner')).toHaveLength(1)
+		}
+	})
+
+	test('concurrent acceptances of one invitation write one grant, and none survives a revoke', async () => {
+		const email = new CapturingEmail()
+		const f = await membershipFixture(repositories, { email })
+		fixtureSeq += 1
+		const owner = await f.person(`accept-owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		await assignMember(f.services, CALLER_ENV, f.ctx, {
+			...(await delegated(f, owner)),
+			scope,
+			role: 'editor',
+			member: { email: `accept-invitee-${fixtureSeq}@example.test` },
+		})
+		const invitee = await f.person(`accept-invitee-${fixtureSeq}`)
+		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		if (invitation === null) throw new Error('fixture')
+		const outcomes = await Promise.all([1, 2, 3].map(() => concurrent.membership.acceptInvitation(invitation, invitee.id)))
+		expect(outcomes.filter(Boolean)).toHaveLength(1)
+		await repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
+		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id)).toBe(false)
+		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
+	})
+
+	test('a link issued while a reconcile removes its mount is never left usable', async () => {
+		const f = await membershipFixture(repositories)
+		fixtureSeq += 1
+		const owner = await f.person(`link-owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		if (pool === null) throw new Error('fixture')
+		// A reconcile that has deleted the mount and holds its transaction open, as a slow one would.
+		const removal = pool.batch([
+			pool.prepare("DELETE FROM app_link_mounts WHERE app = ? AND mount = 'shared'").bind(APP),
+			pool.prepare('SELECT pg_sleep(0.4)'),
+			pool.prepare(`UPDATE credentials SET revoked_at = 1 WHERE app = ? AND link_mount IS NOT NULL AND revoked_at IS NULL AND NOT EXISTS (
+				SELECT 1 FROM app_link_mounts m WHERE m.app = credentials.app AND m.mount = credentials.link_mount AND m.dimension = credentials.link_dimension)`)
+				.bind(APP),
+		])
+		await Bun.sleep(100)
+		const issued = await concurrent.credentials.createLinkCredential({
+			tokenHash: `race-${fixtureSeq}`,
+			label: 'link:shared',
+			app: APP,
+			issuedBy: owner.id,
+			expiresAt: Math.floor(Date.now() / 1000) + 60,
+			grants: [{ action: 'notes.read', scopeType: 'note', scopeValue: 'n1' }],
+			link: { mount: 'shared', chain: [{ type: 'note', value: 'n1' }, scope] },
+		})
+		await removal
+		expect(issued).toBeNull()
+		expect((await f.putSchema(NOTES_SCHEMA)).status).toBe(200)
 	})
 })

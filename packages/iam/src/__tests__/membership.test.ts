@@ -1,10 +1,12 @@
-import { buildAccessClaims, type MembershipCaller, parseAccessClaims, type Scope } from '@fabrika/auth-core'
+import { buildAccessClaims, BUILTIN_ROLE_KEYS, type MembershipCaller, parseAccessClaims, type Scope } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import { acceptInvitation, assignMember, createScope, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from '../membership'
 import { unixNow } from '../repositories/sql'
+import { BUILTIN_ROLES } from '../roles'
 import { createIamRpc } from '../rpc'
+import { hashToken } from '../secret'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
 import { createHarness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
@@ -642,5 +644,138 @@ describe('the RPC surface', () => {
 			ok: false,
 			reason: 'invalid_delegation',
 		})
+	})
+})
+
+describe('review round 1', () => {
+	test('a token minted from a read-only key keeps the key ceiling: it cannot assign an editor', async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const editor = await f.person('editor')
+		const key = 'px_read-only-key-of-the-owner-0123456789'
+		await f.repositories.credentials.createCredential({
+			tokenHash: await hashToken(key),
+			principalId: owner.id,
+			app: APP,
+			issuedBy: owner.id,
+			expiresAt: unixNow() + 3600,
+			grants: [{ action: 'notes.read', scopeType: scope.type, scopeValue: scope.value }],
+		})
+		const minted = await mintFromKey(f.services, TEST_SIGNING_ENV, { app: APP, key, requestId: 'req-mint-read-only' })
+		if (!minted.result.ok) throw new Error('expected a token')
+
+		for (const credential of [key, minted.result.token]) {
+			expect(await requestDelegation(f.services, CALLER_ENV, f.ctx, { app: APP, credential, requestId: 'req-ro', endpoint: INVITE_ENDPOINT })).toEqual({
+				ok: false,
+				reason: 'not_allowed',
+			})
+		}
+		// A grant obtained with the full session token does not lift the ceiling of the key's token.
+		const grant = await delegated(f, owner)
+		expect(
+			await assignMember(f.services, CALLER_ENV, f.ctx, {
+				...grant,
+				credential: minted.result.token,
+				scope,
+				role: 'editor',
+				member: { principalId: editor.id },
+			}),
+		).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await rolesOf(f, editor, scope)).toEqual([])
+	})
+
+	test('IAM built-in roles are the keys the schema parser reserves', () => {
+		expect(Object.keys(BUILTIN_ROLES)).toEqual([...BUILTIN_ROLE_KEYS])
+	})
+
+	test('a membership role named like a built-in is refused at reconcile', async () => {
+		const f = await fixture()
+		const roles = { ...NOTES_SCHEMA.roles, admin: { name: 'Admin', permissions: ['notes.read'], member: { scope: 'workspace' } } }
+		const response = await f.putSchema({
+			...NOTES_SCHEMA,
+			scopes: [{ type: 'workspace', creator: 'admin', members: { manage: 'notes.admin', list: 'notes.read' } }, { type: 'note', in: 'workspace' }],
+			roles,
+		})
+		expect(response.status).toBe(400)
+		expect(await response.text()).toContain('built-in IAM role')
+	})
+
+	test('scope creation refuses a creator role the contract rules refuse', async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		await f.repositories.grants.createGrant({ principalId: owner.id, app: APP, roleKey: 'starter' })
+		const grant = await delegated(f, owner, CREATE_ENDPOINT)
+		// A row written around the reconcile: the contract application's creator role grants a wildcard.
+		await f.repositories.appSchema.upsertRole({ app: APP, roleKey: 'owner', name: 'Owner', permissions: ['*'], origin: 'app' })
+		expect(await createScope(f.services, CALLER_ENV, f.ctx, { ...grant, dimension: 'workspace' })).toMatchObject({
+			ok: false,
+			reason: 'invalid_request',
+		})
+		expect(await f.repositories.membership.listRoleGrantsAt(APP, owner.id, { type: 'workspace', value: 'x' })).toEqual([])
+	})
+
+	test('an acceptance replayed in the same second after a revoke restores nothing', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })
+		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		const invitee = await f.person('invitee')
+		if (invitation === null) throw new Error('fixture')
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id)).toBe(true)
+		await f.repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
+		// The second attempt passed its checks with the same open row before the first committed.
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id)).toBe(false)
+		expect(await rolesOf(f, invitee, scope)).toEqual([])
+	})
+
+	test('assigning over an expired grant renews it; an active one stays as it is', async () => {
+		const f = await fixture()
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const editor = await f.person('editor')
+		await f.repositories.grants.createGrant({
+			principalId: editor.id,
+			app: APP,
+			roleKey: 'editor',
+			scopeType: scope.type,
+			scopeValue: scope.value,
+			expiresAt: unixNow() - 10,
+		})
+		expect(await rolesOf(f, editor, scope)).toEqual([])
+		expect(await assign(f, owner, scope, 'editor', { principalId: editor.id })).toEqual({
+			ok: true,
+			assigned: { principalId: editor.id, role: 'editor' },
+		})
+		expect(await rolesOf(f, editor, scope)).toEqual(['editor'])
+		const renewed = await f.repositories.membership.listRoleGrantsAt(APP, editor.id, scope)
+		expect(await assign(f, owner, scope, 'editor', { principalId: editor.id })).toEqual({
+			ok: true,
+			assigned: { principalId: editor.id, role: 'editor' },
+		})
+		expect(await f.repositories.membership.listRoleGrantsAt(APP, editor.id, scope)).toEqual(renewed)
+	})
+
+	test('accepting an invitation over an expired grant renews it', async () => {
+		const email = new CapturingEmail()
+		const f = await fixture(email)
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const invitee = await f.person('invitee')
+		await f.repositories.grants.createGrant({
+			principalId: invitee.id,
+			app: APP,
+			roleKey: 'editor',
+			scopeType: scope.type,
+			scopeValue: scope.value,
+			expiresAt: unixNow() - 10,
+		})
+		await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })
+		const principal = await f.repositories.principals.getPrincipalById(invitee.id)
+		if (principal === null) throw new Error('fixture')
+		expect((await acceptInvitation(f.services, principal, email.lastToken())).ok).toBe(true)
+		expect(await rolesOf(f, invitee, scope)).toEqual(['editor'])
 	})
 })

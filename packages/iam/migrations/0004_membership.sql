@@ -73,6 +73,8 @@ CREATE TABLE membership_invitations (
 	expires_at  INTEGER NOT NULL,
 	accepted_at INTEGER,
 	accepted_by TEXT REFERENCES principals(id) ON DELETE SET NULL,
+	-- Set by the one acceptance that won; the grant is written only for the attempt that holds it.
+	acceptance_id TEXT UNIQUE,
 	revoked_at  INTEGER,
 	created_at  INTEGER NOT NULL
 );
