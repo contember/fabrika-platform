@@ -113,6 +113,8 @@ function matchSegments(routeSegments: ReadonlyArray<string>, pathSegments: Reado
 		const routeSegment = routeSegments[i]
 		if (routeSegment === undefined) return null
 		if (routeSegment.startsWith('*')) {
+			// Like the gate glob `/x/*`, a non-root wildcard needs the `/` before it: `/x/` matches, `/x` does not.
+			if (i > 0 && pathSegments.length <= i) return null
 			const name = routeSegment.slice(1)
 			if (name !== '') {
 				const decoded: string[] = []

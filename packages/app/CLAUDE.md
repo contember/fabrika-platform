@@ -46,8 +46,9 @@ src/
   `@fabrika/auth-core`) before context, middleware or routing run. Middleware that
   reads the path therefore sees what the router and the proxy's gates saw.
 - The router splits paths literally: a trailing `/` is significant, so `/a/` and
-  `/a` are different routes. Never drop empty segments again — the gate matcher
-  compares the raw path, and the two must agree.
+  `/a` are different routes, and `/x/*rest` needs the `/` (it matches `/x/`, not
+  `/x`). Never drop empty segments again — the gate matcher compares the raw path,
+  and the two must agree (`provider-cloudflare`'s `proxy-to-router.test.ts`).
 - Error handling is structural. Never rely on cross-package `instanceof`.
 - The RPC wire protocol is `{ method, input }` requests and `{ result }` or
   `{ error }` responses. `{ batch }` is removed (A3): no client sends it. Until A3

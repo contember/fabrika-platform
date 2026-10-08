@@ -26,7 +26,9 @@ HTTP route patterns support typed `:segment` parameters and one optional termina
 wildcard such as `/public/*path`. The wildcard captures the decoded remaining
 path; it can never contain an encoded `/`, because step 1 refuses one. A trailing `/` is
 significant and matched literally: `/a/` and `/a` are different routes, and a `:segment`
-never matches the empty segment after a trailing `/`. `route.all()` mounts a Fetch-style handler for every method. It is the
+never matches the empty segment after a trailing `/`. A wildcard below the root needs the
+`/` before it, like the gate glob: `/public/*path` matches `/public/` with an empty
+remainder, not `/public`; `/*path` still matches `/`. `route.all()` mounts a Fetch-style handler for every method. It is the
 compatibility seam for an established REST surface that joins the shared
 application pipeline without changing its wire contract.
 

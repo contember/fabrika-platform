@@ -88,9 +88,15 @@ describe('matchRoutes', () => {
 		expect(await response.text()).toBe('docs/getting-started')
 	})
 
-	test('a terminal wildcard may capture an empty remainder', () => {
-		const matched = matchRoutes(routes, getRequest('https://x/public'))
-		expect(matched?.params).toEqual({ path: '' })
+	test('a terminal wildcard captures an empty remainder only after its slash', () => {
+		expect(matchRoutes(routes, getRequest('https://x/public/'))?.params).toEqual({ path: '' })
+		expect(matchRoutes(routes, getRequest('https://x/public'))).toBeNull()
+	})
+
+	test('a root wildcard still matches the root', () => {
+		const all = route.all('/*path', () => new Response('root'))
+		expect(matchRoutes([all], getRequest('https://x/'))?.params).toEqual({ path: '' })
+		expect(matchRoutes([all], getRequest('https://x/a/b'))?.params).toEqual({ path: 'a/b' })
 	})
 
 	test('a terminal wildcard keeps a trailing slash in what it captures', () => {
