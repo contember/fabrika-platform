@@ -194,7 +194,8 @@ setting is reimported as the enforceable control.
 
 Only the namespace proxy is public. Application services remain private. The
 proxy manifest contains all public apps assigned to that namespace, keyed by
-their configured domains, private upstreams, and ordered authorization gates.
+their configured domains and private upstreams, each with its ordered gates or,
+for a contract application, its endpoint table (`contractProxyTable`).
 Before an app deploy, the control plane:
 
 1. verifies namespace coordinates and claims;

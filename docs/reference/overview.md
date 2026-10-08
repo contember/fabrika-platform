@@ -316,9 +316,13 @@ scope.
 Three kinds of check refuse a request, and only the first is what ADR-0022 calls
 enforcement:
 
-- **Enforcement** — the ordered path gates. There is exactly one gate evaluator,
-  in `@fabrika/auth-core`, and the proxy is the only thing that runs it. It
-  decides whether a request reaches a private service at all.
+- **Enforcement** — the proxy's decision whether a request reaches a private
+  service at all. An installation service is protected by ordered path gates; there
+  is exactly one gate evaluator, in `@fabrika/auth-core`, and the proxy is the only
+  thing that runs it. A contract application is protected by its endpoint table: the
+  proxy selects one endpoint with `planEndpoint` and checks its caller kind, its
+  requirement and admission there, with no fall-through to another endpoint, then
+  names the endpoint and the digest of those rules in `X-Fabrika-Endpoint`.
 - **Authorization** — the action-and-scope check a service makes against an
   application-owned object coordinate. A path gate cannot make it, because the
   coordinate is known only once request data is validated. Every
@@ -342,15 +346,17 @@ proxy is publicly routed; app services stay internal, so bypassing auth stops be
 possible rather than merely discouraged. It is Caddy plus a loopback-bound Bun auth
 service on Zerops, and a thin Worker calling the same code in-process on Cloudflare.
 Caddy owns HTTP correctness and gets no vote on authorization: its configuration is a
-fixed three-step chain per app — delete the injected token and request-id headers,
+fixed three-step chain per app — delete the headers only the proxy may assert (token, request id, endpoint, delegation grant),
 `forward_auth`, proxy to the private upstream — and gate rules are never compiled into
-route matchers. Gates are evaluated once, in TypeScript, against the manifest. Before any
-gate is matched, the proxy refuses a non-canonical raw path with 400 and a request without a
+route matchers. Gates and endpoint tables are evaluated once, in TypeScript, against the
+manifest. Before any gate or endpoint is matched, the proxy refuses a non-canonical raw path with 400 and a request without a
 forwarded method; the application router refuses the same paths.
 
 Nothing downstream of the proxy enforces. An application reads the proxy-injected
 `X-Fabrika-Token`, verifies it locally against IAM's JWKS, and builds its
-`AuthContext`; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
+`AuthContext`. A contract application also serves only the endpoint
+`X-Fabrika-Endpoint` names, with the digest of its own rules, and answers 503
+otherwise; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
 cookie.
 
 A browser that authenticated at IAM reaches an app through a one-time code the proxy
