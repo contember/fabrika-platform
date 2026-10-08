@@ -215,6 +215,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		domain: row.domain,
 		publicOrigin: row.public_origin,
 		triggerRef: row.trigger_ref,
+		authoring: row.authoring === 1,
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),

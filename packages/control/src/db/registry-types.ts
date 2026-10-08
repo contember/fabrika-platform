@@ -27,6 +27,8 @@ export interface AppEnvRow {
 	provider_artifact_json: string
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. NULL = manual-only. */
 	trigger_ref: string | null
+	/** 1 when an operator marked this environment as an MCP authoring target (ADR-0049), else 0. */
+	authoring: number
 	created_at: number
 }
 
@@ -58,6 +60,8 @@ export interface AppEnvInput {
 	domain?: string | null
 	publicOrigin?: string | null
 	triggerRef?: string | null
+	/** Omitted keeps the stored flag; a new environment starts as not an authoring target. */
+	authoring?: boolean
 	namespaceId: string | null
 	provider: string
 	providerTargetJson: string
@@ -80,6 +84,14 @@ export interface NamespaceResourceClaimOwner {
 	ownerAppId: string | null
 	ownerEnv: string | null
 	resourceKeys: readonly string[]
+}
+
+/** An app's GitHub source binding is partial, stale, or points at another owner's repository. */
+export class SourceBindingError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = 'SourceBindingError'
+	}
 }
 
 export class NamespaceResourceClaimConflictError extends Error {

@@ -23,10 +23,12 @@ import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { gitHubAppClientFactory } from '../github/connections/credentials'
 import { createSourceConnections, type SourceConnectionPort } from '../github/connections/port'
+import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/workspace'
 import { controlPublicOrigin } from '../iam'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
 import { HttpIamAdminGateway } from './iam-admin'
+import { controlMcpRoute, type McpRoute } from './mcp'
 import { HttpOperationsService } from './operations'
 import { type GitHubSourceSeams, zeropsControlProvider, zeropsGitHubSource } from './provider'
 
@@ -44,6 +46,8 @@ export interface Runtime {
 	provider: ControlProvider
 	/** GitHub App administration over vault-held keys, consumed by the shared authenticated workflow. */
 	sourceConnection: SourceConnectionPort
+	/** The `/mcp` endpoint (ADR-0049); null when no console public origin is configured. */
+	mcp: McpRoute | null
 	config: ProcessConfig
 	/** The control queue (deploys + namespace jobs), as the concrete producer the consumer is built from. */
 	queue: PostgresJobQueue<ControlJobMessage>
@@ -146,6 +150,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 			vault: () => vault(env),
 			createClient: gitHubAppClientFactory(sourceSeams.githubAppFetch),
 		}),
+		mcp: controlMcpRoute(env, githubWorkspaceSource(env, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))),
 		config,
 		queue,
 		async shutdown(): Promise<void> {

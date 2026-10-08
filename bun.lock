@@ -188,6 +188,7 @@
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
         "@fabrika/runner-cloudflare": "workspace:*",
+        "@modelcontextprotocol/server": "2.2.0",
         "zod": "^3.25.76",
       },
       "devDependencies": {
@@ -791,6 +792,10 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
+    "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.2.0", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-iLhmprRmWI8EcosOA3wVvww22z02NkgqhV4fBH6f/odQBsi7xnJc0HGmi21yWO+/iKw2yzqVE127Zhna5/+JXw=="],
+
+    "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.2.0", "", { "dependencies": { "@modelcontextprotocol/core": "2.2.0", "zod": "^4.2.0" } }, "sha512-qFnltjus6Gk8Lx6J1w2RXmr3YPN22MNT6qD6zjAkaiWIlFIFxWClz0rXHNuJF/KSUyn5YGhkSvXkWDbQHVLFEQ=="],
+
     "@opice/cli": ["@opice/cli@0.11.0", "", { "peerDependencies": { "bun-types": "*" }, "bin": { "opice": "src/cli.ts" } }, "sha512-lTkPO6nHSJuLv/jwOb71ZLPrqbzga5OyhklK8fwgYVMvDq4T7LGoeHmLXgnP/hFzOzsYx1kXjGPX0V2cCTTooQ=="],
 
     "@opice/harness": ["@opice/harness@0.11.0", "", { "dependencies": { "@playwright/test": "^1.60.0", "playwright": "^1.60.0", "zod": "^4.4.3" }, "peerDependencies": { "bun-types": "*" } }, "sha512-p0+/cFmRgeYRxkMD/ODZl+vClWLEv8Vmb8byvcdwxiLN/v5J3tf1T6Pdd5iPpE2vg5YlwzhCVCUa4Qm288XLmg=="],
@@ -1202,6 +1207,10 @@
     "@fabrika/runner-cloudflare/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@fabrika/runner-container/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
+
+    "@modelcontextprotocol/core/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+
+    "@modelcontextprotocol/server/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "@opice/harness/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 

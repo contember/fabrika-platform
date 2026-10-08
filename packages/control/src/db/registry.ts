@@ -14,6 +14,7 @@ import {
 	NamespaceResourceClaimConflictError,
 	type NamespaceResourceClaimOwner,
 	type NamespaceResourceClaimRow,
+	SourceBindingError,
 } from './registry-types'
 import { firstRow } from './returning'
 
@@ -71,11 +72,11 @@ export class ControlRegistryRepository {
 		const installationId = row.github_installation_id
 		if (connectionId === null && installationId === null) return null
 		if (connectionId === null || installationId === null || row.app_owner === null) {
-			throw new Error('incomplete GitHub source binding')
+			throw new SourceBindingError('incomplete GitHub source binding')
 		}
 		const repositoryOwner = githubRepositoryOwner(row.repo_url)
 		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
-			throw new Error('GitHub source binding does not own the repository')
+			throw new SourceBindingError('GitHub source binding does not own the repository')
 		}
 		return { connectionId, installationId }
 	}
@@ -87,15 +88,15 @@ export class ControlRegistryRepository {
 		githubInstallationId: number | null,
 	): Promise<ProviderSourceBinding | null> {
 		if (githubConnectionId === null && githubInstallationId === null) return null
-		if (githubConnectionId === null || githubInstallationId === null) throw new Error('incomplete GitHub source binding')
+		if (githubConnectionId === null || githubInstallationId === null) throw new SourceBindingError('incomplete GitHub source binding')
 		const row = await this.d1.prepare(`SELECT app_owner
 			FROM github_source_connections_keyed WHERE connection_id = ? AND installation_id = ?`)
 			.bind(githubConnectionId, githubInstallationId)
 			.first<{ app_owner: string }>()
-		if (row === null) throw new Error('unknown GitHub source binding')
+		if (row === null) throw new SourceBindingError('unknown GitHub source binding')
 		const repositoryOwner = githubRepositoryOwner(repoUrl)
 		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
-			throw new Error('GitHub source binding does not own the repository')
+			throw new SourceBindingError('GitHub source binding does not own the repository')
 		}
 		return { connectionId: githubConnectionId, installationId: githubInstallationId }
 	}
@@ -428,6 +429,14 @@ export class ControlRegistryRepository {
 		return results
 	}
 
+	/** Every environment an operator marked as an MCP authoring target. */
+	async listAuthoringAppEnvs(): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM app_envs WHERE authoring = 1 ORDER BY app_id, env')
+			.all<AppEnvRow>()
+		return results
+	}
+
 	/**
 	 * Find the (app, env) a push ref triggers by EXACT trigger_ref. Kept for exact lookups; the webhook
 	 * uses `listTriggerEnvs` + `refMatches` instead so a glob trigger_ref (`refs/tags/v*`) also matches.
@@ -551,9 +560,9 @@ export class ControlRegistryRepository {
 		return this.d1
 			.prepare(`INSERT INTO app_envs (
 					app_id, env, domain, public_origin, trigger_ref, namespace_id, provider,
-					provider_target_json, provider_artifact_json
+					provider_target_json, provider_artifact_json, authoring
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0))
 				ON CONFLICT (app_id, env) DO UPDATE SET
 					domain = excluded.domain,
 					public_origin = excluded.public_origin,
@@ -561,7 +570,8 @@ export class ControlRegistryRepository {
 					namespace_id = excluded.namespace_id,
 					provider = excluded.provider,
 					provider_target_json = excluded.provider_target_json,
-					provider_artifact_json = excluded.provider_artifact_json
+					provider_artifact_json = excluded.provider_artifact_json,
+					authoring = COALESCE(?, app_envs.authoring)
 				RETURNING *`)
 			.bind(
 				input.appId,
@@ -573,6 +583,8 @@ export class ControlRegistryRepository {
 				input.provider,
 				input.providerTargetJson,
 				input.providerArtifactJson,
+				authoringFlag(input.authoring),
+				authoringFlag(input.authoring),
 			)
 	}
 
@@ -769,3 +781,5 @@ function githubRepositoryOwner(repoUrl: string): string | null {
 	const match = /^github\.com\/([^/]+)\/[^/]+$/.exec(repoUrl)
 	return match?.[1] ?? null
 }
+
+const authoringFlag = (authoring: boolean | undefined): number | null => authoring === undefined ? null : authoring ? 1 : 0

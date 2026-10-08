@@ -7,6 +7,7 @@
 // the token's `perms` are what `can()` reads, exactly as in production.
 
 import type { IamRpc } from '@fabrika/auth'
+import { buildResourceAccessClaims, RESOURCE_ACCESS_TOKEN_TYP } from '@fabrika/auth-core'
 import { ACTIONS } from '../../actions'
 
 export const TEST_ISSUER = 'https://propustka.test'
@@ -91,3 +92,26 @@ export async function testToken(input: {
 export const adminToken = await testToken({ label: 'admin@vozka.test', actions: ['*'] })
 export const operatorToken = await testToken({ label: 'operator@vozka.test', actions: ['deploy.*', 'operations.*'] })
 export const viewerToken = await testToken({ label: 'viewer@vozka.test', actions: [ACTIONS.DEPLOY_READ] })
+
+/** Sign an OAuth resource access token the way IAM mints one for an MCP client (`typ: at+jwt`). */
+export async function testResourceToken(input: { resource: string; label: string; actions: readonly string[]; app?: string }): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const header = base64Url(JSON.stringify({ alg: 'ES256', kid: KEY_ID, typ: RESOURCE_ACCESS_TOKEN_TYP }))
+	const payload = base64Url(JSON.stringify(buildResourceAccessClaims({
+		iss: TEST_ISSUER,
+		app: input.app ?? 'vozka',
+		resource: input.resource,
+		subject: `user-${input.label}`,
+		label: input.label,
+		permissions: input.actions.map((action) => ({ action, scope: null, source: 'grant' })),
+		issuedAt: now,
+		expiresAt: now + 300,
+		clientId: 'https://claude.ai/oauth/client.json',
+		scopes: ['authoring'],
+		grantId: 'grant-1',
+		tokenId: crypto.randomUUID(),
+	})))
+	const signingInput = `${header}.${payload}`
+	const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, new TextEncoder().encode(signingInput))
+	return `${signingInput}.${base64Url(new Uint8Array(signature))}`
+}

@@ -183,6 +183,8 @@ export interface AppEnvDto {
 	domain: string | null
 	publicOrigin: string | null
 	triggerRef: string | null
+	/** An MCP authoring target (ADR-0049): users with `source.workspace.*` grants may edit and deploy it. */
+	authoring: boolean
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto
@@ -194,6 +196,8 @@ export interface PutAppEnvRequest {
 	domain?: string | null
 	publicOrigin?: string | null
 	triggerRef?: string | null
+	/** Omitted keeps the stored value. Only a Zerops environment of an app with a GitHub connection qualifies. */
+	authoring?: boolean
 	namespaceId?: string | null
 	target: ProviderEnvelopeDto
 	artifact: ProviderEnvelopeDto

@@ -185,6 +185,16 @@ describe('entrypoint isolation', () => {
 		}
 	})
 
+	test('only the Bun entrypoint mounts MCP, and the workspace use cases stay provider-neutral', () => {
+		// ADR-0049: the Worker serves no `/mcp`, so the SDK must not enter its bundle.
+		expect([...walk('index.ts').externals]).not.toContain('@modelcontextprotocol/server')
+		expect(walk('index.ts').files).not.toContain('mcp/handler.ts')
+		expect([...walk('zerops/server.ts').externals]).toContain('@modelcontextprotocol/server')
+		const workspaces = walk('api/workspaces.ts')
+		expect([...workspaces.externals].filter((specifier) => PROVIDERS.has(specifier) || PROCESS_ONLY(specifier) || CLOUDFLARE_ONLY(specifier)))
+			.toEqual([])
+	})
+
 	test('the Worker and the shared layer never reach the process-only source modules', () => {
 		const processOnly = ['github/source/archive.ts', 'github/source/repository.ts', 'github/source/transport.ts', 'github/source/index.ts']
 		for (const entry of ['index.ts', ...SHARED]) {

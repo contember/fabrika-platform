@@ -95,27 +95,43 @@ export interface VaultGitHubCredentialsOptions {
 	readonly createClient?: SourceGitHubClientFactory
 }
 
+/**
+ * The vault-held App credential of exactly the connection a binding names. The connection must own the
+ * repository; a mismatch never falls back to another connection (ADR-0029).
+ */
+export async function readBoundAppCredential(
+	env: Env,
+	binding: SourcePrivateBinding,
+	repository: SourceRepository,
+): Promise<{ readonly installationId: number; readonly credential: GitHubAppCredential }> {
+	const connection = await env.REPOSITORIES.githubConnections.getConnectionByBinding(binding.connectionId, binding.installationId)
+	if (connection === null || connection.installationAccountLogin.toLowerCase() !== repository.owner.toLowerCase()) {
+		throw new SourceFailure('installation_not_found', 'credentials')
+	}
+	try {
+		const credential = await readGitHubAppCredential(await openVault(env), connection.appCredentialRef, connection.connectionId)
+		if (credential.appId !== connection.appId) throw new Error('GitHub App credential does not match its connection')
+		return { installationId: connection.installationId, credential }
+	} catch {
+		throw new SourceFailure('credentials_invalid', 'credentials')
+	}
+}
+
 /** Reads the vault on every operation; there is no in-memory key cache to go stale or leak. */
 export function vaultGitHubCredentials(env: Env, options: VaultGitHubCredentialsOptions = {}): GitHubSourceCredentials {
 	const createClient = options.createClient ?? gitHubAppClientFactory()
 	return {
 		async repositoryToken(input) {
-			const connection = await env.REPOSITORIES.githubConnections.getConnectionByBinding(input.connectionId, input.installationId)
-			// The binding names one connection; a mismatch never falls back to another (ADR-0029).
-			if (connection === null || connection.installationAccountLogin.toLowerCase() !== input.repository.owner.toLowerCase()) {
-				throw new SourceFailure('installation_not_found', 'credentials')
-			}
+			const { installationId, credential } = await readBoundAppCredential(env, input, input.repository)
 			let client: SourceGitHubClient
 			try {
-				const credential = await readGitHubAppCredential(await openVault(env), connection.appCredentialRef, connection.connectionId)
-				if (credential.appId !== connection.appId) throw new Error('GitHub App credential does not match its connection')
 				client = await createClient(credential)
 			} catch {
 				throw new SourceFailure('credentials_invalid', 'credentials')
 			}
 			try {
 				const token = await client.mintRepositoryToken({
-					installationId: connection.installationId,
+					installationId,
 					owner: input.repository.owner,
 					repository: input.repository.name,
 					signal: input.signal,

@@ -692,13 +692,7 @@ describe('provider-neutral run lifecycle', () => {
 		expect((await requireRun(db, runId)).status).toBe('running')
 		finishSecond()
 		expect(await deploy).toEqual({ runId, status: 'succeeded' })
-		const response = await getRunLogUseCase({
-			repositories: db,
-			queue: { send: () => Promise.resolve() },
-			logs: stored.logs,
-			cancel: () => Promise.resolve(),
-			auth: allowAllAuth(),
-		}, runId)
+		const response = await getRunLogUseCase({ repositories: db, logs: stored.logs, auth: allowAllAuth() }, runId)
 		expect(response.status).toBe('succeeded')
 		expect(response.lines.map(({ stream, text }) => ({ stream, text }))).toEqual([
 			{ stream: 'meta', text: 'checking source' },

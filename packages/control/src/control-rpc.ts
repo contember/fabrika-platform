@@ -115,6 +115,7 @@ const appEnvironmentBody = z.object({
 	domain: nullableString,
 	publicOrigin: nullableString,
 	triggerRef: nullableString,
+	authoring: z.boolean().optional(),
 	namespaceId: nullableString,
 	target: providerEnvelopeSchema,
 	artifact: providerEnvelopeSchema,

@@ -23,5 +23,7 @@ export {
 	NamespaceResourceClaimConflictError,
 	type NamespaceResourceClaimOwner,
 	type NamespaceResourceClaimRow,
+	SourceBindingError,
 } from './db/registry-types'
 export { parseProviderJson, RunRepository, type RunRow, type RunStatus, type RunTrigger, serializeProviderJson } from './db/runs'
+export { type WorkspaceInput, WorkspaceRepository, type WorkspaceRow } from './db/workspaces'

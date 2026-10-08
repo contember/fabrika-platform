@@ -107,6 +107,12 @@ export class RunRepository {
 		)
 	}
 
+	/** The newest run that deployed one ref to one environment. */
+	async getLatestRunForRef(input: { appId: string; env: string; ref: string }): Promise<RunRow | null> {
+		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND ref = ?
+			ORDER BY id DESC LIMIT 1`).bind(input.appId, input.env, input.ref).first<RunRow>()
+	}
+
 	async getRun(id: string): Promise<RunRow | null> {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}

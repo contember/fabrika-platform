@@ -24,6 +24,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	const app = await requireApp(c, appId)
 	assertProxyDomain(input.domain)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
+	if (input.authoring === true) assertAuthoringTarget(c.provider.id, app)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
 	const nextNamespaceId = namespace?.id ?? null
@@ -66,6 +67,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		domain: registration.environment.domain ?? null,
 		publicOrigin: registration.environment.publicOrigin ?? null,
 		triggerRef: input.triggerRef ?? null,
+		...(input.authoring === undefined ? {} : { authoring: input.authoring }),
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
@@ -84,7 +86,12 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		action: 'app.env.upsert',
 		resourceType: 'app_env',
 		resourceId: `${appId}/${env}`,
-		metadata: { triggerRef: input.triggerRef ?? null, namespaceId: row.namespace_id, previousNamespaceId: existing?.namespace_id ?? null },
+		metadata: {
+			triggerRef: input.triggerRef ?? null,
+			...(input.authoring === undefined ? {} : { authoring: input.authoring }),
+			namespaceId: row.namespace_id,
+			previousNamespaceId: existing?.namespace_id ?? null,
+		},
 	})
 	notifyCatalogChanged(c)
 	// The manifest carries the host, the namespace, and the artifact's own `upstream` + `gates` — and this
@@ -110,6 +117,13 @@ export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: stri
 	notifyCatalogChanged(c)
 	await syncChangedNamespaceProxies(c.namespaceProxyChanged, routed === null ? [] : [routed])
 	return { ok: true }
+}
+
+/** ADR-0049: authoring is Zerops-only, and Source can reach the repository only through the app's GitHub connection. */
+function assertAuthoringTarget(provider: string, app: AppRow): void {
+	if (provider !== 'zerops' || app.github_connection_id === null || app.github_installation_id === null) {
+		fail(409, 'only a Zerops environment of an app with a GitHub connection can be an authoring target')
+	}
 }
 
 const toProviderApp = (row: AppRow): ProviderApp => ({

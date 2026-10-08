@@ -6,6 +6,7 @@ import { OperationsReleaseRepository } from './operations-releases'
 import { RepoPollingRepository } from './polling'
 import { ControlRegistryRepository } from './registry'
 import { RunRepository } from './runs'
+import { WorkspaceRepository } from './workspaces'
 
 /** Control-plane persistence capabilities selected together by a runtime composition root. */
 export interface ControlRepositories {
@@ -16,6 +17,7 @@ export interface ControlRepositories {
 	operationsCatalog: OperationsCatalogRepository
 	operationsReleases: OperationsReleaseRepository
 	githubConnections: GitHubConnectionStore
+	workspaces: WorkspaceRepository
 }
 
 /** The portable repository bundle. */
@@ -29,5 +31,6 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		operationsCatalog: new OperationsCatalogRepository(db, now),
 		operationsReleases: new OperationsReleaseRepository(db, now),
 		githubConnections: new GitHubConnectionStore(db, now),
+		workspaces: new WorkspaceRepository(db),
 	}
 }

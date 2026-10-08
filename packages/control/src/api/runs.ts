@@ -36,7 +36,13 @@ export interface RunsUseCaseContext {
 	auth: AuthContext
 }
 
-function toRunDto(row: RunRow): RunDto {
+/** The slice a run read needs; a reader never holds the cancel seam. */
+export type RunReadContext = Pick<RunsUseCaseContext, 'repositories' | 'logs' | 'auth'>
+
+/** The slice that creates and enqueues a run. */
+export type RunTriggerContext = Pick<RunsUseCaseContext, 'repositories' | 'queue' | 'auth'>
+
+export function toRunDto(row: RunRow): RunDto {
 	return {
 		id: row.id,
 		appId: row.app_id,
@@ -74,7 +80,7 @@ export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput
 	return { items, nextCursor }
 }
 
-export async function getRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
+export async function getRunUseCase(c: RunReadContext, id: string): Promise<RunDto> {
 	const row = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	return toRunDto(row)
 }
@@ -105,7 +111,7 @@ export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promi
  * The full streamed log for a run, read from R2 (runs/<id>/logs.ndjson). Returns the parsed lines so
  * the dashboard renders them without re-parsing NDJSON. 404 when the run / its log doesn't exist yet.
  */
-export async function getRunLogUseCase(c: RunsUseCaseContext, id: string): Promise<RunLogResponse> {
+export async function getRunLogUseCase(c: RunReadContext, id: string): Promise<RunLogResponse> {
 	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	if (!object) {
@@ -175,18 +181,37 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.
 	const concreteTriggerRef = appEnv.trigger_ref !== null && !isRefPattern(appEnv.trigger_ref) ? appEnv.trigger_ref : null
 	const ref = input.ref ?? concreteTriggerRef ?? `refs/heads/${app.default_branch}`
-	const run = await c.repositories.runs.createRun({ id: uuidv7(), appId, env, ref, trigger: 'manual' })
+	return createManualRun(c, { appId, env, ref })
+}
+
+/**
+ * Write a `pending` manual run, then enqueue it, then audit. The caller has already authorized
+ * `deploy.trigger` at the coordinates. A `commitSha` pins the run to that exact commit of `ref`.
+ */
+export async function createManualRun(
+	c: RunTriggerContext,
+	input: { appId: string; env: string; ref: string; commitSha?: string },
+): Promise<RunDto> {
+	const { appId, env, ref } = input
+	const run = await c.repositories.runs.createRun({
+		id: uuidv7(),
+		appId,
+		env,
+		ref,
+		...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }),
+		trigger: 'manual',
+	})
 	await c.queue.send({ runId: run.id })
 	await c.auth.audit({
 		action: 'deploy.trigger',
 		resourceType: 'run',
 		resourceId: run.id,
-		metadata: { appId, env, ref, trigger: 'manual' },
+		metadata: { appId, env, ref, ...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }), trigger: 'manual' },
 	})
 	return toRunDto(run)
 }
 
-async function requireVisibleRun(c: RunsUseCaseContext, id: string, action: string): Promise<RunRow> {
+async function requireVisibleRun(c: RunReadContext, id: string, action: string): Promise<RunRow> {
 	const run = await c.repositories.runs.getRun(id)
 	if (run === null || !canAtCoordinates(c.auth, action, run.app_id, run.env)) fail(404, 'run not found')
 	return run
@@ -205,6 +230,6 @@ function authorizeList(auth: AuthContext, input: RunListInput): void {
 	if (!allowed) fail(403, `not authorized: ${ACTIONS.DEPLOY_READ}`)
 }
 
-function canAtCoordinates(auth: AuthContext, action: string, appId: string, env: string): boolean {
+export function canAtCoordinates(auth: AuthContext, action: string, appId: string, env: string): boolean {
 	return auth.can(action, appScope(appId)) || auth.can(action, envScope(env))
 }

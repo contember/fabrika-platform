@@ -31,6 +31,7 @@ const environmentsSchema = z.object({
 		domain: storedTextSchema.nullable(),
 		publicOrigin: storedTextSchema.nullable(),
 		triggerRef: storedTextSchema.nullable(),
+		authoring: z.boolean(),
 		namespaceId: storedTextSchema.nullable(),
 		provider: storedTextSchema,
 		target: envelopeSchema,

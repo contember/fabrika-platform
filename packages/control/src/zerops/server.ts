@@ -25,6 +25,7 @@ import type { SourceConnectionPort } from '../github/connections/port'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { locks, operationsReleaseDeps, repositories } from '../services'
+import { isMcpRequest, type McpRoute } from './mcp'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -32,8 +33,23 @@ export function createFetchHandler(
 	env: Env,
 	provider: Runtime['provider'],
 	sourceConnection: SourceConnectionPort,
+	mcp: McpRoute | null = null,
 ): (request: Request) => Promise<Response> {
-	return createControlBunHandler(env, provider, sourceConnection).fetch
+	return withMcp(createControlBunHandler(env, provider, sourceConnection).fetch, mcp)
+}
+
+/** `/mcp` goes to the MCP endpoint; every other request reaches `controlApp` unchanged. */
+function withMcp(app: (request: Request) => Promise<Response>, mcp: McpRoute | null): (request: Request) => Promise<Response> {
+	if (mcp === null) return app
+	return async (request) => {
+		if (!isMcpRequest(request)) return app(request)
+		try {
+			return await mcp(request)
+		} catch (cause) {
+			console.error('mcp request failed:', cause instanceof Error ? cause.message : 'unknown error')
+			return new Response('internal error', { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } })
+		}
+	}
 }
 
 function createControlBunHandler(env: Env, provider: Runtime['provider'], sourceConnection: SourceConnectionPort): BunHandler {
@@ -112,7 +128,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 		// listener speaks HTTP and holds no certificates. Nothing here reads the socket's scheme: the
 		// proxy owns every cookie now, and `src/iam.ts` takes the console's own origin from the configured
 		// public domain (`FABRIKA_CONTROL_DOMAIN`), because behind a terminating balancer the socket lies.
-		fetch: appHandler.fetch,
+		fetch: withMcp(appHandler.fetch, runtime.mcp),
 		// Backstop for anything raised outside the handler. The handler already catches its own throws
 		// (see `createFetchHandler`); without this, Bun's default page would answer with source lines.
 		error(err: unknown): Response {

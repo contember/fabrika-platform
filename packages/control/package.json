@@ -90,6 +90,7 @@
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/runner-cloudflare": "workspace:*",
+		"@modelcontextprotocol/server": "2.2.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {

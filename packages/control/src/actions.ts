@@ -36,6 +36,12 @@ export const ACTIONS = {
 	SECRET_MANAGE: 'secret.manage',
 	/** Manage the platform GitHub source connection. Global because it changes control-wide credentials. */
 	SOURCE_CONNECTION_MANAGE: 'source.connection.manage',
+	/** Read the files of one's own Git workspaces on an authoring target (ADR-0049). Scoped by app/environment. */
+	SOURCE_WORKSPACE_READ: 'source.workspace.read',
+	/** Create Git workspaces and commit to them on an authoring target. Scoped by app/environment. */
+	SOURCE_WORKSPACE_WRITE: 'source.workspace.write',
+	/** Open a pull request from one's own workspace to the default branch. Scoped by app/environment. */
+	SOURCE_PULL_REQUEST_CREATE: 'source.pull-request.create',
 } as const
 
 export type VozkaAction = (typeof ACTIONS)[keyof typeof ACTIONS]

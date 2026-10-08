@@ -35,6 +35,7 @@ const existing: AppEnvDto = {
 	domain: 'shop.example.com',
 	publicOrigin: 'https://public.example.com',
 	triggerRef: 'refs/tags/v*',
+	authoring: false,
 	provider: 'zerops',
 	target: { provider: 'zerops', version: 2, payload: {} },
 	artifact: { provider: 'zerops', version: 2, payload: {} },

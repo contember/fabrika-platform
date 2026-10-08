@@ -36,6 +36,7 @@ export class RepoPollingRepository {
 					a.created_at AS a_created_at,
 						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.public_origin AS e_public_origin,
 						e.trigger_ref AS e_trigger_ref,
+						e.authoring AS e_authoring,
 						e.namespace_id AS e_namespace_id,
 						e.provider AS e_provider, e.provider_target_json AS e_provider_target_json,
 						e.provider_artifact_json AS e_provider_artifact_json,
@@ -63,6 +64,7 @@ export class RepoPollingRepository {
 				domain: r.e_domain,
 				public_origin: r.e_public_origin,
 				trigger_ref: r.e_trigger_ref,
+				authoring: r.e_authoring,
 				namespace_id: r.e_namespace_id,
 				provider: r.e_provider,
 				provider_target_json: r.e_provider_target_json,
@@ -123,6 +125,7 @@ interface PollEligibleJoinRow {
 	e_domain: string | null
 	e_public_origin: string | null
 	e_trigger_ref: string | null
+	e_authoring: number
 	e_namespace_id: string | null
 	e_provider: string
 	e_provider_target_json: string

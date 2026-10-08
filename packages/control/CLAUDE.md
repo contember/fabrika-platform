@@ -280,6 +280,17 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which
   is the id the provider's own marker recovery is keyed to. It deletes NO provider resource (ADR-0034) and
   answers with the row the DELETE returned, so the operator is told what is now unowned.
+- **MCP authoring is a Bun-only protocol adapter (ADR-0049).** `src/zerops/server.ts` routes
+  `POST|GET|DELETE /mcp` to `src/mcp/handler.ts`; everything else reaches `controlApp`. The Worker graph
+  never imports the MCP SDK (`entrypoint-isolation.test.ts`). `/mcp` verifies the injected token for the
+  resource profile `controlMcpResource(controlPublicOrigin)` only, requires `AuthContext.oauth` and a
+  user, and never applies the bootstrap-admin hatch. The tools call `src/api/workspaces.ts`, which reaches
+  the repository through the `WorkspaceSourcePort` — `src/github/workspace.ts`, the binding's own GitHub
+  App with its key read from the vault per operation. A workspace is the branch `fabrika/<id>` owned by one
+  principal; every use case re-checks `app_envs.authoring`, the action at the coordinates and ownership, and
+  answers 404 otherwise. Paths are repository-relative (`isRepositoryPath`, at the MCP boundary), and
+  protected paths (`zerops.y[a]ml`, `fabrika.*`, everything under `.github/`) are refused before GitHub is
+  called. `get_deployment` reaches only runs of the caller's own workspace branches.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

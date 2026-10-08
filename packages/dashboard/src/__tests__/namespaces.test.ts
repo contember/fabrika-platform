@@ -16,6 +16,7 @@ const environment: AppEnvDto = {
 	domain: null,
 	publicOrigin: 'http://notes.localhost:18081',
 	triggerRef: null,
+	authoring: false,
 	namespaceId: null,
 	provider: 'zerops',
 	target: envelope,
