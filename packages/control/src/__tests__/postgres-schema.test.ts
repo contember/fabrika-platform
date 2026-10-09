@@ -31,6 +31,7 @@ import { applyMigrations } from '../zerops/migrate'
 import { createFetchHandler } from '../zerops/server'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
+import { protectionRaceScenario } from './helpers/protection-race'
 import { fakeControlProvider } from './helpers/provider'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv } from './helpers/tokens'
@@ -70,6 +71,7 @@ async function reset(): Promise<void> {
 			'app_vars',
 			'app_secrets',
 			'app_envs',
+			'app_env_protection',
 			'deployment_namespaces',
 			'apps',
 			'vault',
@@ -527,12 +529,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.registry.getAppEnv('acme', 'prod'))?.protected).toBe(1)
 		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(0)
 		expect(await db.registry.setAppEnvProtected('acme', 'stage', true)).toMatchObject({ protected: 1, protection_revision: 1, generation: 1 })
-		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
-		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(1)
-		// The flag outlives the row: a recreated environment starts with it.
+		// A put advances the generation; the stored flag stays.
+		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).toMatchObject({ protected: 1, generation: 2 })
+		// The flag and the counters outlive the row: a recreated environment starts with them.
 		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(true)
-		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
-		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(1)
+		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).toMatchObject({ protected: 1, generation: 3, protection_revision: 1 })
 
 		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
 		const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0' })
@@ -556,6 +557,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await owned.approve(second.id, '{"a":1}', '{"by":"ada"}')).toBe(true)
 		expect(await db.runs.getRun(second.id)).toMatchObject({ status: 'pending', approval_json: '{"by":"ada"}' })
 		expect(await owned.reject(second.id, '{"a":1}')).toBe(false)
+	})
+
+	test('approved access: stale registry writes and a stale publication lose to a protection change', async () => {
+		await reset()
+		await protectionRaceScenario(db, new SqlDeployLocks(raw))
 	})
 
 	test('runs: create, status-guarded transitions, keyset paging, and stale candidates', async () => {

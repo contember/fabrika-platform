@@ -12,12 +12,16 @@ ALTER TABLE app_envs ADD COLUMN protection_revision INTEGER NOT NULL DEFAULT 0;
 -- provider apply an artifact's gates and IAM schema (until B10).
 ALTER TABLE app_envs ADD COLUMN contract_app INTEGER CHECK (contract_app IN (0, 1));
 
--- The `protected` flag outlives its environment: deleting `<app>/<env>` and creating it again keeps the human's
--- choice. No foreign key, so deleting the environment or the application leaves the row.
+-- What outlives an environment: deleting `<app>/<env>` writes its `protected` flag and its counters here, with
+-- `generation` advanced, and creating it again starts from them. The human's choice survives, and a run that
+-- classified against the deleted environment cannot publish into the new one. No foreign key, so deleting the
+-- environment or the application leaves the row.
 CREATE TABLE app_env_protection (
-	app_id    TEXT NOT NULL,
-	env       TEXT NOT NULL,
-	protected INTEGER NOT NULL CHECK (protected IN (0, 1)),
+	app_id              TEXT NOT NULL,
+	env                 TEXT NOT NULL,
+	protected           INTEGER NOT NULL CHECK (protected IN (0, 1)),
+	generation          INTEGER NOT NULL,
+	protection_revision INTEGER NOT NULL,
 	PRIMARY KEY (app_id, env)
 );
 

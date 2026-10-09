@@ -108,6 +108,21 @@ export class SourceBindingError extends Error {
 	}
 }
 
+/**
+ * What a registry write read before it decided (ADR-0050): the environment did not exist, or existed at this
+ * `generation`. The write applies only if that still holds, so a protection change, a publication or another
+ * registry write in between refuses it.
+ */
+export type AppEnvExpectation = { readonly absent: true } | { readonly generation: number }
+
+/** The environment is not what the write read: another change landed first. */
+export class AppEnvChangedError extends Error {
+	constructor(readonly appId: string, readonly env: string) {
+		super(`app env ${appId}/${env} changed while the request ran`)
+		this.name = 'AppEnvChangedError'
+	}
+}
+
 export class NamespaceResourceClaimConflictError extends Error {
 	constructor(readonly namespaceId: string, readonly resourceKey: string) {
 		super(`namespace resource claim owner is immutable: ${namespaceId}/${resourceKey}`)

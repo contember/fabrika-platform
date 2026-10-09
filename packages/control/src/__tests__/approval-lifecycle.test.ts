@@ -25,6 +25,7 @@ import { memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
+import { protectionRaceScenario } from './helpers/protection-race'
 
 const COMMIT = 'c'.repeat(40)
 const ORIGIN = 'https://control.example.test'
@@ -457,6 +458,11 @@ describe('approved access through the run lifecycle', () => {
 })
 
 describe('protection survives the registry', () => {
+	test('stale registry writes and a stale publication lose to a protection change (SQLite)', async () => {
+		const w = world()
+		await protectionRaceScenario(w.db, makeFakeLock(w.db))
+	})
+
 	function registry(w: World, caller: AuthContext, request = consoleRequest()): RegistryUseCaseContext {
 		return {
 			repositories: w.db,

@@ -11,6 +11,8 @@ export { OperationsReleaseRepository, type OperationsReleaseSyncRow, type Termin
 export { RepoPollingRepository, type RepoPollStateRow } from './db/polling'
 export { ControlRegistryRepository, isUnconfirmedNamespaceUpdate } from './db/registry'
 export {
+	AppEnvChangedError,
+	type AppEnvExpectation,
 	type AppEnvInput,
 	type AppEnvRow,
 	type AppInput,

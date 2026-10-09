@@ -1,6 +1,6 @@
 import type { AppDto, AppOptionalFields, CreateAppRequest, ListResponse, OkResponse, UpdateAppRequest } from '@fabrika/control-contract'
 import { requireHumanForProtectedDelete } from '../../approval/human'
-import { type AppEnvRow, type AppRow, type NamespaceResourceClaimRow } from '../../db'
+import { AppEnvChangedError, type AppEnvRow, type AppRow, type NamespaceResourceClaimRow } from '../../db'
 import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-event'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
@@ -55,7 +55,14 @@ export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): P
 	requireHumanForProtectedDelete(c.auth, c.admission, envs)
 	// Read the routed namespaces BEFORE the delete: afterwards the rows that name them are gone.
 	const namespaceIds = routedNamespaceIds(envs)
-	if (!(await c.repositories.registry.deleteApp(id))) fail(404, 'app not found')
+	try {
+		// Only the environments whose protection was checked, at those generations.
+		const expected = envs.map((row) => ({ env: row.env, generation: row.generation }))
+		if (!(await c.repositories.registry.deleteApp(id, expected))) fail(404, 'app not found')
+	} catch (cause) {
+		if (cause instanceof AppEnvChangedError) fail(409, `app ${id} changed while the request ran; retry`)
+		throw cause
+	}
 	await c.auth.audit({ action: 'app.delete', resourceType: 'app', resourceId: id })
 	notifyCatalogChanged(c)
 	await syncChangedNamespaceProxies(c.namespaceProxyChanged, namespaceIds)

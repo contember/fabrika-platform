@@ -1,7 +1,7 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest } from '@fabrika/control-contract'
 import type { ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
 import { requireHumanForProtectedDelete } from '../../approval/human'
-import { type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
+import { AppEnvChangedError, type AppEnvExpectation, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
 import { assertNoHeldResourceClaims, requireApp } from './apps'
@@ -80,13 +80,16 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
 	}
+	// Every check above read `existing`; the write applies only while the environment is still that one (ADR-0050).
+	const expected: AppEnvExpectation = existing === null ? { absent: true } : { generation: existing.generation }
 	let row: AppEnvRow
 	try {
 		row = registration.environment.namespace === undefined
-			? await c.repositories.registry.upsertAppEnv(persistence)
-			: (await c.repositories.registry.upsertAppEnvWithNamespaceResourceClaims(persistence, resourceClaims)).appEnv
+			? await c.repositories.registry.upsertAppEnv(persistence, expected)
+			: (await c.repositories.registry.upsertAppEnvWithNamespaceResourceClaims(persistence, resourceClaims, expected)).appEnv
 	} catch (cause) {
 		if (cause instanceof NamespaceResourceClaimConflictError) fail(409, cause.message)
+		if (cause instanceof AppEnvChangedError) fail(409, `${cause.message}; retry`)
 		throw cause
 	}
 	await c.auth.audit({
@@ -120,8 +123,15 @@ export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: stri
 	assertNoHeldResourceClaims(`app env ${appId}/${env}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(appId, env))
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
 	requireHumanForProtectedDelete(c.auth, c.admission, existing === null ? [] : [existing])
-	const routed = existing?.namespace_id ?? null
-	if (!(await c.repositories.registry.deleteAppEnv(appId, env))) fail(404, 'app env not found')
+	if (existing === null) fail(404, 'app env not found')
+	const routed = existing.namespace_id
+	try {
+		// At the generation whose protection was checked: a protection change in between refuses the delete.
+		if (!(await c.repositories.registry.deleteAppEnv(appId, env, existing.generation))) fail(404, 'app env not found')
+	} catch (cause) {
+		if (cause instanceof AppEnvChangedError) fail(409, `${cause.message}; retry`)
+		throw cause
+	}
 	await c.auth.audit({ action: 'app.env.delete', resourceType: 'app_env', resourceId: `${appId}/${env}` })
 	notifyCatalogChanged(c)
 	await syncChangedNamespaceProxies(c.namespaceProxyChanged, routed === null ? [] : [routed])
