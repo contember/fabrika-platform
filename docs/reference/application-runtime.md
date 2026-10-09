@@ -319,7 +319,9 @@ the same pipeline:
   which has no object storage or no `scoped(tables)` data layer. `serveContract` opens the
   storage (path-style S3, `@fabrika/platform-node`'s `S3BlobStore`) from
   `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a
-  partial set stops the boot. Downloads always go through the application: there are no
+  partial set stops the boot. On Zerops the platform writes all four into the generated run
+  section as `${<host>_…}` references to the application's one `object-storage` service,
+  which must be a bucket the platform created for it. Downloads always go through the application: there are no
   presigned URLs.
 
 A `Ref` and a `Within` are classes with private fields, bound to their request with

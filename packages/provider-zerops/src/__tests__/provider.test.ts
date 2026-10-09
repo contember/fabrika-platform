@@ -1049,21 +1049,26 @@ describe('a contract application deploy', () => {
 		contractDigest: contractDigest(notesArtifact),
 		schema: schemaFromContract(notesArtifact),
 	}
-	const contractArtifact = async (contract: boolean) => {
+	const contractArtifact = async (contract: boolean, services: ZeropsServiceSpec[]) => {
 		const config: ZeropsAppConfig = {
-			...app([API]),
+			...app(services),
 			id: 'notes',
 			target: {
-				...app([API]).target,
+				...app(services).target,
 				...(contract ? { contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } } : {}),
 			},
 		}
 		return compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
 	}
-	const contractRun = async (contract: boolean, granted: ProviderApprovedAccess | 'artifact' | 'none'): Promise<ZeropsDeployResult> => {
+	const contractRun = async (
+		contract: boolean,
+		granted: ProviderApprovedAccess | 'artifact' | 'none',
+		services: ZeropsServiceSpec[] = [API],
+		overrides: Overrides = {},
+	): Promise<ZeropsDeployResult> => {
 		const { artifactAccess: _trusted, ...run } = deployRun(recorded)
-		const artifact = await contractArtifact(contract)
-		return createZeropsDeployer(() => makeCollaborators(recorded))({
+		const artifact = await contractArtifact(contract, services)
+		return createZeropsDeployer(() => makeCollaborators(recorded, overrides))({
 			...run,
 			appId: 'notes',
 			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
@@ -1119,5 +1124,31 @@ describe('a contract application deploy', () => {
 		expect(recorded.logs).toContain(
 			`  generated run section; build checks @fabrika/check@${FABRIKA_CHECK_VERSION}, typescript@${PLATFORM_TYPESCRIPT_VERSION}`,
 		)
+	})
+
+	test('a files application gets its own bucket as FABRIKA_APP_STORAGE_* references in the generated run section', async () => {
+		const result = await contractRun(true, approved, [BUCKET, API], {
+			services: { files: { id: 'bucket-1' } },
+			importedServices: [{ id: 'bucket-1', name: 'files', processes: [{ id: 'create-1', actionName: 'stack.create' }] }],
+		})
+
+		expect(result.status).toBe('succeeded')
+		const sent = recorded.builds[0]?.zeropsYaml ?? ''
+		expect(sent).toContain('FABRIKA_APP_STORAGE_ENDPOINT: "${files_apiUrl}"')
+		expect(sent).toContain('FABRIKA_APP_STORAGE_BUCKET: "${files_bucketName}"')
+		expect(sent).toContain('FABRIKA_APP_STORAGE_ACCESS_KEY_ID: "${files_accessKeyId}"')
+		expect(sent).toContain('FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: "${files_secretAccessKey}"')
+		expect(recorded.envWrites.map((write) => write.key).filter((key) => key.startsWith('FABRIKA_APP_STORAGE_'))).toEqual([])
+	})
+
+	test("another application's bucket is refused before any version exists, so no storage variable reaches a build", async () => {
+		const result = await contractRun(true, approved, [BUCKET, API], {
+			services: { files: { id: 'bucket-of-other-app' } },
+			serviceEnv: [{ id: 'env-provenance', key: 'FABRIKA_STORAGE_PROVENANCE', content: 'bucket-1' }],
+		})
+
+		expect(stepError(result, 'verify-exposure')).toContain('service `files` is a bucket the platform did not create private (no provenance)')
+		expect(recorded.calls).not.toContain('createAppVersion:service-1')
+		expect(recorded.builds).toEqual([])
 	})
 })

@@ -404,6 +404,15 @@ const applicationDatabaseUrl = (
 	return host === undefined ? null : `\${${host}_connectionTlsString}/\${${host}_dbName}?sslmode=require`
 }
 
+/** The hostname the `FABRIKA_APP_STORAGE_*` references name: the application's one object-storage service. */
+const applicationStorageHostname = (services: FabrikaManifestImportDocument['services']): string | null => {
+	const own = services.filter((service) => OBJECT_STORAGE_TYPES.has(service.type)).map((service) => service.hostname)
+	if (own.length > 1) {
+		throw new Error('invalid fabrika manifest: a contract application has one object storage; it declares more than one')
+	}
+	return own[0] ?? null
+}
+
 /** What the platform renders a contract application's execution descriptor from, or null for any other application. */
 export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecution | null => {
 	const { contract } = manifest.target
@@ -412,6 +421,7 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 		appId: manifest.app.id,
 		contract,
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
+		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 	}
 }
@@ -457,6 +467,7 @@ export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAcc
 		appId: manifest.app.id,
 		contract: zeropsContractRun(access.contract),
 		databaseUrl: applicationDatabaseUrl(manifest.target.importDocument.services, manifest.target.namespaceResources),
+		storageHostname: applicationStorageHostname(manifest.target.importDocument.services),
 		runtimePackages: manifest.target.runtimePackages ?? [],
 	}
 }
@@ -531,6 +542,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (contract !== undefined) {
 		if (!LOCKED_APP_ID_PATTERN.test(id)) throw new Error('invalid fabrika manifest: a contract application id must match [a-z0-9][a-z0-9-]*')
 		applicationDatabaseUrl(importDocument.services, namespaceResources)
+		applicationStorageHostname(importDocument.services)
 		const entries = parsedDescriptor.document['zerops']
 		const entry = Array.isArray(entries) ? entries.find((candidate) => isDescriptorSetup(candidate, selectedSetup)) : undefined
 		if (entry !== undefined) lockedAuthoredBuild(entry, selectedSetup)

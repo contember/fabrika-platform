@@ -924,7 +924,7 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
-	for (const name of ['FABRIKA_RELEASE', 'FABRIKA_SERVICE_KEY']) {
+	for (const name of ['FABRIKA_RELEASE', 'FABRIKA_SERVICE_KEY', 'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY']) {
 		test(`refuses reserved secret ${name} on put and delete before mutation`, async () => {
 			const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
 			if (control.secrets === undefined) throw new Error('missing secrets')

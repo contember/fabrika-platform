@@ -2,7 +2,7 @@
 // runs. Of the authored setup only `build.base`, `build.os` and the SPA's `build.buildCommands` survive; the rest of
 // the build, the deploy gate and the whole `run` section are generated here. PURE — no network, no filesystem.
 
-import { type ContractArtifact, contractDigest, FABRIKA_CONTRACT_DIGEST } from '@fabrika/auth-core'
+import { type ContractArtifact, contractDigest, FABRIKA_CONTRACT_DIGEST, type FrameworkVariableName } from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import packageManifest from '../package.json'
 import { renderYaml } from './compile'
@@ -49,6 +49,8 @@ export interface ZeropsLockedExecution {
 	readonly contract: ZeropsContractRun
 	/** A `${host_…}` reference to the application's PostgreSQL service, or null when it has none. */
 	readonly databaseUrl: string | null
+	/** The hostname of the application's one object-storage service, or null when it has none. */
+	readonly storageHostname: string | null
 	readonly runtimePackages: readonly ZeropsRuntimePackage[]
 }
 
@@ -233,6 +235,16 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution): readon
 
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort()
 
+type StorageVariable = Extract<FrameworkVariableName, `FABRIKA_APP_STORAGE_${string}`>
+
+/** The file collections' object storage, as references Zerops resolves at runtime: no credential passes through Fabrika. */
+const storageVariables = (hostname: string): Record<StorageVariable, string> => ({
+	FABRIKA_APP_STORAGE_ENDPOINT: `\${${hostname}_apiUrl}`,
+	FABRIKA_APP_STORAGE_BUCKET: `\${${hostname}_bucketName}`,
+	FABRIKA_APP_STORAGE_ACCESS_KEY_ID: `\${${hostname}_accessKeyId}`,
+	FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: `\${${hostname}_secretAccessKey}`,
+})
+
 /** The generated selected setup: the authored build kept, everything else the platform's. */
 export function renderLockedSetup(
 	setup: string,
@@ -248,6 +260,7 @@ export function renderLockedSetup(
 		[FABRIKA_CONTRACT_DIGEST]: contract.digest,
 		...(release === null ? {} : { FABRIKA_RELEASE: release }),
 		...(execution.databaseUrl === null ? {} : { FABRIKA_APP_DATABASE_URL: execution.databaseUrl }),
+		...(execution.storageHostname === null ? {} : storageVariables(execution.storageHostname)),
 	}
 	const packages = sortedUnique(execution.runtimePackages)
 	return {

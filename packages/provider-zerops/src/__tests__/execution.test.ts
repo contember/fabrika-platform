@@ -21,6 +21,7 @@ const SPA_DESCRIPTOR = 'zerops:\n  - setup: notesapi\n    build:\n      buildCom
 
 const API: ZeropsServiceSpec = { hostname: 'notesapi', type: 'alpine/bun@1.3' }
 const DATABASE: ZeropsServiceSpec = { hostname: 'notesdb', type: 'postgresql:single@18' }
+const BUCKET: ZeropsServiceSpec = { hostname: 'notesfiles', type: 'object-storage', objectStorageSize: 1 }
 
 const contractApp = (target: Partial<ZeropsAppConfig['target']> = {}, id = 'notes'): ZeropsAppConfig => ({
 	id,
@@ -141,6 +142,24 @@ describe('the generated execution descriptor of a contract application', () => {
 		expect(JSON.stringify(setup)).not.toContain('FABRIKA_RELEASE')
 	})
 
+	test("an application's object storage reaches it as references Zerops resolves, so no credential passes through Fabrika", async () => {
+		const run = render(await compile(contractApp({ services: () => [DATABASE, BUCKET, API] })))['run']
+		expect(mapping(run)['envVariables']).toEqual({
+			PORT: '3000',
+			FABRIKA_CONTRACT_DIGEST: DIGEST,
+			FABRIKA_RELEASE: 'r1',
+			FABRIKA_APP_DATABASE_URL: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
+			FABRIKA_APP_STORAGE_ENDPOINT: '${notesfiles_apiUrl}',
+			FABRIKA_APP_STORAGE_BUCKET: '${notesfiles_bucketName}',
+			FABRIKA_APP_STORAGE_ACCESS_KEY_ID: '${notesfiles_accessKeyId}',
+			FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: '${notesfiles_secretAccessKey}',
+		})
+	})
+
+	test('an application without object storage gets no storage variable', async () => {
+		expect(JSON.stringify(render(await compile(contractApp())))).not.toContain('FABRIKA_APP_STORAGE_')
+	})
+
 	test("the namespace's shared PostgreSQL is the database of an application that declares none", async () => {
 		const manifest = await compile(contractApp({
 			services: () => [API],
@@ -224,6 +243,11 @@ describe('a contract application is refused at compile time', () => {
 	test('with two databases', async () => {
 		await expect(compile(contractApp({ services: () => [DATABASE, { hostname: 'otherdb', type: 'postgresql:single@18' }, API] }))).rejects
 			.toThrow('more than one')
+	})
+
+	test('with two buckets, because the runtime opens one', async () => {
+		await expect(compile(contractApp({ services: () => [DATABASE, BUCKET, { ...BUCKET, hostname: 'notesmedia' }, API] }))).rejects
+			.toThrow('a contract application has one object storage; it declares more than one')
 	})
 
 	test('with an application id a generated script cannot name', async () => {

@@ -1110,7 +1110,12 @@ version and deletes an untriggered one
 
 A contract application's execution descriptor is generated whole (`packages/provider-zerops/src/execution.ts`):
 only the selected setup, with `FABRIKA_CONTRACT_DIGEST` beside `FABRIKA_RELEASE` as literals, an `httpGet`
-readiness check of the contract's health endpoint, and the build checks.
+readiness check of the contract's health endpoint, and the build checks. Its database and its object storage
+are `${<host>_…}` references that Zerops resolves at runtime, so no credential passes through Fabrika:
+`FABRIKA_APP_DATABASE_URL` names the application's one PostgreSQL service (or the namespace's), and
+`FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY` name its one
+`object-storage` service (`apiUrl`, `bucketName`, `accessKeyId`, `secretAccessKey`). A second database or
+bucket is refused. The bucket is accepted only with platform provenance, below.
 
 Before any version is reserved, every application deploy reads back each declared service with
 `GET /service-stack-by-name/{projectId}/{hostname}`: `subdomainAccess` must be `false`. An import cannot set
