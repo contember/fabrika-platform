@@ -22,3 +22,8 @@ export class NotFoundError extends Error {
 export class ConflictError extends Error {
 	override name = 'ConflictError'
 }
+
+/** A job attempt wrote after it lost its lease (timed out, taken over or expired); nothing was written. */
+export class LeaseLostError extends Error {
+	override name = 'LeaseLostError'
+}

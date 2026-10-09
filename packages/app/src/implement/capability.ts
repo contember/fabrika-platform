@@ -6,6 +6,7 @@ import {
 	type CapabilityAuthority,
 	type CapabilityGrant,
 	type ContainerGrant,
+	type LeaseFence,
 	MAX_WITHIN_VALUES,
 	type Ref as RefCapability,
 	type RefGrant,
@@ -24,13 +25,18 @@ export class CapabilityLimitError extends Error {
 	override readonly name = 'CapabilityLimitError'
 }
 
-/** One request's lifetime. A capability minted in it is usable only while it runs, and only inside it. */
+/**
+ * One request's lifetime, or one job attempt's. A capability minted in it is usable only while it runs, and only
+ * inside it; a job attempt's writes also need its lease (`fence`).
+ */
 export class RequestFrame {
 	readonly id: string
+	readonly fence: LeaseFence | null
 	#ended = false
 
-	constructor(id: string) {
+	constructor(id: string, fence: LeaseFence | null = null) {
 		this.id = id
+		this.fence = fence
 	}
 
 	get ended(): boolean {
@@ -289,5 +295,9 @@ export const requestCapabilities: CapabilityAuthority = Object.freeze({
 			throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, not to the one running now; never share a capability`)
 		}
 		return grant
+	},
+
+	fence(): LeaseFence | null {
+		return currentRequest.getStore()?.fence ?? null
 	},
 })

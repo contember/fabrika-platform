@@ -3,6 +3,7 @@
 
 import type { FileTables } from './file-tables'
 import type { WebhookTables } from './framework-tables'
+import type { JobLeases } from './job-leases'
 import type { DataLayerRuntime } from './store'
 
 /** Answers what the framework's access check reads from the database: an object's containers, by dimension. */
@@ -15,6 +16,7 @@ export interface FrameworkTables {
 	/** Appends one row of `values` (column → value) to the inbox table of `form`. */
 	appendToInbox(form: string, values: Readonly<Record<string, unknown>>): Promise<void>
 	readonly webhooks: WebhookTables
+	readonly jobs: JobLeases
 }
 
 export interface FrameworkSide {

@@ -50,6 +50,14 @@ export interface WithinGrant {
 
 export type CapabilityGrant = RefGrant | WithinGrant
 
+/** One generation of a job's lease, held by one attempt. A write of the attempt commits only while it still holds it. */
+export interface LeaseFence {
+	readonly job: string
+	/** The attempt holding the lease. */
+	readonly holder: string
+	readonly generation: number
+}
+
 /**
  * The framework side of a capability. `resolve` returns what an authentic capability of the current request grants,
  * or throws when the value is not one, is forged, or belongs to a request that has ended or is not the current one.
@@ -57,4 +65,9 @@ export type CapabilityGrant = RefGrant | WithinGrant
  */
 export interface CapabilityAuthority {
 	resolve(capability: unknown): CapabilityGrant
+	/**
+	 * The lease the work running now must still hold for a write to commit: the job attempt's, or `null` in a
+	 * request. Every mutation checks it inside its own transaction.
+	 */
+	fence(): LeaseFence | null
 }

@@ -1,4 +1,4 @@
-export type { CapabilityAuthority, CapabilityGrant, ContainerGrant, Ref, RefGrant, Within, WithinGrant } from './capability'
+export type { CapabilityAuthority, CapabilityGrant, ContainerGrant, LeaseFence, Ref, RefGrant, Within, WithinGrant } from './capability'
 export { MAX_WITHIN_VALUES } from './capability'
 export { applicationSchema, Database, type PostgresOptions } from './database'
 export type {
@@ -12,7 +12,7 @@ export type {
 	Primitive,
 	ScopedSelect,
 } from './description'
-export { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
+export { CapabilityError, ConflictError, LeaseLostError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 export { FILE_TABLE_PREFIX, type FileColumn, type FileColumnType, type FileOwner, fileTableName, fileTableSql } from './file-table-sql'
 export {
 	type ChildPolicy,

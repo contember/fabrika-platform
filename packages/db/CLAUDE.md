@@ -30,6 +30,7 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | `file-tables.ts`      | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                          |
 | `links.ts`            | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                |
 | `framework-tables.ts` | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                          |
+| `job-leases.ts`       | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                     |
 | `migrations.ts`       | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
 | `codegen.ts`          | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                                         |
 
@@ -43,7 +44,8 @@ An application calls `scoped(tables)` once (its own `src/db/database.ts`), defin
 `@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
 table's containment columns. `frameworkTablesOf` gives the framework the writes no store makes: a `c.form`
 appends one row to its inbox table (the declared columns only, answering nothing), and `c.webhook` keeps its
-bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. `fabrika db migrate`
+bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. The job runner of
+`@fabrika/app` takes a job's lease in `fabrika_job_leases` (`frameworkTablesOf(…).jobs`). `fabrika db migrate`
 applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle. Not
 built yet: `@fabrika/db/testing`, a store for `reference` tables, and reading an inbox.
 
@@ -75,6 +77,23 @@ built yet: `@fabrika/db/testing`, a store for `reference` tables, and reading an
   from the binding and the signed body, never an unsigned header. Two concurrent copies of one delivery insert the
   same `(binding_id, delivery_id)`; exactly one succeeds and the other answers "already recorded". Never replace this
   with a read before the insert. `recordDelivery` first drops the binding's keys older than its retention bound.
+- **Every mutation of a job attempt is fenced by its lease** (`mutation()` in `store.ts` → `fencedTransaction`). The
+  authority's `fence()` names the attempt, or `null` in a request. In the mutation's transaction, before the write:
+  a `for share` select requires the attempt's generation, holder and an unpassed `attempt_deadline`, and
+  `statement_timeout` is set to the time left. Just before `COMMIT` the same check runs again. A failed check, a
+  statement the deadline cancelled, or one `cancelInFlight` cancelled (the runner calls it when the attempt ends)
+  rolls back with `LeaseLostError`. The lock makes a takeover or a renewal wait for the write, so no write of an old
+  generation commits after a newer one was granted. Never add a write path outside `mutation()`.
+- **Every lease time is the database's clock.** `acquire`, `renew`, `finish`, `reapCrashed` and `claimOverdue` take
+  durations and compute and compare with `now()` (`clock_timestamp()` inside a mutation's transaction, where `now()`
+  is its start). Never bind a process timestamp: two containers' clocks disagree.
+- **A lease changes hands in one conditional statement.** `acquire` takes only a free lease; an expired lease whose
+  holder never finished is freed first by `reapCrashed`, whose one winner reports the crash. `renew` and `finish`
+  match the caller's generation and holder. `claimOverdue` sets `last_missed_reported_at` at most once per period, so
+  one of many concurrent checkers reports. Never read a lease and then write it.
+- **The lease statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath exports): they need
+  `now()`, `set_config`, `pg_backend_pid()` and `on conflict`, which the guard refuses on purpose. Only `job-leases.ts`
+  calls it, with constant texts and scalar parameters; never build a text from a value.
 - **The framework migrations are migration identity** (ADR-0017): never edit an entry of `FRAMEWORK_MIGRATIONS`,
   add one.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);

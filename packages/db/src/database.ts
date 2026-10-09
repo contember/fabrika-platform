@@ -1,5 +1,5 @@
 import { SQL } from 'bun'
-import { type CompiledQuery, createQueryId, type Dialect, Kysely, PostgresQueryCompiler, type RootOperationNode } from 'kysely'
+import { CompiledQuery, createQueryId, type Dialect, Kysely, PostgresQueryCompiler, type RootOperationNode } from 'kysely'
 import { PostgresJSDialect } from 'kysely-postgres-js'
 import { QueryRefusedError } from './errors'
 import { assertAllowedTree, type GuardContext } from './guard'
@@ -88,6 +88,8 @@ export function sessionOf(database: Database): Session {
 	return openSession(database)
 }
 
+let executeFixed: (session: Session, compiled: CompiledQuery) => Promise<readonly unknown[]>
+
 /** Runs guarded operation trees; the only path from the layer to the connection. */
 export class Session {
 	readonly #executor: Executor
@@ -97,6 +99,10 @@ export class Session {
 		this.#executor = executor
 		this.#kysely = kysely
 		Object.freeze(this)
+	}
+
+	static {
+		executeFixed = async (session, compiled) => (await session.#executor.executeQuery(compiled)).rows
 	}
 
 	async run<O>(node: RootOperationNode, context: GuardContext): Promise<O[]> {
@@ -116,3 +122,15 @@ export class Session {
 	}
 }
 Object.freeze(Session.prototype)
+
+/** A scalar parameter of a framework statement; Bun.SQL mis-binds arrays, JSON strings and (unprepared) Dates. */
+export type FixedParameter = string | number | null
+
+/**
+ * One of the framework's own fixed statements (`job-leases.ts`): a constant text with scalar parameters. They need
+ * what the guard refuses on purpose (`now()`, `set_config`, `pg_backend_pid()`, `on conflict`), so they bypass it;
+ * no subpath exports this, and no text is ever built from a caller's value.
+ */
+export function runFixedStatement(session: Session, text: string, parameters: readonly FixedParameter[]): Promise<readonly unknown[]> {
+	return executeFixed(session, CompiledQuery.raw(text, [...parameters]))
+}

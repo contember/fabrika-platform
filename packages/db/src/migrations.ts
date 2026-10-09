@@ -7,6 +7,7 @@ export const FRAMEWORK_MIGRATION_BUNDLE = 'fabrika'
 
 export const WEBHOOK_BINDINGS_TABLE = 'fabrika_webhook_bindings'
 export const WEBHOOK_DELIVERIES_TABLE = 'fabrika_webhook_deliveries'
+export const JOB_LEASES_TABLE = 'fabrika_job_leases'
 
 export interface FrameworkMigration {
 	/** Ordered by name; an applied one is immutable, like an application's. */
@@ -35,6 +36,25 @@ CREATE TABLE ${WEBHOOK_DELIVERIES_TABLE} (
 	delivery_id TEXT NOT NULL,
 	received_at BIGINT NOT NULL,
 	PRIMARY KEY (binding_id, delivery_id)
+);
+`,
+	}),
+	Object.freeze({
+		name: '0002_job_leases.sql',
+		sql: `-- One row per job: the lease a run takes, fenced by its generation, and the outcome of the last run.
+CREATE TABLE ${JOB_LEASES_TABLE} (
+	job TEXT PRIMARY KEY,
+	generation INTEGER NOT NULL,
+	holder TEXT,
+	expires_at TIMESTAMPTZ NOT NULL,
+	attempt_deadline TIMESTAMPTZ NOT NULL,
+	first_seen_at TIMESTAMPTZ NOT NULL,
+	last_started_at TIMESTAMPTZ,
+	last_finished_at TIMESTAMPTZ,
+	last_status TEXT,
+	last_succeeded_at TIMESTAMPTZ,
+	last_duration_ms INTEGER,
+	last_missed_reported_at TIMESTAMPTZ
 );
 `,
 	}),

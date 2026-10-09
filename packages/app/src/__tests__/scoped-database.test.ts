@@ -190,6 +190,7 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 				const grant = requestCapabilities.resolve(capability)
 				return grant.kind === 'ref' ? { ...grant, chain: new Map([['workspace', 'w2']]) } : grant
 			},
+			fence: () => null,
 		}
 		const received: unknown[] = []
 		// The reviewed bypass: a connect callback that receives the framework's connection and connects the second layer.
@@ -240,7 +241,10 @@ describe('boot binds the data layer once', () => {
 		const early = scoped(tables)
 		bindScopedDatabase(early, {
 			database: connection,
-			capabilities: { resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all', containers: [] }) },
+			capabilities: {
+				resolve: () => ({ kind: 'within', dimension: 'workspace', action: 'notes.read', principal: 'x', values: 'all', containers: [] }),
+				fence: () => null,
+			},
 		})
 		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow(BootError)
 		expect(() => bootApp(scopedNotesApp(hooks, early), { database: connection })).toThrow('the data layer was bound before boot')

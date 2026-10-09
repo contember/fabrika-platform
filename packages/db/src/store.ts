@@ -35,6 +35,7 @@ import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefuse
 import { fileTables } from './file-tables'
 import { webhookTables } from './framework-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
+import { fencedTransaction, jobLeases } from './job-leases'
 import { linksPredicate, linkValues } from './links'
 import {
 	acknowledgement,
@@ -286,6 +287,17 @@ function session(context: TableContext): Session {
 }
 
 /**
+ * Every mutation runs here, in one transaction. In a job attempt that transaction is fenced by the attempt's lease
+ * (`fencedTransaction`): an attempt that lost it, or ran out of time, writes nothing.
+ */
+function mutation<T>(context: TableContext, work: (transaction: Session) => Promise<T>): Promise<T> {
+	const runtime = runtimeOf(context.connection)
+	const fence = runtime.capabilities.fence()
+	const session = sessionOf(runtime.database)
+	return fence === null ? session.transaction(work) : fencedTransaction(session, fence, work)
+}
+
+/**
  * Reads insert or update data through its own property descriptors, so no getter runs and no inherited or
  * non-enumerable key slips past. Every key is checked before any value is read; unknown keys are refused, not
  * dropped, so an agent learns about them.
@@ -419,7 +431,7 @@ async function lockDestination(transaction: Session, context: TableContext, gran
 }
 
 async function insertRow<O>(context: TableContext, values: ReadonlyMap<string, Primitive | null>, destination: RefGrant | undefined): Promise<O> {
-	return session(context).transaction(async (transaction) => {
+	return mutation(context, async (transaction) => {
 		if (destination !== undefined) {
 			await lockDestination(transaction, context, destination)
 		}
@@ -442,7 +454,7 @@ async function updateRow<O>(
 ): Promise<O> {
 	const table = context.model.name
 	const node = updateNode(table, changes, context.model.version, scopedWhere(expectedVersion, scope), answer(context))
-	return session(context).transaction(async (transaction) => {
+	return mutation(context, async (transaction) => {
 		if (destination !== undefined) {
 			await lockDestination(transaction, context, destination)
 		}
@@ -463,7 +475,7 @@ async function updateRow<O>(
 
 async function removeRow(context: TableContext, scope: OperationNode): Promise<void> {
 	const node = deleteNode(context.model.name, scopedWhere(undefined, scope), keyOf(context.model))
-	const rows = await session(context).run(node, guard(context, 'DeleteQueryNode', scope))
+	const rows = await mutation(context, (transaction) => transaction.run(node, guard(context, 'DeleteQueryNode', scope)))
 	if (rows.length === 0) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
@@ -831,6 +843,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			inboxProblems: (form: string, fields: readonly string[]) => inboxProblems(models, form, fields),
 			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>) => appendToInbox(models, runtimeOf(connection), form, values),
 			webhooks: webhookTables(() => runtimeOf(connection)),
+			jobs: jobLeases(() => runtimeOf(connection)),
 		}),
 	})
 	return database

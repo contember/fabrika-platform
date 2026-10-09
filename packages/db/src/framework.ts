@@ -6,9 +6,12 @@ import type { FileTables } from './file-tables'
 import { frameworkSideOf, type FrameworkTables, type Locator } from './registry'
 import type { DataLayerRuntime } from './store'
 
+export type { LeaseFence } from './capability'
+export { LeaseLostError } from './errors'
 export { fileTableName } from './file-table-sql'
 export type { FileCollectionSpec, FileCollectionTable, FileTables, LiveFile, PendingFile, RemovableFile } from './file-tables'
 export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
+export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { FrameworkTables, Locator } from './registry'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */

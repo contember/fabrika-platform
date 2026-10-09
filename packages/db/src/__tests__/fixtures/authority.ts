@@ -1,4 +1,4 @@
-import type { CapabilityAuthority, CapabilityGrant, ContainerGrant, Ref, RefGrant, Within, WithinGrant } from '../../capability'
+import type { CapabilityAuthority, CapabilityGrant, ContainerGrant, LeaseFence, Ref, RefGrant, Within, WithinGrant } from '../../capability'
 import { CapabilityError } from '../../errors'
 
 class TestRef<D extends string, A extends string> implements Ref<D, A> {
@@ -34,9 +34,15 @@ class TestWithin<D extends string, A extends string> implements Within<D, A> {
 /** Stands in for the framework: mints capabilities and resolves only its own. Request binding is not modelled. */
 export class TestAuthority implements CapabilityAuthority {
 	readonly #principal: string
+	/** The lease every mutation checks; a test sets it to stand in for a job attempt. */
+	lease: LeaseFence | null = null
 
 	constructor(principal = 'user:alice') {
 		this.#principal = principal
+	}
+
+	fence(): LeaseFence | null {
+		return this.lease
 	}
 
 	ref<const D extends string, const A extends string>(dimension: D, action: A, id: string, chain: Readonly<Record<string, string>> = {}): Ref<D, A> {
