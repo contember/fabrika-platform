@@ -3,14 +3,19 @@
 // production ones, and the seams are a composition input, never an environment variable (ADR-0029).
 import { createRuntime, type RuntimeOverrides } from '@fabrika/control/zerops/runtime'
 import { startControlServer } from '@fabrika/control/zerops/server'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createGitHubDouble, localGitHubDoubleApps } from './github-double'
 import {
+	LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE,
+	LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY,
 	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
 	LOCAL_SOURCE_APPLICATION_REPOSITORY,
+	LOCAL_SOURCE_BRANCH_HEAD_FILE,
 	LOCAL_SOURCE_FIXTURE_DIRECTORY,
 	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
 	LOCAL_SOURCE_PLATFORM_REPOSITORY,
+	localSourceBranchHeadSchema,
 } from './local-source-contract'
 import { loadLocalSourceFixtures, readFixtureFiles } from './local-source-fixtures/fixture'
 import { applicationFixtureSource } from './local-source-fixtures/generate'
@@ -44,7 +49,23 @@ export async function localSourceSeams(stateDirectory: string): Promise<NonNulla
 			// Control reads the contract and the migrations file by file, at the commit (ADR-0050).
 			files: readFixtureFiles(manifest.application, await applicationFixtureSource()),
 		},
-	], { access: github })
+		// The agent's commit on top of it, which the `notes-agent-change` browser seed pushes.
+		{
+			repository: LOCAL_SOURCE_APPLICATION_REPOSITORY,
+			fixture: manifest.agentChange,
+			archive: Bun.file(resolve(fixtureDirectory, LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE)),
+			visibility: 'private',
+			files: readFixtureFiles(manifest.agentChange, await applicationFixtureSource(resolve(fixtureDirectory, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY))),
+		},
+	], {
+		access: github,
+		// Read at every lookup: a push moves the branch while Control runs.
+		branchHead: (repository) => {
+			const path = resolve(stateDirectory, LOCAL_SOURCE_BRANCH_HEAD_FILE)
+			if (repository !== LOCAL_SOURCE_APPLICATION_REPOSITORY || !existsSync(path)) return undefined
+			return localSourceBranchHeadSchema.parse(JSON.parse(readFileSync(path, 'utf8'))).commitSha
+		},
+	})
 	return { ...transports, githubAppFetch: github.appFetch }
 }
 

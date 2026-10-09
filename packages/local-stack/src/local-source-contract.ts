@@ -5,6 +5,9 @@ export const LOCAL_SOURCE_FIXTURE_DIRECTORY = 'source-fixtures'
 export const LOCAL_SOURCE_MANIFEST_FILE = 'manifest.json'
 export const LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE = 'platform.tar.gz'
 export const LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE = 'application.tar.gz'
+export const LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE = 'agent-change.tar.gz'
+/** The files of the agent change commit, which Control reads one by one and the composed Notes container can run. */
+export const LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY = 'agent-change'
 export const LOCAL_SOURCE_PLATFORM_REPOSITORY_URL = 'https://github.com/fabrika-local/platform-fixture'
 export const LOCAL_SOURCE_APPLICATION_REPOSITORY_URL = 'https://github.com/fabrika-local/application-fixture'
 export const LOCAL_SOURCE_PLATFORM_REPOSITORY = normalizeZeropsSourceRepository(LOCAL_SOURCE_PLATFORM_REPOSITORY_URL)
@@ -42,7 +45,29 @@ export const localSourceManifestSchema = z.object({
 	version: z.literal(1),
 	platform: localSourceFixtureSchema,
 	application: localSourceFixtureSchema,
+	/** A second commit of the application repository, on top of `application`: an agent's change to Notes. */
+	agentChange: localSourceFixtureSchema,
 }).strict()
+
+/**
+ * Where the application repository's `main` points, as a push leaves it: `triggerByScopedWebhook` writes it before it
+ * sends the push event, and the GitHub double reads it. Without it `main` is the pinned application commit.
+ */
+export const LOCAL_SOURCE_BRANCH_HEAD_FILE = 'github-branch-head.json'
+
+export const localSourceBranchHeadSchema = z.object({ version: z.literal(1), commitSha: gitObjectIdSchema }).strict()
+
+export type LocalSourceBranchHead = z.infer<typeof localSourceBranchHeadSchema>
+
+export type LocalSourceFixtureKind = 'platform' | 'application' | 'agentChange'
+
+export const LOCAL_SOURCE_FIXTURE_KINDS: readonly LocalSourceFixtureKind[] = ['platform', 'application', 'agentChange']
+
+export const LOCAL_SOURCE_ARCHIVE_FILES: Readonly<Record<LocalSourceFixtureKind, string>> = {
+	platform: LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
+	application: LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
+	agentChange: LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE,
+}
 
 export type LocalSourceFixture = z.infer<typeof localSourceFixtureSchema>
 export type LocalSourceManifest = z.infer<typeof localSourceManifestSchema>

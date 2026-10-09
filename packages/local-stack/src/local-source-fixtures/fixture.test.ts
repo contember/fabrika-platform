@@ -4,15 +4,19 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+	LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE,
+	LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY,
 	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
+	LOCAL_SOURCE_ARCHIVE_FILES,
+	LOCAL_SOURCE_FIXTURE_KINDS,
 	LOCAL_SOURCE_MANIFEST_FILE,
 	LOCAL_SOURCE_MAX_COMPRESSED_BYTES,
 	LOCAL_SOURCE_MAX_MANIFEST_BYTES,
 	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
 	type LocalSourceManifest,
 } from '../local-source-contract'
-import { loadLocalSourceFixtures, prepareLocalSourceFixtures } from './fixture'
-import { sha256 } from './generate'
+import { loadLocalSourceFixtures, prepareLocalSourceFixtures, readFixtureFiles } from './fixture'
+import { applicationFixtureSource, generateFixture, sha256 } from './generate'
 
 const roots: string[] = []
 
@@ -34,10 +38,12 @@ describe('local immutable source fixtures', () => {
 		expect(await prepareLocalSourceFixtures(second)).toEqual(manifest)
 		expect(await prepareLocalSourceFixtures(first)).toEqual(manifest)
 		expect(await loadLocalSourceFixtures(first)).toEqual(manifest)
-		for (const file of [LOCAL_SOURCE_MANIFEST_FILE, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE]) {
+		for (const file of [LOCAL_SOURCE_MANIFEST_FILE, ...Object.values(LOCAL_SOURCE_ARCHIVE_FILES)]) {
 			expect(await readFile(join(first, file))).toEqual(await readFile(join(second, file)))
 		}
 		expect((await readdir(first)).sort()).toEqual([
+			LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY,
+			LOCAL_SOURCE_AGENT_CHANGE_ARCHIVE_FILE,
 			LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
 			LOCAL_SOURCE_MANIFEST_FILE,
 			LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
@@ -47,10 +53,9 @@ describe('local immutable source fixtures', () => {
 	test('real source tar admission verifies Git PAX identity, descriptors and safe platform symlink', async () => {
 		const root = await directory()
 		const manifest = await prepareLocalSourceFixtures(root)
-		for (const kind of ['platform', 'application'] satisfies ('platform' | 'application')[]) {
+		for (const kind of LOCAL_SOURCE_FIXTURE_KINDS) {
 			const fixture = manifest[kind]
-			const file = kind === 'platform' ? LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE : LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE
-			const tar = Bun.gunzipSync(await readFile(join(root, file)))
+			const tar = Bun.gunzipSync(await readFile(join(root, LOCAL_SOURCE_ARCHIVE_FILES[kind])))
 			const rewrite = createTarRewrite({
 				...(kind === 'platform' ? { archiveKind: 'platform' } : {}),
 				commitSha: fixture.commitSha,
@@ -59,10 +64,26 @@ describe('local immutable source fixtures', () => {
 			})
 			await new Response(new Blob([tar]).stream().pipeThrough(rewrite.transform)).arrayBuffer()
 			expect(await rewrite.completed).toMatchObject({ commitSha: fixture.commitSha, descriptorSha256: fixture.descriptorSha256 })
-			expect(new TextDecoder().decode(tar)).toContain(`fabrika-local-${kind}-${fixture.commitSha}/`)
+			expect(new TextDecoder().decode(tar)).toContain(`fabrika-local-${kind === 'platform' ? kind : 'application'}-${fixture.commitSha}/`)
 		}
 		expect(manifest.platform.tree.find(entry => entry.path === 'marker-link')?.mode).toBe('120000')
 		expect(manifest.application.tree.filter(entry => entry.type === 'blob').every(entry => entry.mode === '100644')).toBe(true)
+		expect(manifest.agentChange.tree.filter(entry => entry.type === 'blob').every(entry => entry.mode === '100644')).toBe(true)
+	})
+
+	test('the agent change is one commit on top of the pinned application commit, and its files are the ones Control serves', async () => {
+		const root = await directory()
+		const manifest = await prepareLocalSourceFixtures(join(root, 'fixtures'))
+		const repository = join(root, 'repository')
+		const { fixture } = await generateFixture(repository, 'agentChange')
+		expect(fixture).toEqual(manifest.agentChange)
+		const parent = Bun.spawnSync(['git', '-C', repository, 'rev-parse', 'HEAD^'], { stdout: 'pipe', stderr: 'ignore' })
+		expect(new TextDecoder().decode(parent.stdout).trim()).toBe(manifest.application.commitSha)
+		const source = await applicationFixtureSource(join(root, 'fixtures', LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY))
+		expect([...readFixtureFiles(manifest.agentChange, source).keys()]).toContain('db/migrations/20261010090000_note_labels.sql')
+		expect(manifest.agentChange.tree.map((entry) => entry.path)).toEqual(
+			expect.arrayContaining(manifest.application.tree.map((entry) => entry.path)),
+		)
 	})
 
 	test('inherited Git repository, index, config and author settings cannot alter generation', async () => {

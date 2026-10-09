@@ -29,6 +29,8 @@ export interface FixtureRepositoryAccess {
 export interface FixtureTransportOptions {
 	readonly privateUploadFetch?: SourceUploadFetch
 	readonly access?: FixtureRepositoryAccess
+	/** The commit a repository's branch points at now; undefined leaves it at the first fixture of the repository. */
+	readonly branchHead?: (repository: SourceRepository) => string | undefined
 }
 
 /** GitHub and the Zerops upload endpoint as served by the local fixtures; the source code addresses the production origins. */
@@ -65,7 +67,9 @@ export function createFixtureTransports(
 				const { repository, fixture } = source
 				const prefix = `https://api.github.com/repos/${repository.owner}/${repository.name}`
 				if (!url.startsWith(`${prefix}/`) || !readable(source, authorization)) continue
-				const commitRefs = [fixture.commitSha, FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`].map(encodeURIComponent)
+				const head = options.branchHead?.(repository)
+				const branchRefs = head === undefined || head === fixture.commitSha ? [FIXTURE_BRANCH, `refs/heads/${FIXTURE_BRANCH}`] : []
+				const commitRefs = [fixture.commitSha, ...branchRefs].map(encodeURIComponent)
 				if (commitRefs.some((ref) => url === `${prefix}/commits/${ref}`)) {
 					return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })
 				}

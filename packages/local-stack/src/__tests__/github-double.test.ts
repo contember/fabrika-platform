@@ -145,4 +145,29 @@ describe('a private fixture repository behind the double', () => {
 		expect(new Uint8Array(await archive.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
 		expect((await downloadFetch(location, { redirect: 'error' })).status).toBe(404)
 	})
+
+	test('answers the branch with the commit a push moved it to, and every pinned commit by its sha', async () => {
+		const github = await double()
+		const next: LocalSourceFixture = { ...FIXTURE, commitSha: 'e'.repeat(40), treeSha: 'f'.repeat(40) }
+		let head: string | undefined
+		const { metadataFetch } = createFixtureTransports(
+			[FIXTURE, next].map((fixture) => ({
+				repository: LOCAL_SOURCE_APPLICATION_REPOSITORY,
+				fixture,
+				archive: new Blob([new Uint8Array([1])]),
+				visibility: 'private' as const,
+			})),
+			{ access: github, branchHead: () => head },
+		)
+		const { token } = await mint(github)
+		const branch = async () => (await metadataFetch(`${APPLICATION}/commits/${encodeURIComponent('refs/heads/main')}`, withToken(token))).json()
+		expect(await branch()).toMatchObject({ sha: FIXTURE.commitSha })
+		head = next.commitSha
+		expect(await branch()).toMatchObject({ sha: next.commitSha })
+		expect(await (await metadataFetch(`${APPLICATION}/commits/${FIXTURE.commitSha}`, withToken(token))).json()).toMatchObject({
+			sha: FIXTURE.commitSha,
+		})
+		head = 'a0'.repeat(20)
+		expect((await metadataFetch(`${APPLICATION}/commits/main`, withToken(token))).status).toBe(404)
+	})
 })

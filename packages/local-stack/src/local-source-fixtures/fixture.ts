@@ -1,15 +1,16 @@
 import { prepareZeropsDescriptor, verifyZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import {
-	LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE,
+	LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY,
+	LOCAL_SOURCE_ARCHIVE_FILES,
+	LOCAL_SOURCE_FIXTURE_KINDS,
 	LOCAL_SOURCE_MANIFEST_FILE,
 	LOCAL_SOURCE_MAX_COMPRESSED_BYTES,
 	LOCAL_SOURCE_MAX_EXPANDED_BYTES,
 	LOCAL_SOURCE_MAX_MANIFEST_BYTES,
-	LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE,
 	type LocalSourceFixture,
 	type LocalSourceManifest,
 	localSourceManifestSchema,
@@ -38,12 +39,11 @@ export async function loadLocalSourceFixtures(directory: string): Promise<LocalS
 	if (JSON.stringify(manifest) !== JSON.stringify(await pinnedManifest())) {
 		throw new Error('local source fixture identity mismatch; explicit reset required')
 	}
-	for (const kind of ['platform', 'application'] satisfies ('platform' | 'application')[]) {
+	for (const kind of LOCAL_SOURCE_FIXTURE_KINDS) {
 		const fixture = manifest[kind]
 		await verifyZeropsArtifactSourceDescriptor({ path: 'zerops.yaml', contents: fixture.descriptorContents, sha256: fixture.descriptorSha256 })
 		prepareZeropsDescriptor(fixture.descriptorContents, kind === 'platform' ? 'proxy' : 'notesapi')
-		const file = kind === 'platform' ? LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE : LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE
-		const archive = await readBoundedFile(join(directory, file), LOCAL_SOURCE_MAX_COMPRESSED_BYTES)
+		const archive = await readBoundedFile(join(directory, LOCAL_SOURCE_ARCHIVE_FILES[kind]), LOCAL_SOURCE_MAX_COMPRESSED_BYTES)
 		if (archive.byteLength !== fixture.archiveBytes || sha256(archive) !== fixture.archiveSha256) {
 			throw new Error('local source fixture archive mismatch')
 		}
@@ -59,20 +59,36 @@ export async function prepareLocalSourceFixtures(directory: string): Promise<Loc
 	try {
 		const platform = await generateFixture(join(staging, 'platform'), 'platform')
 		const application = await generateFixture(join(staging, 'application'), 'application')
-		const manifest = localSourceManifestSchema.parse({ version: 1, platform: platform.fixture, application: application.fixture })
+		const agentChange = await generateFixture(join(staging, 'agentChange'), 'agentChange')
+		const manifest = localSourceManifestSchema.parse({
+			version: 1,
+			platform: platform.fixture,
+			application: application.fixture,
+			agentChange: agentChange.fixture,
+		})
 		if (JSON.stringify(manifest) !== JSON.stringify(await pinnedManifest())) {
 			throw new Error('local source fixture inputs differ from the pinned identity')
 		}
-		await writeFile(join(staging, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE), platform.archive)
-		await writeFile(join(staging, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE), application.archive)
+		const generated = { platform, application, agentChange }
+		for (const kind of LOCAL_SOURCE_FIXTURE_KINDS) await writeFile(join(staging, LOCAL_SOURCE_ARCHIVE_FILES[kind]), generated[kind].archive)
+		await writeFiles(join(staging, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY), agentChange.files)
 		await writeFile(join(staging, LOCAL_SOURCE_MANIFEST_FILE), `${JSON.stringify(manifest, null, '\t')}\n`)
 		await loadLocalSourceFixtures(staging)
-		await rename(join(staging, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE), join(directory, LOCAL_SOURCE_PLATFORM_ARCHIVE_FILE))
-		await rename(join(staging, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE), join(directory, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE))
+		for (const kind of LOCAL_SOURCE_FIXTURE_KINDS) {
+			await rename(join(staging, LOCAL_SOURCE_ARCHIVE_FILES[kind]), join(directory, LOCAL_SOURCE_ARCHIVE_FILES[kind]))
+		}
+		await rename(join(staging, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY), join(directory, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY))
 		await rename(join(staging, LOCAL_SOURCE_MANIFEST_FILE), join(directory, LOCAL_SOURCE_MANIFEST_FILE))
 		return manifest
 	} finally {
 		await rm(staging, { recursive: true, force: true })
+	}
+}
+
+async function writeFiles(root: string, files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): Promise<void> {
+	for (const [path, bytes] of files) {
+		await mkdir(dirname(join(root, path)), { recursive: true })
+		await writeFile(join(root, path), bytes, { mode: 0o644 })
 	}
 }
 

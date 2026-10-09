@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type LocalSourceFixture, localSourceFixtureSchema } from '../local-source-contract'
+import { type LocalSourceFixture, type LocalSourceFixtureKind, localSourceFixtureSchema } from '../local-source-contract'
 
 export const fixtureInputs = fileURLToPath(new URL('../../fixtures/source/', import.meta.url))
 
@@ -95,9 +95,24 @@ async function platformFixtureSource(): Promise<ReadonlyMap<string, Uint8Array<A
 	)
 }
 
-export async function generateFixture(directory: string, kind: 'platform' | 'application'): Promise<{
+/** The agent's change to Notes as a patch on the application fixture, written under the fabrika-app skill. */
+export const agentChangePatch = join(fixtureInputs, 'notes-agent-change.patch')
+
+const FIXTURE_MESSAGES: Readonly<Record<LocalSourceFixtureKind, string>> = {
+	platform: 'Fabrika local platform source fixture v1',
+	application: 'Fabrika local application source fixture v1',
+	agentChange: 'Rename a note, and give notes a label table',
+}
+
+/**
+ * One fixture repository and its archive. The agent change commits the application fixture first, so its parent is
+ * exactly the pinned application commit, then applies the patch as the agent's commit.
+ */
+export async function generateFixture(directory: string, kind: LocalSourceFixtureKind): Promise<{
 	fixture: LocalSourceFixture
 	archive: Uint8Array<ArrayBuffer>
+	/** Every regular file of the commit by path. */
+	files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>
 }> {
 	await mkdir(directory)
 	await git(directory, ['init', '--quiet', '--object-format=sha1', '--initial-branch=main', '--template='])
@@ -116,7 +131,11 @@ export async function generateFixture(directory: string, kind: 'platform' | 'app
 	// Forced: the example's own .gitignore names the generated entry, which this commit carries as the build writes it.
 	await git(directory, ['add', '--force', '--', ...files])
 	await git(directory, ['update-index', '--chmod=-x', '--', ...files.filter((file) => file !== 'marker-link')])
-	await git(directory, ['commit', '--quiet', '--no-gpg-sign', '-m', `Fabrika local ${kind} source fixture v1`])
+	await git(directory, ['commit', '--quiet', '--no-gpg-sign', '-m', FIXTURE_MESSAGES[kind === 'agentChange' ? 'application' : kind]])
+	if (kind === 'agentChange') {
+		await git(directory, ['apply', '--index', '--whitespace=nowarn', '--', agentChangePatch])
+		await git(directory, ['commit', '--quiet', '--no-gpg-sign', '-m', FIXTURE_MESSAGES[kind]])
+	}
 	const text = async (args: string[]) => new TextDecoder().decode(await git(directory, args))
 	const commitSha = (await text(['rev-parse', 'HEAD'])).trim()
 	const treeSha = (await text(['rev-parse', `${commitSha}^{tree}`])).trim()
@@ -125,12 +144,17 @@ export async function generateFixture(directory: string, kind: 'platform' | 'app
 		if (!mode || !type || !sha || !path) throw new Error('invalid local source fixture tree')
 		return { mode, type, sha, path }
 	})
+	const committed = new Map<string, Uint8Array<ArrayBuffer>>()
+	for (const entry of tree) {
+		if (entry.type === 'blob' && entry.mode !== '120000') committed.set(entry.path, new Uint8Array(await readFile(join(directory, entry.path))))
+	}
 	const descriptorContents = await text(['show', `${commitSha}:zerops.yaml`])
 	const descriptor = await createZeropsArtifactSourceDescriptor(descriptorContents)
-	const tar = await git(directory, ['archive', '--format=tar', `--prefix=fabrika-local-${kind}-${commitSha}/`, commitSha])
+	const tar = await git(directory, ['archive', '--format=tar', `--prefix=fabrika-local-${archivePrefix(kind)}-${commitSha}/`, commitSha])
 	const archive = Bun.gzipSync(tar)
 	return {
 		archive,
+		files: committed,
 		fixture: localSourceFixtureSchema.parse({
 			commitSha,
 			treeSha,
@@ -142,3 +166,5 @@ export async function generateFixture(directory: string, kind: 'platform' | 'app
 		}),
 	}
 }
+
+const archivePrefix = (kind: LocalSourceFixtureKind): string => (kind === 'agentChange' ? 'application' : kind)
