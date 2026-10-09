@@ -510,11 +510,10 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		const written = [...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null), ...Object.keys(workloadKeys)]
 		const removed = SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] === null)
 		log(`  [dry-run] would write service variables on ${serviceId}: ${written.join(', ') || '(none)'}`)
-		log(
-			`  [dry-run] would remove service variables on ${serviceId} if present: ${
-				[...removed, RELEASE_KEY].join(', ')
-			}, and every workload key not written`,
-		)
+		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${[...removed, RELEASE_KEY].join(', ')}`)
+		if (Object.keys(workloadKeys).length > 0) {
+			log(`  [dry-run] would remove every other job and webhook key on ${serviceId}`)
+		}
 		return
 	}
 	assertRunning(signal)
