@@ -26,6 +26,11 @@ export interface DeploymentBounds {
 	/** The remote name of the proxy Worker the deployer built, or null when it built none. */
 	readonly proxy: string | null
 	/**
+	 * The service binding the deployer wrote for each connector import (`FABRIKA_CONNECT_<IMPORT>`), by binding name, to
+	 * the remote name of the owner's proxy Worker. These are the only bindings to another application's Worker.
+	 */
+	readonly connectors: Readonly<Record<string, string>>
+	/**
 	 * The value of every framework variable the platform wrote into each Worker; a generated config must carry exactly
 	 * these. `proxy` is null when the deployer built no proxy.
 	 */
@@ -203,12 +208,17 @@ const field = (entry: unknown, name: string): unknown => typeof entry === 'objec
  * The one platform service an application may bind is IAM, and only at `IAM_APPLICATION_ENTRYPOINT`: the default
  * export issues keys and approves devices. Another application's Worker is never bound.
  */
-const assertServices = (worker: string, config: WranglerConfig, names: ApplicationNames): void => {
+const assertServices = (worker: string, config: WranglerConfig, names: ApplicationNames, connectors: Readonly<Record<string, string>>): void => {
 	const env = names.self.env
 	const iam = env === 'local' ? IAM_SERVICE : `${env}-${IAM_SERVICE}`
 	for (const entry of entries(config.services, worker, 'services')) {
 		const service = field(entry, 'service')
 		const entrypoint = field(entry, 'entrypoint')
+		const binding = field(entry, 'binding')
+		const owner = typeof binding === 'string' && Object.hasOwn(connectors, binding) ? connectors[binding] : undefined
+		if (owner !== undefined && service === owner && entrypoint === undefined) {
+			continue
+		}
 		if (service === iam) {
 			if (entrypoint !== IAM_APPLICATION_ENTRYPOINT) {
 				const bound = entrypoint === undefined ? 'its default entrypoint' : `entrypoint \`${String(entrypoint)}\``
@@ -322,7 +332,8 @@ const assertFrameworkVariables = (worker: string, vars: unknown, expected: Reado
 	if (vars !== undefined && (typeof vars !== 'object' || vars === null || Array.isArray(vars))) {
 		throw new Error(`cloudflare: Worker \`${worker}\` emits unreadable \`vars\`, which cannot be checked`)
 	}
-	for (const name of FRAMEWORK_VARIABLE_NAMES) {
+	const written = Object.keys(vars ?? {}).filter(isFrameworkVariableName)
+	for (const name of new Set([...FRAMEWORK_VARIABLE_NAMES, ...Object.keys(expected), ...written])) {
 		const actual: unknown = vars === undefined ? undefined : Reflect.get(vars, name)
 		if (actual !== expected[name]) {
 			throw new Error(`cloudflare: Worker \`${worker}\` sets \`${name}\` to a value Fabrika did not write; it is managed by Fabrika`)
@@ -361,7 +372,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 			}
 		}
 		assertOwnRemote('the Worker is named', config.name, names)
-		assertServices(worker, config, names)
+		assertServices(worker, config, names, isPlatformProxy(generated, bounds) ? {} : bounds.connectors)
 		assertResourceBindings(worker, config, names)
 		assertBoundedAssets(worker, config.assets)
 		if (isPlatformProxy(generated, bounds)) {

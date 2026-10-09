@@ -1170,6 +1170,55 @@ describe("another application's names (ADR-0048)", () => {
 	const binding = (bindings: Worker['options']['bindings'], name = 'demo'): CloudflareAppConfig =>
 		config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name, compatibility_flags: [], bindings, main: 'src/index.ts' }) })
 
+	const connectorHanded = {
+		FABRIKA_IAM_ISSUER: 'https://iam.example.test',
+		FABRIKA_CONNECT_CATALOG_KEY: 'px_private-catalog-edge',
+		FABRIKA_CONNECT_CATALOG_URL: 'https://catalog.example.com',
+	}
+	const owners: readonly AppEnvironment[] = [...installationApps, { app: 'catalog', env: 'prod' }]
+
+	test("an import gets the platform's FABRIKA_CONNECT_<IMPORT> binding to the owner's proxy Worker, and only that (F4)", async () => {
+		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), {
+			env: 'prod',
+			domain: 'notes.example.com',
+			installationApps: owners,
+			checkoutContract: notesArtifact,
+			managedEnvironment: connectorHanded,
+		})
+		expect(result.status).toBe('succeeded')
+		const { app } = provisioned()
+		const reference = app.options.bindings?.['FABRIKA_CONNECT_CATALOG']
+		expect(reference).toBeInstanceOf(ServiceReference)
+		expect(reference?.configureBinding({ config: {}, binding: 'FABRIKA_CONNECT_CATALOG', env: 'prod' })).toEqual({
+			services: [{ binding: 'FABRIKA_CONNECT_CATALOG', service: 'prod-catalog-proxy', entrypoint: undefined }],
+		})
+		expect(app.options.vars?.['FABRIKA_CONNECT_CATALOG_URL']).toBe('https://catalog.example.com')
+		expect(rec.logs.join('\n')).not.toContain('private-catalog-edge')
+	})
+
+	test("an authored binding to the owner's proxy Worker, or one named for an import, is refused", async () => {
+		const contract = { schema: CONTRACT_SCHEMA }
+		const authored = (bindings: Worker['options']['bindings']): CloudflareAppConfig =>
+			config({
+				...contract,
+				resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: 'src/index.ts' }),
+			})
+		const options = {
+			env: 'prod',
+			domain: 'notes.example.com',
+			installationApps: owners,
+			checkoutContract: notesArtifact,
+			managedEnvironment: connectorHanded,
+		}
+		await expect(deploy(rec, authored({ CATALOG: new ServiceReference('catalog-proxy') }), options)).rejects.toThrow(
+			'binds service `prod-catalog-proxy`, a name of application `catalog` (environment `prod`)',
+		)
+		await expect(deploy(rec, authored({ FABRIKA_CONNECT_CATALOG: new ServiceReference('catalog-proxy') }), options)).rejects.toThrow(
+			'application variable `FABRIKA_CONNECT_CATALOG` is managed by Fabrika',
+		)
+		await expect(deploy(rec, authored({ FABRIKA_CONNECT_CATALOG: emitting({ services: [] }) }), options)).rejects.toThrow('is managed by Fabrika')
+	})
+
 	test('a binding to `prod-otherapp` is refused, as a service or as a resource of another kind', async () => {
 		await expect(deploy(rec, binding({ OTHER: new ServiceReference('otherapp') }), { env: 'prod', installationApps })).rejects.toThrow(
 			'Worker `prod-demo` binds service `prod-otherapp`, a name of application `otherapp` (environment `prod`); an application binds only its own resources',

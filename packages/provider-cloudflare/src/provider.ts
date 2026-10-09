@@ -4,6 +4,7 @@ import {
 	appEnvironmentId,
 	type ArtifactAccess,
 	artifactAccessDigest,
+	connectVariables,
 	type ContractArtifact,
 	contractDigest,
 	FABRIKA_CONTRACT_DIGEST,
@@ -14,7 +15,7 @@ import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
-import { type GeneratedConfig, Worker } from 'oblaka-iac'
+import { type GeneratedConfig, ServiceReference, Worker } from 'oblaka-iac'
 import { configArtifactAccess } from './artifact-access'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
@@ -61,7 +62,12 @@ const assertRunning = (signal: AbortSignal): void => {
 
 /** An application never names a variable only the platform writes, whether or not this deploy writes it. */
 const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: CloudflareDeployRun): void => {
-	const authored = [...(config.pipeline?.vars ?? []), ...Object.keys(application.options.vars ?? {}), ...Object.keys(run.vars)]
+	const authored = [
+		...(config.pipeline?.vars ?? []),
+		...Object.keys(application.options.vars ?? {}),
+		...Object.keys(application.options.bindings ?? {}),
+		...Object.keys(run.vars),
+	]
 	const reserved = authored.find(isFrameworkVariableName)
 	if (reserved !== undefined) {
 		throw new Error(`cloudflare: application variable \`${reserved}\` is managed by Fabrika`)
@@ -89,6 +95,34 @@ const withManagedEnvironment = (
 		vars: {
 			...(application.options.vars ?? {}),
 			...present,
+		},
+	})
+	return replaceApplicationWorker(authored, configured)
+}
+
+/** The proxy Worker the platform builds for application `appId`, before oblaka's environment prefix. */
+const proxyWorkerName = (appId: string): string => `${appId}-proxy`
+
+/** The remote name oblaka gives a Worker named `name` in `env`. */
+const remoteName = (env: string, name: string): string => (env === 'local' ? name : `${env}-${name}`)
+
+/**
+ * Each connector import's `FABRIKA_CONNECT_<IMPORT>` service binding, to the owner's proxy Worker in the same
+ * environment, by binding name; the owner's proxy enforces the export (ADR-0022), so no binding reaches its application.
+ */
+const connectorBindings = (contract: ContractArtifact | null): Readonly<Record<string, string>> =>
+	Object.fromEntries(
+		Object.entries(contract?.imports ?? {}).map(([name, imported]) => [connectVariables(name).binding, proxyWorkerName(imported.app)]),
+	)
+
+const withConnectorBindings = (authored: Worker, bindings: Readonly<Record<string, string>>): Worker => {
+	if (Object.keys(bindings).length === 0) return authored
+	const application = applicationWorker(authored)
+	const configured = new Worker({
+		...application.options,
+		bindings: {
+			...(application.options.bindings ?? {}),
+			...Object.fromEntries(Object.entries(bindings).map(([binding, worker]) => [binding, new ServiceReference(worker)])),
 		},
 	})
 	return replaceApplicationWorker(authored, configured)
@@ -143,7 +177,7 @@ const platformProxied = (authored: Worker, access: ArtifactAccess, contract: Con
 	}
 	const protection = proxyProtection(access, contract)
 	if (protection === null) return authored
-	const name = `${run.appId}-proxy`
+	const name = proxyWorkerName(run.appId)
 	if (authored.options.name === name) {
 		throw new Error(`cloudflare: application Worker \`${name}\` takes the name of the proxy Worker the platform builds; rename it`)
 	}
@@ -430,7 +464,11 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	// Fabrika's own components compose their own proxies; every application gets the platform's.
 	const served = platformResources === 'refuse' ? platformProxied(authored, access, contract, run) : authored
 	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(served), run)
-	const worker = withManagedEnvironment(loaded.config, served, run, contractEnvironment(run.managedEnvironment, contract))
+	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
+	const worker = withConnectorBindings(
+		withManagedEnvironment(loaded.config, served, run, contractEnvironment(run.managedEnvironment, contract)),
+		connectors,
+	)
 	const dir = workerDir(loaded.config, loaded.cwd)
 	const bounds: DeploymentBounds = {
 		env: run.env,
@@ -440,6 +478,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		iamAppId: appEnvironmentId(run.appId, run.env),
 		installation: run.installationApps ?? [],
 		proxy: served === authored ? null : `${run.env}-${run.appId}-proxy`,
+		connectors: Object.fromEntries(Object.entries(connectors).map(([binding, owner]) => [binding, remoteName(run.env, owner)])),
 		frameworkVariables: {
 			application: frameworkValues(applicationWorker(worker).options.vars),
 			proxy: served === authored ? null : frameworkValues(worker.options.vars),
