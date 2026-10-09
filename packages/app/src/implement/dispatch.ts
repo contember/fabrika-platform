@@ -1,7 +1,7 @@
 // The per-request pipeline of a contract application (ADR-0012 §5): canonical path and endpoint selection, the
 // endpoint the proxy applied (ADR-0022 rule 5), the token, the caller kind, the requirement, admission, strict input, the access form, the handler, output
 // projection. The caller-kind, requirement and access checks are authorization; the same-origin and content-type
-// checks are admission. Neither evaluates a gate: the proxy has already decided that the request may reach us.
+// checks are admission. Neither is the proxy's decision: the proxy has already decided that the request may reach us.
 // The anonymous kinds (health, form, webhook, the share SPA) read no token and take their own fixed steps.
 
 import type { IamMembership } from '@fabrika/auth'

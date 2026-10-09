@@ -5,7 +5,7 @@ import type { DeployJobMessage } from '../run-lifecycle'
 import { createHarness, pushWebhookRequest, signWebhook } from './helpers/harness'
 import { providerEnvironment } from './helpers/provider'
 
-// The webhook is the one unauthenticated route, HMAC-gated by the route's connection secret. These tests
+// The webhook is the one unauthenticated route, authenticated by HMAC with the route's connection secret. These tests
 // exercise: (1) signature verification (good/bad), (2) repo+ref → (app, env) mapping driving run
 // creation + enqueue, (3) the verified-but-unsubscribed no-op. The real verifier runs the HMAC check.
 

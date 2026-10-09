@@ -2,7 +2,6 @@
 // enable: a switched-off transport has no row, so IAM answers 404 there as its handlers did.
 
 import { describe, expect, test } from 'bun:test'
-import { FROZEN_IAM_MINT_PATHS } from '../../../platform-artifacts/src/__tests__/service-parity/frozen'
 import { iamServiceOptions } from '../app'
 import { MINT_DELEGATION_PATH, MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 import { iamServiceContract } from '../service'
@@ -10,7 +9,6 @@ import { iamServiceContract } from '../service'
 describe("IAM's service contract", () => {
 	test('names the mint paths the router serves', () => {
 		const live = [MINT_SESSION_PATH, MINT_KEY_PATH, MINT_EXCHANGE_PATH, MINT_DELEGATION_PATH]
-		expect([...FROZEN_IAM_MINT_PATHS]).toEqual(live)
 		const contract = iamServiceContract({ health: false, managementRpc: false, mintRpc: true, membershipTransport: false })
 		expect(contract.endpoints.filter((row) => row.id.startsWith('mint-')).map((row) => row.path)).toEqual(live)
 	})

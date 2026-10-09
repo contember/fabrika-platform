@@ -26,6 +26,7 @@ import {
 	zeropsNamespaceTargetCodec,
 	type ZeropsRunState,
 } from '@fabrika/provider-zerops'
+import { isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { NOTES_FILES_SERVICE, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -543,6 +544,26 @@ const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> 
  * IAM is fronted by its service table: every surface it serves passes the proxy to authenticate itself, and a path no
  * row serves is the proxy's refusal (plain text), never IAM's own 404 (JSON) or any page.
  */
+/**
+ * The manifests the running proxies read, from inside their containers: the strict parser accepts both, so neither
+ * carries a `gates` key. Every platform entry is an installation entry; every apps entry is an application's table.
+ */
+const proveLiveManifests = async (): Promise<void> => {
+	const live = async (service: string, path: string) => {
+		const manifest = parseProxyManifestJson(await composeOutput(['exec', '-T', service, 'cat', path]))
+		if (manifest === null) throw new Error(`the manifest ${service} reads is not one the strict parser accepts`)
+		return manifest
+	}
+	const platform = await live('platform-proxy-auth', '/local-state/platform-proxy.manifest.json')
+	if (platform.apps.length === 0 || platform.apps.some((app) => isApplicationEntry(app))) {
+		throw new Error('the platform proxy fronts something other than installation entries')
+	}
+	const apps = await live('apps-proxy-auth', '/local-state/apps-proxy.manifest.json')
+	if (apps.apps.length === 0 || !apps.apps.every((app) => isApplicationEntry(app))) {
+		throw new Error('the apps proxy fronts something other than application tables')
+	}
+}
+
 const proveIamTable = async (): Promise<void> => {
 	const unknown = await fetch(`${IAM_ORIGIN}/local-smoke-undeclared`, { redirect: 'manual' })
 	if (unknown.status !== 403 || (unknown.headers.get('content-type') ?? '').startsWith('application/json')) {
@@ -817,6 +838,7 @@ const main = async (): Promise<void> => {
 	await requestJson(IAM_ORIGIN, '/healthz')
 	await requestJson(NOTES_ORIGIN, '/healthz')
 	await proveOperationsPublicBoundary(machineKey)
+	await proveLiveManifests()
 	await proveIamTable()
 	await proveControlTable()
 	await proveConsoleAdmission()

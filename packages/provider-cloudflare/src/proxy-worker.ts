@@ -201,7 +201,7 @@ function findApp(manifest: ProxyManifest, url: URL): ProxyApp | null {
 
 /**
  * Mirrors the generated Caddy metadata route, whose `path` matcher ignores case: such a request is
- * answered by the metadata endpoint, which compares exactly and 404s a mismatch, and never reaches the gates.
+ * answered by the metadata endpoint, which compares exactly and 404s a mismatch, and never reaches the endpoint table.
  */
 function isOAuthMetadataPath(app: ProxyApp, url: URL): boolean {
 	if (isApplicationEntry(app)) return false

@@ -1,7 +1,7 @@
 // The HTTP transport for `IamRpc`. What is asserted here is the WIRE and the failure split — the two
 // things that cannot be checked by the type system and that fail closed but silently when wrong.
 //
-// The wire is `@fabrika/iam`'s `src/rpc-http.ts`; a mismatch there becomes a 5xx on every gated
+// The wire is `@fabrika/iam`'s `src/rpc-http.ts`; a mismatch there becomes a 5xx on every credentialed
 // request with nothing in the message saying why, so the path, the method, the bearer and the body
 // are each pinned. The failure split is the other half: a DECIDED negative (`{ ok:false, reason }` at
 // 200) must come back as a result, and only a transport fault may throw.

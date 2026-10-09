@@ -2,7 +2,7 @@
  * Local access-token verification — the only thing this SDK still does with a credential.
  *
  * Since [ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md) the PROXY is the only
- * enforcement point: it matches the app's gates, resolves the credential, and injects the verified
+ * enforcement point: it selects the endpoint, resolves the credential, and injects the verified
  * token as `PROXY_TOKEN_HEADER`. The app must NOT trust that header blindly, so every token is
  * re-verified here against IAM's published JWKS — signature, `iss`, `aud`, `exp` — before it can
  * become an `AuthContext`.
@@ -10,7 +10,7 @@
  * The verification itself is `@fabrika/jwks`, shared byte-for-byte with the proxy's enforcement path.
  * What this file owns is the SDK's construction shape: the audience is fixed at construction, and the
  * key set plus the unknown-`kid` cooldown are cached PER BINDING in a module-level WeakMap rather than
- * per instance — `@fabrika/app` calls its `middleware(env)` factory on every request, so an SDK object
+ * per instance — a service may build one on every request, so an SDK object
  * built there is per-request while the binding lives for the isolate/process.
  */
 

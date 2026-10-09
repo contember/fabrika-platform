@@ -114,8 +114,8 @@ async function dispatchOne(router: AnyRouter, ctx: unknown, call: SingleCall): P
 }
 
 /**
- * Dispatch an RPC POST. The `ctx` is already built (and decorated by middleware,
- * e.g. `ctx.auth`) by the server before this is called. One request is one call,
+ * Dispatch an RPC POST. The `ctx` is already built (with its `ctx.auth`, for example)
+ * by the server before this is called. One request is one call,
  * `{ method, input }`.
  */
 export async function dispatchRpcRequest(args: { router: AnyRouter; ctx: unknown; request: Request }): Promise<Response> {

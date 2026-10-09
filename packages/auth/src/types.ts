@@ -91,3 +91,8 @@ export interface ListPrincipalsFailure {
 	reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' | 'not_allowed'
 	status: 401 | 403
 }
+
+/** A request context with a writable `auth` slot, set to the resolved `AuthContext` (or null for an anonymous caller). */
+export interface AuthCarrier {
+	auth?: AuthContext | null
+}

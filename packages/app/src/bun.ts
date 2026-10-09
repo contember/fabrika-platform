@@ -14,7 +14,7 @@ import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { S3BlobStore } from '@fabrika/platform-node'
 import { join, resolve, sep } from 'node:path'
-import type { FabrikaApp, RequestExecutionContext } from './app.js'
+import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
@@ -44,7 +44,7 @@ export interface BunHandler {
 	drain(): Promise<void>
 }
 
-export function createBunHandler<Env>(app: FabrikaApp<Env>, env: Env, options: BunHandlerOptions): BunHandler {
+export function createBunHandler<Env>(app: FetchService<Env>, env: Env, options: BunHandlerOptions): BunHandler {
 	if (options.executionContext !== undefined) {
 		return {
 			fetch: (request) => app.fetch(request, env, options.executionContext),

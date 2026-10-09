@@ -5,7 +5,7 @@
 // This is the ONE place the platform's app list is declared. The local composition builds its manifest
 // from it (`packages/local-stack/src/prepare.ts`) and the committed artifact is rendered from it, so a
 // table change reaches a deployed installation the same way it reaches the local stack — which is the
-// whole item: the live document on `fabrika-test` was hand-written and gated the entire control plane
+// whole item: the live document on `fabrika-test` was hand-written and made the entire control plane
 // `public` for two days while the console's declaration said otherwise, and nothing reported it.
 //
 // DEV-TIME ONLY: it imports the service contracts from the PRIVATE service packages, which is why it
@@ -81,7 +81,7 @@ const serviceTable = ({ endpoints, reservedPrefixes }: InstallationEndpointTable
  * of silently moving IAM's public address.
  */
 export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
-	// Every row is `protocol`: IAM authenticates each surface itself, and a gate in front of its login page is a login loop.
+	// Every row is `protocol`: IAM authenticates each surface itself, and a credentialed row in front of its login page is a login loop.
 	{
 		id: PLATFORM_IAM_APP_ID,
 		service: 'iam',

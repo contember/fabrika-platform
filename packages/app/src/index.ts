@@ -1,5 +1,6 @@
-// @fabrika/app — the first-party server framework for Fabrika applications:
-// Fetch-based HTTP routing, typed RPC, middleware, and object-level authorization.
+// @fabrika/app — the first-party server framework: typed RPC, its client, structural errors, and the `{ fetch }` the
+// runtime adapters serve. A contract application uses `@fabrika/app/contract`; an installation service
+// `@fabrika/app/service`.
 
 // ─── RPC ─────────────────────────────────────────────────────────────
 export { initRpc } from './rpc/builder.js'
@@ -9,13 +10,8 @@ export type { InferRouter, InferRouterClient } from './rpc/types.js'
 // ─── Schema contract (validator-agnostic) ────────────────────────────
 export type { StandardSchemaV1 } from './standard-schema.js'
 
-// ─── Routing ─────────────────────────────────────────────────────────
-export { matchRoutes, route } from './router.js'
-export type { HttpMethod, HttpRoute, Route, RouteOptions, RouteParams, RpcRoute } from './router.js'
-
-// ─── Application ─────────────────────────────────────────────────────
-export { defineApp } from './app.js'
-export type { AppConfig, AssetsLike, FabrikaApp, RequestExecutionContext } from './app.js'
+// ─── Request handling ────────────────────────────────────────────────
+export type { FetchService, RequestExecutionContext } from './fetch.js'
 
 // ─── Errors ──────────────────────────────────────────────────────────
 export {
@@ -31,9 +27,8 @@ export {
 	UnauthorizedError,
 } from './errors.js'
 
-// ─── Middleware + auth contract ──────────────────────────────────────
+// ─── Auth contract ───────────────────────────────────────────────────
 export type { AuthContext, Scope } from '@fabrika/auth'
-export type { Middleware } from './middleware.js'
 
 // ─── Client ──────────────────────────────────────────────────────────
 export { createRpcClient } from './client/rpc.js'

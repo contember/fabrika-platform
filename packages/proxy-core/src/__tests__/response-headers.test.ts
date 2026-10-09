@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test'
 import { BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy } from '../headers'
 import type { ProxyApp } from '../manifest'
 import { createVerifyService } from '../service'
-import { anonymousRow, appWith, contractAppWith, endpointRow, FakeIam, ISSUER, signToken, verifyRequest } from './helpers'
+import { anonymousRow, contractAppWith, endpointRow, FakeIam, installationAppWith, ISSUER, serviceRow, signToken, verifyRequest } from './helpers'
 
 const ME = endpointRow({
 	id: 'api.me',
@@ -86,8 +86,8 @@ describe('a contract application', () => {
 })
 
 describe('an answer that belongs to no contract application', () => {
-	test("a gate app's denial carries the base policy", async () => {
-		const verify = verifyWith(new FakeIam(), appWith({ rules: [{ path: '/*', kind: 'service' }] }))
+	test("an installation entry's denial carries the base policy", async () => {
+		const verify = verifyWith(new FakeIam(), installationAppWith([serviceRow('/*', ['machine'])]))
 		const response = await verify(verifyRequest({ path: '/x' }))
 		expect(response.status).toBe(401)
 		expectHeaders(response, BASE_HEADER_POLICY)

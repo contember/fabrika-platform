@@ -46,19 +46,11 @@ import {
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 } from './constants'
-import { compileGates } from './gates'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
 import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, BASE_HEADER_POLICY, type HeaderPolicy } from './headers'
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
-import {
-	formatOAuthBearerChallenge,
-	hasEndpointTable,
-	isApplicationEntry,
-	type ManifestEndpointRow,
-	type ProxyApp,
-	type ProxyManifest,
-} from './manifest'
+import { formatOAuthBearerChallenge, isApplicationEntry, type ManifestEndpointRow, type ProxyApp, type ProxyManifest } from './manifest'
 import { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
 
 export interface VerifyServiceConfig {
@@ -83,8 +75,8 @@ export type VerifyService = (request: Request) => Promise<Response>
 const HOST_PATTERN = /^[a-z0-9.\-[\]]+(:\d{1,5})?$/i
 
 /**
- * Build the `/verify` service. Gates and endpoint tables are compiled once here, not per request — the
- * matcher is on the hot path of every request to every app.
+ * Build the `/verify` service. Endpoint tables are compiled once here, not per request — the planner is
+ * on the hot path of every request to every app.
  */
 export function createVerifyService(config: VerifyServiceConfig): VerifyService {
 	const logger = config.logger ?? silentLogger
@@ -153,8 +145,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 					: oauthMetadataResponse(metadata, forwarded.method)
 			}
 
-			// The handoff callback is checked BEFORE the gates: it is how a browser becomes able to
-			// satisfy one, so it cannot itself be behind one. Because Caddy returns a non-2xx auth
+			// The handoff callback is checked BEFORE the endpoint table: it is how a browser obtains a
+			// session, so it cannot itself be behind an endpoint. Because Caddy returns a non-2xx auth
 			// response verbatim, answering 302 + Set-Cookie here reaches the client and never the app.
 			const isCallback = forwarded.url.pathname === AUTH_CALLBACK_PATH
 			const decision = isCallback
@@ -168,7 +160,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				path: redactPath(forwarded.url.pathname),
 			}
 			if (decision.outcome === 'allow') {
-				logger.info('allow', { ...fields, gate: decision.gate, subject: decision.subject, endpoint: decision.endpoint })
+				logger.info('allow', { ...fields, subject: decision.subject, endpoint: decision.endpoint })
 				const headers = new Headers({ 'cache-control': 'no-store', [REQUEST_ID_HEADER]: requestId })
 				if (decision.token !== null) {
 					headers.set(PROXY_TOKEN_HEADER, decision.token)
@@ -210,7 +202,6 @@ function withFileTreatment(response: Response): Response {
 
 /** Whether the request selects a download endpoint, whose every answer gets the file treatment instead of the policy. */
 function isDownload(resolved: ResolvedApp, forwarded: ForwardedRequest): boolean {
-	if (resolved.kind !== 'endpoints') return false
 	const plan = planEndpoint(resolved.table, forwarded.method, forwarded.rawPath)
 	return plan.outcome === 'endpoint' && plan.endpoint.kind === 'download'
 }
@@ -382,7 +373,7 @@ type ForwardedRead = { ok: true; request: ForwardedRequest } | { ok: false; reas
  *
  * The URL is assembled by assignment rather than by `new URL(uri, base)`: a request line of
  * `GET //evil.example/x` is a legal path, and relative resolution would read it as a protocol-relative
- * URL, silently changing the host — which would both mis-match the gates and turn the login bounce
+ * URL, silently changing the host — which would both select the wrong app and turn the login bounce
  * into an open redirect.
  */
 function readForwardedRequest(request: Request, requestId: string): ForwardedRead {
@@ -436,11 +427,9 @@ function selectApp(verifyUrl: URL, host: string, byId: Map<string, ResolvedApp>,
 	return byHost.get(hostname) ?? null
 }
 
-/** The compiled form an app is protected by. The manifest parser already refused an ambiguous table. */
+/** The compiled table an app is protected by. The manifest parser already refused an ambiguous table. */
 function resolveApp(app: ProxyApp): ResolvedApp {
-	return hasEndpointTable(app)
-		? { kind: 'endpoints', app, table: compileEndpointTable<ManifestEndpointRow>(app) }
-		: { kind: 'gates', app, gates: compileGates(app.gates) }
+	return { app, table: compileEndpointTable<ManifestEndpointRow>(app) }
 }
 
 /** Lower-case, port stripped — the one normalization every host comparison in this file uses. */

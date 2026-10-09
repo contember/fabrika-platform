@@ -1,5 +1,5 @@
-import { assertAppRuntimeConformance } from '@fabrika/app/testing'
 import { describe, expect, test } from 'bun:test'
+import { assertAppRuntimeConformance } from '../../../app/src/__tests__/fixtures/runtime-conformance'
 import { controlApp } from '../app'
 import type { Env } from '../env'
 import { createHarness } from './helpers/harness'

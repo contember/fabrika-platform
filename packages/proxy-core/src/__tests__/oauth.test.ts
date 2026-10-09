@@ -1,7 +1,7 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { PROXY_TOKEN_HEADER } from '../constants'
-import { formatOAuthBearerChallenge, type OAuthBearerChallenge } from '../manifest'
+import { formatOAuthBearerChallenge, type InstallationProxyEndpointRow, type OAuthBearerChallenge } from '../manifest'
 import { OAUTH_METADATA_VERIFY_PATH } from '../oauth'
 import { createVerifyService } from '../service'
 import {
@@ -10,11 +10,13 @@ import {
 	foreignPrivateKey,
 	ISSUER,
 	manifestWith,
-	OAUTH_GATES,
+	MCP_ROW,
 	OAUTH_RESOURCE,
+	protocolRow,
 	RESOURCE,
 	RESOURCE_METADATA,
 	type ResourceSignOptions,
+	serviceRow,
 	signResourceToken,
 	signUserToken,
 	verifyRequest,
@@ -22,8 +24,8 @@ import {
 
 const METADATA_PATH = new URL(RESOURCE_METADATA).pathname
 
-function service(iam = new FakeIam(), gates = OAUTH_GATES) {
-	return createVerifyService({ manifest: manifestWith(gates, { oauthResources: [OAUTH_RESOURCE] }), iam, issuer: ISSUER })
+function service(iam = new FakeIam(), endpoints: InstallationProxyEndpointRow[] = [MCP_ROW]) {
+	return createVerifyService({ manifest: manifestWith(endpoints, { oauthResources: [OAUTH_RESOURCE] }), iam, issuer: ISSUER })
 }
 
 function expectChallenge(response: Response, status: number, parameters: Omit<OAuthBearerChallenge, 'resource_metadata'> = {}): void {
@@ -34,7 +36,7 @@ function expectChallenge(response: Response, status: number, parameters: Omit<OA
 	expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 }
 
-describe('oauth gate', () => {
+describe('a row that admits oauth', () => {
 	test('a valid resource token is verified locally and injected as the proxy token', async () => {
 		const iam = new FakeIam()
 		const token = await signResourceToken()
@@ -64,13 +66,7 @@ describe('oauth gate', () => {
 		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
 
-	test('an opaque px_ bearer is an invalid_token challenge and never reaches IAM mint', async () => {
-		const iam = new FakeIam()
-		expectChallenge(await service(iam)(verifyRequest({ path: '/mcp', bearer: 'px_key' })), 401, { error: 'invalid_token' })
-		expect(iam.mintTokenCalls + iam.mintFromKeyCalls).toBe(0)
-	})
-
-	test('a native app token is an invalid_token challenge on an oauth gate', async () => {
+	test('a native app token is an invalid_token challenge on an oauth row', async () => {
 		expectChallenge(await service()(verifyRequest({ path: '/mcp', bearer: await signUserToken() })), 401, { error: 'invalid_token' })
 	})
 
@@ -99,15 +95,15 @@ describe('oauth gate', () => {
 		expect(response.headers.get('WWW-Authenticate')).toBeNull()
 	})
 
-	test('an oauth rule is terminal: a refusal never falls through to a later public or human rule', async () => {
-		const verify = service(new FakeIam(), { rules: [...OAUTH_GATES.rules, { kind: 'human', path: '/*' }, { kind: 'public', path: '/*' }] })
+	test('the oauth row is terminal: a refusal on /mcp is never answered by the wildcard row', async () => {
+		const verify = service(new FakeIam(), [MCP_ROW, protocolRow('/*')])
 		expectChallenge(await verify(verifyRequest({ path: '/mcp', cookie: `${SESSION_COOKIE}=session` })), 401)
 		expectChallenge(await verify(verifyRequest({ path: '/mcp', bearer: await signUserToken() })), 401, { error: 'invalid_token' })
 		expect((await verify(verifyRequest({ path: '/other' }))).status).toBe(204)
 	})
 
-	test('a resource token does not satisfy a service gate', async () => {
-		const verify = service(new FakeIam(), { rules: [...OAUTH_GATES.rules, { kind: 'service', path: '/api' }] })
+	test('a resource token does not satisfy a machine row', async () => {
+		const verify = service(new FakeIam(), [MCP_ROW, serviceRow('/api', ['machine'])])
 		expect((await verify(verifyRequest({ path: '/api', bearer: await signResourceToken() }))).status).toBe(401)
 	})
 })
@@ -146,7 +142,7 @@ describe('oauth protected resource metadata', () => {
 			.toBe(403)
 	})
 
-	test('the metadata path on /verify is still gated, never admitted implicitly', async () => {
+	test('the metadata path on /verify is still planned, never admitted implicitly', async () => {
 		expect((await service()(verifyRequest({ path: METADATA_PATH }))).status).toBe(403)
 	})
 })

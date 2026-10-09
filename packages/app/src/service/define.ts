@@ -1,5 +1,5 @@
 // A service contract: the endpoint table of one of the installation's own services (ADR-0012, ADR-0022 "Installation
-// entries"). Plain data over `@fabrika/auth-core` only, so a table module stays dependency-light like a gate module.
+// entries"). Plain data over `@fabrika/auth-core` only, so a table module stays dependency-light.
 
 import {
 	APP_ENVIRONMENT_SEPARATOR,

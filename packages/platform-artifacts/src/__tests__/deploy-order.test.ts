@@ -38,7 +38,7 @@ describe('the four services a platform deploy touches', () => {
 		expect(new Set(PLATFORM_DEPLOY_ORDER)).toEqual(new Set([...PLATFORM_PROXY_APPS.map((app) => app.service), PROXY_HOSTNAME]))
 	})
 
-	test('and the SEQUENCE puts the enforcement point ahead of the service whose gates it carries', () => {
+	test('and the SEQUENCE puts the enforcement point ahead of the service whose table it carries', () => {
 		// Two stages, and only one of them is ordered. iam and operations order NOTHING against
 		// each other — no boot-time call between them, no readiness gate that leaves the service, and no
 		// variable one's deploy writes that another's build reads — so they build at once.

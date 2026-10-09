@@ -7,15 +7,16 @@
  */
 
 import {
-	type AppGates,
 	buildAccessClaims,
 	buildResourceAccessClaims,
 	type EndpointRequirement,
 	type ExchangeAuthCodeResult,
+	type InstallationCredentialedEndpoint,
 	type InstallationEndpointRow,
 	type Jwks,
 	type MintFromKeyResult,
 	type MintTokenResult,
+	type OAuthEndpointScopes,
 	type PermissionEntry,
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
@@ -35,7 +36,6 @@ import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
 import type {
 	ContractProxyApp,
-	GateProxyApp,
 	InstallationProxyApp,
 	InstallationProxyEndpointRow,
 	OAuthProtectedResource,
@@ -57,7 +57,6 @@ export const OAUTH_RESOURCE: OAuthProtectedResource = {
 	authorizationServers: [ISSUER],
 	scopesSupported: ['mcp:read', 'mcp:write'],
 }
-export const OAUTH_GATES: AppGates = { rules: [{ kind: 'oauth', path: '/mcp', resource: RESOURCE, scopes: ['mcp:read'] }] }
 
 // One ES256 key pair for the suite; `publicJwks` is what a healthy IAM serves.
 const primary = await generateKeyPair('ES256')
@@ -226,14 +225,6 @@ export class FakeIam implements IamGateway {
 
 // ── Manifest + request construction ────────────────────────────────────────────
 
-export function appWith(gates: AppGates, overrides: Partial<GateProxyApp> = {}): GateProxyApp {
-	return { id: APP, hosts: [HOST], upstream: 'app:3000', scheme: 'https', gates, ...overrides }
-}
-
-export function manifestWith(gates: AppGates, overrides: Partial<GateProxyApp> = {}): ProxyManifest {
-	return { apps: [appWith(gates, overrides)] }
-}
-
 type CredentialedRow = Extract<ProxyEndpointRow, { requirement: EndpointRequirement }>
 type AnonymousRow = Extract<ProxyEndpointRow, { requirement: null }>
 
@@ -284,6 +275,28 @@ export function installationAppWith(
 	overrides: Partial<InstallationProxyApp> = {},
 ): InstallationProxyApp {
 	return { id: APP, hosts: [HOST], upstream: 'app:3000', scheme: 'https', installation: true, endpoints, reservedPrefixes, ...overrides }
+}
+
+/** An installation `service` row serving every method on `path`; its id is the path. */
+export function serviceRow(
+	path: string,
+	callers: InstallationCredentialedEndpoint['callers'],
+	oauth: OAuthEndpointScopes | null = null,
+): InstallationProxyEndpointRow {
+	return installationRow({ id: path, kind: 'service', method: '*', path, callers, requirement: { kind: 'authenticated' }, admission: null, oauth })
+}
+
+/** An installation `protocol` row serving every method on `path`: anonymous at the proxy. */
+export function protocolRow(path: string): InstallationProxyEndpointRow {
+	return installationRow({ id: path, kind: 'protocol', method: '*', path, callers: [], requirement: null, admission: null, oauth: null })
+}
+
+/** The `/mcp` row OAuth clients reach with a resource token carrying `mcp:read`; register `OAUTH_RESOURCE` beside it. */
+export const MCP_ROW = serviceRow('/mcp', ['oauth'], { scopes: ['mcp:read'] })
+
+/** A manifest of one installation entry on `HOST`. */
+export function manifestWith(endpoints: InstallationProxyEndpointRow[], overrides: Partial<InstallationProxyApp> = {}): ProxyManifest {
+	return { apps: [installationAppWith(endpoints, [], overrides)] }
 }
 
 export interface VerifyRequestOptions {

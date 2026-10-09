@@ -27,6 +27,7 @@ if (!build.success || script === undefined) throw new Error('the Operations SDK 
 
 const handler = createBunHandler(witnessApp, {
 	verified: async (token) => (await verifier.verify(token, WITNESS_IAM_APP_ID)).ok,
+	proxySecret: required('FABRIKA_PROXY_SECRET'),
 	fixture: { dsn: required('FABRIKA_OPERATIONS_DSN'), release: required('FABRIKA_RELEASE'), script: await script.text() },
 }, { onBackgroundError: () => console.error('background task failed') })
 

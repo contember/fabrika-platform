@@ -6,21 +6,35 @@
  * Each test names the failure and the status it must produce.
  */
 
-import { type AppGates, HANDOFF_COOKIE_PREFIX } from '@fabrika/auth-core'
+import { HANDOFF_COOKIE_PREFIX, type TokenPrincipalType } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { cacheKey, MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
 import { handoffChallenge } from '../handoff'
+import type { InstallationProxyEndpointRow } from '../manifest'
 import { OAUTH_METADATA_VERIFY_PATH } from '../oauth'
 import { createVerifyService, type VerifyService } from '../service'
-import { APP, FakeIam, type FakeIamOptions, foreignPrivateKey, ISSUER, manifestWith, signToken, signUserToken, verifyRequest } from './helpers'
+import {
+	APP,
+	FakeIam,
+	type FakeIamOptions,
+	foreignPrivateKey,
+	ISSUER,
+	manifestWith,
+	protocolRow,
+	serviceRow,
+	signToken,
+	signUserToken,
+	verifyRequest,
+} from './helpers'
 
-const HUMAN: AppGates = { rules: [{ path: '/*', kind: 'human' }] }
-const SERVICE: AppGates = { rules: [{ path: '/*', kind: 'service' }] }
-const PUBLIC_THEN_HUMAN: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
+const HUMAN = [serviceRow('/*', ['human'])]
+const MACHINE = [serviceRow('/*', ['machine'])]
+const OPEN = [protocolRow('/*')]
+const PROTOCOL_THEN_HUMAN = [protocolRow('/public/*'), serviceRow('/*', ['human'])]
 
-function service(gates: AppGates, iam: FakeIam, cache: MemoryTokenCache | null = new MemoryTokenCache()): VerifyService {
-	return createVerifyService({ manifest: manifestWith(gates), iam, issuer: ISSUER, cache })
+function service(endpoints: InstallationProxyEndpointRow[], iam: FakeIam, cache: MemoryTokenCache | null = new MemoryTokenCache()): VerifyService {
+	return createVerifyService({ manifest: manifestWith(endpoints), iam, issuer: ISSUER, cache })
 }
 
 function iamWith(options: FakeIamOptions): FakeIam {
@@ -64,15 +78,15 @@ function expectLoginUrl(raw: string | null, returnUrl: string): void {
 }
 
 describe('deny — nothing matched', () => {
-	test('a path matching NO gate rule is denied 403', async () => {
-		const verify = service({ rules: [{ path: '/api/*', kind: 'service' }] }, iamWith({}))
+	test('a path matching NO row is denied 403', async () => {
+		const verify = service([serviceRow('/api/*', ['machine'])], iamWith({}))
 		const response = await verify(verifyRequest({ path: '/elsewhere' }))
 		expect(response.status).toBe(403)
 		expectDenied(response)
 	})
 
-	test('an app with an EMPTY rule list denies everything', async () => {
-		const verify = service({ rules: [] }, iamWith({}))
+	test('an entry with an EMPTY table denies everything', async () => {
+		const verify = service([], iamWith({}))
 		expectDenied(await verify(verifyRequest({ path: '/' })))
 		expectDenied(await verify(verifyRequest({ path: '/anything/at/all' })))
 	})
@@ -90,12 +104,12 @@ describe('deny — nothing matched', () => {
 	})
 })
 
-describe('deny — a workload key on a service gate', () => {
-	test.each([['job', 'nightly'], ['webhook', 'github'], ['app', 'shop']] as const)(
+describe('deny — a workload key on a machine row', () => {
+	test.each<[TokenPrincipalType, string]>([['job', 'nightly'], ['webhook', 'github'], ['app', 'shop']])(
 		'a %s key is refused 403, also from the cache',
 		async (type, workload) => {
 			const iam = iamWith({ mintFromKey: { ok: true, token: await signToken({ type, workload }), expiresAt: future() } })
-			const verify = service(SERVICE, iam)
+			const verify = service(MACHINE, iam)
 			for (let attempt = 0; attempt < 2; attempt++) {
 				const response = await verify(verifyRequest({ path: '/api/x', bearer: 'px_workload' }))
 				expect(response.status).toBe(403)
@@ -108,14 +122,14 @@ describe('deny — a workload key on a service gate', () => {
 
 describe('deny — the forwarded request is not describable', () => {
 	test('a missing X-Forwarded-Uri denies rather than falling back to the /verify path', async () => {
-		// Critical: /verify would match a `/*` public rule and let everything through.
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		// Critical: /verify would match a `/*` protocol row and let everything through.
+		const verify = service(OPEN, iamWith({}))
 		const response = await verify(verifyRequest({ forwardedUri: null }))
 		expect(response.status).toBe(403)
 	})
 
 	test('an X-Forwarded-Uri that is not a path is denied', async () => {
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const verify = service(OPEN, iamWith({}))
 		expectDenied(await verify(verifyRequest({ forwardedUri: 'https://evil.example/x' })))
 		expectDenied(await verify(verifyRequest({ forwardedUri: 'page' })))
 	})
@@ -130,7 +144,7 @@ describe('deny — the forwarded request is not describable', () => {
 	})
 
 	test('a missing or empty method is denied rather than defaulting to GET', async () => {
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const verify = service(OPEN, iamWith({}))
 		const missing = await verify(verifyRequest({ method: null }))
 		expect(missing.status).toBe(403)
 		expectDenied(missing)
@@ -138,32 +152,31 @@ describe('deny — the forwarded request is not describable', () => {
 	})
 
 	test('a missing host is denied', async () => {
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const verify = service(OPEN, iamWith({}))
 		const response = await verify(verifyRequest({ forwardedHost: null, app: null }))
 		expect(response.status).toBe(403)
 	})
 
 	test('a syntactically impossible host is denied', async () => {
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const verify = service(OPEN, iamWith({}))
 		expectDenied(await verify(verifyRequest({ forwardedHost: 'evil.example/../x' })))
 		expectDenied(await verify(verifyRequest({ forwardedHost: 'a b' })))
 	})
 
 	test('a non-GET subrequest is refused — forward_auth always rewrites to GET', async () => {
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const verify = service(OPEN, iamWith({}))
 		const request = new Request(`http://127.0.0.1:9000/verify?app=${APP}`, { method: 'POST' })
 		expect((await verify(request)).status).toBe(405)
 	})
 
 	test('a request to any path other than /verify is 404, not a decision', async () => {
-		const verify = service({ rules: [{ path: '/*', kind: 'public' }] }, iamWith({}))
+		const verify = service(OPEN, iamWith({}))
 		expect((await verify(new Request('http://127.0.0.1:9000/'))).status).toBe(404)
 	})
 })
 
-describe('deny — a non-canonical path is refused before any gate is matched', () => {
-	// Every rule is public: a path that slipped past the check would be allowed, not bounced.
-	const OPEN: AppGates = { rules: [{ path: '/*', kind: 'public' }] }
+describe('deny — a non-canonical path is refused before any endpoint is planned', () => {
+	// Every row is protocol: a path that slipped past the check would be allowed, not bounced.
 
 	test.each([
 		['a repeated slash', '//admin/users'],
@@ -187,7 +200,7 @@ describe('deny — a non-canonical path is refused before any gate is matched', 
 	})
 
 	test('a trailing slash is significant: it is matched literally, never as the path without it', async () => {
-		const verify = service({ rules: [{ path: '/admin', kind: 'public' }] }, iamWith({}))
+		const verify = service([protocolRow('/admin')], iamWith({}))
 		expect((await verify(verifyRequest({ forwardedUri: '/admin' }))).status).toBe(204)
 		const response = await verify(verifyRequest({ forwardedUri: '/admin/' }))
 		expect(response.status).toBe(403)
@@ -200,7 +213,7 @@ describe('deny — a non-canonical path is refused before any gate is matched', 
 	})
 })
 
-describe('deny — human gate', () => {
+describe('deny — a human row', () => {
 	test('no cookies at all → 302 to IAM login, with the original URL as the return target', async () => {
 		const iam = iamWith({})
 		const response = await service(HUMAN, iam)(verifyRequest({ path: '/dashboard' }))
@@ -268,7 +281,7 @@ describe('deny — human gate', () => {
 	})
 })
 
-describe('deny — a human gate admits a USER principal, not merely a valid token', () => {
+describe('deny — a session admits a USER principal, not merely a valid token', () => {
 	test('a non-user token cannot ride in on the session tier either', async () => {
 		// Even if IAM somehow answered a session exchange with a non-user token, it is not a human.
 		const iam = iamWith({ mintToken: { ok: true, token: await signToken({ type: 'service' }), expiresAt: future() } })
@@ -276,9 +289,9 @@ describe('deny — a human gate admits a USER principal, not merely a valid toke
 		expect(response.status).toBe(302)
 	})
 
-	test('a non-user token is still a valid SERVICE credential — only the human gate refuses it', async () => {
-		const iam = iamWith({ mintFromKey: { ok: true, token: await signToken({}), expiresAt: future() } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_share' }))).status).toBe(204)
+	test('a service token is still a valid machine key — only the session tier refuses it', async () => {
+		const iam = iamWith({ mintFromKey: { ok: true, token: await signToken({ type: 'service' }), expiresAt: future() } })
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_machine' }))).status).toBe(204)
 	})
 })
 
@@ -337,10 +350,10 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 		expect(JSON.stringify(error)).not.toContain('disabled')
 	})
 
-	test('only the HUMAN miss changes shape — a service gate still answers a flat 401', async () => {
+	test('only the HUMAN miss changes shape — a machine row still answers a flat 401', async () => {
 		const iam = iamWith({ mintFromKey: { ok: false, reason: 'invalid_key' } })
 		const request = verifyRequest({ path: '/api/x', method: 'POST', bearer: 'px_bad', headers: { 'Sec-Fetch-Mode': 'cors' } })
-		const response = await service(SERVICE, iam)(request)
+		const response = await service(MACHINE, iam)(request)
 		expect(response.status).toBe(401)
 		expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
 		expect(await response.text()).toBe('unauthorized')
@@ -355,57 +368,56 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 	})
 })
 
-describe('deny — service gate', () => {
-	test('no credential at all on a service-only gate set → 401 (no login bounce for a machine)', async () => {
-		const response = await service(SERVICE, iamWith({}))(verifyRequest({ path: '/api/x' }))
+describe('deny — a machine row', () => {
+	test('no credential at all on a machine-only row → 401 (no login bounce for a machine)', async () => {
+		const response = await service(MACHINE, iamWith({}))(verifyRequest({ path: '/api/x' }))
 		expect(response.status).toBe(401)
 		expect(response.headers.get('location')).toBeNull()
 	})
 
 	test('an unknown px_ key → 401', async () => {
 		const iam = iamWith({ mintFromKey: { ok: false, reason: 'invalid_key' } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_nope' }))).status).toBe(401)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_nope' }))).status).toBe(401)
 	})
 
 	test('a disabled service principal → 403', async () => {
 		const iam = iamWith({ mintFromKey: { ok: false, reason: 'disabled' } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_dead' }))).status).toBe(403)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_dead' }))).status).toBe(403)
 	})
 
 	test("a key whose token is above IAM's size bound → 403", async () => {
 		const iam = iamWith({ mintFromKey: { ok: false, reason: 'token_too_large' } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_wide' }))).status).toBe(403)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_wide' }))).status).toBe(403)
 	})
 
 	test('an unknown principal → 403', async () => {
 		const iam = iamWith({ mintFromKey: { ok: false, reason: 'unknown_principal' } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_ghost' }))).status).toBe(403)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_ghost' }))).status).toBe(403)
 	})
 
 	test('a non-px_ bearer → 401 with NO IAM call', async () => {
 		const iam = iamWith({})
-		const response = await service(SERVICE, iam)(verifyRequest({ bearer: 'eyJnot.a.jwt' }))
+		const response = await service(MACHINE, iam)(verifyRequest({ bearer: 'eyJnot.a.jwt' }))
 		expect(response.status).toBe(401)
 		expect(iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
 
-	test('a validly signed access token as a bearer → 401: only a px_ key satisfies a service gate', async () => {
+	test('a validly signed access token as a bearer → 401: only a px_ key reaches a machine row', async () => {
 		const iam = iamWith({})
-		const response = await service(SERVICE, iam)(verifyRequest({ bearer: await signToken({}) }))
+		const response = await service(MACHINE, iam)(verifyRequest({ bearer: await signToken({}) }))
 		expect(response.status).toBe(401)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 		expect(iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
 
-	test('a PRESENT-but-invalid credential does NOT fall through to a later human rule', async () => {
-		const gates: AppGates = { rules: [{ path: '/*', kind: 'service' }, { path: '/*', kind: 'human' }] }
+	test('a PRESENT-but-invalid key is terminal: the session beside it is never consulted', async () => {
 		const iam = iamWith({
 			mintFromKey: { ok: false, reason: 'invalid_key' },
 			mintToken: { ok: true, token: await signUserToken(), expiresAt: future() },
 		})
-		const response = await service(gates, iam)(verifyRequest({ bearer: 'px_bad', cookie: '__Host-px_session=good' }))
+		const response = await service([serviceRow('/*', ['human', 'machine'])], iam)(verifyRequest({ bearer: 'px_bad', cookie: '__Host-px_session=good' }))
 		expect(response.status).toBe(401)
-		expect(iam.mintTokenCalls).toBe(0) // the human rule was never reached
+		expect(iam.mintTokenCalls).toBe(0)
 	})
 })
 
@@ -419,17 +431,17 @@ describe('deny — IAM is unreachable', () => {
 
 	test('an unreachable IAM on the service path denies with 503', async () => {
 		const iam = iamWith({ unreachable: true })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_key' }))).status).toBe(503)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_key' }))).status).toBe(503)
 	})
 
 	test('an EMPTY key set denies everything (no keys, no verification)', async () => {
 		const iam = iamWith({ jwks: { keys: [] }, mintFromKey: { ok: true, token: await signToken({}), expiresAt: future() } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_key' }))).status).toBe(401)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_key' }))).status).toBe(401)
 	})
 
-	test('a public gate still passes when IAM is down — it needs no credential', async () => {
+	test('a protocol row still passes when IAM is down — it reads no credential', async () => {
 		const iam = iamWith({ unreachable: true })
-		const response = await service(PUBLIC_THEN_HUMAN, iam)(verifyRequest({ path: '/public/health' }))
+		const response = await service(PROTOCOL_THEN_HUMAN, iam)(verifyRequest({ path: '/public/health' }))
 		expect(response.status).toBe(204)
 		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
 	})
@@ -457,7 +469,7 @@ describe('deny — "we could not check" is 503 on the human path, never a login 
 
 	test('the service path already did this, and still does', async () => {
 		const iam = iamWith({ jwksUnreachable: true, mintFromKey: { ok: true, token: await signUserToken(), expiresAt: future() } })
-		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_ci' }))).status).toBe(503)
+		expect((await service(MACHINE, iam)(verifyRequest({ bearer: 'px_ci' }))).status).toBe(503)
 	})
 })
 
@@ -474,12 +486,12 @@ describe('deny — the forwarded host must belong to the pinned app', () => {
 })
 
 describe('one request, one session resolution', () => {
-	test('two overlapping human rules mint at most once', async () => {
-		const gates: AppGates = { rules: [{ path: '/admin/*', kind: 'human' }, { path: '/*', kind: 'human' }] }
+	test('two overlapping human rows mint at most once', async () => {
 		const iam = iamWith({ mintToken: { ok: false, reason: 'invalid_session' } })
-		const response = await service(gates, iam)(verifyRequest({ path: '/admin/users', cookie: '__Host-px_session=s' }))
+		const verify = service([serviceRow('/admin/*', ['human']), serviceRow('/*', ['human'])], iam)
+		const response = await verify(verifyRequest({ path: '/admin/users', cookie: '__Host-px_session=s' }))
 		expect(response.status).toBe(302)
-		// Both rules match and both miss; the verdict cannot differ, so the exchange happens once.
+		// Only the most specific row is consulted, so the exchange happens once.
 		expect(iam.mintTokenCalls).toBe(1)
 	})
 })

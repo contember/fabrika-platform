@@ -1,6 +1,6 @@
-import { assertAppRuntimeConformance } from '@fabrika/app/testing'
 import { ENDPOINT_HEADER } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { assertAppRuntimeConformance } from '../../../app/src/__tests__/fixtures/runtime-conformance'
 import { operationsApp, type OperationsAppEnv } from '../app'
 import { SqliteHealthRepository } from '../health-repository.js'
 import { testOperationsIam } from './helpers/iam.js'

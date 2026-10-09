@@ -3,7 +3,7 @@
  *
  * Every API/RPC entrypoint resolves the caller through IAM and then
  * `auth.can(action, scope?)` against one of these actions, auditing mutations. The GitHub webhook is
- * the only unauthenticated route (HMAC-gated instead).
+ * the only unauthenticated route (authenticated by its HMAC instead).
  *
  * This module is the single source of truth for the strings. The SCHEMA DECLARATION that provisions
  * this vocabulary into IAM (so the admin UI can render real choices) lives in fabrika.config.ts —

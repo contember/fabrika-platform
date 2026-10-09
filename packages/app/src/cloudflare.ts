@@ -3,7 +3,7 @@
 import { DecodedIamMembership } from '@fabrika/auth'
 import type { IamMembershipRpc } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
-import type { FabrikaApp, RequestExecutionContext } from './app.js'
+import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { boot, type ContractApp, type IamKeySource } from './implement/boot.js'
 import { CONNECT_BINDING_PREFIX, type ConnectFetch } from './implement/connect.js'
 import type { SpaAssets } from './implement/dispatch.js'
@@ -41,9 +41,9 @@ export interface CloudflareWorker<Env> {
 	queue?(batch: CloudflareMessageBatch, env: Env, exec: CloudflareExecutionContext): Promise<void>
 }
 
-/** Adapt a runtime-neutral Fabrika application to a Workers module export. */
+/** Adapt a runtime-neutral `{ fetch }` service to a Workers module export. */
 export function createCloudflareWorker<Env>(
-	app: FabrikaApp<Env>,
+	app: FetchService<Env>,
 	options: CloudflareWorkerOptions<Env> = {},
 ): CloudflareWorker<Env> {
 	const scheduled = options.scheduled

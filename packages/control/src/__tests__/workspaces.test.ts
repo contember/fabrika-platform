@@ -244,7 +244,7 @@ for (const backend of backends) {
 						'zerops.yaml',
 						'apps/web/zerops.yml',
 						'fabrika.config.ts',
-						'pkg/fabrika.gates.ts',
+						'pkg/fabrika.service.ts',
 						'.github/workflows/ci.yml',
 						'.github/actions/x/action.yml',
 					]

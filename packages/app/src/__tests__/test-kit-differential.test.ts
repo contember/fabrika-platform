@@ -18,7 +18,7 @@ const app: ContractProxyApp = {
 	scheme: 'https',
 	...contractProxyTable(kit.artifact),
 }
-const resolved: ResolvedApp = { kind: 'endpoints', app, table: compileEndpointTable(app) }
+const resolved: ResolvedApp = { app, table: compileEndpointTable(app) }
 const forwarded = (method: string, path: string, headers: Headers) => ({
 	method,
 	url: new URL(path, kit.origin),
@@ -116,7 +116,7 @@ describe('the kit and proxy-core decide alike', () => {
 		const headers = headersFor(CREDENTIALS['session'] ?? {}, {})
 		const decision = await authorizer.authorize(resolved, forwarded('POST', '/api/me', headers))
 		const response = await kit.fetch('/api/me', { method: 'POST', headers, body: '{}' })
-		expect(decision).toMatchObject({ outcome: 'allow', gate: 'endpoint', subject: person.id })
+		expect(decision).toMatchObject({ outcome: 'allow', subject: person.id })
 		expect(await response.json()).toEqual({ result: { id: person.id, label: person.label } })
 	})
 })

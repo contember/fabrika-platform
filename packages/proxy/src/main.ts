@@ -16,7 +16,7 @@ const env = readProxyEnv(Bun.env)
 const raw: unknown = await Bun.file(env.manifestPath).json()
 const manifest = parseProxyManifest(raw)
 if (manifest === null) {
-	// A manifest we do not fully understand is a gate list nobody wrote. Refuse to start; Caddy then
+	// A manifest we do not fully understand is an endpoint table nobody wrote. Refuse to start; Caddy then
 	// gets connection-refused on /verify and denies every request with a 502.
 	consoleLogger.error('invalid proxy manifest', { path: env.manifestPath })
 	process.exit(1)

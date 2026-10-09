@@ -1,4 +1,3 @@
-import type { AppGates } from '@fabrika/auth'
 import {
 	buildResourceAccessClaims,
 	DELEGATION_HEADER,
@@ -13,11 +12,27 @@ import {
 } from '@fabrika/auth-core'
 import type { DelegationRequest } from '@fabrika/proxy-core'
 import { FILE_TREATMENT, headerPolicy } from '@fabrika/proxy-core/headers'
-import { contractProxyTable, encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
+import {
+	contractProxyTable,
+	encodeProxyManifestJson,
+	type InstallationProxyEndpointRow,
+	type OAuthProtectedResource,
+} from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { APP, FakeIam, HOST, installationRow, ISSUER, signToken, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
+import {
+	APP,
+	FakeIam,
+	HOST,
+	installationAppWith,
+	installationRow,
+	ISSUER,
+	protocolRow,
+	serviceRow,
+	signToken,
+	signUserToken,
+} from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
 
@@ -36,14 +51,12 @@ class RawUrlRequest extends Request {
 }
 
 const environment = (
-	gates: AppGates,
+	endpoints: InstallationProxyEndpointRow[],
 	upstream: CloudflareProxyEnv['APP'] = { fetch: () => Promise.resolve(new Response('upstream')) },
 ): CloudflareProxyEnv => ({
 	IAM: new FakeIam(),
 	FABRIKA_IAM_ISSUER: ISSUER,
-	FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
-		apps: [{ id: APP, hosts: [HOST], upstream: 'APP', scheme: 'https', gates }],
-	}),
+	FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({ apps: [installationAppWith(endpoints, [], { upstream: 'APP' })] }),
 	APP: upstream,
 })
 
@@ -70,7 +83,7 @@ describe('Cloudflare proxy Worker', () => {
 	})
 
 	test("an installation service's answer passes through: the header policy is a contract application's", async () => {
-		const env = environment({ rules: [{ path: '/public/*', kind: 'public' }] }, {
+		const env = environment([protocolRow('/public/*')], {
 			fetch: () => Promise.resolve(new Response('ok', { headers: { 'Content-Security-Policy': "script-src 'self' 'unsafe-inline'" } })),
 		})
 		const response = await createCloudflareProxyHandler(env)(new Request(`https://${HOST}/public/page`))
@@ -81,7 +94,7 @@ describe('Cloudflare proxy Worker', () => {
 	test('deletes every X-Fabrika-* hop header a client sends; Cloudflare sets no proxy secret', async () => {
 		let seen: Request | undefined
 		const env = environment(
-			{ rules: [{ path: '/public/*', kind: 'public' }] },
+			[protocolRow('/public/*')],
 			{
 				fetch: (request: Request) => {
 					seen = request
@@ -100,10 +113,10 @@ describe('Cloudflare proxy Worker', () => {
 		expect(seen?.headers.get(PROXY_SECRET_HEADER)).toBeNull()
 	})
 
-	test('forwards a public request with its method and body, but never a client token', async () => {
+	test('forwards a protocol request with its method and body, but never a client token', async () => {
 		let seen: Request | undefined
 		const env = environment(
-			{ rules: [{ path: '/public/*', kind: 'public' }] },
+			[protocolRow('/public/*')],
 			{
 				fetch: (request: Request) => {
 					seen = request
@@ -143,7 +156,7 @@ describe('Cloudflare proxy Worker', () => {
 		const forged = { 'X-Fabrika-Client-Ip': '203.0.113.99', 'X-Forwarded-For': '203.0.113.99' }
 		const upstreamHeaders = async (headers: Record<string, string>): Promise<Headers> => {
 			const seen: Request[] = []
-			const env = environment({ rules: [{ path: '/*', kind: 'public' }] }, {
+			const env = environment([protocolRow('/*')], {
 				fetch: (request: Request) => {
 					seen.push(request)
 					return Promise.resolve(new Response('ok'))
@@ -174,7 +187,7 @@ describe('Cloudflare proxy Worker', () => {
 		const token = await signUserToken()
 		let seen: Request | undefined
 		const env = environment(
-			{ rules: [{ path: '/*', kind: 'human' }] },
+			[serviceRow('/*', ['human'])],
 			{
 				fetch: (request: Request) => {
 					seen = request
@@ -197,11 +210,11 @@ describe('Cloudflare proxy Worker', () => {
 		expect(seen?.headers.get('Cookie')).toBe('app-cookie=kept')
 	})
 
-	test('uses the shared service gate before a later human gate', async () => {
-		const token = await signUserToken()
+	test('a key is terminal: the session beside it is never consulted', async () => {
+		const token = await signToken({ type: 'service' })
 		let seen: Request | undefined
 		const env = environment(
-			{ rules: [{ path: '/*', kind: 'service' }, { path: '/*', kind: 'human' }] },
+			[serviceRow('/*', ['human', 'machine'])],
 			{
 				fetch: (request: Request) => {
 					seen = request
@@ -230,7 +243,7 @@ describe('Cloudflare proxy Worker', () => {
 	test('returns the shared login bounce and does not call the application', async () => {
 		let calls = 0
 		const env = environment(
-			{ rules: [{ path: '/*', kind: 'human' }] },
+			[serviceRow('/*', ['human'])],
 			{
 				fetch: () => {
 					calls++
@@ -245,7 +258,7 @@ describe('Cloudflare proxy Worker', () => {
 		expect(calls).toBe(0)
 	})
 
-	test('denies an invalid service credential and a malformed manifest before the app', async () => {
+	test('denies an invalid machine credential and a malformed manifest before the app', async () => {
 		let calls = 0
 		const upstream = {
 			fetch: () => {
@@ -253,7 +266,7 @@ describe('Cloudflare proxy Worker', () => {
 				return Promise.resolve(new Response('should not run'))
 			},
 		}
-		const service = environment({ rules: [{ path: '/*', kind: 'service' }] }, upstream)
+		const service = environment([serviceRow('/*', ['machine'])], upstream)
 		const denied = await createCloudflareProxyHandler(service)(
 			new Request(`https://${HOST}/private`, {
 				headers: { Authorization: 'Bearer not-a-token' },
@@ -272,7 +285,7 @@ describe('Cloudflare proxy Worker', () => {
 		['a dot-dot segment', '/a/../admin'],
 		['an encoded dot-dot segment', '/a/%2e%2e/b'],
 		['an encoded slash', '/x%2Fy'],
-	])('refuses %s in the raw request URL before the app, even on a public gate', async (_name, path) => {
+	])('refuses %s in the raw request URL before the app, even on a protocol row', async (_name, path) => {
 		let calls = 0
 		const upstream = {
 			fetch: () => {
@@ -280,7 +293,7 @@ describe('Cloudflare proxy Worker', () => {
 				return Promise.resolve(new Response('should not run'))
 			},
 		}
-		const response = await createCloudflareProxyHandler(environment({ rules: [{ path: '/*', kind: 'public' }] }, upstream))(
+		const response = await createCloudflareProxyHandler(environment([protocolRow('/*')], upstream))(
 			new RawUrlRequest(`https://${HOST}${path}`),
 		)
 		expect(response.status).toBe(400)
@@ -298,7 +311,7 @@ describe('Cloudflare proxy Worker', () => {
 				return Promise.resolve(new Response('should not run'))
 			},
 		}
-		const base = environment({ rules: [{ path: '/*', kind: 'public' }] }, upstream)
+		const base = environment([protocolRow('/*')], upstream)
 		for (const issuer of [undefined, '', '   ', 'not a url', 'ftp://iam.test']) {
 			const handler = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_ISSUER: issuer })
 			expect((await handler(new Request(`https://${HOST}/anything`))).status).toBe(503)
@@ -362,7 +375,9 @@ describe('Cloudflare proxy Worker — OAuth resources', () => {
 					hosts: [HOST],
 					upstream: 'APP',
 					scheme: 'https',
-					gates: { rules: [{ path: '/mcp', kind: 'oauth', resource: RESOURCE, scopes: ['authoring'] }, { path: '/*', kind: 'public' }] },
+					installation: true,
+					endpoints: [serviceRow('/mcp', ['oauth'], { scopes: ['authoring'] }), protocolRow('/*')],
+					reservedPrefixes: [],
 					oauthResources: [OAUTH_RESOURCE],
 				}],
 			}),
@@ -390,7 +405,7 @@ describe('Cloudflare proxy Worker — OAuth resources', () => {
 		const response = await handler(new Request(variant))
 		expect(response.status).toBe(404)
 		expect(upstream.calls).toBe(0)
-		// The same request off the metadata path reaches the public catch-all, proving the 404 is not the gate's.
+		// The same request off the metadata path reaches the protocol catch-all, proving the 404 is not the row's.
 		expect((await handler(new Request(`https://${HOST}/.well-known/other`))).status).toBe(200)
 		expect(upstream.calls).toBe(1)
 	})

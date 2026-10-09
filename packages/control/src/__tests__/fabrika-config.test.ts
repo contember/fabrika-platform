@@ -115,7 +115,7 @@ describe('defineApp(vozka config)', () => {
 	})
 })
 
-// The proxy owns the public route and evaluates path gates. The app keeps the IAM middleware as
+// The proxy owns the public route and decides the endpoint table. The app keeps the IAM middleware as
 // defence in depth for the shared Worker runtime.
 
 describe('Schema actions/scopes match src/actions.ts (no drift)', () => {

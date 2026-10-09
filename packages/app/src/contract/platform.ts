@@ -1,5 +1,5 @@
 // What a contract compiles to for IAM (ADR-0012 §4): the vocabulary the deploy reconciles. The proxy reads the
-// endpoint table itself (`contractProxyTable` in `@fabrika/proxy-core/manifest`); a contract generates no gates.
+// endpoint table itself (`contractProxyTable` in `@fabrika/proxy-core/manifest`).
 
 import {
 	APP_CALLER_PREFIX,

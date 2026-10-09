@@ -192,9 +192,9 @@ subdomain is published.
 
 MCP authoring (ADR-0049) is opt-in. --mcp-clients takes a JSON array of the MCP clients this
 installation trusts: [{"provider":"claude"|"chatgpt","clientId":"<https CIMD URL>","redirectUris":[...],
-"metadataUrl":"<https URL>"?}]. With it, the console's /mcp is gated for OAuth bearers and IAM gets
-FABRIKA_IAM_OAUTH_CONFIG. Without it, /mcp falls to the human gate and FABRIKA_IAM_OAUTH_CONFIG on iam
-is left as it is.
+"metadataUrl":"<https URL>"?}]. With it, the console's /mcp admits OAuth bearers and IAM gets
+FABRIKA_IAM_OAUTH_CONFIG. Without it, /mcp admits only a signed-in person and FABRIKA_IAM_OAUTH_CONFIG on
+iam is left as it is.
 
 Credentials are read from the ENVIRONMENT ONLY and have no flag, so they cannot reach a CI log or a
 process listing:

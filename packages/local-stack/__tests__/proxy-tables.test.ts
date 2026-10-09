@@ -9,6 +9,9 @@
  * `createCloudflareProxyWorker`, which serializes it into a var, and a provider change could drop or
  * reshape it without anything else noticing.
  *
+ * It also witnesses that no installation manifest carries a gate: every producer of one yields only
+ * installation entries with an endpoint table, and the strict parser refuses a `gates` key.
+ *
  * It lives OUTSIDE `src/` because it must import `fabrika.config.ts`, which pulls in
  * `@fabrika/provider-cloudflare`: `tsconfig.json` includes `src/**` only, so oblaka's raw TypeScript
  * never reaches `bun run typecheck`.
@@ -17,8 +20,18 @@
 import { controlServiceContract } from '@fabrika/control/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
-import { hasEndpointTable, parseProxyManifestJson, type ProxyApp, serviceProxyTable } from '@fabrika/proxy-core/manifest'
+import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
+import {
+	encodeProxyManifestJson,
+	isApplicationEntry,
+	parseProxyManifestJson,
+	type ProxyApp,
+	type ProxyManifest,
+	serviceProxyTable,
+} from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { buildControlWorker } from '../../control/fabrika.config'
 import { buildOperationsProxy } from '../../operations/fabrika.config'
 import { localPlatformProxyManifest } from '../src/prepare'
@@ -39,7 +52,7 @@ function productionAccess(vars: Record<string, unknown> | undefined): unknown {
 }
 
 function accessOf(app: ProxyApp | undefined): unknown {
-	if (app === undefined || !hasEndpointTable(app)) return undefined
+	if (app === undefined || isApplicationEntry(app)) return undefined
 	return { installation: 'installation' in app, endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes }
 }
 
@@ -72,5 +85,61 @@ describe('both compositions name the Operations host by the same app', () => {
 	test('the Cloudflare proxy Worker and the shared platform manifest agree', () => {
 		expect(productionApp(buildOperationsProxy({ env: 'local' }).options.vars).id).toBe(OPERATIONS_APP_ID)
 		expect(localPlatformProxyManifest().apps.map((app) => app.id)).toContain(OPERATIONS_APP_ID)
+	})
+})
+
+/** Every entry is an installation entry with a table, and the encoded document names no `gates` key anywhere. */
+function expectNoGates(manifest: ProxyManifest): void {
+	expect(manifest.apps.length).toBeGreaterThan(0)
+	for (const app of manifest.apps) {
+		expect(isApplicationEntry(app)).toBe(false)
+		expect('installation' in app && app.installation).toBe(true)
+		expect(app.endpoints.length).toBeGreaterThan(0)
+	}
+	const encoded = encodeProxyManifestJson(manifest)
+	expect(encoded).not.toContain('"gates"')
+	expect(parseProxyManifestJson(encoded)).toEqual(manifest)
+}
+
+describe("the installation's proxy manifest has no gates", () => {
+	const composition: PlatformProxyComposition = {
+		scheme: 'https',
+		placement: {
+			iam: { hosts: ['iam.example.test'] },
+			control: { hosts: ['control.example.test'] },
+			operations: { hosts: ['errors.example.test'] },
+		},
+	}
+
+	test('the resolved platform manifest, with MCP authoring off and on', () => {
+		expectNoGates(resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition))
+		expectNoGates(resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...composition, authorizationServer: 'https://iam.example.test' }))
+	})
+
+	test('the local platform manifest, with MCP authoring off and on', () => {
+		expectNoGates(localPlatformProxyManifest())
+		expectNoGates(
+			localPlatformProxyManifest([{
+				provider: 'claude',
+				clientId: 'https://client.example/metadata',
+				redirectUris: ['https://client.example/callback'],
+			}]),
+		)
+	})
+
+	test('the manifest each Cloudflare proxy Worker bakes into its variables', () => {
+		for (const worker of [buildControlWorker({ env: 'local' }), buildOperationsProxy({ env: 'local' })]) {
+			const encoded = worker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+			if (typeof encoded !== 'string') throw new Error('proxy Worker does not carry a manifest')
+			const manifest = parseProxyManifestJson(encoded)
+			if (manifest === null) throw new Error('the strict parser refuses a proxy Worker manifest')
+			expectNoGates(manifest)
+		}
+	})
+
+	test('the committed template, as generated', () => {
+		expect(JSON.stringify(PLATFORM_PROXY_MANIFEST_TEMPLATE)).not.toContain('"gates"')
+		const source = readFileSync(new URL('../../provider-zerops/src/installation/generated/platform-proxy-manifest.ts', import.meta.url), 'utf8')
+		expect(source).not.toContain('gates')
 	})
 })

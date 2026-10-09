@@ -2,7 +2,7 @@
 // typechecked as part of the package.
 
 import type { AuthContext } from '@fabrika/auth'
-import type { RequestExecutionContext } from '../app.js'
+import type { RequestExecutionContext } from '../fetch.js'
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === 'object'

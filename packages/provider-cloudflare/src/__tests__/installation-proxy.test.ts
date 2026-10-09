@@ -4,7 +4,7 @@
  */
 
 import type { InstallationEndpointTable } from '@fabrika/auth-core'
-import { hasEndpointTable, isApplicationEntry, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
+import { isApplicationEntry, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
 import { createCloudflareProxyWorker } from '../proxy'
@@ -37,7 +37,7 @@ describe('an installation service behind its Cloudflare proxy Worker', () => {
 		})
 		const encoded = worker.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
 		const entry = typeof encoded === 'string' ? parseProxyManifestJson(encoded)?.apps[0] : undefined
-		if (entry === undefined || !hasEndpointTable(entry)) throw new Error('the proxy Worker carries no table')
+		if (entry === undefined) throw new Error('the proxy Worker carries no table')
 		expect(isApplicationEntry(entry)).toBe(false)
 		expect(entry.endpoints.map((row) => row.id)).toEqual(['ingest'])
 		expect(entry.hosts).toEqual(['errors.example.com'])

@@ -1,4 +1,4 @@
-// The GitHub webhook handler — the ONE unauthenticated route. It is HMAC-gated instead: the route's
+// The GitHub webhook handler — the ONE unauthenticated route. It authenticates by HMAC instead: the route's
 // connection secret verifies the `X-Hub-Signature-256` over the raw body before anything touches the
 // database. On a verified push it maps repo+ref → (app, env) through the connection's bound apps, creates
 // a `pending` run, and enqueues the deploy. A push that no env subscribes to is a 204 no-op.
@@ -21,7 +21,7 @@ export interface WebhookDeps {
 /**
  * Handle `POST /webhooks/github/:connectionId`. Verify the HMAC, decode the push, and for every (app, env) whose
  * `trigger_ref` matches the pushed ref, create + enqueue a run. Returns:
- *   - 401 when the signature is missing/invalid (HMAC gate — the only auth on this route),
+ *   - 401 when the signature is missing/invalid (the HMAC check — the only auth on this route),
  *   - 204 when verified but no env subscribes to the ref (acknowledged no-op),
  *   - 200 with the created run ids when one or more deploys were triggered.
  */
@@ -33,7 +33,7 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 		return error(401, 'invalid webhook signature')
 	}
 	if (push === null) {
-		// Either a bad signature or an undecodable body — both are 401 on this HMAC-gated route (we do
+		// Either a bad signature or an undecodable body — both are 401 on this HMAC-authenticated route (we do
 		// not distinguish, to avoid leaking which check failed).
 		return error(401, 'invalid webhook signature')
 	}

@@ -8,7 +8,7 @@ export { CLIENT_ADDRESS_HEADER, DELEGATION_HEADER, ENDPOINT_HEADER, PROXY_TOKEN_
 // ── What Caddy's `forward_auth` sends us ───────────────────────────────────────
 //
 // `forward_auth` rewrites the subrequest to `GET <uri>`, so the ORIGINAL method and URI arrive only
-// in these headers. `reverse_proxy` adds the other three X-Forwarded-* itself. Everything the gate
+// in these headers. `reverse_proxy` adds the other three X-Forwarded-* itself. Everything the
 // decision depends on comes from here — never from the `/verify` request's own method/path.
 
 export const FORWARDED_METHOD_HEADER = 'X-Forwarded-Method'

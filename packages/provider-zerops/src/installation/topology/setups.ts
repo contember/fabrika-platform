@@ -174,9 +174,9 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_SIGNING_KEYS` (ES256 private JWKs — an empty value is refused at
  * boot rather than silently issuing ephemeral tokens), `OIDC_CLIENT_SECRET` when OIDC is enabled,
- * `FABRIKA_EMAIL_RESEND_API_KEY` when Resend is enabled, `FABRIKA_IAM_RPC_KEY` (gates
+ * `FABRIKA_EMAIL_RESEND_API_KEY` when Resend is enabled, `FABRIKA_IAM_RPC_KEY` (authenticates
  * the management `/rpc/*` surface; unset 404s it, which is the fail-closed default), `FABRIKA_IAM_PROXY_KEY`
- * (gates `/auth/mint/*`, which the proxy calls on the cold path — a SEPARATE secret by least privilege,
+ * (authenticates `/auth/mint/*`, which the proxy calls on the cold path — a SEPARATE secret by least privilege,
  * since the proxy is the only publicly routed component and must not also be able to write audit rows),
  * `FABRIKA_IAM_PROVISIONING_KEY`. Both shared secrets must be at least 32 characters; a shorter one fails
  * the boot rather than standing in front of an internet-reachable surface while looking configured.
@@ -318,7 +318,7 @@ const operations: ZeropsYamlSetupSpec = {
 
 /**
  * The auth enforcement proxy — Caddy for HTTP correctness, a compiled Bun auth service for every
- * authorization decision (ADR-0022, as amended by ADR-0022: gates are NEVER compiled into Caddy routes).
+ * authorization decision (ADR-0022: the endpoint table is NEVER compiled into Caddy routes).
  *
  * This is the only setup deployed into BOTH projects, and the only publicly routed service in either.
  *
@@ -330,7 +330,7 @@ const operations: ZeropsYamlSetupSpec = {
  *
  * ── How the manifest reaches the build, and what is unverified about it ───────────────────────────
  *
- * `proxy.manifest.json` tells the proxy which apps it fronts, at which upstream, under which gates. It
+ * `proxy.manifest.json` tells the proxy which apps it fronts, at which upstream, under which endpoint table. It
  * is baked into the artifact at BUILD time, which is what `docs/backlog/08` chose ("redeploy") over
  * pushing to Caddy's admin API. But on Zerops fabrika has no filesystem in the deploy path — a Zerops
  * deploy is five HTTP calls (ADR-0003) — so the driver cannot write a file into the build the way the
@@ -427,7 +427,7 @@ const proxy: ZeropsYamlSetupSpec = {
 		base: 'alpine@3.21',
 		ports: PROXY_PUBLIC_PORTS.map((port) => ({ port, httpSupport: true })),
 		// Deliberately NOT one of the public ports: a health path on a public listener would be one path per
-		// proxy that answers 200 without consulting the gates, and would shadow an app path of the same name.
+		// proxy that answers 200 without consulting the endpoint table, and would shadow an app path of the same name.
 		healthCheck: { httpGet: { port: PROXY_HEALTH_PORT, path: '/healthz' }, ...LIVENESS },
 		envVariables: {
 			FABRIKA_PROXY_MANIFEST: '/var/www/proxy.manifest.json',

@@ -4,13 +4,12 @@
 // does NOT do — set one on a failed redemption, trust the request for the destination, reach the
 // upstream — as about the happy path.
 
-import type { AppGates } from '@fabrika/auth-core'
 import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_PREFIX, SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createVerifyService } from '../service'
-import { FakeIam, manifestWith, verifyRequest } from './helpers'
+import { FakeIam, manifestWith, protocolRow, serviceRow, verifyRequest } from './helpers'
 
-const HUMAN: AppGates = { rules: [{ path: '/healthz', kind: 'public' }, { path: '/*', kind: 'human' }] }
+const HUMAN = [protocolRow('/healthz'), serviceRow('/*', ['human'])]
 
 const ISSUER = 'https://iam.test'
 const RETURN_URL = 'https://app.example.com/dashboard'

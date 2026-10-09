@@ -1,4 +1,4 @@
-import type { AuthContext, FabrikaApp, RequestExecutionContext } from '@fabrika/app'
+import type { AuthContext, FetchService, RequestExecutionContext } from '@fabrika/app'
 import { dispatchRpcRequest, serveService, type ServiceHandler } from '@fabrika/app/service'
 import { WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'
 import type { ResolvedAdmin } from './admin/router'
@@ -71,7 +71,7 @@ export function iamServiceOptions(options: IamAppOptions): IamServiceOptions {
  * The native Cloudflare service-binding RPC remains on the WorkerEntrypoint. The optional HTTP
  * transports are mounted by the Bun composition because their shared-secret boundary is process-only.
  */
-export function createIamApp(options: IamAppOptions = {}): FabrikaApp<Env> {
+export function createIamApp(options: IamAppOptions = {}): FetchService<Env> {
 	const context = (request: Request, env: Env, exec: RequestExecutionContext): IamAppContext => ({
 		env,
 		request,

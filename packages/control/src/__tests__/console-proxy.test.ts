@@ -37,7 +37,7 @@ function console_(options: { readonly mcp: boolean }): (request: Request) => Pro
 	}
 	const app = createControlApp(options.mcp ? () => Promise.resolve(new Response('mcp')) : null)
 	return consoleBehindProxy({
-		access: { table: serviceProxyTable(controlServiceContract(options), { oauth: options.mcp }) },
+		table: serviceProxyTable(controlServiceContract(options), { oauth: options.mcp }),
 		...(options.mcp
 			? {
 				oauthResources: [{ resource: RESOURCE, resourceMetadata: METADATA, authorizationServers: [TEST_ISSUER], scopesSupported: [CONTROL_MCP_SCOPE] }],

@@ -33,7 +33,7 @@ export type ControlEndpointId = ReturnType<typeof controlServiceContract>['endpo
 
 /**
  * The console's rows. `*-root` rows are the exact paths of the reserved prefixes: the service answers 404 there, so
- * neither they nor `/mcp` reach the SPA. With MCP off, `/mcp` is such a row for a session, as its gate was.
+ * neither they nor `/mcp` reach the SPA. With MCP off, `/mcp` is such a row for a session.
  */
 export function controlServiceContract(options: ControlServiceOptions) {
 	return defineServiceContract(VOZKA_APP_ID, (s) => ({

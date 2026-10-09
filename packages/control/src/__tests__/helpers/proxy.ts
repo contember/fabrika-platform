@@ -2,7 +2,6 @@
 // `vozka-proxy` runs, in front of whatever upstream the test supplies. The IAM it asks mints the suite's own tokens.
 
 import {
-	type AppGates,
 	compileEndpointTable,
 	ENDPOINT_HEADER,
 	type ExchangeAuthCodeResult,
@@ -29,8 +28,8 @@ export interface ProxyIam {
 }
 
 export interface ConsoleProxyOptions {
-	/** The table a new proxy publishes (`serviceProxyTable`), or the gates an old one carried. */
-	readonly access: { readonly table: InstallationProxyTable } | { readonly gates: AppGates }
+	/** The table the proxy publishes (`serviceProxyTable`). */
+	readonly table: InstallationProxyTable
 	readonly oauthResources?: readonly OAuthProtectedResource[]
 	readonly iam?: ProxyIam
 	readonly upstream: (request: Request) => Promise<Response>
@@ -40,14 +39,13 @@ const future = () => Math.floor(Date.now() / 1000) + 300
 
 /** A request through the console's proxy: a 2xx from the upstream, or the proxy's own refusal, bounce or challenge. */
 export function consoleBehindProxy(options: ConsoleProxyOptions): (request: Request) => Promise<Response> {
-	const access = 'table' in options.access ? options.access.table : { gates: options.access.gates }
 	const manifest = {
 		apps: [{
 			id: 'vozka',
 			hosts: [CONSOLE_HOST],
 			upstream: 'APP',
 			scheme: 'https',
-			...access,
+			...options.table,
 			...(options.oauthResources === undefined ? {} : { oauthResources: [...options.oauthResources] }),
 		}],
 	}

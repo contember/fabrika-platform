@@ -279,11 +279,12 @@ services:
       timeout: 2s
       retries: 60
 
-  # The Operations browser SDK witness: an application without a contract, because a contract application cannot
-  # hand its browser the managed DSN yet.
+  # The Operations browser SDK witness: a stand-in behind a minimal contract, serving its own page, because a contract
+  # application cannot hand its browser the managed DSN yet (backlog 102).
   operations-witness:
     <<: *bun
     command: bun packages/local-stack/src/operations-witness/server.ts
+    env_file: .state/operations-witness.env
     environment:
       FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
       FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
@@ -329,7 +330,7 @@ services:
   apps-proxy:
     image: caddy:2.10.2-alpine
     command: caddy run --config /local-state/apps-caddy.json
-    # Caddy reads the Notes proxy secret from its environment (`{env.FABRIKA_PROXY_SECRET_…}`) and sends it upstream.
+    # Caddy reads each application's proxy secret from its environment (`{env.FABRIKA_PROXY_SECRET_…}`) and sends it upstream.
     env_file: .state/apps-proxy-secret.env
     network_mode: service:apps-proxy-auth
     volumes:

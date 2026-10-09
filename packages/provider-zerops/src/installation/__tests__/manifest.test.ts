@@ -4,29 +4,54 @@
 // `notesapi:3000` beside the three platform apps, because on the light tier an application shares the
 // project and therefore the proxy's ONE manifest. Writing the platform template alone would delete it.
 
-import type { GateProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { type InstallationEndpointRow, requirementDigest } from '@fabrika/auth-core'
+import {
+	type ContractProxyApp,
+	contractProxyTable,
+	type InstallationProxyApp,
+	type InstallationProxyTable,
+	type ProxyApp,
+	type ProxyManifest,
+} from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from '../manifest'
 
-const gates = { rules: [{ path: '/*', kind: 'public' } as const] }
+const protocolRow = (id: string, path: string) => {
+	const row: InstallationEndpointRow = { id, kind: 'protocol', method: '*', path, callers: [], requirement: null, admission: null, oauth: null }
+	const rules = { ...row, delegation: null }
+	return { ...rules, digest: requirementDigest(rules) }
+}
 
-const consoleApp: GateProxyApp = {
+const table = (...paths: string[]): InstallationProxyTable => ({
+	installation: true,
+	endpoints: paths.map((path, index) => protocolRow(`row-${index}`, path)),
+	reservedPrefixes: [],
+})
+
+const consoleApp: InstallationProxyApp = {
 	id: 'vozka',
 	hosts: ['proxy-292c-8082.prg1.zerops.app'],
 	upstream: 'control:3000',
-	gates: { rules: [{ path: '/api/*', kind: 'human' }, { path: '/healthz', kind: 'public' }] },
 	scheme: 'https',
+	...table('/healthz', '/api'),
 }
 
 const platform: ProxyManifest = {
 	apps: [
-		{ id: 'iam', hosts: ['proxy-292c-8080.prg1.zerops.app'], upstream: 'iam:3000', gates, scheme: 'https' },
+		{ id: 'iam', hosts: ['proxy-292c-8080.prg1.zerops.app'], upstream: 'iam:3000', scheme: 'https', ...table('/*') },
 		consoleApp,
-		{ id: 'operations', hosts: ['proxy-292c-8083.prg1.zerops.app'], upstream: 'operations:3000', gates, scheme: 'https' },
+		{ id: 'operations', hosts: ['proxy-292c-8083.prg1.zerops.app'], upstream: 'operations:3000', scheme: 'https', ...table('/*') },
 	],
 }
 
-const notes: GateProxyApp = { id: 'notes', hosts: ['proxy-292c-8084.prg1.zerops.app'], upstream: 'notesapi:3000', gates, scheme: 'https' }
+const notes: ContractProxyApp = {
+	id: 'notes',
+	hosts: ['proxy-292c-8084.prg1.zerops.app'],
+	upstream: 'notesapi:3000',
+	scheme: 'https',
+	...contractProxyTable(notesArtifact),
+}
 
 describe('merging', () => {
 	test('carries every application entry the platform does not own', () => {
@@ -36,13 +61,13 @@ describe('merging', () => {
 		expect(merged.manifest.apps.find((app) => app.id === 'notes')).toEqual(notes)
 	})
 
-	test('replaces a platform app rather than duplicating it, and its gates win', () => {
-		// The drift backlog 58 exists for: the live console entry gated everything `public` while
-		// `CONTROL_PROXY_GATES` had said otherwise for two days.
-		const stale: GateProxyApp = { ...consoleApp, gates }
+	test('replaces a platform app rather than duplicating it, and its table wins', () => {
+		// The drift backlog 58 exists for: the live console entry made everything `public` while the
+		// console's own declaration had said otherwise for two days.
+		const stale: InstallationProxyApp = { ...consoleApp, ...table('/*') }
 		const merged = mergePlatformProxyManifest(platform, { apps: [stale, notes] })
 		expect(merged.manifest.apps.filter((app) => app.id === 'vozka')).toHaveLength(1)
-		expect(merged.manifest.apps.find((app) => app.id === 'vozka')).toMatchObject({ gates: consoleApp.gates })
+		expect(merged.manifest.apps.find((app) => app.id === 'vozka')).toMatchObject({ endpoints: consoleApp.endpoints })
 	})
 
 	test('supersedes a live entry standing on a platform host, and reports which one', () => {

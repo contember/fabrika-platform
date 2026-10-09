@@ -2,7 +2,7 @@
  * The local composition and a deployed installation must be ONE document with two placements.
  *
  * They used to be two: `prepare.ts` built the local manifest and the live one on `fabrika-test` was
- * hand-written, so the console's gates could change and reach only one of them — which is what
+ * hand-written, so the console's access rules could change and reach only one of them — which is what
  * happened, and what nothing reported (backlog 58). `prepare.ts` now calls the installation's
  * generator, and this file pins the consequence: everything except the hostnames, the scheme and IAM's
  * port is identical on both sides, so a table change cannot reach one and miss the other.

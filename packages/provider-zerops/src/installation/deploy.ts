@@ -10,7 +10,7 @@
 //     deploying control at a new version while the previous, more permissive manifest is still in
 //     front of it leaves `/api/*` open for the length of the deploy. The sequence is therefore
 //     (IAM + Operations) → **proxy** → control: the two that order nothing against each
-//     other built at once, with the enforcement point ahead of the service whose gates just widened.
+//     other built at once, with the enforcement point ahead of the service whose table just widened.
 //     `__tests__/deploy.test.ts` pins it.
 //
 // Bringing `fabrika-test` to HEAD on 2026-08-05 took `zops push` from a laptop, once per service, in a
@@ -94,7 +94,7 @@ export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
  *
  * What is NOT arbitrary stays: every environment write happens before any of these starts, the proxy
  * is deployed after both, and control after the proxy (ADR-0022 — the enforcement point ahead of
- * the service whose gates just widened). `deploy-order.test.ts` in `@fabrika/platform-artifacts` and
+ * the service whose table just widened). `deploy-order.test.ts` in `@fabrika/platform-artifacts` and
  * `__tests__/deploy.test.ts` fail if that sequence changes.
  */
 export const PLATFORM_CONCURRENT_DEPLOY = ['iam', 'operations'] as const
@@ -276,7 +276,7 @@ const IAM_OAUTH_CONFIG = 'FABRIKA_IAM_OAUTH_CONFIG'
  *
  * The namespace source default comes from the verified snapshot. Values are compared but never logged.
  * IAM's OAuth configuration is written only when MCP authoring is enabled; without it the variable is
- * left as it is, and the manifest — which no longer gates `/mcp` for OAuth — is what turns MCP off.
+ * left as it is, and the manifest — whose `/mcp` row then admits no OAuth token — is what turns MCP off.
  */
 const desiredServiceEnv = (
 	environment: string,

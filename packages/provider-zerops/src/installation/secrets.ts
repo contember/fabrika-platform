@@ -55,9 +55,9 @@ const generateEs256Jwk = (): JsonWebKey & { kid: string; alg: string; use: strin
 export interface InstallationSecrets {
 	/** IAM's token-signing material: a JSON array of ES256 private JWKs, index 0 active. */
 	readonly signingKeys: string
-	/** Gates IAM's management `/rpc/*` surface. Held by IAM, control and Operations. */
+	/** Authenticates IAM's management `/rpc/*` surface. Held by IAM, control and Operations. */
 	readonly rpcKey: string
-	/** Gates IAM's `/auth/mint/*` surface, which the proxy calls on the cold path. */
+	/** Authenticates IAM's `/auth/mint/*` surface, which the proxy calls on the cold path. */
 	readonly proxyKey: string
 	/** The `px_` admin bearer IAM admits as a synthetic global admin. The one value this command prints. */
 	readonly provisioningKey: string

@@ -7,7 +7,7 @@
 //
 // The deployment that fronts it on Zerops — the Caddy configuration and the compiled binary — is
 // `@fabrika/proxy`, which is private because it is an artifact rather than an API. The manifest wire
-// contract and its strict parser are the `./manifest` subpath; the gate matcher and the token claims
+// contract and its strict parser are the `./manifest` subpath; the endpoint planner and the token claims
 // are `@fabrika/auth-core`.
 
 export { Authorizer } from './authorize'
@@ -32,8 +32,7 @@ export {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from './constants'
-export { applicableGates, compileGates, readBearer, readCookie, readServiceCredential } from './gates'
-export type { CompiledGate } from './gates'
+export { readBearer, readCookie } from './credentials'
 export { stripFabrikaCookies } from './handoff'
 export { HttpIamGateway, IamUnavailableError } from './iam'
 export type { DelegationIssuer, DelegationRequest, HttpIamGatewayOptions, IamGateway } from './iam'

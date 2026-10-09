@@ -63,8 +63,6 @@ describe('appsWithoutProxySecret', () => {
 		snapshot: `sha256:${'0'.repeat(64)}`,
 		csp: NO_CSP_ORIGINS,
 	})
-	const gateApp: ProxyApp = { id: 'control', hosts: ['control.example.com'], upstream: 'control:3000', scheme: 'https', gates: { rules: [] } }
-
 	const installation: ProxyApp = {
 		id: 'vozka',
 		hosts: ['console.example.com'],
@@ -76,7 +74,7 @@ describe('appsWithoutProxySecret', () => {
 	}
 
 	test('names each contract app whose secret variable is unset or empty, and no installation service', () => {
-		const manifest = { apps: [contract('notes@prod'), contract('notes@stage'), contract('wiki@prod'), gateApp, installation] }
+		const manifest = { apps: [contract('notes@prod'), contract('notes@stage'), contract('wiki@prod'), installation] }
 		const source = { [proxySecretVariable('notes@prod')]: 'secret', [proxySecretVariable('notes@stage')]: '' }
 		expect(appsWithoutProxySecret(manifest, source)).toEqual(['notes@stage', 'wiki@prod'])
 	})

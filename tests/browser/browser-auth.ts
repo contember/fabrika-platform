@@ -40,13 +40,14 @@ const IAM_ORIGIN = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabr
 const WITNESS_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://sdk.fabrika.localhost:18081'
 
 /**
- * Every host a scenario is signed in to, with the app id IAM knows it by. `registerLocalApps` in
- * `@fabrika/local-stack` registers exactly these origins, so a name added here without a registration
- * there is a 400 at sign-in rather than a silent miss.
+ * Every host a scenario is signed in to, with the app id IAM knows it by and the roles that hold a permission there.
+ * `registerLocalApps` in `@fabrika/local-stack` registers exactly these origins, so a name added here without a
+ * registration there is a 400 at sign-in rather than a silent miss. The witness admits a member only, and only the
+ * admin's grant reaches every application.
  */
-const APP_HOSTS: readonly { app: string; origin: string }[] = [
-	{ app: 'vozka', origin: CONTROL_ORIGIN },
-	{ app: 'sdk-witness', origin: WITNESS_ORIGIN },
+const APP_HOSTS: readonly { app: string; origin: string; roles: readonly BrowserIdentityRole[] }[] = [
+	{ app: 'vozka', origin: CONTROL_ORIGIN, roles: ['admin', 'operations-notes'] },
+	{ app: 'sdk-witness', origin: WITNESS_ORIGIN, roles: ['admin'] },
 ]
 
 /** Where a scenario reads the principal it is signed in as. Mirrored in `support/fixtures.ts`. */
@@ -115,7 +116,7 @@ async function signIn(browser: Browser, identity: BrowserIdentity): Promise<Stor
 			sameSite: 'Lax',
 		}])
 		const page = await context.newPage()
-		for (const { app, origin } of APP_HOSTS) {
+		for (const { app, origin } of APP_HOSTS.filter((host) => host.roles.includes(identity.role))) {
 			const response = await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' })
 			if (response !== null && !response.ok()) {
 				throw new Error(`handoff to ${app} failed with status ${response.status()} — is the app registered in IAM?`)

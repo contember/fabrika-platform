@@ -1,17 +1,12 @@
 /**
  * The proxy authorization core ([ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
  *
- * An installation service is protected by gates — four steps, same order, same fail-closed posture:
- *   1. match the request path against the app's ordered gate rules;
- *   2. resolve the credential the matched rule requires (cookie session or `px_` key);
- *   3. exchange it with IAM once, cache the result, and thereafter verify LOCALLY against the JWKS;
- *   4. deny unless a rule was satisfied.
- *
- * A contract application is protected by its endpoint table instead, in one pass over ONE selected endpoint:
- * `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session when `human` may call →
- * the requirement (`satisfies`) → admission → the delegation grant. There is no fall-through to another endpoint.
- * An installation entry's table is decided by the same pass; on a row that admits `oauth`, a bearer that is not a
- * `px_` key is an OAuth resource token, verified locally like an `oauth` gate's.
+ * Every entry — a contract application or an installation service — is protected by its endpoint table, in one pass
+ * over ONE selected endpoint: `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session
+ * when `human` may call → the requirement (`satisfies`) → admission → the delegation grant. There is no fall-through
+ * to another endpoint. On an installation row that admits `oauth`, a bearer that is not a `px_` key is an OAuth
+ * resource token, verified locally. A key or a session is exchanged with IAM once, cached, and thereafter verified
+ * LOCALLY against the JWKS.
  *
  * A human miss becomes a bounce to IAM's `/auth/login`, in whichever shape the caller can act on: a
  * 302 for a document navigation, a 401 carrying the same URL in a JSON body for everything else (see
@@ -31,8 +26,6 @@ import {
 	callerOf,
 	type CompiledEndpointTable,
 	formatEndpointHeader,
-	type GateRule,
-	isWorkloadKind,
 	planEndpoint,
 	satisfies,
 	SESSION_COOKIE,
@@ -41,32 +34,21 @@ import {
 } from '@fabrika/auth-core'
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
-import { applicableGates, type CompiledGate, readBearer, readCookie, readServiceCredential } from './gates'
+import { readBearer, readCookie } from './credentials'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
-import {
-	type ContractProxyApp,
-	type GateProxyApp,
-	type InstallationProxyApp,
-	type ManifestEndpointRow,
-	type OAuthBearerChallenge,
-	type OAuthProtectedResource,
-	oauthResourceOfRow,
-	type ProxyApp,
-} from './manifest'
+import { type ManifestEndpointRow, type OAuthBearerChallenge, type OAuthProtectedResource, oauthResourceOfRow, type ProxyApp } from './manifest'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
 export type DenyReason =
-	/** No gate rule matched the path. The fail-closed default. */
-	| 'no_rule'
-	/** Every matching rule was a `service` rule and no credential was presented. */
+	/** The endpoint admits no person, and no credential was presented. */
 	| 'no_credential'
-	/** A service credential was presented and is not a valid `px_` key. */
+	/** A bearer was presented and is not a valid `px_` key. */
 	| 'invalid_key'
-	/** An `oauth` rule's or row's bearer is malformed, unverifiable, or minted for another resource or app. */
+	/** An `oauth` row's bearer is malformed, unverifiable, or minted for another resource or app. */
 	| 'invalid_token'
-	/** An `oauth` rule's or row's bearer verified but lacks a required scope. */
+	/** An `oauth` row's bearer verified but lacks a required scope. */
 	| 'insufficient_scope'
 	| 'no_session'
 	| 'invalid_session'
@@ -74,7 +56,7 @@ export type DenyReason =
 	| 'disabled'
 	/** IAM refused to sign a token above its size bound: the principal holds more than fits in a header. */
 	| 'token_too_large'
-	/** A contract application's table has no endpoint for the method and path. No fall-through. */
+	/** The entry's table has no endpoint for the method and path. The fail-closed default; no fall-through. */
 	| 'no_endpoint'
 	/**
 	 * The credential's caller kind is not one of the endpoint's callers, is no caller kind at all (a job or a webhook
@@ -93,7 +75,7 @@ export type DenyReason =
 	| 'no_app'
 	/** The forwarded-request headers are missing or malformed — we cannot know what was asked for. */
 	| 'bad_forward'
-	/** The forwarded path is not canonical (`isCanonicalPath`); refused before any gate is matched. */
+	/** The forwarded path is not canonical (`isCanonicalPath`); refused before any endpoint is planned. */
 	| 'non_canonical_path'
 	/** IAM could not be consulted, or its keys could not be fetched. We do not know; we refuse. */
 	| 'iam_unavailable'
@@ -103,14 +85,12 @@ export type DenyReason =
 export type Decision =
 	| {
 		outcome: 'allow'
-		/** The gate kind that admitted the request, or `endpoint` for a contract application's table. */
-		gate: 'public' | 'service' | 'human' | 'oauth' | 'endpoint'
-		/** The verified token to inject upstream. `null` on a `public` gate or an anonymous endpoint — no credential, no token. */
+		/** The verified token to inject upstream. `null` on an anonymous endpoint — no credential, no token. */
 		token: string | null
 		/** Principal id (or credential id) for the log line. Never a secret. */
 		subject: string | null
-		/** `<id>@<digest>` of the selected endpoint, for `X-Fabrika-Endpoint`; `null` for a gate. */
-		endpoint: string | null
+		/** `<id>@<digest>` of the selected endpoint, for `X-Fabrika-Endpoint`. */
+		endpoint: string
 		/** The single-use delegation grant for `X-Fabrika-Delegation`, when the endpoint spends one. */
 		delegation: string | null
 	}
@@ -119,11 +99,11 @@ export type Decision =
 		status: 400 | 401 | 403 | 503
 		reason: DenyReason
 		clearHandoffState?: string
-		/** Set on an `oauth` rule's or row's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */
+		/** Set on an `oauth` row's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */
 		challenge?: OAuthBearerChallenge
 	}
 	/**
-	 * A human hit a `human` gate without a usable session. `location` is where they must go to sign
+	 * A human reached an endpoint `human` may call without a usable session. `location` is where they must go to sign
 	 * in; `status` is only how they are TOLD — 302 for a document navigation, 401 for anything else,
 	 * whose body carries the same URL. See `isDocumentNavigation` for why the two differ.
 	 */
@@ -137,9 +117,9 @@ export type Decision =
 
 /** The original request, reconstructed from what `forward_auth` forwarded. */
 export interface ForwardedRequest {
-	/** Original method. Gates are path-only; an endpoint table selects by it. */
+	/** Original method; the endpoint table selects by it. */
 	method: string
-	/** Original absolute URL. Its `pathname` drives gate matching; the whole URL is the login return. */
+	/** Original absolute URL; the whole URL is the login return. */
 	url: URL
 	/** The forwarded path exactly as the upstream receives it, already checked by `isCanonicalPath`. */
 	rawPath: string
@@ -148,10 +128,11 @@ export interface ForwardedRequest {
 	requestId: string
 }
 
-/** An app plus its precompiled gates or endpoint table, built once at startup. */
-export type ResolvedApp =
-	| { kind: 'gates'; app: GateProxyApp; gates: CompiledGate[] }
-	| { kind: 'endpoints'; app: ContractProxyApp | InstallationProxyApp; table: CompiledEndpointTable<ManifestEndpointRow> }
+/** An entry plus its precompiled endpoint table, built once at startup. */
+export interface ResolvedApp {
+	readonly app: ProxyApp
+	readonly table: CompiledEndpointTable<ManifestEndpointRow>
+}
 
 export interface AuthorizerOptions {
 	iam: IamGateway
@@ -178,7 +159,7 @@ const FETCH_MODE_HEADER = 'Sec-Fetch-Mode'
 /** Fetch metadata the browser writes and page script cannot: `same-origin` only for a request from this origin. */
 const FETCH_SITE_HEADER = 'Sec-Fetch-Site'
 
-/** Why a `human` attempt failed — mirrors `mintToken`'s reasons. */
+/** Why a session attempt failed — mirrors `mintToken`'s reasons. */
 type SessionFailureReason = 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled'
 
 type Denial = Extract<Decision, { outcome: 'deny' }>
@@ -229,68 +210,13 @@ export class Authorizer {
 	 */
 	async authorize(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
 		try {
-			return await this.decide(resolved, request)
+			return await this.decideEndpoint(resolved.app, resolved.table, request)
 		} catch (err) {
 			if (err instanceof IamUnavailableError) {
 				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
 			}
 			return { outcome: 'deny', status: 403, reason: 'internal_error' }
 		}
-	}
-
-	private async decide(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
-		if (resolved.kind === 'endpoints') {
-			return await this.decideEndpoint(resolved.app, resolved.table, request)
-		}
-		const matching = applicableGates(resolved.gates, request.url.pathname)
-		if (matching.length === 0) {
-			// Fail closed — the app has no public route of its own, so an unmatched path is denied.
-			return { outcome: 'deny', status: 403, reason: 'no_rule' }
-		}
-
-		// Remembers a human rule's miss (with its precise reason) so the browser is bounced to login
-		// only after every matching rule has been exhausted.
-		let humanMiss: SessionFailureReason | null = null
-		// The human behind a request is resolved AT MOST ONCE. Two matching human rules cannot reach
-		// different verdicts, so a second resolution would only buy a second `mintToken`.
-		let session: SessionAttempt | null = null
-
-		for (const { rule } of matching) {
-			if (rule.kind === 'oauth') {
-				return await this.authorizeOAuth(resolved.app, rule, request) // terminal, with or without a token
-			}
-			if (rule.kind === 'public') {
-				return { outcome: 'allow', gate: 'public', token: null, subject: null, endpoint: null, delegation: null }
-			}
-			if (rule.kind === 'service') {
-				const raw = readServiceCredential(request.headers, request.url, rule.credential)
-				if (raw === null) {
-					continue // absent → fall through to the next matching rule
-				}
-				return await this.authorizeBearer(resolved.app, raw, request.requestId) // present → terminal
-			}
-			session ??= await this.authorizeSession(resolved.app, request)
-			if (session.ok) {
-				return { outcome: 'allow', gate: 'human', token: session.token, subject: session.claims.sub, endpoint: null, delegation: null }
-			}
-			if (session.status === 'unavailable') {
-				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
-			}
-			if (session.status === 'refused') {
-				// A new login would mint the same token again, so this is a denial, never a bounce.
-				return { outcome: 'deny', status: 403, reason: session.reason }
-			}
-			if (session.reason !== 'no_session') {
-				return await this.loginDecision(resolved.app, request, session.reason)
-			}
-			humanMiss = session.reason
-		}
-
-		if (humanMiss !== null) {
-			return await this.loginDecision(resolved.app, request, humanMiss)
-		}
-		// Every matching rule was a `service` rule with no credential present.
-		return { outcome: 'deny', status: 401, reason: 'no_credential' }
 	}
 
 	/**
@@ -300,7 +226,7 @@ export class Authorizer {
 	 * requirement, then admission.
 	 */
 	private async decideEndpoint(
-		app: ContractProxyApp | InstallationProxyApp,
+		app: ProxyApp,
 		table: CompiledEndpointTable<ManifestEndpointRow>,
 		request: ForwardedRequest,
 	): Promise<Decision> {
@@ -314,7 +240,7 @@ export class Authorizer {
 		const row = plan.endpoint
 		const endpoint = formatEndpointHeader(row.id, row.digest)
 		if (row.requirement === null) {
-			return admitBody(row, request.headers) ?? { outcome: 'allow', gate: 'endpoint', token: null, subject: null, endpoint, delegation: null }
+			return admitBody(row, request.headers) ?? { outcome: 'allow', token: null, subject: null, endpoint, delegation: null }
 		}
 		const oauth = oauthBindingOf(app, row)
 		if (oauth === 'unregistered') {
@@ -346,7 +272,6 @@ export class Authorizer {
 		}
 		return {
 			outcome: 'allow',
-			gate: 'endpoint',
 			token: caller.token,
 			subject: caller.claims.sub,
 			endpoint,
@@ -359,7 +284,7 @@ export class Authorizer {
 	 * credential there as an OAuth resource token; otherwise the session, if `human` may call.
 	 */
 	private async endpointCaller(
-		app: ContractProxyApp | InstallationProxyApp,
+		app: ProxyApp,
 		oauth: OAuthBinding | null,
 		callers: readonly TokenCaller[],
 		request: ForwardedRequest,
@@ -396,7 +321,7 @@ export class Authorizer {
 
 	/** A fresh grant for every request, never cached: IAM spends it once, for this request id. */
 	private async obtainDelegation(
-		app: ContractProxyApp | InstallationProxyApp,
+		app: ProxyApp,
 		endpoint: string,
 		token: string,
 		requestId: string,
@@ -409,23 +334,6 @@ export class Authorizer {
 		return result.ok && result.grant !== ''
 			? { ok: true, grant: result.grant }
 			: { ok: false, denial: { outcome: 'deny', status: 403, reason: 'delegation_refused' } }
-	}
-
-	/**
-	 * An `oauth`-rule bearer: an RFC 9068 access token minted by IAM for this rule's resource of this
-	 * app, carrying every scope the rule names. A refusal is a bearer challenge pointing at the resource
-	 * metadata, never a login bounce.
-	 */
-	private async authorizeOAuth(app: GateProxyApp, rule: Extract<GateRule, { kind: 'oauth' }>, request: ForwardedRequest): Promise<Decision> {
-		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
-		if (resource === undefined) {
-			// The manifest parser refuses an unregistered oauth rule; reaching this is a composition bug.
-			return { outcome: 'deny', status: 403, reason: 'internal_error' }
-		}
-		const verified = await this.verifyOAuthBearer(app, { resource, scopes: rule.scopes }, readBearer(request.headers.get('Authorization')))
-		return verified.ok
-			? { outcome: 'allow', gate: 'oauth', token: verified.token, subject: verified.claims.sub, endpoint: null, delegation: null }
-			: verified.denial
 	}
 
 	/**
@@ -453,23 +361,6 @@ export class Authorizer {
 			}
 		}
 		return { ok: true, token: bearer, claims: verified.claims }
-	}
-
-	/**
-	 * A `service`-rule bearer. Only a `px_` opaque key satisfies it: it is exchanged via `mintFromKey`
-	 * (cached, so the hot path is a local verify). Anything else is refused with no IAM call. A
-	 * present-but-invalid credential fails closed — no fall-through.
-	 */
-	private async authorizeBearer(app: ProxyApp, bearer: string, requestId: string): Promise<Decision> {
-		const key = await this.exchangeKey(app, bearer, requestId)
-		if (!key.ok) {
-			return key.denial
-		}
-		// A workload key is accepted by no mount, a gate included (ADR-0022 "Principal kinds").
-		if (isWorkloadKind(key.claims.ptype)) {
-			return { outcome: 'deny', status: 403, reason: 'caller_kind' }
-		}
-		return { outcome: 'allow', gate: 'service', token: key.token, subject: key.claims.sub, endpoint: null, delegation: null }
 	}
 
 	/** Exchange a `px_` key for a verified token, through the cache. A non-`px_` bearer is refused with no IAM call. */
@@ -514,8 +405,8 @@ export class Authorizer {
 	 *   1. a cached token minted earlier from the SAME session — no IAM call;
 	 *   2. exchange the `px_session` SSO cookie via `mintToken`.
 	 *
-	 * Every tier additionally requires `ptype: 'user'`: a `human` gate asserts that a resolved USER
-	 * principal exists. Without the check a broken IAM could turn a service token into a human allow.
+	 * Every tier additionally requires `ptype: 'user'`: a session asserts that a resolved USER principal
+	 * exists. Without the check a broken IAM could turn a service token into a human allow.
 	 */
 	private async authorizeSession(app: ProxyApp, request: ForwardedRequest): Promise<SessionAttempt> {
 		const cookieHeader = request.headers.get('Cookie')
@@ -579,9 +470,8 @@ export class Authorizer {
 	}
 
 	/**
-	 * Redeem a handoff code (ADR-0022). Called for the reserved callback path only, BEFORE gate
-	 * matching — the callback is how a browser becomes able to satisfy a gate, so it cannot be behind
-	 * one.
+	 * Redeem a handoff code (ADR-0022). Called for the reserved callback path only, BEFORE the endpoint
+	 * is planned — the callback is how a browser obtains a session, so it cannot be behind an endpoint.
 	 *
 	 * A failed redemption is an ordinary deny with no cookie. It is deliberately not a fresh bounce to
 	 * IAM: a code that will not redeem twice would turn a retry into a loop.
@@ -667,7 +557,7 @@ function invalidKey(): Denial {
  * The resource and scopes of a row that admits `oauth`, `null` for any other row, and `unregistered` when the entry
  * has no resource on the row's path.
  */
-function oauthBindingOf(app: ContractProxyApp | InstallationProxyApp, row: ManifestEndpointRow): OAuthBinding | null | 'unregistered' {
+function oauthBindingOf(app: ProxyApp, row: ManifestEndpointRow): OAuthBinding | null | 'unregistered' {
 	const required = 'oauth' in row ? row.oauth : null
 	if (required === null) {
 		return null

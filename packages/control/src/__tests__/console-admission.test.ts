@@ -37,7 +37,7 @@ function admissionFixture(): (request: Request) => Promise<Outcome> {
 	}
 	let reached = false
 	const fetch = consoleBehindProxy({
-		access: { table: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }) },
+		table: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
 		iam: { session: adminToken, keys: { px_admin: adminToken } },
 		upstream: (request) => {
 			reached = true

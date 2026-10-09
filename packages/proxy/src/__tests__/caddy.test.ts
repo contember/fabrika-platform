@@ -9,7 +9,7 @@
  *     make the Caddy layer itself fail-closed.
  */
 
-import { type AppGates, FABRIKA_HOP_HEADERS, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
+import { FABRIKA_HOP_HEADERS, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
 import {
 	CLIENT_ADDRESS_HEADER,
 	DELEGATION_HEADER,
@@ -21,7 +21,7 @@ import {
 import { BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, InstallationProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
-import { endpointRow, installationRow } from '../../../proxy-core/src/__tests__/helpers'
+import { endpointRow, installationAppWith, installationRow, protocolRow, serviceRow } from '../../../proxy-core/src/__tests__/helpers'
 import {
 	buildCaddyConfig,
 	type CaddyBuildOptions,
@@ -33,18 +33,16 @@ import {
 	uriRedactionPattern,
 } from '../caddy'
 
-const GATES: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
+const CONSOLE = serviceRow('/*', ['human'])
 
 const MANIFEST: ProxyManifest = {
 	apps: [
-		{ id: 'app-one', hosts: ['one.example.com'], upstream: 'one:3000', scheme: 'https', gates: GATES },
-		{
+		installationAppWith([protocolRow('/public/*'), CONSOLE], [], { id: 'app-one', hosts: ['one.example.com'], upstream: 'one:3000' }),
+		installationAppWith([serviceRow('/*', ['machine'])], [], {
 			id: 'app-two',
 			hosts: ['two.example.com', 'alias.example.com'],
 			upstream: 'two:8080',
-			scheme: 'https',
-			gates: { rules: [{ path: '/*', kind: 'service' }] },
-		},
+		}),
 	],
 }
 
@@ -146,8 +144,8 @@ describe('server shape', () => {
 	test('a host claimed by two apps is rejected at generation time', () => {
 		const clashing: ProxyManifest = {
 			apps: [
-				{ id: 'a', hosts: ['same.example.com'], upstream: 'a:1', scheme: 'https', gates: { rules: [] } },
-				{ id: 'b', hosts: ['SAME.example.com'], upstream: 'b:1', scheme: 'https', gates: { rules: [] } },
+				installationAppWith([], [], { id: 'a', hosts: ['same.example.com'], upstream: 'a:1' }),
+				installationAppWith([], [], { id: 'b', hosts: ['SAME.example.com'], upstream: 'b:1' }),
 			],
 		}
 		expect(() => buildCaddyConfig(clashing, OPTIONS)).toThrow(CaddyConfigError)
@@ -161,7 +159,7 @@ describe('the per-app chain is fail-closed by construction', () => {
 	test('every app route strips the client-assertable headers BEFORE anything else', () => {
 		for (const route of routes.slice(0, 2)) {
 			const strip = subrouteOf(route).routes[0]?.handle
-			// The token, or a `public` path would carry a client's own to the app; the request id, which is
+			// The token, or a `protocol` row would carry a client's own to the app; the request id, which is
 			// written to IAM's auth log and audit trail; and every name a client address travels under, so
 			// the only one an upstream can read is the one this hop writes below. Within one HeaderOps a
 			// named delete runs AFTER the set (caddyhttp/headers.go ApplyTo, v2.10.2), so the set is a second
@@ -273,13 +271,7 @@ describe('the per-app chain is fail-closed by construction', () => {
 
 describe('IAM login cookie ownership', () => {
 	const owner = { issuer: 'https://iam.example.com', upstream: 'iam:3000' }
-	const iam: ProxyApp = {
-		id: 'identity-service',
-		hosts: ['iam.example.com'],
-		upstream: 'iam:3000',
-		scheme: 'https',
-		gates: { rules: [{ path: '/*', kind: 'public' }] },
-	}
+	const iam: ProxyApp = installationAppWith([protocolRow('/*')], [], { id: 'identity-service', hosts: ['iam.example.com'], upstream: 'iam:3000' })
 
 	function upstreamCookie(app: ProxyApp, cookie: string, iamSessionOwner?: CaddyBuildOptions['iamSessionOwner']): string {
 		const config = buildCaddyConfig({ apps: [app] }, { ...OPTIONS, ...(iamSessionOwner === undefined ? {} : { iamSessionOwner }) })
@@ -422,7 +414,7 @@ describe('a contract app — the endpoint table', () => {
 		if (value === undefined) throw new Error('missing fixture')
 		return value
 	}
-	const [contractRoute, gateRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
+	const [contractRoute, installationRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
 		?.routes ?? []
 	const steps = subrouteOf(defined(contractRoute)).routes
 	const auth = proxyHandler(steps[1])
@@ -452,9 +444,9 @@ describe('a contract app — the endpoint table', () => {
 		})
 	})
 
-	test('a gate app keeps its Authorization header: IAM reads its own bearer', () => {
-		const gateCopies = proxyHandler(subrouteOf(defined(gateRoute)).routes[1]).handle_response?.[0]?.routes ?? []
-		expect(JSON.stringify(gateCopies)).not.toContain('Authorization')
+	test('an installation entry keeps its Authorization header: IAM reads its own bearer', () => {
+		const installationCopies = proxyHandler(subrouteOf(defined(installationRoute)).routes[1]).handle_response?.[0]?.routes ?? []
+		expect(JSON.stringify(installationCopies)).not.toContain('Authorization')
 	})
 
 	test('every X-Fabrika-* hop header a client sends is deleted before the auth service and the app see it', () => {
@@ -478,8 +470,8 @@ describe('a contract app — the endpoint table', () => {
 		expect(JSON.stringify(auth)).not.toContain(PROXY_SECRET_HEADER)
 	})
 
-	test('a gate app gets no proxy secret: it is not a contract application', () => {
-		expect(JSON.stringify(subrouteOf(defined(gateRoute)).routes.slice(1))).not.toContain(PROXY_SECRET_HEADER)
+	test('an installation entry gets no proxy secret: it is not a contract application', () => {
+		expect(JSON.stringify(subrouteOf(defined(installationRoute)).routes.slice(1))).not.toContain(PROXY_SECRET_HEADER)
 	})
 
 	test('the secret is in no generated file: the config names only the variable', () => {
@@ -498,32 +490,23 @@ describe('access-log redaction', () => {
 		expect(fields[`request>headers>${PROXY_SECRET_HEADER}`]).toEqual({ filter: 'delete' })
 	})
 
-	test('credentials cannot survive in the logged URI', () => {
-		const withQueryCredential: ProxyManifest = {
-			apps: [{
-				id: 'a',
-				hosts: ['a.example.com'],
-				upstream: 'a:1',
-				scheme: 'https',
-				gates: { rules: [{ path: '/s/*', kind: 'service', credential: { in: 'query', name: 'pxt' } }] },
-			}],
-		}
-		const pattern = new RegExp(uriRedactionPattern(withQueryCredential), 'g')
-		expect('/s/px_abc123?pxt=deadbeef'.replace(pattern, 'REDACTED')).toBe('/s/REDACTEDREDACTED')
+	test('a px_ key cannot survive in the logged URI', () => {
+		const pattern = new RegExp(uriRedactionPattern(), 'g')
+		expect('/s/px_abc123?page=2'.replace(pattern, 'REDACTED')).toBe('/s/REDACTED?page=2')
 		// A path that carries no credential is untouched.
 		expect('/api/v1/items?page=2'.replace(pattern, 'REDACTED')).toBe('/api/v1/items?page=2')
 	})
 
 	test('the ADR-0022 handoff code is redacted on every app, declared or not', () => {
-		// The code is a bare random token on a reserved path — no `px_` prefix, no gate rule to declare
-		// it — so it is only ever caught by an unconditional alternative.
-		const pattern = new RegExp(uriRedactionPattern(MANIFEST), 'g')
+		// The code is a bare random token on a reserved path — no `px_` prefix — so it is only ever caught
+		// by an unconditional alternative.
+		const pattern = new RegExp(uriRedactionPattern(), 'g')
 		expect('/__fabrika/auth/callback?code=deadbeef'.replace(pattern, 'REDACTED')).toBe('/__fabrika/auth/callbackREDACTED')
 		expect('/__fabrika/auth/callback?code=deadbeef&x=1'.replace(pattern, 'REDACTED')).toBe('/__fabrika/auth/callbackREDACTED&x=1')
 	})
 
 	test('OAuth state is redacted from request and redirect URLs on every app', () => {
-		const pattern = new RegExp(uriRedactionPattern(MANIFEST), 'g')
+		const pattern = new RegExp(uriRedactionPattern(), 'g')
 		expect('/api/source/callback?state=CAPABILITY&code=CODE'.replace(pattern, 'REDACTED')).not.toContain('CAPABILITY')
 		expect('https://github.com/apps/example/installations/new?state=CAPABILITY'.replace(pattern, 'REDACTED')).not.toContain('CAPABILITY')
 	})
@@ -534,14 +517,14 @@ describe('access-log redaction', () => {
 		// against caddy 2.10.2), and a misspelled one is ignored rather than rejected.
 		const filter = fields['resp_headers>Location']
 		expect(filter?.filter).toBe('regexp')
-		expect(filter?.regexp).toBe(uriRedactionPattern(MANIFEST))
+		expect(filter?.regexp).toBe(uriRedactionPattern())
 
 		const pattern = new RegExp(filter?.regexp ?? '', 'g')
 		// IAM's 302 to the reserved callback — the proxy fronts IAM too.
 		expect('https://app.example.com/__fabrika/auth/callback?code=SECRET'.replace(pattern, 'REDACTED'))
 			.not.toContain('SECRET')
-		// The login bounce percent-encodes the whole original URL, credential and all, into `redirect`.
-		const bounce = `https://iam.test/auth/login?app=a&redirect=${encodeURIComponent('https://app.example.com/s/x?pxt=SECRET')}`
+		// The login bounce percent-encodes the whole original URL, query and all, into `redirect`.
+		const bounce = `https://iam.test/auth/login?app=a&redirect=${encodeURIComponent('https://app.example.com/s/x?resume=SECRET')}`
 		expect(bounce.replace(pattern, 'REDACTED')).not.toContain('SECRET')
 	})
 
@@ -562,14 +545,9 @@ describe('OAuth protected resource metadata', () => {
 		if (route === undefined) throw new Error('expected an app route')
 		return subrouteOf(route).routes
 	}
-	const app: ProxyApp = {
-		id: 'mcp-app',
-		hosts: ['mcp.example.com'],
-		upstream: 'mcp:3000',
-		scheme: 'https',
-		gates: { rules: [{ path: '/mcp', kind: 'oauth', resource: resource.resource, scopes: ['authoring'] }, { path: '/*', kind: 'human' }] },
-		oauthResources: [resource],
-	}
+	const placement = { id: 'mcp-app', hosts: ['mcp.example.com'], upstream: 'mcp:3000' }
+	const mcp = serviceRow('/mcp', ['oauth'], { scopes: ['authoring'] })
+	const app = installationAppWith([mcp, CONSOLE], [], { ...placement, oauthResources: [resource] })
 	const steps = appSteps(app)
 
 	test('the metadata path is answered by the auth service, after the strip and before forward_auth', () => {
@@ -594,7 +572,7 @@ describe('OAuth protected resource metadata', () => {
 	})
 
 	test('an app without OAuth resources gets no metadata route', () => {
-		expect(appSteps({ ...app, oauthResources: undefined, gates: GATES })).toHaveLength(3)
+		expect(appSteps(installationAppWith([CONSOLE], [], placement))).toHaveLength(3)
 	})
 })
 
@@ -619,7 +597,7 @@ describe('a contract app — the response headers', () => {
 		csp: { connectSrc: ['https://api.maps.example'], imgSrc: ['https://tiles.maps.example'], frameAncestors: [] },
 		operationsOrigin: 'https://operations.example.com',
 	}
-	const [contractRoute, gateRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
+	const [contractRoute, installationRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
 		?.routes ?? []
 	const policy = headerPolicy(contract.csp, 'https://operations.example.com')
 	const chain = rawSubrouteOf(defined(contractRoute)).routes
@@ -690,8 +668,8 @@ describe('a contract app — the response headers', () => {
 		})
 	})
 
-	test("a gate app's answers are passed through: the policy is a contract application's", () => {
-		const steps = rawSubrouteOf(defined(gateRoute)).routes
+	test("an installation entry's answers are passed through: the policy is a contract application's", () => {
+		const steps = rawSubrouteOf(defined(installationRoute)).routes
 		expect(proxyHandler(steps.at(-1)).headers?.response).toBeUndefined()
 		expect(JSON.stringify(steps)).not.toContain('status_code":[1]')
 		expect(steps[0]?.handle[0]).toEqual({

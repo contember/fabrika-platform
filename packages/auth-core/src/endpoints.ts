@@ -1,4 +1,4 @@
-// The endpoint matcher of contract applications. It selects; it evaluates no gate rule. The proxy and the framework
+// The endpoint matcher of every endpoint table. It selects; it decides no access. The proxy and the framework
 // both select with it, so a request reaches the endpoint whose rules the proxy applied.
 
 import { isCanonicalPath } from './canonical-path'
@@ -248,7 +248,7 @@ function matchSegments(segments: readonly Segment[], path: readonly string[]): R
 	const params: [string, string][] = []
 	for (const [index, segment] of segments.entries()) {
 		if (segment.kind === 'wildcard') {
-			// Like the gate glob `/x/*`, a non-root wildcard needs the `/` before it: `/x/` matches, `/x` does not.
+			// A non-root wildcard needs the `/` before it: `/x/` matches, `/x` does not.
 			return index === 0 || path.length > index ? Object.fromEntries(params) : null
 		}
 		const value = path[index]

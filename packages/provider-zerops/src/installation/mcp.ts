@@ -1,7 +1,7 @@
 // MCP authoring, opt-in per installation (ADR-0049).
 //
 // The operator names the MCP clients it trusts; everything else is derived. One input turns on BOTH
-// halves, so they cannot disagree: the console's `oauth` gate with its registered resource in the proxy
+// halves, so they cannot disagree: the console's `oauth` row with its registered resource in the proxy
 // manifest, and IAM's `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly that resource.
 
 import { type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'

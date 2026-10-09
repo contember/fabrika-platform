@@ -3,36 +3,18 @@
  * API would consume. A Caddyfile would have to be parsed by Caddy before it meant anything; JSON is
  * what it means.
  *
- * ── Why gate rules are NOT compiled into Caddy routes ─────────────────────────────────────────────
+ * ── Why endpoint tables are NOT compiled into Caddy routes ───────────────────────────────────────
  *
- * The obvious design is one Caddy route per gate rule, relying on Caddy's first-match-wins route
- * evaluation to reproduce `AppGates`' first-match-wins precedence. It was checked against Caddy
- * v2.10.2's source rather than assumed, and it does not hold. Three independent reasons:
- *
- *  1. **Fall-through is not expressible.** A matching rule whose credential is ABSENT falls through
- *     to the next rule; a present credential is terminal. Presence may depend on a declared header,
- *     query or cookie location, so the full decision still belongs to the canonical evaluator.
- *  2. **`path` is case-insensitive.** `MatchPath.Match` lower-cases both the pattern and the request
- *     path ("we do case-insensitive matching to mitigate security issues"). `AppGates`' glob is
- *     case-sensitive. `/Admin/*` would gate a different set of requests in the two engines.
- *  3. **`*` stops at `/`.** For a pattern with an interior wildcard Caddy falls back to Go's
- *     `path.Match`, whose `*` does not cross a path separator; the SDK's glob compiles `*` to `.*`,
- *     which does. A pattern of `/api/` + `*` + `/x` matches `/api/a/b/x` in one engine and not in the
- *     other. Caddy also
- *     normalizes the path (merging `//`) before matching; the SDK matches the raw pathname.
- *
- * Any of these mismatches turns a route split into a silent widening or narrowing of an authorization
- * rule — the failure mode with the worst blast radius available here. So the mapping is deliberately
- * trivial: **every request goes to `/verify`**, and gate evaluation happens once, in TypeScript,
- * exactly as ADR-0022 divides the work (Caddy owns HTTP correctness, the auth service owns auth).
- * Gate ORDER is preserved verbatim in the manifest the auth service reads.
- *
- * Gates still shape the generated config in one place: the access-log redaction pattern extends its
- * fixed alternatives with the declared `query` credential locations, so a credential in a URL never
- * reaches a log file.
+ * The obvious design is one Caddy route per endpoint row. It does not hold against Caddy v2.10.2's
+ * source: `MatchPath.Match` lower-cases both the pattern and the request path, an interior `*` falls
+ * back to Go's `path.Match`, which does not cross a path separator, and Caddy merges `//` before
+ * matching, while `planEndpoint` reads the raw, case-sensitive path and selects the most specific row.
+ * Any mismatch turns a route split into a silent widening or narrowing of an authorization rule. So
+ * the mapping is deliberately trivial: **every request goes to `/verify`**, and the endpoint is
+ * planned once, in TypeScript, exactly as ADR-0022 divides the work (Caddy owns HTTP correctness, the
+ * auth service owns auth).
  */
 
-import type { GateRule } from '@fabrika/auth-core'
 import {
 	API_KEY_PREFIX,
 	AUTH_CODE_PARAM,
@@ -64,14 +46,7 @@ import {
 	INLINE_FILE_TYPES,
 	REMOVED_RESPONSE_HEADERS,
 } from '@fabrika/proxy-core/headers'
-import {
-	type ContractProxyApp,
-	isApplicationEntry,
-	isGateProxyApp,
-	isProxyHost,
-	type ProxyApp,
-	type ProxyManifest,
-} from '@fabrika/proxy-core/manifest'
+import { type ContractProxyApp, isApplicationEntry, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before
@@ -297,7 +272,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 					encoder: {
 						format: 'filter',
 						wrap: { format: 'json' },
-						fields: logFieldFilters(manifest),
+						fields: logFieldFilters(),
 					},
 				},
 			},
@@ -320,7 +295,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 					},
 					// The liveness probe lives on its OWN listener, which is never published. Putting it on
 					// the public listener would mean one path per proxy that shadows an app's path and
-					// answers 200 without consulting the gates.
+					// answers 200 without consulting the endpoint table.
 					health: {
 						listen: healthListen,
 						automatic_https: { disable: true },
@@ -569,7 +544,7 @@ function copyResponseHeader(header: string): CaddyRoute {
  * Access-log redaction. `should_log_credentials: false` already keeps `Cookie` / `Set-Cookie` /
  * `Authorization` out, but the injected token header is not in Caddy's credentials list, and the
  * request URI and the response `Location` are both logged verbatim — and either can carry a
- * credential: a share-link `px_` token in the path, a declared `query` credential, or the ADR-0022
+ * credential: a share-link `px_` token in the path, or the ADR-0022
  * handoff code. The URI and `Location` share one pattern, because a credential is the same string
  * wherever it appears.
  *
@@ -577,8 +552,8 @@ function copyResponseHeader(header: string): CaddyRoute {
  * response headers are a top-level `resp_headers` object. Verified against a running caddy 2.10.2 —
  * a misspelled path is silently ignored, which is exactly how a redaction quietly stops happening.
  */
-function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter> {
-	const pattern = uriRedactionPattern(manifest)
+function logFieldFilters(): Record<string, CaddyLogFilter> {
+	const pattern = uriRedactionPattern()
 	return {
 		[`request>headers>${PROXY_TOKEN_HEADER}`]: { filter: 'delete' },
 		// A single-use grant, but a credential until IAM spends it.
@@ -608,38 +583,17 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
  *     so nothing else in this file would ever contribute it;
  *   - `?state=…`, an OAuth capability that must never reach request or redirect logs;
  *   - `?redirect=…`, the login bounce's return URL. It is not itself a credential, it is a carrier:
- *     the whole original URL is percent-encoded into it, so a declared `query` credential re-appears
- *     as `%3Fpxt%3D…` after being stripped from the logged URI;
- *   - `?<name>=…` for each `query` credential location any app declares.
+ *     the whole original URL is percent-encoded into it, so a `px_` token in it is still caught.
  *
- * Deterministic: names are de-duplicated and sorted, so the config is stable across runs.
+ * Every entry reads a key only as a bearer, never from the URL, so the pattern depends on no manifest.
  */
-export function uriRedactionPattern(manifest: ProxyManifest): string {
-	const names = new Set<string>()
-	for (const app of manifest.apps) {
-		// A contract app reads a key only as a bearer, never from the URL.
-		const rules = isGateProxyApp(app) ? app.gates.rules : []
-		for (const rule of rules) {
-			const name = queryCredentialName(rule)
-			if (name !== null) {
-				names.add(name)
-			}
-		}
-	}
-	const alternatives = [
+export function uriRedactionPattern(): string {
+	return [
 		`${API_KEY_PREFIX}[A-Za-z0-9_.\\-]+`,
 		`[?&]${escapeRe2(AUTH_CODE_PARAM)}=[^&]*`,
 		`[?&]state=[^&]*`,
 		`[?&]${escapeRe2(LOGIN_REDIRECT_PARAM)}=[^&]*`,
-	]
-	for (const name of [...names].sort()) {
-		alternatives.push(`[?&]${escapeRe2(name)}=[^&]*`)
-	}
-	return alternatives.join('|')
-}
-
-function queryCredentialName(rule: GateRule): string | null {
-	return rule.kind === 'service' && rule.credential !== undefined && rule.credential.in === 'query' ? rule.credential.name : null
+	].join('|')
 }
 
 function escapeRe2(literal: string): string {

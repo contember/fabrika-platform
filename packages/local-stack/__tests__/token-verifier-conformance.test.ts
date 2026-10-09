@@ -11,7 +11,7 @@
  * outage read as a forged token, which is a silent incident on one side and a login loop on the
  * other. The semantics live in one place now; this is the probe that they stay there.
  *
- * It lives OUTSIDE `src/`, like `proxy-gates.test.ts` and `console-access-plane.test.ts`:
+ * It lives OUTSIDE `src/`, like `proxy-tables.test.ts` and `console-access-plane.test.ts`:
  * `tsconfig.json` includes `src/**` only, so reaching across into two other packages never enters
  * this package's program. The key material and the signing helper are borrowed from the proxy suite
  * because `jose` resolves from that package, not from this one.

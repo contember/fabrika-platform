@@ -1,4 +1,4 @@
-import type { AuthContext, FabrikaApp, RequestExecutionContext } from '@fabrika/app'
+import type { AuthContext, FetchService, RequestExecutionContext } from '@fabrika/app'
 import { dispatchRpcRequest, serveService, type ServiceHandler } from '@fabrika/app/service'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { type ControlEndpointId, controlServiceContract } from '../fabrika.service'
@@ -37,7 +37,7 @@ export type McpRoute = (request: Request) => Promise<Response>
  * from on both providers. With an MCP route the table carries the `oauth` row for `/mcp`; without one, `/mcp` is a
  * session-only row that answers 404. Provider and runtime ports are supplied by the composition root.
  */
-export function createControlApp(mcp: McpRoute | null): FabrikaApp<ControlAppEnv> {
+export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppEnv> {
 	type Handle = (ctx: ControlAppContext, params: Readonly<Record<string, string>>) => Response | Promise<Response>
 	const serve = (handle: Handle): ServiceHandler<ControlAppEnv> => ({ request, params, env: { env, provider, sourceConnection }, exec }) =>
 		handle({ env: withRequestExecution(env, exec), provider, sourceConnection, request }, params)
@@ -80,7 +80,7 @@ export function createControlApp(mcp: McpRoute | null): FabrikaApp<ControlAppEnv
 }
 
 /** The console without MCP: what the Cloudflare Worker serves. */
-export const controlApp: FabrikaApp<ControlAppEnv> = createControlApp(null)
+export const controlApp: FetchService<ControlAppEnv> = createControlApp(null)
 
 async function mcpRequest(mcp: McpRoute, request: Request): Promise<Response> {
 	try {

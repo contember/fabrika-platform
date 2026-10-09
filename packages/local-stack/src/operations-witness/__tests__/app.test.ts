@@ -1,15 +1,20 @@
 import { createBunHandler } from '@fabrika/app/bun'
-import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { PROXY_SECRET_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { witnessApp } from '../app'
 
 const fixture = { dsn: 'https://0123456789abcdef0123456789abcdef@operations.test/123', release: 'release-123', script: 'console.info("SDK fixture")' }
 
-const handler = createBunHandler(witnessApp, { verified: (token) => Promise.resolve(token === 'valid'), fixture }, {
+const SECRET = 'witness-proxy-secret'
+const handler = createBunHandler(witnessApp, { verified: (token) => Promise.resolve(token === 'valid'), proxySecret: SECRET, fixture }, {
 	onBackgroundError: () => undefined,
 })
-const get = (path: string, token?: string) =>
-	handler.fetch(new Request(`http://sdk.test${path}`, token === undefined ? {} : { headers: { [PROXY_TOKEN_HEADER]: token } }))
+const get = (path: string, token?: string, secret = SECRET) =>
+	handler.fetch(
+		new Request(`http://sdk.test${path}`, {
+			headers: { [PROXY_SECRET_HEADER]: secret, ...(token === undefined ? {} : { [PROXY_TOKEN_HEADER]: token }) },
+		}),
+	)
 
 describe('the Operations SDK witness', () => {
 	test('answers nothing but its health check without a token that verifies', async () => {
@@ -17,6 +22,8 @@ describe('the Operations SDK witness', () => {
 		for (const path of ['/', '/operations-sdk', '/operations-sdk/config', '/operations-sdk.js']) {
 			expect((await get(path)).status).toBe(401)
 			expect((await get(path, 'forged')).status).toBe(401)
+			// A valid token that did not come through the proxy's hop.
+			expect((await get(path, 'valid', 'another-secret')).status).toBe(401)
 		}
 	})
 

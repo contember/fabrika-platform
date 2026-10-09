@@ -10,7 +10,7 @@
  *
  *   the console's public origin  ≠  IAM's public issuer  ≠  IAM's private RPC address
  *
- * It lives OUTSIDE `src/` for the same reason `proxy-gates.test.ts` does: `tsconfig.json` includes
+ * It lives OUTSIDE `src/` for the same reason `proxy-tables.test.ts` does: `tsconfig.json` includes
  * `src/**` only, so reaching across into two other packages never enters this package's program.
  */
 

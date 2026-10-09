@@ -117,7 +117,6 @@ export async function integrationFixture() {
 		const authorizer = new Authorizer({ issuer, iam: gateway, cache: null })
 		const table = serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false })
 		const resolved: ResolvedApp = {
-			kind: 'endpoints',
 			app: { id: 'vozka', hosts: ['localhost'], upstream: 'control', scheme: 'http', ...table },
 			table: compileEndpointTable(table),
 		}

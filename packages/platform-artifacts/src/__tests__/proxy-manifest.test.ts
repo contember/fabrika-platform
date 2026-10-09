@@ -101,7 +101,7 @@ describe('the service tables come from the modules that own them', () => {
 		})
 	})
 
-	test('IAM carries its installation table, every row `protocol`, because a gate in front of a login page is a login loop', () => {
+	test('IAM carries its installation table, every row `protocol`, because a credentialed row in front of a login page is a login loop', () => {
 		const table = iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS)
 		const iam = byId.get(PLATFORM_IAM_APP_ID)?.table
 		expect(iam).toEqual({ endpoints: table.endpoints, reservedPrefixes: table.reservedPrefixes })

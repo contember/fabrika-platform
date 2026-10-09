@@ -1,6 +1,6 @@
-// The `defineApp()` RPC client, a typed proxy: `client.a.b.c(input)` POSTs `{ method: 'a.b.c', input }` to the
-// configured endpoint and unwraps `{ result }` / `{ error }`. Errors surface as `RpcError` (carrying `type`,
-// `loginUrl`, … off the error envelope).
+// The RPC client of the `{ method, input }` wire protocol that `dispatchRpcRequest` serves, a typed proxy:
+// `client.a.b.c(input)` POSTs `{ method: 'a.b.c', input }` to the configured endpoint and unwraps `{ result }` /
+// `{ error }`. Errors surface as `RpcError` (carrying `type`, `loginUrl`, … off the error envelope).
 
 import type { InferRpcClient } from '../rpc/contract.js'
 import { type BounceConfig, type BounceOption, exchange, resolveBounce, type RpcFetch } from './transport.js'
@@ -9,7 +9,7 @@ export interface RpcClientOptions {
 	/** Endpoint the RPC proxy POSTs to (e.g. `/rpc`). */
 	readonly baseUrl: string
 	/**
-	 * Auto-redirect to SSO on a human-gated 401 (`type: 'auth'` + `loginUrl`) instead of throwing.
+	 * Auto-redirect to SSO on a sign-in 401 (`type: 'auth'` + `loginUrl`) instead of throwing.
 	 * `true` uses sane defaults; pass `{ sessionKey, windowMs }` to tune the re-entry guard.
 	 */
 	readonly bounceOnAuth?: BounceOption

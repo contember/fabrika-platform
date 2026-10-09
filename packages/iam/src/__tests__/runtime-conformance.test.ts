@@ -9,10 +9,10 @@
  * configuration and must be equally invisible on both.
  */
 
-import { assertAppRuntimeConformance, runAppRuntimeConformance } from '@fabrika/app/testing'
 import { ENDPOINT_HEADER } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
+import { assertAppRuntimeConformance, runAppRuntimeConformance } from '../../../app/src/__tests__/fixtures/runtime-conformance'
 import { createIamApp, iamApp } from '../app'
 import type { Env } from '../env'
 import { createHarness } from './helpers/harness'

@@ -1,4 +1,4 @@
-import { type AuthContext, ForbiddenError, initRpc, type Middleware, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
+import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
 import { permits, scopedValues } from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import { z } from 'zod'
@@ -198,7 +198,8 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	}),
 })
 
-export const adminRpcAuth: Middleware<IamAppContext> = async (request, ctx, next) => {
+/** Resolve the admin behind an `/admin/rpc` request, then run `next` with it on `ctx`; anyone else is refused. */
+export const adminRpcAuth = async (request: Request, ctx: IamAppContext, next: () => Promise<Response>): Promise<Response> => {
 	try {
 		const credentials = extractCredentials(request, ctx.requestId)
 		const resolution = await resolveAdmin(ctx.services, ctx.env, credentials)

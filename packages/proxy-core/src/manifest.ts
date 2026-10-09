@@ -1,21 +1,17 @@
 import {
 	APP_ENVIRONMENT_SEPARATOR,
-	type AppGates,
 	type Caller,
 	compileEndpointTable,
 	type ContractArtifact,
 	contractDigest,
 	type CredentialedEndpoint,
-	type CredentialLocation,
 	type EndpointDelegation,
 	endpointDelegation,
 	type EndpointRow,
 	EndpointTableError,
-	type GateRule,
 	type InstallationEndpointRow,
 	type InstallationEndpointTable,
 	isDigest,
-	isOAuthResourceUri,
 	parseAppEnvironmentId,
 	requirementDigest,
 } from '@fabrika/auth-core'
@@ -36,13 +32,6 @@ interface ProxyAppBase {
 	upstream: string
 	/** Browser-facing scheme used for login and handoff URLs, defaulting to https. */
 	scheme: 'http' | 'https'
-}
-
-/** An installation service (IAM, Control, Operations): ordered gate rules. */
-export interface GateProxyApp extends ProxyAppBase {
-	/** Ordered rules; evaluated only by auth-core in the proxy. */
-	gates: AppGates
-	oauthResources?: OAuthProtectedResource[]
 }
 
 /** A contract application: its endpoint table, from which the proxy selects one endpoint per request (ADR-0022 rule 3). */
@@ -76,11 +65,8 @@ export interface InstallationProxyApp extends ProxyAppBase {
 /** What a producer adds to a contract app's placement: the output of `contractProxyTable`. */
 export type ContractProxyTable = Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot' | 'csp'>
 
-/**
- * The manifest says which form an app is protected by: `gates`, an application's endpoint table, or an installation
- * entry's endpoint table.
- */
-export type ProxyApp = GateProxyApp | ContractProxyApp | InstallationProxyApp
+/** Every entry is protected by an endpoint table: an application's, or an installation service's. */
+export type ProxyApp = ContractProxyApp | InstallationProxyApp
 
 /**
  * Whether an entry is an application: its hop carries the proxy secret, its answers get the header policy, and an
@@ -88,15 +74,6 @@ export type ProxyApp = GateProxyApp | ContractProxyApp | InstallationProxyApp
  */
 export function isApplicationEntry(app: ProxyApp): app is ContractProxyApp {
 	return 'endpoints' in app && !('installation' in app)
-}
-
-/** Whether an entry is protected by an endpoint table, an application's or an installation service's. */
-export function hasEndpointTable(app: ProxyApp): app is ContractProxyApp | InstallationProxyApp {
-	return 'endpoints' in app
-}
-
-export function isGateProxyApp(app: ProxyApp): app is GateProxyApp {
-	return 'gates' in app
 }
 
 interface ProxyEndpointExtras {
@@ -130,32 +107,6 @@ export function isProxyHost(host: string): boolean {
 	return host.length > 0 && host.length <= 253 && host.split('.').every((label) => label.length <= 63 && HOST_LABEL.test(label))
 }
 
-export const proxyCredentialLocationSchema = z.object({
-	in: z.enum(['header', 'query', 'cookie']),
-	name: z.string().min(1),
-}) satisfies z.ZodType<CredentialLocation, z.ZodTypeDef, unknown>
-
-const gatePathSchema = z.string().startsWith('/')
-/** A gate rule's fields before normalization; a producer adds its own refinements on top. */
-export const proxyGateRuleFieldsSchema = z.discriminatedUnion('kind', [
-	z.object({ path: gatePathSchema, kind: z.literal('public') }),
-	z.object({ path: gatePathSchema, kind: z.literal('human') }),
-	z.object({ path: gatePathSchema, kind: z.literal('service'), credential: proxyCredentialLocationSchema.nullish() }),
-	z.object({ path: gatePathSchema, kind: z.literal('oauth'), resource: z.string().refine(isOAuthResourceUri), scopes: oauthScopesSchema }),
-])
-
-/** Drop an absent service credential, so a rule without one carries no `credential` key at all. */
-export const normalizeGateRule = (rule: z.infer<typeof proxyGateRuleFieldsSchema>): GateRule => {
-	if (rule.kind !== 'service') return rule
-	return { path: rule.path, kind: rule.kind, ...(rule.credential == null ? {} : { credential: rule.credential }) }
-}
-
-export const proxyGateRuleSchema = proxyGateRuleFieldsSchema.transform(normalizeGateRule) satisfies z.ZodType<GateRule, z.ZodTypeDef, unknown>
-
-export const proxyAppGatesSchema = z.object({
-	rules: z.array(proxyGateRuleSchema),
-}) satisfies z.ZodType<AppGates, z.ZodTypeDef, unknown>
-
 /** An id that holds `@` must be a whole `<app>@<env>`; a malformed one would mint for an app IAM never registered. */
 const proxyAppIdSchema = z.string().min(1).refine((id) => !id.includes(APP_ENVIRONMENT_SEPARATOR) || parseAppEnvironmentId(id) !== null)
 
@@ -166,27 +117,8 @@ const proxyAppFields = {
 	upstream: z.string().min(1),
 }
 
-// An app carrying both forms is refused, never read as one of them: dropping a table would leave gates nobody approved.
-export const gateProxyAppSchema = z.object({
-	...proxyAppFields,
-	gates: proxyAppGatesSchema,
-	scheme: proxyAppScheme,
-	oauthResources: z.array(oauthProtectedResourceSchema).min(1).optional(),
-	endpoints: z.undefined(),
-	installation: z.undefined(),
-}).transform(({ endpoints: _endpoints, installation: _installation, ...app }) => app).superRefine((app, ctx) => {
-	checkOAuthResources(app, ctx)
-	for (const rule of app.gates.rules) {
-		if (rule.kind !== 'oauth') continue
-		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
-		if (resource === undefined || !rule.scopes.every((scope) => resource.scopesSupported.includes(scope))) {
-			ctx.addIssue({ code: 'custom', message: 'unregistered OAuth gate' })
-		}
-	}
-}) satisfies z.ZodType<GateProxyApp, z.ZodTypeDef, unknown>
-
 /** Each resource once, on one of the entry's own hosts and its scheme. */
-function checkOAuthResources(app: Pick<GateProxyApp, 'hosts' | 'scheme' | 'oauthResources'>, ctx: z.RefinementCtx): void {
+function checkOAuthResources(app: Pick<InstallationProxyApp, 'hosts' | 'scheme' | 'oauthResources'>, ctx: z.RefinementCtx): void {
 	const resources = new Set<string>()
 	const metadata = new Set<string>()
 	for (const resource of app.oauthResources ?? []) {
@@ -257,6 +189,7 @@ const cspOriginsSchema = z.object({
 	frameAncestors: cspDirectiveSchema,
 }).strict() satisfies z.ZodType<CspOrigins, z.ZodTypeDef, unknown>
 
+// Strict: a key the proxy does not read (`gates`, or an installation entry's field) is refused, never ignored.
 export const contractProxyAppSchema = z.object({
 	...proxyAppFields,
 	scheme: proxyAppScheme,
@@ -265,10 +198,7 @@ export const contractProxyAppSchema = z.object({
 	snapshot: z.string().refine(isDigest),
 	csp: cspOriginsSchema,
 	operationsOrigin: z.string().refine((value) => isPolicyOrigin(value, ['https:', 'http:'])).optional(),
-	gates: z.undefined(),
-	oauthResources: z.undefined(),
-	installation: z.undefined(),
-}).transform(({ gates: _gates, oauthResources: _oauthResources, installation: _installation, ...app }) => app).superRefine((app, ctx) => {
+}).strict().superRefine((app, ctx) => {
 	checkEndpointTable(app, ctx)
 }) satisfies z.ZodType<ContractProxyApp, z.ZodTypeDef, unknown>
 
@@ -330,11 +260,7 @@ export const installationProxyAppSchema = z.object({
 	endpoints: z.array(installationProxyEndpointRowSchema),
 	reservedPrefixes: z.array(z.string()),
 	oauthResources: z.array(oauthProtectedResourceSchema).min(1).optional(),
-	gates: z.undefined(),
-	snapshot: z.undefined(),
-	csp: z.undefined(),
-	operationsOrigin: z.undefined(),
-}).transform(({ gates: _gates, snapshot: _snapshot, csp: _csp, operationsOrigin: _operationsOrigin, ...app }) => app).superRefine((app, ctx) => {
+}).strict().superRefine((app, ctx) => {
 	if (app.id.includes(APP_ENVIRONMENT_SEPARATOR)) {
 		ctx.addIssue({ code: 'custom', message: 'an installation entry is no application environment' })
 	}
@@ -353,7 +279,7 @@ export const installationProxyAppSchema = z.object({
 	checkEndpointTable(app, ctx)
 }) satisfies z.ZodType<InstallationProxyApp, z.ZodTypeDef, unknown>
 
-export const proxyAppSchema = z.union([gateProxyAppSchema, contractProxyAppSchema, installationProxyAppSchema]) satisfies z.ZodType<
+export const proxyAppSchema = z.union([contractProxyAppSchema, installationProxyAppSchema]) satisfies z.ZodType<
 	ProxyApp,
 	z.ZodTypeDef,
 	unknown
@@ -419,7 +345,7 @@ export function findDuplicateProxyHost(apps: readonly Pick<ProxyApp, 'hosts'>[])
 
 export const proxyManifestSchema = z.object({
 	apps: z.array(proxyAppSchema),
-}).superRefine(({ apps }, ctx) => {
+}).strict().superRefine(({ apps }, ctx) => {
 	if (new Set(apps.map((app) => app.id)).size !== apps.length) ctx.addIssue({ code: 'custom', message: 'duplicate proxy app id' })
 	if (findDuplicateProxyHost(apps) !== null) ctx.addIssue({ code: 'custom', message: 'duplicate proxy host' })
 }) satisfies z.ZodType<ProxyManifest, z.ZodTypeDef, unknown>

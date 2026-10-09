@@ -1,4 +1,4 @@
-import type { FabrikaApp } from '@fabrika/app'
+import type { FetchService } from '@fabrika/app'
 import { dispatchRpcRequest, serveService } from '@fabrika/app/service'
 import { type AuthCarrier, type AuthContext, type Iam } from '@fabrika/auth'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
@@ -57,7 +57,7 @@ const privateService = serveService<'health' | 'rpc' | 'catalog-reconcile' | 're
  * Operations as the same runtime-neutral service on Workers and Bun. The request's host picks the table: the public
  * hostname is served only `OPERATIONS_PUBLIC_SERVICE`, anything else only `OPERATIONS_PRIVATE_SERVICE`.
  */
-export const operationsApp: FabrikaApp<OperationsAppEnv> = {
+export const operationsApp: FetchService<OperationsAppEnv> = {
 	fetch(request, env, exec) {
 		const service = isPublicIngress(new URL(request.url), env.publicHost) ? publicService : privateService
 		return service.fetch(request, env, exec)

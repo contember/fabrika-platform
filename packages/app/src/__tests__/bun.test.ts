@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { defineApp, type RequestExecutionContext } from '../app.js'
 import { createBunHandler } from '../bun.js'
-import { route } from '../router.js'
+import type { FetchService } from '../fetch.js'
 import { initRpc } from '../rpc/builder.js'
+import { dispatchRpcRequest } from '../rpc/dispatcher.js'
 import type { StandardSchemaV1 } from '../standard-schema.js'
 import { record } from './helpers.js'
 
@@ -17,11 +17,8 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 }
 
 describe('createBunHandler', () => {
-	test('dispatches through the runtime-neutral app pipeline', async () => {
-		const app = defineApp<{ value: string }, { value: string }>({
-			context: (env) => ({ value: env.value }),
-			routes: [route.get('/value', (ctx) => new Response(ctx.value))],
-		})
+	test('serves a runtime-neutral service with its environment', async () => {
+		const app: FetchService<{ value: string }> = { fetch: async (_request, env) => new Response(env.value) }
 		const handler = createBunHandler(app, { value: 'from-env' }, { onBackgroundError() {} })
 
 		const response = await handler.fetch(new Request('https://app.test/value'))
@@ -30,15 +27,12 @@ describe('createBunHandler', () => {
 
 	test('can use a process-owned execution context', async () => {
 		let registered = false
-		const app = defineApp<Record<string, never>, { exec: RequestExecutionContext }>({
-			context: (_env, _request, exec) => ({ exec }),
-			routes: [
-				route.get('/work', (ctx) => {
-					ctx.exec.waitUntil(Promise.resolve())
-					return new Response('accepted')
-				}),
-			],
-		})
+		const app: FetchService<Record<string, never>> = {
+			fetch: async (_request, _env, exec) => {
+				exec.waitUntil(Promise.resolve())
+				return new Response('accepted')
+			},
+		}
 		const handler = createBunHandler(app, {}, {
 			executionContext: {
 				waitUntil() {
@@ -67,10 +61,7 @@ describe('createBunHandler', () => {
 		const router = rpc.router({
 			greet: rpc.procedure.input(inputSchema).query(({ ctx, input }) => `${ctx.prefix} ${input.name}`),
 		})
-		const app = defineApp<{ prefix: string }, { prefix: string }>({
-			context: (env) => env,
-			routes: [route.rpc('/rpc', router)],
-		})
+		const app: FetchService<{ prefix: string }> = { fetch: (request, env) => dispatchRpcRequest({ router, ctx: env, request }) }
 		const handler = createBunHandler(app, { prefix: 'Hello' }, { onBackgroundError() {} })
 		const response = await handler.fetch(
 			new Request('https://app.test/rpc', {
@@ -87,15 +78,12 @@ describe('createBunHandler', () => {
 	test('drain waits for work registered through waitUntil', async () => {
 		const background = deferred()
 		const events: string[] = []
-		const app = defineApp<Record<string, never>, { waitUntil(promise: Promise<unknown>): void }>({
-			context: (_env, _request, exec) => exec,
-			routes: [
-				route.get('/work', (ctx) => {
-					ctx.waitUntil(background.promise.then(() => events.push('background')))
-					return new Response('accepted', { status: 202 })
-				}),
-			],
-		})
+		const app: FetchService<Record<string, never>> = {
+			fetch: async (_request, _env, exec) => {
+				exec.waitUntil(background.promise.then(() => events.push('background')))
+				return new Response('accepted', { status: 202 })
+			},
+		}
 		const handler = createBunHandler(app, {}, { onBackgroundError() {} })
 
 		const response = await handler.fetch(new Request('https://app.test/work'))
@@ -116,15 +104,12 @@ describe('createBunHandler', () => {
 	test('reports a rejected background task and still drains', async () => {
 		const errors: unknown[] = []
 		const failure = new Error('background failed')
-		const app = defineApp<Record<string, never>, { waitUntil(promise: Promise<unknown>): void }>({
-			context: (_env, _request, exec) => exec,
-			routes: [
-				route.get('/work', (ctx) => {
-					ctx.waitUntil(Promise.reject(failure))
-					return new Response('accepted')
-				}),
-			],
-		})
+		const app: FetchService<Record<string, never>> = {
+			fetch: async (_request, _env, exec) => {
+				exec.waitUntil(Promise.reject(failure))
+				return new Response('accepted')
+			},
+		}
 		const handler = createBunHandler(app, {}, { onBackgroundError: (error) => errors.push(error) })
 
 		await handler.fetch(new Request('https://app.test/work'))
@@ -133,15 +118,12 @@ describe('createBunHandler', () => {
 	})
 
 	test('a failing error hook cannot prevent draining', async () => {
-		const app = defineApp<Record<string, never>, { waitUntil(promise: Promise<unknown>): void }>({
-			context: (_env, _request, exec) => exec,
-			routes: [
-				route.get('/work', (ctx) => {
-					ctx.waitUntil(Promise.reject(new Error('background failed')))
-					return new Response('accepted')
-				}),
-			],
-		})
+		const app: FetchService<Record<string, never>> = {
+			fetch: async (_request, _env, exec) => {
+				exec.waitUntil(Promise.reject(new Error('background failed')))
+				return new Response('accepted')
+			},
+		}
 		const handler = createBunHandler(app, {}, {
 			onBackgroundError() {
 				throw new Error('reporting failed')

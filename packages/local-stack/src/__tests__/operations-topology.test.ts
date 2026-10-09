@@ -1,14 +1,14 @@
 import { compileEndpointTable, planEndpoint } from '@fabrika/auth-core'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { PLATFORM_CONSOLE_APP_ID, PLATFORM_IAM_APP_ID } from '@fabrika/platform-artifacts/proxy-manifest'
-import { hasEndpointTable } from '@fabrika/proxy-core/manifest'
+import { isApplicationEntry } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { localPlatformProxyManifest } from '../prepare'
 
 describe('local Operations topology', () => {
 	test('the platform proxy admits ingest and the upload, each authenticating itself, and nothing else', () => {
 		const operations = localPlatformProxyManifest().apps.find((app) => app.id === OPERATIONS_APP_ID)
-		if (operations === undefined || !hasEndpointTable(operations)) throw new Error('expected Operations behind its service table')
+		if (operations === undefined || isApplicationEntry(operations)) throw new Error('expected Operations behind its service table')
 		expect(operations.upstream).toBe('operations:3000')
 		expect(operations.hosts).toEqual(['errors.fabrika.localhost'])
 		const table = compileEndpointTable(operations)
@@ -30,7 +30,7 @@ describe('local Operations topology', () => {
 describe('local control topology', () => {
 	test('the console is fronted by its table: health and the webhook open, every other row credentialed', () => {
 		const control = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
-		if (control === undefined || !hasEndpointTable(control)) throw new Error('expected the console behind its service table')
+		if (control === undefined || isApplicationEntry(control)) throw new Error('expected the console behind its service table')
 		const table = compileEndpointTable(control)
 		const selected = (method: string, path: string) => {
 			const plan = planEndpoint(table, method, path)
@@ -54,7 +54,7 @@ describe('local control topology', () => {
 describe('local IAM topology', () => {
 	test('IAM is fronted by its table, every surface a protocol row, because it authenticates itself', () => {
 		const iam = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_IAM_APP_ID)
-		if (iam === undefined || !hasEndpointTable(iam)) throw new Error('expected IAM behind its service table')
+		if (iam === undefined || isApplicationEntry(iam)) throw new Error('expected IAM behind its service table')
 		const table = compileEndpointTable(iam)
 		const probes: [string, string][] = [['GET', '/auth/login'], ['GET', '/.well-known/jwks.json'], ['POST', '/admin/rpc'], ['POST', '/auth/mint/key']]
 		for (const [method, path] of probes) {

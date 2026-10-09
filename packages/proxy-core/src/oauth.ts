@@ -8,7 +8,7 @@ export const OAUTH_METADATA_VERIFY_PATH = '/oauth-metadata'
 
 /**
  * The entry's protected resource whose metadata URL is this request's host and exact raw pathname. Only an
- * installation service, behind gates or an installation entry, has one.
+ * installation entry has one.
  */
 export function findOAuthMetadata(app: ProxyApp, url: URL): OAuthProtectedResource | null {
 	if (isApplicationEntry(app)) return null

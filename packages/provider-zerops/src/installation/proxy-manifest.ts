@@ -4,26 +4,25 @@
 // ── Why a template rather than a `ProxyManifest` with the hosts left out ──────────────────────────
 //
 // `parseProxyManifest` refuses an app that declares no hosts, and rightly — a host-less app is fronted
-// by nothing and gates nothing. So the committed half cannot BE a manifest with empty hosts; it is a
+// by nothing and protects nothing. So the committed half cannot BE a manifest with empty hosts; it is a
 // type of its own, and `resolvePlatformProxyManifest` is the one way to turn it into the document the
 // proxy parses.
 //
 // ── The split ────────────────────────────────────────────────────────────────────────────────────
 //
 //   template   which apps exist, their ids, the private service each is dialed at, the public listener
-//              each answers on, and their gates or service table. True of every installation, so it is GENERATED into
+//              each answers on, and their service table. True of every installation, so it is GENERATED into
 //              `src/generated/` and reviewed in a diff.
 //   placement  the hostnames and the browser-facing scheme. `proxy-292c-8080.prg1.zerops.app` names one
 //              account's project, and a production installation binds custom domains instead, so
 //              whoever is deploying supplies these.
 //
-// Nothing in this file imports the packages that OWN the gates and tables. That is the point of the split:
+// Nothing in this file imports the packages that OWN the tables. That is the point of the split:
 // they live in the private service packages and reach a deployed installation as DATA, through the
 // generated artifact, so the published deploy path never depends on a package it cannot resolve.
 
 import { type InstallationEndpointTable, installationTableDigest } from '@fabrika/auth-core'
 import {
-	hasEndpointTable,
 	type InstallationProxyApp,
 	isApplicationEntry,
 	type OAuthProtectedResource,
@@ -120,7 +119,7 @@ export interface PlatformProxyComposition {
 	readonly placement: Readonly<Record<PlatformProxyService, PlatformProxyPlacement>>
 	/**
 	 * The public IAM origin that issues OAuth tokens. Present only when the installation enables MCP
-	 * authoring; absent leaves every `oauthResource` unregistered and ungated.
+	 * authoring; absent leaves every `oauthResource` unregistered and serves each service's table without OAuth.
 	 */
 	readonly authorizationServer?: string
 	/** The port browsers reach every app on, when it is not the scheme's default. The local composition's is 18080. */
@@ -189,8 +188,8 @@ export const resolvePlatformProxyManifest = (
 	composition: PlatformProxyComposition,
 ): PlatformProxyManifest => {
 	const manifest = parseProxyManifest({ apps: template.apps.map((app) => resolvedApp(app, composition)) })
-	// Every platform service is an installation entry; never an application, never gates.
-	const services = manifest?.apps.flatMap((app) => hasEndpointTable(app) && !isApplicationEntry(app) ? [app] : []) ?? []
+	// Every platform service is an installation entry, never an application.
+	const services = manifest?.apps.flatMap((app) => isApplicationEntry(app) ? [] : [app]) ?? []
 	if (manifest === null || services.length !== manifest.apps.length) {
 		throw new Error('the resolved platform proxy manifest is not one the proxy would accept')
 	}

@@ -1,5 +1,5 @@
 // @fabrika/app/contract — the contract of an application: `defineContract`, `compileContract`, the artifact
-// parser, and the gates and IAM schema it compiles to. Browser-safe: no server runtime, no Node or Bun API.
+// parser, and the IAM schema it compiles to. Browser-safe: no server runtime, no Node or Bun API.
 export { contractArtifactSchema, parseContractArtifact, schemaShapeSchema } from './artifact-schema'
 export { buildArtifact } from './build'
 export { compileContract, describeContract } from './compile'

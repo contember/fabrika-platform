@@ -9,8 +9,8 @@ import {
 	rawRequestTarget,
 	requirementDigest,
 } from '@fabrika/auth-core'
-import type { FabrikaApp, RequestExecutionContext } from '../app.js'
 import { defaultOnError, jsonResponse } from '../errors.js'
+import type { FetchService, RequestExecutionContext } from '../fetch.js'
 import type { ServiceArtifact } from './define.js'
 
 export interface ServiceRequest<Env> {
@@ -45,7 +45,7 @@ export function serveService<Id extends string, Env>(
 	service: ServiceArtifact<Id>,
 	handlers: ServiceHandlers<Id, Env>,
 	options: ServeServiceOptions<Env> = {},
-): FabrikaApp<Env> {
+): FetchService<Env> {
 	const table = compileEndpointTable<InstallationEndpointRow & { readonly id: Id }>(service)
 	const missing = service.endpoints.filter((row) => !Object.hasOwn(handlers, row.id)).map((row) => row.id)
 	if (missing.length > 0) {

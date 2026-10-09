@@ -6,12 +6,11 @@
  * that logs a header fails here.
  */
 
-import type { AppGates } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
 import { redactPath, redactUrl } from '../log'
 import { createVerifyService } from '../service'
-import { CapturingLogger, FakeIam, ISSUER, manifestWith, signUserToken, verifyRequest } from './helpers'
+import { CapturingLogger, FakeIam, ISSUER, manifestWith, serviceRow, signToken, signUserToken, verifyRequest } from './helpers'
 
 const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
 
@@ -21,24 +20,19 @@ const API_KEY = 'px_KEYSECRET-bbbbbbbb'
 const SHARE = 'px_SHARESECRET-cccccccc'
 const QUERY_TOKEN = 'QUERYSECRET-dddddddd'
 
-const GATES: AppGates = {
-	rules: [
-		{ path: '/share/*', kind: 'service', credential: { in: 'query', name: 'pxt' } },
-		{ path: '/api/*', kind: 'service' },
-		{ path: '/*', kind: 'human' },
-	],
-}
+const ROWS = [serviceRow('/api/*', ['machine']), serviceRow('/*', ['human'])]
 
 describe('no secret material reaches the log', () => {
 	test('across the whole decision matrix', async () => {
 		const token = await signUserToken()
+		const machineToken = await signToken({ type: 'service' })
 		const logger = new CapturingLogger()
 		const iam = new FakeIam({
 			mintToken: { ok: true, token, expiresAt: future() },
-			mintFromKey: { ok: true, token, expiresAt: future() },
+			mintFromKey: { ok: true, token: machineToken, expiresAt: future() },
 		})
 		const verify = createVerifyService({
-			manifest: manifestWith(GATES),
+			manifest: manifestWith(ROWS),
 			iam,
 			issuer: ISSUER,
 			cache: new MemoryTokenCache(),
@@ -46,14 +40,14 @@ describe('no secret material reaches the log', () => {
 		})
 
 		await verify(verifyRequest({ path: '/dashboard', cookie: `__Host-px_session=${SESSION}` })) // allow (human)
-		await verify(verifyRequest({ path: '/api/x', bearer: API_KEY })) // allow (service)
-		await verify(verifyRequest({ path: `/share/${SHARE}?pxt=${QUERY_TOKEN}` })) // deny (bad query token)
-		await verify(verifyRequest({ path: '/dashboard' })) // login bounce
-		await verify(verifyRequest({ path: '/nowhere-in-the-gates', app: 'unknown-app' })) // deny
+		await verify(verifyRequest({ path: '/api/x', bearer: API_KEY })) // allow (machine)
+		await verify(verifyRequest({ path: '/dashboard', bearer: API_KEY })) // deny (a machine key on a human row)
+		await verify(verifyRequest({ path: `/share/${SHARE}?pxt=${QUERY_TOKEN}` })) // login bounce, a key in the path and the query
+		await verify(verifyRequest({ path: '/nowhere', app: 'unknown-app' })) // deny
 
 		expect(logger.lines.length).toBeGreaterThan(0)
 		const dumped = logger.dump()
-		for (const secret of [SESSION, API_KEY, SHARE, QUERY_TOKEN, token]) {
+		for (const secret of [SESSION, API_KEY, SHARE, QUERY_TOKEN, token, machineToken]) {
 			expect(dumped).not.toContain(secret)
 		}
 		// Nor any of the header names' values, in whole or in part.
@@ -63,7 +57,7 @@ describe('no secret material reaches the log', () => {
 
 	test('the login bounce is logged without the redirect URL, in either shape', async () => {
 		const logger = new CapturingLogger()
-		const verify = createVerifyService({ manifest: manifestWith(GATES), iam: new FakeIam({}), issuer: ISSUER, logger })
+		const verify = createVerifyService({ manifest: manifestWith(ROWS), iam: new FakeIam({}), issuer: ISSUER, logger })
 		// The 302's Location and the 401's JSON body carry the same `?redirect=<original URL>`, so the
 		// original query re-appears percent-encoded in both. Neither may reach a log line.
 		await verify(verifyRequest({ path: `/secret?resume=${QUERY_TOKEN}` }))
@@ -80,7 +74,7 @@ describe('no secret material reaches the log', () => {
 			exchangeAuthCode: () => Promise.reject(new Error('nope')),
 			getJwks: () => Promise.reject(new Error('nope')),
 		}
-		const verify = createVerifyService({ manifest: manifestWith(GATES), iam: exploding, issuer: ISSUER, logger })
+		const verify = createVerifyService({ manifest: manifestWith(ROWS), iam: exploding, issuer: ISSUER, logger })
 		const response = await verify(verifyRequest({ path: '/x', cookie: `__Host-px_session=${SESSION}` }))
 		expect(response.status).toBeGreaterThanOrEqual(300)
 		expect(logger.dump()).not.toContain(SESSION)

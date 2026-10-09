@@ -12,15 +12,22 @@ import {
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { CONTROL_MCP_SCOPE, controlMcpResource, controlMcpResourceMetadata, controlServiceContract } from '../../../control/fabrika.service'
+import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '../../../iam/src/service'
+import { OPERATIONS_PUBLIC_SERVICE } from '../../../operations/src/service'
+import type { DenyReason } from '../authorize'
 import { MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
 import { BASE_HEADER_POLICY } from '../headers'
+import { type InstallationProxyTable, type OAuthProtectedResource, parseProxyManifest, type ProxyApp, serviceProxyTable } from '../manifest'
 import { OAUTH_METADATA_VERIFY_PATH } from '../oauth'
 import { createVerifyService, type VerifyService } from '../service'
 import {
 	APP,
+	CapturingLogger,
 	FakeIam,
 	type FakeIamOptions,
+	HOST,
 	installationAppWith,
 	installationRow,
 	ISSUER,
@@ -294,5 +301,130 @@ describe('the proxy answers of an installation entry', () => {
 		const response = await verify(verifyRequest({ endpoint: OAUTH_METADATA_VERIFY_PATH, path: '/.well-known/oauth-protected-resource/mcp' }))
 		expect(response.status).toBe(200)
 		expect(await response.json()).toMatchObject({ resource: RESOURCE, scopes_supported: ['mcp:read', 'mcp:write'] })
+	})
+})
+
+// The tables the platform publishes for Control, IAM and Operations, decided as their proxy decides them.
+const CONSOLE_ORIGIN = `https://${HOST}`
+const CONSOLE_MCP: OAuthProtectedResource = {
+	resource: controlMcpResource(CONSOLE_ORIGIN),
+	resourceMetadata: controlMcpResourceMetadata(CONSOLE_ORIGIN),
+	authorizationServers: [ISSUER],
+	scopesSupported: [CONTROL_MCP_SCOPE],
+}
+
+/** The entry a producer publishes for the table, parsed as the proxy loads it. */
+function entryOf(table: InstallationProxyTable, oauthResources?: OAuthProtectedResource[]): ProxyApp {
+	const entry = installationAppWith(table.endpoints, table.reservedPrefixes, oauthResources === undefined ? {} : { oauthResources })
+	const parsed = parseProxyManifest({ apps: [entry] })?.apps[0]
+	if (parsed === undefined) throw new Error('the service table does not parse as a proxy manifest')
+	return parsed
+}
+
+const CONTROL = entryOf(serviceProxyTable(controlServiceContract({ mcp: true }), { oauth: true }), [CONSOLE_MCP])
+const IAM = entryOf(serviceProxyTable(iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS), { oauth: false }))
+const OPERATIONS = entryOf(serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false }))
+
+async function decide(entry: ProxyApp, options: FakeIamOptions, request: VerifyRequestOptions) {
+	const iam = new FakeIam(options)
+	const logger = new CapturingLogger()
+	const verify = createVerifyService({ manifest: { apps: [entry] }, iam, issuer: ISSUER, cache: new MemoryTokenCache(), logger })
+	const response = await verify(verifyRequest(request))
+	return { iam, response, reason: logger.lines.at(-1)?.fields['reason'] }
+}
+
+const USER: FakeIamOptions = { mintToken: await minted('user') }
+const keyOf = async (type: TokenPrincipalType | undefined, workload?: string): Promise<FakeIamOptions> => ({
+	mintFromKey: await minted(type, [], workload),
+})
+const MACHINE_KEY = await keyOf('service')
+const LINK_KEY = await keyOf(undefined)
+const JOB_KEY = await keyOf('job', 'nightly')
+const WEBHOOK_KEY = await keyOf('webhook', 'github')
+const sameOrigin = { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }
+const sessionRpc: VerifyRequestOptions = { method: 'POST', path: '/api/rpc', cookie: SESSION, headers: sameOrigin }
+const keyRpc = (bearer: string): VerifyRequestOptions => ({ method: 'POST', path: '/api/rpc', bearer, headers: sameOrigin })
+
+describe('the real installation tables refuse what no service may receive', () => {
+	test.each<[string, ProxyApp, FakeIamOptions, VerifyRequestOptions, number, DenyReason]>([
+		[
+			'Control: a cross-site session POST to the console RPC',
+			CONTROL,
+			USER,
+			{
+				...sessionRpc,
+				headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
+			},
+			403,
+			'cross_site',
+		],
+		[
+			'Control: a session POST to the console RPC without its media type',
+			CONTROL,
+			USER,
+			{
+				...sessionRpc,
+				headers: { 'Sec-Fetch-Site': 'same-origin' },
+			},
+			400,
+			'content_type',
+		],
+		['Control: a machine key on the console SPA', CONTROL, MACHINE_KEY, { path: '/apps/notes', bearer: 'px_machine' }, 403, 'caller_kind'],
+		[
+			'Control: a machine key on a GitHub browser route',
+			CONTROL,
+			MACHINE_KEY,
+			{
+				path: '/api/source/github/callback',
+				bearer: 'px_machine',
+			},
+			403,
+			'caller_kind',
+		],
+		['Control: a share-link key on the console RPC', CONTROL, LINK_KEY, keyRpc('px_link'), 403, 'caller_kind'],
+		['Control: a job key on the console RPC', CONTROL, JOB_KEY, keyRpc('px_job'), 403, 'caller_kind'],
+		['Control: a webhook key on the console RPC', CONTROL, WEBHOOK_KEY, keyRpc('px_webhook'), 403, 'caller_kind'],
+		['Control: an unknown path under /api', CONTROL, USER, { path: '/api/other', cookie: SESSION }, 403, 'no_endpoint'],
+		['Control: a path below /mcp', CONTROL, USER, { path: '/mcp/x', cookie: SESSION }, 403, 'no_endpoint'],
+		['Control: a path below the IAM admin gateway', CONTROL, USER, { path: '/iam/admin/apps', cookie: SESSION }, 403, 'no_endpoint'],
+		[
+			'Control: another method than GET on an SPA path',
+			CONTROL,
+			USER,
+			{
+				method: 'POST',
+				path: '/apps/notes',
+				cookie: SESSION,
+				headers: sameOrigin,
+			},
+			403,
+			'no_endpoint',
+		],
+		['IAM: a mint path IAM does not serve', IAM, {}, { method: 'POST', path: '/auth/mint/other' }, 403, 'no_endpoint'],
+		['IAM: a path outside every row', IAM, {}, { path: '/unknown' }, 403, 'no_endpoint'],
+		['Operations: an envelope path two segments deep', OPERATIONS, {}, { method: 'POST', path: '/api/1/2/envelope/' }, 403, 'no_endpoint'],
+		['Operations: an envelope path without its trailing slash', OPERATIONS, {}, { method: 'POST', path: '/api/1/envelope' }, 403, 'no_endpoint'],
+	])('%s', async (_name, entry, options, request, status, reason) => {
+		const decided = await decide(entry, options, request)
+		expectDenied(decided.response, status)
+		expect(decided.reason).toBe(reason)
+	})
+
+	test('Control: a bearer that is not a px_ key on the console RPC is a 401 invalid_key with no IAM call', async () => {
+		const { iam, response, reason } = await decide(CONTROL, {}, keyRpc('eyJhbGciOi.jwt'))
+		expectDenied(response, 401)
+		expect(reason).toBe('invalid_key')
+		expect(iam.mintFromKeyCalls + iam.mintTokenCalls).toBe(0)
+		expect(challenge(response)).toBeNull()
+	})
+
+	test('Control: an OAuth token without the authoring scope on /mcp is a 403 insufficient_scope with the challenge', async () => {
+		const bearer = await signResourceToken({ resource: CONSOLE_MCP.resource, scopes: ['other'] })
+		const { response, reason } = await decide(CONTROL, {}, { method: 'POST', path: '/mcp', bearer })
+		expectDenied(response, 403)
+		expect(reason).toBe('insufficient_scope')
+		expect(challenge(response)).toBe(
+			`Bearer resource_metadata="${CONSOLE_MCP.resourceMetadata}", error="insufficient_scope", scope="${CONTROL_MCP_SCOPE}"`,
+		)
 	})
 })

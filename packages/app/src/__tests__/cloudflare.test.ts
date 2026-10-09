@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { defineApp } from '../app.js'
 import { type CloudflareExecutionContext, createCloudflareWorker } from '../cloudflare.js'
-import { route } from '../router.js'
+import type { FetchService } from '../fetch.js'
 
 type Env = Record<string, never>
 
@@ -12,11 +11,8 @@ const exec: CloudflareExecutionContext = {
 }
 
 describe('createCloudflareWorker', () => {
-	test('dispatches through the runtime-neutral app pipeline', async () => {
-		const app = defineApp<Env, Record<string, never>>({
-			context: () => ({}),
-			routes: [route.get('/healthz', () => new Response('ok'))],
-		})
+	test('serves a runtime-neutral service', async () => {
+		const app: FetchService<Env> = { fetch: async () => new Response('ok') }
 		const worker = createCloudflareWorker(app)
 
 		const response = await worker.fetch(new Request('https://app.test/healthz'), env, exec)
@@ -26,7 +22,7 @@ describe('createCloudflareWorker', () => {
 
 	test('exposes scheduled when configured', async () => {
 		let ran = false
-		const app = defineApp<Env, Record<string, never>>({ context: () => ({}), routes: [] })
+		const app: FetchService<Env> = { fetch: async () => new Response('not found', { status: 404 }) }
 		const worker = createCloudflareWorker(app, {
 			scheduled: async () => {
 				ran = true
@@ -40,7 +36,7 @@ describe('createCloudflareWorker', () => {
 
 	test('exposes queue when configured', async () => {
 		let ran = false
-		const app = defineApp<Env, Record<string, never>>({ context: () => ({}), routes: [] })
+		const app: FetchService<Env> = { fetch: async () => new Response('not found', { status: 404 }) }
 		const worker = createCloudflareWorker(app, {
 			queue: async () => {
 				ran = true
@@ -53,7 +49,7 @@ describe('createCloudflareWorker', () => {
 	})
 
 	test('omits lifecycle handlers when they are not configured', () => {
-		const app = defineApp<Env, Record<string, never>>({ context: () => ({}), routes: [] })
+		const app: FetchService<Env> = { fetch: async () => new Response('not found', { status: 404 }) }
 		const worker = createCloudflareWorker(app)
 
 		expect(worker.scheduled).toBeUndefined()

@@ -5,7 +5,7 @@ import type { AuthContext } from '../types'
 import { IamRpcStub, makeRequest } from './stub'
 
 // Build a real (`permits`-backed) AuthContext straight from access-token claims — the same path the
-// SDK's gate produces after verifying a `px_token`. `can`/`scopedTo`/`audit` behave identically
+// SDK produces after verifying a `px_token`. `can`/`scopedTo`/`audit` behave identically
 // whether the claims came from a cookie session or a `px_` key.
 function ctxWith(
 	perms: PermissionEntry[],

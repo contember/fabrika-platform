@@ -7,15 +7,15 @@
 import { FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
+	contractProxyTable,
 	FABRIKA_PROXY_MANIFEST_JSON,
-	hasEndpointTable,
 	type InstallationProxyApp,
 	isApplicationEntry,
 	parseProxyManifestJson,
 	type ProxyManifest,
 } from '@fabrika/proxy-core/manifest'
-
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { ZeropsApi } from '../../index'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
 import { parsePlatformDeployArgs, type PlatformDeployInput } from '../deploy-options'
@@ -27,7 +27,7 @@ import { type FakeZerops, fakeZerops, platformServices, SUBDOMAINS } from './fak
 /** The platform app `id` of a parsed manifest; every platform service is an installation entry with its table. */
 const tableAppOf = (manifest: ProxyManifest | null, id: string): InstallationProxyApp | undefined => {
 	const app = manifest?.apps.find((entry) => entry.id === id)
-	return app === undefined || !hasEndpointTable(app) || isApplicationEntry(app) ? undefined : app
+	return app === undefined || isApplicationEntry(app) ? undefined : app
 }
 
 const oauthRows = (app: InstallationProxyApp | undefined) => app?.endpoints.filter((row) => row.callers.some((caller) => caller === 'oauth')) ?? []
@@ -41,22 +41,19 @@ const OPERATIONS_HOST = 'proxy-292c-8083.prg1.zerops.app'
 /** The live manifest on `fabrika-test`: the three platform apps plus one APPLICATION the deploy must keep. */
 const liveManifest = JSON.stringify({
 	apps: [
-		{ id: 'iam-local', hosts: [IAM_HOST], upstream: 'iam:3000', gates: { rules: [{ path: '/*', kind: 'public' }] }, scheme: 'https' },
-		{ id: 'vozka', hosts: [CONSOLE_HOST], upstream: 'control:3000', gates: { rules: [{ path: '/*', kind: 'public' }] }, scheme: 'https' },
+		// Stale platform entries: the deploy replaces each with its current table.
+		{ id: 'iam-local', hosts: [IAM_HOST], upstream: 'iam:3000', scheme: 'https', installation: true, endpoints: [], reservedPrefixes: [] },
+		{ id: 'vozka', hosts: [CONSOLE_HOST], upstream: 'control:3000', scheme: 'https', installation: true, endpoints: [], reservedPrefixes: [] },
 		{
 			id: 'operations',
 			hosts: [OPERATIONS_HOST],
 			upstream: 'operations:3000',
-			gates: { rules: [{ path: '/api/*/envelope/', kind: 'public' }] },
 			scheme: 'https',
+			installation: true,
+			endpoints: [],
+			reservedPrefixes: [],
 		},
-		{
-			id: 'notes',
-			hosts: ['proxy-292c-8084.prg1.zerops.app'],
-			upstream: 'notesapi:3000',
-			gates: { rules: [{ path: '/*', kind: 'human' }] },
-			scheme: 'https',
-		},
+		{ id: 'notes', hosts: ['proxy-292c-8084.prg1.zerops.app'], upstream: 'notesapi:3000', scheme: 'https', ...contractProxyTable(notesArtifact) },
 	],
 })
 

@@ -13,7 +13,9 @@ afterEach(async () => {
 test('build-time owner JSON preserves explicit ownership, null disables it, and malformed coordinates fail', async () => {
 	const directory = await mkdtemp(resolve(tmpdir(), 'proxy-owner-'))
 	directories.push(directory)
-	const manifest = { apps: [{ id: 'login', hosts: ['iam.example.test'], upstream: 'iam:3000', gates: { rules: [] } }] }
+	const manifest = {
+		apps: [{ id: 'login', hosts: ['iam.example.test'], upstream: 'iam:3000', installation: true, endpoints: [], reservedPrefixes: [] }],
+	}
 	const manifestPath = resolve(directory, 'manifest.json')
 	const output = resolve(directory, 'caddy.json')
 	await Bun.write(manifestPath, JSON.stringify(manifest))

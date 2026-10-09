@@ -1,6 +1,6 @@
 /**
- * Manifest parsing. The stance under test: strictness. A manifest with one unreadable rule is
- * rejected whole, because a proxy that boots on a half-understood gate list enforces a gate list
+ * Manifest parsing. The stance under test: strictness. A manifest with one unreadable row or key is
+ * rejected whole, because a proxy that boots on a half-understood endpoint table enforces a table
  * nobody wrote.
  */
 
@@ -22,57 +22,60 @@ import {
 	encodeProxyManifestJson,
 	type InstallationProxyApp,
 	isApplicationEntry,
-	isGateProxyApp,
 	isProxyHost,
 	parseProxyManifest,
 	parseProxyManifestJson,
-	type ProxyManifest,
 	serviceProxyTable,
 } from '../manifest'
 import { createVerifyService } from '../service'
-import { contractAppWith, FakeIam, HOST, installationAppWith, installationRow, ISSUER, OAUTH_RESOURCE, verifyRequest } from './helpers'
+import {
+	contractAppWith,
+	FakeIam,
+	HOST,
+	installationAppWith,
+	installationRow,
+	ISSUER,
+	OAUTH_RESOURCE,
+	protocolRow,
+	serviceRow,
+	verifyRequest,
+} from './helpers'
 
-/** The gate rules of the first app; a contract app or no app has none. */
-const rulesOf = (manifest: ProxyManifest | null) => {
-	const app = manifest?.apps[0]
-	return app === undefined || !isGateProxyApp(app) ? undefined : app.gates.rules
-}
+/** An installation entry as a producer writes it on the wire: no scheme, since the parser defaults it. */
+const entryWith = (fields: Record<string, unknown>) => ({
+	id: 'a',
+	hosts: ['a.test'],
+	upstream: 'a:1',
+	installation: true,
+	endpoints: [],
+	reservedPrefixes: [],
+	...fields,
+})
 
-const withHost = (host: string) => ({ apps: [{ id: 'a', hosts: [host], upstream: 'a:1', gates: { rules: [] } }] })
+const withHost = (host: string) => ({ apps: [entryWith({ hosts: [host] })] })
 
-const VALID = {
-	apps: [{
-		id: 'app-one',
-		hosts: ['One.Example.com'],
-		upstream: 'one:3000',
-		gates: {
-			rules: [
-				{ path: '/public/*', kind: 'public' },
-				{ path: '/api/*', kind: 'service', credential: { in: 'header', name: 'x-token' } },
-				{ path: '/*', kind: 'human' },
-			],
-		},
-	}],
-}
+const PUBLIC = protocolRow('/public/*')
+const API = serviceRow('/api/*', ['machine'])
+const CONSOLE = serviceRow('/*', ['human'])
+const VALID = { apps: [entryWith({ id: 'app-one', hosts: ['One.Example.com'], upstream: 'one:3000', endpoints: [PUBLIC, API, CONSOLE] })] }
 
 describe('parseProxyManifest — accepts', () => {
-	test('a well-formed manifest, preserving rule order exactly', () => {
-		const manifest = parseProxyManifest(VALID)
-		expect(rulesOf(manifest)?.map((rule) => rule.kind)).toEqual(['public', 'service', 'human'])
-		expect(rulesOf(manifest)?.map((rule) => rule.path)).toEqual(['/public/*', '/api/*', '/*'])
+	test('a well-formed manifest, preserving its rows exactly', () => {
+		const app = parseProxyManifest(VALID)?.apps[0]
+		expect(app?.endpoints).toEqual([PUBLIC, API, CONSOLE])
 	})
 
 	test('an application environment id <app>@<env>, the audience the proxy mints for', () => {
-		expect(parseProxyManifest({ apps: [{ ...VALID.apps[0], id: 'notes@prod' }] })?.apps[0]?.id).toBe('notes@prod')
+		const application = contractAppWith([], [], { id: 'notes@prod' })
+		expect(parseProxyManifest({ apps: [application] })?.apps[0]?.id).toBe('notes@prod')
 	})
 
 	test('hosts are lower-cased', () => {
 		expect(parseProxyManifest(VALID)?.apps[0]?.hosts).toEqual(['one.example.com'])
 	})
 
-	test('an empty rule list seals an app', () => {
-		expect(rulesOf(parseProxyManifest({ apps: [{ id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] } }] })))
-			.toEqual([])
+	test('an empty endpoint table seals an entry', () => {
+		expect(parseProxyManifest({ apps: [entryWith({})] })?.apps[0]?.endpoints).toEqual([])
 	})
 
 	test('the literal hostnames a deployment actually names', () => {
@@ -100,9 +103,7 @@ describe('parseProxyManifest — accepts', () => {
 })
 
 describe('scheme — the scheme the BROWSER speaks, which no header can supply', () => {
-	const withScheme = (scheme?: unknown) => ({
-		apps: [{ id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] }, ...(scheme === undefined ? {} : { scheme }) }],
-	})
+	const withScheme = (scheme?: unknown) => ({ apps: [entryWith(scheme === undefined ? {} : { scheme })] })
 
 	test('an absent scheme is https — saying nothing gives you the safe value', () => {
 		expect(parseProxyManifest(withScheme())?.apps[0]?.scheme).toBe('https')
@@ -126,44 +127,28 @@ describe('scheme — the scheme the BROWSER speaks, which no header can supply',
 })
 
 describe('parseProxyManifest — rejects', () => {
+	const { id: _id, ...withoutId } = entryWith({})
+	const { upstream: _upstream, ...withoutUpstream } = entryWith({})
+	const { endpoints: _endpoints, ...withoutTable } = entryWith({})
 	const bad: [string, unknown][] = [
 		['a non-object', 'nope'],
 		['null', null],
 		['a missing apps array', {}],
-		['an app with no id', { apps: [{ hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }] }],
-		['an app with no gates', { apps: [{ id: 'a', hosts: ['a'], upstream: 'a:1' }] }],
-		['an app id with @ that is not <app>@<env>', { apps: [{ id: 'notes@', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }] }],
-		['an app id with two @', { apps: [{ id: 'notes@prod@eu', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }] }],
-		['an app with no hosts', { apps: [{ id: 'a', hosts: [], upstream: 'a:1', gates: { rules: [] } }] }],
-		['an app with no upstream', { apps: [{ id: 'a', hosts: ['a'], gates: { rules: [] } }] }],
-		['duplicate app ids', {
-			apps: [
-				{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [] } },
-				{ id: 'a', hosts: ['y'], upstream: 'a:1', gates: { rules: [] } },
-			],
-		}],
-		['an unknown gate kind', { apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'admin' }] } }] }],
-		['a relative gate path', { apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: 'api/*', kind: 'public' }] } }] }],
-		['an unknown credential location', {
-			apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'body', name: 't' } }] } }],
-		}],
-		['a credential with no name', {
-			apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'header' } }] } }],
-		}],
-		['one bad rule among good ones', {
-			apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'public' }, { path: '/*', kind: 'nonsense' }] } }],
-		}],
+		['an app with no id', { apps: [withoutId] }],
+		['an app with no endpoint table', { apps: [withoutTable] }],
+		['an app of no form', { apps: [{ id: 'a', hosts: ['a'], upstream: 'a:1' }] }],
+		['an app id with @ that is not <app>@<env>', { apps: [contractAppWith([], [], { id: 'notes@' })] }],
+		['an app id with two @', { apps: [contractAppWith([], [], { id: 'notes@prod@eu' })] }],
+		['an app with no hosts', { apps: [entryWith({ hosts: [] })] }],
+		['an app with no upstream', { apps: [withoutUpstream] }],
+		['duplicate app ids', { apps: [entryWith({ hosts: ['x'] }), entryWith({ hosts: ['y'] })] }],
+		['an unknown row kind', { apps: [entryWith({ endpoints: [{ ...PUBLIC, kind: 'admin' }] })] }],
+		['a relative row path', { apps: [entryWith({ endpoints: [protocolRow('api/*')] })] }],
+		['one bad row among good ones', { apps: [entryWith({ endpoints: [PUBLIC, { ...API, kind: 'nonsense' }] })] }],
 		// Uniqueness is a manifest rule, not a generator rule: a runtime load must refuse the same thing.
-		['two apps claiming one host', {
-			apps: [
-				{ id: 'a', hosts: ['same.example.com'], upstream: 'a:1', gates: { rules: [] } },
-				{ id: 'b', hosts: ['SAME.example.com'], upstream: 'b:1', gates: { rules: [] } },
-			],
-		}],
-		['one app claiming a host twice', { apps: [{ id: 'a', hosts: ['x.test', 'X.test'], upstream: 'a:1', gates: { rules: [] } }] }],
-		['a host carrying a port, which could never match', {
-			apps: [{ id: 'a', hosts: ['x.test:8080'], upstream: 'a:1', gates: { rules: [] } }],
-		}],
+		['two apps claiming one host', { apps: [entryWith({ hosts: ['same.example.com'] }), entryWith({ id: 'b', hosts: ['SAME.example.com'] })] }],
+		['one app claiming a host twice', { apps: [entryWith({ hosts: ['x.test', 'X.test'] })] }],
+		['a host carrying a port, which could never match', withHost('x.test:8080')],
 		// Caddy's host matcher reads `*` as a wildcard LABEL, so any of these would answer for hosts this
 		// app never declared — every sibling app behind the same proxy included.
 		['a bare wildcard host', withHost('*')],
@@ -185,28 +170,33 @@ describe('parseProxyManifest — rejects', () => {
 		})
 	}
 
-	test('a credential on a public rule is ignored', () => {
-		const manifest = parseProxyManifest({
-			apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'public', credential: { in: 'query', name: 't' } }] } }],
-		})
-		expect(rulesOf(manifest)?.[0]).toEqual({ path: '/*', kind: 'public' })
-	})
-
 	test('malformed JSON', () => {
 		expect(parseProxyManifestJson('{')).toBeNull()
 	})
+})
 
-	test('strips extensions and omits absent service credentials', () => {
-		const app = { id: 'a', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }
-		for (const credential of [undefined, null]) {
-			const result = parseProxyManifest({
-				apps: [{ ...app, extra: true, gates: { extra: true, rules: [{ kind: 'service', path: '/*', credential, extra: true }] } }],
-				extra: true,
-			})
-			expect(JSON.stringify(result)).toBe(
-				'{"apps":[{"id":"a","hosts":["a"],"upstream":"a:1","gates":{"rules":[{"path":"/*","kind":"service"}]},"scheme":"https"}]}',
-			)
-		}
+describe('strictness — a key the proxy does not read is refused, never ignored', () => {
+	const application = contractAppWith([], [], { id: 'notes@prod' })
+	const entry = installationAppWith([PUBLIC])
+
+	test('the entries parse without the key', () => {
+		expect(parseProxyManifest({ apps: [application] })).not.toBeNull()
+		expect(parseProxyManifest({ apps: [entry] })).not.toBeNull()
+	})
+
+	test.each<[string, unknown]>([
+		['gates on a contract entry', { ...application, gates: { rules: [] } }],
+		['gates on an installation entry', { ...entry, gates: { rules: [] } }],
+		['gates in place of an endpoint table', { id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] } }],
+		['an unknown key on a contract entry', { ...application, extra: true }],
+		['an unknown key on an installation entry', { ...entry, extra: true }],
+		['an unknown key on an installation row', { ...entry, endpoints: [{ ...PUBLIC, extra: true }] }],
+	])('refuses %s', (_name, app) => {
+		expect(parseProxyManifest({ apps: [app] })).toBeNull()
+	})
+
+	test('refuses an unknown key beside the apps', () => {
+		expect(parseProxyManifest({ apps: [entry], extra: true })).toBeNull()
 	})
 })
 
@@ -307,7 +297,6 @@ describe('contract apps — the endpoint table', () => {
 		['a duplicate endpoint', { ...app, endpoints: [first, ...app.endpoints] }],
 		['an invalid reserved prefix', { ...app, reservedPrefixes: ['/api/'] }],
 		['a snapshot that is not a digest', { ...app, snapshot: 'v1' }],
-		['gates beside the table', { ...app, gates: { rules: [] } }],
 		['OAuth resources on a contract app', { ...app, oauthResources: [] }],
 		['an unknown caller kind', { ...app, endpoints: [{ ...first, callers: ['job'] }, ...rest] }],
 		['a CSP origin that is not https', { ...app, csp: { ...app.csp, imgSrc: ['http://tiles.example'] } }],
@@ -326,10 +315,6 @@ describe('contract apps — the endpoint table', () => {
 		}],
 	])('refuses %s', (_name, candidate) => {
 		expect(parseProxyManifest({ apps: [candidate] })).toBeNull()
-	})
-
-	test('refuses an endpoint table beside gates on a gate app', () => {
-		expect(parseProxyManifest({ apps: [{ ...VALID.apps[0], endpoints: [] }] })).toBeNull()
 	})
 })
 
@@ -364,7 +349,7 @@ describe('installation entries — the forms no application may declare', () => 
 		const parsed = parseProxyManifest({ apps: [entry] })
 		expect(parsed).toEqual({ apps: [entry] })
 		const parsedEntry = parsed?.apps[0]
-		expect(parsedEntry !== undefined && (isApplicationEntry(parsedEntry) || isGateProxyApp(parsedEntry))).toBe(false)
+		expect(parsedEntry !== undefined && isApplicationEntry(parsedEntry)).toBe(false)
 	})
 
 	// Rows with true digests and no `oauth` field, so each is refused for its form and not for a stray field.
@@ -394,8 +379,6 @@ describe('installation entries — the forms no application may declare', () => 
 
 	test('an application entry marked installation is refused, never read as either form', () => {
 		expect(parses({ ...application, installation: true })).toBe(false)
-		expect(parses({ ...entry, gates: { rules: [] } })).toBe(false)
-		expect(parses({ id: 'iam', hosts: ['iam.example.com'], upstream: 'iam:3000', gates: { rules: [] }, installation: true })).toBe(false)
 	})
 
 	test('an installation entry refuses an application environment id and what only an application carries', () => {
@@ -496,6 +479,6 @@ describe('serviceProxyTable — the manifest form of a service contract', () => 
 		}
 		const parsed = parseProxyManifest({ apps: [{ ...placement, ...table, oauthResources: [OAUTH_RESOURCE] }] })
 		const entry = parsed?.apps[0]
-		expect(entry !== undefined && !isApplicationEntry(entry) && !isGateProxyApp(entry)).toBe(true)
+		expect(entry !== undefined && !isApplicationEntry(entry)).toBe(true)
 	})
 })

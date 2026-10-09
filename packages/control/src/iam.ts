@@ -4,9 +4,9 @@
  * Each credentialed row of the console's service table resolves its caller ONCE — from the token the
  * proxy injected, verified locally against IAM's JWKS — and hands the resulting `AuthContext` to its
  * handler. The API router only performs action and scope checks against that context. The GitHub
- * webhook is a `protocol` row and is HMAC-gated instead.
+ * webhook is a `protocol` row and authenticates by its HMAC instead.
  *
- * Nothing here evaluates a gate: since ADR-0022 the proxy is the only enforcement point, and it has
+ * Nothing here enforces access: since ADR-0022 the proxy is the only enforcement point, and it has
  * already refused (or bounced to login) anything the console's table (`fabrika.service.ts`) does not admit.
  */
 import {
@@ -83,7 +83,7 @@ export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<strin
  *
  * There used to be a second hatch here — a request bearing `FABRIKA_IAM_PROVISIONING_KEY` was
  * authorized as a synthetic global admin. It was DEAD CODE behind the proxy and could not be
- * revived: `/api/*` is gated `service`, the proxy resolves a `px_` bearer by asking IAM to mint from
+ * revived: `/api/rpc` is a credentialed row, the proxy resolves a `px_` bearer by asking IAM to mint from
  * it, and the provisioning key has no `credentials` row — IAM resolves it specially, in
  * `resolveCaller`, for its OWN `/admin/*` surface. So `mintFromKey` answered `invalid_key` and the
  * request was refused before control ever saw the bearer. One mechanism per job: machine access to

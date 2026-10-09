@@ -2,13 +2,13 @@
  * `createIam` — the single request-time entry point apps use instead of hand-rolling auth.
  *
  * Since [ADR-0022](../../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md) the PROXY is the only
- * thing that enforces: it matches the app's gates, resolves the credential, and injects a verified
+ * thing that enforces: it selects the endpoint, resolves the credential, and injects a verified
  * access token as `PROXY_TOKEN_HEADER`. What is left for an app is small and fixed:
  *   - `authenticate(request)` — read that header and verify it LOCALLY against IAM's published JWKS
  *     (signature, `iss`, `aud`, `exp`), then build an `AuthContext`. The header is never trusted blindly.
  *   - `listPrincipals` — the app's people directory.
  *
- * There is NO gate evaluation here, no session→token exchange, and no cookie is ever written.
+ * There is NO access decision here, no session→token exchange, and no cookie is ever written.
  *
  * There is also NO local mode. The SDK verifies IAM-issued tokens and nothing else, everywhere. Local
  * development runs the real stack (`bun run local:up`), where the proxy fronts each service and IAM
@@ -49,7 +49,7 @@ export interface CreateIamOptions {
 
 /** Why an authentication attempt produced no `AuthContext`. */
 export type AuthFailureReason =
-	/** No proxy-injected token on the request — a `public` gate, or nothing is in front of the app. */
+	/** No proxy-injected token on the request — an anonymous endpoint, or nothing is in front of the app. */
 	| 'no_token'
 	/** A token was presented and did not verify: signature, `iss`, `aud`, `exp` or claim shape. */
 	| 'invalid_token'
@@ -74,7 +74,7 @@ export type AuthFailure = Extract<AuthResult, { ok: false }>
 
 /**
  * The ANONYMOUS context — no principal, NO permissions (`can` → false, `scopedTo` → [] = none),
- * `audit` a no-op. What an app sets on a request the proxy admitted through a `public` gate: there is
+ * `audit` a no-op. What an app sets on a request the proxy admitted through an anonymous endpoint: there is
  * no token to verify, and nothing about the caller is known. An RPC procedure's `.require` on such a
  * request would (correctly) 403.
  */

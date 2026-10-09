@@ -148,60 +148,6 @@ export interface AppWorkloadDef {
 	actions: string[]
 }
 
-// ── Per-path access gates (the propustka-native front door, enforced by the proxy) ──
-//
-// Replaces the deleted Cloudflare-Access edge model (AppAccess/AccessAppDecl/AccessRule). There is
-// no IAM reconcile for these: gate rules are deployed verbatim in the proxy manifest, and the proxy
-// decides WHICH credential KIND a path requires. Three kinds mirror the three old edge decisions:
-//   - public  → no credential (the old `bypass`/everyone carve-out)
-//   - service → a machine `px_` key (the old `non_identity`/service-token gate)
-//   - human   → a logged-in human via `px_session`/`px_token` (the old `allow`-by-audience gate)
-// WHO is an admitted human stays centrally owned by propustka (decided at `/auth/callback`, the
-// admission allowlist), exactly as the old central edge audience did — a `human` gate only asserts
-// "a resolved user principal exists". Auth-surface paths (`/auth/*`, `/.well-known/jwks.json`) live
-// on PROPUSTKA's host, not the app's, so apps never declare them.
-
-/** Where a propustka `px_` credential rides on a request. */
-export interface CredentialLocation {
-	/** Transport carrying the credential. */
-	in: 'header' | 'query' | 'cookie'
-	/** Header / query-param / cookie name. A header value may be bare or `Bearer <token>`. */
-	name: string
-}
-
-/** What a matched path requires. The discriminant `kind` mirrors the three old edge decisions. */
-export type GateKind =
-	/** Anyone — no credential. Terminal; resolves to an ANONYMOUS AuthContext (`principal: null`). */
-	| { kind: 'public' }
-	/**
-	 * A machine `px_` key — a bearer (default `Authorization: Bearer`) or the
-	 * declared `credential` location. ABSENT → falls through to the next matching rule; PRESENT but
-	 * invalid → fail closed (no fall-through).
-	 */
-	| { kind: 'service'; credential?: CredentialLocation }
-	/** A logged-in human (a `user` principal via the `px_session`/`px_token` cookies). */
-	| { kind: 'human' }
-	/**
-	 * An OAuth bearer access token minted for `resource` (RFC 8707) that carries every scope in
-	 * `scopes`. Missing or invalid → 401 with an RFC 9728 `WWW-Authenticate` challenge; never a
-	 * browser login redirect. Terminal like `public`: an absent token does not fall through.
-	 */
-	| { kind: 'oauth'; resource: string; scopes: string[] }
-
-/**
- * One per-path gate rule. The array order on `AppGates.rules` is the PRECEDENCE: the first rule whose
- * `path` matches AND whose required credential is present is enforced. A matching rule whose credential
- * is ABSENT falls through to the next matching rule; a request matching NO rule is denied (fail-closed).
- * `path` is a glob where `*` matches any run of chars (e.g. `/api/v1/*`) and a whole `:name` segment
- * matches exactly one non-empty segment (e.g. `/files/:id`); anchored.
- */
-export type GateRule = { path: string } & GateKind
-
-/** An app's full per-path gate declaration, enforced by the Fabrika proxy. */
-export interface AppGates {
-	rules: GateRule[]
-}
-
 /**
  * App-aware role lookup. The worker layers a built-in cross-app source (admin) over a
  * per-app DB source. `app` is the calling app id; null = cross-app/built-in only.

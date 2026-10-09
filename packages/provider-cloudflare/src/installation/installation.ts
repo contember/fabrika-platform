@@ -62,7 +62,7 @@ const run = async (command: InstallationCommand, argv: readonly string[]): Promi
 		return
 	}
 	if (command !== 'plan' && command !== 'deploy') {
-		// The router already gates on `commands`, so this is unreachable today — and it is the branch that
+		// The router already filters on `commands`, so this is unreachable today — and it is the branch that
 		// keeps it unreachable: without it, a command added to the contract later falls through to a deploy.
 		throw new Error(`Cloudflare installation does not support \`platform ${command}\``)
 	}

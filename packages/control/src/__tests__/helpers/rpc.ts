@@ -1,4 +1,4 @@
-import { defineApp, route } from '@fabrika/app'
+import { dispatchRpcRequest } from '@fabrika/app/service'
 import { createControlRpcRouter } from '../../control-rpc'
 import type { Env } from '../../env'
 import type { ControlRpcDeps } from '../../services'
@@ -33,11 +33,11 @@ export async function rpcResult(request: Request, deps: ControlRpcDeps): Promise
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 	}
-	const app = defineApp({
-		context: () => ({ auth: deps.auth, request, env, provider: deps.provider, sourceConnection: unusedSourceConnection(deps.provider.id) }),
-		routes: [route.rpc('/api/rpc', createControlRpcRouter(() => deps))],
+	const response = await dispatchRpcRequest({
+		router: createControlRpcRouter(() => deps),
+		ctx: { auth: deps.auth, request, env, provider: deps.provider, sourceConnection: unusedSourceConnection(deps.provider.id) },
+		request,
 	})
-	const response = await app.fetch(request, {}, { waitUntil() {} })
 	const body: unknown = await response.json()
 	if (typeof body !== 'object' || body === null) throw new Error('expected an RPC envelope')
 	if ('result' in body) return Response.json(body.result, { status: response.status })

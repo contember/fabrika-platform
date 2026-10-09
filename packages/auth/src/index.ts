@@ -3,21 +3,19 @@
 // Depends ONLY on @fabrika/auth-core: the binding is typed as the `IamRpc` contract (so the SDK
 // never imports the IAM service), and `can()`/`scopedTo()` reuse core's `permits`/`matchAction`.
 //
-// Enforcement lives in @fabrika/proxy (ADR-0022). Nothing exported here can evaluate a gate.
+// Enforcement lives in the proxy (ADR-0022). Nothing exported here decides whether a request reaches the app.
 
 export { IamClient } from './client'
 export { applyScope } from './scope'
-// The typed HTTP errors + the per-resource authorization helper a per-path gate cannot express.
+// The typed HTTP errors + the per-resource authorization helper the endpoint table cannot express.
 export { ForbiddenError, requirePermission, UnauthenticatedError } from './errors'
 export type { HttpError } from './errors'
 // Request-time surface: the single `createIam` entry point (verification + `listPrincipals`) and the
 // anonymous context an app sets on a request the proxy admitted
-// through a `public` gate.
+// through an anonymous endpoint.
 export { anonymousContext, createIam, Iam } from './iam'
 export type { AuthFailure, AuthFailureReason, AuthResult, CreateIamOptions, IamEnv } from './iam'
-// The shared middleware contract consumed by `@fabrika/app`. Owned here so an app pipeline needs no
-// duplicate compatibility interface; the SDK itself no longer ships any middleware.
-export type { AuthCarrier, Middleware } from './middleware'
+export type { AuthCarrier } from './types'
 // The HTTP transport for the SAME `IamRpc` contract, for a runtime with no Cloudflare service binding
 // (a long-running Bun/Node process). Drops into anywhere a binding goes — `createIam`, `IamClient`,
 // `env.IAM` — because the contract is unchanged and only the transport differs.
@@ -44,18 +42,13 @@ export { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 
 // Re-export from core so apps need only depend on the SDK: DomainEvent (one event shape),
 // IamRpc (the whole binding contract; an app types its `env.IAM` as the narrower `IamBinding`),
-// Scope (the `{ type, value }` coordinate apps pass to `can()`), the AppSchema vocabulary types
-// apps DECLARE in `fabrika.schema.ts` for `reconcileSchema()`, and the per-path gate types
-// (`AppGates` & co.) apps DECLARE for the PROXY manifest — never for in-process enforcement.
+// Scope (the `{ type, value }` coordinate apps pass to `can()`), and the AppSchema vocabulary types
+// apps DECLARE in `fabrika.schema.ts` for `reconcileSchema()`.
 export type {
 	AppActionDef,
-	AppGates,
 	AppSchema,
 	AppScopeDef,
-	CredentialLocation,
 	DomainEvent,
-	GateKind,
-	GateRule,
 	IamMembershipRpc,
 	IamRpc,
 	LinkTokenClaims,

@@ -29,7 +29,18 @@ const notes = 'FABRIKA_PROXY_SECRET=existing-proxy-secret\n'
 	+ 'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY=existing-storage-secret\n'
 
 async function seedExistingState(): Promise<void> {
-	for (const file of ['platform-db.env', 'apps-db.env', 'iam.env', 'platform-proxy.env', 'apps-proxy.env', 'apps-proxy-secret.env', 'emulator.env']) {
+	for (
+		const file of [
+			'platform-db.env',
+			'apps-db.env',
+			'iam.env',
+			'platform-proxy.env',
+			'apps-proxy.env',
+			'apps-proxy-secret.env',
+			'operations-witness.env',
+			'emulator.env',
+		]
+	) {
 		await Bun.write(resolve(directory, file), 'EXISTING_VALUE=must-not-rotate\n')
 	}
 	await Bun.write(resolve(directory, 'notes.env'), notes)

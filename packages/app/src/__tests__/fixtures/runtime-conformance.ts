@@ -1,6 +1,8 @@
-import type { FabrikaApp, RequestExecutionContext } from '../app.js'
-import { createBunHandler } from '../bun.js'
-import { type CloudflareExecutionContext, createCloudflareWorker } from '../cloudflare.js'
+// Test-only: a service answers the same through the direct call, the Bun adapter and the Worker adapter.
+
+import { createBunHandler } from '../../bun.js'
+import { type CloudflareExecutionContext, createCloudflareWorker } from '../../cloudflare.js'
+import type { FetchService, RequestExecutionContext } from '../../fetch.js'
 
 export type AppTestRuntime = 'direct' | 'bun' | 'cloudflare'
 
@@ -17,7 +19,7 @@ export interface AppRuntimeResponses {
 }
 
 export interface AppRuntimeConformanceOptions<Env> {
-	readonly app: FabrikaApp<Env>
+	readonly app: FetchService<Env>
 	/** Create isolated runtime state so one execution cannot affect the next. */
 	readonly createEnv: () => Env | Promise<Env>
 	/** Create an equivalent fresh request for each runtime. */

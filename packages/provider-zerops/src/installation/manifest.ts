@@ -5,7 +5,7 @@
 // On the `light` tier an application shares the platform's project and therefore the platform proxy's
 // single `FABRIKA_PROXY_MANIFEST_JSON`. The live document on `fabrika-test` carries a fourth app —
 // `notes` → `notesapi:3000` on listener 8084 — beside the three platform ones. `platformProxyManifest`
-// deliberately emits only the platform apps (it is generated from the platform's own gate modules and
+// deliberately emits only the platform apps (it is generated from the platform's own service contracts and
 // knows nothing about applications), so writing it alone would DELETE every application entry and take
 // the deployed applications offline at the next proxy build.
 //

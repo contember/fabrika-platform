@@ -112,7 +112,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  *   POST {origin}/auth/mint/delegation {app, credential, requestId, endpoint} -> a grant or a denial (rule 6)
  *   GET  {origin}/.well-known/jwks.json                         -> Jwks                     (public)
  *
- * The four POST endpoints are the `/auth/mint/*` PROXY surface, gated by IAM's `proxyKey` — the
+ * The four POST endpoints are the `/auth/mint/*` PROXY surface, authenticated by IAM's `proxyKey` — the
  * least-privilege split ADR-0022 requires, kept apart from the management `/rpc/*` surface. They
  * answer **200 on any decided outcome, including a denial**: `{ ok: false, reason }` is "IAM answered:
  * no", a non-200 is "IAM could not be consulted". Both deny; only the second is an incident.

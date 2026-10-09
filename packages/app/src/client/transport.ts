@@ -1,7 +1,7 @@
 // What both browser clients share: the error type, the login bounce, and reading the `{ result }` / `{ error }`
 // envelope off a response.
 //
-// `bounceOnAuth` folds the SSO redirect every SPA needs into the client: on a human-gated 401 (`type: 'auth'` +
+// `bounceOnAuth` folds the SSO redirect every SPA needs into the client: on a 401 for a person who must sign in (`type: 'auth'` +
 // `loginUrl`) it redirects the browser to the login URL (returning the current page) instead of throwing, with a
 // short re-entry guard so an unprovisioned identity can't loop forever.
 
@@ -24,7 +24,7 @@ export class RpcError extends Error {
 export type RpcFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 /**
- * Auto-redirect to SSO on a human-gated 401 (`type: 'auth'` + `loginUrl`) instead of throwing.
+ * Auto-redirect to SSO on a sign-in 401 (`type: 'auth'` + `loginUrl`) instead of throwing.
  * `true` uses sane defaults; pass `{ sessionKey, windowMs }` to tune the re-entry guard.
  */
 export type BounceOption = boolean | { sessionKey?: string; windowMs?: number }

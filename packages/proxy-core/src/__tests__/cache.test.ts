@@ -3,21 +3,22 @@
  * fully disabled every decision is byte-identical — only the number of IAM calls changes.
  */
 
-import { type AppGates, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
+import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { cacheKey, MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
+import type { InstallationProxyEndpointRow } from '../manifest'
 import { createVerifyService } from '../service'
-import { FakeIam, type FakeIamOptions, ISSUER, manifestWith, signUserToken, verifyRequest } from './helpers'
+import { FakeIam, type FakeIamOptions, ISSUER, manifestWith, protocolRow, serviceRow, signToken, signUserToken, verifyRequest } from './helpers'
 
 const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
 
-const HUMAN: AppGates = { rules: [{ path: '/*', kind: 'human' }] }
-const SERVICE: AppGates = { rules: [{ path: '/*', kind: 'service' }] }
+const HUMAN = [serviceRow('/*', ['human'])]
+const MACHINE = [serviceRow('/*', ['machine'])]
 
-function run(gates: AppGates, options: FakeIamOptions, cache: MemoryTokenCache | null) {
+function run(endpoints: InstallationProxyEndpointRow[], options: FakeIamOptions, cache: MemoryTokenCache | null) {
 	const iam = new FakeIam(options)
-	return { iam, verify: createVerifyService({ manifest: manifestWith(gates), iam, issuer: ISSUER, cache }) }
+	return { iam, verify: createVerifyService({ manifest: manifestWith(endpoints), iam, issuer: ISSUER, cache }) }
 }
 
 function stableLocation(raw: string | null): string | null {
@@ -48,11 +49,11 @@ describe('cache disabled — same decisions, more calls', () => {
 	})
 
 	test('a px_ key still authorizes on every request', async () => {
-		const token = await signUserToken()
+		const token = await signToken({ type: 'service' })
 		const options: FakeIamOptions = { mintFromKey: { ok: true, token, expiresAt: future() } }
 
-		const cached = run(SERVICE, options, new MemoryTokenCache())
-		const uncached = run(SERVICE, options, null)
+		const cached = run(MACHINE, options, new MemoryTokenCache())
+		const uncached = run(MACHINE, options, null)
 
 		for (let i = 0; i < 3; i++) {
 			expect((await cached.verify(verifyRequest({ bearer: 'px_ci' }))).status).toBe(204)
@@ -63,24 +64,24 @@ describe('cache disabled — same decisions, more calls', () => {
 	})
 
 	test('every deny in the matrix denies identically with no cache', async () => {
-		const cases: { gates: AppGates; options: FakeIamOptions; request: Request }[] = [
-			{ gates: HUMAN, options: {}, request: verifyRequest({}) },
-			{ gates: HUMAN, options: { mintToken: { ok: false, reason: 'disabled' } }, request: verifyRequest({ cookie: '__Host-px_session=s' }) },
-			{ gates: SERVICE, options: {}, request: verifyRequest({ bearer: 'px_nope' }) },
-			{ gates: SERVICE, options: { unreachable: true }, request: verifyRequest({ bearer: 'px_x' }) },
-			{ gates: { rules: [{ path: '/nope', kind: 'public' }] }, options: {}, request: verifyRequest({ path: '/yes' }) },
+		const cases: { endpoints: InstallationProxyEndpointRow[]; options: FakeIamOptions; request: Request }[] = [
+			{ endpoints: HUMAN, options: {}, request: verifyRequest({}) },
+			{ endpoints: HUMAN, options: { mintToken: { ok: false, reason: 'disabled' } }, request: verifyRequest({ cookie: '__Host-px_session=s' }) },
+			{ endpoints: MACHINE, options: {}, request: verifyRequest({ bearer: 'px_nope' }) },
+			{ endpoints: MACHINE, options: { unreachable: true }, request: verifyRequest({ bearer: 'px_x' }) },
+			{ endpoints: [protocolRow('/nope')], options: {}, request: verifyRequest({ path: '/yes' }) },
 		]
-		for (const { gates, options, request } of cases) {
-			const withCache = await run(gates, options, new MemoryTokenCache()).verify(request.clone())
-			const without = await run(gates, options, null).verify(request.clone())
+		for (const { endpoints, options, request } of cases) {
+			const withCache = await run(endpoints, options, new MemoryTokenCache()).verify(request.clone())
+			const without = await run(endpoints, options, null).verify(request.clone())
 			expect(without.status).toBe(withCache.status)
 			expect(stableLocation(without.headers.get('location'))).toBe(stableLocation(withCache.headers.get('location')))
 		}
 	})
 
-	test('a cache is never consulted for a public gate', async () => {
+	test('a cache is never consulted for a protocol row', async () => {
 		const cache = new MemoryTokenCache()
-		const { verify } = run({ rules: [{ path: '/*', kind: 'public' }] }, {}, cache)
+		const { verify } = run([protocolRow('/*')], {}, cache)
 		expect((await verify(verifyRequest({}))).status).toBe(204)
 		expect(cache.size).toBe(0)
 	})
@@ -88,9 +89,9 @@ describe('cache disabled — same decisions, more calls', () => {
 
 describe('cache correctness', () => {
 	test('a cached entry inside the refresh skew is not reused', async () => {
-		const nearlyExpired = await signUserToken()
+		const nearlyExpired = await signToken({ type: 'service' })
 		const iam = new FakeIam({ mintFromKey: { ok: true, token: nearlyExpired, expiresAt: future(5) } })
-		const verify = createVerifyService({ manifest: manifestWith(SERVICE), iam, issuer: ISSUER, cache: new MemoryTokenCache() })
+		const verify = createVerifyService({ manifest: manifestWith(MACHINE), iam, issuer: ISSUER, cache: new MemoryTokenCache() })
 		await verify(verifyRequest({ bearer: 'px_ci' }))
 		await verify(verifyRequest({ bearer: 'px_ci' }))
 		// expiresAt is inside TOKEN_REFRESH_SKEW_SECONDS, so the entry is re-minted rather than ridden.
@@ -98,9 +99,9 @@ describe('cache correctness', () => {
 	})
 
 	test('two different credentials never share an entry', async () => {
-		const token = await signUserToken()
+		const token = await signToken({ type: 'service' })
 		const iam = new FakeIam({ mintFromKey: { ok: true, token, expiresAt: future() } })
-		const verify = createVerifyService({ manifest: manifestWith(SERVICE), iam, issuer: ISSUER, cache: new MemoryTokenCache() })
+		const verify = createVerifyService({ manifest: manifestWith(MACHINE), iam, issuer: ISSUER, cache: new MemoryTokenCache() })
 		await verify(verifyRequest({ bearer: 'px_a' }))
 		await verify(verifyRequest({ bearer: 'px_b' }))
 		expect(iam.seenKeys).toEqual(['px_a', 'px_b'])
