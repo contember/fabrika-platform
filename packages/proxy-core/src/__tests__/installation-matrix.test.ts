@@ -322,6 +322,7 @@ function entryOf(table: InstallationProxyTable, oauthResources?: OAuthProtectedR
 }
 
 const CONTROL = entryOf(serviceProxyTable(controlServiceContract({ mcp: true }), { oauth: true }), [CONSOLE_MCP])
+const CONTROL_WITHOUT_MCP = entryOf(serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }))
 const IAM = entryOf(serviceProxyTable(iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS), { oauth: false }))
 const OPERATIONS = entryOf(serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false }))
 
@@ -409,6 +410,18 @@ describe('the real installation tables refuse what no service may receive', () =
 		expectDenied(decided.response, status)
 		expect(decided.reason).toBe(reason)
 	})
+
+	// `/webhooks` is reserved: only the declared GitHub delivery runs there, and nothing under it falls through to the SPA.
+	for (const [mcp, entry] of [['on', CONTROL], ['off', CONTROL_WITHOUT_MCP]] satisfies [string, ProxyApp][]) {
+		test.each(['/webhooks/github', '/webhooks/github/c1/x', '/webhooks/other'])(
+			`Control, MCP ${mcp}: a session GET of %s is 403 no_endpoint`,
+			async (path) => {
+				const decided = await decide(entry, USER, { path, cookie: SESSION })
+				expectDenied(decided.response, 403)
+				expect(decided.reason).toBe('no_endpoint')
+			},
+		)
+	}
 
 	test('Control: a bearer that is not a px_ key on the console RPC is a 401 invalid_key with no IAM call', async () => {
 		const { iam, response, reason } = await decide(CONTROL, {}, keyRpc('eyJhbGciOi.jwt'))
