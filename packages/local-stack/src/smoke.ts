@@ -25,6 +25,7 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { approveInConsole } from './console-approval'
 import {
 	LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
 	LOCAL_SOURCE_FIXTURE_DIRECTORY,
@@ -390,6 +391,24 @@ const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceMan
 	}
 }
 
+/**
+ * Notes has no contract, so its first deploy to the protected `prod` waits for a human to approve its gates and IAM
+ * schema (ADR-0050). The smoke approves it as the signed-in console admin; a later smoke on the same stack finds them
+ * approved and does not wait.
+ */
+const approveIfParked = async (machineKey: string, runId: string): Promise<void> => {
+	// A run is `running` while Control classifies it, so only the park or the provider's acceptance decides.
+	const run = await poll(
+		'the deploy to wait for approval or reach its provider',
+		async () => runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId })),
+		(value) => value.status === 'awaiting_approval' || value.status === 'failed' || value.externalRunId !== undefined,
+		{ timeoutMs: DURABLE_BUILD_WAIT_MS },
+	)
+	if (run.status !== 'awaiting_approval') return
+	console.info(`Deploy ${runId} waits for approval; approving it in the console`)
+	await approveInConsole(CONTROL_ORIGIN, runId)
+}
+
 const proveRestartReconciliation = async (
 	machineKey: string,
 	webhookSecret: string,
@@ -397,6 +416,7 @@ const proveRestartReconciliation = async (
 ): Promise<{ runId: string; commitSha: string; checkpoint: ZeropsRunState }> => {
 	console.info(`Pushing immutable Notes commit ${fixtures.application.commitSha}`)
 	const runId = await triggerByScopedWebhook(webhookSecret, fixtures.application.commitSha)
+	await approveIfParked(machineKey, runId)
 	console.info(`Deploy ${runId} accepted; waiting for its durable triggered checkpoint`)
 	let observed: string | undefined
 	const checkpoint = await poll(

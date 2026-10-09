@@ -32,7 +32,11 @@ machine API key described below.
    source connection `local-keyed-alpha` that owns its private repository;
 3. signs a push with that connection's webhook secret, requires its scoped route
    `/webhooks/github/local-keyed-alpha` to answer 200 with exactly one triggered
-   run, and waits for that run's external app-version id;
+   run, and waits for that run's external app-version id. Notes has no contract, so
+   its first deploy to the protected `prod` waits for approval of its gates and IAM
+   schema ([ADR-0050](../decisions/0050-approved-access.md)): the smoke signs in to the
+   console through the real handoff (`LOCAL_DEV_LOGIN`) and approves it with
+   `approvals.complete` from the console's origin, as a person does;
 4. hard-kills control while the emulated pipeline is `BUILDING`;
 5. starts control after the pipeline becomes `ACTIVE`, runs the maintenance cron until the dead
    holder's deploy lease expires, and verifies that it settles the run plus terminal release projection;
