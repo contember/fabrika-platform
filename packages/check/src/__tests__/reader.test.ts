@@ -58,6 +58,20 @@ describe('the reader refuses what it cannot read, with the position and the allo
 		expect(refusal(application("export const contract = { app: 'notes' }\n"))).toEqual(['fabrika.contract.ts:1:25 contract the contract is a object'])
 	})
 
+	test("an installation service's contract and an installation-only caller are no application contract (ADR-0022)", () => {
+		const service = `import { defineServiceContract } from '@fabrika/app/service'
+
+export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/mcp', { scopes: ['authoring'] }) }))
+`
+		expect(refusal(application(service))).toEqual([
+			'fabrika.contract.ts:3:25 literal call of a function that is not c.*, z.* or define*',
+			"fabrika.contract.ts:1:10 literal value import of 'defineServiceContract' from the package '@fabrika/app/service'",
+		])
+		expect(refusal(application(edited("callers: ['human']", "callers: ['oauth']")))).toEqual([
+			"fabrika.contract.ts:11:32 contract 'oauth' is not a caller of an RPC mount",
+		])
+	})
+
 	test('a source the parser rejects, and an import of a module the caller did not supply', () => {
 		expect(refusal(application(BASE, 'export const Note = {\n'))).toEqual(['src/schemas.ts:2:1 parse-error Unexpected token (2:0)'])
 		expect(refusal(new Map([['fabrika.contract.ts', BASE]]))).toEqual(["fabrika.contract.ts:3:10 literal unresolved module './src/schemas'"])

@@ -22,6 +22,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'18-link-procedure-outside-grants.ts': `Type '"notes.delete"' is not assignable to type '"notes.read"'`,
 	'19-options-set-builder-fields.ts': `is not assignable to type 'Owned<"kind" | "path">'`,
 	'20-creates-contained-dimension.ts': `Type '"note"' is not assignable to type '"workspace"'`,
+	'21-oauth-caller-on-rpc-mount.ts': `Type '"oauth"' is not assignable to type 'RpcCaller'`,
 }
 
 describe('the contract mistakes are type errors', () => {

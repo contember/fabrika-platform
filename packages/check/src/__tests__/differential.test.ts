@@ -178,6 +178,7 @@ const MISTAKES: Readonly<Record<string, string>> = {
 	'19-options-set-builder-fields.ts': "mount 'github': 'kind' is set by c.webhook itself and cannot be an option; remove it",
 	'20-creates-contained-dimension.ts':
 		"procedure 'api.workspaces.create': creates a 'note', which lies in 'workspace' (allowed: a dimension without in; a contained value is a row a store inserts)",
+	'21-oauth-caller-on-rpc-mount.ts': "fabrika.contract.ts:30:40 'oauth' is not a caller of an RPC mount",
 }
 
 /** The first refusal, as a finding line without its rule id and allowed form, or as a compile problem. */

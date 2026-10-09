@@ -167,6 +167,28 @@ describe('parseContractArtifact', () => {
 		expect(() => parseContractArtifact(withoutCsp)).toThrow()
 	})
 
+	test('refuses every form only an installation row may use (ADR-0022 "Installation entries")', () => {
+		const credentialed = artifact.endpoints.findIndex((row) => row.requirement !== null)
+		const anonymous = artifact.endpoints.findIndex((row) => row.requirement === null)
+		const replaced = (index: number, fields: Record<string, unknown>) => ({
+			...artifact,
+			endpoints: artifact.endpoints.map((row, at) => (at === index ? { ...row, ...fields } : row)),
+		})
+		const variants = [
+			replaced(anonymous, { kind: 'protocol' }),
+			replaced(credentialed, { kind: 'service' }),
+			replaced(credentialed, { method: '*' }),
+			replaced(credentialed, { callers: ['oauth'] }),
+			replaced(credentialed, { requirement: { kind: 'authenticated' } }),
+			replaced(credentialed, { oauth: { scopes: ['authoring'] } }),
+		]
+		for (const variant of variants) {
+			expect(() => parseContractArtifact(variant)).toThrow()
+		}
+		expect(parseContractArtifact(replaced(credentialed, {}))).toEqual(artifact)
+		expect(parseContractArtifact(replaced(anonymous, {}))).toEqual(artifact)
+	})
+
 	test('refuses a wildcard wherever the artifact names an action', () => {
 		const owner = artifact.roles['owner']
 		const workspace = artifact.dimensions['workspace']
