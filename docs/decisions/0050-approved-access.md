@@ -36,21 +36,41 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 
 - The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
   every file under `db/migrations/` is listed.
-- The snapshot digest covers the canonical contract and the migration list, not the checker version.
+- The snapshot digest covers the canonical contract, the migration list and the artifact access, not the
+  checker version.
 - A commit without `fabrika.contract.ts` has a snapshot without a contract. Dropping the contract from a
   commit is a widening.
-- Control's registry records whether an application has a contract, in `app_envs.contract_app`, from
-  its own snapshots and never from an upload. A recorded snapshot with a contract sets it to 1 at once,
-  before anything is published. Only a published snapshot without one sets it to 0. Only at 0 does the
-  provider receive `artifactAccess` and apply its artifact's gates and IAM schema, until B10. Otherwise,
-  without approved access, a provider routes nothing, reconciles no IAM schema and refuses a non-dry
-  deploy.
+- An application without a contract is approved by its **artifact access**: its gates and IAM schema
+  (`ArtifactAccess`, `artifactAccessDigest` in `@fabrika/auth-core`). The snapshot holds it. Every change
+  from the approved one is a widening, a removal included, so the first deploy to a protected
+  environment waits, and so does a contract removed (1 → 0). A provider receives the approved digest
+  (`ProviderEnvironment.artifactAccess`). It applies an artifact's gates and schema only when they hash to
+  that digest. Without approved access a provider routes nothing, reconciles no IAM schema and refuses a
+  non-dry deploy.
+- On Zerops, Control reads the artifact access from the registry's artifact before the deploy
+  (`ControlProvider.artifactAccess`). A registry write changes the artifact and advances `generation`,
+  so a run that classified the old one classifies again.
+- On Cloudflare the access is known only once the runner loads the config. A run without a contract
+  publishes the approved artifact access unchanged. The job carries its digest and the protection. The
+  executor hashes the config's gates and schema. On a protected mismatch it stops before provisioning
+  and reports them. Control fails that run and creates a new run, parked in `awaiting_approval` with
+  that access as its candidate. A new run, so the runner never sees a run id twice. Approving it
+  deploys with the approved digest. Otherwise the deploy reports what it applied. IAM applies only a
+  reported schema that matches the approved digest, or any on an unprotected environment. Control then
+  records it in the publication (`recordDeployedArtifactAccess`).
+- The published snapshot is stored on `app_envs.published_snapshot_json`, written by the same
+  compare-and-swap as `published_run_id`.
 - Control reads the snapshot at the provider's `applicationRoot`, the directory the provider executes
   from, with the same normalization (`checkoutRelativeDirectory` on Cloudflare). A root outside the
   repository fails the run.
-- The Cloudflare runner job carries the approved access: the contract and its digest, or `artifact`.
-  The runner hands it to the executor in a file beside the checkout. The deployer builds the proxy
-  table and `FABRIKA_CONTRACT_DIGEST` from it, never from the checkout.
+- The Cloudflare runner job carries the approved access: the contract and its digest, or the artifact
+  approval. The runner hands it to the executor in a file beside the checkout. The deployer builds the
+  proxy table and `FABRIKA_CONTRACT_DIGEST` from it, never from the checkout. Every framework variable
+  in each generated wrangler config must equal the value the platform wrote, so a binding's
+  `configureBinding` cannot overwrite the digest.
+- The snapshot is logged before the run's secrets are known, so redaction cannot cover it. Its log
+  lines carry fixed codes and counts only, never a name from the checkout. The change lines stay in
+  the classification the approval page shows.
 - A run records its actor as `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`.
 - `approvals.complete` approves or refuses; a refused run fails. The protected flag changes through
   `apps.environments.protect`. A parked run can be cancelled.
@@ -87,7 +107,10 @@ reconciles IAM:
 
 A run publishes with `UPDATE … WHERE generation = ? AND protection_revision = ?`, inside the existing
 namespace lease. A concurrent publication therefore loses. A change of the `protected` flag advances
-both values, so a run that classified under the old flag also loses.
+both values, so a run that classified under the old flag also loses. A registry write advances
+`generation` too. The counters are monotonic per `<app>@<env>` and survive deletion (section 4).
+`apps.environments.put`, `apps.environments.delete` and `apps.delete` apply only while the environment
+is at the generation they read, so a protection change between their check and their write refuses them.
 
 A run that loses the compare-and-swap is classified again against the new active snapshot. This holds
 while the run waits and after it is approved. An approval is valid only for the baseline digest it
@@ -136,10 +159,10 @@ Each environment has a `protected` flag, a column of Control's `app_envs`. `prod
 default; every other environment is not. Changing the flag requires `access.approve` from a human user
 principal, the same rule as approving (section 5). Control's audit log records every change.
 
-The flag outlives its environment. Control keeps it per `<app>@<env>` in `app_env_protection`, which
-deleting the environment or the application leaves in place. A recreated environment starts with the
-kept value, else with the default. Deleting a protected environment, or an application with one, takes
-the same human with `access.approve`.
+The flag outlives its environment. Deleting the environment or the application writes the flag and
+both counters, `generation` advanced, to `app_env_protection`. Nothing deletes that row. A recreated
+environment starts from it, else from the default. Deleting a protected environment, or an application
+with one, takes the same human with `access.approve`.
 
 Unprotected environments do not wait. Every environment with `protected = true` requires approval
 for a widening, whatever its name or role. Staging and MCP authoring targets are unprotected by

@@ -83,9 +83,11 @@ binds `APP` is refused; the exposure and name refusals above are checked on the 
 generates, before provisioning and again before deploying; Control sends its registry of Cloudflare
 deployments with each job. Work unit B6 sends the run's approved access in the job: the deployer builds
 the proxy and writes the digest from the approved contract, and refuses a checkout with a contract when
-Control read none. IAM receives the approved contract's schema; a runner-reported schema applies only to
-an application Control's registry knows has no contract. Outside Control (a local deploy) the deployer
-reads the contract from the checkout with the same static reader.
+Control read none. IAM receives the approved contract's schema. Without a contract the job carries the
+approved artifact access by its digest. The executor stops a protected mismatch before provisioning, and
+IAM applies a runner-reported schema only when it matches ([ADR-0050](0050-approved-access.md)). Every
+framework variable of each generated config must equal the platform's value. Outside Control (a local
+deploy) the deployer reads the contract from the checkout with the same static reader.
 
 ### On Cloudflare these are a strong default, not a security boundary
 

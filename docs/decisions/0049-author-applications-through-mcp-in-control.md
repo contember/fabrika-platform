@@ -76,8 +76,10 @@ with the approval link.
 - An agent can add endpoints, roles and tables without an operator. A stage environment is not
   protected by default, so the change applies there at once; on production a widening waits for a
   human.
-- Every refusal of the reader, the checker and the build must be one short, actionable line in the
-  build log, because that log is the agent's only feedback.
+- Every refusal of the checker and the build must be one short, actionable line in the build log,
+  because that log is the agent's only feedback. Control's snapshot reader is the exception: it logs
+  before the run's secrets are known, so it gives a fixed code and a count, and `fabrika-check` names the
+  problems ([ADR-0050](0050-approved-access.md)).
 
 ## Alternatives considered
 

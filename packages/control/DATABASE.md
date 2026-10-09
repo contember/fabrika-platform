@@ -49,8 +49,12 @@ lifecycle stay in `CLAUDE.md`.
   status. `operations_release_sync` references `runs` with `ON DELETE CASCADE`: its rows are copied aside and
   restored around the rebuild, because dropping the parent would cascade into them. Rebuild a referenced table
   the same way.
-- **`app_env_protection` has no foreign key, on purpose.** It keeps an environment's `protected` flag after the
-  environment or its app is deleted; `upsertAppEnv` seeds a new row from it. Never add an `ON DELETE CASCADE`.
+- **`app_env_protection` has no foreign key, and nothing deletes its rows, on purpose.** Deleting an environment
+  or its app writes the `protected` flag and the counters there, `generation` advanced, in the delete's own batch;
+  inserting an environment seeds all three from it. Recreation therefore never resets the publication
+  compare-and-swap. Never add an `ON DELETE CASCADE` or a delete of it.
+- **A registry write is conditional on what it read** (`AppEnvExpectation`): an update locks the row at its read
+  `generation` first, then writes; namespace claims follow the update, guarded by the state it wrote.
 - **The Bun migration wrapper owns `control_schema_migrations`, bundle `control`, and advisory lock
   `4471902583`.** Bundle and filename form the migration identity; see ADR-0017.
 

@@ -21,20 +21,25 @@ this one import.
   exactly `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, `cloudflareRunnerJobSchema` refuses any other
   key, and the checkout's own `pipeline.build` child runs with those names removed from its
   environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
-- **`reconcile-schema` REPORTS, it does not call IAM.** The step writes `RunnerOutcomeFile`
-  (`$FABRIKA_RUNNER_OUTCOME_FILE`) with the app id and the schema as JSON; the control-side `deploy`
-  validates both fields after the runner validates the container's `/status` envelope, requires the
-  reported app to be the deploying app, bounds and parses the JSON with `parseAppSchema` — which
-  applies IAM's own `isActionAllowed` rule to every role permission — and only then calls the
-  `SchemaReconciler` with its own key and the projected return origins. With Control's approved access
-  (`environment.access`, ADR-0050) the deploy and the reconcile apply `access.schema` instead, whatever the
-  runner reported. A reported schema applies only with `environment.artifactAccess` (Control's registry knows
-  the application has no contract), and never a `contract: true` one; with neither, a report fails the run.
+- **The executor REPORTS, it does not call IAM.** It writes `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`);
+  the control-side `deploy` and `reconcile` decide what IAM hears, with the control plane's own key and the projected
+  return origins. With Control's approved contract (`environment.access`, ADR-0050) they apply `access.schema`,
+  whatever the runner reported. Without a contract (`environment.artifactAccess`) the runner's `artifactAccess`
+  report decides: `reportedArtifactAccess` bounds and parses it with the schemas the executor used, and
+  `judgeArtifactAccess` applies its schema only when it hashes to the approved digest or the environment is
+  unprotected, never a `contract: true` one, and hands Control a `pending` report only for a failed run on a
+  protected environment whose access differs. With neither, any report fails the run.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
-  digest, or `artifact`). `buildJob` refuses a non-dry deploy without it, and `cloudflareRunnerJobSchema`
-  parses the contract and checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside
-  the checkout and names it in `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the
-  executor reads it (`readApprovedContract`) before the config runs. Unset outside a runner (a local deploy).
+  digest, or the artifact approval `{ digest, protected }`). `buildJob` refuses a non-dry deploy without it, and
+  `cloudflareRunnerJobSchema` parses the contract and checks its digest. The runner writes it to
+  `<workspace>/<runId>.access.json` beside the checkout and names it in `FABRIKA_APPROVED_ACCESS_FILE`, set after
+  every job-supplied name; the executor reads it (`readApprovedAccess`) before the config runs. Unset outside a
+  runner (a local deploy). The executor hashes the config's gates and schema (`configArtifactAccess`, parsed with
+  the same schemas Control uses, so the digests agree); a protected mismatch writes a `pending` report and throws
+  before provisioning, and a finished deploy reports `deployed`. The runner keeps a `pending` report of a failed run.
+- **Every framework variable of each generated config is the platform's** (`assertFrameworkVariables` in
+  `src/bounds.ts`, before provisioning and before each deploy): a binding's `configureBinding` writes the config
+  after the deployer injected its values, so the config is where `FABRIKA_CONTRACT_DIGEST` is checked.
 - **`checkoutRelativeDirectory` is the one application-root normalization.** The runner resolves `workerDir`
   with it, and `applicationRoot` hands it to Control, which reads the run's snapshot there. Never add a second.
 - **`cloudflareRunnerJobSchema` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading

@@ -143,12 +143,13 @@ bun test
 - **Published access comes from Control's approved snapshot (ADR-0050), never from the artifact.**
   `src/namespace/manifest.ts` builds a member's endpoint table from `member.access`
   (`contractProxyTable(access.contract)`, the upstream from the artifact). It routes an artifact's gates only
-  with `member.artifactAccess` (Control's registry knows the application has no contract) and never for an
-  artifact that claims a contract; otherwise the member is not routed. `lockedExecutionFor` locks the descriptor
-  down whenever `environment.access` is present — a config that drops `target.contract` cannot drop it — and
-  refuses a non-dry deploy with neither field, and an artifact that claims a contract under `artifactAccess`.
-  `approvedSchemaOf` gives the IAM schema of deploy, cancel and reconcile: `access.schema`, or the artifact's
-  only under `artifactAccess` and never a `contract: true` one; otherwise none.
+  when `artifactAccessApproved`: the artifact claims no contract and its gates and IAM schema
+  (`zeropsArtifactAccess`) hash to `member.artifactAccess.digest`; otherwise the member is not routed.
+  `lockedExecutionFor` locks the descriptor down whenever `environment.access` is present — a config that drops
+  `target.contract` cannot drop it — and refuses a non-dry deploy with neither field, an artifact that claims a
+  contract, and an artifact whose access is not the approved one. `approvedSchemaOf` gives the IAM schema of
+  deploy, cancel and reconcile: `access.schema`, or the artifact's only when `artifactAccessApproved`; otherwise
+  none. Control reads the candidate through `ControlProvider.artifactAccess` before the deploy.
 - **The namespace proxy attempt follows the same rule** (`republishProxy`, `src/namespace/proxy-attempt.ts`).
   `proxyBuild` on the namespace target is `{ appVersionId, triggered, manifestSha256? }` and the codec
   refuses any other shape. An inherited untriggered attempt is deleted; a triggered one is polled, and with
