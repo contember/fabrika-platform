@@ -1,7 +1,7 @@
 import type { GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
 import { vault } from '../../services'
 import { advanceWithDeadline, CONFIGURATION_DEADLINE_MS, errorForPhase, matchesConnectionIdentity, webhookUrl } from './configuration'
-import { audit, linkedDeadline, requireHuman, requireSameOrigin, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
+import { audit, linkedDeadline, requireHuman, type SourceConnectionWorkflowDeps, throwIfAborted } from './context'
 import { reconcileUnavailable, repairFailed, SourceConnectionWorkflowError, sourceUnavailable } from './errors'
 import { type GitHubSetupAttempt, type GitHubSetupPhase } from './model'
 import type { SourceGitHubAppIdentity, SourceInstallationScope, SourceInstallationVerification } from './port'
@@ -10,7 +10,6 @@ import { connectionDto, splitRepository, workflowDto } from './status'
 
 export async function verifySourceInstallation(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
-	requireSameOrigin(deps.env, deps.request)
 	const attempt = await requireAttempt(deps, connectionId, 'installation_required')
 	if (attempt.appCredentialRef === null) throw new SourceConnectionWorkflowError(409)
 	const scope = installationScope(attempt)
@@ -49,7 +48,6 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
 
 export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
-	requireSameOrigin(deps.env, deps.request)
 	const attempt = await deps.env.REPOSITORIES.githubConnections.getAttempt(connectionId)
 	if (attempt === null || attempt.status !== 'repair_required') {
 		throw new SourceConnectionWorkflowError(404)
@@ -79,7 +77,6 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 /** Re-verify one stable connection's App with its vault key and reapply its webhook; nothing about the binding changes. */
 export async function reconcileSourceConnection(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
-	requireSameOrigin(deps.env, deps.request)
 	const connection = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
 	if (connection === null) throw new SourceConnectionWorkflowError(404)
 	const deadline = linkedDeadline(deps.request.signal, CONFIGURATION_DEADLINE_MS)

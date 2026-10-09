@@ -10,10 +10,9 @@ import { manifestCallback, manifestHandoff } from './github/connections/manifest
 import type { SourceConnectionPort } from './github/connections/port'
 import { handleWebhook } from './github/triggers/webhook'
 import { error } from './http'
-import { controlAuthenticator, controlPublicOrigin } from './iam'
+import { controlAuthenticator } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
-import { controlOriginGuard } from './origin-guard'
 import { connectionWebhookVerifier, repositories } from './services'
 
 export interface ControlAppEnv {
@@ -42,13 +41,12 @@ export function createControlApp(mcp: McpRoute | null): FabrikaApp<ControlAppEnv
 	type Handle = (ctx: ControlAppContext, params: Readonly<Record<string, string>>) => Response | Promise<Response>
 	const serve = (handle: Handle): ServiceHandler<ControlAppEnv> => ({ request, params, env: { env, provider, sourceConnection }, exec }) =>
 		handle({ env: withRequestExecution(env, exec), provider, sourceConnection, request }, params)
-	/** A credentialed row: the caller from the injected token, then the same-origin admission of a state change. */
+	/** A credentialed row: the caller from the injected token. The proxy admitted a session's state change already. */
 	const authenticated = (handle: Handle): ServiceHandler<ControlAppEnv> =>
 		serve(async (ctx, params) => {
 			const caller = await controlAuthenticator(ctx.env)(ctx.request)
 			if (!caller.ok) return caller.response
-			const authed: ControlAppContext = { ...ctx, auth: caller.auth }
-			return controlOriginGuard<ControlAppContext>(ctx.env)(ctx.request, authed, () => Promise.resolve(handle(authed, params)))
+			return handle({ ...ctx, auth: caller.auth }, params)
 		})
 	const notFound = serve(() => error(404, 'not found'))
 	const builder = serve((ctx) => builderPublicResponse(ctx.request, ctx.env, ctx.provider.id) ?? error(404, 'not found'))
@@ -134,11 +132,9 @@ function iamAdmin(ctx: ControlAppContext): Promise<Response> {
 	if (gateway === undefined) {
 		return Promise.resolve(Response.json({ error: 'IAM admin gateway unavailable' }, { status: 503 }))
 	}
-	const publicOrigin = controlPublicOrigin(ctx.env)
 	return forwardIamAdmin(ctx.request, {
 		gateway,
 		...(ctx.env.FABRIKA_IAM_ISSUER === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_ISSUER }),
-		...(publicOrigin === undefined ? {} : { publicOrigin }),
 	})
 }
 
@@ -147,10 +143,8 @@ function operationsApi(ctx: ControlAppContext): Promise<Response> {
 	if (gateway === undefined) {
 		return Promise.resolve(Response.json({ error: 'operations unavailable' }, { status: 503 }))
 	}
-	const publicOrigin = controlPublicOrigin(ctx.env)
 	return forwardOperationsApi(ctx.request, {
 		gateway,
 		...(ctx.env.FABRIKA_IAM_ISSUER === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_ISSUER }),
-		...(publicOrigin === undefined ? {} : { publicOrigin }),
 	})
 }

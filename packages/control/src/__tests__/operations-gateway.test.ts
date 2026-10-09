@@ -24,7 +24,7 @@ describe('Operations console gateway', () => {
 				headers: { cookie: '__Host-px_session=session-one', 'X-Fabrika-Token': 'trusted-token', origin: CONSOLE },
 				body: JSON.stringify({ method: 'issues.list', input: {} }),
 			}),
-			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: CONSOLE },
+			{ gateway, publicIamUrl: 'https://iam.test' },
 		)
 
 		expect(response.status).toBe(200)
@@ -36,73 +36,13 @@ describe('Operations console gateway', () => {
 		expect(forwardedBody).toEqual({ method: 'issues.list', input: {} })
 	})
 
-	test('allows only safe methods without a same-origin proof, including guarding PUT', async () => {
+	test('reads no origin: a state change is transported as the proxy admitted it', async () => {
+		// Admission is the proxy's (ADR-0022): a session's POST reaches here only with `Sec-Fetch-Site: same-origin`,
+		// and a bearer is explicit authority. `console-admission.test.ts` drives both through the real proxy.
 		const gateway = new RecordingGateway()
-		const missingOrigin = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/rpc', { method: 'PUT', body: '{}' }),
-			{ gateway, publicOrigin: CONSOLE },
-		)
-		const crossOrigin = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/rpc', {
-				method: 'PUT',
-				headers: { origin: 'https://attacker.test' },
-				body: '{}',
-			}),
-			{ gateway, publicOrigin: CONSOLE },
-		)
-		const sameOrigin = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/rpc', {
-				method: 'PUT',
-				headers: { origin: 'https://console.test' },
-				body: '{}',
-			}),
-			{ gateway, publicOrigin: CONSOLE },
-		)
-
-		expect(missingOrigin.status).toBe(403)
-		expect(crossOrigin.status).toBe(403)
-		expect(sameOrigin.status).toBe(200)
+		const response = await forwardOperationsApi(new Request('http://console.test/operations/api/rpc', { method: 'PUT', body: '{}' }), { gateway })
+		expect(response.status).toBe(200)
 		expect(gateway.requests).toHaveLength(1)
-	})
-
-	test('the origin compared against is CONFIGURED, never the reconstructed request URL', async () => {
-		// Behind a TLS-terminating balancer the process is reached over plain HTTP, so `request.url`
-		// reads `http://console.test` while the browser truthfully sent `https://console.test`. The old
-		// comparison refused every genuine operator write in exactly that shape.
-		const gateway = new RecordingGateway()
-		const behindBalancer = await forwardOperationsApi(
-			new Request('http://console.test/operations/api/rpc', {
-				method: 'PUT',
-				headers: { origin: CONSOLE },
-				body: '{}',
-			}),
-			{ gateway, publicOrigin: CONSOLE },
-		)
-		expect(behindBalancer.status).toBe(200)
-
-		// With nothing configured the guard fails closed rather than trusting the socket.
-		const unconfigured = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/rpc', {
-				method: 'PUT',
-				headers: { origin: CONSOLE },
-				body: '{}',
-			}),
-			{ gateway },
-		)
-		expect(unconfigured.status).toBe(403)
-	})
-
-	test('applies the shared same-origin rule: Sec-Fetch-Site, Origin: null and the Referer fallback', async () => {
-		const send = (headers: Record<string, string>) =>
-			forwardOperationsApi(
-				new Request('http://console.test/operations/api/rpc', { method: 'POST', headers, body: '{}' }),
-				{ gateway: new RecordingGateway(), publicOrigin: CONSOLE },
-			)
-		expect((await send({ origin: CONSOLE, 'sec-fetch-site': 'cross-site' })).status).toBe(403)
-		expect((await send({ origin: 'null' })).status).toBe(403)
-		expect((await send({ origin: 'null', 'sec-fetch-site': 'same-origin' })).status).toBe(200)
-		expect((await send({ referer: `${CONSOLE}/operations/issues` })).status).toBe(200)
-		expect((await send({ referer: 'https://attacker.test/' })).status).toBe(403)
 	})
 
 	test('never transports removed operator REST, direct ingest, or artifact paths', async () => {
@@ -152,7 +92,7 @@ describe('Operations console gateway', () => {
 				headers: { origin: 'https://console.test' },
 				body: JSON.stringify({ method: 'issues', input: {} }),
 			}),
-			{ gateway: unauthorized, publicIamUrl: 'https://iam.test', publicOrigin: CONSOLE },
+			{ gateway: unauthorized, publicIamUrl: 'https://iam.test' },
 		)
 
 		expect(response.status).toBe(401)

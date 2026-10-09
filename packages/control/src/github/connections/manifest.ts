@@ -9,7 +9,6 @@ import {
 	randomToken,
 	requireControlOrigin,
 	requireHuman,
-	requireSameOrigin,
 	serverDeadline,
 	sha256,
 	type SourceConnectionWorkflowDeps,
@@ -44,7 +43,7 @@ export async function startSourceConnection(
 	input: StartGitHubSourceConnectionRequest,
 ): Promise<StartGitHubSourceConnectionResponse> {
 	const principalId = requireHuman(deps.auth)
-	const origin = requireSameOrigin(deps.env, deps.request)
+	const origin = requireControlOrigin(deps.env)
 	if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(input.organization) || input.appName.length < 1 || input.appName.length > 100) {
 		throw new SourceConnectionWorkflowError(400)
 	}

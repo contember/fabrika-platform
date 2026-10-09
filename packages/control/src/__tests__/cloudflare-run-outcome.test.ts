@@ -204,7 +204,6 @@ describe('Cloudflare run outcome through Control', () => {
 					queue: { send: () => Promise.resolve() },
 					lock: makeFakeLock(db),
 					request: new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin' } }),
-					publicOrigin: ORIGIN,
 				}, { appId: 'app', env: 'prod', protected: true })
 				return 200
 			} catch (error) {

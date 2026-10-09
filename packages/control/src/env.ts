@@ -67,9 +67,8 @@ export interface Env {
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string
 	/**
-	 * Public domain this stage serves on (drives absolute URLs); empty when unknown. Also the CSRF
-	 * guard's authority on the console's own origin — see `controlPublicOrigin` in src/iam.ts, which
-	 * cannot use the request's own protocol behind a TLS-terminating balancer.
+	 * Public domain this stage serves on (drives absolute URLs); empty when unknown. See `controlPublicOrigin`
+	 * in src/iam.ts, which cannot use the request's own protocol behind a TLS-terminating balancer.
 	 */
 	FABRIKA_CONTROL_DOMAIN?: string
 	/**

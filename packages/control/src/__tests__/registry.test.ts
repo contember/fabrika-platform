@@ -904,7 +904,7 @@ describe('the namespace proxy follows the registry', () => {
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
-			admission: { request: consoleRequest(), publicOrigin: CONSOLE_ORIGIN },
+			admission: { request: consoleRequest() },
 			namespaceProxyChanged: (namespaceId) => {
 				recording.synced.push(namespaceId)
 				return recording.fail === namespaceId ? Promise.reject(new Error('platform said no')) : Promise.resolve()

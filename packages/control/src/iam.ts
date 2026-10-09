@@ -33,7 +33,7 @@ export interface IamEnv {
 	 * escape hatch for the first operator before IAM knows about fabrika.
 	 */
 	FABRIKA_CONTROL_BOOTSTRAP_ADMINS?: string
-	/** The control plane's own public domain — the CSRF guard's authority (see `controlPublicOrigin`). */
+	/** The control plane's own public domain (see `controlPublicOrigin`). */
 	FABRIKA_CONTROL_DOMAIN?: string
 }
 
@@ -42,11 +42,11 @@ export interface IamEnv {
  *
  * That variable has no settled shape and never needed one, because its only consumer read it for
  * truthiness: the local stack sets a full origin (`http://control.fabrika.localhost:18080`) and a
- * live installation a bare host (`proxy-…zerops.app`). Now that the CSRF guard compares against it
- * (backlog 50), both spellings have to mean the same thing — a bare host is assumed `https`, which is
- * the only scheme a public host is served on.
+ * live installation a bare host (`proxy-…zerops.app`). Absolute URLs built from it (the GitHub App
+ * manifest's callback, the MCP resource) need both spellings to mean the same thing — a bare host is
+ * assumed `https`, which is the only scheme a public host is served on.
  *
- * Returns `undefined` when nothing usable is configured; the guard then fails closed.
+ * Returns `undefined` when nothing usable is configured; a caller that needs an origin then fails closed.
  */
 export function controlPublicOrigin(env: Pick<IamEnv, 'FABRIKA_CONTROL_DOMAIN'>): string | undefined {
 	const raw = env.FABRIKA_CONTROL_DOMAIN?.trim() ?? ''

@@ -1,23 +1,20 @@
 // The human rule of ADR-0050 §5, shared by approving, changing `protected`, and deleting a protected environment.
-// The user-principal check is authorization; the same-origin check is admission (docs/reference/overview.md).
+// These checks are authorization; the proxy's session admission keeps another site's page out (ADR-0022).
 
 import type { AuthContext } from '@fabrika/auth'
 import { ACTIONS } from '../actions'
 import { fail } from '../api/domain'
 import { canAtCoordinates } from '../api/runs'
 import type { AppEnvRow } from '../db'
-import { sameOrigin } from '../origin-guard'
 
-/** The request a console call arrived on, and the console's configured public origin (absent refuses every one). */
+/** The request a console call arrived on. */
 export interface ConsoleAdmission {
 	readonly request: Request
-	readonly publicOrigin: string | undefined
 }
 
 /**
  * The caller is a person in the console: a user principal on a session, not a key (`Authorization`), an OAuth (MCP)
- * token or a share link, on a request from the console's own origin. A service principal, the builder key and any
- * agent credential are refused whatever they carry.
+ * token or a share link. A service principal, the builder key and any agent credential are refused whatever they carry.
  */
 export function requireHumanApprover(auth: AuthContext, admission: ConsoleAdmission | undefined): { readonly id: string; readonly label: string } {
 	const principal = auth.principal
@@ -26,7 +23,6 @@ export function requireHumanApprover(auth: AuthContext, admission: ConsoleAdmiss
 	}
 	if (admission === undefined) fail(403, 'an access change is approved from the console itself')
 	if (admission.request.headers.get('Authorization') !== null) fail(403, 'an access change is approved in the console, not with a key')
-	if (!sameOrigin(admission.request, admission.publicOrigin)) fail(403, 'an access change is approved from the console itself')
 	return { id: principal.id, label: principal.label }
 }
 

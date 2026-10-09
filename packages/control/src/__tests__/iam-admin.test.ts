@@ -22,7 +22,7 @@ describe('IAM admin gateway', () => {
 			new Request('https://console.test/iam/admin/apps/notes/schema?view=full', {
 				headers: { cookie: '__Host-px_session=session-one; app_cookie=kept-here', [PROXY_TOKEN_HEADER]: 'proxy-jwt' },
 			}),
-			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
+			{ gateway, publicIamUrl: 'https://iam.test' },
 		)
 
 		expect(response.status).toBe(200)
@@ -32,26 +32,11 @@ describe('IAM admin gateway', () => {
 		expect(gateway.requests[0]?.headers.get('authorization')).toBe('Bearer proxy-jwt')
 	})
 
-	test('rejects cross-origin mutations before they reach IAM', async () => {
-		const gateway = new RecordingGateway()
-		const response = await forwardIamAdmin(
-			new Request('https://console.test/iam/admin/api-keys', {
-				method: 'POST',
-				headers: { origin: 'https://attacker.test' },
-				body: '{}',
-			}),
-			{ gateway },
-		)
-
-		expect(response.status).toBe(403)
-		expect(gateway.requests).toHaveLength(0)
-	})
-
 	test('adds the public IAM login URL to an unauthenticated response', async () => {
 		const gateway = new RecordingGateway(Response.json({ error: 'unauthorized' }, { status: 401 }))
 		const response = await forwardIamAdmin(
 			new Request('https://console.test/iam/admin/me'),
-			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
+			{ gateway, publicIamUrl: 'https://iam.test' },
 		)
 		const body: unknown = await response.json()
 
@@ -66,7 +51,7 @@ describe('IAM admin gateway', () => {
 		const gateway = new RecordingGateway(Response.json({ error: { type: 'auth', message: 'unauthorized' } }, { status: 401 }))
 		const response = await forwardIamAdmin(
 			new Request('https://console.test/iam/admin/rpc', { method: 'POST', headers: { origin: 'https://console.test' }, body: '{}' }),
-			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
+			{ gateway, publicIamUrl: 'https://iam.test' },
 		)
 		const body: unknown = await response.json()
 
@@ -128,67 +113,14 @@ describe('IAM admin gateway', () => {
 	})
 })
 
-// ── The CSRF origin guard (backlog 50) ────────────────────────────────────────
-//
-// Both cases below were live 403s on Zerops: the console could not write anything, and neither could
-// any machine caller. The gateway is reached over plain HTTP behind the balancer, which is why the
-// request URL cannot be the thing the browser's `Origin` is compared against.
+// Admission is the proxy's (ADR-0022): `console-admission.test.ts` drives cross-site, same-site and same-origin
+// sessions and bearers through the real proxy, so this gateway reads no origin at all.
 
-describe('the gateway CSRF guard', () => {
-	// `null` means "not configured" — an explicit `undefined` would just re-select the default.
-	const forward = (headers: Record<string, string>, publicOrigin: string | null = 'https://console.test') =>
-		forwardIamAdmin(
-			new Request('http://console.test/iam/admin/rpc', { method: 'POST', headers, body: '{}' }),
-			{ gateway: new RecordingGateway(Response.json({ ok: true })), ...(publicOrigin === null ? {} : { publicOrigin }) },
-		)
-
-	test("accepts the browser's https origin although the process was reached over http", async () => {
-		expect((await forward({ origin: 'https://console.test' })).status).toBe(200)
-	})
-
-	test('still rejects a cross-site origin', async () => {
-		expect((await forward({ origin: 'https://evil.test' })).status).toBe(403)
-	})
-
-	test('lets a bearer-only caller through — no cookie, no ambient authority, nothing to forge', async () => {
-		expect((await forward({ authorization: 'Bearer px_machine' })).status).toBe(200)
-	})
-
-	test('checks a bearer that arrives alongside any cookie', async () => {
-		expect((await forward({ authorization: 'Bearer px_machine', cookie: 'app_session=abc' })).status).toBe(403)
-	})
-
-	test('fails closed when no public origin is configured', async () => {
-		expect((await forward({ origin: 'https://console.test' }, null)).status).toBe(403)
-	})
-
-	test('refuses a cross-site Sec-Fetch-Site even with a matching Origin', async () => {
-		expect((await forward({ origin: 'https://console.test', 'sec-fetch-site': 'cross-site' })).status).toBe(403)
-		expect((await forward({ origin: 'https://console.test', 'sec-fetch-site': 'same-site' })).status).toBe(403)
-	})
-
-	test('refuses Origin: null unless Sec-Fetch-Site proves same-origin', async () => {
-		expect((await forward({ origin: 'null' })).status).toBe(403)
-		expect((await forward({ origin: 'null', 'sec-fetch-site': 'same-origin' })).status).toBe(200)
-	})
-
-	test('falls back to the Referer when Origin is absent', async () => {
-		expect((await forward({ referer: 'https://console.test/access/keys' })).status).toBe(200)
-		expect((await forward({ referer: 'https://evil.test/page' })).status).toBe(403)
-		expect((await forward({})).status).toBe(403)
-	})
-
-	test('treats PUT as state-changing and leaves only safe methods unchecked', async () => {
-		const send = (method: string) =>
-			forwardIamAdmin(
-				new Request('https://console.test/iam/admin/apps/notes/schema', {
-					method,
-					headers: { origin: 'https://evil.test' },
-					...(method === 'GET' || method === 'HEAD' ? {} : { body: '{}' }),
-				}),
-				{ gateway: new RecordingGateway(Response.json({ ok: true })), publicOrigin: 'https://console.test' },
-			)
-		expect((await send('PUT')).status).toBe(403)
-		expect((await send('GET')).status).toBe(200)
+describe('the gateway reads no origin', () => {
+	test('a state change is transported whatever its Origin, behind a balancer or not', async () => {
+		const gateway = new RecordingGateway(Response.json({ ok: true }))
+		const response = await forwardIamAdmin(new Request('http://console.test/iam/admin/rpc', { method: 'PUT', body: '{}' }), { gateway })
+		expect(response.status).toBe(200)
+		expect(gateway.requests).toHaveLength(1)
 	})
 })

@@ -75,8 +75,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 	const control = new Map([
 		['FABRIKA_CONTROL_DATABASE_URL', POSTGRES_URL],
 		['ENVIRONMENT', input.environment],
-		// A bare HOST, not an origin: `controlPublicOrigin` accepts either, and this is also what the
-		// same-origin check on both first-party gateways is decided against.
+		// A bare HOST, not an origin: `controlPublicOrigin` accepts either.
 		['FABRIKA_CONTROL_DOMAIN', input.hosts.control],
 		['FABRIKA_IAM_ISSUER', iamOrigin],
 		['OPERATIONS_ARTIFACT_ORIGIN', operationsOrigin],

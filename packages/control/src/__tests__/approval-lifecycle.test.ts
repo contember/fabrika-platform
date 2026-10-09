@@ -205,7 +205,6 @@ function approvals(w: World, caller: AuthContext, request = consoleRequest()): A
 		queue: { send: (message) => Promise.resolve(void w.queued.push(message)) },
 		lock: makeFakeLock(w.db),
 		request,
-		publicOrigin: ORIGIN,
 	}
 }
 
@@ -411,7 +410,7 @@ describe('approved access through the run lifecycle', () => {
 		expect(w.republished.at(-1)?.members.map((member) => member.access?.contractDigest)).toEqual([DIGEST])
 	})
 
-	test('a service principal, an OAuth (MCP) token, a key, another origin and an operator cannot approve', async () => {
+	test('a service principal, an OAuth (MCP) token, a key and an operator cannot approve', async () => {
 		const w = world()
 		await seed(w)
 		const parked = await deploy(w, 'prod')
@@ -420,8 +419,6 @@ describe('approved access through the run lifecycle', () => {
 		expect(await status(approve(w, parked.runId, auth({ type: 'service' })))).toBe(403)
 		expect(await status(approve(w, parked.runId, auth({ oauth: true })))).toBe(403)
 		expect(await status(approve(w, parked.runId, auth(), consoleRequest({ Authorization: 'Bearer px_builder' })))).toBe(403)
-		expect(await status(approve(w, parked.runId, auth(), consoleRequest({ Origin: 'https://evil.example.test', 'Sec-Fetch-Site': 'cross-site' }))))
-			.toBe(403)
 		expect(await status(approve(w, parked.runId, operator))).toBe(404)
 		expect((await run(w, parked.runId)).status).toBe('awaiting_approval')
 		expect(w.queued).toEqual([])
@@ -584,7 +581,7 @@ describe('protection survives the registry', () => {
 			provider: provider(w),
 			auth: caller,
 			signal: new AbortController().signal,
-			admission: { request, publicOrigin: ORIGIN },
+			admission: { request },
 		}
 	}
 

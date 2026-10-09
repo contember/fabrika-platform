@@ -73,7 +73,7 @@ import { reconcileSourceConnection, repairSourceConnection, verifySourceInstalla
 import { startSourceConnection } from './github/connections/manifest'
 import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
-import { appScope, controlPublicOrigin } from './iam'
+import { appScope } from './iam'
 import { jsonValueSchema } from './json-value'
 import { buildControlRpcDeps } from './services'
 
@@ -371,7 +371,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			signal: ctx.request.signal,
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
-			admission: { request: ctx.request, publicOrigin: controlPublicOrigin(ctx.env) },
+			admission: { request: ctx.request },
 		}
 	}
 
@@ -401,7 +401,6 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			queue: deps.queue,
 			lock: deps.lock,
 			request: ctx.request,
-			publicOrigin: controlPublicOrigin(ctx.env),
 		}
 	}
 

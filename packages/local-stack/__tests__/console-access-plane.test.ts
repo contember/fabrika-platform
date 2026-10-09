@@ -101,7 +101,7 @@ async function stack(): Promise<Stack> {
 			if (callOptions.proxyToken !== null) headers.set(PROXY_TOKEN_HEADER, proxyToken)
 			return forwardIamAdmin(
 				new Request(`${CONSOLE}/iam/admin/rpc`, { method: 'POST', headers, body: JSON.stringify({ method, input }) }),
-				{ gateway, publicIamUrl: ISSUER, publicOrigin: CONSOLE },
+				{ gateway, publicIamUrl: ISSUER },
 			)
 		},
 		stop: () => server.stop(true),
@@ -134,37 +134,6 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		}
 	})
 
-	test('a hostile cross-origin POST is stopped by the DEPUTY, before IAM is asked', async () => {
-		// The confused-deputy attack: a hostile page POSTs to the console's own origin and the browser
-		// attaches ambient cookies by itself. Control's own same-origin check refuses it, so the request
-		// never reaches the gateway — which is what makes the transport-only design safe.
-		const { call, stop } = await stack()
-		try {
-			const response = await call('principals.invite', { email: 'evil@contember.com' }, {
-				cookie: 'console_state=ambient',
-				origin: 'https://evil.example.test',
-			})
-			expect(response.status).toBe(403)
-			// Control's flat envelope — the deputy answered, IAM was never called.
-			expect(await response.json()).toEqual({ error: 'cross-origin request rejected' })
-		} finally {
-			await stop()
-		}
-	})
-
-	test('a cookie-bearing POST with no Origin at all is refused by the deputy', async () => {
-		const { call, stop } = await stack()
-		try {
-			const response = await call('principals.invite', { email: 'evil2@contember.com' }, {
-				cookie: 'console_state=ambient',
-				origin: null,
-			})
-			expect(response.status).toBe(403)
-		} finally {
-			await stop()
-		}
-	})
-
 	test('IAM authority comes from the proxy token, not a forwarded app session', async () => {
 		const { call, stop } = await stack()
 		try {
@@ -175,11 +144,12 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		}
 	})
 
+	// A hostile page's POST never reaches this gateway: the console's proxy refuses a session's state change that does
+	// not carry `Sec-Fetch-Site: same-origin` (`control/src/__tests__/console-admission.test.ts`, and the smoke).
 	test('a machine caller needs no origin at all', async () => {
 		const { call, stop } = await stack()
 		try {
-			// No cookie, so no ambient authority and nothing for CSRF to defend. It fails on the credential
-			// (401), not on the origin (403) — which is the distinction that matters.
+			// It fails on the credential (401), never on an origin: the gateway reads none.
 			const response = await call('me', null, { bearer: 'px_not_a_real_key', origin: null, proxyToken: null })
 			expect(response.status).toBe(401)
 		} finally {

@@ -679,16 +679,12 @@ describe('GitHub source connection workflow', () => {
 		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), 'missing')).rejects.toMatchObject({ httpStatus: 404 })
 	})
 
-	test('requires a same-origin human to reconcile a stable connection', async () => {
+	test('requires a human to reconcile a stable connection', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		const connectionId = await connectKeyed(env, source)
 		await expect(reconcileSourceConnection(
 			deps(env, source, mutationRequest('/api/rpc'), auth('service')),
-			connectionId,
-		)).rejects.toMatchObject({ httpStatus: 403 })
-		await expect(reconcileSourceConnection(
-			deps(env, source, new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { origin: 'https://evil.example' } })),
 			connectionId,
 		)).rejects.toMatchObject({ httpStatus: 403 })
 	})
@@ -713,28 +709,23 @@ describe('GitHub source connection workflow', () => {
 		expect(await queryRowsFromEnv(env, `SELECT id FROM github_source_setup_attempts WHERE status IN ('active','repair_required')`)).toEqual([])
 	})
 
-	test('applies the shared same-origin rule to source connection mutations', async () => {
-		const start = (headers: Record<string, string>) =>
+	test('reads no origin: the proxy admitted the request, and the callback origin is the configured one', async () => {
+		// Admission is the proxy's (ADR-0022); `console-admission.test.ts` drives these mutations through it.
+		const start = (env: Env) =>
 			startSourceConnection(
-				deps(environment(), new FakeSourceConnection(), new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers })),
+				deps(env, new FakeSourceConnection(), new Request(`${ORIGIN}/api/rpc`, { method: 'POST' })),
 				{ organization: 'acme', appName: 'source', visibility: 'private', repositories: [] },
 			)
-		await expect(start({ origin: ORIGIN, 'sec-fetch-site': 'cross-site' })).rejects.toMatchObject({ httpStatus: 403 })
-		await expect(start({ origin: 'null' })).rejects.toMatchObject({ httpStatus: 403 })
-		await expect(start({ referer: 'https://evil.example/page' })).rejects.toMatchObject({ httpStatus: 403 })
-		await expect(start({ referer: `${ORIGIN}/settings/source` })).resolves.toMatchObject({
-			continuePath: expect.stringContaining('/api/source/github/manifest/'),
-		})
-		await expect(start({ origin: 'null', 'sec-fetch-site': 'same-origin' })).resolves.toMatchObject({
-			continuePath: expect.stringContaining('/api/source/github/manifest/'),
-		})
+		await expect(start(environment())).resolves.toMatchObject({ continuePath: expect.stringContaining('/api/source/github/manifest/') })
+		const { FABRIKA_CONTROL_DOMAIN: _unset, ...unconfigured } = environment()
+		await expect(start(unconfigured)).rejects.toMatchObject({ httpStatus: 403 })
 	})
 
-	test('requires a same-origin human for every privileged entrypoint', async () => {
+	test('requires a human for every privileged entrypoint', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
 		await expect(startSourceConnection(
-			deps(env, source, new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { origin: 'https://evil.example' } })),
+			deps(env, source, mutationRequest('/api/rpc'), auth('service')),
 			{ organization: 'acme', appName: 'source', visibility: 'private', repositories: [] },
 		)).rejects.toThrow('source connection request failed')
 		await expect(sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`), auth('service')), {})).rejects.toThrow(

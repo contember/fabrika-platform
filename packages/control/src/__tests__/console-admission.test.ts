@@ -53,6 +53,8 @@ function admissionFixture(): (request: Request) => Promise<Outcome> {
 
 type Credential = 'same-origin session' | 'cross-site session' | 'same-site session' | 'bearer' | 'bearer and cookie'
 
+const BEARERS: readonly Credential[] = ['bearer', 'bearer and cookie']
+
 const CREDENTIALS: Readonly<Record<Credential, Record<string, string>>> = {
 	'same-origin session': { cookie: `${SESSION_COOKIE}=s`, origin: CONSOLE_ORIGIN, 'sec-fetch-site': 'same-origin' },
 	'cross-site session': { cookie: `${SESSION_COOKIE}=s`, origin: 'https://attacker.example', 'sec-fetch-site': 'cross-site' },
@@ -123,18 +125,21 @@ test('a doubled slash cannot route a session around the RPC row', async () => {
 describe('a bearer is explicit authority', () => {
 	const fetch = admissionFixture()
 
-	for (const target of MOUNTS.slice(0, 2)) {
+	for (const target of MOUNTS) {
 		test(`${target.name}: a bearer, with or without a cookie, is served`, async () => {
 			expect(await fetch(call(target, 'bearer'))).toBe('control 200')
 			expect(await fetch(call(target, 'bearer and cookie'))).toBe('control 200')
 		})
 	}
 
-	// Control's own same-origin guards still refuse these; the proxy's admission is meant to replace them.
-	for (const target of [...MOUNTS.slice(2), ...GITHUB]) {
-		test(`${target.name}: a bearer without the console's origin is refused by Control`, async () => {
-			expect(await fetch(call(target, 'bearer'))).toBe('control 403')
-			expect(await fetch(call(target, 'bearer and cookie'))).toBe('control 403')
+	// The accepted relaxation of B10f: Control's same-origin guards refused these without the console's origin.
+	for (const target of GITHUB) {
+		test(`${target.name}: a person's key reaches the workflow, which reads no origin`, async () => {
+			for (const credential of BEARERS) {
+				const outcome = await fetch(call(target, credential))
+				expect(outcome.startsWith('control ')).toBe(true)
+				expect(outcome).not.toBe('control 403')
+			}
 		})
 	}
 

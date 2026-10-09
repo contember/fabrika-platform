@@ -324,8 +324,7 @@ const desiredServiceEnv = (
 				[FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource(proxySource)],
 				['ENVIRONMENT', environment],
 				['FABRIKA_IAM_ISSUER', iamOrigin],
-				// A bare host: `controlPublicOrigin` accepts either spelling, and this is also what the
-				// same-origin check on both first-party gateways is decided against.
+				// A bare host: `controlPublicOrigin` accepts either spelling.
 				['FABRIKA_CONTROL_DOMAIN', placement.hosts.control],
 				// The digest of the console table the proxy above publishes: Control picks its own table, MCP or not,
 				// by it, and refuses to start under another, so the two cannot disagree at runtime.
