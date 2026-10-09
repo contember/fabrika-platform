@@ -19,7 +19,7 @@ import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
-import { type ControlRepositories, createControlRepositories } from '../db'
+import { AppEnvChangedError, type AppEnvInput, type ControlRepositories, createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { type PublishGitHubConnectionInput } from '../github/connections/model'
 import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from '../github/connections/secrets'
@@ -31,8 +31,10 @@ import { applyMigrations } from '../zerops/migrate'
 import { createFetchHandler } from '../zerops/server'
 import { fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
+import { interleaving } from './helpers/postgres-interleave'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { fakeControlProvider } from './helpers/provider'
+import { refusedClaimScenario } from './helpers/refused-claims'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv } from './helpers/tokens'
 
@@ -562,6 +564,78 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 	test('approved access: stale registry writes and a stale publication lose to a protection change', async () => {
 		await reset()
 		await protectionRaceScenario(db, new SqlDeployLocks(raw))
+	})
+
+	test('approved access: a refused conditional put keeps none of its namespace claims', async () => {
+		await reset()
+		await refusedClaimScenario(db)
+	})
+
+	const stage: AppEnvInput = { ...providerEnvironment('acme', 'stage') }
+
+	/** Run `contend` on its own connection while `hold` waits to commit on another, then let `hold` commit. */
+	async function interleaved<T>(hold: (held: ControlRepositories) => Promise<unknown>, contend: (contender: ControlRepositories) => Promise<T>) {
+		if (postgresUrl === null || fixture === null) throw new Error('Postgres fixture is unavailable')
+		const lanes = await interleaving(postgresUrl, fixture.schema)
+		try {
+			const held = hold(createControlRepositories(lanes.held))
+			await lanes.heldReady()
+			const contended = contend(createControlRepositories(lanes.contender))
+			await lanes.contenderBlocked()
+			await lanes.commit()
+			await held
+			return await Promise.allSettled([contended]).then(([outcome]) => outcome)
+		} finally {
+			await lanes.close()
+		}
+	}
+
+	test('approved access: an app deletion waits for a protection change on its environment, and then refuses', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		const read = await db.registry.upsertAppEnv(stage, { absent: true })
+		const outcome = await interleaved(
+			(human) => human.registry.setAppEnvProtected('acme', 'stage', true),
+			(service) => service.registry.deleteApp('acme', [{ env: 'stage', generation: read.generation }]),
+		)
+		expect(outcome?.status === 'rejected' ? outcome.reason : null).toBeInstanceOf(AppEnvChangedError)
+		expect(await db.registry.getAppEnv('acme', 'stage')).toMatchObject({ protected: 1, protection_revision: 1 })
+	})
+
+	test('approved access: an environment deletion waits for a protection change, and then refuses', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		const read = await db.registry.upsertAppEnv(stage, { absent: true })
+		const outcome = await interleaved(
+			(human) => human.registry.setAppEnvProtected('acme', 'stage', true),
+			(service) => service.registry.deleteAppEnv('acme', 'stage', read.generation),
+		)
+		expect(outcome?.status === 'rejected' ? outcome.reason : null).toBeInstanceOf(AppEnvChangedError)
+		expect(await db.registry.getAppEnv('acme', 'stage')).toMatchObject({ protected: 1, protection_revision: 1 })
+	})
+
+	test('approved access: a recreation that waits for a deletion starts from what that deletion left', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		const first = await db.registry.upsertAppEnv(stage, { absent: true })
+		expect(await db.registry.deleteAppEnv('acme', 'stage', first.generation)).toBe(true)
+		const recreated = await db.registry.upsertAppEnv(stage, { absent: true })
+		expect(recreated).toMatchObject({ protected: 0, generation: 1, protection_revision: 0 })
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'main', trigger: 'manual', actor: 'user:ada' })
+		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
+		await owned.start(run.id, 'logs')
+		const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0', artifact: null })
+		await owned.snapshot(run.id, snapshot)
+		const protectedRow = await db.registry.setAppEnvProtected('acme', 'stage', true)
+		expect(protectedRow).toMatchObject({ protected: 1, generation: 2, protection_revision: 1 })
+
+		const outcome = await interleaved(
+			(service) => service.registry.deleteAppEnv('acme', 'stage', 2),
+			(service) => service.registry.upsertAppEnv(stage, { absent: true }),
+		)
+		expect(outcome?.status).toBe('fulfilled')
+		expect(await db.registry.getAppEnv('acme', 'stage')).toMatchObject({ protected: 1, generation: 3, protection_revision: 1 })
+		expect(await owned.publish(run.id, { generation: recreated.generation, protectionRevision: recreated.protection_revision }, snapshot)).toBe(false)
 	})
 
 	test('runs: create, status-guarded transitions, keyset paging, and stale candidates', async () => {

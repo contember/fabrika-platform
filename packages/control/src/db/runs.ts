@@ -1,6 +1,7 @@
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { type LeaseFence, runLeaseKey } from '../lease'
+import { runCoordinateLockStatements } from './coordinate-lock'
 import { firstRow } from './returning'
 
 export type RunTrigger = 'webhook' | 'manual' | 'poll'
@@ -316,6 +317,7 @@ export class RunRepository {
 			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
 				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
 					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
+			...runCoordinateLockStatements(this.d1, id),
 			this.d1.prepare(`UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ?, generation = generation + 1
 				WHERE generation = ? AND protection_revision = ?
 					AND EXISTS (SELECT 1 FROM runs
@@ -325,7 +327,7 @@ export class RunRepository {
 						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
 				RETURNING app_id`).bind(id, snapshotJson, expected.generation, expected.protectionRevision, id, fence.holder, fence.nowMs),
 		])
-		return (results[1]?.results.length ?? 0) > 0
+		return (results.at(-1)?.results.length ?? 0) > 0
 	}
 
 	/**
@@ -343,13 +345,14 @@ export class RunRepository {
 			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
 				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
 					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
+			...runCoordinateLockStatements(this.d1, id),
 			this.d1.prepare(`UPDATE app_envs SET published_snapshot_json = ?, generation = generation + 1
 				WHERE published_run_id = ? AND generation = ? AND protection_revision = ? AND protected = 0
 					AND EXISTS (SELECT 1 FROM deploy_locks
 						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
 				RETURNING app_id`).bind(snapshotJson, id, expected.generation, expected.protectionRevision, fence.holder, fence.nowMs),
 		])
-		return (results[1]?.results.length ?? 0) > 0
+		return (results.at(-1)?.results.length ?? 0) > 0
 	}
 
 	/**

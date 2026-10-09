@@ -34,6 +34,7 @@ import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
+import { refusedClaimScenario } from './helpers/refused-claims'
 
 const COMMIT = 'c'.repeat(40)
 
@@ -575,6 +576,10 @@ describe('protection survives the registry', () => {
 	test('stale registry writes and a stale publication lose to a protection change (SQLite)', async () => {
 		const w = world()
 		await protectionRaceScenario(w.db, makeFakeLock(w.db))
+	})
+
+	test('a refused conditional put keeps none of its namespace claims (SQLite)', async () => {
+		await refusedClaimScenario(world().db)
 	})
 
 	function registry(w: World, caller: AuthContext, request = consoleRequest()): RegistryUseCaseContext {

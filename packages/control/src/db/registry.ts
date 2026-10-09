@@ -1,6 +1,7 @@
 import { type DeployLocks, type SqlDatabase, SqlDeployLocks, type SqlStatement } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { type LeaseFence, namespaceLeaseKey } from '../lease'
+import { appCoordinateLockStatements, appRowLockStatement, coordinateLockStatements, defaultProtected } from './coordinate-lock'
 import {
 	AppEnvChangedError,
 	type AppEnvExpectation,
@@ -54,7 +55,7 @@ const appEnvInsertValues = (input: AppEnvInput): (string | number | null)[] => [
 	input.providerTargetJson,
 	input.providerArtifactJson,
 	authoringFlag(input.authoring),
-	input.env === 'prod' ? 1 : 0,
+	defaultProtected(input.env),
 	input.appId,
 	input.env,
 ]
@@ -69,7 +70,9 @@ const appEnvTombstoneSql = `INSERT INTO app_env_protection (app_id, env, protect
 const APP_ENV_TOMBSTONE_CONFLICT = `ON CONFLICT (app_id, env) DO UPDATE SET
 	protected = excluded.protected, generation = excluded.generation, protection_revision = excluded.protection_revision`
 
-const claimRows = (results: readonly { readonly results: readonly (AppEnvRow | NamespaceResourceClaimRow)[] }[]): NamespaceResourceClaimRow[] =>
+const claimRows = (
+	results: readonly { readonly results: readonly (AppRow | AppEnvRow | NamespaceResourceClaimRow)[] }[],
+): NamespaceResourceClaimRow[] =>
 	results.map((result) => {
 		const [claim] = result.results
 		if (claim === undefined || !('resource_key' in claim) || result.results.length !== 1) {
@@ -253,11 +256,13 @@ export class ControlRegistryRepository {
 				}))`,
 				values: [id, expected.length, id, ...expected.flatMap((row) => [row.env, row.generation])],
 			}
+		const lock = appCoordinateLockStatements(this.d1, id)
 		const results = await this.d1.batch([
+			...lock,
 			this.d1.prepare(`${appEnvTombstoneSql} WHERE app_id = ? ${APP_ENV_TOMBSTONE_CONFLICT}`).bind(id),
 			this.d1.prepare(`DELETE FROM apps WHERE id = ?${unchanged.sql} RETURNING id`).bind(id, ...unchanged.values),
 		])
-		if ((results[1]?.results.length ?? 0) > 0) return true
+		if ((results[lock.length + 1]?.results.length ?? 0) > 0) return true
 		if (expected !== undefined && (await this.getApp(id)) !== null) throw new AppEnvChangedError(id, '*')
 		return false
 	}
@@ -604,13 +609,7 @@ export class ControlRegistryRepository {
 	 * With `expected`, the write applies only if the environment is still what the caller read (`AppEnvChangedError`).
 	 */
 	async upsertAppEnv(input: AppEnvInput, expected?: AppEnvExpectation): Promise<AppEnvRow> {
-		await this.assertStoredSourceConnection(input.appId)
-		if (expected === undefined) return firstRow<AppEnvRow>(this.appEnvUpsertStatement(input))
-		const write = this.expectedAppEnvWrite(input, expected, [])
-		const results = await this.d1.batch<AppEnvRow>(write.statements)
-		const row = results[write.envAt]?.results[0]
-		if (row === undefined) throw new AppEnvChangedError(input.appId, input.env)
-		return row
+		return (await this.writeAppEnv(input, [], expected)).appEnv
 	}
 
 	/**
@@ -625,32 +624,47 @@ export class ControlRegistryRepository {
 		if (input.namespaceId === null) {
 			throw new Error('namespace resource claims require an environment namespace')
 		}
+		return this.writeAppEnv(input, resourceKeys, expected)
+	}
+
+	/**
+	 * One environment write and its namespace claims, in one transaction under the coordinate lock. With `expected`, a
+	 * write that finds the environment changed fails the whole transaction (`expectedAppEnvWrite`), so no claim of it
+	 * commits either.
+	 */
+	private async writeAppEnv(
+		input: AppEnvInput,
+		resourceKeys: readonly string[],
+		expected: AppEnvExpectation | undefined,
+	): Promise<{ appEnv: AppEnvRow; resourceClaims: NamespaceResourceClaimRow[] }> {
 		await this.assertStoredSourceConnection(input.appId)
-		const owner: NamespaceResourceClaimOwner = {
-			namespaceId: input.namespaceId,
-			ownerAppId: input.appId,
-			ownerEnv: input.env,
-			resourceKeys,
+		const lock = [appRowLockStatement(this.d1, input.appId), ...coordinateLockStatements(this.d1, input.appId, input.env)]
+		const write = expected === undefined ? { statements: [this.appEnvUpsertStatement(input)], envAt: 0 } : this.expectedAppEnvWrite(input, expected)
+		const owner: NamespaceResourceClaimOwner | null = input.namespaceId === null || resourceKeys.length === 0
+			? null
+			: { namespaceId: input.namespaceId, ownerAppId: input.appId, ownerEnv: input.env, resourceKeys }
+		const statements = [...lock, ...write.statements, ...(owner === null ? [] : this.namespaceResourceClaimStatements(owner))]
+		const run = () => this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>(statements)
+		const claimed = owner === null ? run : () => this.withNamespaceResourceClaimConflict(owner, run)
+		const results = expected === undefined ? await claimed() : await this.expectedWrite(input, expected, claimed)
+		const envResult = results[lock.length + write.envAt]
+		const appEnv = envResult?.results[0]
+		if (appEnv === undefined || !('provider' in appEnv) || envResult?.results.length !== 1) {
+			throw new Error('expected one row from an app environment write')
 		}
-		if (expected !== undefined) {
-			const guard = 'absent' in expected ? undefined : { input, generation: expected.generation + 1 }
-			const write = this.expectedAppEnvWrite(input, expected, this.namespaceResourceClaimStatements(owner, guard))
-			const results = await this.withNamespaceResourceClaimConflict(owner, () => this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>(write.statements))
-			const appEnv = results[write.envAt]?.results[0]
-			if (appEnv === undefined || !('provider' in appEnv)) throw new AppEnvChangedError(input.appId, input.env)
-			return { appEnv, resourceClaims: claimRows(results.slice(write.claimsFrom, write.claimsFrom + write.claims)) }
+		return { appEnv, resourceClaims: claimRows(results.slice(lock.length + write.statements.length)) }
+	}
+
+	/** A failed conditional write is a conflict when the environment is no longer what the caller read. */
+	private async expectedWrite<T>(input: AppEnvInput, expected: AppEnvExpectation, write: () => Promise<T>): Promise<T> {
+		try {
+			return await write()
+		} catch (cause) {
+			const current = await this.getAppEnv(input.appId, input.env)
+			const unchanged = 'absent' in expected ? current === null : current?.generation === expected.generation
+			if (!unchanged) throw new AppEnvChangedError(input.appId, input.env)
+			throw cause
 		}
-		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
-			this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>([
-				this.appEnvUpsertStatement(input),
-				...this.namespaceResourceClaimStatements(owner),
-			]))
-		const [appResult, ...claimResults] = results
-		const appEnv = appResult?.results[0]
-		if (appEnv === undefined || !('provider' in appEnv) || appResult?.results.length !== 1) {
-			throw new Error('expected one row from an app environment upsert')
-		}
-		return { appEnv, resourceClaims: claimRows(claimResults) }
 	}
 
 	/** Create an app, its first namespaced environment, and all claims in one transaction. */
@@ -678,29 +692,24 @@ export class ControlRegistryRepository {
 			ownerEnv: environmentInput.env,
 			resourceKeys,
 		}
+		const lock = coordinateLockStatements(this.d1, environmentInput.appId, environmentInput.env)
 		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
 			this.d1.batch<AppRow | AppEnvRow | NamespaceResourceClaimRow>([
 				this.appInsertStatement(appInput),
+				...lock,
 				this.appEnvUpsertStatement(environmentInput),
 				...this.namespaceResourceClaimStatements(owner),
 			]))
+		const envAt = 1 + lock.length
 		const app = results[0]?.results[0]
-		const appEnv = results[1]?.results[0]
+		const appEnv = results[envAt]?.results[0]
 		if (app === undefined || !('id' in app) || results[0]?.results.length !== 1) {
 			throw new Error('expected one row from an app insert')
 		}
-		if (appEnv === undefined || !('provider' in appEnv) || results[1]?.results.length !== 1) {
+		if (appEnv === undefined || !('provider' in appEnv) || results[envAt]?.results.length !== 1) {
 			throw new Error('expected one row from an app environment upsert')
 		}
-		const resourceClaims: NamespaceResourceClaimRow[] = []
-		for (const result of results.slice(2)) {
-			const claim = result.results[0]
-			if (claim === undefined || !('resource_key' in claim) || result.results.length !== 1) {
-				throw new Error('expected one row from a namespace resource claim acquisition')
-			}
-			resourceClaims.push(claim)
-		}
-		return { app, appEnv, resourceClaims }
+		return { app, appEnv, resourceClaims: claimRows(results.slice(envAt + 1)) }
 	}
 
 	private appEnvUpsertStatement(input: AppEnvInput): SqlStatement {
@@ -721,22 +730,19 @@ export class ControlRegistryRepository {
 	}
 
 	/**
-	 * A write conditional on what the caller read. An existing environment is locked at its read `generation` first,
-	 * so nothing changes it between that check and the update. The claims follow the update (their owner must already
-	 * be in their namespace) and apply only while the environment is exactly what this write left. A new environment
-	 * is inserted only while none exists.
+	 * A write conditional on what the caller read, under the coordinate lock. A new environment is a plain insert, which
+	 * fails on the key when one exists. An existing one is checked first: when it is not at the generation the caller read,
+	 * the check inserts a duplicate of the locked protection row, and the unique key fails the transaction.
 	 */
-	private expectedAppEnvWrite(
-		input: AppEnvInput,
-		expected: AppEnvExpectation,
-		claims: readonly SqlStatement[],
-	): { readonly statements: SqlStatement[]; readonly envAt: number; readonly claimsFrom: number; readonly claims: number } {
+	private expectedAppEnvWrite(input: AppEnvInput, expected: AppEnvExpectation): { readonly statements: SqlStatement[]; readonly envAt: number } {
 		if ('absent' in expected) {
-			const insert = this.d1.prepare(`${APP_ENV_INSERT_SQL} ON CONFLICT (app_id, env) DO NOTHING RETURNING *`).bind(...appEnvInsertValues(input))
-			return { statements: [insert, ...claims], envAt: 0, claimsFrom: 1, claims: claims.length }
+			return { statements: [this.d1.prepare(`${APP_ENV_INSERT_SQL} RETURNING *`).bind(...appEnvInsertValues(input))], envAt: 0 }
 		}
-		const lock = this.d1.prepare('UPDATE app_envs SET generation = generation WHERE app_id = ? AND env = ? AND generation = ?')
-			.bind(input.appId, input.env, expected.generation)
+		const check = this.d1
+			.prepare(`INSERT INTO app_env_protection (app_id, env, protected, generation, protection_revision)
+				SELECT app_id, env, protected, generation, protection_revision FROM app_env_protection
+				WHERE app_id = ? AND env = ? AND NOT EXISTS (SELECT 1 FROM app_envs WHERE app_id = ? AND env = ? AND generation = ?)`)
+			.bind(input.appId, input.env, input.appId, input.env, expected.generation)
 		const update = this.d1
 			.prepare(`UPDATE app_envs SET
 					domain = ?, public_origin = ?, trigger_ref = ?, namespace_id = ?, provider = ?,
@@ -757,52 +763,24 @@ export class ControlRegistryRepository {
 				input.env,
 				expected.generation,
 			)
-		return { statements: [lock, update, ...claims], envAt: 1, claimsFrom: 2, claims: claims.length }
+		return { statements: [check, update], envAt: 1 }
 	}
 
-	/** With `guard`, each claim is acquired only while the environment holds that write: its generation and its registration. */
-	private namespaceResourceClaimStatements(
-		input: NamespaceResourceClaimOwner,
-		guard?: { readonly input: AppEnvInput; readonly generation: number },
-	): SqlStatement[] {
+	private namespaceResourceClaimStatements(input: NamespaceResourceClaimOwner): SqlStatement[] {
 		if ((input.ownerAppId === null) !== (input.ownerEnv === null)) {
 			throw new Error('namespace resource claim owner app and environment must both be set or both be null')
 		}
 		return [...new Set(input.resourceKeys)].sort().map((resourceKey) =>
-			guard === undefined
-				? this.d1
-					.prepare(`INSERT INTO namespace_resource_claims (
-						namespace_id, resource_key, owner_app_id, owner_env
-					)
-					VALUES (?, ?, ?, ?)
-					ON CONFLICT (namespace_id, resource_key) DO UPDATE SET
-						owner_app_id = excluded.owner_app_id,
-						owner_env = excluded.owner_env
-					RETURNING *`)
-					.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv)
-				: this.d1
-					.prepare(`INSERT INTO namespace_resource_claims (
-						namespace_id, resource_key, owner_app_id, owner_env
-					)
-					SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM app_envs
-						WHERE app_id = ? AND env = ? AND generation = ? AND namespace_id = ?
-							AND provider_target_json = ? AND provider_artifact_json = ?)
-					ON CONFLICT (namespace_id, resource_key) DO UPDATE SET
-						owner_app_id = excluded.owner_app_id,
-						owner_env = excluded.owner_env
-					RETURNING *`)
-					.bind(
-						input.namespaceId,
-						resourceKey,
-						input.ownerAppId,
-						input.ownerEnv,
-						guard.input.appId,
-						guard.input.env,
-						guard.generation,
-						guard.input.namespaceId,
-						guard.input.providerTargetJson,
-						guard.input.providerArtifactJson,
-					)
+			this.d1
+				.prepare(`INSERT INTO namespace_resource_claims (
+					namespace_id, resource_key, owner_app_id, owner_env
+				)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT (namespace_id, resource_key) DO UPDATE SET
+					owner_app_id = excluded.owner_app_id,
+					owner_env = excluded.owner_env
+				RETURNING *`)
+				.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv)
 		)
 	}
 
@@ -832,11 +810,13 @@ export class ControlRegistryRepository {
 	 * kept for these coordinates beyond the environment's deletion.
 	 */
 	async setAppEnvProtected(appId: string, env: string, value: boolean): Promise<AppEnvRow | null> {
-		return this.d1
-			.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1
-				WHERE app_id = ? AND env = ? RETURNING *`)
-			.bind(value ? 1 : 0, appId, env)
-			.first<AppEnvRow>()
+		const lock = coordinateLockStatements(this.d1, appId, env)
+		const results = await this.d1.batch<AppEnvRow>([
+			...lock,
+			this.d1.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1
+				WHERE app_id = ? AND env = ? RETURNING *`).bind(value ? 1 : 0, appId, env),
+		])
+		return results[lock.length]?.results[0] ?? null
 	}
 
 	/**
@@ -845,11 +825,13 @@ export class ControlRegistryRepository {
 	 */
 	async deleteAppEnv(appId: string, env: string, expected?: number): Promise<boolean> {
 		const at = expected === undefined ? { sql: '', values: [] } : { sql: ' AND generation = ?', values: [expected] }
+		const lock = coordinateLockStatements(this.d1, appId, env)
 		const results = await this.d1.batch([
+			...lock,
 			this.d1.prepare(`${appEnvTombstoneSql} WHERE app_id = ? AND env = ?${at.sql} ${APP_ENV_TOMBSTONE_CONFLICT}`).bind(appId, env, ...at.values),
 			this.d1.prepare(`DELETE FROM app_envs WHERE app_id = ? AND env = ?${at.sql} RETURNING app_id`).bind(appId, env, ...at.values),
 		])
-		if ((results[1]?.results.length ?? 0) > 0) return true
+		if ((results[lock.length + 1]?.results.length ?? 0) > 0) return true
 		if (expected !== undefined && (await this.getAppEnv(appId, env)) !== null) throw new AppEnvChangedError(appId, env)
 		return false
 	}
