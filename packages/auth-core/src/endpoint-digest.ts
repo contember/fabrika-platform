@@ -3,11 +3,17 @@
 
 import type { ContractArtifact, EndpointRow, ExportDescription } from './contract'
 import { canonicalAdmission, canonicalArtifactJson, canonicalJson, canonicalShape } from './contract-canonical'
-import type { InstallationEndpointRow } from './installation-endpoint'
+import type { InstallationEndpointRow, InstallationEndpointTable } from './installation-endpoint'
 import { sha256Hex } from './sha256'
 
 /** The variable that carries the digest of the contract a deploy was approved with; the application compares its own. */
 export const FABRIKA_CONTRACT_DIGEST = 'FABRIKA_CONTRACT_DIGEST'
+
+/**
+ * The variable that carries `installationTableDigest` of the table an installation service's proxy publishes; the
+ * service picks its own table by it and refuses to start when it names none.
+ */
+export const FABRIKA_SERVICE_TABLE_DIGEST = 'FABRIKA_SERVICE_TABLE_DIGEST'
 
 /**
  * What a membership or scope-creating endpoint spends at IAM through a single-use delegation grant (ADR-0022 rule 6):
@@ -82,6 +88,16 @@ function sortedCodeUnits(values: readonly string[]): string[] {
 /** The digest of the whole artifact, over its one canonical serialization. */
 export function contractDigest(artifact: ContractArtifact): string {
 	return digestOf(canonicalArtifactJson(artifact))
+}
+
+/**
+ * The digest of an installation service's table: each row's id and `requirementDigest`, and the reserved prefixes. A
+ * composition writes it beside the service from the table its proxy publishes, so the service refuses to start under
+ * another table (ADR-0022 "Installation entries"). Row and prefix order carry no meaning.
+ */
+export function installationTableDigest(table: InstallationEndpointTable): string {
+	const endpoints = table.endpoints.map((row) => `${row.id}@${requirementDigest({ ...row, delegation: null })}`)
+	return digestOf(canonicalJson({ endpoints: sortedCodeUnits(endpoints), reservedPrefixes: sortedCodeUnits(table.reservedPrefixes) }))
 }
 
 /**

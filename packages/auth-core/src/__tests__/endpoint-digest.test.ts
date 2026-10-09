@@ -7,11 +7,12 @@ import {
 	endpointDigest,
 	exportDigest,
 	formatEndpointHeader,
+	installationTableDigest,
 	isDigest,
 	parseEndpointHeader,
 	requirementDigest,
 } from '../endpoint-digest'
-import type { InstallationCredentialedEndpoint } from '../installation-endpoint'
+import type { InstallationAnonymousEndpoint, InstallationCredentialedEndpoint } from '../installation-endpoint'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 type Rules = EndpointRow & { readonly delegation: EndpointDelegation | null }
@@ -200,5 +201,40 @@ describe('exportDigest', () => {
 		expect(exportDigest({ ...description, version: 2 })).not.toBe(digest)
 		expect(exportDigest({ ...description, audience: 'someone else' })).not.toBe(digest)
 		expect(exportDigest({ ...description, procedures: { get: { input: null, output: { type: 'boolean' } } } })).not.toBe(digest)
+	})
+})
+
+describe('installationTableDigest', () => {
+	const health: InstallationAnonymousEndpoint = {
+		id: 'health',
+		kind: 'health',
+		method: '*',
+		path: '/healthz',
+		callers: [],
+		requirement: null,
+		admission: null,
+		oauth: null,
+	}
+	const console_: InstallationCredentialedEndpoint = {
+		id: 'console',
+		kind: 'service',
+		method: 'GET',
+		path: '/*',
+		callers: ['human'],
+		requirement: { kind: 'authenticated' },
+		admission: null,
+		oauth: null,
+	}
+	const table = { endpoints: [health, console_], reservedPrefixes: ['/api', '/mcp'] }
+
+	test('row and prefix order carry no meaning', () => {
+		expect(installationTableDigest({ endpoints: [console_, health], reservedPrefixes: ['/mcp', '/api'] })).toBe(installationTableDigest(table))
+	})
+
+	test("a row's rules, its id and the reserved prefixes each change it", () => {
+		const digest = installationTableDigest(table)
+		expect(installationTableDigest({ ...table, endpoints: [health, { ...console_, callers: ['human', 'machine'] }] })).not.toBe(digest)
+		expect(installationTableDigest({ ...table, endpoints: [health, { ...console_, id: 'shell' }] })).not.toBe(digest)
+		expect(installationTableDigest({ ...table, reservedPrefixes: ['/api'] })).not.toBe(digest)
 	})
 })
