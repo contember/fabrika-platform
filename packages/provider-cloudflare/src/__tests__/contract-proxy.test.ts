@@ -150,7 +150,9 @@ describe('a contract application behind its endpoint table on Cloudflare', () =>
 
 	test('a proxy Worker given both a table and gates is refused', () => {
 		const both = { name: 'notes-proxy', app: appWorker(), appId: APP_ID, appHost: HOST, endpoints: table, gates: { rules: [] }, iamUrl: ISSUER }
-		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [both])).toThrow('exactly one of an endpoint table, an installation table or gates')
+		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [both])).toThrow(
+			'exactly one of an endpoint table, an installation table or gates',
+		)
 		const installationAndGates = { ...both, endpoints: undefined, installation: { installation: true, endpoints: [], reservedPrefixes: [] } }
 		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [installationAndGates])).toThrow('exactly one of')
 	})
