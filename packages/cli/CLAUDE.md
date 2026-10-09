@@ -68,10 +68,13 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   generated tests are committed and run with this package's suite; `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
 - `db test-isolation` is the platform's run of them (the Zerops start script): the files must equal the scaffold's
-  output, then `bun --config=<empty> test <files> --reporter=junit` runs them on `FABRIKA_APP_DATABASE_URL` with
+  output and no endpoint may lack its input fixture, then `bun --config=<empty> test
+  --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them on `FABRIKA_APP_DATABASE_URL` with
   `FABRIKA_TEST_POSTGRES_REQUIRED=1` and no framework variable, and every case name the scaffold wrote must be
-  reported as passed (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never applies. Its output
-  has the URL cut out.
+  reported as passed with an assertion (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never
+  applies. **It prints none of the child's output**, only the counts and the failed case names, which come from the
+  scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
+  the start script never passes it.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message or a server-reported
   Postgres error; any other driver error is replaced, because it may quote the URL.

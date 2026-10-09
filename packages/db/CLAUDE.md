@@ -34,7 +34,6 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | `migrations.ts`       | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
 | `codegen.ts`          | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                                         |
 | `testing.ts`          | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
-| -------------------   | -------------------------------------------------------------------------------------------------------------------------                      |
 | `production.ts`       | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                        |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
@@ -56,12 +55,17 @@ built yet: a store for `reference` tables, and reading an inbox.
 `testDatabase` migrates a fresh `app_test_<hex>` schema through `@fabrika/platform-node`'s application runner, or
 answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
 chains that share no value, every container row a table owns first; `tableProbe` reaches one table of a layer by
-name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them.
+name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
+column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer.
 There is no generated `move` case yet: an access form hands a handler one capability, and `t.move` needs the source
 and the target `Ref`, so no handler can call it.
 
 ## Invariants
 
+- **The generated tests catch mistakes; the data layer is the enforcement.** They catch what an application's author,
+  usually an agent, gets wrong: a handler that serves another scope's rows, a cache keyed by nothing, a policy that
+  does not hold. A deliberately hostile author runs in the same process and can always subvert them. Never weaken a
+  store check because a generated test covers the case.
 - **`@fabrika/db/tables` imports no Bun API, no driver and no Kysely runtime.** `@fabrika/app/contract` (the SPA)
   and the static contract reader (a Worker) import it; `tables.test.ts` bundles it for a browser.
 - **`defineTables` and `readTables` are one parse** (`parseTables`), over values nobody type-checked: plain objects
@@ -78,11 +82,16 @@ and the target `Ref`, so no handler can call it.
   `objectPredicate`, …), so kind, dimension, action and the authority run on every call. It exists for the generated
   tests, which address a table by name; add no operation to it that a store does not have.
 - **`@fabrika/db/testing` is for test files only.** It refuses to load or run once `markProductionProcess` ran (the
-  generated entrypoint calls it before it imports the application, and nothing unmarks it), and when `FABRIKA_RELEASE`
-  is set; the mark is what holds after the framework scrubbed `FABRIKA_*` from the process. `@fabrika/check`'s
-  `test-only-import` refuses it outside a test file: it seeds rows past the data layer, through a raw connection of
-  its own. A test database whose migrations fail drops its schema, and `close` runs every cleanup step. Its seeding fills a required column it does not place with a sample of the column's type,
-  and refuses a type codegen refuses.
+  generated entrypoint calls it before it imports the application), and when `FABRIKA_RELEASE` is set. The mark is a
+  non-writable, non-configurable property of `globalThis` under `Symbol.for('fabrika.production')`: every installed
+  copy of this package reads it, it holds after the framework scrubbed `FABRIKA_*`, and nothing unmarks it.
+  `@fabrika/check`'s `test-only-import` refuses the module outside a test file: it seeds rows past the data layer,
+  through a raw connection of its own. Its seeding fills a required column it does not place with a sample of the
+  column's type, and refuses a type codegen refuses.
+- **A throwaway schema is held by its advisory lock for its whole life.** The lock (SHA-256 of
+  `fabrika-test-schema:<name>`) is taken on a reserved connection before the schema exists. Each `testDatabase` first
+  drops every `app_test_*` schema whose lock it can take, and never one whose lock is held. A failed migration drops
+  the schema, and `close` runs every cleanup step even when one throws.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.
 - **A file row carries its owner's whole chain**, under a composite foreign key with `ON UPDATE CASCADE` and

@@ -425,6 +425,16 @@ src/
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
   kit does not. Its API is what `fabrika db test-scaffold` writes against: a change
   regenerates `packages/cli`'s fixture tests.
+- **The generated tests catch mistakes; the data layer is the enforcement.** They catch what an
+  application's author, usually an agent, gets wrong. A deliberately hostile author runs in the
+  same process and can always subvert them. Never rely on them for a guarantee `@fabrika/db` or
+  the pipeline does not give.
+- **The generated tests register through captured runner functions** (`testing/runner.ts`).
+  `@fabrika/app/testing/preload`, which `fabrika db test-isolation` preloads, captures Bun's
+  `test`, `describe`, `expect` and `afterAll` in a non-configurable global before any
+  application module loads; without it the module's own import is used. A case that ran no
+  `expect` fails. `endpointAccessKit` fails a case whose input the endpoint refuses (400) and
+  counts a text marker of the other scope's rows as a leak, wherever it is in the answer.
 - **The test kits refuse a serving process.** The generated entrypoint calls
   `markProductionProcess` (`@fabrika/db/production`, re-exported by both adapters) before it
   imports the application; `@fabrika/app/testing*` and `@fabrika/db/testing` then refuse to

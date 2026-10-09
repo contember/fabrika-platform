@@ -34,30 +34,31 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
   `files` means no policies. `readContractSource` uses it unless `tables` (the artifact form) is given.
 
-| Module               | What it owns                                                                                           |
-| -------------------- | ------------------------------------------------------------------------------------------------------ |
-| `check.ts`           | `checkApplication`, the disk reader, and the order the rules run in.                                   |
-| `ast.ts`             | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.      |
-| `graph.ts`           | The one static resolver: what a name denotes through consts, imports and exports, without executing.   |
-| `layout.ts`          | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.     |
-| `references.ts`      | Every way a module names another, and which names a direct load takes.                                 |
-| `resolution.ts`      | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
-| `trust.ts`           | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
-| `jsonc.ts`           | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
-| `toml.ts`            | The TOML subset `bunfig.toml` is read in, keys decoded as Bun decodes them; anything else is refused.  |
-| `limits.ts`          | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
-| `finding.ts`         | The rule ids, the `Finding` shape and its one-line format.                                             |
-| `rules/literal.ts`   | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
-| `rules/contract.ts`  | What the reader refuses, run by the checker once the literal rule passes.                              |
-| `rules/*.ts`         | One file per rule group.                                                                               |
-| `contract.ts`        | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.          |
-| `scaffold.ts`        | The tests `fabrika db test-scaffold` writes: policy isolation and endpoint access (`generatedTests`).  |
-| `scaffold-sample.ts` | The fixed input literal of an endpoint's schema that an endpoint access case sends.                    |
-| `rules/isolation.ts` | Every generated test is byte for byte what the scaffold writes now; none it no longer writes.          |
-| `reader/value.ts`    | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                 |
-| `reader/schema.ts`   | Each `z` factory and method applied to real zod, with its arguments and options checked.               |
-| `reader/surface.ts`  | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.  |
-| `reader/tables.ts`   | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`. |
+| Module                 | What it owns                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| `check.ts`             | `checkApplication`, the disk reader, and the order the rules run in.                                   |
+| `ast.ts`               | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.      |
+| `graph.ts`             | The one static resolver: what a name denotes through consts, imports and exports, without executing.   |
+| `layout.ts`            | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.     |
+| `references.ts`        | Every way a module names another, and which names a direct load takes.                                 |
+| `resolution.ts`        | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
+| `trust.ts`             | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
+| `jsonc.ts`             | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
+| `toml.ts`              | The TOML subset `bunfig.toml` is read in, keys decoded as Bun decodes them; anything else is refused.  |
+| `limits.ts`            | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
+| `finding.ts`           | The rule ids, the `Finding` shape and its one-line format.                                             |
+| `rules/literal.ts`     | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
+| `rules/contract.ts`    | What the reader refuses, run by the checker once the literal rule passes.                              |
+| `rules/*.ts`           | One file per rule group.                                                                               |
+| `contract.ts`          | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.          |
+| `scaffold.ts`          | The tests `fabrika db test-scaffold` writes: policy isolation and endpoint access (`generatedTests`).  |
+| `scaffold-sample.ts`   | The fixed input literal of an endpoint's schema that an endpoint access case sends.                    |
+| `endpoint-fixtures.ts` | `src/__tests__/endpoint-access.fixtures.ts`: the author's inputs, read statically within the budget.   |
+| `rules/isolation.ts`   | Every generated test is byte for byte what the scaffold writes now; none it no longer writes.          |
+| `reader/value.ts`      | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                 |
+| `reader/schema.ts`     | Each `z` factory and method applied to real zod, with its arguments and options checked.               |
+| `reader/surface.ts`    | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.  |
+| `reader/tables.ts`     | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`. |
 
 Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id; `direct-forms.test.ts` holds the
 directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
@@ -97,6 +98,8 @@ directory that no table registers fails the test.
 | `skipped-test`               | `.skip`, `.only`, `.todo`, `.skipIf`, `.if`, `.todoIf`, `.failing`, `xit`/`fit`/… in test files; `[test] root`, `pathIgnorePatterns` or `retry` in `bunfig.toml`                                                                                                                                                                                                                                                            |
 | `test-without-assertion`     | a `test`/`it` registration (also `.concurrent`, `.each(…)(…)`) that runs no matcher on `expect(…)` and no `expect…`/`assert…` helper                                                                                                                                                                                                                                                                                        |
 | `generated-test-hash`        | a generated test whose content no longer matches its header hash, or whose header is not the first line; a generated test that is missing or differs from the scaffold's output byte for byte (header or not); one the scaffold no longer writes; a contract or `src/db/tables.ts` the reader refuses                                                                                                                       |
+| `mock-module`                | `mock.module(…)` of `bun:test`, of a `@fabrika/*` specifier, of a relative path into a generated test, or with a computed specifier, anywhere in the application                                                                                                                                                                                                                                                            |
+| `endpoint-fixture`           | an endpoint with an access form whose input the scaffold cannot sample and that has no fixture; a fixture of no tested endpoint; a fixtures file that is not one `export const fixtures = { … }` of plain literals                                                                                                                                                                                                          |
 | `parse-error`                | a source file the parser does not accept                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## The literal subset (shared with B1)
@@ -213,8 +216,12 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   (A15) and the generated-test header `// @generated by fabrika db test-scaffold sha256:<hex>`, whose hash is the
   SHA-256 of everything after the first line (A11, `generatedTestHeader`). Change one only together with its
   producer.
+- **The generated tests catch mistakes; the data layer is the enforcement.** The rules around them (`mock-module`,
+  the byte-for-byte comparison, `endpoint-fixture`) stop an author, usually an agent, from silencing them by
+  accident or by an honest shortcut. A deliberately hostile author can always subvert code that runs in the same
+  process; do not grow these rules into a sandbox.
 - **The scaffold and the check are one function.** `fabrika db test-scaffold` writes exactly `generatedTests` of what
-  `scaffoldInputs` reads (`readTablesSource`, and `readContractSource` against those policies), and
+  `scaffoldInputs` reads (`readTablesSource`, `readEndpointFixtures`, and `readContractSource` against the policies), and
   `rules/isolation.ts` compares the tree with the same call, byte for byte. The case names are what `fabrika db
   test-isolation` requires as passed in the JUnit report, so keep them unique within a file. The output is
   dprint-stable under this repository's configuration; an application's formatter must skip the generated files. A

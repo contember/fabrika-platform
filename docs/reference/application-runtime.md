@@ -541,15 +541,32 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 
 ### The generated tests
 
+**What they are for.** The generated tests catch the **mistakes** of an application's author,
+who is usually an agent: a handler that serves another scope's rows, a cache keyed by
+nothing, a policy that does not hold. They do not stop a deliberately hostile author, who
+runs in the same process and can always subvert them. The data layer (`@fabrika/db`, A8–A10)
+is the enforcement.
+
 `fabrika db test-scaffold` writes two kinds of test and deletes a generated test it no
 longer writes. Both run only for an application on `@fabrika/db`, and both open a test
 database with `@fabrika/db/testing`'s `testDatabase`: a fresh schema `app_test_<hex>`
-that the real migration runner fills from `db/migrations/`, dropped again when the
-migrations fail. Without `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip
-message and the file registers no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that
-into a failure. Every seeded row lies in one of two containment chains that share no
-value, with each container row a table owns.
+that the real migration runner fills from `db/migrations/`. Without
+`FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file registers no
+test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 
+- **Throwaway schemas.** A schema is held by a session-level advisory lock derived from its
+  name, taken before it exists and kept for its whole life. Every test database first drops
+  the `app_test_*` schemas whose lock it can take (a run that crashed or was killed) and
+  never one whose lock is held (a live run, in any process). A schema is dropped again when
+  its migrations fail, and `close` runs every cleanup step. Every application plan refuses a
+  migration that names `public`, an `app_…` or a `fabrika…` schema, quoted or not, so neither
+  the test run nor `fabrika db migrate` can reach a live schema; names resolve through the
+  runner's `search_path`.
+- **Seeding.** Every seeded row lies in one of two containment chains that share no value,
+  with each container row a table owns. Every text column the fixture fills, nullable or
+  not, holds a distinct marker; a required column of another type gets a sample of its type.
+  A required foreign key outside the containment chain cannot be filled, so such a column
+  needs a default or must be nullable.
 - **Policy isolation tests**, `src/db/__tests__/<table>.policy-isolation.test.ts` for
   every dimension and child table, from the policies alone. They prove that the data
   layer enforces the declared policy, not that the application uses it:
@@ -571,31 +588,40 @@ value, with each container row a table owns.
   caller holding the action in one scope names the other scope's object or value and
   gets 404 (`on`) or 403 (`in`). For every `on` and `over` procedure, a caller of the
   other scope asks first, then a caller of one scope asks for its own; the second answer
-  must be a 200 that holds no key or scope value of the other scope's rows. The input is a fixed
-  literal of the input schema, written into the test; an endpoint whose schema the
-  scaffold cannot sample (a `regex`) gets no case and a comment saying so. `deps` runs
-  with an empty environment.
+  must be a 200 that holds no key, scope value or text marker of the other scope's rows.
+  `deps` runs with an empty environment.
+- **Inputs.** A case sends a fixed literal written into the test: a sample of the input
+  schema, or, where the scaffold cannot sample one (a `regex`), the author's literal from
+  `src/__tests__/endpoint-access.fixtures.ts` (`export const fixtures = { '<endpoint id>':
+  { … } }`, plain literals only, read statically within the reader's budget). A missing
+  fixture and a fixture of no tested endpoint are `endpoint-fixture` findings; an input the
+  endpoint's schema refuses fails its cases. The access form's `from` field is replaced by
+  the seeded value.
+- **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
+  `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
+  which captures Bun's own functions before any application module loads, and a case that
+  ran no `expect` fails. The checker refuses `mock.module` of `bun:test`, of `@fabrika/*`, of a
+  generated test and with a computed specifier (`mock-module`). The kits refuse to load or
+  run in a process the generated entrypoint started (`markProductionProcess`, one
+  non-configurable property of `globalThis` that every installed package copy reads).
 - **What neither kind catches:** an application bug that needs other data or another
-  order of requests, such as a handler-level cache keyed by something the test does not
-  vary. The kits refuse to load or run in a process the generated entrypoint started
-  (`markProductionProcess`), whatever the environment says.
+  order of requests, such as a cache keyed by something the test does not vary.
 - **`move` has no case yet.** An access form hands a handler one capability, and a move
   needs the source and the target `Ref`, so no handler can call `t.move`.
-- `@fabrika/check` regenerates every generated test from the contract and policies it
-  reads statically and compares the files byte for byte: a missing, edited or replaced
-  one (header or not) and a generated test the scaffold no longer writes are
+- `@fabrika/check` regenerates every generated test from the contract, the policies and the
+  fixtures it reads statically and compares the files byte for byte: a missing, edited or
+  replaced one (header or not) and a generated test the scaffold no longer writes are
   `generated-test-hash` findings. `bunfig.toml` may not set `[test] root`,
   `pathIgnorePatterns` or `retry` (`skipped-test`).
 - **The platform runs them** at container start on Zerops, after `fabrika db migrate`
   and `fabrika db codegen --verify` (the build has no database): `fabrika db
-  test-isolation` runs exactly the generated files with an empty `bunfig.toml`, so no
-  preload or root of the application applies, against a throwaway schema of the
-  application's database, and fails unless every case name the scaffold wrote is
-  reported as passed in the JUnit report. A failure leaves nothing to answer the
+  test-isolation` runs exactly the generated files with an empty `bunfig.toml` and the
+  platform's preload, against a throwaway schema of the application's database, and fails
+  unless every case name the scaffold wrote is reported as passed, with an assertion, in the
+  JUnit report. It prints none of the tests' output, only the counts and the failed case
+  names, because a dependency may write a credential into it; `--verbose`, which the start
+  script never passes, prints the output locally. A failure leaves nothing to answer the
   readiness check.
-- The seeding fills a required column it does not place with a sample of its type; a
-  required foreign key outside the containment chain cannot be filled, so such a column
-  needs a default or must be nullable.
 
 ## What the platform writes into an application
 

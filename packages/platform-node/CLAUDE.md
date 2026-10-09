@@ -55,6 +55,12 @@ Read this before moving a service onto this driver.
   plan); `guardCheck` then fails the transaction when the file ended it or loosened `lock_timeout`,
   `statement_timeout` or `search_path` (`set_config()` included). Keep both: the tokenizer cannot see
   procedural calls, and the guard cannot undo a `COMMIT`.
+- **An application migration names only its own schema.** Every application plan refuses a
+  schema-qualified reference to `public`, an `app_…` or a `fabrika…` schema, quoted or not, also
+  inside a dollar-quoted body (`foreignSchemaReference`, the same tokenizer). Unqualified names
+  resolve through the runner's `search_path`; `pg_catalog.` stays allowed. A table alias with such
+  a name is refused too: the tokenizer cannot tell a schema from a table. The test kit's throwaway
+  schema depends on this: a migration that reached `public` would change live rows on every run.
 - **Checksums are verified before anything is applied.** An applied file that changed fails the run with
   nothing applied; a ledger row with no file (a rollback) is tolerated.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**
