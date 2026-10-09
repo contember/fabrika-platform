@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { refusedStatement, statementStarts } from '../migration-sql.js'
+import { foreignSchemaReference, refusedStatement, statementStarts } from '../migration-sql.js'
 
 describe('migration statement starts', () => {
 	test('splits top-level statements and reports the line of each', () => {
@@ -67,5 +67,22 @@ describe('refused migration statements', () => {
 
 	test('names the line of the refused statement', () => {
 		expect(refusedStatement('CREATE TABLE a (id text);\n-- note\nCOMMIT;')).toEqual({ statement: 'COMMIT', line: 3 })
+	})
+})
+
+describe('schema-qualified references of an application migration', () => {
+	test('refuses public, another application and a platform schema, quoted or not, also inside a dollar-quoted body', () => {
+		expect(foreignSchemaReference("UPDATE public.notes SET title = 'x';")).toEqual({ schema: 'public', line: 1 })
+		expect(foreignSchemaReference('CREATE TABLE a (id TEXT);\nUPDATE "app_notes".notes SET title = NULL')).toEqual({ schema: 'app_notes', line: 2 })
+		expect(foreignSchemaReference('INSERT INTO Public . notes VALUES (1)')).toEqual({ schema: 'public', line: 1 })
+		expect(foreignSchemaReference('DELETE FROM APP_Other.notes')).toEqual({ schema: 'app_other', line: 1 })
+		expect(foreignSchemaReference('SELECT * FROM fabrika_iam.principals')).toEqual({ schema: 'fabrika_iam', line: 1 })
+		expect(foreignSchemaReference('DO $$\nBEGIN\n  UPDATE public.notes SET title = NULL;\nEND\n$$')).toEqual({ schema: 'public', line: 3 })
+	})
+
+	test('allows unqualified names, pg_catalog, and a qualifier inside a literal or a comment', () => {
+		expect(foreignSchemaReference('CREATE TABLE notes (id TEXT PRIMARY KEY); SELECT pg_catalog.now()')).toBeUndefined()
+		expect(foreignSchemaReference("-- public.notes\nCOMMENT ON TABLE notes IS 'copied from public.notes'")).toBeUndefined()
+		expect(foreignSchemaReference('SELECT "Public".x FROM notes')).toBeUndefined()
 	})
 })

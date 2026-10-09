@@ -29,37 +29,30 @@ export interface StatementStart {
 	readonly line: number
 }
 
-const isWordStart = (char: string): boolean => /[A-Za-z_\u0080-￿]/.test(char)
-const isWordPart = (char: string): boolean => /[A-Za-z0-9_$\u0080-￿]/.test(char)
-const DOLLAR_TAG = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/
+const isWordStart = (char: string): boolean => /[A-Za-z_\u0080-\uffff]/.test(char)
+const isWordPart = (char: string): boolean => /[A-Za-z0-9_$\u0080-\uffff]/.test(char)
+const DOLLAR_TAG = /^\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/
+
+/** One lexical token of SQL: comments and whitespace are dropped; a literal or a quoted body keeps its contents. */
+export type SqlToken =
+	| { readonly kind: 'word'; readonly text: string; readonly line: number }
+	| { readonly kind: 'quoted'; readonly text: string; readonly line: number }
+	| { readonly kind: 'string'; readonly line: number }
+	| { readonly kind: 'dollar'; readonly body: string; readonly line: number }
+	| { readonly kind: 'punct'; readonly char: string; readonly line: number }
 
 /**
- * Splits SQL into top-level statements and reports how each begins. Comments (`--`, nested `/* *\/`), string
- * literals (`''`, `E''` with backslash escapes), quoted identifiers and dollar-quoted bodies are skipped, so a
- * keyword inside them is not a statement. A `;` inside parentheses does not end a statement.
+ * The tokens of `sql`. Comments (`--`, nested `/* *\/`), string literals (`''`, `E''` with backslash escapes), quoted
+ * identifiers (`""` unescaped) and dollar-quoted bodies are each one token, so a keyword inside them is no word.
  */
-export function statementStarts(sql: string): StatementStart[] {
-	const starts: StatementStart[] = []
-	let words: string[] = []
-	let wordsLine = 0
-	let tokens = 0
-	let depth = 0
+export function sqlTokens(sql: string): SqlToken[] {
+	const tokens: SqlToken[] = []
 	let line = 1
 	let index = 0
-	const finish = (): void => {
-		if (tokens > 0) starts.push({ words, line: wordsLine })
-		words = []
-		tokens = 0
-	}
 	/** Moves to `end`, counting the newlines it passes. */
 	const skipTo = (end: number): void => {
 		for (let at = index; at < end && at < sql.length; at++) if (sql[at] === '\n') line++
 		index = Math.min(end, sql.length)
-	}
-	const token = (word: string | undefined): void => {
-		if (tokens === 0) wordsLine = line
-		if (word !== undefined && tokens === words.length && words.length < 2) words.push(word.toUpperCase())
-		tokens++
 	}
 	while (index < sql.length) {
 		const char = sql[index] ?? ''
@@ -87,7 +80,7 @@ export function statementStarts(sql: string): StatementStart[] {
 			}
 			skipTo(at)
 		} else if (char === "'" || ((char === 'E' || char === 'e') && next === "'")) {
-			token(undefined)
+			tokens.push({ kind: 'string', line })
 			const escapes = char !== "'"
 			let at = index + (escapes ? 2 : 1)
 			while (at < sql.length) {
@@ -98,36 +91,92 @@ export function statementStarts(sql: string): StatementStart[] {
 			}
 			skipTo(at + 1)
 		} else if (char === '"') {
-			token(undefined)
+			const startLine = line
 			let at = index + 1
+			let text = ''
 			while (at < sql.length) {
-				if (sql[at] === '"' && sql[at + 1] === '"') at += 2
-				else if (sql[at] === '"') break
-				else at++
+				if (sql[at] === '"' && sql[at + 1] === '"') {
+					text += '"'
+					at += 2
+				} else if (sql[at] === '"') break
+				else text += sql[at++] ?? ''
 			}
+			tokens.push({ kind: 'quoted', text, line: startLine })
 			skipTo(at + 1)
 		} else if (char === '$' && DOLLAR_TAG.test(sql.slice(index, index + 64))) {
-			token(undefined)
 			const tag = DOLLAR_TAG.exec(sql.slice(index, index + 64))?.[0] ?? '$$'
 			const end = sql.indexOf(tag, index + tag.length)
+			tokens.push({ kind: 'dollar', body: sql.slice(index + tag.length, end === -1 ? sql.length : end), line })
 			skipTo(end === -1 ? sql.length : end + tag.length)
 		} else if (isWordStart(char)) {
 			let at = index + 1
 			while (at < sql.length && isWordPart(sql[at] ?? '')) at++
-			token(sql.slice(index, at))
+			tokens.push({ kind: 'word', text: sql.slice(index, at), line })
 			index = at
-		} else if (char === ';' && depth === 0) {
-			finish()
-			index++
 		} else {
-			if (char === '(') depth++
-			else if (char === ')' && depth > 0) depth--
-			token(undefined)
+			tokens.push({ kind: 'punct', char, line })
 			index++
 		}
 	}
+	return tokens
+}
+
+/**
+ * Splits SQL into top-level statements and reports how each begins. A keyword inside a comment, a literal, a quoted
+ * identifier or a dollar-quoted body is not a statement, and a `;` inside parentheses does not end one.
+ */
+export function statementStarts(sql: string): StatementStart[] {
+	const starts: StatementStart[] = []
+	let words: string[] = []
+	let wordsLine = 0
+	let count = 0
+	let depth = 0
+	const finish = (): void => {
+		if (count > 0) starts.push({ words, line: wordsLine })
+		words = []
+		count = 0
+	}
+	for (const token of sqlTokens(sql)) {
+		if (token.kind === 'punct' && token.char === ';' && depth === 0) {
+			finish()
+			continue
+		}
+		if (token.kind === 'punct' && token.char === '(') depth++
+		else if (token.kind === 'punct' && token.char === ')' && depth > 0) depth--
+		if (count === 0) wordsLine = token.line
+		if (token.kind === 'word' && count === words.length && words.length < 2) words.push(token.text.toUpperCase())
+		count++
+	}
 	finish()
 	return starts
+}
+
+/** Whether a schema qualifier names another application's schema, a platform schema or `public`. */
+function isForeignSchema(name: string): boolean {
+	return name === 'public' || name.startsWith('app_') || name.startsWith('fabrika')
+}
+
+/**
+ * The first schema-qualified reference of an application migration (`public.notes`, `"app_other".notes`) to a schema
+ * that is not its own, also inside a dollar-quoted body. An application's names resolve through the runner's
+ * `search_path`, its own schema; `pg_catalog.` stays allowed. Unquoted names are folded to lower case, as Postgres does.
+ */
+export function foreignSchemaReference(sql: string): { readonly schema: string; readonly line: number } | undefined {
+	const tokens = sqlTokens(sql)
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]
+		if (token === undefined) continue
+		if (token.kind === 'dollar') {
+			const inner = foreignSchemaReference(token.body)
+			if (inner !== undefined) return { schema: inner.schema, line: token.line + inner.line - 1 }
+			continue
+		}
+		const dot = tokens[index + 1]
+		if ((token.kind !== 'word' && token.kind !== 'quoted') || dot?.kind !== 'punct' || dot.char !== '.') continue
+		const schema = token.kind === 'word' ? token.text.toLowerCase() : token.text
+		if (isForeignSchema(schema)) return { schema, line: token.line }
+	}
+	return undefined
 }
 
 /** The first refused top-level statement of a migration file, or `undefined`. */

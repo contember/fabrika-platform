@@ -42,6 +42,14 @@ describe('application migration identity', () => {
 		}
 	})
 
+	test('every plan refuses a migration that reaches another schema, so migrate and the test kit refuse it', () => {
+		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
+		const reaching = migration('20261008120000_init.sql', "CREATE TABLE notes (id TEXT);\nUPDATE public.accounts SET plan = 'free';")
+		expect(() => migrations.plan([reaching])).toThrow(
+			'Application migration 20261008120000_init.sql line 2 names the schema public; an application migration names its own tables unqualified',
+		)
+	})
+
 	test('composes one app bundle, a ledger in the application schema and the default timeouts', () => {
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
 		const plan = migrations.plan([migration('20261008120000_init.sql', 'SELECT 1')])

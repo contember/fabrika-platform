@@ -3,8 +3,10 @@
 // two disjoint containment chains, and the table probe reaches a table by name with every runtime check of a store.
 
 import { definePostgresApplicationMigrations, PostgresDatabase } from '@fabrika/platform-node'
-import { SQL } from 'bun'
+import { type ReservedSQL, SQL } from 'bun'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod/v4'
 import { inSet, namesOf } from './builtins'
 import { type CatalogColumn, introspectSchema } from './codegen'
 import { applicationSchema, Database } from './database'
@@ -140,6 +142,36 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 	return undefined
 }
 
+/** The throwaway schemas, `app_test_<16 hex>`; nothing else is ever reclaimed. */
+const TEST_SCHEMA = /^app_test_[0-9a-f]{16}$/
+
+/** The session-level advisory lock that holds a throwaway schema: the first 48 bits of SHA-256 of its name, plus one. */
+function schemaLockKey(schema: string): string {
+	return String(createHash('sha256').update(`fabrika-test-schema:${schema}`, 'utf8').digest().readUIntBE(0, 6) + 1)
+}
+
+const namespaceRows = z.array(z.object({ nspname: z.string() }))
+const lockRows = z.array(z.object({ locked: z.boolean() }))
+
+/**
+ * Drops every throwaway schema whose lock can be taken: its run ended without `close` (a crash, a kill). A schema whose
+ * lock is held belongs to a live run, perhaps in another process, and is never touched.
+ */
+async function reclaimAbandonedSchemas(lock: ReservedSQL, admin: SQL): Promise<void> {
+	const schemas = namespaceRows.parse(await admin.unsafe(`SELECT nspname FROM pg_namespace WHERE nspname LIKE 'app\\_test\\_%'`))
+	for (const { nspname } of schemas) {
+		if (!TEST_SCHEMA.test(nspname)) continue
+		const key = schemaLockKey(nspname)
+		const [taken] = lockRows.parse(await lock.unsafe('SELECT pg_try_advisory_lock($1::bigint) AS locked', [key]))
+		if (taken?.locked !== true) continue
+		try {
+			await lock.unsafe(`DROP SCHEMA IF EXISTS ${quoted(nspname)} CASCADE`)
+		} finally {
+			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [key])
+		}
+	}
+}
+
 /** Runs every step even when an earlier one throws, then throws what failed. */
 async function settleAll(steps: readonly (() => Promise<void>)[]): Promise<void> {
 	const failures: unknown[] = []
@@ -177,18 +209,34 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	const schema = applicationSchema(appId)
 	const migrations = definePostgresApplicationMigrations({ appId, directory: migrationsDirectory(options.migrations) })
 	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+	const holder = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+	const lock = await holder.reserve()
 	const dropSchema = async (): Promise<void> => {
 		await admin.unsafe(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
 	}
-	const runner = PostgresDatabase.connect(url, { max: 1 })
+	const releaseLock = async (): Promise<void> => {
+		try {
+			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [schemaLockKey(schema)])
+		} finally {
+			lock.release()
+		}
+	}
+	const cleanup = (): Promise<void> => settleAll([dropSchema, releaseLock, () => holder.close(), () => admin.close()])
 	try {
-		await migrations.apply(runner)
+		await reclaimAbandonedSchemas(lock, admin)
+		// Held for the schema's whole life, before the schema exists: a schema whose lock is free is abandoned.
+		await lock.unsafe('SELECT pg_advisory_lock($1::bigint)', [schemaLockKey(schema)])
+		const runner = PostgresDatabase.connect(url, { max: 1 })
+		try {
+			await migrations.apply(runner)
+		} finally {
+			await runner.close()
+		}
 	} catch (error) {
 		// The runner creates the schema and its ledger before a failing migration, so a failed start leaves them behind.
-		await settleAll([() => runner.close(), dropSchema, () => admin.close()])
+		await cleanup()
 		throw error
 	}
-	await runner.close()
 	const database = Database.postgres({ url, schema, max: 2 })
 	let catalog: Promise<readonly CatalogColumn[]> | undefined
 
@@ -316,7 +364,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			}
 			return values
 		},
-		close: () => settleAll([() => database.close(), dropSchema, () => admin.close()]),
+		close: () => settleAll([() => database.close(), cleanup]),
 	}
 }
 

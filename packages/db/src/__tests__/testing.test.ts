@@ -2,9 +2,9 @@
 // the release refusal run in a child process with a controlled environment; the rest needs FABRIKA_TEST_POSTGRES_URL
 // and skips cleanly without it. The URL is a credential: no assertion prints it.
 
-import { SQL } from 'bun'
+import { SQL, type Subprocess } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CapabilityError, QueryRefusedError } from '../errors'
@@ -84,6 +84,34 @@ describe('in a process that serves an application', () => {
 		expect(result.stderr).toContain('@fabrika/db/testing is a test helper; this process serves an application')
 	})
 
+	test('another installed copy of the package reads the same mark', async () => {
+		const copy = join(import.meta.dir, '..', '..', `.copy-${crypto.randomUUID().slice(0, 8)}`)
+		cpSync(join(import.meta.dir, '..'), join(copy, 'src'), { recursive: true, filter: (source) => !source.includes('__tests__') })
+		try {
+			const result = await runChild([
+				"const { markProductionProcess } = await import('@fabrika/db/production')",
+				'markProductionProcess()',
+				`await import(${JSON.stringify(join(copy, 'src', 'testing.ts'))})`,
+			], {})
+			expect(result.code).not.toBe(0)
+			expect(result.stderr).toContain('@fabrika/db/testing is a test helper; this process serves an application')
+		} finally {
+			rmSync(copy, { recursive: true, force: true })
+		}
+	})
+
+	test('nothing unmarks the process', async () => {
+		const result = await runChild([
+			"const { markProductionProcess, isProductionProcess } = await import('@fabrika/db/production')",
+			'markProductionProcess()',
+			"const key = Symbol.for('fabrika.production')",
+			'const attempts = [() => { globalThis[key] = false }, () => delete globalThis[key], () => Object.defineProperty(globalThis, key, { value: false })]',
+			'for (const attempt of attempts) { try { attempt() } catch {} }',
+			'console.log(String(isProductionProcess()))',
+		], {})
+		expect(result).toMatchObject({ code: 0, stdout: 'true\n' })
+	})
+
 	test('a kit loaded before the mark refuses to run after it', async () => {
 		const result = await runChild([
 			"const { testDatabase, tableProbe } = await import('@fabrika/db/testing')",
@@ -141,14 +169,72 @@ describe.skipIf(!hasPostgres)('a test database on Postgres', () => {
 		const failing = mkdtempSync(join(tmpdir(), 'fabrika-db-testing-failing-'))
 		writeFileSync(join(failing, '20261009120000_partial.sql'), 'CREATE TABLE partial (id TEXT); SELECT * FROM missing_a11_table;')
 		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
-		const schemas = async (): Promise<unknown> => sql.unsafe("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'app_test_%' ORDER BY nspname")
 		try {
-			const before = await schemas()
+			const before = await testSchemas(sql)
 			await expect(testDatabase({ migrations: failing, label: 'failing.test.ts' })).rejects.toThrow()
-			expect(await schemas()).toEqual(before)
+			expect((await testSchemas(sql)).filter((schema) => !before.includes(schema))).toEqual([])
 		} finally {
 			await sql.close()
 			rmSync(failing, { recursive: true, force: true })
+		}
+	})
+
+	test('a migration that reaches a live schema is refused before anything runs', async () => {
+		const live = `live_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+		const reaching = mkdtempSync(join(tmpdir(), 'fabrika-db-testing-reaching-'))
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			await sql.unsafe(`CREATE TABLE public.${live} (id TEXT PRIMARY KEY, plan TEXT NOT NULL); INSERT INTO public.${live} VALUES ('a1', 'paid')`)
+			writeFileSync(join(reaching, '20261009120000_backfill.sql'), `CREATE TABLE notes (id TEXT);\nUPDATE public.${live} SET plan = 'free';`)
+			await expect(testDatabase({ migrations: reaching, label: 'reaching.test.ts' })).rejects.toThrow('names the schema public')
+			const rows: unknown = await sql.unsafe(`SELECT plan FROM public.${live}`)
+			expect(rows).toEqual([{ plan: 'paid' }])
+		} finally {
+			await sql.unsafe(`DROP TABLE IF EXISTS public.${live}`)
+			await sql.close()
+			rmSync(reaching, { recursive: true, force: true })
+		}
+	})
+
+	test('a run that died is reclaimed by the next one; a live run in another process is not', async () => {
+		const opened = async (): Promise<{ readonly child: Subprocess<'ignore', 'pipe', 'pipe'>; readonly schema: string }> => {
+			const child = Bun.spawn([
+				'bun',
+				'-e',
+				[
+					"const { testDatabase } = await import('@fabrika/db/testing')",
+					`const database = await testDatabase({ migrations: ${JSON.stringify(migrations)}, label: 'child.test.ts' })`,
+					'console.log(database?.schema)',
+					'await new Promise(() => {})',
+				].join('\n'),
+			], {
+				cwd: join(import.meta.dir, '..', '..'),
+				env: { PATH: process.env['PATH'] ?? '', [URL_VAR]: url },
+				stdin: 'ignore',
+				stdout: 'pipe',
+				stderr: 'pipe',
+			})
+			const { value } = await child.stdout.getReader().read()
+			return { child, schema: new TextDecoder().decode(value).trim() }
+		}
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const dead = await opened()
+		const live = await opened()
+		try {
+			expect(dead.schema).toMatch(/^app_test_[0-9a-f]{16}$/)
+			dead.child.kill('SIGKILL')
+			await dead.child.exited
+			expect(await testSchemas(sql)).toContain(dead.schema)
+			const next = await testDatabase({ migrations, label: 'next.test.ts' })
+			await next?.close()
+			const remaining = await testSchemas(sql)
+			expect(remaining).not.toContain(dead.schema)
+			expect(remaining).toContain(live.schema)
+		} finally {
+			live.child.kill('SIGKILL')
+			await live.child.exited
+			await (await testDatabase({ migrations, label: 'cleanup.test.ts' }))?.close()
+			await sql.close()
 		}
 	})
 
@@ -226,6 +312,13 @@ describe.skipIf(!hasPostgres)('a test database on Postgres', () => {
 		expect(await probe.count(authority.within('workspace', 'notes.read', []))).toBe('0')
 	})
 })
+
+async function testSchemas(sql: SQL): Promise<string[]> {
+	const rows: unknown = await sql.unsafe("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'app\\_test\\_%' ORDER BY nspname")
+	return Array.isArray(rows)
+		? rows.flatMap((row: unknown) => (typeof row === 'object' && row !== null ? [String(Reflect.get(row, 'nspname'))] : []))
+		: []
+}
 
 async function organizationOf(schema: string, workspace: string): Promise<string> {
 	const sql = new SQL({ url, adapter: 'postgres', max: 1 })

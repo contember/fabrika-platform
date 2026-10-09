@@ -1,6 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { foreignSchemaReference } from './migration-sql'
 import {
 	applyPostgresMigrations,
 	definePostgresMigrationPlan,
@@ -78,6 +79,12 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 		for (const migration of migrations) {
 			if (!APPLICATION_MIGRATION_NAME.test(migration.name)) {
 				throw new PostgresMigrationError(`Application migration ${migration.name} is not named YYYYMMDDHHMMSS_slug.sql`)
+			}
+			const foreign = foreignSchemaReference(migration.sql)
+			if (foreign !== undefined) {
+				throw new PostgresMigrationError(
+					`Application migration ${migration.name} line ${foreign.line} names the schema ${foreign.schema}; an application migration names its own tables unqualified`,
+				)
 			}
 		}
 		return definePostgresMigrationPlan({
