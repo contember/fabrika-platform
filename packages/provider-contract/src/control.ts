@@ -1,4 +1,4 @@
-import type { AppSchema, ContractArtifact } from '@fabrika/auth-core'
+import type { AppSchema, ArtifactAccess, ContractArtifact } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from './json'
 
 /** Events whose persistence and presentation belong to the control plane. */
@@ -69,11 +69,19 @@ export interface ProviderEnvironment {
 	 */
 	readonly access?: ProviderApprovedAccess
 	/**
-	 * Set when Control's registry records that the environment's application has no contract (its published snapshot
-	 * has none, and no later snapshot brought one): until B10 its artifact's gates and IAM schema apply. Absent, a
+	 * Set when the environment's approved snapshot has no contract: the approved artifact access (gates and IAM schema)
+	 * by its digest. A provider applies an artifact's gates and schema only when their digest equals it. Absent, a
 	 * provider publishes no application access from the artifact, whatever the artifact claims (ADR-0050).
 	 */
-	readonly artifactAccess?: true
+	readonly artifactAccess?: ProviderArtifactApproval
+}
+
+/** The artifact access Control approved for an environment without a contract (ADR-0050). */
+export interface ProviderArtifactApproval {
+	/** `artifactAccessDigest` of the approved access; null when none is approved yet. */
+	readonly digest: string | null
+	/** A different access waits for a human; on an unprotected environment it applies, and Control records it. */
+	readonly protected: boolean
 }
 
 /** Raw registration data passed to provider-owned validation and normalization. */
@@ -152,6 +160,18 @@ export interface ProviderTerminalOutcome {
 	readonly exitCode?: number
 	/** Whether provider-local release artifacts reached Operations. */
 	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
+	/** ADR-0050, for a provider that learns the artifact access only while it deploys (no `artifactAccess` hook). */
+	readonly artifactAccess?: ProviderArtifactAccessReport
+}
+
+/**
+ * What a provider found the artifact access to be. `deployed`: the deploy applied it (the approved one, or any on an
+ * unprotected environment). `pending`: it differs from the approved one on a protected environment, so the deploy
+ * stopped before provisioning anything (state `failed`) and Control parks the run for a human.
+ */
+export interface ProviderArtifactAccessReport {
+	readonly state: 'deployed' | 'pending'
+	readonly access: ArtifactAccess
 }
 
 /** Running means external settlement is unresolved, including an ambiguous submission response. */
@@ -229,6 +249,8 @@ export interface ProviderReconcileOutcome {
 	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
 	/** The settled run was a preview: core projects it as a dry run. */
 	readonly dryRun?: boolean
+	/** See `ProviderTerminalOutcome.artifactAccess`. */
+	readonly artifactAccess?: ProviderArtifactAccessReport
 }
 
 /** Write one secret value to provider-managed storage. */
@@ -303,8 +325,8 @@ export interface ProviderNamespaceMember {
 	readonly proxySecret?: string
 	/** See `ProviderEnvironment.access`: the proxy table of a contract application comes only from here. */
 	readonly access?: ProviderApprovedAccess
-	/** See `ProviderEnvironment.artifactAccess`: only then do the artifact's gates route the member. */
-	readonly artifactAccess?: true
+	/** See `ProviderEnvironment.artifactAccess`: only then, and only at that digest, do the artifact's gates route the member. */
+	readonly artifactAccess?: ProviderArtifactApproval
 }
 
 /** One idempotent namespace lifecycle invocation. */
@@ -499,4 +521,10 @@ export interface ControlProvider {
 	 * access snapshot there (ADR-0050). Absent means the repository root.
 	 */
 	applicationRoot?(source: ProviderSource): string | null
+	/**
+	 * The access an artifact grants when its application has no contract (ADR-0050), for a provider whose artifact
+	 * carries it. Control snapshots it and classifies it before the deploy. Absent, the provider reports it from the
+	 * deploy (`ProviderTerminalOutcome.artifactAccess`).
+	 */
+	artifactAccess?(artifact: ProviderEnvelope): ArtifactAccess
 }

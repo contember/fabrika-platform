@@ -32,6 +32,7 @@ import {
 	renderFabrikaImportYaml,
 	renderFabrikaProvisioningYaml,
 	verifyZeropsArtifactSourceDescriptor,
+	zeropsArtifactAccess,
 	zeropsArtifactCodec,
 } from './manifest'
 import {
@@ -328,6 +329,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				return undefined
 			}
 		},
+		// The artifact carries its gates and IAM schema, so Control snapshots and classifies them before the deploy (ADR-0050).
+		artifactAccess: (artifact) => zeropsArtifactAccess(decodeEnvelope('artifact', 'zerops', artifact, zeropsArtifactCodec)),
 		resolveSource,
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
@@ -370,7 +373,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				target: runtimeTarget,
 				artifact,
 				...(input.environment.access === undefined ? {} : { access: input.environment.access }),
-				...(input.environment.artifactAccess === true ? { artifactAccess: true } : {}),
+				...(input.environment.artifactAccess === undefined ? {} : { artifactAccess: input.environment.artifactAccess }),
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: input.events,

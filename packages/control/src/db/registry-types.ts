@@ -31,14 +31,14 @@ export interface AppEnvRow {
 	authoring: number
 	/** The run whose snapshot is this environment's active access (ADR-0050); NULL until a run publishes. */
 	published_run_id: string | null
+	/** That snapshot, as published (`src/approval/snapshot.ts`); NULL exactly when `published_run_id` is. */
+	published_snapshot_json: string | null
 	/** Advanced by every publication; a publication names the generation it read (compare-and-swap). */
 	generation: number
 	/** 1 when a widening waits for a human's approval here (ADR-0050), else 0. */
 	protected: number
 	/** Advanced by every change of `protected`; a publication names the revision it classified under. */
 	protection_revision: number
-	/** 1 once a snapshot of this environment had a contract, 0 once one without was published, NULL before any. */
-	contract_app: number | null
 	created_at: number
 }
 

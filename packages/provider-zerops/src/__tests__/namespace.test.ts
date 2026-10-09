@@ -51,6 +51,7 @@ import { decodeZeropsNamespaceProxySource } from '../namespace/proxy-source'
 import type { ZeropsNamespaceProxySource } from '../namespace/types'
 import type { ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
+import { approvedArtifact } from './fixtures/access'
 
 interface FakeState {
 	projects: Map<string, ZeropsProject>
@@ -1267,7 +1268,7 @@ describe('Zerops namespace lifecycle', () => {
 				env: 'prod',
 				domain: 'Notes.Example.Test',
 				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
-				artifactAccess: true,
+				artifactAccess: approvedArtifact(notes),
 			}],
 			signal: new AbortController().signal,
 			events: { checkpoint: async () => {}, boundary: async () => {} },

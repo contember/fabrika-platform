@@ -22,7 +22,13 @@ function snapshot(
 	tables: Readonly<Record<string, TablePolicyArtifact>> = { notes: NOTES_TABLE },
 	migrations: MigrationEntry[] = [],
 ): AccessSnapshot {
-	return { version: 1, contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), tables), migrations, checker: '0.0.0' }
+	return {
+		version: 1,
+		contract: readContractSource(new Map([['fabrika.contract.ts', contract]]), tables),
+		migrations,
+		checker: '0.0.0',
+		artifact: null,
+	}
 }
 
 const lines = (baseline: AccessSnapshot, candidate: AccessSnapshot) => classifyAccess(baseline, candidate).changes.map((change) => change.line)

@@ -1,4 +1,4 @@
-import { type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import { type AppEnvironment, artifactAccessDigest, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import { contractProxyTable, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
@@ -135,6 +135,7 @@ const deploy = (
 		readonly checkoutContract?: ContractArtifact
 		/** The contract Control approved for the run, or null when Control read none at the commit. */
 		readonly contract?: ContractArtifact | null
+		readonly artifactApproval?: { readonly digest: string | null; readonly protected: boolean }
 		readonly installationApps?: readonly AppEnvironment[]
 	} = {},
 ) =>
@@ -163,6 +164,7 @@ const deploy = (
 		vars: {},
 		managedEnvironment: options.managedEnvironment ?? {},
 		...(options.contract === undefined ? {} : { contract: options.contract }),
+		...(options.artifactApproval === undefined ? {} : { artifactApproval: options.artifactApproval }),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
@@ -1072,6 +1074,30 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		)
 		expect(rec.provisions).toHaveLength(0)
 		await expect(deploy(rec, config({ gates: GATES }), { contract: null })).resolves.toMatchObject({ status: 'succeeded' })
+	})
+
+	test('a first deploy to a protected environment stops before provisioning and reports the gates and schema', async () => {
+		const schema = { scopes: [], actions: [{ action: 'notes.read' }], roles: {} }
+		const app = config({ gates: GATES, schema })
+		await expect(deploy(rec, app, { contract: null, artifactApproval: { digest: null, protected: true } })).rejects.toThrow(
+			"the config's gates and IAM schema are not the access Control approved",
+		)
+		expect(rec.provisions).toHaveLength(0)
+		expect(rec.commands).toHaveLength(0)
+		expect(rec.outcomes).toEqual([{ artifactAccess: { state: 'pending', accessJson: JSON.stringify({ gates: GATES, schema }) } }])
+	})
+
+	test('the approved gates and schema deploy and are reported; an unprotected change deploys too', async () => {
+		const schema = { scopes: [], actions: [{ action: 'notes.read' }], roles: {} }
+		const app = config({ gates: GATES, schema })
+		const digest = artifactAccessDigest({ gates: GATES, schema })
+		const deployedReport: RunnerOutcomeFile = { artifactAccess: { state: 'deployed', accessJson: JSON.stringify({ gates: GATES, schema }) } }
+		expect(await deploy(rec, app, { contract: null, artifactApproval: { digest, protected: true } })).toMatchObject({ status: 'succeeded' })
+		// Control applies the reported schema; the reconcile-schema step reports nothing of its own.
+		expect(rec.outcomes).toEqual([deployedReport])
+		rec.outcomes.length = 0
+		expect(await deploy(rec, app, { contract: null, artifactApproval: { digest: null, protected: false } })).toMatchObject({ status: 'succeeded' })
+		expect(rec.outcomes).toEqual([deployedReport])
 	})
 
 	test('an application without a contract hands its gates to the proxy the platform builds', async () => {

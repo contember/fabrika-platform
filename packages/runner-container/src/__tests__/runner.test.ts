@@ -40,7 +40,7 @@ const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunner
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
-	approvedAccess: { kind: 'artifact' },
+	approvedAccess: { kind: 'artifact', digest: null, protected: false },
 	...overrides,
 })
 
@@ -820,6 +820,24 @@ describe('executor outcome file', () => {
 		})
 	})
 
+	test('a refused deploy still carries artifact access waiting for a human, and only that', async () => {
+		const pending = { state: 'pending', accessJson: '{"gates":null,"schema":null}' }
+		const deployed = { artifactAccess: { ...pending, state: 'deployed' }, iamReconcile: { app: 'shop', schemaJson: '{}' } }
+		await withWorkspace(async (workspace) => {
+			const refused = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify({ artifactAccess: pending })), 1)
+			expect(refused.status).toMatchObject({ state: 'failed', exitCode: 1, artifactAccess: pending })
+		})
+		await withWorkspace(async (workspace) => {
+			const failed = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(deployed)), 1)
+			expect(failed.status.artifactAccess).toBeUndefined()
+			expect(failed.status.iamReconcile).toBeUndefined()
+		})
+		await withWorkspace(async (workspace) => {
+			const succeeded = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(deployed)))
+			expect(succeeded.status).toMatchObject({ state: 'succeeded', artifactAccess: deployed.artifactAccess })
+		})
+	})
+
 	test('a dry run reports no reconcile even when the checkout wrote an outcome file', async () => {
 		await withWorkspace(async (workspace) => {
 			const reconcile = { app: 'shop', schemaJson: '{"roles":[]}' }
@@ -942,7 +960,7 @@ describe('approved access file', () => {
 	test("the executor reads the job's approved access beside the checkout, under a name no job value redirects", async () => {
 		const { path, contents, workspace } = await runSeeing(baseJob({ managedEnvironment: { [APPROVED_ACCESS_FILE_ENV]: '/tmp/forged.json' } }))
 		expect(path).toBe(join(workspace, 'run-1.access.json'))
-		expect(contents === undefined ? undefined : JSON.parse(contents)).toEqual({ kind: 'artifact' })
+		expect(contents === undefined ? undefined : JSON.parse(contents)).toEqual({ kind: 'artifact', digest: null, protected: false })
 		expect(await Bun.file(join(workspace, 'run-1.access.json')).exists()).toBe(false)
 	})
 

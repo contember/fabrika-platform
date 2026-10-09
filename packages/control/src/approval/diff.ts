@@ -3,6 +3,9 @@
 // access widens it.
 
 import {
+	type AppSchema,
+	type ArtifactAccess,
+	artifactAccessDigest,
 	canonicalizeArtifact,
 	canonicalJson,
 	type ContractArtifact,
@@ -36,6 +39,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 		removed: (name) => `Migration \`${name}\` is removed`,
 		changed: (name, before, after) => (before.checksum === after.checksum ? [] : [widening(`Migration \`${name}\` changes`)]),
 	})
+	compareArtifactAccess(changes, baseline.artifact, candidate.artifact)
 	const list = changes.list
 	return { outcome: list.length === 0 ? 'unchanged' : list.some((change) => change.widens) ? 'widening' : 'removal', changes: list }
 }
@@ -50,6 +54,46 @@ class Changes {
 
 const widening = (line: string): AccessChange => ({ widens: true, line })
 const removal = (line: string): AccessChange => ({ widens: false, line })
+
+/**
+ * The gates and IAM schema of an application without a contract. Nothing shows which of their changes narrow access, so
+ * every change widens it, a removal included: the approver reads what changed.
+ */
+function compareArtifactAccess(changes: Changes, before: ArtifactAccess | null, after: ArtifactAccess | null): void {
+	if (after === null) {
+		if (before !== null) changes.add(widening("The artifact's gates and IAM schema no longer apply"))
+		return
+	}
+	if (before !== null && artifactAccessDigest(before) === artifactAccessDigest(after)) return
+	const detail = new Changes()
+	if (before === null) detail.add(widening("The artifact's gates and IAM schema apply for the first time"))
+	const ruleText = (access: ArtifactAccess | null): string[] =>
+		(access?.gates?.rules ?? []).map(({ path, kind, ...rest }) => `${path} → ${kind}${Object.keys(rest).length === 0 ? '' : ` ${canonicalJson(rest)}`}`)
+	const beforeRules = ruleText(before)
+	const afterRules = ruleText(after)
+	for (const rule of afterRules) if (!beforeRules.includes(rule)) detail.add(widening(`Gate \`${rule}\` is added`))
+	for (const rule of beforeRules) if (!afterRules.includes(rule)) detail.add(widening(`Gate \`${rule}\` is removed`))
+	if (detail.list.length === 0 && canonicalJson(beforeRules) !== canonicalJson(afterRules)) detail.add(widening('The gates change order'))
+	compareSchemas(detail, before?.schema ?? null, after.schema)
+	changes.add(...(detail.list.length === 0 ? [widening("The artifact's gates and IAM schema change")] : detail.list))
+}
+
+function compareSchemas(changes: Changes, before: AppSchema | null, after: AppSchema | null): void {
+	const actions = (schema: AppSchema | null): string[] => (schema?.actions ?? []).map((action) => action.action)
+	for (const action of union(actions(before), actions(after))) {
+		if (!actions(before).includes(action)) changes.add(widening(`IAM action \`${action}\` is added`))
+		else if (!actions(after).includes(action)) changes.add(widening(`IAM action \`${action}\` is removed`))
+	}
+	const roles = (schema: AppSchema | null): Map<string, readonly string[]> =>
+		new Map(Object.entries(schema?.roles ?? {}).map(([key, role]) => [key, role.permissions]))
+	compareKeyed(changes, roles(before), roles(after), {
+		added: (key, permissions) => `New IAM role \`${key}\` with ${permissions.map((permission) => `\`${permission}\``).join(', ') || 'no permissions'}`,
+		removed: (key) => [widening(`IAM role \`${key}\` is removed`)],
+		changed: (key, from, to) => setChanges(`IAM role \`${key}\``, from, to, 'gains', 'loses').map((change) => widening(change.line)),
+	})
+	const rest = (schema: AppSchema | null) => canonicalJson({ ...schema, actions: undefined, roles: undefined })
+	if (rest(before) !== rest(after)) changes.add(widening("The IAM schema's scopes, links or delegations change"))
+}
 
 function compareContracts(changes: Changes, before: ContractArtifact | null, after: ContractArtifact | null): void {
 	if (before === null && after === null) return

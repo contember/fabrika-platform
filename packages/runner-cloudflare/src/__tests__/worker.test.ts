@@ -34,7 +34,7 @@ const job: CloudflareRunnerJob = {
 	env: 'stage',
 	runnerKey: RUNNER_KEY,
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_API_TOKEN: 'tok' },
-	approvedAccess: { kind: 'artifact' },
+	approvedAccess: { kind: 'artifact', digest: null, protected: false },
 }
 
 /** Re-read a fixture as a job (a JSON round-trip keeps an intentionally malformed one honest, with no `as`). */

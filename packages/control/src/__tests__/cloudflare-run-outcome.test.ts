@@ -30,6 +30,8 @@ async function seedCloudflareRun(db: ControlRepositories): Promise<string> {
 		providerTargetJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: {} }),
 		providerArtifactJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } }),
 	})
+	// Unprotected, so the schema the runner reports applies without an approval (ADR-0050).
+	await db.registry.setAppEnvProtected('app', 'prod', false)
 	const runId = uuidv7()
 	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test', commitSha: COMMIT })
 	return runId
@@ -44,7 +46,7 @@ function fakeRunner(options: { callerLost: boolean }): { service: CloudflareRunn
 				runId: job.runId,
 				state: 'succeeded',
 				exitCode: 0,
-				iamReconcile: { app: 'app', schemaJson: SCHEMA_JSON },
+				artifactAccess: { state: 'deployed', accessJson: `{"gates":null,"schema":${SCHEMA_JSON}}` },
 				startedAt: 1,
 				finishedAt: 2,
 			}

@@ -1,5 +1,6 @@
 // @fabrika/auth-core — pure logic, types, and wire names shared across auth components and apps.
 export * from './app-environment'
+export * from './artifact-access'
 export * from './canonical-path'
 export * from './contract'
 export * from './contract-canonical'

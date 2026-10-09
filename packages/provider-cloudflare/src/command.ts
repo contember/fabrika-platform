@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
 import { type CloudflareDeployResult, createCloudflareDeployer } from './provider'
-import { APPROVED_ACCESS_FILE_ENV, INSTALLATION_APPS_ENV, runnerApprovedAccessSchema } from './runner-protocol'
+import { APPROVED_ACCESS_FILE_ENV, INSTALLATION_APPS_ENV, type RunnerApprovedAccess, runnerApprovedAccessSchema } from './runner-protocol'
 
 const requiredEnvironmentValue = (name: string): string => {
 	const value = environmentValue(name)
@@ -71,10 +71,10 @@ export const parseInstallationApps = (raw: string | undefined): readonly AppEnvi
 
 /**
  * Read the access Control approved for this run from the file at `FABRIKA_APPROVED_ACCESS_FILE`, as the runner
- * writes it: the contract, or null when Control read none at the commit. Undefined when no runner set it (a
- * local deploy); a file that is unreadable or malformed fails the deploy rather than falling back to the checkout.
+ * writes it. Undefined when no runner set it (a local deploy); a file that is unreadable or malformed fails the deploy
+ * rather than falling back to the checkout.
  */
-export const readApprovedContract = async (path: string | undefined): Promise<ContractArtifact | null | undefined> => {
+export const readApprovedAccess = async (path: string | undefined): Promise<RunnerApprovedAccess | undefined> => {
 	if (path === undefined || path === '') return undefined
 	let decoded: unknown
 	try {
@@ -84,7 +84,16 @@ export const readApprovedContract = async (path: string | undefined): Promise<Co
 	}
 	const access = runnerApprovedAccessSchema.safeParse(decoded)
 	if (!access.success) throw new Error(`${APPROVED_ACCESS_FILE_ENV} does not hold the access Control approved`)
-	return access.data.kind === 'contract' ? access.data.contract : null
+	return access.data
+}
+
+/** The approved access as the deployer takes it: the contract (null when Control read none), and the artifact approval. */
+const approvedRun = (
+	access: RunnerApprovedAccess | undefined,
+): { readonly contract?: ContractArtifact | null; readonly artifactApproval?: { readonly digest: string | null; readonly protected: boolean } } => {
+	if (access === undefined) return {}
+	if (access.kind === 'contract') return { contract: access.contract }
+	return { contract: null, artifactApproval: { digest: access.digest, protected: access.protected } }
 }
 
 export interface LoadedCloudflareCommandConfig {
@@ -113,7 +122,7 @@ export interface CloudflareCommandDeployOptions {
 export const deployCloudflareConfig = async (options: CloudflareCommandDeployOptions): Promise<CloudflareDeployResult> => {
 	const cwd = options.cwd ?? process.cwd()
 	// Before the config runs: loading it executes the checkout's code.
-	const contract = await readApprovedContract(environmentValue(APPROVED_ACCESS_FILE_ENV))
+	const approved = approvedRun(await readApprovedAccess(environmentValue(APPROVED_ACCESS_FILE_ENV)))
 	const loaded = await loadCloudflareCommandConfig(options.configPath ?? './fabrika.config.ts', cwd)
 	const deploy = createCloudflareDeployer({
 		accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
@@ -129,7 +138,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		...(domain === undefined ? {} : { domain }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
-		...(contract === undefined ? {} : { contract }),
+		...approved,
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),

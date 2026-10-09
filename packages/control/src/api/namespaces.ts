@@ -375,7 +375,7 @@ async function namespaceMembers(
 	const members: ProviderNamespaceMember[] = []
 	for (const row of await deps.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
 		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)
-		const access = await approvedProviderAccess(deps.repositories, row)
+		const access = approvedProviderAccess(row)
 		members.push({
 			appId: row.app_id,
 			env: row.env,

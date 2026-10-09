@@ -2,10 +2,20 @@
 // path that publishes access reads it through.
 
 import { parseContractArtifact, schemaFromContract } from '@fabrika/app/contract'
-import { canonicalArtifactJson, canonicalJson, type ContractArtifact, contractDigest, sha256Hex } from '@fabrika/auth-core'
-import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
+import { appSchemaSchema } from '@fabrika/auth'
+import {
+	type ArtifactAccess,
+	artifactAccessDigest,
+	canonicalArtifactJson,
+	canonicalJson,
+	type ContractArtifact,
+	contractDigest,
+	sha256Hex,
+} from '@fabrika/auth-core'
+import type { ProviderApprovedAccess, ProviderArtifactApproval } from '@fabrika/provider-contract'
+import { proxyAppGatesSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
-import type { AppEnvRow, ControlRepositories } from '../db'
+import type { AppEnvRow } from '../db'
 
 /** One migration file of the commit, with the SHA-256 of its text (the checksum the application's ledger records). */
 export interface MigrationEntry {
@@ -20,16 +30,28 @@ export interface AccessSnapshot {
 	readonly migrations: readonly MigrationEntry[]
 	/** The `@fabrika/check` version that read it; empty for the empty snapshot. */
 	readonly checker: string
+	/**
+	 * Without a contract, the artifact's gates and IAM schema: from the provider before the deploy, or as the deploy
+	 * reported them. Null with a contract, and before any is known.
+	 */
+	readonly artifact: ArtifactAccess | null
 }
 
 /** The baseline of an environment that has published nothing: every item of a candidate is an addition. */
-export const EMPTY_SNAPSHOT: AccessSnapshot = { version: 1, contract: null, migrations: [], checker: '' }
+export const EMPTY_SNAPSHOT: AccessSnapshot = { version: 1, contract: null, migrations: [], checker: '', artifact: null }
+
+/** Gates and an IAM schema read back as JSON (a stored snapshot, a runner's report), parsed by their own schemas. */
+export const artifactAccessSchema = z.object({
+	gates: proxyAppGatesSchema.nullable(),
+	schema: appSchemaSchema.nullable(),
+}).strict() satisfies z.ZodType<ArtifactAccess, z.ZodTypeDef, unknown>
 
 const snapshotSchema = z.object({
 	version: z.literal(1),
 	contract: z.unknown(),
 	migrations: z.array(z.object({ name: z.string().min(1), checksum: z.string().regex(/^[0-9a-f]{64}$/) }).strict()),
 	checker: z.string(),
+	artifact: artifactAccessSchema.nullable(),
 }).strict()
 
 /** Parse a stored snapshot; the contract is parsed by the artifact's own schema. */
@@ -40,6 +62,7 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 		contract: parsed.contract === null ? null : parseContractArtifact(parsed.contract),
 		migrations: parsed.migrations,
 		checker: parsed.checker,
+		artifact: parsed.artifact,
 	}
 }
 
@@ -48,13 +71,14 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 }
 
 /**
- * The digest of the access a snapshot grants: the canonical contract and the migration list. The checker version is
- * not part of it, so reading the same commit with a newer checker approves nothing new.
+ * The digest of the access a snapshot grants: the canonical contract, the migration list and the artifact access. The
+ * checker version is not part of it, so reading the same commit with a newer checker approves nothing new.
  */
 export function snapshotDigest(snapshot: AccessSnapshot): string {
 	const migrations = [...snapshot.migrations].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 	const contract = snapshot.contract === null ? 'null' : canonicalArtifactJson(snapshot.contract)
-	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}`)}`
+	const artifact = snapshot.artifact === null ? 'null' : artifactAccessDigest(snapshot.artifact)
+	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\n${artifact}`)}`
 }
 
 /** What a provider publishes for a snapshot: the contract, its digest and the IAM schema compiled from it. */
@@ -72,38 +96,34 @@ export interface ActiveSnapshot {
 	readonly snapshot: AccessSnapshot
 }
 
+type PublishedFields = Pick<AppEnvRow, 'app_id' | 'env' | 'published_run_id' | 'published_snapshot_json' | 'generation'>
+
 /**
- * The environment's approved snapshot: the snapshot of its published run, or the empty one. Every path that publishes a
- * proxy table or reconciles IAM reads access through this function, never from the provider artifact (ADR-0050).
+ * The environment's approved snapshot: the one its last publication wrote, or the empty one. Every path that publishes
+ * a proxy table or reconciles IAM reads access through this function, never from the provider artifact (ADR-0050).
  */
-export async function approvedSnapshot(
-	repositories: Pick<ControlRepositories, 'runs'>,
-	appEnv: Pick<AppEnvRow, 'app_id' | 'env' | 'published_run_id' | 'generation'>,
-): Promise<ActiveSnapshot> {
+export function approvedSnapshot(appEnv: PublishedFields): ActiveSnapshot {
 	const runId = appEnv.published_run_id
-	if (runId === null) return { runId: null, generation: appEnv.generation, snapshot: EMPTY_SNAPSHOT }
-	const run = await repositories.runs.getRun(runId)
-	if (run === null || run.app_id !== appEnv.app_id || run.env !== appEnv.env || run.snapshot_json === null) {
-		throw new Error(`the published run of ${appEnv.app_id}/${appEnv.env} has no snapshot`)
-	}
-	return { runId, generation: appEnv.generation, snapshot: parseSnapshot(run.snapshot_json) }
+	const raw = appEnv.published_snapshot_json
+	if ((runId === null) !== (raw === null)) throw new Error(`the publication of ${appEnv.app_id}/${appEnv.env} is incomplete`)
+	return { runId, generation: appEnv.generation, snapshot: raw === null ? EMPTY_SNAPSHOT : parseSnapshot(raw) }
 }
 
-/** What a provider may publish for an environment: its approved contract, or the artifact's access of a non-contract app. */
+/** What a provider may publish for an environment: its approved contract, or the artifact access approved without one. */
 export interface ProviderAccessFields {
 	readonly access?: ProviderApprovedAccess
-	readonly artifactAccess?: true
+	readonly artifactAccess?: ProviderArtifactApproval
 }
 
 /**
- * `approvedSnapshot` as the provider reads it. Only the registry's `contract_app = 0` lets the artifact decide, for an
- * application whose published snapshot has no contract (until B10); never the artifact's own claim.
+ * `approvedSnapshot` as the provider reads it. Without a contract, the approved artifact access by its digest: a
+ * provider applies an artifact's gates and schema only when they hash to it. Nothing before a first publication.
  */
-export async function approvedProviderAccess(
-	repositories: Pick<ControlRepositories, 'runs'>,
-	appEnv: Pick<AppEnvRow, 'app_id' | 'env' | 'published_run_id' | 'generation' | 'contract_app'>,
-): Promise<ProviderAccessFields> {
-	const access = approvedAccess((await approvedSnapshot(repositories, appEnv)).snapshot)
+export function approvedProviderAccess(appEnv: PublishedFields & Pick<AppEnvRow, 'protected'>): ProviderAccessFields {
+	const active = approvedSnapshot(appEnv)
+	if (active.runId === null) return {}
+	const access = approvedAccess(active.snapshot)
 	if (access !== undefined) return { access }
-	return appEnv.contract_app === 0 ? { artifactAccess: true } : {}
+	const artifact = active.snapshot.artifact
+	return { artifactAccess: { digest: artifact === null ? null : artifactAccessDigest(artifact), protected: appEnv.protected === 1 } }
 }

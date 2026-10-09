@@ -12,9 +12,19 @@ export const runnerIamReconcileSchema = z.object({ app: z.string(), schemaJson: 
 
 export type RunnerIamReconcile = z.infer<typeof runnerIamReconcileSchema>
 
+/**
+ * The artifact access the executor found (ADR-0050), as JSON text: the config's gates and IAM schema. `pending`: it is
+ * not the approved one on a protected environment, so nothing was provisioned. `deployed`: the deploy applied it.
+ * The control plane parses, bounds and checks it before it applies or records anything.
+ */
+export const runnerArtifactAccessSchema = z.object({ state: z.enum(['deployed', 'pending']), accessJson: z.string() })
+
+export type RunnerArtifactAccess = z.infer<typeof runnerArtifactAccessSchema>
+
 /** What the executor leaves at `$FABRIKA_RUNNER_OUTCOME_FILE` for the runner to fold into its terminal status. */
 export interface RunnerOutcomeFile {
 	readonly iamReconcile?: RunnerIamReconcile
+	readonly artifactAccess?: RunnerArtifactAccess
 }
 
 export const RUNNER_OUTCOME_FILE_ENV = 'FABRIKA_RUNNER_OUTCOME_FILE'
@@ -23,17 +33,17 @@ export const RUNNER_OUTCOME_FILE_ENV = 'FABRIKA_RUNNER_OUTCOME_FILE'
 export const INSTALLATION_APPS_ENV = 'FABRIKA_INSTALLATION_APPS'
 
 /**
- * The access Control approved for a run (ADR-0050): the contract it read at the commit, or `artifact` for an
- * application Control's registry knows has none, whose config's gates and schema apply. The proxy table and
- * `FABRIKA_CONTRACT_DIGEST` follow this, never the checkout.
+ * The access Control approved for a run (ADR-0050): the contract it read at the commit, or, for an application
+ * without one, the digest of the approved gates and IAM schema (null before any) and whether a different one waits for
+ * a human. The proxy table and `FABRIKA_CONTRACT_DIGEST` follow this, never the checkout.
  */
 export type RunnerApprovedAccess =
 	| { readonly kind: 'contract'; readonly contract: ContractArtifact; readonly contractDigest: string }
-	| { readonly kind: 'artifact' }
+	| { readonly kind: 'artifact'; readonly digest: string | null; readonly protected: boolean }
 
 export const runnerApprovedAccessSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('contract'), contract: z.unknown(), contractDigest: z.string() }).strict(),
-	z.object({ kind: z.literal('artifact') }).strict(),
+	z.object({ kind: z.literal('artifact'), digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(), protected: z.boolean() }).strict(),
 ]).transform((access, context): RunnerApprovedAccess => {
 	if (access.kind === 'artifact') return access
 	const contract = contractArtifactSchema.safeParse(access.contract)
@@ -55,6 +65,7 @@ export const runnerStatusSchema = z.object({
 	error: z.string().optional(),
 	artifactState: z.enum(['complete', 'incomplete', 'not_applicable']).optional(),
 	iamReconcile: runnerIamReconcileSchema.optional(),
+	artifactAccess: runnerArtifactAccessSchema.optional(),
 	/** A preview: nothing was deployed and nothing may be applied from it. */
 	dryRun: z.boolean().optional(),
 	startedAt: z.number().finite(),

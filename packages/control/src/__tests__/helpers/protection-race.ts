@@ -27,14 +27,15 @@ export async function protectionRaceScenario(db: ControlRepositories, locks: Dep
 	const owned = fixtureRuns(db.runs, locks)
 	const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'main', trigger: 'manual', actor: 'user:ada' })
 	await owned.start(run.id, 'logs')
-	await owned.snapshot(run.id, JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0' }))
-	const classifiedAt = { generation: read.generation, protectionRevision: read.protection_revision, hasContract: false }
+	const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0', artifact: null })
+	await owned.snapshot(run.id, snapshot)
+	const classifiedAt = { generation: read.generation, protectionRevision: read.protection_revision }
 
 	await db.registry.setAppEnvProtected('acme', 'stage', true)
 	await expect(db.registry.deleteAppEnv('acme', 'stage', read.generation)).rejects.toBeInstanceOf(AppEnvChangedError)
 	await expect(db.registry.upsertAppEnv(stage, { generation: read.generation })).rejects.toBeInstanceOf(AppEnvChangedError)
 	await expect(db.registry.deleteApp('acme', [{ env: 'stage', generation: read.generation }])).rejects.toBeInstanceOf(AppEnvChangedError)
-	expect(await owned.publish(run.id, classifiedAt)).toBe(false)
+	expect(await owned.publish(run.id, classifiedAt, snapshot)).toBe(false)
 
 	const current = await db.registry.getAppEnv('acme', 'stage')
 	if (current === null) throw new Error('stage is gone')
@@ -44,6 +45,6 @@ export async function protectionRaceScenario(db: ControlRepositories, locks: Dep
 	expect(recreated.protected).toBe(1)
 	expect(recreated.generation).toBeGreaterThan(current.generation)
 	expect(recreated.protection_revision).toBe(current.protection_revision)
-	expect(await owned.publish(run.id, classifiedAt)).toBe(false)
+	expect(await owned.publish(run.id, classifiedAt, snapshot)).toBe(false)
 	expect((await db.registry.getAppEnv('acme', 'stage'))?.published_run_id).toBeNull()
 }

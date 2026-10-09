@@ -8,6 +8,7 @@ import { defineApp } from '../authoring'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
 import { compileNamespaceProxyManifest } from '../namespace/manifest'
 import { namespaceProxySecrets } from '../namespace/proxy-secrets'
+import { approvedArtifact } from './fixtures/access'
 import { SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 
 const member = (appId: string, options: { contract: boolean; proxySecret?: string }): ProviderNamespaceMember => {
@@ -34,7 +35,7 @@ const member = (appId: string, options: { contract: boolean; proxySecret?: strin
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
 		...(options.contract
 			? { access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) } }
-			: { artifactAccess: true }),
+			: { artifactAccess: approvedArtifact(manifest) }),
 		...(options.proxySecret === undefined ? {} : { proxySecret: options.proxySecret }),
 	}
 }

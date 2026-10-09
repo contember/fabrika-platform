@@ -1,5 +1,5 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import { type AppSchema, isDigest } from '@fabrika/auth-core'
+import { type AppSchema, type ArtifactAccess, artifactAccessDigest, isDigest } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec, ProviderEnvironment } from '@fabrika/provider-contract'
 import { normalizeGateRule, proxyEndpointRowSchema, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
@@ -421,21 +421,35 @@ export const claimsContract = (manifest: FabrikaManifest): boolean =>
 	manifest.target.contract !== undefined || manifest.app.schema?.contract === true
 	|| (manifest.target.proxy !== undefined && 'endpoints' in manifest.target.proxy)
 
+/** The access an artifact grants without a contract (ADR-0050): its proxy's gates and its IAM schema. */
+export const zeropsArtifactAccess = (manifest: FabrikaManifest): ArtifactAccess => {
+	const proxy = manifest.target.proxy
+	return { gates: proxy !== undefined && 'gates' in proxy ? proxy.gates : null, schema: manifest.app.schema ?? null }
+}
+
 /** What Control lets a provider publish for one environment (`ProviderEnvironment.access` / `artifactAccess`). */
 export type ZeropsAccess = Pick<ProviderEnvironment, 'access' | 'artifactAccess'>
 
+/** Whether the artifact's own gates and schema are the ones Control approved for an application without a contract. */
+export const artifactAccessApproved = (manifest: FabrikaManifest, granted: ZeropsAccess): boolean => {
+	const approved = granted.artifactAccess?.digest ?? null
+	return approved !== null && !claimsContract(manifest) && artifactAccessDigest(zeropsArtifactAccess(manifest)) === approved
+}
+
 /**
  * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
- * so a configuration cannot drop it. An application Control knows has no contract (`artifactAccess`) deploys its own
- * descriptor, but not with an artifact that claims a contract; with neither, nothing deploys outside a dry run.
+ * so a configuration cannot drop it. Without a contract the artifact deploys its own descriptor only when its access is
+ * the one Control approved; otherwise nothing deploys outside a dry run.
  */
 export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAccess, dryRun: boolean): ZeropsLockedExecution | null {
 	const access = granted.access
 	if (access === undefined) {
-		if (granted.artifactAccess === true && claimsContract(manifest)) {
+		if (dryRun) return null
+		if (granted.artifactAccess === undefined) throw new Error('zerops: Control approved no access for this environment')
+		if (claimsContract(manifest)) {
 			throw new Error('zerops: the artifact claims a contract, but the commit Control read has no `fabrika.contract.ts`')
 		}
-		if (granted.artifactAccess !== true && !dryRun) throw new Error('zerops: Control approved no access for this environment')
+		if (!artifactAccessApproved(manifest, granted)) throw new Error("zerops: the artifact's gates and IAM schema are not the access Control approved")
 		return null
 	}
 	if (!LOCKED_APP_ID_PATTERN.test(manifest.app.id)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
@@ -448,13 +462,12 @@ export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAcc
 }
 
 /**
- * The IAM schema a deploy, cancel or reconcile applies: the approved contract's, or the artifact's for an application
- * Control knows has no contract (until B10, and never a `contract: true` one). `undefined` reconciles nothing.
+ * The IAM schema a deploy, cancel or reconcile applies: the approved contract's, or the artifact's when its access is
+ * the one Control approved. `undefined` reconciles nothing.
  */
 export function approvedSchemaOf(manifest: FabrikaManifest, granted: ZeropsAccess): AppSchema | undefined {
 	if (granted.access !== undefined) return granted.access.schema
-	const schema = manifest.app.schema
-	return granted.artifactAccess === true && schema?.contract !== true ? schema : undefined
+	return artifactAccessApproved(manifest, granted) ? manifest.app.schema : undefined
 }
 
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>

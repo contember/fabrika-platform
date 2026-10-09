@@ -155,6 +155,7 @@ const runOutcome = (status: RunnerStatus): CloudflareRunRecovery => {
 		...(status.exitCode === undefined ? {} : { exitCode: status.exitCode }),
 		...(status.artifactState === undefined ? {} : { artifactState: status.artifactState }),
 		...(status.iamReconcile === undefined ? {} : { iamReconcile: status.iamReconcile }),
+		...(status.artifactAccess === undefined ? {} : { accessReport: status.artifactAccess }),
 		...(status.dryRun === true ? { dryRun: true } : {}),
 	}
 }

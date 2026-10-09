@@ -28,6 +28,7 @@ import { CANCELLED, createZeropsDeployer, type ZeropsDeployResult, type ZeropsDe
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
+import { approvedArtifact } from './fixtures/access'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 
 interface Recorded {
@@ -298,7 +299,7 @@ const deployRun = (
 ): ZeropsDeployRun => ({
 	appId: 'demo',
 	env: 'prod',
-	artifactAccess: true,
+	artifactAccess: approvedArtifact(compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR)),
 	secrets: {},
 	vars: { IMAGE: 'registry.test/demo:v2' },
 	managedEnvironment: NO_MANAGED_VALUES,
@@ -1061,12 +1062,13 @@ describe('a contract application deploy', () => {
 	}
 	const contractRun = async (contract: boolean, granted: ProviderApprovedAccess | 'artifact' | 'none'): Promise<ZeropsDeployResult> => {
 		const { artifactAccess: _trusted, ...run } = deployRun(recorded)
+		const artifact = await contractArtifact(contract)
 		return createZeropsDeployer(() => makeCollaborators(recorded))({
 			...run,
 			appId: 'notes',
 			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
-			artifact: await contractArtifact(contract),
-			...(granted === 'none' ? {} : granted === 'artifact' ? { artifactAccess: true } : { access: granted }),
+			artifact,
+			...(granted === 'none' ? {} : granted === 'artifact' ? { artifactAccess: approvedArtifact(artifact) } : { access: granted }),
 		})
 	}
 
@@ -1074,6 +1076,19 @@ describe('a contract application deploy', () => {
 		const result = await contractRun(true, 'artifact')
 		expect(stepError(result, 'trigger-build')).toBe('zerops: the artifact claims a contract, but the commit Control read has no `fabrika.contract.ts`')
 		expect(recorded.builds).toEqual([])
+	})
+
+	test('an artifact whose gates or schema are not the approved ones neither deploys nor reconciles IAM', async () => {
+		const run = deployRun(recorded)
+		const widened = compileFabrikaManifest(
+			{ ...app([DB, API]), target: { ...app([DB, API]).target, proxy: { upstream: 'api:3000', gates: { rules: [{ path: '/*', kind: 'public' }] } } } },
+			'prod',
+			SOURCE_DESCRIPTOR,
+		)
+		const result = await createZeropsDeployer(() => makeCollaborators(recorded))({ ...run, artifact: widened })
+		expect(stepError(result, 'trigger-build')).toBe("zerops: the artifact's gates and IAM schema are not the access Control approved")
+		expect(recorded.builds).toEqual([])
+		expect(recorded.schemaBodies).toEqual([])
 	})
 
 	test('an environment Control approved nothing for is refused before the build, whatever the artifact claims', async () => {

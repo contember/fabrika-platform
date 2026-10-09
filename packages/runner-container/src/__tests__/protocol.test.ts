@@ -8,7 +8,7 @@ const validJob: CloudflareRunnerJob = {
 	env: 'prod',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'tok' },
-	approvedAccess: { kind: 'artifact' },
+	approvedAccess: { kind: 'artifact', digest: null, protected: false },
 }
 
 describe('cloudflareRunnerJobSchema', () => {

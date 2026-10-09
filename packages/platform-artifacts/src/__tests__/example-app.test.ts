@@ -11,7 +11,7 @@
 //
 // NOT PROVEN: that Zerops accepts any of it. No request in this file leaves the process.
 
-import { applicableGates, compileGates, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { applicableGates, artifactAccessDigest, compileGates, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM } from '@fabrika/example-zerops-app'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
 import { NOTES_APP_ID } from '@fabrika/example-zerops-app/schema'
@@ -23,6 +23,7 @@ import {
 	createZeropsDeployer,
 	type ZeropsApi,
 	type ZeropsAppVersionStatus,
+	zeropsArtifactAccess,
 	type ZeropsCollaborators,
 	type ZeropsDeployRun,
 	type ZeropsRuntimeTarget,
@@ -200,7 +201,7 @@ const makeRun = (
 	env: 'prod',
 	target,
 	artifact: MANIFEST,
-	artifactAccess: true,
+	artifactAccess: { digest: artifactAccessDigest(zeropsArtifactAccess(MANIFEST)), protected: true },
 	secrets: {},
 	vars: {},
 	managedEnvironment: {

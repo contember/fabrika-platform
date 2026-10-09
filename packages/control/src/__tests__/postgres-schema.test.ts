@@ -536,18 +536,18 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).toMatchObject({ protected: 1, generation: 3, protection_revision: 1 })
 
 		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
-		const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0' })
+		const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0', artifact: null })
 		const first = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:ada' })
 		const second = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:ada' })
 		expect(first.actor).toBe('user:ada')
 		await owned.start(first.id, 'logs')
-		const unpublished = { generation: 0, protectionRevision: 0, hasContract: false }
-		expect(await owned.publish(first.id, unpublished)).toBe(false)
+		const unpublished = { generation: 0, protectionRevision: 0 }
+		expect(await owned.publish(first.id, unpublished, snapshot)).toBe(false)
 		await owned.snapshot(first.id, snapshot)
-		expect(await owned.publish(first.id, { ...unpublished, protectionRevision: 1 })).toBe(false)
-		expect(await owned.publish(first.id, unpublished)).toBe(true)
-		expect(await owned.publish(first.id, unpublished)).toBe(false)
-		expect(await db.registry.getAppEnv('acme', 'prod')).toMatchObject({ published_run_id: first.id, generation: 1, contract_app: 0 })
+		expect(await owned.publish(first.id, { ...unpublished, protectionRevision: 1 }, snapshot)).toBe(false)
+		expect(await owned.publish(first.id, unpublished, snapshot)).toBe(true)
+		expect(await owned.publish(first.id, unpublished, snapshot)).toBe(false)
+		expect(await db.registry.getAppEnv('acme', 'prod')).toMatchObject({ published_run_id: first.id, published_snapshot_json: snapshot, generation: 1 })
 		await owned.finish(first.id, 'succeeded', 0)
 
 		await owned.start(second.id, 'logs')

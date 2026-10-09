@@ -9,7 +9,7 @@ import type {
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
@@ -20,6 +20,7 @@ import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zerops
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourcePort, ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
+import { approvedArtifact } from './fixtures/access'
 import { SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
 
@@ -94,26 +95,36 @@ const readyNamespace = (): ProviderDeploymentNamespace => ({
 	},
 })
 
-const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvironment => ({
-	appId: 'notes',
-	env: 'prod',
-	// Control's registry knows these applications have no contract, so their artifact's descriptor and schema apply.
-	artifactAccess: true,
-	domain: 'notes.example.test',
-	publicOrigin: 'https://public.notes.example.test',
-	namespace: readyNamespace(),
-	target: {
-		provider: 'zerops',
-		version: zeropsStoredTargetCodec.version,
-		payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1' }),
-	},
-	artifact: {
-		provider: 'zerops',
-		version: zeropsArtifactCodec.version,
-		payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)),
-	},
-	...overrides,
-})
+/** Control approved the artifact's own gates and IAM schema, whichever artifact a test sets, unless it says otherwise. */
+const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvironment => {
+	const base: ProviderEnvironment = {
+		appId: 'notes',
+		env: 'prod',
+		domain: 'notes.example.test',
+		publicOrigin: 'https://public.notes.example.test',
+		namespace: readyNamespace(),
+		target: {
+			provider: 'zerops',
+			version: zeropsStoredTargetCodec.version,
+			payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1' }),
+		},
+		artifact: {
+			provider: 'zerops',
+			version: zeropsArtifactCodec.version,
+			payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)),
+		},
+		...overrides,
+	}
+	if ('artifactAccess' in overrides) return base
+	// A test's malformed artifact is what it checks the refusal of; it has no access to approve.
+	let manifest: ReturnType<typeof zeropsArtifactCodec.decode>
+	try {
+		manifest = decodeEnvelope('artifact', 'zerops', base.artifact, zeropsArtifactCodec)
+	} catch {
+		return base
+	}
+	return { ...base, artifactAccess: approvedArtifact(manifest) }
+}
 
 const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	runId: 'run-1',

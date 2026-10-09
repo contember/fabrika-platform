@@ -7,6 +7,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { defineApp } from '../authoring'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { compileNamespaceProxyManifest } from '../namespace/manifest'
+import { approvedArtifact } from './fixtures/access'
 
 const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
 	path: 'zerops.yaml',
@@ -43,7 +44,7 @@ const member = (
 		...(domain === undefined ? {} : { domain }),
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
 		...(options.access === undefined ? {} : { access: options.access }),
-		...(options.contract === true || options.access !== undefined || options.trusted === false ? {} : { artifactAccess: true }),
+		...(options.contract === true || options.access !== undefined || options.trusted === false ? {} : { artifactAccess: approvedArtifact(manifest) }),
 	}
 }
 
@@ -94,10 +95,42 @@ describe('namespace proxy manifest', () => {
 		expect(manifest.apps[0]).toEqual({ id: 'alpha@prod', hosts: ['alpha.example.com'], upstream: 'alpha:3000', scheme: 'https', ...TABLE })
 	})
 
-	test('an uploaded gates descriptor is not routed unless Control knows the application has no contract', () => {
+	test('an uploaded gates descriptor is routed only as the artifact access Control approved', () => {
 		// A first protected run parked for approval: nothing published, and the upload hides its contract behind `/* → public`.
 		expect(compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com', { trusted: false })])).toEqual({ apps: [] })
 		expect(compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com')]).apps.map((app) => app.id)).toEqual(['alpha@prod'])
+		const approved = member('alpha', 'alpha.example.com').artifactAccess
+		if (approved === undefined) throw new Error('the member carries no approval')
+		expect(compileNamespaceProxyManifest('apps-prod', [{ ...member('alpha', 'alpha.example.com'), artifactAccess: { ...approved, digest: null } }]))
+			.toEqual({ apps: [] })
+	})
+
+	test('a later upload with wider gates is not routed under the approval of the narrower one (a contract removed, 1 → 0)', () => {
+		const approvedNarrow = member('alpha', 'alpha.example.com').artifactAccess
+		if (approvedNarrow === undefined) throw new Error('the member carries no approval')
+		const widened = compileFabrikaManifest(
+			defineApp({
+				id: 'alpha',
+				target: {
+					platform: 'zerops',
+					services: () => [{ hostname: 'alpha', type: 'alpine/bun@1.3' }],
+					proxy: { upstream: 'alpha:3000', gates: { rules: [{ path: '/*', kind: 'public' as const }] } },
+				},
+			}),
+			'prod',
+			SOURCE_DESCRIPTOR,
+		)
+		const uploaded: ProviderNamespaceMember = {
+			appId: 'alpha',
+			env: 'prod',
+			domain: 'alpha.example.com',
+			artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(widened) },
+			artifactAccess: approvedNarrow,
+		}
+		expect(compileNamespaceProxyManifest('apps-prod', [uploaded])).toEqual({ apps: [] })
+		expect(compileNamespaceProxyManifest('apps-prod', [{ ...uploaded, artifactAccess: approvedArtifact(widened) }]).apps).toEqual([
+			{ id: 'alpha@prod', hosts: ['alpha.example.com'], upstream: 'alpha:3000', gates: { rules: [{ path: '/*', kind: 'public' }] }, scheme: 'https' },
+		])
 	})
 
 	test('the artifact refuses an endpoint row whose digest does not describe its rules', () => {

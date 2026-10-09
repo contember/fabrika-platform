@@ -1,9 +1,18 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { type AppEnvironment, appEnvironmentId, type AppSchema, parseAppEnvironmentId } from '@fabrika/auth-core'
+import {
+	type AppEnvironment,
+	appEnvironmentId,
+	type AppSchema,
+	type ArtifactAccess,
+	artifactAccessDigest,
+	parseAppEnvironmentId,
+} from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
 	ProviderApprovedAccess,
+	ProviderArtifactAccessReport,
+	ProviderArtifactApproval,
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderEnvelope,
@@ -20,11 +29,18 @@ import type {
 import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
+import { artifactAccessSchema } from './artifact-access'
 import { cloudflareArtifactCodec } from './codec'
-import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile, runnerIamReconcileSchema } from './runner-protocol'
+import {
+	type RunnerApprovedAccess,
+	runnerApprovedAccessSchema,
+	type RunnerArtifactAccess,
+	runnerArtifactAccessSchema,
+	type RunnerIamReconcile,
+} from './runner-protocol'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
-import { defaultReconcileSchema, parseAppSchema } from './schema'
+import { defaultReconcileSchema } from './schema'
 
 export * from './runner-protocol'
 
@@ -171,8 +187,12 @@ export interface CloudflareCloneSource {
 	readonly repoUrl: string
 }
 
-/** A run's terminal outcome plus the IAM reconcile the executor compiled, if the plan reached that step. */
-export type CloudflareRunOutcome = ProviderTerminalOutcome & { readonly iamReconcile?: RunnerIamReconcile; readonly dryRun?: boolean }
+/** A run's terminal outcome plus what the executor reported: the IAM schema it compiled, and the artifact access it found. */
+export type CloudflareRunOutcome = Omit<ProviderTerminalOutcome, 'artifactAccess'> & {
+	readonly iamReconcile?: RunnerIamReconcile
+	readonly accessReport?: RunnerArtifactAccess
+	readonly dryRun?: boolean
+}
 
 /** What the runner reports for a run after a control-plane restart: its persisted outcome, or still in flight. */
 export type CloudflareRunRecovery = CloudflareRunOutcome | { readonly state: 'running' }
@@ -257,7 +277,8 @@ const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedA
 	if (environment.access !== undefined) {
 		return { kind: 'contract', contract: environment.access.contract, contractDigest: environment.access.contractDigest }
 	}
-	return environment.artifactAccess === true ? { kind: 'artifact' } : undefined
+	const approval = environment.artifactAccess
+	return approval === undefined ? undefined : { kind: 'artifact', digest: approval.digest, protected: approval.protected }
 }
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
@@ -317,10 +338,10 @@ interface IamReconcileTarget {
 	readonly appId: string
 	readonly env: string
 	readonly returnOrigins?: readonly string[]
-	/** Control's approved access (ADR-0050): a contract application's IAM schema comes from it, never from the runner. */
+	/** Control's approved contract (ADR-0050): a contract application's IAM schema comes from it, never from the runner. */
 	readonly access?: ProviderApprovedAccess
-	/** Control knows the application has no contract, so the schema the runner compiled from its config applies. */
-	readonly artifactAccess?: true
+	/** Control's approved artifact access: the runner's reported gates and schema apply only when they hash to it. */
+	readonly artifactAccess?: ProviderArtifactApproval
 	readonly signal: AbortSignal
 }
 
@@ -328,15 +349,59 @@ interface IamReconcileTarget {
 class InvalidIamReport extends Error {}
 
 /**
- * Apply the schema the executor compiled, with the control plane's own IAM key. The control port may
- * have implementations other than the runner relay, so validate and bound its report before IAM hears it.
+ * The artifact access the runner reported, bounded and parsed. The control port may have implementations other than
+ * the runner relay, so nothing it says is applied before this.
  */
-const applyIamReconcile = async (
-	options: CloudflareControlOptions,
-	target: IamReconcileTarget,
-	report: RunnerIamReconcile | undefined,
-): Promise<void> => {
-	const schema = target.access?.schema ?? reportedSchema(target, report)
+const reportedArtifactAccess = (report: RunnerArtifactAccess): ArtifactAccess => {
+	const parsedReport = runnerArtifactAccessSchema.safeParse(report)
+	if (!parsedReport.success) throw new InvalidIamReport('reported artifact access whose state or body is malformed')
+	const { accessJson } = parsedReport.data
+	if (accessJson.length > MAX_SCHEMA_JSON_CHARS) {
+		throw new InvalidIamReport(`reported artifact access of ${accessJson.length} characters, over the ${MAX_SCHEMA_JSON_CHARS} limit`)
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(accessJson)
+	} catch {
+		throw new InvalidIamReport('reported artifact access that is not valid JSON')
+	}
+	const access = artifactAccessSchema.safeParse(parsed)
+	if (!access.success) throw new InvalidIamReport('reported malformed gates or a malformed authz schema')
+	if (access.data.schema?.contract === true) {
+		throw new InvalidIamReport('reported a contract schema, which comes only from the contract Control approved')
+	}
+	return access.data
+}
+
+/** What a terminal outcome of an application without a contract may apply, and what Control hears of its access. */
+interface ArtifactVerdict {
+	readonly schema: AppSchema | null
+	readonly report: ProviderArtifactAccessReport | null
+}
+
+/**
+ * Judge the runner's report against Control's approved artifact access (ADR-0050). A `pending` report is believed only
+ * as what it claims: a failed run on a protected environment whose access differs. A `deployed` access applies only
+ * when it is the approved one, or the environment is unprotected; otherwise the run fails and IAM hears nothing.
+ */
+const judgeArtifactAccess = (approval: ProviderArtifactApproval, outcome: CloudflareRunOutcome): ArtifactVerdict => {
+	const raw = outcome.accessReport
+	// Without a report Control applies and records nothing; the run's state stands as the runner reported it.
+	if (raw === undefined) return { schema: null, report: null }
+	const access = reportedArtifactAccess(raw)
+	const approved = artifactAccessDigest(access) === approval.digest
+	if (raw.state === 'pending') {
+		if (outcome.state !== 'failed' || !approval.protected || approved) {
+			throw new InvalidIamReport('reported access waiting for approval that needs none')
+		}
+		return { schema: null, report: { state: 'pending', access } }
+	}
+	if (approval.protected && !approved) throw new InvalidIamReport('deployed gates and an authz schema that are not the access Control approved')
+	return { schema: outcome.state === 'succeeded' ? access.schema : null, report: { state: 'deployed', access } }
+}
+
+/** Apply a schema with the control plane's own IAM key. */
+const applySchema = async (options: CloudflareControlOptions, target: IamReconcileTarget, schema: AppSchema): Promise<void> => {
 	if (options.propustkaUrl === undefined) return
 	// Return origins ride this call because `apps.setReturnOrigins` 404s for an app IAM has never heard
 	// of, and the schema reconcile is what registers it. Separate call, same moment.
@@ -351,43 +416,12 @@ const applyIamReconcile = async (
 	})
 }
 
-/** The schema the runner compiled, for an application Control knows has no contract; a contract schema is refused. */
-const reportedSchema = (target: IamReconcileTarget, report: RunnerIamReconcile | undefined): AppSchema => {
-	if (target.artifactAccess !== true) throw new InvalidIamReport('reported an authz schema, but Control approved no access for this environment')
-	if (report === undefined) throw new InvalidIamReport('reported no authz schema')
-	const parsedReport = runnerIamReconcileSchema.safeParse(report)
-	if (!parsedReport.success) {
-		throw new InvalidIamReport('reported an authz schema whose app id or body is not a string')
-	}
-	const reconcile = parsedReport.data
-	if (reconcile.app !== target.appId) {
-		throw new InvalidIamReport(`reported an authz schema for app "${reconcile.app}", expected "${target.appId}"`)
-	}
-	if (reconcile.schemaJson.length > MAX_SCHEMA_JSON_CHARS) {
-		throw new InvalidIamReport(`reported an authz schema of ${reconcile.schemaJson.length} characters, over the ${MAX_SCHEMA_JSON_CHARS} limit`)
-	}
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(reconcile.schemaJson)
-	} catch {
-		throw new InvalidIamReport('reported an authz schema that is not valid JSON')
-	}
-	const schema = parseAppSchema(parsed)
-	if (!schema.ok) {
-		throw new InvalidIamReport(`reported a malformed authz schema: ${schema.message}`)
-	}
-	if (schema.schema.contract === true) {
-		throw new InvalidIamReport('reported a contract schema, which comes only from the contract Control approved')
-	}
-	return schema.schema
-}
-
 /**
- * Settle a terminal outcome: apply its IAM reconcile, if any, before Control marks the run terminal. Both
- * the awaited deploy and a post-restart reconcile come through here under Control's lease. IAM replaces
- * the app's whole vocabulary, so applying the same schema again after a lost lease is harmless.
- * `retryUnavailableIam` keeps the run in flight when IAM was unreachable or answered 5xx/408/429, so the
- * next reconcile retries; an invalid report or any other IAM refusal fails the run.
+ * Settle a terminal outcome: apply the IAM schema Control approved, if any, before Control marks the run terminal. Both
+ * the awaited deploy and a post-restart reconcile come through here under Control's lease. IAM replaces the app's whole
+ * vocabulary, so applying the same schema again after a lost lease is harmless. `retryUnavailableIam` keeps the run in
+ * flight when IAM was unreachable or answered 5xx/408/429, so the next reconcile retries; an invalid report or any
+ * other IAM refusal fails the run.
  */
 const settleOutcome = async (
 	options: CloudflareControlOptions,
@@ -396,24 +430,36 @@ const settleOutcome = async (
 	log: (line: string) => Promise<void>,
 	retryUnavailableIam: boolean,
 ): Promise<ProviderTerminalOutcome | { readonly state: 'running' }> => {
+	const terminal: ProviderTerminalOutcome = {
+		state: outcome.state,
+		...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
+		...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }),
+	}
 	const failed: ProviderTerminalOutcome = { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
-	const reconcile = outcome.iamReconcile
-	if (reconcile !== undefined && outcome.dryRun === true) {
-		await log('reconcile-schema refused: a dry run reported an authz schema')
+	const reported = outcome.iamReconcile !== undefined || outcome.accessReport !== undefined
+	if (outcome.dryRun === true) {
+		if (!reported) return terminal
+		await log('reconcile-schema refused: a dry run reported access')
 		return failed
 	}
-	// An approved contract reconciles its own schema once the deploy succeeded, whatever the runner reported.
-	const approved = target.access !== undefined && outcome.state === 'succeeded' && outcome.dryRun !== true
-	if (reconcile === undefined && !approved) return outcome
+	let verdict: ArtifactVerdict = { schema: null, report: null }
 	try {
-		await applyIamReconcile(options, target, reconcile)
+		if (target.access !== undefined) {
+			// An approved contract reconciles its own schema once the deploy succeeded, whatever the runner reported.
+			verdict = { schema: outcome.state === 'succeeded' ? target.access.schema : null, report: null }
+		} else if (target.artifactAccess !== undefined) {
+			verdict = judgeArtifactAccess(target.artifactAccess, outcome)
+		} else if (reported) {
+			throw new InvalidIamReport('reported access, but Control approved no access for this environment')
+		}
+		if (verdict.schema !== null) await applySchema(options, target, verdict.schema)
 	} catch (error) {
 		target.signal.throwIfAborted()
 		await log(`reconcile-schema failed: ${error instanceof Error ? error.message : 'unknown error'}`)
 		if (retryUnavailableIam && isTransientIamFailure(error)) return { state: 'running' }
 		return failed
 	}
-	return outcome
+	return verdict.report === null ? terminal : { ...terminal, artifactAccess: verdict.report }
 }
 
 const isTransientIamFailure = (error: unknown): boolean => {
@@ -469,7 +515,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 			...(input.environment.access === undefined ? {} : { access: input.environment.access }),
-			...(input.environment.artifactAccess === true ? { artifactAccess: true } : {}),
+			...(input.environment.artifactAccess === undefined ? {} : { artifactAccess: input.environment.artifactAccess }),
 		}
 		const log = async (line: string): Promise<void> => input.events.log(line)
 		return settleOutcome(options, target, outcome, log, false)
@@ -486,7 +532,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 			...(input.environment.access === undefined ? {} : { access: input.environment.access }),
-			...(input.environment.artifactAccess === true ? { artifactAccess: true } : {}),
+			...(input.environment.artifactAccess === undefined ? {} : { artifactAccess: input.environment.artifactAccess }),
 		}
 		const log = async (line: string): Promise<void> => {
 			if (input.log === undefined) console.error(`run ${input.runId}: ${line}`)
@@ -498,6 +544,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			state: outcome.state,
 			...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
 			...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }),
+			...(outcome.artifactAccess === undefined ? {} : { artifactAccess: outcome.artifactAccess }),
 			...(recovery.dryRun === true ? { dryRun: true } : {}),
 		}
 	},

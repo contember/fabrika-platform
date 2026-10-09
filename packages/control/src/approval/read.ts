@@ -56,7 +56,7 @@ export async function readAccessSnapshot(commit: CommitFiles, root: string, appI
 	const inRepository = (path: string): string => (root === '' ? path : `${root}/${path}`)
 	const exists = (path: string): boolean => commit.paths.has(inRepository(path))
 	const migrations = await readMigrations(commit, root)
-	if (!exists(CONTRACT_FILE)) return { version: 1, contract: null, migrations, checker: CHECKER_VERSION }
+	if (!exists(CONTRACT_FILE)) return { version: 1, contract: null, migrations, checker: CHECKER_VERSION, artifact: null }
 	const files = new Map<string, string>()
 	for (let round = 0;; round++) {
 		const missing = contractReaderInputs(files, exists)
@@ -70,7 +70,7 @@ export async function readAccessSnapshot(commit: CommitFiles, root: string, appI
 	if (contract.app !== appId) {
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
-	return { version: 1, contract, migrations, checker: CHECKER_VERSION }
+	return { version: 1, contract, migrations, checker: CHECKER_VERSION, artifact: null }
 }
 
 function readContract(files: ReadonlyMap<string, string>) {

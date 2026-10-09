@@ -2,6 +2,7 @@ import type { AppGates } from '@fabrika/auth'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
+	artifactAccessDigest,
 	type ContractArtifact,
 	contractDigest,
 	FABRIKA_CONTRACT_DIGEST,
@@ -12,6 +13,7 @@ import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from
 import { contractProxyTable, proxyAppGatesSchema } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
+import { configArtifactAccess } from './artifact-access'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
 import {
@@ -299,7 +301,7 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			assertRunning(signal)
 			// The reconcile itself happens in the CONTROL plane, which holds IAM's admin key; this
 			// container runs the checkout's own code and never sees it (ADR-0022).
-			await cf.writeOutcome({ iamReconcile: { app: config.id, schemaJson: JSON.stringify(config.schema) } })
+			if (run.artifactApproval === undefined) await cf.writeOutcome({ iamReconcile: { app: config.id, schemaJson: JSON.stringify(config.schema) } })
 			return
 		}
 		case 'sync-secrets': {
@@ -358,6 +360,12 @@ export interface CloudflareDeployRun {
 	 * outside Control (a local deploy), the deployer reads `fabrika.contract.ts` from the checkout, as Control does.
 	 */
 	readonly contract?: ContractArtifact | null
+	/**
+	 * Without a contract, the artifact access Control approved (ADR-0050). On a protected environment a config whose gates
+	 * and IAM schema hash to anything else stops before provisioning and reports them (`pending`); otherwise the deploy
+	 * reports what it applied (`deployed`). Absent outside Control.
+	 */
+	readonly artifactApproval?: { readonly digest: string | null; readonly protected: boolean }
 	/** Every Cloudflare deployment of the installation in Control's registry; a name of another application is refused. */
 	readonly installationApps?: readonly AppEnvironment[]
 	readonly dryRun: boolean
@@ -393,6 +401,12 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const platformResources = options.platformResources ?? 'refuse'
 	const contract = await servedContract(cf, loaded.cwd, run.contract)
 	assertContractSchema(loaded.config, contract)
+	const approval = contract === null ? run.artifactApproval : undefined
+	const artifactAccess = approval === undefined ? null : configArtifactAccess(loaded.config)
+	if (artifactAccess !== null && approval?.protected === true && !run.dryRun && artifactAccessDigest(artifactAccess) !== approval.digest) {
+		await cf.writeOutcome({ artifactAccess: { state: 'pending', accessJson: JSON.stringify(artifactAccess) } })
+		throw new Error("cloudflare: the config's gates and IAM schema are not the access Control approved; the run waits for a human with access.approve")
+	}
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Fabrika's own components compose their own proxies; every application gets the platform's.
 	const served = platformResources === 'refuse' ? platformProxied(authored, loaded.config, contract, run) : authored
@@ -426,5 +440,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker), run, (step) => runStep(step, env))
+	// Control applies this access's IAM schema and records it; the reconcile-schema step reports nothing for it.
+	if (artifactAccess !== null && !run.dryRun && result.status === 'succeeded') {
+		await cf.writeOutcome({ artifactAccess: { state: 'deployed', accessJson: JSON.stringify(artifactAccess) } })
+	}
 	return { appId: run.appId, env: run.env, ...result }
 }
