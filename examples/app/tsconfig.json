@@ -1,8 +1,20 @@
 {
-	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"noPropertyAccessFromIndexSignature": true,
+		"forceConsistentCasingInFileNames": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
 		"noEmit": true,
 		"types": ["@cloudflare/workers-types", "@types/bun"]
 	},
-	"include": ["src/**/*", "scripts/**/*", "fabrika.schema.ts", "fabrika.gates.ts"]
+	"include": ["src/**/*", "fabrika/**/*", "fabrika.contract.ts"]
 }

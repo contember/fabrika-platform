@@ -1,25 +1,30 @@
 {
-	"name": "@fabrika/example-app",
+	"name": "fabrika-example-app",
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"build": "fabrika app build --provider=cloudflare",
+		"check": "fabrika-check .",
 		"dev": "bunx lopata dev --env local --port 18190 --listen 127.0.0.1",
 		"oblaka": "bunx oblaka oblaka.ts",
-		"provision-schema": "bun run scripts/provision-schema.ts",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@fabrika/app": "workspace:*",
-		"@fabrika/auth": "workspace:*",
-		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/provider-cloudflare": "workspace:*"
+		"@fabrika/app": "^0.0.4",
+		"@fabrika/auth-core": "^0.0.4",
+		"@fabrika/provider-cloudflare": "^0.0.4",
+		"@fabrika/proxy-core": "^0.0.4",
+		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
+		"@fabrika/check": "^0.0.4",
+		"@fabrika/cli": "^0.0.4",
 		"@types/bun": "latest",
 		"lopata": "^0.21.0",
 		"oblaka-iac": "latest",
+		"typescript": "^5.9.3",
 		"wrangler": "^4.24.0"
 	}
 }
