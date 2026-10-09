@@ -79,6 +79,17 @@ describe('the console behind its table', () => {
 		expect((await fetch(rpc({ authorization: 'Bearer px_machine' }))).status).toBe(200)
 	})
 
+	test('a CLI asking for a connector reaches its procedure on the RPC mount', async () => {
+		const describe = new Request(`${CONSOLE_ORIGIN}/api/rpc`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', authorization: 'Bearer px_machine' },
+			body: JSON.stringify({ method: 'connectors.describe', input: { consumer: 'shop', env: 'prod', app: 'notes', export: 'notes', version: 1 } }),
+		})
+		const response = await fetch(describe)
+		expect(response.status).toBe(404)
+		expect(await response.text()).toContain('has approved no export notes@1 for shop')
+	})
+
 	test('with MCP off, /mcp is a session row the service answers 404', async () => {
 		expect((await fetch(mcpCall({ ...session, 'sec-fetch-site': 'same-origin' }))).status).toBe(404)
 		expect((await fetch(mcpCall({ authorization: 'Bearer px_machine' }))).status).toBe(403)
