@@ -35,7 +35,7 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { approveInConsole } from './console-approval'
+import { approveInConsole, signInToConsole } from './console-approval'
 import {
 	LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
 	LOCAL_SOURCE_FIXTURE_DIRECTORY,
@@ -821,6 +821,37 @@ const proveControlTable = async (): Promise<void> => {
 }
 
 /**
+ * The proxy admits a session's state change only from the console itself: a signed-in person's cookie on a cross-site
+ * or same-site POST is refused before Control is asked, on all three JSON mounts, and the same POST from the console
+ * is served.
+ */
+const FOREIGN_SITES = [
+	{ site: 'cross-site', origin: 'https://attacker.example' },
+	{ site: 'same-site', origin: 'http://sibling.fabrika.localhost:18080' },
+]
+
+const proveConsoleAdmission = async (): Promise<void> => {
+	const cookie = await signInToConsole(CONTROL_ORIGIN)
+	const post = (path: string, site: string, origin: string) =>
+		fetch(`${CONTROL_ORIGIN}${path}`, {
+			method: 'POST',
+			redirect: 'manual',
+			headers: { accept: 'application/json', 'content-type': 'application/json', cookie, origin, 'sec-fetch-site': site },
+			body: JSON.stringify({ method: 'installation', input: null }),
+		})
+	for (const path of ['/api/rpc', '/iam/admin/rpc', '/operations/api/rpc']) {
+		for (const { site, origin } of FOREIGN_SITES) {
+			const refused = await post(path, site, origin)
+			if (refused.status !== 403 || (refused.headers.get('content-type') ?? '').startsWith('application/json')) {
+				throw new Error(`a ${site} session POST to ${path} answered ${refused.status}, expected a proxy refusal`)
+			}
+		}
+	}
+	const served = await post('/api/rpc', 'same-origin', CONTROL_ORIGIN)
+	if (served.status !== 200) throw new Error(`a same-origin session POST to /api/rpc answered ${served.status}`)
+}
+
+/**
  * Read the operator API the way the console does: through the proxy, through control's transport-only
  * gateway, with a real credential. It used to reach into the container and call `127.0.0.1:3000`
  * unauthenticated, which only worked while Operations synthesised a dev persona — a bypass that has
@@ -1022,6 +1053,7 @@ const main = async (): Promise<void> => {
 	await proveOperationsPublicBoundary(machineKey)
 	await proveIamTable()
 	await proveControlTable()
+	await proveConsoleAdmission()
 	await ensureNamespace(machineKey)
 	await proveNamespaceSource(machineKey, fixtures)
 	await ensureNotesApp(machineKey, fixtures)
