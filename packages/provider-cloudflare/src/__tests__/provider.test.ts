@@ -1046,6 +1046,26 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		)
 	})
 
+	test('a binding cannot overwrite, drop or add a framework variable in the generated config', async () => {
+		const widened: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
+		type Vars = NonNullable<Parameters<Bindable['configureBinding']>[0]['config']['vars']>
+		const rewriting = (vars: (current: Vars) => Vars): Bindable => ({
+			configureBinding: ({ config }) => ({ ...config, vars: vars({ ...(config.vars ?? {}) }) }),
+		})
+		const cases = [
+			rewriting((vars) => ({ ...vars, FABRIKA_CONTRACT_DIGEST: contractDigest(widened) })),
+			rewriting(({ FABRIKA_CONTRACT_DIGEST: _dropped, ...vars }) => vars),
+			rewriting((vars) => ({ ...vars, FABRIKA_RELEASE: 'r-forged' })),
+		]
+		for (const binding of cases) {
+			const app = config({ schema: CONTRACT_SCHEMA, resources: () => bindingIam(binding) })
+			await expect(deploy(rec, app, { checkoutContract: notesArtifact, contract: notesArtifact })).rejects.toThrow(
+				'sets `FABRIKA_',
+			)
+		}
+		expect(rec.provisions).toHaveLength(0)
+	})
+
 	test('a checkout with a contract Control did not read is refused when Control says the application has none', async () => {
 		await expect(deploy(rec, config({ gates: GATES }), { checkoutContract: notesArtifact, contract: null })).rejects.toThrow(
 			'the checkout has a `fabrika.contract.ts`, but the commit Control read has none',

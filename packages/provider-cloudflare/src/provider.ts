@@ -14,7 +14,14 @@ import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
-import { assertGeneratedConfigs, assertGeneration, assertStateNamespace, type DeploymentBounds, generateWranglerConfigs } from './bounds'
+import {
+	assertGeneratedConfigs,
+	assertGeneration,
+	assertStateNamespace,
+	type DeploymentBounds,
+	frameworkValues,
+	generateWranglerConfigs,
+} from './bounds'
 import { runnerWorkerGraph } from './checkout'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
@@ -400,6 +407,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		iamAppId: appEnvironmentId(run.appId, run.env),
 		installation: run.installationApps ?? [],
 		proxy: served === authored ? null : `${run.env}-${run.appId}-proxy`,
+		frameworkVariables: {
+			application: frameworkValues(applicationWorker(worker).options.vars),
+			proxy: served === authored ? null : frameworkValues(worker.options.vars),
+		},
 	}
 	assertStateNamespace(stateNamespace(loaded.config, run), platformResources)
 	assertGeneration(await generateWranglerConfigs(worker, run.env), bounds)

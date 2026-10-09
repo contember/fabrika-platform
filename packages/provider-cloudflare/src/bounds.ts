@@ -1,4 +1,4 @@
-import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { resolve } from 'node:path'
 import type { GeneratedConfig, Worker } from 'oblaka-iac'
@@ -25,6 +25,23 @@ export interface DeploymentBounds {
 	readonly installation: readonly AppEnvironment[]
 	/** The remote name of the proxy Worker the deployer built, or null when it built none. */
 	readonly proxy: string | null
+	/**
+	 * The value of every framework variable the platform wrote into each Worker; a generated config must carry exactly
+	 * these. `proxy` is null when the deployer built no proxy.
+	 */
+	readonly frameworkVariables: {
+		readonly application: Readonly<Record<string, string>>
+		readonly proxy: Readonly<Record<string, string>> | null
+	}
+}
+
+/** The framework variables among a Worker's `vars`, as the deployer wrote them. */
+export const frameworkValues = (vars: Readonly<Record<string, unknown>> | undefined): Record<string, string> => {
+	const values: Record<string, string> = {}
+	for (const [name, value] of Object.entries(vars ?? {})) {
+		if (isFrameworkVariableName(name) && typeof value === 'string') values[name] = value
+	}
+	return values
 }
 
 /** Where the proxy Worker the deployer builds has its generated config: the runner's own copy of this package. */
@@ -297,6 +314,22 @@ const assertRoutedHere = (worker: string, config: WranglerConfig, bounds: Deploy
 	}
 }
 
+/**
+ * A binding's `configureBinding` writes the generated config after the deployer injected its values, so the config is
+ * where a framework variable is checked: present exactly when the platform wrote it, and with the platform's value.
+ */
+const assertFrameworkVariables = (worker: string, vars: unknown, expected: Readonly<Record<string, string>>): void => {
+	if (vars !== undefined && (typeof vars !== 'object' || vars === null || Array.isArray(vars))) {
+		throw new Error(`cloudflare: Worker \`${worker}\` emits unreadable \`vars\`, which cannot be checked`)
+	}
+	for (const name of FRAMEWORK_VARIABLE_NAMES) {
+		const actual: unknown = vars === undefined ? undefined : Reflect.get(vars, name)
+		if (actual !== expected[name]) {
+			throw new Error(`cloudflare: Worker \`${worker}\` sets \`${name}\` to a value Fabrika did not write; it is managed by Fabrika`)
+		}
+	}
+}
+
 const isPlatformProxy = (generated: GeneratedConfig, bounds: DeploymentBounds): boolean =>
 	bounds.proxy !== null && generated.config.name === bounds.proxy && resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH
 
@@ -333,12 +366,14 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		assertBoundedAssets(worker, config.assets)
 		if (isPlatformProxy(generated, bounds)) {
 			assertRoutedHere(worker, config, bounds)
+			assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.proxy ?? {})
 			continue
 		}
 		if (resolve(bounds.cwd, generated.path) === PROXY_CONFIG_PATH) {
 			throw new Error(`cloudflare: Worker \`${worker}\` lives in the directory of the proxy Worker the platform builds`)
 		}
 		assertUnexposed(worker, config)
+		assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.application)
 	}
 }
 
