@@ -83,6 +83,7 @@
 		"@fabrika/check": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/github-app": "workspace:*",
+		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",

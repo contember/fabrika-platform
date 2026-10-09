@@ -19,6 +19,7 @@ import { type ProxySecrets, VaultProxySecrets } from './proxy-secret'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
+import { iamWorkloadKeyIssuer, VaultWorkloadCredentials, type WorkloadCredentialsPort } from './workload-credentials'
 
 export const DEPLOY_LOCK_REQUEUE_DELAY_S = 30
 export const STALE_RUN_MAX_AGE_S = 30 * 60
@@ -91,7 +92,22 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
 		...proxySecretDeps(env),
+		...workloadCredentialDeps(env),
 	}
+}
+
+/**
+ * Workload keys are issued by IAM with the provisioning key and sealed in the vault; an installation without all three
+ * issues none, and a contract with a job or a webhook does not deploy there.
+ */
+export function workloadCredentialDeps(env: Env): { workloadCredentials?: WorkloadCredentialsPort } {
+	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
+	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	if (env.FABRIKA_CONTROL_VAULT_KEY === undefined || origin === '' || provisioningKey === '') {
+		return {}
+	}
+	const issuer = iamWorkloadKeyIssuer({ origin, provisioningKey })
+	return { workloadCredentials: new VaultWorkloadCredentials(repositories(env).workloadCredentials, () => vault(env), issuer) }
 }
 
 /** The proxy secrets live in the vault, so an installation without one hands the providers none. */

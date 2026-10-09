@@ -29,9 +29,11 @@ import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
+import { Vault } from '../vault'
+import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
 import { memoryCommits } from './helpers/commits'
 import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
-import { createHarness } from './helpers/harness'
+import { createHarness, harnessDatabase } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { refusedClaimScenario } from './helpers/refused-claims'
@@ -637,3 +639,80 @@ describe('protection survives the registry', () => {
 		expect(await deleteAppUseCase(registry(w, auth()), 'notes')).toEqual({ ok: true })
 	})
 })
+
+describe('workload keys from the approved contract', () => {
+	const WITH_JOB = edited(
+		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n",
+		"\tapp: c.spa('/', { dir: 'dist/app', access: { member: true } }),\n\tjobs: { nightly: c.cron('0 3 * * *', { actions: ['notes.delete'], scope: 'app' }) },\n",
+	)
+
+	async function credentialed(w: World) {
+		const vault = await Vault.create(harnessDatabase(w.db), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
+		const issued: string[] = []
+		const issuer: WorkloadKeyIssuer = {
+			issue: (input) => {
+				issued.push(`${input.app}/${input.kind}:${input.name}`)
+				return Promise.resolve({ key: `px_${'k'.repeat(40)}${issued.length}`, expiresAt: input.expiresAt })
+			},
+		}
+		return { issued, workloadCredentials: new VaultWorkloadCredentials(w.db.workloadCredentials, () => Promise.resolve(vault), issuer) }
+	}
+
+	test('a deploy hands each job of the approved contract its key, and no run log keeps it', async () => {
+		const w = world()
+		await seed(w)
+		w.contract = WITH_JOB
+		const { issued, workloadCredentials } = await credentialed(w)
+		const loggingProvider = provider(w)
+		const result = await executeDeploy({
+			...deps(w),
+			workloadCredentials,
+			provider: {
+				...loggingProvider,
+				deploy: (input) => {
+					input.events.log(`key=${input.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY'] ?? 'none'}`)
+					return loggingProvider.deploy(input)
+				},
+			},
+		}, { runId: await createdRun(w, 'stage') })
+		expect(result.status).toBe('succeeded')
+		expect(issued).toEqual(['notes@stage/job:nightly'])
+		const key = w.deploys[0]?.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY']
+		expect(key).toMatch(/^px_k+1$/)
+		const stored = [...w.logs.values()].join('\n')
+		expect(stored).toContain('key=[redacted]')
+		expect(stored).not.toContain(String(key))
+	})
+
+	test('a contract with a job does not deploy where Control cannot issue its key', async () => {
+		const w = world()
+		await seed(w)
+		w.contract = WITH_JOB
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await deploy(w, 'stage')).status).toBe('failed')
+			expect(quiet.mock.calls.flat().map(String).join('\n')).toContain('this installation cannot issue their keys')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect(w.deploys).toEqual([])
+	})
+
+	test('a dry run issues no key, and a contract without a workload needs none', async () => {
+		const w = world()
+		await seed(w)
+		w.contract = WITH_JOB
+		const { issued, workloadCredentials } = await credentialed(w)
+		expect((await executeDeploy({ ...deps(w), workloadCredentials }, { runId: await createdRun(w, 'stage'), dryRun: true })).status).toBe('succeeded')
+		w.contract = BASE
+		expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(issued).toEqual([])
+		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY'])).toEqual([undefined, undefined])
+	})
+})
+
+async function createdRun(w: World, env: string): Promise<string> {
+	const runId = uuidv7()
+	await w.db.runs.createRun({ id: runId, appId: 'notes', env, ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+	return runId
+}

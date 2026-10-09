@@ -1,4 +1,11 @@
-import { appEnvironmentId, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FABRIKA_PROXY_SECRET, isFrameworkVariableName } from '@fabrika/auth-core'
+import {
+	appEnvironmentId,
+	type ContractArtifact,
+	FABRIKA_IAM_APP_ID,
+	FABRIKA_IAM_ISSUER,
+	FABRIKA_PROXY_SECRET,
+	isFrameworkVariableName,
+} from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS, operationsManagedEnvironment } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
@@ -39,6 +46,7 @@ import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './op
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
+import { declaredWorkloads, type WorkloadCredentialsPort } from './workload-credentials'
 
 export type RunOutcome = ProviderTerminalOutcome
 
@@ -66,6 +74,11 @@ export interface RunDeps {
 	iamIssuer?: string
 	/** The proxy secret of an environment behind a namespace proxy (ADR-0022 rule 5); absent without a vault. */
 	proxySecrets?: ProxySecrets
+	/**
+	 * The keys of the approved contract's jobs and webhooks (ADR-0022 "Principal kinds"); absent without a vault, an IAM
+	 * issuer or a provisioning key, and then a contract that declares one does not deploy.
+	 */
+	workloadCredentials?: WorkloadCredentialsPort
 }
 
 export interface DeployJobMessage {
@@ -580,8 +593,12 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			}
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
+		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
+		const approvedContract = registration.environment.access?.contract ?? null
+		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
+		Object.assign(managedEnvironment, workloadKeys)
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
-		runLogs.redact([...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? ''])
+		runLogs.redact([...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? '', ...Object.values(workloadKeys)])
 		let outcome: ProviderDeployOutcome
 		try {
 			if (ingestGap !== null) {
@@ -674,6 +691,23 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 }
 
 /** The environment's approved access as the provider reads it, read again after this run's publication. */
+async function reconcileWorkloadKeys(
+	credentials: WorkloadCredentialsPort | undefined,
+	appId: string,
+	env: string,
+	contract: ContractArtifact | null,
+): Promise<Readonly<Record<string, string>>> {
+	if (credentials !== undefined) {
+		return credentials.reconcile(appId, env, contract)
+	}
+	if (declaredWorkloads(contract).size > 0) {
+		throw new Error(
+			'the contract declares jobs or webhooks, and this installation cannot issue their keys (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
+		)
+	}
+	return {}
+}
+
 async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<ProviderAccessFields> {
 	const row = await repositories.registry.getAppEnv(appEnv.app_id, appEnv.env)
 	if (row === null) throw new Error(`app environment ${appEnv.app_id}/${appEnv.env} disappeared during the deploy`)
