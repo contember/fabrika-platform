@@ -74,6 +74,13 @@ describe('the owner serves its export to the edge key, and to nothing else', () 
 		const anonymous = await owner.fetch('/__fabrika/connect/products.v1', post({}))
 		expect(anonymous.status).toBe(401)
 	})
+
+	test("the description needs the export's own action: a key holding another action of the owner is refused", async () => {
+		const { owner } = connected()
+		const writer = owner.testCaller([{ action: 'catalog.product.write' }], { kind: 'machine' })
+		const response = await owner.fetch('/__fabrika/connect/products.v1', post({}, { Authorization: `Bearer ${writer.key}` }))
+		expect(response.status).toBe(403)
+	})
 })
 
 describe('ctx.connect in the consumer', () => {

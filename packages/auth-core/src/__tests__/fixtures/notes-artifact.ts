@@ -186,7 +186,7 @@ const endpoints: EndpointRow[] = [
 		method: 'POST',
 		path: '/__fabrika/connect/products.v1',
 		callers: ['app:shop', 'machine'],
-		requirement: { kind: 'member' },
+		requirement: { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } },
 		admission: json,
 		input: null,
 		output: null,

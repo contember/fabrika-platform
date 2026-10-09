@@ -708,21 +708,51 @@ class ArtifactBuilder {
 				this.#readAction(`procedure '${id}'`, procedure.access)
 				this.#procedure(source, id, joinPath(CONNECT_PREFIX, id), callers, procedure)
 			}
-			// The description a consumer vendors, behind the same callers as the procedures it describes.
-			this.#row({
-				id: base,
-				source,
-				kind: 'query',
-				method: 'POST',
-				path: joinPath(CONNECT_PREFIX, base),
-				callers,
-				requirement: { kind: 'member' },
-				admission: JSON_ADMISSION,
-				input: null,
-				output: null,
-			})
+			const requirement = this.#descriptionRequirement(where, base)
+			if (requirement !== null) {
+				// The description a consumer vendors, behind the callers and the action of the procedures it describes.
+				this.#row({
+					id: base,
+					source,
+					kind: 'query',
+					method: 'POST',
+					path: joinPath(CONNECT_PREFIX, base),
+					callers,
+					requirement,
+					admission: JSON_ADMISSION,
+					input: null,
+					output: null,
+				})
+			}
 		}
 		return exports
+	}
+
+	/**
+	 * The requirement of an export's description: the one requirement its procedures share. A description shows every
+	 * procedure, so it needs what each procedure needs; v1 exports declare one action, in one dimension, for all of them.
+	 */
+	#descriptionRequirement(where: string, base: string): EndpointRequirement | null {
+		const requirements = this.#endpoints.filter((row) => row.id.startsWith(`${base}.`)).map((row) => row.requirement)
+		const [first] = requirements
+		if (first === undefined || first === null) {
+			this.#problem(where, 'exports no procedure (allowed: procedures: { <name>: c.query({ … }) })')
+			return null
+		}
+		const description: EndpointRequirement = first.kind === 'member'
+			? first
+			: { kind: 'action', action: first.action, access: { form: 'over', dimension: first.access.dimension } }
+		const same = requirements.every((requirement) =>
+			requirement !== null && (requirement.kind === 'member'
+				? description.kind === 'member'
+				: description.kind === 'action' && requirement.action === description.action
+					&& requirement.access.dimension === description.access.dimension)
+		)
+		if (!same) {
+			this.#problem(where, 'its procedures need different actions or dimensions (allowed: one action in one dimension for every procedure of an export)')
+			return null
+		}
+		return description
 	}
 
 	/** An export runs read-only, so its action may not be one a table writes with, nor one that manages members. */
