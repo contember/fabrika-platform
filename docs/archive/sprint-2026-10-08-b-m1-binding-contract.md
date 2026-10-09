@@ -14,9 +14,9 @@
 # Sprint — B-M1: the binding contract (2026-10-08)
 
 **Goal.** The proxy enforces endpoints, IAM is restricted, and a widening on production waits for a human: B0–B6 of
-the [implementation plan](../ideas/app-framework-implementation-plan.md).
+the implementation plan (deleted at close; see git history).
 
-**Theme.** Part B's first milestone. Run by the [orchestration](../ideas/app-framework-orchestration.md).
+**Theme.** Part B's first milestone. Run by the orchestration (deleted at close; see git history).
 
 ## Refs re-verified at HEAD (2026-10-08)
 

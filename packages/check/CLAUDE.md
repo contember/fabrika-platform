@@ -249,7 +249,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 
 ## Notes
 
-- The SPA rules of the framework document (`import.meta.env`, `innerHTML`, `eval`) apply to every file, because the
+- The SPA rules (`import.meta.env`, `innerHTML`, `eval`) apply to every file, because the
   server has no DOM to lose and Bun's `import.meta.env` is `process.env`.
 - `cross-app-fetch` refuses every absolute URL with a static prefix: statically, another application's origin and a
   third party's look the same.
@@ -257,5 +257,5 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 - The checker runs the reader without table policies, so `buildArtifact`'s checks (unknown actions, paths, table
   links) run only where the tables are known: in Control and `compileContract`. The reader reads `src/db/tables.ts`
   (`readTablesSource`); the checker compiles the contract against it only for the generated tests.
-- Not here yet: squawk rules and destructive-migration markers (deferred, not in v1), timers as
+- Not here yet: squawk rules and destructive-migration markers (backlog 98), timers as
   job substitutes (A15), store functions that take bare ids.

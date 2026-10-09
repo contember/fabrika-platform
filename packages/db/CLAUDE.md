@@ -3,7 +3,9 @@
 The scoped data layer for applications on Postgres: handlers reach rows only through a capability
 (`Ref` or `Within`) and only for the operation its action allows. It runs inside the application
 process, so it stops honest mistakes and makes a bypass conspicuous; it is not a hard boundary against
-code in the same process. Design: [scoped database access](../../docs/ideas/scoped-database-access.md).
+code in the same process. Design: [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md),
+[ADR-0017](../../docs/decisions/0017-service-owned-postgres-migrations.md) for its migrations, and
+[application runtime](../../docs/reference/application-runtime.md) for how `implement` binds it.
 Assumes the root CLAUDE.md.
 
 Published (`publishConfig.access: public`): applications depend on it.

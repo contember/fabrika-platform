@@ -11,11 +11,11 @@ type or a `GRANT` passes, although the design keeps migrations expand-only. Medi
 
 ## Problem
 
-The design ([scoped database access](../ideas/scoped-database-access.md), "Expand only" and "Destructive-change
-protection") requires squawk rules (`ban-drop-column`, `ban-drop-table`, `renaming-column`, `renaming-table`,
-`changing-column-type`, `adding-required-field`), a `-- fabrika:contract` marker that names the release which stopped
-using a dropped object, and a refusal of views, triggers, functions, `GRANT`, `SECURITY DEFINER` and policy
-statements. None of this is built:
+Application migrations are expand-only: a drop, rename or type change ships in a later release than the one that
+stopped using the object. The decided protection is squawk rules (`ban-drop-column`, `ban-drop-table`,
+`renaming-column`, `renaming-table`, `changing-column-type`, `adding-required-field`), a `-- fabrika:contract` marker
+that names the release which stopped using a dropped object, and a refusal of views, triggers, functions, `GRANT`,
+`SECURITY DEFINER` and policy statements. None of this is built:
 
 - The checker has one migration rule, `migration-name` (`packages/check/src/rules/migrations.ts:20`).
   `packages/check/CLAUDE.md:253` lists squawk rules and destructive-migration markers as not built.

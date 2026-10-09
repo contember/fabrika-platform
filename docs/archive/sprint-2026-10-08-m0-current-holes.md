@@ -7,10 +7,10 @@
 
 # Sprint — M0: close the current holes (2026-10-08)
 
-**Goal.** Part 0 of the [implementation plan](../ideas/app-framework-implementation-plan.md): canonical paths, IAM key issuing, a narrow IAM entrypoint on
+**Goal.** Part 0 of the implementation plan (deleted at close; see git history): canonical paths, IAM key issuing, a narrow IAM entrypoint on
 Cloudflare, provider exposure refusals.
 
-**Theme.** Holes in today's code, independent of parts A and B. Run by the [orchestration](../ideas/app-framework-orchestration.md): one work unit per
+**Theme.** Holes in today's code, independent of parts A and B. Run by the orchestration (deleted at close; see git history): one work unit per
 branch and worktree, independent review, integrator gate, fast-forward to `main`.
 
 ## Refs re-verified at HEAD (2026-10-08)

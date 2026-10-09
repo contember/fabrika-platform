@@ -218,7 +218,7 @@ const endpoints: EndpointRow[] = [
 ]
 
 /**
- * The framework document's notes contract with one of each companion, as `compileContract` emits it (`@fabrika/app`'s
+ * A notes contract with one of each companion, as `compileContract` emits it (`@fabrika/app`'s
  * `compile.test.ts`). An inbox is read with an action that no membership role grants.
  */
 export const notesArtifact: ContractArtifact = {

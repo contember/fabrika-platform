@@ -25,7 +25,7 @@ ceiling behind it. Needs a decision on the claim shape; medium to large effort.
   the caller gets a 403 (`packages/app/src/implement/dispatch.ts:717`). Each value is one bound parameter, and
   `Bun.SQL` binds no array.
 
-The plan's risk table names "scope-compressed claims later" for the first ceiling and nothing for the second.
+The application framework plan's risk table (the plan was deleted at close; see git history) named "scope-compressed claims later" for the first ceiling and nothing for the second.
 
 ## Approach / acceptance
 

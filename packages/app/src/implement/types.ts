@@ -33,7 +33,7 @@ type TargetOf<Acc> = Acc extends { readonly action: infer A extends string; read
 	: Acc extends { readonly action: infer A extends string; readonly on: infer D extends string } ? readonly [D, A]
 	: never
 
-/** `ctx.members`, only where the action is the dimension's `members.manage` (the framework document, section 6). */
+/** `ctx.members`, only where the action is the dimension's `members.manage` (ADR-0012 §6). */
 type MembersContext<C, Acc> = TargetOf<Acc> extends readonly [infer D extends string, infer A extends string]
 	? DimensionsOf<C>[D & keyof DimensionsOf<C>] extends { readonly members: { readonly manage: A } }
 		? { readonly members: MemberManagement<D, A, RoleOf<C>> }

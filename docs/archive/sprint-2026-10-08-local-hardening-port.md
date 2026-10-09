@@ -14,7 +14,7 @@
 
 **Theme.** The branch (base `4bb81292`, closed 2026-09-28) conflicts in 63 files with `main`, which moved 154
 commits since. Each of its work units is redone on `main`, with the old commit as a guide. This is step 2 of G0 in
-the [orchestration](../ideas/app-framework-orchestration.md); step 1, `mcp-authoring`, landed at `28706106` after the
+the orchestration (deleted at close; see git history); step 1, `mcp-authoring`, landed at `28706106` after the
 full gate (typecheck, lint, format, 4070 + 317 + 180 tests pass, 0 fail, 38 skip for live Zerops only, with Postgres
 and S3 set).
 
@@ -106,7 +106,7 @@ Old sprint: `git show sprint/local-hardening:docs/archive/sprint-2026-09-28-loca
 
 ## Out of scope (explicit)
 
-- Part 0, A and B of the [implementation plan](../ideas/app-framework-implementation-plan.md); they start after
+- Part 0, A and B of the implementation plan (deleted at close; see git history); they start after
   this sprint closes.
 - A CLI verb for `namespaces.update`.
 

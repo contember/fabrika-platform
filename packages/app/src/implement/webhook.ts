@@ -1,4 +1,4 @@
-// `c.webhook` for GitHub (the framework document, section 4). A holder of the bound dimension's `members.manage`
+// `c.webhook` for GitHub (docs/reference/application-runtime.md). A holder of the bound dimension's `members.manage`
 // creates a binding through the generated `webhooks.<name>.bind` endpoint; the framework generates the secret and
 // keeps the binding in `fabrika_webhook_bindings`. A delivery is checked in a fixed order — the binding, the
 // signature over the raw body, the account, the input, the delivery id — before its handler sees a `Ref` of the

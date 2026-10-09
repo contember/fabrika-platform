@@ -1,4 +1,4 @@
-// Scopes, members and share links on the caller's behalf (the framework document, section 6). The framework asks IAM
+// Scopes, members and share links on the caller's behalf (ADR-0012 §6). The framework asks IAM
 // through `@fabrika/auth`'s `IamMembership`, with the caller's verified token and the delegation grant the proxy
 // obtained for this request; IAM checks the caller's live permissions, generates every value and issues every key.
 // The framework writes no grant and mints no credential.

@@ -12,9 +12,9 @@
 
 # Sprint — A-M2: the scoped data layer (2026-10-08)
 
-**Goal.** `@fabrika/db` on Zerops: A8–A11 of the [implementation plan](../ideas/app-framework-implementation-plan.md).
+**Goal.** `@fabrika/db` on Zerops: A8–A11 of the implementation plan (deleted at close; see git history).
 
-**Theme.** Row-level isolation between users and scopes. Run by the [orchestration](../ideas/app-framework-orchestration.md).
+**Theme.** Row-level isolation between users and scopes. Run by the orchestration (deleted at close; see git history).
 
 ## Refs re-verified at HEAD (2026-10-08)
 

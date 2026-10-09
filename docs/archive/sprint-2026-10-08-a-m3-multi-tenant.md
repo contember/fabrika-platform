@@ -10,10 +10,10 @@
 # Sprint — A-M3: multi-tenant applications (2026-10-08)
 
 **Goal.** Workspaces, members, share links, forms and GitHub webhooks: A12–A13 of the
-[implementation plan](../ideas/app-framework-implementation-plan.md).
+implementation plan (deleted at close; see git history).
 
 **Theme.** Membership as IAM operations with live checks. Run by the
-[orchestration](../ideas/app-framework-orchestration.md).
+orchestration (deleted at close; see git history).
 
 ## Refs re-verified at HEAD (2026-10-08)
 

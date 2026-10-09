@@ -1,5 +1,5 @@
 /**
- * The membership operations of a multi-tenant application (the framework document, section 6; ADR-0022
+ * The membership operations of a multi-tenant application (ADR-0012 §6; ADR-0022
  * rule 6): delegation grants, scope creation, membership, invitations and share links.
  *
  * Every operation resolves the caller from its own credential and evaluates it against the caller's LIVE

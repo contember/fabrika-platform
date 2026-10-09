@@ -17,7 +17,7 @@ const UNLISTED_WEBHOOK_ROWS = new Set(['webhooks.github.bind', 'webhooks.github.
 describe('compileContract', () => {
 	const artifact = compileContract(contract, notesArtifact.tables)
 
-	test('compiles the framework document contract to the artifact auth-core describes', () => {
+	test('compiles the notes contract to the artifact auth-core describes', () => {
 		const { endpoints, reservedPrefixes, ...rest } = artifact
 		const { endpoints: expectedEndpoints, reservedPrefixes: expectedPrefixes, ...expectedRest } = canonicalizeArtifact(notesArtifact)
 		expect(rest).toEqual(expectedRest)

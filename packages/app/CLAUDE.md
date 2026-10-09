@@ -10,9 +10,8 @@ target: an application declares `fabrika.contract.ts` and serves it through
 `fabrika app build` writes (`@fabrika/app/build`). The installation's own services
 (IAM, Control, Operations) declare service contracts and serve them with `serveService`
 (`@fabrika/app/service`). The runtime adapters (`@fabrika/app/bun`, `@fabrika/app/cloudflare`) serve a
-`FetchService` (`{ fetch(request, env, exec) }`, `src/fetch.ts`). The remaining surface is
-the A-M1 work of the
-[implementation plan](../../docs/ideas/app-framework-implementation-plan.md).
+`FetchService` (`{ fetch(request, env, exec) }`, `src/fetch.ts`). How it works:
+[application runtime](../../docs/reference/application-runtime.md).
 
 ## Commands
 
@@ -338,7 +337,7 @@ src/
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
   object moves. It admits only a key of its own mount.
-- **Revocation takes effect within the token lifetime** (ADR-0022 rule 6, plan D12): a
+- **Revocation takes effect within the token lifetime** (ADR-0022 rule 6): a
   removed member or revoked link keeps access until its cached token expires, at most
   300 s. The framework checks the token, not IAM, per request; never add an IAM call per
   request to close that window.

@@ -37,4 +37,4 @@ neither was built.
 `.github/workflows/ci.yml`, `packages/runner-container/Dockerfile`, `packages/runner-container/docker/package.json`,
 `packages/runner-container/package.json`, `packages/runner-container/CLAUDE.md`.
 
-<!-- Origin: a finding of the application framework run (docs/ideas/app-framework-implementation-plan.md). -->
+<!-- Origin: a finding of the application framework run (the plan was deleted at close; see git history). -->

@@ -184,7 +184,8 @@ own, on the `scoped(tables)` result of `@fabrika/db`; nothing reaches the databa
 `fabrika.contract.ts`: `serveContract(() => import('../src/app'), process.env)` on
 Zerops, `createContractWorker(() => import('../src/app'))` on Cloudflare. The adapter
 first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then imports
-the application, so no module of it can copy one, and calls
+the application, so no module of it can copy one through `process.env`. The process's original environment
+block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
 `boot(app, { environment, iam, assets, database, files, membership })`. For an application on `@fabrika/db`,
 `serveContract` loads the data layer before the application and opens its connection on
 `FABRIKA_APP_DATABASE_URL`, in the schema `app_<FABRIKA_APP_ID>` its migrations created;
@@ -462,9 +463,8 @@ action. A Cloudflare deploy refuses a workload key, because a Worker runs neithe
 
 ## Connectors
 
-An application reads another's data through a connector
-([declarative application connectors](../ideas/declarative-app-connectors.md)): the owner exports queries,
-the consumer imports them. v1 is read-only.
+An application reads another's data through a connector: the owner exports queries, the consumer imports
+them. v1 is read-only.
 
 ```ts
 // the owner's contract

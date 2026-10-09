@@ -14,10 +14,10 @@
 # Sprint — A-M4: companions (2026-10-09)
 
 **Goal.** Files, cron, read-only connectors, the skill and the template: A14–A17 of the
-[implementation plan](../ideas/app-framework-implementation-plan.md).
+implementation plan (deleted at close; see git history).
 
 **Theme.** What an application needs beside its endpoints and tables. Run by the
-[orchestration](../ideas/app-framework-orchestration.md).
+orchestration (deleted at close; see git history).
 
 ## Refs re-verified at HEAD (2026-10-09)
 

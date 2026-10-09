@@ -32,4 +32,4 @@ blocked-by: []
 `packages/app/src/implement/` (dispatch of `spa`), `packages/app/skill/SKILL.md`, `examples/zerops-app`,
 `packages/local-stack/src/operations-witness/`, `tests/browser/operations-sdk-ingest.test.ts`.
 
-<!-- Origin: A17b of docs/ideas/app-framework-implementation-plan.md. -->
+<!-- Origin: A17b of the application framework plan (docs/archive/sprint-2026-10-09-a-m4-companions.md). -->

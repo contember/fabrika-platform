@@ -11,7 +11,7 @@ import type { Services } from '../../services'
 import { getSigner } from '../../signing'
 import { adminTokenFor, makeServicesFor, TEST_SIGNING_ENV } from './harness'
 
-// A multi-tenant application for the membership witnesses (the framework document, section 6), reconciled
+// A multi-tenant application for the membership witnesses (ADR-0012 §6), reconciled
 // through the real admin PUT so its declarations pass the same validation a deploy's do.
 
 export const ORIGIN = 'https://iam.example.com'

@@ -173,6 +173,9 @@ migration file is a widening in the approval diff
   namespace.
 - Each wrapper must define and test its bundle order, ledger, and lock
   identity.
+- An application migration cannot use `CREATE INDEX CONCURRENTLY`, which
+  Postgres refuses inside the per-file transaction; an index build holds its
+  lock and must finish within the 60 s `statement_timeout`.
 - Real Postgres tests cover fresh installation, cross-service filename
   collisions, per-file atomicity, and concurrent container startup.
 - A pre-1.0 squash costs a reinstall of every live installation, and the person

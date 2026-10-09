@@ -9,9 +9,9 @@
 # Sprint — A-M1: framework core (2026-10-08)
 
 **Goal.** Applications written against the contract on both clouds, with generated gates, in-process checks and a
-checker: A0–A7 of the [implementation plan](../ideas/app-framework-implementation-plan.md).
+checker: A0–A7 of the implementation plan (deleted at close; see git history).
 
-**Theme.** Part A's foundation. Run by the [orchestration](../ideas/app-framework-orchestration.md).
+**Theme.** Part A's foundation. Run by the orchestration (deleted at close; see git history).
 
 ## Refs re-verified at HEAD (2026-10-08)
 

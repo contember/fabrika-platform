@@ -12,10 +12,10 @@
 # Sprint — B-M2: locked providers (2026-10-09)
 
 **Goal.** The platform owns the run section and the build; exposure is refused and read back: B7–B8 of the
-[implementation plan](../ideas/app-framework-implementation-plan.md).
+implementation plan (deleted at close; see git history).
 
 **Theme.** Part B's second milestone, run in parallel with B-M1 by the
-[orchestration](../ideas/app-framework-orchestration.md). This file was written at close; the work units ran from the
+orchestration (deleted at close; see git history). This file was written at close; the work units ran from the
 orchestration's briefs.
 
 ## Work units

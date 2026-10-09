@@ -1,6 +1,5 @@
-// The IAM operations a multi-tenant application requests on its caller's behalf (the framework document,
-// section 6): scope creation, membership and share links. IAM evaluates every request against the
-// caller's LIVE permissions, generates every value and issues every key; the application supplies the
+// The IAM operations a multi-tenant application requests on its caller's behalf (ADR-0012 §6): scope
+// creation, membership and share links. IAM evaluates every request against the caller's LIVE permissions, generates every value and issues every key; the application supplies the
 // caller's token as proof and nothing that names an actor.
 //
 // A SEPARATE interface from `IamRpc`, like `IamHandoffRpc`: an application's IAM entrypoint serves it,

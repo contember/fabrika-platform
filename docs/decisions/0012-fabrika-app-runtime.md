@@ -223,5 +223,11 @@ All four are built, so the contract binds outside the application process too.
 - **A computed contract.** Rejected: the platform could read it only by executing application code.
 - **Accept any Standard Schema validator in contracts.** Rejected: the contract must be readable
   without evaluation, which needs one known set of schema calls.
+- **A platform data executor that holds the database credentials.** Rejected for v1: it is the only design that
+  makes object-level access independent of application code, but an earlier spike built one and dropped it as too
+  costly for the first users. It remains the long-term hard boundary; `@fabrika/db` runs in the application process.
+- **Slack and Stripe webhooks beside GitHub's.** Rejected for v1: Slack signs with one secret per Slack app and its
+  signature does not cover the URL, so one tenant could replay its own signed delivery to another tenant's binding;
+  Stripe generates its own secrets, so the framework cannot issue one per binding.
 - **Keep `@trasa/core` independent and add a Fabrika integration package.** Rejected: the shared auth
   contracts and the framework are one product surface and must change together.

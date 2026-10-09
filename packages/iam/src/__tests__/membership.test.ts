@@ -24,7 +24,7 @@ import {
 	type Person,
 } from './helpers/membership'
 
-// Every rule of the framework document's membership table (section 6), the share links and the
+// Every membership invariant of this package's CLAUDE.md (ADR-0012 §6), the share links and the
 // delegation grants of ADR-0022 rule 6, against the real schema. Each operation is the IAM function the
 // RPC surface calls; the caller is a native token signed for the app, as the proxy's would be.
 

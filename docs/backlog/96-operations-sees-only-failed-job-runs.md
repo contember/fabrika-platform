@@ -34,4 +34,4 @@ the public ingest key, so a holder of the browser DSN can forge one, as they can
 `packages/operations` (ingest, repositories, migrations), `packages/operations-contract`, `packages/dashboard`,
 `packages/app/src/jobs/report.ts`.
 
-<!-- Origin: the A15 review of the application framework plan (docs/ideas/app-framework-implementation-plan.md). -->
+<!-- Origin: the A15 review of the application framework plan (deleted at close; see git history). -->

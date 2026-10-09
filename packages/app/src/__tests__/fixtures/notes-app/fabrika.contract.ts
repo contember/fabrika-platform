@@ -1,4 +1,4 @@
-// The framework document's notes contract with one of each companion. Compiled by `compile.test.ts`, which expects
+// A notes contract with one of each companion. Compiled by `compile.test.ts`, which expects
 // `@fabrika/auth-core`'s `notesArtifact` fixture, and checked by `@fabrika/check` in `check.test.ts`.
 
 import { defineContract } from '@fabrika/app/contract'
