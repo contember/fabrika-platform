@@ -1,7 +1,7 @@
 // The membership transport (`src/membership-http.ts`), end to end the way an application on Zerops reaches it: Control
 // issues the environment's key through `membershipKeys.issue` with the provisioning key, and the application calls
 // `POST /membership/<method>` with `@fabrika/auth`'s `HttpIamMembership`. The key pins the application id and adds no
-// authority: the caller is the end user's token, and every write spends the proxy's delegation grant.
+// authority: the caller is the end user's token, and scope creation and membership changes spend the proxy's grant.
 
 import { HttpIamMembership, IamTransportError } from '@fabrika/auth'
 import { type MembershipCaller, type Scope, WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'

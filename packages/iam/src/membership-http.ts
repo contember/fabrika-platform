@@ -5,8 +5,8 @@
 //
 // The key authenticates the transport and PINS THE APPLICATION ID: a call whose `app` is not the key's is refused, so a
 // key of `notes@stage` acts for no other application and no other environment. It adds no authority. Every operation
-// still resolves its caller from the end user's credential in the body, against that application, and every write still
-// spends the delegation grant the proxy obtained for the request. The key is no `credentials` row, so no path that
+// still resolves its caller from the end user's credential in the body, against that application, and scope creation and
+// membership changes still spend the delegation grant the proxy obtained for the request (share links take none). The key is no `credentials` row, so no path that
 // resolves a `px_` credential finds it.
 //
 // Narrower than the binding: no `requestDelegation`. Only the proxy obtains a grant (`/auth/mint/delegation`); an

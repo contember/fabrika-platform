@@ -208,8 +208,9 @@ with `FABRIKA_IAM_RPC_KEY` as the bearer. On Zerops Control issues that key per
 application environment while the approved contract has an endpoint with a delegation
 or a share-link mount, and the provider writes both variables (IAM's public origin and
 the key); an application may not set either. The key pins the application id and adds
-no authority: each operation still acts as the caller's token, and every write spends
-the proxy's delegation grant. The surface serves no `requestDelegation`.
+no authority: each operation still acts as the caller's token, and scope creation and
+membership changes spend the proxy's delegation grant (a share link needs none, as on
+Cloudflare). The surface serves no `requestDelegation`.
 
 Where the hop is not a service binding, `boot` also takes the proxy secret
 `FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, refuses

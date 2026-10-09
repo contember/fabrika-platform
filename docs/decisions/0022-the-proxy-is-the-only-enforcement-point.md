@@ -461,8 +461,9 @@ IAM's public origin, with a **membership transport key** of its application envi
 issues that key from the approved snapshot while the contract has an endpoint with a delegation or a share-link mount,
 rotates it like a workload key, and writes it with IAM's origin as `FABRIKA_IAM_RPC_KEY` and `FABRIKA_IAM_RPC_URL`;
 a reconcile that leaves the application neither deletes it. The key pins the application id: a call for another
-application or environment is refused. It adds no authority, because every operation still acts as the caller's token
-and every write spends the proxy's grant. It is no principal kind and no `px_` credential IAM resolves, so it mints
+application or environment is refused. It adds no authority, because every operation still acts as the caller's token,
+and scope creation and membership changes spend the proxy's grant; issuing and revoking a share link needs none, as
+on Cloudflare. It is no principal kind and no `px_` credential IAM resolves, so it mints
 nothing. The surface serves no `requestDelegation`: only the proxy obtains a grant. Work unit F3 built this.
 
 ## Consequences

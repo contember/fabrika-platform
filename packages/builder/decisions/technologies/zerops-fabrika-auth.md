@@ -55,7 +55,8 @@ owner, user or tenant id from the input and never read `process.env`.
 On Zerops an endpoint with `creates`, `ctx.members` or `ctx.links` reaches IAM
 through the membership transport the platform writes (`FABRIKA_IAM_RPC_URL`,
 `FABRIKA_IAM_RPC_KEY`). The key only pins the application; the caller's token
-and the proxy's delegation grant carry the authority.
+carries the authority, with the proxy's delegation grant for scope creation and
+membership changes.
 
 ## Local authentication is the same model
 

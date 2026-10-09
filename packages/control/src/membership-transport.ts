@@ -2,7 +2,8 @@
 // deploy reconciles it from the APPROVED snapshot: while the contract has an endpoint that spends a delegation grant or a
 // share-link mount, IAM issues one key for `<app>@<env>`, sealed in the vault and handed to the provider as
 // `FABRIKA_IAM_RPC_KEY`. The key only authenticates the application to IAM's `/membership/*` and pins its application id;
-// the authority of each operation stays the end user's token and the proxy's delegation grant. Never logged, never
+// the authority of each operation stays the end user's token, plus the proxy's delegation grant for scope creation and
+// membership changes. Never logged, never
 // returned over the API.
 
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
