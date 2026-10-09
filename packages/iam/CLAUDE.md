@@ -35,13 +35,15 @@ fails if that stops being true — it is the guard, not documentation of one.
 
 ## Invariants
 
-- **`src/service.ts` is IAM's service contract, which replaces `createIamApp`'s router in B10d**
-  (ADR-0022 "Installation entries"). Every row is `protocol`, because IAM authenticates each surface
-  itself. `iamServiceContract(options)` takes the composition switches of `IamAppOptions`: a switched-off
-  transport (management `/rpc/*`, mint `/auth/mint/*`, the applications' `/membership/*`) has no row, and
-  `/auth/mint` and `/rpc` are reserved, so none of its paths falls to a broader
-  row. Nothing serves or publishes it yet. It imports only `@fabrika/app/service`; `iamRoutes` is exported
-  only for the B10 route test.
+- **IAM is served through its service contract, `src/service.ts`, and nothing else** (ADR-0022
+  "Installation entries"). `createIamApp` is `serveService` over `iamServiceContract(iamServiceOptions(options))`:
+  a switched-off transport (management `/rpc/*` with an empty `rpcKey`, mint `/auth/mint/*` with an empty
+  `proxyKey`, the applications' `/membership/*`, liveness) has no row, and `/auth/mint` and `/rpc` are
+  reserved, so none of its paths falls to a broader row. Every row is `protocol`, because IAM authenticates
+  each surface itself, so no row requires `X-Fabrika-Endpoint` and the private hops (Control's
+  `HttpIamRpc` and admin gateway) carry whatever header they carry. On Zerops the platform proxy publishes
+  `IAM_INSTALLATION_SERVICE_OPTIONS`' table; IAM's Cloudflare Worker stays unfronted, and there the table is
+  only its router. `src/service.ts` imports only `@fabrika/app/service`, so strict consumers can import it.
 - **AN APPLICATION BINDS `PropustkaApplication`, NOT THE DEFAULT EXPORT** (`src/index.ts`). It carries
   what an application's Workers call — the proxy's `mintToken`/`mintFromKey`/`exchangeAuthCode`, the
   SDK's `getJwks`/`listPrincipals`/`audit`, and the `IamMembershipRpc` operations — and nothing else. The default `Propustka` extends it with

@@ -8,6 +8,7 @@
 
 import type { MintFromKeyResult } from '@fabrika/auth-core'
 import { CONTROL_PROXY_GATES, controlMcpResource, controlMcpResourceMetadata, controlProxyGates } from '@fabrika/control/gates'
+import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
@@ -98,8 +99,18 @@ describe('the gates and service tables come from the modules that own them', () 
 		})
 	})
 
-	test('IAM is a single `public` rule, because a gate in front of a login page is a login loop', () => {
-		expect(byId.get(PLATFORM_IAM_APP_ID)?.gates?.rules).toEqual([{ path: '/*', kind: 'public' }])
+	test('IAM carries its installation table, every row `protocol`, because a gate in front of a login page is a login loop', () => {
+		const table = iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS)
+		const iam = byId.get(PLATFORM_IAM_APP_ID)?.table
+		expect(iam).toEqual({ endpoints: table.endpoints, reservedPrefixes: table.reservedPrefixes })
+		expect(new Set(iam?.endpoints.map((row) => row.kind))).toEqual(new Set(['protocol', 'health']))
+	})
+
+	test("IAM's published table serves every transport the installation's IAM process mounts", () => {
+		const ids = byId.get(PLATFORM_IAM_APP_ID)?.table?.endpoints.map((row) => row.id) ?? []
+		for (const id of ['mint-session', 'mint-key', 'mint-exchange', 'mint-delegation', 'membership', 'rpc', 'admin-rpc', 'health']) {
+			expect(ids).toContain(id)
+		}
 	})
 
 	test('and the console is NOT `public` — the drift this item exists for', () => {

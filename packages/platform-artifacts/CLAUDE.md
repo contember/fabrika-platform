@@ -14,7 +14,7 @@ bun run --filter @fabrika/platform-artifacts gen:schemas    # refetch the pinned
 
 - `src/render.ts` — writes or checks: the root `zerops.yaml`, `generated/*.zerops-import.yaml`, and
   `provider-zerops/src/installation/generated/*.ts`. Every Zerops document is schema-validated before it is written.
-- `src/proxy-manifest.ts` — the three fronted apps and their gates. The ONE declaration of the platform's
+- `src/proxy-manifest.ts` — the three fronted apps and their gates or service tables. The ONE declaration of the platform's
   app list; `local-stack` imports it through `./proxy-manifest`.
 - `src/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control` as data.
 - `generated/` — committed import documents. Generated; never hand-edit.

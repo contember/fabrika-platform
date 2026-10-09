@@ -782,6 +782,19 @@ const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> 
 	}
 }
 
+/**
+ * IAM is fronted by its service table: every surface it serves passes the proxy to authenticate itself, and a path no
+ * row serves is the proxy's refusal (plain text), never IAM's own 404 (JSON) or any page.
+ */
+const proveIamTable = async (): Promise<void> => {
+	const unknown = await fetch(`${IAM_ORIGIN}/local-smoke-undeclared`, { redirect: 'manual' })
+	if (unknown.status !== 403 || (unknown.headers.get('content-type') ?? '').startsWith('application/json')) {
+		throw new Error(`an IAM path no row serves answered ${unknown.status}, expected a proxy refusal`)
+	}
+	const jwks = await fetch(`${IAM_ORIGIN}/.well-known/jwks.json`)
+	if (jwks.status !== 200) throw new Error(`IAM's JWKS answered ${jwks.status} through its table`)
+}
+
 /** A navigation to the RPC URL must be redirected by the proxy before control handles the method. */
 const proveControlIsGated = async (): Promise<void> => {
 	const response = await fetch(`${CONTROL_ORIGIN}/api/rpc`, { headers: { accept: 'application/json' }, redirect: 'manual' })
@@ -997,6 +1010,7 @@ const main = async (): Promise<void> => {
 	await requestJson(IAM_ORIGIN, '/healthz')
 	await requestJson(NOTES_ORIGIN, '/healthz')
 	await proveOperationsPublicBoundary(machineKey)
+	await proveIamTable()
 	await proveControlIsGated()
 	await ensureNamespace(machineKey)
 	await proveNamespaceSource(machineKey, fixtures)

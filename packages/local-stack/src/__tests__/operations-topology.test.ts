@@ -58,12 +58,15 @@ describe('local control topology', () => {
 })
 
 describe('local IAM topology', () => {
-	test('IAM is public at the proxy because it authenticates itself', () => {
+	test('IAM is fronted by its table, every surface a protocol row, because it authenticates itself', () => {
 		const iam = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_IAM_APP_ID)
-		expect(iam).toBeDefined()
-		const gates = gatesOf(iam)
-		for (const path of ['/auth/login', '/.well-known/jwks.json', '/admin/rpc']) {
-			expect(firstGate(gates, path)).toBe('public')
+		if (iam === undefined || !hasEndpointTable(iam)) throw new Error('expected IAM behind its service table')
+		const table = compileEndpointTable(iam)
+		const probes: [string, string][] = [['GET', '/auth/login'], ['GET', '/.well-known/jwks.json'], ['POST', '/admin/rpc'], ['POST', '/auth/mint/key']]
+		for (const [method, path] of probes) {
+			const plan = planEndpoint(table, method, path)
+			expect(plan.outcome === 'endpoint' ? plan.endpoint.kind : plan.outcome).toBe('protocol')
 		}
+		expect(planEndpoint(table, 'GET', '/undeclared').outcome).toBe('no-endpoint')
 	})
 })

@@ -1,5 +1,5 @@
-// IAM's service contract (ADR-0022 "Installation entries"). Nothing serves or publishes it yet; until work unit B10d
-// the platform proxy keeps IAM's `/*` public gate and the service keeps `createIamApp`.
+// IAM's service contract (ADR-0022 "Installation entries"): `createIamApp` serves it, and on Zerops the platform proxy
+// decides from it. IAM's Cloudflare Worker stays unfronted; there the table is only its router.
 //
 // Every row is `protocol`: IAM authenticates each surface itself (its login, the JWKS, OAuth, `/admin/*` bearer-only,
 // the shared secrets of `/rpc/*` and `/auth/mint/*`, an application's own key on `/membership/*`), so the proxy reads
@@ -48,5 +48,12 @@ export function iamServiceContract(options: IamServiceOptions) {
 		}
 	})
 }
+
+/**
+ * What an installation's IAM process mounts, and so the table the platform proxy publishes: the Zerops topology always
+ * writes both transport keys. Zerops applications reach `/membership/*` and an operator's `fabrika control key issue`
+ * reaches `/rpc/*` at the public issuer; namespace proxies mint over `/auth/mint/*` there too.
+ */
+export const IAM_INSTALLATION_SERVICE_OPTIONS: IamServiceOptions = { health: true, managementRpc: true, mintRpc: true, membershipTransport: true }
 
 export type IamEndpointId = ReturnType<typeof iamServiceContract>['endpoints'][number]['id']

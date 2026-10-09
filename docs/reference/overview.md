@@ -345,8 +345,8 @@ enforcement:
   `installation: true`; it may use five forms no application may declare (`protocol`
   and `service` rows, the method `*`, the caller `oauth`, the requirement
   `authenticated`), and its hop keeps `Authorization`, sets no proxy secret and leaves
-  the service's answers untouched. No producer emits one yet: the services move to
-  them in work unit B10. Each service's table is a service contract
+  the service's answers untouched. Operations and IAM are fronted by theirs (work
+  units B10c–d); the console moves in B10e. Each service's table is a service contract
   (`@fabrika/app/service`), proved against its frozen gates by the differential in
   `platform-artifacts/src/__tests__/service-parity/`.
 - **Authorization** — the action-and-scope check a service makes against an

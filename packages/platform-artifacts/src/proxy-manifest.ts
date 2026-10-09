@@ -14,9 +14,10 @@
 // `src/installation/generated/platform-proxy-manifest.ts` (the gates, as data) — a deploy command reads those two and
 // never reaches this file.
 
-import type { AppGates, BodyAdmission, GateRule, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
+import type { BodyAdmission, GateRule, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
 import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { controlSchema } from '@fabrika/control/schema'
+import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import {
@@ -41,10 +42,10 @@ export {
  *
  * Deliberately NOT `iam-local`, the name the live installation inherited when its manifest was copied
  * from the local composition during the 2026-08-03 bring-up. On a deployed installation that name is
- * simply false, and it is safe to correct because the id is INERT for an app whose every rule is
- * `public`: gate matching returns `allow` on the first rule with no token and no IAM call, so the id
- * never becomes a token audience, never reaches `mintToken`/`mintFromKey`/`verify`, and never appears in
- * a login bounce (which only a `human` miss can produce). It is used for app SELECTION — the generated
+ * simply false, and it is safe to correct because the id is INERT for an app whose every row is
+ * `protocol`: the proxy admits it with no token and no IAM call, so the id never becomes a token
+ * audience, never reaches `mintToken`/`mintFromKey`/`verify`, and never appears in a login bounce
+ * (which only a `human` caller can produce). It is used for app SELECTION — the generated
  * Caddy route pins `?app=<id>` — but both sides of that lookup are generated from this one list, so they
  * cannot disagree. The remaining use is the proxy's log line, which is exactly where a false name costs
  * something.
@@ -53,13 +54,6 @@ export const PLATFORM_IAM_APP_ID = 'iam'
 
 /** The console's app id — the name its IAM schema, roles and grants are already registered under. */
 export const PLATFORM_CONSOLE_APP_ID = 'vozka'
-
-/**
- * IAM authenticates itself: its login, JWKS and admin surfaces own their own authorization, and a gate
- * in front of the login page is a login loop. Written out rather than imported because there is no gate
- * module to import — IAM declares no gates at all, by design.
- */
-const IAM_PROXY_GATES: AppGates = { rules: [{ path: '/*', kind: 'public' }] }
 
 /**
  * The console's MCP endpoint (ADR-0049). The `authoring` scope grants only what the MCP tools call;
@@ -87,7 +81,14 @@ const serviceTable = ({ endpoints, reservedPrefixes }: InstallationEndpointTable
  * of silently moving IAM's public address.
  */
 export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
-	{ id: PLATFORM_IAM_APP_ID, service: 'iam', port: 8080, upstream: 'iam:3000', gates: IAM_PROXY_GATES },
+	// Every row is `protocol`: IAM authenticates each surface itself, and a gate in front of its login page is a login loop.
+	{
+		id: PLATFORM_IAM_APP_ID,
+		service: 'iam',
+		port: 8080,
+		upstream: 'iam:3000',
+		table: serviceTable(iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS)),
+	},
 	{
 		id: PLATFORM_CONSOLE_APP_ID,
 		service: 'control',
@@ -126,8 +127,8 @@ const HEADER = [
 	'// hosts and the browser-facing scheme belong to ONE installation and are supplied at deploy time —',
 	'// `resolvePlatformProxyManifest` binds them.',
 	'//',
-	"// The gate rules and service tables below are the services' own (`CONTROL_PROXY_GATES`,",
-	'// `OPERATIONS_PUBLIC_SERVICE`) as of the last regeneration, copied on purpose: a PUBLISHED deploy command',
+	"// The gate rules and service tables below are the services' own (`CONTROL_PROXY_GATES`, IAM's and",
+	"// Operations' service contracts) as of the last regeneration, copied on purpose: a PUBLISHED deploy command",
 	'// may not import the private packages that own them. `gen:check` in CI is what makes the copy a fact',
 	'// rather than a hope.',
 	'//',

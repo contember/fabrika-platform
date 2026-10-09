@@ -183,8 +183,9 @@ The proxy is the only front door locally, exactly as it is in a deployed
 installation. It fronts each host with the SAME declarations a deployed proxy
 carries — `CONTROL_PROXY_GATES` (`packages/control/fabrika.gates.ts`) for the
 console, the service table `OPERATIONS_PUBLIC_SERVICE` (`packages/operations/src/service.ts`)
-for the public Operations host, imported rather than copied — and IAM is `public`
-because it authenticates itself.
+for the public Operations host, imported rather than copied — and IAM by its own
+service table (`packages/iam/src/service.ts`), every row `protocol` because it
+authenticates itself.
 The platform Caddy generator receives IAM's trusted issuer and private upstream
 as `iamSessionOwner`. Only that exact route retains IAM's `__Host-px_session`;
 all other Fabrika cookies are removed, including handoff verifiers. Application

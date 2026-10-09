@@ -10,6 +10,7 @@
  */
 
 import { assertAppRuntimeConformance, runAppRuntimeConformance } from '@fabrika/app/testing'
+import { ENDPOINT_HEADER } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { createIamApp, iamApp } from '../app'
@@ -117,5 +118,33 @@ describe('IAM runtime conformance', () => {
 		})
 
 		expect(response.status).toBe(404)
+	})
+
+	test("Control's IAM admin gateway hop is served on both adapters, though it carries the console's endpoint header", async () => {
+		const response = await assertAppRuntimeConformance({
+			app: createIamApp(),
+			createEnv: () => env(),
+			createRequest: () =>
+				new Request(`${ISSUER}/admin/rpc`, {
+					method: 'POST',
+					// What Control's proxy named for its own `iam-admin-rpc` row; IAM's rows are all `protocol` and check none.
+					headers: { 'content-type': 'application/json', [ENDPOINT_HEADER]: `iam-admin-rpc@sha256:${'0'.repeat(64)}` },
+					body: JSON.stringify({ method: 'me', input: null }),
+				}),
+		})
+
+		// Reached the admin surface, which refuses a request without a bearer: no 404, no 503.
+		expect(response.status).toBe(401)
+	})
+
+	test('the membership and management transports are equally invisible when the composition does not mount them', async () => {
+		for (const path of ['/membership/members.list', '/rpc/mintToken', '/healthz']) {
+			const response = await assertAppRuntimeConformance({
+				app: createIamApp(),
+				createEnv: () => env(),
+				createRequest: () => new Request(`${ISSUER}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+			})
+			expect(response.status).toBe(404)
+		}
 	})
 })
