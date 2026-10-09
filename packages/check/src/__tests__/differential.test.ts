@@ -11,6 +11,8 @@ import { z } from 'zod/v4'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
+import { contract as filesContract } from '../../../app/src/__tests__/fixtures/scoped-files/fabrika.contract'
+import { tables as filesTables } from '../../../app/src/__tests__/fixtures/scoped-files/src/db/tables'
 import { contract as scopedContract } from '../../../app/src/__tests__/fixtures/scoped-notes/fabrika.contract'
 import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scoped-notes/src/db/tables'
 import { contract as organizationsContract } from '../../../app/src/__tests__/fixtures/scoped-organizations/fabrika.contract'
@@ -97,6 +99,11 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app scoped-organizations (src/db/tables.ts read from source)',
 		root: join(APP_TESTS, 'fixtures', 'scoped-organizations'),
 		evaluated: () => compileContract(organizationsContract, organizationsTables),
+	},
+	{
+		name: '@fabrika/app scoped-files (a file collection on a table read from source)',
+		root: join(APP_TESTS, 'fixtures', 'scoped-files'),
+		evaluated: () => compileContract(filesContract, filesTables),
 	},
 ]
 

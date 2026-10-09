@@ -16,6 +16,7 @@
 		"packages/installation-init",
 		"packages/provider-cloudflare",
 		"packages/platform",
+		"packages/platform-node",
 		"packages/control-contract",
 		"packages/operations-contract",
 		"packages/runner-container"

@@ -5,7 +5,7 @@ import { z } from 'zod/v4'
 
 export const Note = z.strictObject({ id: z.uuid(), title: z.string() })
 
-export const MAX_BYTES = 256 * 1024
+export const MAX_BYTES = 262144
 export const MAX_PER_NOTE = 3
 
 export const contract = defineContract({

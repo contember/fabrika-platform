@@ -55,6 +55,7 @@ COPY packages/iam-contract ./packages/iam-contract
 COPY packages/installation-init ./packages/installation-init
 COPY packages/provider-cloudflare ./packages/provider-cloudflare
 COPY packages/platform ./packages/platform
+COPY packages/platform-node ./packages/platform-node
 COPY packages/control-contract ./packages/control-contract
 COPY packages/operations-contract ./packages/operations-contract
 COPY packages/runner-container/src ./packages/runner-container/src
