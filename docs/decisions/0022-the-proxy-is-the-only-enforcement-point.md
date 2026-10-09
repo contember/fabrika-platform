@@ -284,7 +284,8 @@ application may declare:
   resource token for the entry's registered OAuth resource whose path is the row's path, and must carry
   every scope of the row. A refusal carries the RFC 6750 `WWW-Authenticate` challenge with the resource
   metadata URL, and so does a request without a bearer when `human` is not a caller. It is never a login
-  bounce. A `px_` key whose caller kind the row does not list is a 403. The callers of an installation
+  bounce. A `px_` key keeps its precedence: an invalid one is a 401 and one whose caller kind the row does not
+  list is a 403, each with the same challenge. The callers of an installation
   row are `human`, `machine` and `oauth`.
 - **Requirement `authenticated`**: the caller kind must be listed, and no permission is needed. It is
   the only requirement of an installation row: an administrator of IAM alone holds no permission of the

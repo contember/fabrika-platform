@@ -86,7 +86,8 @@ bun test   # deny-matrix (gates), endpoint-matrix (application tables) and insta
   or asks for an unsupported scope. On a row that admits `oauth`, a bearer that is not a `px_` key (or
   no bearer, when `human` is not a caller) takes the same RFC 6750 path as an `oauth` gate
   (`verifyOAuthBearer`): local verification for the row's resource, every row scope, the challenge on
-  401/403, never a bounce. A `protocol` row reads no credential like any anonymous kind; only its hop
+  401/403, never a bounce; a refused `px_` key there keeps its status and reason and gets the challenge too
+  (`withBearerChallenge`). A `protocol` row reads no credential like any anonymous kind; only its hop
   differs.
 - **A workload key opens no gate either.** A `service` gate refuses a key whose token has a workload kind (`job`,
   `webhook`, `app`) with 403 `caller_kind`, also from the cache (ADR-0022 "Principal kinds").

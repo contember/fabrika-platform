@@ -316,14 +316,19 @@ export class Authorizer {
 		if (row.requirement === null) {
 			return admitBody(row, request.headers) ?? { outcome: 'allow', gate: 'endpoint', token: null, subject: null, endpoint, delegation: null }
 		}
+		const oauth = oauthBindingOf(app, row)
+		if (oauth === 'unregistered') {
+			// The manifest parser refuses an `oauth` row without its resource; reaching this is a composition bug.
+			return { outcome: 'deny', status: 403, reason: 'internal_error' }
+		}
 		const callers: readonly TokenCaller[] = row.callers
-		const caller = await this.endpointCaller(app, row, callers, request)
+		const caller = await this.endpointCaller(app, oauth, callers, request)
 		if (!caller.ok) {
 			return caller.decision
 		}
 		const kind = callerOf(caller.claims)
 		if (kind === null || !callers.includes(kind) || !callerAdmittedAt(kind, row.path)) {
-			return { outcome: 'deny', status: 403, reason: 'caller_kind' }
+			return withBearerChallenge({ outcome: 'deny', status: 403, reason: 'caller_kind' }, oauth)
 		}
 		if (!satisfies(row.requirement, caller.claims.perms)) {
 			return { outcome: 'deny', status: 403, reason: 'insufficient_permission' }
@@ -355,15 +360,10 @@ export class Authorizer {
 	 */
 	private async endpointCaller(
 		app: ContractProxyApp | InstallationProxyApp,
-		row: ManifestEndpointRow,
+		oauth: OAuthBinding | null,
 		callers: readonly TokenCaller[],
 		request: ForwardedRequest,
 	): Promise<EndpointCaller> {
-		const oauth = oauthBindingOf(app, row)
-		if (oauth === 'unregistered') {
-			// The manifest parser refuses an `oauth` row without its resource; reaching this is a composition bug.
-			return { ok: false, decision: { outcome: 'deny', status: 403, reason: 'internal_error' } }
-		}
 		const authorization = request.headers.get('Authorization')
 		if (authorization !== null && authorization.trim() !== '') {
 			const bearer = readBearer(authorization)
@@ -372,7 +372,9 @@ export class Authorizer {
 				return verified.ok ? { ok: true, token: verified.token, claims: verified.claims, session: false } : { ok: false, decision: verified.denial }
 			}
 			const key = bearer === null ? { ok: false, denial: invalidKey() } satisfies KeyAttempt : await this.exchangeKey(app, bearer, request.requestId)
-			return key.ok ? { ok: true, token: key.token, claims: key.claims, session: false } : { ok: false, decision: key.denial }
+			return key.ok
+				? { ok: true, token: key.token, claims: key.claims, session: false }
+				: { ok: false, decision: withBearerChallenge(key.denial, oauth) }
 		}
 		if (!callers.includes('human')) {
 			// No session reaches an endpoint a person may not call, so there is nothing to sign in to.
@@ -672,6 +674,18 @@ function oauthBindingOf(app: ContractProxyApp | InstallationProxyApp, row: Manif
 	}
 	const resource = 'installation' in app ? oauthResourceOfRow(app, row) : null
 	return resource === null ? 'unregistered' : { resource, scopes: required.scopes }
+}
+
+/**
+ * A refused `px_` key on a row that admits `oauth` still tells an OAuth client where the resource's metadata is
+ * (RFC 6750 §3): a 401 as `invalid_token`, a 403 with no error code. Status and reason stay those of the key.
+ */
+function withBearerChallenge(denial: Denial, oauth: OAuthBinding | null): Denial {
+	if (oauth === null || (denial.status !== 401 && denial.status !== 403)) {
+		return denial
+	}
+	const challenge: OAuthBearerChallenge = { resource_metadata: oauth.resource.resourceMetadata }
+	return { ...denial, challenge: denial.status === 401 ? { ...challenge, error: 'invalid_token' } : challenge }
 }
 
 /** An endpoint that admits a body admits only its declared media types (ADR-0022 rule 3, admission). */

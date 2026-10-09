@@ -121,11 +121,30 @@ function expectDenied(response: Response, status: number): void {
 const challenge = (response: Response): string | null => response.headers.get('WWW-Authenticate')
 
 describe('caller oauth — a row that admits only OAuth resource tokens', () => {
-	test('a px_ key is a 403 caller_kind, never an OAuth token', async () => {
+	test('a valid px_ key is a 403 caller_kind, never an OAuth token, and still names the resource metadata', async () => {
 		const { verify } = service({ mintFromKey: await minted('service') })
-		expectDenied(await verify(verifyRequest({ method: 'POST', path: '/mcp', bearer: 'px_machine' })), 403)
+		const machine = await verify(verifyRequest({ method: 'POST', path: '/mcp', bearer: 'px_machine' }))
+		expectDenied(machine, 403)
+		expect(challenge(machine)).toBe(`Bearer resource_metadata="${RESOURCE_METADATA}"`)
 		const { verify: asUser } = service({ mintFromKey: await minted('user') })
-		expectDenied(await asUser(verifyRequest({ method: 'POST', path: '/mcp', bearer: 'px_user' })), 403)
+		const user = await asUser(verifyRequest({ method: 'POST', path: '/mcp', bearer: 'px_user' }))
+		expectDenied(user, 403)
+		expect(challenge(user)).toBe(`Bearer resource_metadata="${RESOURCE_METADATA}"`)
+	})
+
+	test('an invalid px_ key is a 401 invalid_token with the challenge', async () => {
+		const { iam, verify } = service({ mintFromKey: { ok: false, reason: 'invalid_key' } })
+		const response = await verify(verifyRequest({ method: 'POST', path: '/mcp', bearer: 'px_bad' }))
+		expectDenied(response, 401)
+		expect(challenge(response)).toBe(`Bearer resource_metadata="${RESOURCE_METADATA}", error="invalid_token"`)
+		expect(iam.mintFromKeyCalls).toBe(1)
+	})
+
+	test('a refused key on a row that admits no oauth carries no challenge', async () => {
+		const { verify } = service({ mintFromKey: { ok: false, reason: 'invalid_key' } })
+		const response = await verify(verifyRequest({ ...JSON_POST, bearer: 'px_bad' }))
+		expectDenied(response, 401)
+		expect(challenge(response)).toBeNull()
 	})
 
 	test('no bearer is a 401 with the resource metadata challenge and no error code', async () => {
