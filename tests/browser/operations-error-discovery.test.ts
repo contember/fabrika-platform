@@ -64,6 +64,8 @@ async function identityRpc(session: string, method: string, input: unknown): Pro
 			'content-type': 'application/json',
 			cookie: `${SESSION_COOKIE}=${session}`,
 			origin: BASE_URL,
+			// What the console's own page sends; the proxy admits a session POST only from the same origin.
+			'sec-fetch-site': 'same-origin',
 		},
 		body: JSON.stringify({ method, input }),
 	})
