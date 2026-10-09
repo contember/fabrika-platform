@@ -13,11 +13,11 @@ import { compileContract } from '../contract/compile'
 import { type ConnectSnapshot, describeSnapshot, exportDescription } from '../contract/connect'
 import { ContractError } from '../contract/problems'
 import { snapshotNames, snapshotSource } from '../contract/snapshot-source'
-import { contract as catalog } from './fixtures/connect/catalog/fabrika.contract'
-import { catalogProductsV1 } from './fixtures/connect/shop/fabrika/connect/catalog.products.v1'
+import { contract as catalog } from './fixtures/connect-catalog/fabrika.contract'
+import { catalogProductsV1 } from './fixtures/connect-shop/fabrika/connect/catalog.products.v1'
 
 // Inside the package, so the generated module resolves `zod/v4` as an application's would.
-const scratch = mkdtempSync(join(import.meta.dir, 'fixtures', 'connect', '.generated-'))
+const scratch = mkdtempSync(join(import.meta.dir, '.generated-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
 function isSnapshot(value: unknown): value is ConnectSnapshot {
@@ -152,7 +152,7 @@ describe('the snapshot reads back into what it was written from', () => {
 
 describe('the consumer that vendors it', () => {
 	test('@fabrika/check reads the shop, its contract and the vendored snapshot, with no finding', async () => {
-		const findings = await checkApplication({ root: join(import.meta.dir, 'fixtures', 'connect', 'shop') })
+		const findings = await checkApplication({ root: join(import.meta.dir, 'fixtures', 'connect-shop') })
 		expect(findings).toEqual([])
 	})
 })

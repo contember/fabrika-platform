@@ -1,5 +1,5 @@
 import { implement } from '@fabrika/app/implement'
-import { contract } from '../fixtures/connect/catalog/fabrika.contract'
+import { contract } from '../fixtures/connect-catalog/fabrika.contract'
 
 // every exported procedure needs its handler under handlers.exports
 export const app = implement(contract, {

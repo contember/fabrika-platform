@@ -9,6 +9,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
+import { contract as catalogContract } from '../../../app/src/__tests__/fixtures/connect-catalog/fabrika.contract'
+import { contract as shopContract } from '../../../app/src/__tests__/fixtures/connect-shop/fabrika.contract'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
 import { contract as jobsContract } from '../../../app/src/__tests__/fixtures/jobs-notes/fabrika.contract'
@@ -119,6 +121,18 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app multi-tenant (src/db/tables.ts read from source)',
 		root: join(APP_TESTS, 'fixtures', 'multi-tenant'),
 		evaluated: () => compileContract(multiTenantContract, multiTenantTables),
+	},
+	{
+		name: '@fabrika/app connect/catalog, the owner of an export',
+		root: join(APP_TESTS, 'fixtures', 'connect-catalog'),
+		evaluated: () => compileContract(catalogContract, {}),
+		tables: {},
+	},
+	{
+		name: '@fabrika/app connect/shop, whose import reads its digest from the vendored snapshot',
+		root: join(APP_TESTS, 'fixtures', 'connect-shop'),
+		evaluated: () => compileContract(shopContract, {}),
+		tables: {},
 	},
 ]
 

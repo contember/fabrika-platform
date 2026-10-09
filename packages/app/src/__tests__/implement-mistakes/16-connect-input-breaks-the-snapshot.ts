@@ -1,6 +1,6 @@
 import { implement } from '@fabrika/app/implement'
-import { contract } from '../fixtures/connect/shop/fabrika.contract'
-import { catalogProductsV1 } from '../fixtures/connect/shop/fabrika/connect/catalog.products.v1'
+import { contract } from '../fixtures/connect-shop/fabrika.contract'
+import { catalogProductsV1 } from '../fixtures/connect-shop/fabrika/connect/catalog.products.v1'
 
 // the vendored snapshot types the call: a sku is a string
 export const app = implement(contract, {
