@@ -30,7 +30,7 @@ resolve the project and its services
 ```
 
 That order is a security property, not just a dependency: a fabrika application enforces nothing by
-itself, so the enforcement proxy is deployed **before** the control plane whose gates just changed. It
+itself, so the enforcement proxy is deployed **before** the control plane whose endpoint table just changed. It
 therefore lives in code with a test, rather than in a workflow file that can be edited. The Cloudflare
 sidecar repository keeps its order in the workflow instead; the two providers differ deliberately.
 
@@ -45,7 +45,7 @@ permissive manifest.
 branch. The workflow refuses anything that does not look like a tag.
 
 That tag decides everything this pipeline DOES: the deploy order, the proxy manifest it composes (the
-gate rules that enforce the whole installation), the console schema it reconciles, and every variable
+endpoint tables that enforce the whole installation), the console schema it reconciles, and every variable
 it writes.
 
 The workflow runs with `--source-dir=.` from the selected checkout and uploads one exact committed
