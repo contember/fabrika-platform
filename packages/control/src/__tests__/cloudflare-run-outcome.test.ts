@@ -1,8 +1,12 @@
+import type { AuthContext } from '@fabrika/auth'
+import { permits } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import { createCloudflareControlProvider } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, spyOn, test } from 'bun:test'
+import { ControlApiError } from '../api/domain'
+import { setEnvironmentProtectionUseCase } from '../approval/api'
 import { type ControlRepositories } from '../db'
 import { type CloudflareRunnerService, recoverRunOnRunner, startRunOnRunner } from '../platform-cf'
 import { reconcileProviderRuns } from '../provider-reconcile'
@@ -10,7 +14,7 @@ import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { memoryCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
-import { fixtureRuns, makeFakeLock } from './helpers/lock'
+import { fixtureProtect, fixtureRuns, makeFakeLock } from './helpers/lock'
 
 // Control is the only writer of a Cloudflare run's row (ADR-0044). The runner persists its terminal
 // status — with the IAM reconcile the executor compiled — and Control applies that reconcile once,
@@ -31,7 +35,7 @@ async function seedCloudflareRun(db: ControlRepositories): Promise<string> {
 		providerArtifactJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } }),
 	})
 	// Unprotected, so the schema the runner reports applies without an approval (ADR-0050).
-	await db.registry.setAppEnvProtected('app', 'prod', false)
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 	const runId = uuidv7()
 	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test', commitSha: COMMIT })
 	return runId
@@ -179,5 +183,80 @@ describe('Cloudflare run outcome through Control', () => {
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0 })
 		expect(iamCalls).toEqual(['app@prod', 'app@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
+	})
+
+	test('a human cannot protect the environment while a Cloudflare job runs under the old flag, nor while its outcome is unsettled', async () => {
+		const { db } = createHarness()
+		const runId = await seedCloudflareRun(db)
+		const ORIGIN = 'https://control.example.test'
+		const human: AuthContext = {
+			ok: true,
+			principal: { id: 'p-ada', type: 'user', label: 'ada@example.test' },
+			can: (action, scope) => permits([{ action: 'access.approve', scope: null, source: 'grant' }], action, scope),
+			scopedTo: () => null,
+			audit: () => Promise.resolve(),
+		}
+		const protect = async (): Promise<number> => {
+			try {
+				await setEnvironmentProtectionUseCase({
+					repositories: db,
+					auth: human,
+					queue: { send: () => Promise.resolve() },
+					lock: makeFakeLock(db),
+					request: new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin' } }),
+					publicOrigin: ORIGIN,
+				}, { appId: 'app', env: 'prod', protected: true })
+				return 200
+			} catch (error) {
+				return error instanceof ControlApiError ? error.httpStatus : 500
+			}
+		}
+		const wider =
+			'{"scopes":[],"actions":[{"action":"notes.read"},{"action":"notes.delete"}],"roles":{"deleter":{"name":"Deleter","permissions":["notes.delete"]}}}'
+		const during: number[] = []
+		const persisted = new Map<string, RunnerStatus>()
+		const runner = (callerLost: boolean): CloudflareRunnerService => ({
+			startRun: async (job) => {
+				during.push(await protect())
+				const status: RunnerStatus = {
+					runId: job.runId,
+					state: 'succeeded',
+					exitCode: 0,
+					artifactAccess: { state: 'deployed', accessJson: `{"gates":{"rules":[{"path":"/*","kind":"public"}]},"schema":${wider}}` },
+					startedAt: 1,
+					finishedAt: 2,
+				}
+				persisted.set(job.runId, status)
+				if (callerLost) throw new Error('RPC aborted: the calling isolate was replaced')
+				return { status, lineCount: 1 }
+			},
+			cancelRun: async () => {},
+			recoverRun: async (id) => persisted.get(id) ?? null,
+		})
+		const iamCalls: string[] = []
+
+		expect(await executeDeploy(deps(db, cloudflareProvider(runner(false), iamCalls)), { runId })).toEqual({ runId, status: 'succeeded' })
+		expect(during).toEqual([409])
+		expect(iamCalls).toEqual(['app@prod'])
+		expect(await db.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 0, protection_revision: 1 })
+
+		const orphaned = uuidv7()
+		await db.runs.createRun({
+			id: orphaned,
+			appId: 'app',
+			env: 'prod',
+			ref: 'refs/heads/main',
+			trigger: 'manual',
+			actor: 'user:test',
+			commitSha: COMMIT,
+		})
+		expect(await executeDeploy(deps(db, cloudflareProvider(runner(true), iamCalls)), { runId: orphaned })).toEqual({
+			runId: orphaned,
+			status: 'running',
+		})
+		expect(await protect()).toBe(409)
+		expect(await reconcileProviderRuns(deps(db, cloudflareProvider(runner(true), iamCalls)))).toMatchObject({ checked: 1, succeeded: 1 })
+		expect(await protect()).toBe(200)
+		expect(await db.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, protection_revision: 2 })
 	})
 })

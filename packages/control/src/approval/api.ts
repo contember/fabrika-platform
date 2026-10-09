@@ -8,7 +8,7 @@ import { ACTIONS } from '../actions'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
 import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
-import type { ControlRepositories, RunRow } from '../db'
+import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
@@ -86,8 +86,19 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	if (!canAtCoordinates(c.auth, ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
 	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
 	if (before === null) fail(404, 'app env not found')
-	const row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected)
-	if (row === null) fail(404, 'app env not found')
+	// A job started under the old flag would still apply what it allowed, so the change waits for the deployment.
+	const lease = await acquireLease(c.lock, runLeaseKey(input.appId, input.env), c.leaseClock)
+	if (lease === null) fail(409, 'a deployment is running; retry')
+	let row: AppEnvRow | null
+	try {
+		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, lease.fence())
+	} finally {
+		await lease.release()
+	}
+	if (row === null) {
+		if ((await c.repositories.registry.getAppEnv(input.appId, input.env)) === null) fail(404, 'app env not found')
+		fail(409, 'a deployment is running; retry')
+	}
 	await c.auth.audit({
 		action: 'access.protect',
 		resourceType: 'app_env',

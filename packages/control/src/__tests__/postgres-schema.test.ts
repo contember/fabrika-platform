@@ -29,7 +29,7 @@ import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
 import { applyMigrations } from '../zerops/migrate'
 import { createFetchHandler } from '../zerops/server'
-import { fixtureRuns } from './helpers/lock'
+import { fixtureProtect, fixtureRuns } from './helpers/lock'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { interleaving } from './helpers/postgres-interleave'
 import { protectionRaceScenario } from './helpers/protection-race'
@@ -530,7 +530,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
 		expect((await db.registry.getAppEnv('acme', 'prod'))?.protected).toBe(1)
 		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(0)
-		expect(await db.registry.setAppEnvProtected('acme', 'stage', true)).toMatchObject({ protected: 1, protection_revision: 1, generation: 1 })
+		expect(await fixtureProtect(db.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'stage' }, true)).toMatchObject({
+			protected: 1,
+			protection_revision: 1,
+			generation: 1,
+		})
 		// A put advances the generation; the stored flag stays.
 		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))).toMatchObject({ protected: 1, generation: 2 })
 		// The flag and the counters outlive the row: a recreated environment starts with them.
@@ -595,7 +599,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		const read = await db.registry.upsertAppEnv(stage, { absent: true })
 		const outcome = await interleaved(
-			(human) => human.registry.setAppEnvProtected('acme', 'stage', true),
+			(human) => fixtureProtect(human.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'stage' }, true),
 			(service) => service.registry.deleteApp('acme', [{ env: 'stage', generation: read.generation }]),
 		)
 		expect(outcome?.status === 'rejected' ? outcome.reason : null).toBeInstanceOf(AppEnvChangedError)
@@ -607,7 +611,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		const read = await db.registry.upsertAppEnv(stage, { absent: true })
 		const outcome = await interleaved(
-			(human) => human.registry.setAppEnvProtected('acme', 'stage', true),
+			(human) => fixtureProtect(human.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'stage' }, true),
 			(service) => service.registry.deleteAppEnv('acme', 'stage', read.generation),
 		)
 		expect(outcome?.status === 'rejected' ? outcome.reason : null).toBeInstanceOf(AppEnvChangedError)
@@ -622,12 +626,12 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		const recreated = await db.registry.upsertAppEnv(stage, { absent: true })
 		expect(recreated).toMatchObject({ protected: 0, generation: 1, protection_revision: 0 })
 		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'main', trigger: 'manual', actor: 'user:ada' })
+		const protectedRow = await fixtureProtect(db.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'stage' }, true)
+		expect(protectedRow).toMatchObject({ protected: 1, generation: 2, protection_revision: 1 })
 		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
 		await owned.start(run.id, 'logs')
 		const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0', artifact: null })
 		await owned.snapshot(run.id, snapshot)
-		const protectedRow = await db.registry.setAppEnvProtected('acme', 'stage', true)
-		expect(protectedRow).toMatchObject({ protected: 1, generation: 2, protection_revision: 1 })
 
 		const outcome = await interleaved(
 			(service) => service.registry.deleteAppEnv('acme', 'stage', 2),

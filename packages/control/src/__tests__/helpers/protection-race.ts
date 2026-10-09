@@ -2,7 +2,7 @@ import type { DeployLocks } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { expect } from 'bun:test'
 import { AppEnvChangedError, type AppEnvInput, type ControlRepositories } from '../../db'
-import { fixtureRuns } from './lock'
+import { fixtureProtect, fixtureRuns } from './lock'
 
 const stage: AppEnvInput = {
 	appId: 'acme',
@@ -14,9 +14,10 @@ const stage: AppEnvInput = {
 }
 
 /**
- * The reviewer's interleaving, on whichever dialect `db` runs: a run classifies `stage` while it is unprotected; a
+ * The reviewer's interleaving, on whichever dialect `db` runs: a run is queued for `stage` while it is unprotected; a
  * service reads the environment for a put and a delete; a human protects it; then the stale writes land. Neither the
- * stale writes nor the run's publication may pass, and a recreated environment keeps the flag and the counters.
+ * stale writes nor a publication classified before the change may pass, and a recreated environment keeps the flag and
+ * the counters. While the run is running, the human cannot change the flag at all.
  */
 export async function protectionRaceScenario(db: ControlRepositories, locks: DeployLocks): Promise<void> {
 	await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
@@ -26,12 +27,13 @@ export async function protectionRaceScenario(db: ControlRepositories, locks: Dep
 
 	const owned = fixtureRuns(db.runs, locks)
 	const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'main', trigger: 'manual', actor: 'user:ada' })
+	const classifiedAt = { generation: read.generation, protectionRevision: read.protection_revision }
+	const stageAt = { appId: 'acme', env: 'stage' }
+	expect(await fixtureProtect(db.registry, locks, stageAt, true)).toMatchObject({ protected: 1, protection_revision: 1 })
 	await owned.start(run.id, 'logs')
 	const snapshot = JSON.stringify({ version: 1, contract: null, migrations: [], checker: '0.0.0', artifact: null })
 	await owned.snapshot(run.id, snapshot)
-	const classifiedAt = { generation: read.generation, protectionRevision: read.protection_revision }
-
-	await db.registry.setAppEnvProtected('acme', 'stage', true)
+	expect(await fixtureProtect(db.registry, locks, stageAt, false)).toBeNull()
 	await expect(db.registry.deleteAppEnv('acme', 'stage', read.generation)).rejects.toBeInstanceOf(AppEnvChangedError)
 	await expect(db.registry.upsertAppEnv(stage, { generation: read.generation })).rejects.toBeInstanceOf(AppEnvChangedError)
 	await expect(db.registry.deleteApp('acme', [{ env: 'stage', generation: read.generation }])).rejects.toBeInstanceOf(AppEnvChangedError)

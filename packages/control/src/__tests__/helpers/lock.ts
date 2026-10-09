@@ -1,6 +1,6 @@
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
-import type { AppliedOperationsIngestConfig, ControlRepositories, DeploymentNamespaceState, RunRepository } from '../../db'
+import type { AppEnvRow, AppliedOperationsIngestConfig, ControlRepositories, DeploymentNamespaceState, RunRepository } from '../../db'
 import { CATALOG_LEASE_KEY, LEASE_TTL_MS, type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../../lease'
 import { harnessDatabase } from './harness'
 
@@ -49,6 +49,24 @@ export function fixtureRuns(runs: RunRepository, locks: DeployLocks, now: () => 
 		approve: (id: string, classificationJson: string, approvalJson: string) =>
 			owned(id, (fence) => runs.approveParkedRun(id, classificationJson, approvalJson, fence)),
 		reject: (id: string, classificationJson: string) => owned(id, (fence) => runs.rejectParkedRun(id, classificationJson, fence)),
+	}
+}
+
+/** Change protection the way the console does: under the environment's deployment lease, here as a fixture holder. */
+export async function fixtureProtect(
+	registry: ControlRepositories['registry'],
+	locks: DeployLocks,
+	coordinates: { readonly appId: string; readonly env: string },
+	value: boolean,
+	now: () => number = Date.now,
+): Promise<AppEnvRow | null> {
+	const key = runLeaseKey(coordinates.appId, coordinates.env)
+	const holder = `fixture-protect-${key}`
+	if (!(await locks.acquire(key, holder, LEASE_TTL_MS))) throw new Error(`fixture lease ${key} is held`)
+	try {
+		return await registry.setAppEnvProtected(coordinates.appId, coordinates.env, value, { holder, nowMs: now() })
+	} finally {
+		await locks.release(key, holder)
 	}
 }
 

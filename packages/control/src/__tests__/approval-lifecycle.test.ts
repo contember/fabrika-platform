@@ -545,30 +545,23 @@ describe('approved access through the run lifecycle', () => {
 		expect((await deploy(w, 'stage')).status).toBe('awaiting_approval')
 	})
 
-	test('protection enabled while a run publishes makes the publication lose and the run wait', async () => {
+	test('a protection change while a run deploys answers 409 and changes nothing; once it is done, the change applies', async () => {
 		const w = world()
 		await seed(w)
 		const runs = w.db.runs
 		const publish = runs.publishRunSnapshot.bind(runs)
-		let protectedFirst = false
+		const during: number[] = []
 		runs.publishRunSnapshot = async (id, expected, snapshotJson, fence) => {
-			if (!protectedFirst) {
-				protectedFirst = true
-				await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'stage', protected: true })
-			}
+			during.push(await status(setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'stage', protected: true })))
 			return publish(id, expected, snapshotJson, fence)
 		}
 
-		const raced = await deploy(w, 'stage')
-		expect(raced.status).toBe('awaiting_approval')
-		const row = await run(w, raced.runId)
-		expect(row.approval_json).toBeNull()
-		expect(parseClassification(row.classification_json ?? '')).toMatchObject({ outcome: 'widening', protected: true })
-		expect(w.logs.get(`runs/${raced.runId}/logs.ndjson`)).toContain(
-			'another publication, registry write or protection change landed first; classifying again',
-		)
-		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 1 })
-		expect(w.deploys).toEqual([])
+		const deployed = await deploy(w, 'stage')
+		expect(deployed.status).toBe('succeeded')
+		expect(during).toEqual([409])
+		expect(await published(w, 'stage')).toEqual({ runId: deployed.runId, generation: 1 })
+		expect(await status(setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'stage', protected: true }))).toBe(200)
+		expect(await w.db.registry.getAppEnv('notes', 'stage')).toMatchObject({ protected: 1, protection_revision: 1 })
 	})
 })
 

@@ -1,6 +1,6 @@
 import { type DeployLocks, type SqlDatabase, SqlDeployLocks, type SqlStatement } from '@fabrika/platform'
 import type { ProviderSourceBinding } from '@fabrika/provider-contract'
-import { type LeaseFence, namespaceLeaseKey } from '../lease'
+import { type LeaseFence, namespaceLeaseKey, runLeaseKey } from '../lease'
 import { appCoordinateLockStatements, appRowLockStatement, coordinateLockStatements, defaultProtected } from './coordinate-lock'
 import {
 	AppEnvChangedError,
@@ -807,16 +807,29 @@ export class ControlRegistryRepository {
 	/**
 	 * Change an environment's `protected` flag (ADR-0050); the caller has authorized a human with `access.approve`. The
 	 * change advances `generation`, so a run that classified under the old flag loses its publication, and the flag is
-	 * kept for these coordinates beyond the environment's deletion.
+	 * kept for these coordinates beyond the environment's deletion. It is fenced on the environment's deployment lease
+	 * and refused while a run is `running`: that run's job applies what the old flag allowed. Null when the environment is
+	 * missing, the lease is lost or a run is running.
 	 */
-	async setAppEnvProtected(appId: string, env: string, value: boolean): Promise<AppEnvRow | null> {
-		const lock = coordinateLockStatements(this.d1, appId, env)
+	async setAppEnvProtected(appId: string, env: string, value: boolean, fence: LeaseFence): Promise<AppEnvRow | null> {
+		const key = runLeaseKey(appId, env)
+		const leading = [
+			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?').bind(
+				key,
+				fence.holder,
+				fence.nowMs,
+			),
+			...coordinateLockStatements(this.d1, appId, env),
+		]
 		const results = await this.d1.batch<AppEnvRow>([
-			...lock,
+			...leading,
 			this.d1.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1
-				WHERE app_id = ? AND env = ? RETURNING *`).bind(value ? 1 : 0, appId, env),
+				WHERE app_id = ? AND env = ?
+					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
+					AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.app_id = app_envs.app_id AND runs.env = app_envs.env AND runs.status = 'running')
+				RETURNING *`).bind(value ? 1 : 0, appId, env, key, fence.holder, fence.nowMs),
 		])
-		return results[lock.length]?.results[0] ?? null
+		return results[leading.length]?.results[0] ?? null
 	}
 
 	/**
