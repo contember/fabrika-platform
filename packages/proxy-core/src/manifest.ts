@@ -123,9 +123,17 @@ export interface ProxyManifest {
 	apps: ProxyApp[]
 }
 
+/** An installation service's entry: its gates until its B10 unit lands, its endpoint table after. */
+export type InstallationServiceApp = GateProxyApp | InstallationProxyApp
+
 /** A manifest of installation services only, such as the platform proxy's. */
-export interface GateProxyManifest {
-	apps: GateProxyApp[]
+export interface InstallationServiceManifest {
+	apps: InstallationServiceApp[]
+}
+
+/** Whether an entry is one of the installation's own services, protected by gates or by an installation table. */
+export function isInstallationServiceApp(app: ProxyApp): app is InstallationServiceApp {
+	return !isApplicationEntry(app)
 }
 
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/

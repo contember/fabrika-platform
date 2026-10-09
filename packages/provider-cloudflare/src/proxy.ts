@@ -1,5 +1,11 @@
 import type { AppGates } from '@fabrika/auth'
-import { type ContractProxyTable, encodeProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import {
+	type ContractProxyTable,
+	encodeProxyManifestJson,
+	type InstallationProxyTable,
+	type ProxyApp,
+	type ProxyManifest,
+} from '@fabrika/proxy-core/manifest'
 import { ServiceReference, Worker } from 'oblaka-iac'
 
 interface CloudflareProxyWorkerBase {
@@ -22,17 +28,21 @@ interface CloudflareProxyWorkerBase {
 interface CloudflareContractProxyOptions {
 	readonly endpoints: ContractProxyTable
 	readonly gates?: never
+	readonly installation?: never
 	/** The Operations ingest origin a contract application's `connect-src` admits, from its managed DSN. */
 	readonly operationsOrigin?: string
 }
 
 /**
- * What the proxy enforces: a contract application's endpoint table (`contractProxyTable(artifact)`), or the ordered
- * gates of an installation service. Never both.
+ * What the proxy enforces: a contract application's endpoint table (`contractProxyTable(artifact)`), an installation
+ * service's table (`serviceProxyTable(service, …)`), or the ordered gates of an installation service. Exactly one. The
+ * deployer passes only the first two forms an application can carry; `installation` is written by the platform's
+ * own service configs, which is what makes the marker trusted composition (ADR-0022 "Installation entries").
  */
 export type CloudflareProxyWorkerOptions =
 	| (CloudflareProxyWorkerBase & CloudflareContractProxyOptions)
-	| (CloudflareProxyWorkerBase & { readonly gates: AppGates; readonly endpoints?: never })
+	| (CloudflareProxyWorkerBase & { readonly installation: InstallationProxyTable; readonly endpoints?: never; readonly gates?: never })
+	| (CloudflareProxyWorkerBase & { readonly gates: AppGates; readonly endpoints?: never; readonly installation?: never })
 
 /** Where `createCloudflareProxyWorker` points its Worker: the deployer builds every application's proxy from here. */
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
@@ -70,7 +80,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		// Cloudflare terminates TLS at the edge and a route is always https; only a localhost
 		// binding is reached over plain HTTP.
 		scheme: local ? 'http' : 'https',
-	} satisfies Omit<ProxyApp, 'gates' | 'endpoints'>
+	} satisfies Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>
 	const manifest: ProxyManifest = { apps: [proxyApp(placement, options)] }
 	const domain = options.domain?.trim()
 
@@ -93,9 +103,14 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 	})
 }
 
-function proxyApp(placement: Omit<ProxyApp, 'gates' | 'endpoints'>, options: CloudflareProxyWorkerOptions): ProxyApp {
-	if (options.endpoints !== undefined && options.gates !== undefined) {
-		throw new Error("cloudflare proxy carries a contract application's endpoint table or gates, never both")
+function proxyApp(placement: Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>, options: CloudflareProxyWorkerOptions): ProxyApp {
+	const forms = [options.endpoints, options.installation, options.gates].filter((form) => form !== undefined)
+	if (forms.length !== 1) {
+		throw new Error('cloudflare proxy carries exactly one of an endpoint table, an installation table or gates')
+	}
+	if (options.installation !== undefined) {
+		const { installation, endpoints, reservedPrefixes } = options.installation
+		return { ...placement, installation, endpoints, reservedPrefixes }
 	}
 	if (options.endpoints !== undefined) {
 		const { endpoints, reservedPrefixes, snapshot, csp } = options.endpoints

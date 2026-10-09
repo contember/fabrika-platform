@@ -4,13 +4,14 @@
 // Regenerate: bun run --filter @fabrika/platform-artifacts gen
 //
 // The installation-independent half of `FABRIKA_PROXY_MANIFEST_JSON`: which apps the platform proxy
-// fronts, at which private upstream, on which public listener, under which gates. The hosts and the
-// browser-facing scheme belong to ONE installation and are supplied at deploy time —
+// fronts, at which private upstream, on which public listener, under which gates or service table. The
+// hosts and the browser-facing scheme belong to ONE installation and are supplied at deploy time —
 // `resolvePlatformProxyManifest` binds them.
 //
-// The gate rules below are `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES` as of the last
-// regeneration, copied on purpose: a PUBLISHED deploy command may not import the private package that
-// owns them. `gen:check` in CI is what makes the copy a fact rather than a hope.
+// The gate rules and service tables below are the services' own (`CONTROL_PROXY_GATES`,
+// `OPERATIONS_PUBLIC_SERVICE`) as of the last regeneration, copied on purpose: a PUBLISHED deploy command
+// may not import the private packages that own them. `gen:check` in CI is what makes the copy a fact
+// rather than a hope.
 //
 // The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy gates and registers
 // it only on an installation that enables MCP authoring.
@@ -74,11 +75,30 @@ export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 			service: 'operations',
 			port: 8083,
 			upstream: 'operations:3000',
-			gates: {
-				rules: [
-					{ path: '/api/*/envelope/', kind: 'public' },
-					{ path: '/api/artifacts/source-maps/', kind: 'public' },
+			table: {
+				endpoints: [
+					{
+						id: 'ingest',
+						kind: 'protocol',
+						method: '*',
+						path: '/api/:projectId/envelope/',
+						callers: [],
+						requirement: null,
+						admission: null,
+						oauth: null,
+					},
+					{
+						id: 'source-map-upload',
+						kind: 'protocol',
+						method: '*',
+						path: '/api/artifacts/source-maps/',
+						callers: [],
+						requirement: null,
+						admission: null,
+						oauth: null,
+					},
 				],
+				reservedPrefixes: [],
 			},
 		},
 	],

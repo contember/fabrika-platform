@@ -39,11 +39,6 @@
 			"types": "./src/operator-api.ts",
 			"default": "./src/operator-api.ts"
 		},
-		"./gates": {
-			"bun": "./src/gates.ts",
-			"types": "./src/gates.ts",
-			"default": "./src/gates.ts"
-		},
 		"./service": {
 			"bun": "./src/service.ts",
 			"types": "./src/service.ts",
@@ -113,6 +108,7 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@fabrika/provider-cloudflare": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*",
 		"@types/bun": "latest",
 		"jose": "^5.9.0",
 		"oblaka-iac": "^0.0.18",

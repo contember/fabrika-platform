@@ -9,9 +9,15 @@
  */
 
 import { controlMcpResource, controlProxyGates } from '@fabrika/control/gates'
-import { PLATFORM_PROXY_APPS, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
+import { PLATFORM_PROXY_APPS, type PlatformProxyApp, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
 import type { McpClient } from '@fabrika/provider-zerops/installation'
-import { encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import {
+	encodeProxyManifestJson,
+	type InstallationServiceApp,
+	isGateProxyApp,
+	parseProxyManifestJson,
+	serviceProxyTable,
+} from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -19,11 +25,21 @@ import { parseOAuthConfig } from '../../../iam/src/oauth-config'
 import { localApps } from '../app-registration'
 import { localIamOAuthConfig, localPlatformProxyManifest, readLocalMcpClients } from '../prepare'
 
+/** What protects an entry: its gates, or its service table's rows and reserved prefixes. */
+const accessOf = (app: InstallationServiceApp) =>
+	isGateProxyApp(app) ? app.gates : { endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes }
+
+const templateAccessOf = (app: PlatformProxyApp) => {
+	if (app.table === undefined) return app.gates
+	const { endpoints, reservedPrefixes } = serviceProxyTable(app.table, { oauth: false })
+	return { endpoints, reservedPrefixes }
+}
+
 describe('the local platform manifest is the installation template, placed locally', () => {
-	test('the same apps in the same order, with the same gates', () => {
+	test('the same apps in the same order, with the same gates or service tables', () => {
 		const local = localPlatformProxyManifest().apps
 		expect(local.map((app) => app.id)).toEqual(PLATFORM_PROXY_APPS.map((app) => app.id))
-		expect(local.map((app) => app.gates)).toEqual(PLATFORM_PROXY_APPS.map((app) => app.gates))
+		expect(local.map(accessOf)).toEqual(PLATFORM_PROXY_APPS.map(templateAccessOf))
 	})
 
 	test('and nothing beside them — an app the local stack alone fronts would be a definition of its own', () => {
@@ -72,7 +88,10 @@ describe('MCP authoring in the local composition', () => {
 		if (match?.[1] === undefined) throw new Error('compose.yaml names no FABRIKA_CONTROL_DOMAIN')
 		return match[1]
 	}
-	const consoleOf = (clients?: readonly McpClient[]) => localPlatformProxyManifest(clients).apps.find((app) => app.id === 'vozka')
+	const consoleOf = (clients?: readonly McpClient[]) => {
+		const console_ = localPlatformProxyManifest(clients).apps.find((app) => app.id === 'vozka')
+		return console_ !== undefined && isGateProxyApp(console_) ? console_ : undefined
+	}
 
 	test('is off by default: no OAuth gate, no registered resource, and IAM OAuth disabled', () => {
 		expect(readLocalMcpClients({})).toBeUndefined()

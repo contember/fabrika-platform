@@ -291,7 +291,10 @@ Invariants:
 - A PostgreSQL URL is always `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
   port is the only one `postgresql:ha@18` offers, and it keeps the session state the migration lock needs.
 - **The proxy manifest is a committed template plus a deploy-time placement.** The template is
-  installation-independent and `gen:check` proves it matches the gate modules; hosts and scheme are
-  arguments. `parseProxyManifest` refuses an app with no hosts, hence a separate template type.
+  installation-independent and `gen:check` proves it matches the gate modules and service contracts; hosts
+  and scheme are arguments. `parseProxyManifest` refuses an app with no hosts, hence a separate template type.
+  An app carries `gates` or a service `table` (rows without digests); `resolvePlatformProxyManifest` turns a
+  table into an installation entry with `serviceProxyTable`, registering its `oauthResource` and keeping its
+  `oauth` rows only when the composition names an authorization server.
 - `enableSubdomainAccess` in a generated artifact is a DECLARATION, never a mechanism; the artifact's
   header says so. Do not remove that note without removing the field.

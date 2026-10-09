@@ -30,9 +30,9 @@ bun run test:browser  # the opice suites in tests/browser/
   is a CALLER of the installation's own generator, not a second copy of it: it hands
   `resolvePlatformProxyManifest` (`@fabrika/platform-artifacts/proxy-manifest`, the private
   dev-time generator package) the local hosts, the local scheme and IAM's local port, and gets the same
-  three apps a deployed installation is fronted by, with the same gates. Everything else — which apps
-  exist, their ids, `CONTROL_PROXY_GATES`, `OPERATIONS_PROXY_GATES` — comes from that one declaration,
-  so a gate change cannot reach a deployed proxy and miss this one, or the reverse.
+  three apps a deployed installation is fronted by, with the same gates or service tables. Everything
+  else — which apps exist, their ids, `CONTROL_PROXY_GATES`, `OPERATIONS_PUBLIC_SERVICE` — comes from that
+  one declaration, so a gate or table change cannot reach a deployed proxy and miss this one, or the reverse.
   `src/__tests__/platform-manifest.test.ts` pins exactly which fields this composition is allowed to
   differ in. No synthetic persona exists anywhere — the app SDK has none to select.
   The single dev bypass is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at

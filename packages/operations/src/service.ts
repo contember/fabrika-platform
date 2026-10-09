@@ -1,8 +1,8 @@
-// Operations' two service contracts (ADR-0022 "Installation entries"). Nothing serves or publishes them yet; until
-// work unit B10c the public proxy keeps `OPERATIONS_PROXY_GATES` and the service keeps `operationsApp`.
+// Operations' two service contracts (ADR-0022 "Installation entries"): `operationsApp` serves them, and the public
+// one is what Operations' proxy decides from on both providers.
 //
-// Like `gates.ts`, this module stays free of `@fabrika/provider-cloudflare` and of the rest of this package: the
-// package relaxes two strict flags for oblaka, and strict consumers import this file.
+// This module stays free of `@fabrika/provider-cloudflare` and of the rest of this package: the package relaxes two
+// strict flags for oblaka, and strict consumers (the platform template generator, the local stack) import this file.
 
 import { defineServiceContract } from '@fabrika/app/service'
 import { OPERATIONS_APP_ID, OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'

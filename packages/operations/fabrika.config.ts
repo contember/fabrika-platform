@@ -9,7 +9,8 @@ import {
 	ServiceReference,
 	Worker,
 } from '@fabrika/provider-cloudflare'
-import { OPERATIONS_PROXY_GATES } from './src/gates'
+import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
+import { OPERATIONS_PUBLIC_SERVICE } from './src/service'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -76,7 +77,7 @@ export const buildOperationsProxy = (ctx: ResourceContext): Worker => {
 		appId: OPERATIONS_APP_ID,
 		appHost: publicHost === '' ? 'localhost' : publicHost,
 		domain: ctx.domain,
-		gates: OPERATIONS_PROXY_GATES,
+		installation: serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false }),
 		iamUrl,
 	})
 }

@@ -12,7 +12,7 @@ require additional protocol-specific HTTP surfaces.
 | ------------ | ------------------------------------- | --------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------- | --------------- |
 | Access / IAM | `@fabrika/iam` `createIamApp()`       | `IamAdminRpcContract` in `@fabrika/iam-contract`          | `/admin/rpc` | IAM resolves its own sessions, API keys, provisioning caller, and bootstrap caller | `iam`           |
 | Delivery     | `@fabrika/control` `controlApp`       | `ControlRpcContract` in `@fabrika/control-contract`       | `/api/rpc`   | Own middleware over `@fabrika/auth` `iam.authenticate()`                           | `control`       |
-| Operations   | `@fabrika/operations` `operationsApp` | `OperationsRpcContract` in `@fabrika/operations-contract` | `/api/rpc`   | Own middleware over `iam.authenticate()`, plus IAM principal lookup                | `operations`    |
+| Operations   | `@fabrika/operations` `operationsApp` | `OperationsRpcContract` in `@fabrika/operations-contract` | `/api/rpc`   | `serveService` row handler over `iam.authenticate()`, plus IAM principal lookup    | `operations`    |
 
 `@fabrika/auth` ships no middleware. It owns the `Middleware<Ctx>` type that
 `@fabrika/app` consumes, and each application writes the handful of lines that call

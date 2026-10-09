@@ -14,11 +14,11 @@
 // `src/installation/generated/platform-proxy-manifest.ts` (the gates, as data) — a deploy command reads those two and
 // never reaches this file.
 
-import type { AppGates, GateRule } from '@fabrika/auth-core'
+import type { AppGates, BodyAdmission, GateRule, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
 import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { controlSchema } from '@fabrika/control/schema'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
+import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import {
 	type PlatformOAuthResourceTemplate,
 	type PlatformProxyApp,
@@ -74,6 +74,9 @@ const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
 	}],
 }
 
+/** A service contract as template data: its rows and reserved prefixes, without the service's id. */
+const serviceTable = ({ endpoints, reservedPrefixes }: InstallationEndpointTable): InstallationEndpointTable => ({ endpoints, reservedPrefixes })
+
 /**
  * The apps, in manifest order.
  *
@@ -93,7 +96,7 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 		gates: CONTROL_PROXY_GATES,
 		oauthResource: CONTROL_MCP_RESOURCE,
 	},
-	{ id: OPERATIONS_APP_ID, service: 'operations', port: 8083, upstream: 'operations:3000', gates: OPERATIONS_PROXY_GATES },
+	{ id: OPERATIONS_APP_ID, service: 'operations', port: 8083, upstream: 'operations:3000', table: serviceTable(OPERATIONS_PUBLIC_SERVICE) },
 ]
 
 /** The installation-independent half of every platform proxy manifest. */
@@ -119,13 +122,14 @@ const HEADER = [
 	'// Regenerate: bun run --filter @fabrika/platform-artifacts gen',
 	'//',
 	'// The installation-independent half of `FABRIKA_PROXY_MANIFEST_JSON`: which apps the platform proxy',
-	'// fronts, at which private upstream, on which public listener, under which gates. The hosts and the',
-	'// browser-facing scheme belong to ONE installation and are supplied at deploy time —',
+	'// fronts, at which private upstream, on which public listener, under which gates or service table. The',
+	'// hosts and the browser-facing scheme belong to ONE installation and are supplied at deploy time —',
 	'// `resolvePlatformProxyManifest` binds them.',
 	'//',
-	'// The gate rules below are `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES` as of the last',
-	'// regeneration, copied on purpose: a PUBLISHED deploy command may not import the private package that',
-	'// owns them. `gen:check` in CI is what makes the copy a fact rather than a hope.',
+	"// The gate rules and service tables below are the services' own (`CONTROL_PROXY_GATES`,",
+	'// `OPERATIONS_PUBLIC_SERVICE`) as of the last regeneration, copied on purpose: a PUBLISHED deploy command',
+	'// may not import the private packages that own them. `gen:check` in CI is what makes the copy a fact',
+	'// rather than a hope.',
 	'//',
 	"// The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy gates and registers",
 	'// it only on an installation that enables MCP authoring.',
@@ -157,6 +161,42 @@ const renderOAuthResource = (resource: PlatformOAuthResourceTemplate): string[] 
 	'\t\t\t},',
 ]
 
+const list = (values: readonly string[]): string => `[${values.map(quote).join(', ')}]`
+
+const renderAdmission = (admission: BodyAdmission | null): string =>
+	admission === null ? 'null' : `{ contentTypes: ${list(admission.contentTypes)}, maxBytes: ${admission.maxBytes ?? 'null'} }`
+
+const renderRow = (row: InstallationEndpointRow): string[] => [
+	'\t\t\t\t\t{',
+	`\t\t\t\t\t\tid: ${quote(row.id)},`,
+	`\t\t\t\t\t\tkind: ${quote(row.kind)},`,
+	`\t\t\t\t\t\tmethod: ${quote(row.method)},`,
+	`\t\t\t\t\t\tpath: ${quote(row.path)},`,
+	`\t\t\t\t\t\tcallers: ${list(row.callers)},`,
+	`\t\t\t\t\t\trequirement: ${row.requirement === null ? 'null' : `{ kind: ${quote(row.requirement.kind)} }`},`,
+	`\t\t\t\t\t\tadmission: ${renderAdmission(row.admission)},`,
+	`\t\t\t\t\t\toauth: ${row.oauth === null ? 'null' : `{ scopes: ${list(row.oauth.scopes)} }`},`,
+	'\t\t\t\t\t},',
+]
+
+const renderAccess = (app: PlatformProxyApp): string[] =>
+	app.table === undefined
+		? [
+			'\t\t\tgates: {',
+			'\t\t\t\trules: [',
+			...app.gates.rules.map((rule) => `\t\t\t\t\t${renderRule(rule)},`),
+			'\t\t\t\t],',
+			'\t\t\t},',
+		]
+		: [
+			'\t\t\ttable: {',
+			'\t\t\t\tendpoints: [',
+			...app.table.endpoints.flatMap(renderRow),
+			'\t\t\t\t],',
+			`\t\t\t\treservedPrefixes: ${list(app.table.reservedPrefixes)},`,
+			'\t\t\t},',
+		]
+
 const renderApp = (app: PlatformProxyApp): string =>
 	[
 		'\t\t{',
@@ -164,11 +204,7 @@ const renderApp = (app: PlatformProxyApp): string =>
 		`\t\t\tservice: ${quote(app.service)},`,
 		`\t\t\tport: ${app.port},`,
 		`\t\t\tupstream: ${quote(app.upstream)},`,
-		'\t\t\tgates: {',
-		'\t\t\t\trules: [',
-		...app.gates.rules.map((rule) => `\t\t\t\t\t${renderRule(rule)},`),
-		'\t\t\t\t],',
-		'\t\t\t},',
+		...renderAccess(app),
 		...(app.oauthResource === undefined ? [] : renderOAuthResource(app.oauthResource)),
 		'\t\t},',
 	].join('\n')

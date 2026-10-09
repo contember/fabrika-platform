@@ -124,7 +124,10 @@ this one import.
     headers, and answers a throwing `APP` binding with a fixed 502 under the same treatment (ADR-0022);
   - otherwise the config's `gates`, parsed with `proxyAppGatesSchema`;
   - neither: no proxy, and the application Worker is reachable by nothing.
-    `createCloudflareProxyWorker` takes `endpoints` or `gates`, never both. Its `IAM` binding is also the
+    `createCloudflareProxyWorker` takes exactly one of `endpoints`, `installation` or `gates`. `installation`
+    (an installation service's `serviceProxyTable`) is the trusted marker of ADR-0022 "Installation
+    entries": only the platform's own service configs pass it, and the deployer never builds it from an
+    application's config. Its `IAM` binding is also the
     delegation issuer the proxy asks for grants. An authored variable under a `FRAMEWORK_VARIABLE_NAMES` name is refused.
 - **Another application's names are refused** (ADR-0048). Control sends `<app>@<env>` of every Cloudflare
   deployment in its registry (`CloudflareRunnerJob.installationApps` → `FABRIKA_INSTALLATION_APPS` →

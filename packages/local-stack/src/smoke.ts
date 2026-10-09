@@ -742,11 +742,11 @@ const proveNamespaceIsolation = async (): Promise<void> => {
  * The public Operations hostname serves ingest and nothing else, and the refusal comes from the PROXY —
  * which is what makes it a boundary rather than a coincidence.
  *
- * `OPERATIONS_PROXY_GATES` declares two `public` rules and nothing else, so health, `/private/*`
- * reconciliation and the whole `/api/*` operator surface match no rule and are denied outright (403).
- * A valid machine credential buys nothing here either: it is not that the credential is wrong, it is
- * that the host declares no route to spend it on. Ingest passes its `public` gate and is then
- * challenged by Operations' own envelope credential check.
+ * `OPERATIONS_PUBLIC_SERVICE` declares two `protocol` rows and nothing else, so health, `/private/*`
+ * reconciliation and the whole `/api/*` operator surface select no row and are denied outright (403
+ * `no_endpoint`). A valid machine credential buys nothing here either: it is not that the credential is
+ * wrong, it is that the host declares no endpoint to spend it on. Ingest and the upload pass the proxy and
+ * are then challenged by Operations' own credential checks, the upload's bearer reaching it intact.
  */
 const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> => {
 	const denied = ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/undeclared-path', '/api/rpc']
@@ -770,6 +770,15 @@ const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> 
 	})
 	if (ingest.status !== 401) {
 		throw new Error(`public Operations ingest returned ${ingest.status}, expected credential challenge`)
+	}
+	// Operations answers JSON; a proxy refusal is plain text, so the type says who refused the bogus bearer.
+	const upload = await fetch(`${OPERATIONS_ORIGIN}/api/artifacts/source-maps/`, {
+		method: 'POST',
+		headers: { authorization: 'Bearer local-smoke-not-an-upload-credential', 'content-type': 'application/json' },
+		body: '{}',
+	})
+	if (upload.status !== 401 || !(upload.headers.get('content-type') ?? '').startsWith('application/json')) {
+		throw new Error(`public Operations upload returned ${upload.status} from the proxy, expected Operations' own credential check`)
 	}
 }
 

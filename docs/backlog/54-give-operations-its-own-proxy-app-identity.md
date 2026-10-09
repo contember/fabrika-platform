@@ -14,11 +14,11 @@ Operations host `operations`); what is left is the move that makes the identity 
 
 ## What already shipped
 
-The Operations public hostname serves two `public` routes — Sentry envelope ingest and
-the source-map upload — and `OPERATIONS_PROXY_GATES` now declares exactly those. The
-`/healthz`, `/private/*` and `/api/*` rules described routes `app.ts`'s `isPublicIngress`
-guard answers with a 404 on that host; they are denied outright now (`no_rule` → 403)
-rather than admitted into a 404. Both compositions name the host by `OPERATIONS_APP_ID`,
+The Operations public hostname serves two self-authenticating routes — Sentry envelope
+ingest and the source-map upload — and its service table `OPERATIONS_PUBLIC_SERVICE`
+declares exactly those as `protocol` rows. `/healthz`, `/private/*` and `/api/rpc` are
+served only by the private table; on the public host they are denied at the proxy
+(`no_endpoint` → 403). Both compositions name the host by `OPERATIONS_APP_ID`,
 so a shared manifest can express the Cloudflare shape, which `appId: 'vozka'` never could.
 
 ## What is left, and why it is not a rename

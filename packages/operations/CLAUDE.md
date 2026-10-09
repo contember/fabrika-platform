@@ -14,10 +14,11 @@ dashboard. Cloudflare adapters live in `platform-cf.ts`; Bun-only lifecycle code
 lives under `src/node/`. The direct ingest surface and authenticated operator
 surface remain separate exports.
 
-`src/app.ts` is the shared `@fabrika/app` definition. It owns host isolation,
-declarative routes, and `@fabrika/auth` operator middleware. Both runtime
-entrypoints dispatch through this application; the Bun server uses
-`@fabrika/app/bun`.
+`src/app.ts` serves Operations' two service contracts (`src/service.ts`,
+`@fabrika/app/service`): the request's host picks the table, so the public
+hostname is served only `OPERATIONS_PUBLIC_SERVICE` and every other host only
+`OPERATIONS_PRIVATE_SERVICE`. There is no other router. Both runtime entrypoints
+dispatch through `operationsApp`; the Bun server uses `@fabrika/app/bun`.
 
 `src/operator-rpc.ts` implements `OperationsRpcContract` at `/api/rpc` for the
 console. It calls typed operator use cases; administrative REST routes are not mounted.
@@ -26,15 +27,14 @@ their protocol-specific HTTP surfaces.
 
 The public hostname accepts only Sentry-compatible
 `/api/:projectId/envelope/` ingest and the authenticated source-map upload path.
-`OPERATIONS_PROXY_GATES` (`src/gates.ts`) therefore declares exactly those two
-`public` rules; `/api/rpc`, `/private/catalog/reconcile`, and
-`/private/releases/reconcile` are 404 on that host and stay private, so they may
-not carry a rule there. `src/service.ts` holds the two service contracts that replace
-the gates and `operationsApp` in B10c: `OPERATIONS_PUBLIC_SERVICE` (the same two
-routes, as `protocol` rows) and the never-published `OPERATIONS_PRIVATE_SERVICE`
-(liveness, the reconcile paths, and `POST /api/rpc` as a `protocol` row, because
-Control's gateway forwards the console's own `X-Fabrika-Endpoint`). Nothing serves
-them yet; `operationsRoutes` is exported only for the B10 route test. Control's same-origin gateway
+`OPERATIONS_PUBLIC_SERVICE` therefore declares exactly those two `protocol` rows,
+and it is what Operations' proxy decides from on both providers (the Cloudflare
+`operations-proxy` and the Zerops template entry): every other path is a proxy 403
+(`no_endpoint`). The never-published `OPERATIONS_PRIVATE_SERVICE` holds liveness,
+the reconcile paths, and `POST /api/rpc` as a `protocol` row, because Control's
+gateway forwards the console's own `X-Fabrika-Endpoint`, which names no Operations
+row; never make that row `service`. Every row authenticates itself, so Operations
+requires no endpoint header anywhere. Control's same-origin gateway
 transports operator requests; Operations owns authentication, scoped
 authorization, IAM audit, and principal lookup. Authentication is verification
 only (ADR-0022): the proxy in front of whichever surface the request arrived on

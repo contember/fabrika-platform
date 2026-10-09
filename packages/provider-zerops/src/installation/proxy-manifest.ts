@@ -11,23 +11,26 @@
 // ── The split ────────────────────────────────────────────────────────────────────────────────────
 //
 //   template   which apps exist, their ids, the private service each is dialed at, the public listener
-//              each answers on, and their gates. True of every installation, so it is GENERATED into
+//              each answers on, and their gates or service table. True of every installation, so it is GENERATED into
 //              `src/generated/` and reviewed in a diff.
 //   placement  the hostnames and the browser-facing scheme. `proxy-292c-8080.prg1.zerops.app` names one
 //              account's project, and a production installation binds custom domains instead, so
 //              whoever is deploying supplies these.
 //
-// Nothing in this file imports the packages that OWN the gates. That is the point of the split: the
-// gate sets live in `@fabrika/control` (private) and reach a deployed installation as DATA, through the
+// Nothing in this file imports the packages that OWN the gates and tables. That is the point of the split:
+// they live in the private service packages and reach a deployed installation as DATA, through the
 // generated artifact, so the published deploy path never depends on a package it cannot resolve.
 
-import type { AppGates, GateRule } from '@fabrika/auth-core'
+import type { AppGates, GateRule, InstallationEndpointTable } from '@fabrika/auth-core'
 import {
 	type GateProxyApp,
-	type GateProxyManifest,
-	isGateProxyApp,
+	type InstallationProxyApp,
+	type InstallationServiceApp,
+	type InstallationServiceManifest,
+	isInstallationServiceApp,
 	type OAuthProtectedResource,
 	parseProxyManifest,
+	serviceProxyTable,
 } from '@fabrika/proxy-core/manifest'
 
 /** The platform services an installation's proxy fronts. Each name is a service hostname in the topology. */
@@ -51,8 +54,7 @@ export interface PlatformOAuthResourceTemplate {
 	readonly scopeGrants: readonly PlatformOAuthScopeGrant[]
 }
 
-/** One fronted app, in the form that is the same on every installation. */
-export interface PlatformProxyApp {
+interface PlatformProxyAppBase {
 	/** The IAM app id. It is the audience of every token the proxy mints for this app's host. */
 	readonly id: string
 	/** The topology service that answers for it. */
@@ -67,11 +69,18 @@ export interface PlatformProxyApp {
 	readonly port: number
 	/** Where the proxy dials it over the project's private network. */
 	readonly upstream: string
-	/** Owned by the service's own gate module and copied in by the generator. Never written by hand. */
-	readonly gates: AppGates
 	/** Present only on an app that can serve OAuth clients; off unless the composition names an authorization server. */
 	readonly oauthResource?: PlatformOAuthResourceTemplate
 }
+
+/**
+ * One fronted app, in the form that is the same on every installation: protected by the gates of its gate module, or
+ * by the service contract that replaces them (ADR-0022 "Installation entries"). Both are copied in by the generator
+ * and never written by hand.
+ */
+export type PlatformProxyApp =
+	| (PlatformProxyAppBase & { readonly gates: AppGates; readonly table?: never })
+	| (PlatformProxyAppBase & { readonly table: InstallationEndpointTable; readonly gates?: never })
 
 /** Everything about an installation's manifest that does not depend on WHICH installation it is. */
 export interface PlatformProxyManifestTemplate {
@@ -140,22 +149,38 @@ export const platformOAuthResourceUris = (
 	}
 }
 
-/** The gate rule goes FIRST, so the app's own catch-all rules cannot claim the path before it. */
-const withOAuthResource = (
-	app: GateProxyApp,
+const registeredResource = (
+	hosts: readonly string[],
 	template: PlatformOAuthResourceTemplate,
 	composition: PlatformProxyComposition,
 	authorizationServer: string,
-): GateProxyApp => {
-	const { resource, resourceMetadata } = platformOAuthResourceUris(composition, app.hosts, template)
-	const rule: GateRule = { path: template.path, kind: 'oauth', resource, scopes: [...template.scopes] }
-	const registered: OAuthProtectedResource = {
-		resource,
-		resourceMetadata,
-		authorizationServers: [authorizationServer],
-		scopesSupported: [...template.scopes],
-	}
+): OAuthProtectedResource => ({
+	...platformOAuthResourceUris(composition, hosts, template),
+	authorizationServers: [authorizationServer],
+	scopesSupported: [...template.scopes],
+})
+
+/** The gate rule goes FIRST, so the app's own catch-all rules cannot claim the path before it. */
+const withOAuthGate = (app: GateProxyApp, template: PlatformOAuthResourceTemplate, registered: OAuthProtectedResource): GateProxyApp => {
+	const rule: GateRule = { path: template.path, kind: 'oauth', resource: registered.resource, scopes: [...template.scopes] }
 	return { ...app, gates: { rules: [rule, ...app.gates.rules] }, oauthResources: [registered] }
+}
+
+/** Only an installation that names an authorization server registers the resource; otherwise its rows are dropped. */
+const resolvedServiceApp = (
+	placed: Pick<InstallationProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>,
+	table: InstallationEndpointTable,
+	template: PlatformOAuthResourceTemplate | undefined,
+	composition: PlatformProxyComposition,
+): InstallationProxyApp => {
+	const registered = template === undefined || composition.authorizationServer === undefined
+		? undefined
+		: registeredResource(placed.hosts, template, composition, composition.authorizationServer)
+	return {
+		...placed,
+		...serviceProxyTable(table, { oauth: registered !== undefined }),
+		...(registered === undefined ? {} : { oauthResources: [registered] }),
+	}
 }
 
 /**
@@ -167,25 +192,23 @@ const withOAuthResource = (
 export const resolvePlatformProxyManifest = (
 	template: PlatformProxyManifestTemplate,
 	composition: PlatformProxyComposition,
-): GateProxyManifest => {
-	const apps = template.apps.map((app): GateProxyApp => {
+): InstallationServiceManifest => {
+	const apps = template.apps.map((app): InstallationServiceApp => {
 		const placement = composition.placement[app.service]
-		const resolved: GateProxyApp = {
-			id: app.id,
-			hosts: [...placement.hosts],
-			upstream: placement.upstream ?? app.upstream,
-			gates: app.gates,
-			scheme: composition.scheme,
+		const placed = { id: app.id, hosts: [...placement.hosts], upstream: placement.upstream ?? app.upstream, scheme: composition.scheme }
+		if (app.table !== undefined) {
+			return resolvedServiceApp(placed, app.table, app.oauthResource, composition)
 		}
+		const resolved: GateProxyApp = { ...placed, gates: app.gates }
 		return app.oauthResource === undefined || composition.authorizationServer === undefined
 			? resolved
-			: withOAuthResource(resolved, app.oauthResource, composition, composition.authorizationServer)
+			: withOAuthGate(resolved, app.oauthResource, registeredResource(placed.hosts, app.oauthResource, composition, composition.authorizationServer))
 	})
 	const manifest = parseProxyManifest({ apps })
-	// Every platform service is protected by gates, so the parsed manifest holds gate apps only.
-	const gateApps = manifest?.apps.flatMap((app) => isGateProxyApp(app) ? [app] : []) ?? []
-	if (manifest === null || gateApps.length !== manifest.apps.length) {
+	// Every platform service is an installation service, by gates or by its table; never an application.
+	const services = manifest?.apps.flatMap((app) => isInstallationServiceApp(app) ? [app] : []) ?? []
+	if (manifest === null || services.length !== manifest.apps.length) {
 		throw new Error('the resolved platform proxy manifest is not one the proxy would accept')
 	}
-	return { apps: gateApps }
+	return { apps: services }
 }

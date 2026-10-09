@@ -1,9 +1,9 @@
 /**
- * What the CLOUDFLARE proxy Workers bake into their own manifests is the same gate set the local
- * platform manifest fronts each service with.
+ * What the CLOUDFLARE proxy Workers bake into their own manifests is the same gate set or service table
+ * the local platform manifest fronts each service with.
  *
  * The local manifest no longer copies those sets — `prepare.ts` calls the installation's own generator,
- * which imports `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES` from the packages that own them,
+ * which imports `CONTROL_PROXY_GATES` and `OPERATIONS_PUBLIC_SERVICE` from the packages that own them,
  * and that is what removed the drift this file used to exist for. What is left is the other half, and
  * it is not tautological: the gates reach a deployed CLOUDFLARE proxy through
  * `createCloudflareProxyWorker`, which serializes them into a var, and a provider change could drop or
@@ -16,15 +16,15 @@
 
 import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
-import { parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
+import { type InstallationServiceApp, isGateProxyApp, parseProxyManifestJson, type ProxyApp, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { buildControlWorker } from '../../control/fabrika.config'
 import { buildOperationsProxy } from '../../operations/fabrika.config'
 import { localPlatformProxyManifest } from '../src/prepare'
 
 /** The single app a production Cloudflare proxy Worker bakes into its own manifest. */
-function productionApp(vars: Record<string, unknown> | undefined): { id: string; gates: unknown } {
+function productionApp(vars: Record<string, unknown> | undefined): ProxyApp {
 	const encoded = vars?.['FABRIKA_PROXY_MANIFEST_JSON']
 	if (typeof encoded !== 'string') throw new Error('proxy Worker does not carry a manifest')
 	const manifest = parseProxyManifestJson(encoded)
@@ -33,24 +33,32 @@ function productionApp(vars: Record<string, unknown> | undefined): { id: string;
 	return app
 }
 
-/** The gates a production Cloudflare proxy Worker bakes into its own manifest. */
-function productionGates(vars: Record<string, unknown> | undefined): unknown {
-	return productionApp(vars).gates
+/** The gates or the service table a production Cloudflare proxy Worker bakes into its own manifest. */
+function productionAccess(vars: Record<string, unknown> | undefined): unknown {
+	return accessOf(productionApp(vars))
 }
 
-describe('a deployed Cloudflare proxy Worker carries the declared gates', () => {
+function accessOf(app: ProxyApp | InstallationServiceApp | undefined): unknown {
+	if (app === undefined) return undefined
+	if (isGateProxyApp(app)) return app.gates
+	return { installation: 'installation' in app, endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes }
+}
+
+const OPERATIONS_TABLE = serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false })
+
+describe('a deployed Cloudflare proxy Worker carries the declared gates or service table', () => {
 	test('control', () => {
-		expect(productionGates(buildControlWorker({ env: 'local' }).options.vars)).toEqual(CONTROL_PROXY_GATES)
+		expect(productionAccess(buildControlWorker({ env: 'local' }).options.vars)).toEqual(CONTROL_PROXY_GATES)
 	})
 
-	test('Operations', () => {
-		expect(productionGates(buildOperationsProxy({ env: 'local' }).options.vars)).toEqual(OPERATIONS_PROXY_GATES)
+	test('Operations, as an installation entry', () => {
+		expect(productionAccess(buildOperationsProxy({ env: 'local' }).options.vars)).toEqual(OPERATIONS_TABLE)
 	})
 
 	test('and the local manifest fronts the same services with them', () => {
 		const apps = new Map(localPlatformProxyManifest().apps.map((app) => [app.id, app]))
-		expect(apps.get('vozka')?.gates).toEqual(CONTROL_PROXY_GATES)
-		expect(apps.get(OPERATIONS_APP_ID)?.gates).toEqual(OPERATIONS_PROXY_GATES)
+		expect(accessOf(apps.get('vozka'))).toEqual(CONTROL_PROXY_GATES)
+		expect(accessOf(apps.get(OPERATIONS_APP_ID))).toEqual(OPERATIONS_TABLE)
 	})
 })
 

@@ -6,9 +6,10 @@
 // listener the proxy never opens. Those are the ways this document can be wrong while every other test
 // in the repository passes, which is exactly how the hand-written live one was wrong for two days.
 
+import type { MintFromKeyResult } from '@fabrika/auth-core'
 import { CONTROL_PROXY_GATES, controlMcpResource, controlMcpResourceMetadata, controlProxyGates } from '@fabrika/control/gates'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
+import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
 import {
 	compileTopology,
@@ -17,10 +18,12 @@ import {
 	PROXY_HEALTH_PORT,
 	PROXY_PUBLIC_PORTS,
 } from '@fabrika/provider-zerops/installation/topology'
-import { encodeProxyManifestJson, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { createVerifyService, PROXY_TOKEN_HEADER } from '@fabrika/proxy-core'
+import { encodeProxyManifestJson, isApplicationEntry, isGateProxyApp, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { APP, FakeIam, HOST, ISSUER, signToken, verifyRequest } from '../../../proxy-core/src/__tests__/helpers'
 import {
 	PLATFORM_CONSOLE_APP_ID,
 	PLATFORM_IAM_APP_ID,
@@ -84,21 +87,23 @@ describe('the public listeners', () => {
 	})
 })
 
-describe('the gates come from the modules that own them', () => {
-	test('the console carries `CONTROL_PROXY_GATES` and Operations `OPERATIONS_PROXY_GATES`', () => {
-		const byId = new Map(PLATFORM_PROXY_APPS.map((app) => [app.id, app]))
+describe('the gates and service tables come from the modules that own them', () => {
+	const byId = new Map(PLATFORM_PROXY_APPS.map((app) => [app.id, app]))
+
+	test('the console carries `CONTROL_PROXY_GATES` and Operations its `OPERATIONS_PUBLIC_SERVICE` table', () => {
 		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.gates).toEqual(CONTROL_PROXY_GATES)
-		expect(byId.get(OPERATIONS_APP_ID)?.gates).toEqual(OPERATIONS_PROXY_GATES)
+		expect(byId.get(OPERATIONS_APP_ID)?.table).toEqual({
+			endpoints: OPERATIONS_PUBLIC_SERVICE.endpoints,
+			reservedPrefixes: OPERATIONS_PUBLIC_SERVICE.reservedPrefixes,
+		})
 	})
 
 	test('IAM is a single `public` rule, because a gate in front of a login page is a login loop', () => {
-		const iam = PLATFORM_PROXY_APPS.find((app) => app.id === PLATFORM_IAM_APP_ID)
-		expect(iam?.gates.rules).toEqual([{ path: '/*', kind: 'public' }])
+		expect(byId.get(PLATFORM_IAM_APP_ID)?.gates?.rules).toEqual([{ path: '/*', kind: 'public' }])
 	})
 
 	test('and the console is NOT `public` — the drift this item exists for', () => {
-		const console_ = PLATFORM_PROXY_APPS.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
-		expect(console_?.gates.rules.some((rule) => rule.path === '/*' && rule.kind === 'public')).toBe(false)
+		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.gates?.rules.some((rule) => rule.path === '/*' && rule.kind === 'public')).toBe(false)
 	})
 })
 
@@ -147,6 +152,50 @@ describe('resolving the template', () => {
 	})
 })
 
+describe('the Operations entry, resolved, at the proxy', () => {
+	const operations = resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
+		scheme: 'https',
+		placement: { iam: { hosts: ['iam.test'] }, control: { hosts: ['console.test'] }, operations: { hosts: [HOST] } },
+	}).apps.find((app) => app.id === OPERATIONS_APP_ID)
+	if (operations === undefined) throw new Error('the template fronts no Operations app')
+	const verifyWith = (mintFromKey?: MintFromKeyResult) =>
+		createVerifyService({
+			manifest: { apps: [{ ...operations, id: APP }] },
+			iam: new FakeIam(mintFromKey === undefined ? {} : { mintFromKey }),
+			issuer: ISSUER,
+		})
+
+	test('is an installation entry: its hop keeps Authorization, sets no proxy secret and no response policy', () => {
+		expect('installation' in operations && operations.installation).toBe(true)
+		expect(isApplicationEntry(operations)).toBe(false)
+	})
+
+	test('a path the public host does not serve is a proxy 403, with and without a machine key', async () => {
+		const machine = verifyWith({ ok: true, token: await signToken({ type: 'service' }), expiresAt: Math.floor(Date.now() / 1000) + 300 })
+		const anonymous = verifyWith()
+		for (const path of ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/rpc', '/api/undeclared-path']) {
+			for (const method of ['GET', 'POST']) {
+				expect((await anonymous(verifyRequest({ method, path }))).status).toBe(403)
+				expect((await machine(verifyRequest({ method, path, bearer: 'px_machine' }))).status).toBe(403)
+			}
+		}
+	})
+
+	test('ingest and the upload reach Operations with no token minted, the upload with its bearer still on the request', async () => {
+		const verify = verifyWith()
+		for (
+			const request of [
+				verifyRequest({ method: 'POST', path: '/api/1/envelope/' }),
+				verifyRequest({ method: 'POST', path: '/api/artifacts/source-maps/', bearer: 'release-upload-credential' }),
+			]
+		) {
+			const response = await verify(request)
+			expect(response.status).toBe(204)
+			expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+		}
+	})
+})
+
 describe('MCP authoring, resolved', () => {
 	const composition: PlatformProxyComposition = {
 		scheme: 'https',
@@ -157,7 +206,10 @@ describe('MCP authoring, resolved', () => {
 		},
 	}
 	const consoleOrigin = `https://${subdomainHost(8082)}`
-	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => manifest.apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => {
+		const console_ = manifest.apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+		return console_ !== undefined && isGateProxyApp(console_) ? console_ : undefined
+	}
 
 	test('enabled, the console carries exactly `controlProxyGates(origin)` and registers `controlMcpResource(origin)`', () => {
 		const manifest = resolvePlatformProxyManifest(platformProxyManifestTemplate(), {

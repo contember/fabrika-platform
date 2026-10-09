@@ -1,4 +1,4 @@
-import { buildAccessClaims, type IamRpc, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { buildAccessClaims, ENDPOINT_HEADER, type IamRpc, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { operationsCatalogSnapshotHash, type OperationsCatalogSource } from '@fabrika/operations-contract/catalog'
 import {
 	OPERATIONS_RELEASE_RECONCILE_PATH,
@@ -375,6 +375,15 @@ describe('Operations public/private HTTP isolation', () => {
 		expect(forbidden.status).toBe(404)
 		const forbiddenBody: unknown = await forbidden.json()
 		expect(forbiddenBody).toEqual({ error: { type: 'not_found', message: 'not found' } })
+	})
+
+	test("Control's gateway hop reaches the operator API with the console's endpoint header; other methods do not", async () => {
+		const fetch = handler()
+		const hop = rpcRequest('operations.internal', 'sources', null, VIEWER_TOKEN)
+		hop.headers.set(ENDPOINT_HEADER, `operations-rpc@sha256:${'0'.repeat(64)}`)
+		expect((await fetch(hop)).status).toBe(200)
+		expect((await fetch(new Request('https://operations.internal/api/rpc', { method: 'GET' }))).status).toBe(404)
+		expect((await fetch(new Request('https://operations.internal/api/1/envelope/', { method: 'POST', body: '{}' }))).status).toBe(404)
 	})
 
 	test('RPC validation uses the common error envelope and does not reach a use-case', async () => {

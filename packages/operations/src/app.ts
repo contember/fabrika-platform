@@ -1,6 +1,6 @@
-import { defineApp, type Route, route } from '@fabrika/app'
+import type { FabrikaApp } from '@fabrika/app'
+import { dispatchRpcRequest, serveService } from '@fabrika/app/service'
 import { type AuthCarrier, type AuthContext, type Iam } from '@fabrika/auth'
-import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
 import { handleOperationsCatalogRequest } from './catalog.js'
 import { handleDirectIngestRequest } from './direct-ingest.js'
@@ -8,6 +8,7 @@ import type { HealthRepository } from './health-repository.js'
 import { operationsRpcRouter } from './operator-rpc.js'
 import type { OperationsDataEnv } from './pipeline.js'
 import { handleOperationsReleaseRequest } from './releases.js'
+import { OPERATIONS_PRIVATE_SERVICE, OPERATIONS_PUBLIC_SERVICE } from './service.js'
 
 const INGEST_PATH = /^\/api\/[1-9][0-9]{0,18}\/envelope\/$/
 export interface OperationsAppEnv extends OperationsDataEnv {
@@ -21,92 +22,59 @@ export interface OperationsAppEnv extends OperationsDataEnv {
 	health: HealthRepository
 }
 
-export interface OperationsAppContext extends AuthCarrier {
-	auth?: AuthContext | null
+/** What an operator procedure receives: the verified caller of the request. */
+interface OperationsRpcContext extends AuthCarrier {
+	auth: AuthContext
 	readonly env: OperationsAppEnv
 	readonly request: Request
 }
 
-/** The routes `operationsApp` serves; exported so the B10 route-coverage test reads the live list. */
-export const operationsRoutes: Route<OperationsAppContext>[] = [
-	route.all('/healthz', (ctx) =>
-		isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)
-			? notFound()
-			: Response.json({ status: 'ok' })),
-	route.all('/api/:projectId/envelope/', (ctx) => directIngest(ctx)),
-	route.all(OPERATIONS_SOURCE_MAP_UPLOAD_PATH, (ctx) => sourceMapUpload(ctx)),
-	route.all('/private/catalog/reconcile', (ctx) => catalogReconcile(ctx)),
-	route.all(OPERATIONS_RELEASE_RECONCILE_PATH, (ctx) => releaseReconcile(ctx)),
-	route.rpc('/api/rpc', operationsRpcRouter, { use: [privateOperatorRoute] }),
-	route.all('/*path', () => notFound()),
-]
+const onError = (): Response => {
+	console.error('operations request failed')
+	return Response.json({ error: 'internal error' }, { status: 500 })
+}
 
-/** Operations as the same runtime-neutral Fabrika application on Workers and Bun. */
-export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
-	context: (env, request) => ({ env, request }),
-	routes: operationsRoutes,
-	onError() {
-		console.error('operations request failed')
-		return Response.json({ error: 'internal error' }, { status: 500 })
+/** The public hostname: ingest and the source-map upload, each checking its own credential. */
+const publicService = serveService<'ingest' | 'source-map-upload', OperationsAppEnv>(OPERATIONS_PUBLIC_SERVICE, {
+	'ingest': ({ request, env }) => {
+		if (!INGEST_PATH.test(new URL(request.url).pathname)) {
+			return Response.json({ error: 'not found' }, { status: 404 })
+		}
+		return handleDirectIngestRequest(request, { repositories: env.repositories, queue: env.ingestQueue })
 	},
-})
+	'source-map-upload': ({ request, env }) => handleSourceMapUploadRequest(request, { repositories: env.repositories, artifacts: env.payloads }),
+}, { onError })
 
-async function privateOperatorRoute(request: Request, ctx: OperationsAppContext, next: () => Promise<Response>): Promise<Response> {
-	if (isPublicIngress(new URL(request.url), ctx.env.publicHost)) return notFound()
-	const result = await ctx.env.iam.authenticate(request)
+/** Every other host: the private network, which only Control and the platform's liveness probe dial. */
+const privateService = serveService<'health' | 'rpc' | 'catalog-reconcile' | 'release-reconcile', OperationsAppEnv>(OPERATIONS_PRIVATE_SERVICE, {
+	'health': () => Response.json({ status: 'ok' }),
+	'rpc': operatorRpc,
+	'catalog-reconcile': ({ request, env }) => handleOperationsCatalogRequest(request, { repositories: env.repositories, syncKey: env.syncKey }),
+	'release-reconcile': ({ request, env }) => handleOperationsReleaseRequest(request, { repositories: env.repositories, syncKey: env.syncKey }),
+}, { onError })
+
+/**
+ * Operations as the same runtime-neutral service on Workers and Bun. The request's host picks the table: the public
+ * hostname is served only `OPERATIONS_PUBLIC_SERVICE`, anything else only `OPERATIONS_PRIVATE_SERVICE`.
+ */
+export const operationsApp: FabrikaApp<OperationsAppEnv> = {
+	fetch(request, env, exec) {
+		const service = isPublicIngress(new URL(request.url), env.publicHost) ? publicService : privateService
+		return service.fetch(request, env, exec)
+	},
+}
+
+/** The injected token, verified locally; every procedure then authorizes itself. */
+async function operatorRpc({ request, env }: { readonly request: Request; readonly env: OperationsAppEnv }): Promise<Response> {
+	const result = await env.iam.authenticate(request)
 	if (!result.ok) {
 		const type = result.status === 401 ? 'auth' : result.status === 403 ? 'forbidden' : 'error'
 		return Response.json({ error: { type, message: 'authentication required' } }, { status: result.status })
 	}
-	ctx.auth = result.context
-	return next()
-}
-
-function directIngest(ctx: OperationsAppContext): Promise<Response> {
-	const url = new URL(ctx.request.url)
-	if (!isPublicIngress(url, ctx.env.publicHost) || !INGEST_PATH.test(url.pathname)) {
-		return Promise.resolve(notFound())
-	}
-	return handleDirectIngestRequest(ctx.request, {
-		repositories: ctx.env.repositories,
-		queue: ctx.env.ingestQueue,
-	})
-}
-
-function sourceMapUpload(ctx: OperationsAppContext): Promise<Response> {
-	if (!isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)) {
-		return Promise.resolve(notFound())
-	}
-	return handleSourceMapUploadRequest(ctx.request, {
-		repositories: ctx.env.repositories,
-		artifacts: ctx.env.payloads,
-	})
-}
-
-function catalogReconcile(ctx: OperationsAppContext): Promise<Response> {
-	if (isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)) {
-		return Promise.resolve(notFound())
-	}
-	return handleOperationsCatalogRequest(ctx.request, {
-		repositories: ctx.env.repositories,
-		syncKey: ctx.env.syncKey,
-	})
-}
-
-function releaseReconcile(ctx: OperationsAppContext): Promise<Response> {
-	if (isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)) {
-		return Promise.resolve(notFound())
-	}
-	return handleOperationsReleaseRequest(ctx.request, {
-		repositories: ctx.env.repositories,
-		syncKey: ctx.env.syncKey,
-	})
+	const ctx: OperationsRpcContext = { env, request, auth: result.context }
+	return dispatchRpcRequest({ router: operationsRpcRouter, ctx, request })
 }
 
 function isPublicIngress(url: URL, publicHost: string): boolean {
 	return publicHost !== '' && url.hostname.toLowerCase() === publicHost.toLowerCase()
-}
-
-function notFound(): Response {
-	return Response.json({ error: 'not found' }, { status: 404 })
 }
