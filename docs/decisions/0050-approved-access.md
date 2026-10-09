@@ -41,7 +41,10 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 - A commit without `fabrika.contract.ts` has a snapshot without a contract. Dropping the contract from a
   commit is a widening.
 - An application without a contract is approved by its **artifact access**: its gates and IAM schema
-  (`ArtifactAccess`, `artifactAccessDigest` in `@fabrika/auth-core`). The snapshot holds it. Every change
+  (`ArtifactAccess`, `artifactAccessDigest` in `@fabrika/auth-core`). The snapshot holds it. The digest is
+  over `canonicalArtifactAccess`: catalogs (scopes, actions) are sorted by identifier and sets (permissions,
+  assigners, link grants, OAuth scopes) by value; gate rules keep their order, which is precedence. A list
+  that repeats an identifier is refused, not sorted. Every change
   from the approved one is a widening, a removal included, so the first deploy to a protected
   environment waits, and so does a contract removed (1 → 0). A provider receives the approved digest
   (`ProviderEnvironment.artifactAccess`). It applies an artifact's gates and schema only when they hash to
@@ -52,7 +55,8 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
   so a run that classified the old one classifies again.
 - On Cloudflare the access is known only once the runner loads the config. A run without a contract
   publishes the approved artifact access unchanged. The job carries its digest and the protection. The
-  executor hashes the config's gates and schema. On a protected mismatch it stops before provisioning
+  executor reads the config's gates and schema once, before `resources()` runs, and hashes that frozen copy;
+  the proxy, the report and the IAM schema all come from it. On a protected mismatch it stops before provisioning
   and reports them. Control fails that run and creates a new run, parked in `awaiting_approval` with
   that access as its candidate. A new run, so the runner never sees a run id twice. Approving it
   deploys with the approved digest. Otherwise the deploy reports what it applied. IAM applies only a
@@ -70,7 +74,9 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
   `configureBinding` cannot overwrite the digest.
 - The snapshot is logged before the run's secrets are known, so redaction cannot cover it. Its log
   lines carry fixed codes and counts only, never a name from the checkout. The change lines stay in
-  the classification the approval page shows.
+  the classification the approval page shows. For artifact access they cover every field of the IAM
+  schema: each entry type has a field table the compiler holds complete (`IAM_SCHEMA_FIELDS`), and a
+  change no field describes still shows as a change.
 - A run records its actor as `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`.
 - `approvals.complete` approves or refuses; a refused run fails. The protected flag changes through
   `apps.environments.protect`. A parked run can be cancelled.
@@ -111,6 +117,16 @@ both values, so a run that classified under the old flag also loses. A registry 
 `generation` too. The counters are monotonic per `<app>@<env>` and survive deletion (section 4).
 `apps.environments.put`, `apps.environments.delete` and `apps.delete` apply only while the environment
 is at the generation they read, so a protection change between their check and their write refuses them.
+A refused put commits nothing, its namespace claims included.
+
+Every write of an `<app>@<env>` — create, put, delete, protection change, publication — first ensures
+the coordinates' `app_env_protection` row and locks it, and only then reads the tombstone or the
+environment. A write that may create an environment, and an application's deletion, lock the `apps`
+row first. On Postgres concurrent writes of one environment therefore run one after another; SQLite
+and D1 run one batch at a time anyway.
+
+A protection change takes the environment's deployment lease and is refused (409) while a run holds it
+or is still `running` without it: a job deploys what the flag allowed when it started.
 
 A run that loses the compare-and-swap is classified again against the new active snapshot. This holds
 while the run waits and after it is approved. An approval is valid only for the baseline digest it

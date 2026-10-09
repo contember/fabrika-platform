@@ -34,8 +34,10 @@ this one import.
   `cloudflareRunnerJobSchema` parses the contract and checks its digest. The runner writes it to
   `<workspace>/<runId>.access.json` beside the checkout and names it in `FABRIKA_APPROVED_ACCESS_FILE`, set after
   every job-supplied name; the executor reads it (`readApprovedAccess`) before the config runs. Unset outside a
-  runner (a local deploy). The executor hashes the config's gates and schema (`configArtifactAccess`, parsed with
-  the same schemas Control uses, so the digests agree); a protected mismatch writes a `pending` report and throws
+  runner (a local deploy). The executor reads the config's gates and schema ONCE, before `resources()` runs the
+  checkout's code (`configArtifactAccess`: parsed with the same schemas Control uses, canonical and deep-frozen, so
+  the digests agree). The proxy, the report and the IAM schema all come from that value; never read
+  `config.gates` or `config.schema` after it. A protected mismatch writes a `pending` report and throws
   before provisioning, and a finished deploy reports `deployed`. The runner keeps a `pending` report of a failed run.
 - **Every framework variable of each generated config is the platform's** (`assertFrameworkVariables` in
   `src/bounds.ts`, before provisioning and before each deploy): a binding's `configureBinding` writes the config

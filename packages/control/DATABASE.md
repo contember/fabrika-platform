@@ -53,8 +53,16 @@ lifecycle stay in `CLAUDE.md`.
   or its app writes the `protected` flag and the counters there, `generation` advanced, in the delete's own batch;
   inserting an environment seeds all three from it. Recreation therefore never resets the publication
   compare-and-swap. Never add an `ON DELETE CASCADE` or a delete of it.
-- **A registry write is conditional on what it read** (`AppEnvExpectation`): an update locks the row at its read
-  `generation` first, then writes; namespace claims follow the update, guarded by the state it wrote.
+- **Every write of an environment takes its coordinate lock first** (`src/db/coordinate-lock.ts`): it ensures the
+  `app_env_protection` row (`INSERT … ON CONFLICT DO NOTHING`), locks it (`UPDATE … SET generation = generation`,
+  the portable row lock), and only then reads the tombstone or `app_envs`. That covers registry put, delete and
+  protection change and both publication writes in `runs.ts`. A write that may create an environment, and
+  `deleteApp`, lock the `apps` row before it. Keep the order: `deploy_locks` lease row, `apps` row, protection rows,
+  `app_envs` rows. A new writer of `app_envs` takes the same lock.
+- **A registry write is conditional on what it read** (`AppEnvExpectation`). A lost expectation fails the whole
+  batch, so nothing of the write commits, its namespace claims included: an absent-expected put is a plain insert
+  that fails on the key; a generation-expected put first inserts a duplicate of the locked protection row when the
+  generation differs. `expectedWrite` turns the failure into `AppEnvChangedError`.
 - **The Bun migration wrapper owns `control_schema_migrations`, bundle `control`, and advisory lock
   `4471902583`.** Bundle and filename form the migration identity; see ADR-0017.
 

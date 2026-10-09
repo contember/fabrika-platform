@@ -354,7 +354,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   Deleting a protected environment, or an app with one, takes the same human (`requireHumanForProtectedDelete`,
   over `RegistryUseCaseContext.admission`). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an
-  in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise).
+  in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise), and
+  every write of an environment takes its coordinate lock first (`DATABASE.md`). `apps.environments.protect` takes
+  the environment's deployment lease and answers 409 while a run holds it or is still `running`.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 
