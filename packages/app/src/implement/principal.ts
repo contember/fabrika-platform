@@ -1,6 +1,6 @@
 // Who called: the caller kind a verified token presents, and the principal a handler sees for it.
 
-import { type AccessTokenClaims, APP_CALLER_PREFIX, type Caller, callerOf } from '@fabrika/auth-core'
+import { type AccessTokenClaims, APP_CALLER_PREFIX, type Caller, callerOf, OAUTH_CALLER } from '@fabrika/auth-core'
 
 /** A person: the IAM session, or a `px_` key bound to a user principal. */
 export interface UserPrincipal {
@@ -52,6 +52,8 @@ export function presentedBy(claims: AccessTokenClaims): Presented | null {
 			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
 		case 'link':
 			return { caller, principal: { kind: 'link', credentialId: claims.sub } }
+		// An OAuth token reaches only an installation entry, which no application serves.
+		case OAUTH_CALLER:
 		case null:
 			return null
 		default:
