@@ -120,8 +120,10 @@ needed only when there is no app config. Platform commands load the provider's
   `Sec-Fetch-Site` and content-type checks; Control reads no `Origin`, and IAM's `/admin/*` is bearer-only).
   `docs/reference/overview.md` defines all three; keep the vocabulary.
   Every manifest entry is an endpoint table: a contract application's, or an installation service's. The
-  most specific endpoint wins, with no fall-through, and the service serves only the endpoint id the proxy
-  sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3). Only an entry that platform composition marks
+  most specific endpoint wins, with no fall-through, and a credentialed row is served only under the endpoint
+  id the proxy sets in `X-Fabrika-Endpoint` (ADR-0022 rules 3 and 5). An installation service's `protocol`
+  and `health` rows ignore that header, because they authenticate themselves and also arrive unfronted —
+  so does a private gateway hop that still carries the console's endpoint id. Only an entry that platform composition marks
   `installation: true` may use the installation-only forms (`protocol`, `service`, method `*`, caller
   `oauth`, requirement `authenticated`); never let an application declare one.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
