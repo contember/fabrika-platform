@@ -1107,8 +1107,8 @@ buckets its collision-refusing import created in the environment's stored target
 them into that variable.
 
 The build container has no database, so a contract application's start script runs `fabrika db migrate`, then
-`fabrika db codegen --verify`, then the server: a stale committed `schema.generated.ts` fails the readiness
-check.
+`fabrika db codegen --verify`, then `fabrika db test-isolation`, then the server: a stale committed
+`schema.generated.ts` or a generated isolation case that did not pass fails the readiness check.
 
 ## Alpine custom runtime
 

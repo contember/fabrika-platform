@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { checkApplication } from '../check'
-import { readTablesSource } from '../contract'
 import type { Finding, RuleId } from '../finding'
-import { isolationTests } from '../scaffold'
+import { generatedTests, scaffoldInputs } from '../scaffold'
 
 export const check = (files: Readonly<Record<string, string>>): Promise<Finding[]> =>
 	checkApplication({ root: '/application', files: new Map(Object.entries(files)) })
@@ -43,17 +42,21 @@ export interface DB {
 export const columns = { notes: ['id', 'workspace_id', 'title'] } as const satisfies ColumnList<DB>
 `
 
-const CLEAN_TABLE_FILES = new Map([
+const CLEAN_SOURCES = new Map([
+	['fabrika.contract.ts', CLEAN_CONTRACT],
+	['src/schemas/notes.ts', CLEAN_SCHEMAS],
 	['src/db/tables.ts', CLEAN_TABLES],
 	['src/db/schema.generated.ts', CLEAN_SCHEMA_GENERATED],
 ])
 
-/** What `fabrika db test-scaffold` writes for the clean tables: the isolation test of `notes`. */
-export const CLEAN_ISOLATION_TESTS: ReadonlyMap<string, string> = await isolationTests(readTablesSource(CLEAN_TABLE_FILES))
+const cleanInputs = scaffoldInputs(CLEAN_SOURCES)
+
+/** What `fabrika db test-scaffold` writes for the clean application, by path. */
+export const CLEAN_GENERATED_TESTS: ReadonlyMap<string, string> = new Map(
+	[...(await generatedTests(cleanInputs.policies, cleanInputs.artifact))].map(([path, test]) => [path, test.text]),
+)
 
 export const CLEAN_APPLICATION: Readonly<Record<string, string>> = {
-	'fabrika.contract.ts': CLEAN_CONTRACT,
-	'src/schemas/notes.ts': CLEAN_SCHEMAS,
-	...Object.fromEntries(CLEAN_TABLE_FILES),
-	...Object.fromEntries(CLEAN_ISOLATION_TESTS),
+	...Object.fromEntries(CLEAN_SOURCES),
+	...Object.fromEntries(CLEAN_GENERATED_TESTS),
 }

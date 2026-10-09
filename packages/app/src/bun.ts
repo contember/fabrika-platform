@@ -21,6 +21,8 @@ import { captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
 import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
 
+export { markProductionProcess } from '@fabrika/db/production'
+
 export interface ManagedBunHandlerOptions {
 	/** Required sink for rejected background tasks. Do not log raw errors or secret-bearing values. */
 	onBackgroundError(error: unknown): void

@@ -83,7 +83,7 @@ describe('the generated execution descriptor of a contract application', () => {
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
-					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'sh /var/www/fabrika/migrate.generated.sh' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
+					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'sh /var/www/fabrika/migrate.generated.sh' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db test-isolation' 'exec bun fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
 				deployFiles: ['./'],
 				cache: ['node_modules'],
@@ -117,7 +117,7 @@ describe('the generated execution descriptor of a contract application', () => {
 		const commands = mapping(render(await compile(contractApp()))['build'])['buildCommands']
 		const start = Array.isArray(commands) ? commands.find((command) => String(command).includes('start.generated.sh')) : undefined
 		expect(String(start)).toMatch(
-			/'set -eu' 'cd \/var\/www' 'sh \/var\/www\/fabrika\/migrate\.generated\.sh' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'exec bun /,
+			/'set -eu' 'cd \/var\/www' 'sh \/var\/www\/fabrika\/migrate\.generated\.sh' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes \S+ db test-isolation' 'exec bun /,
 		)
 	})
 

@@ -62,11 +62,16 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   framework's tables (`@fabrika/db/migrations`, bundle `fabrika`) before `db/migrations/`.
 - `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema;
   `--verify` writes nothing and fails when the file differs.
-- `db test-scaffold` writes `@fabrika/check`'s `isolationTests` of the policies the static reader reads from
-  `src/db/tables.ts` (the checker's own read) and deletes the generated test of a table that is gone; a hand-written
-  test is never touched. It connects to nothing. `src/__tests__/fixtures/isolation-app/` is an application whose
+- `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own
+  read of the contract and `src/db/tables.ts`) and deletes a generated test it no longer writes; a hand-written test
+  is never touched. It connects to nothing. `src/__tests__/fixtures/isolation-app/` is an application whose
   generated tests are committed and run with this package's suite; `db.test.ts` fails when they differ from what the
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
+- `db test-isolation` is the platform's run of them (the Zerops start script): the files must equal the scaffold's
+  output, then `bun --config=<empty> test <files> --reporter=junit` runs them on `FABRIKA_APP_DATABASE_URL` with
+  `FABRIKA_TEST_POSTGRES_REQUIRED=1` and no framework variable, and every case name the scaffold wrote must be
+  reported as passed (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never applies. Its output
+  has the URL cut out.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message or a server-reported
   Postgres error; any other driver error is replaced, because it may quote the URL.

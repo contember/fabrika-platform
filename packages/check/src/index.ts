@@ -2,4 +2,4 @@ export { type ApplicationTree, checkApplication, type CheckInput, readApplicatio
 export { type Finding, formatFinding, RULE_IDS, type RuleId } from './finding'
 export { CONTRACT_FILE, GENERATED_ENTRY_FILE, MIGRATIONS_DIR, TABLES_FILE, ZEROPS_FILES } from './layout'
 export { GENERATED_TEST_HEADER, generatedTestHeader } from './rules/tests'
-export { ISOLATION_TESTS_DIR, isolationTestBody, isolationTestPath, isolationTests } from './scaffold'
+export { ENDPOINT_ACCESS_TEST, type GeneratedTest, generatedTests, POLICY_TESTS_DIR, policyTestPath, scaffoldInputs } from './scaffold'

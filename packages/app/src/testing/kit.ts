@@ -21,6 +21,7 @@ import {
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
+import { refuseInProduction } from '@fabrika/db/production'
 import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
@@ -97,6 +98,7 @@ function stripClientAsserted(headers: Headers): void {
 
 /** Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`. */
 export function testKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
+	refuseInProduction('@fabrika/app/testing')
 	const name = app.contract.vocabulary.app
 	const appId = `${name}@${TEST_ENVIRONMENT}`
 	const host = `${name}.test`

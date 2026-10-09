@@ -19,16 +19,16 @@ import { type ImportMappings, readImportMappings } from './resolution'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkClientIdentity } from './rules/identity'
-import { checkIsolationTests } from './rules/isolation'
+import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
 import { checkMigrationNames } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode } from './rules/runtime'
-import { checkGeneratedTest, checkTestNode } from './rules/tests'
+import { checkGeneratedTest, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
-import { checkTrustedResolution } from './trust'
+import { BUNFIG_FILE, checkTrustedResolution } from './trust'
 
 export interface CheckInput {
 	/** The application's root directory. */
@@ -121,10 +121,13 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const literal = checkLiteralGraph([CONTRACT_FILE, TABLES_FILE], graph)
 	findings.push(...literal)
 	const contract = modules.get(CONTRACT_FILE)
-	if (contract !== undefined && literal.length === 0) findings.push(...checkContractRead(graph))
+	const contractRead = contract !== undefined && literal.length === 0 ? checkContractRead(graph) : []
+	findings.push(...contractRead)
 	if (contract !== undefined) findings.push(...checkClientIdentity(contract, graph))
-	findings.push(...(await checkIsolationTests(tree.files, literal.length === 0 && trust.length === 0)))
+	findings.push(...(await checkGeneratedTests(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0)))
 	findings.push(...checkMigrationNames(checkedPaths))
+	const bunfig = tree.files.get(BUNFIG_FILE)
+	if (bunfig !== undefined) findings.push(...checkTestSuiteConfig(bunfig))
 	const jobs = contract === undefined ? [] : contractJobs(contract, graph)
 	for (const name of ZEROPS_FILES) {
 		const text = tree.files.get(name)

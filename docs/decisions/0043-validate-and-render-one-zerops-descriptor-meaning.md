@@ -81,10 +81,11 @@ named like a trusted one, an `exports` map in the root manifest, a `bunfig` `pre
 spelling, a test preload outside the checked files, `tsconfig` `paths` and `declare module '@fabrika/*'`.
 The checker version is pinned and recorded in the run's snapshot.
 
-The build has no database. The migrations and the verification of the committed schema types therefore
-run at container start: the start script runs `fabrika db migrate`, then `fabrika db codegen --verify`
-against the application's real schema, then the server, under `set -eu`. A stale `schema.generated.ts`
-leaves nothing that answers the readiness check, and the previous version keeps serving.
+The build has no database. The migrations, the verification of the committed schema types and the
+generated isolation tests therefore run at container start: the start script runs `fabrika db migrate`, then
+`fabrika db codegen --verify` against the application's real schema, then `fabrika db test-isolation` on a
+throwaway schema, then the server, under `set -eu`. A stale `schema.generated.ts` or a generated case that
+did not pass leaves nothing that answers the readiness check, and the previous version keeps serving.
 
 The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).

@@ -158,6 +158,8 @@ export const checkModuleReferences = (
 			}
 			const resolution = resolveRelative(exists, file, specifier)
 			if (resolution.kind === 'file') testOnly(reference, resolution.path)
+			// A directory import loads its index, and an ambiguous one may load any candidate.
+			else if (resolution.kind !== 'missing') { for (const path of resolution.paths) testOnly(reference, path) }
 			const packageEntry = resolution.kind === 'directory' && resolution.paths.some((path) => path.endsWith('/package.json'))
 			if (resolution.kind === 'ambiguous' || packageEntry) {
 				const what = packageEntry
@@ -186,7 +188,12 @@ export const checkModuleReferences = (
 			}
 			// Mapping targets are relative to the root, where both package.json and tsconfig.json live.
 			const mapped = target.startsWith('/') ? undefined : joinRelative('package.json', target)
-			if (mapped !== undefined) testOnly(reference, mapped)
+			if (mapped !== undefined) {
+				const resolved = resolveRelative(exists, 'package.json', `./${mapped}`)
+				if (resolved.kind === 'file') testOnly(reference, resolved.path)
+				else if (resolved.kind !== 'missing') { for (const path of resolved.paths) testOnly(reference, path) }
+				else testOnly(reference, mapped)
+			}
 			const problem = containmentProblem(mapped)
 			if (problem !== undefined) {
 				report(node, 'unchecked-import', `'${specifier}' is mapped to '${target}', which ${problem}`, 'a mapping onto a module inside the application')

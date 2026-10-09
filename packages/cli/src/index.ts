@@ -25,7 +25,7 @@ Usage:
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
   fabrika control <key|apps|namespaces|register|deploy|runs> [options]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
-  fabrika db <new|migrate|codegen|test-scaffold> [options]
+  fabrika db <new|migrate|codegen|test-scaffold|test-isolation> [options]
   fabrika job run <name>
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().

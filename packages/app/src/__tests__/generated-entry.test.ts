@@ -10,7 +10,7 @@ import {
 } from '@fabrika/app/build'
 import { checkApplication, CONTRACT_FILE, GENERATED_ENTRY_FILE as CHECKED_ENTRY_FILE } from '@fabrika/check'
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -57,4 +57,28 @@ describe('the generated entrypoint', () => {
 			rmSync(root, { recursive: true, force: true })
 		}
 	})
+})
+
+describe('a process the generated entrypoint serves from', () => {
+	const root = join(import.meta.dir, 'production-load')
+
+	for (const kit of ['@fabrika/db/testing', '@fabrika/app/testing', '@fabrika/app/testing/isolation']) {
+		test(`refuses ${kit} although the framework scrubbed FABRIKA_RELEASE`, async () => {
+			mkdirSync(join(root, 'fabrika'), { recursive: true })
+			writeFileSync(join(root, GENERATED_ENTRY_FILE), generatedEntry('bun'))
+			try {
+				const child = Bun.spawn(['bun', GENERATED_ENTRY_FILE], {
+					cwd: root,
+					env: { PATH: process.env['PATH'] ?? '', FABRIKA_RELEASE: 'r1', PRODUCTION_LOAD_KIT: kit },
+					stdout: 'pipe',
+					stderr: 'pipe',
+				})
+				const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
+				expect(code).not.toBe(0)
+				expect(stderr).toContain('is a test helper; this process serves an application')
+			} finally {
+				rmSync(join(root, 'fabrika'), { recursive: true, force: true })
+			}
+		})
+	}
 })

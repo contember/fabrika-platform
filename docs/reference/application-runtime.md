@@ -526,7 +526,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   403, as IAM refuses to sign it.
 - Only test files may import the kit: `@fabrika/check` reports `test-only-import`
   for `@fabrika/app/testing` (and its subpaths), `@fabrika/db/testing`, or a test
-  module, loaded from any other file.
+  module, loaded from any other file, a directory index included.
 - The proxy decision runs first, and it is production's: proxy-core's verify service
   over `contractProxyTable(kit.artifact)`, with the kit's IAM (`kit.iam`) behind it. A
   denial or a login answer reaches the test as the proxy sends it: canonical path (400),
@@ -539,39 +539,63 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   It carries the proxy's token, signed by the kit the way IAM signs, and the real
   verifier and dispatcher answer it.
 
-### The generated isolation tests
+### The generated tests
 
-`fabrika db test-scaffold` writes `src/db/__tests__/<table>.isolation.test.ts` for every
-dimension and child table of `src/db/tables.ts`, from the policies alone, and deletes
-the generated test of a table that is gone. A reference or inbox table gets none: no
-store reaches it.
+`fabrika db test-scaffold` writes two kinds of test and deletes a generated test it no
+longer writes. Both run only for an application on `@fabrika/db`, and both open a test
+database with `@fabrika/db/testing`'s `testDatabase`: a fresh schema `app_test_<hex>`
+that the real migration runner fills from `db/migrations/`, dropped again when the
+migrations fail. Without `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip
+message and the file registers no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that
+into a failure. Every seeded row lies in one of two containment chains that share no
+value, with each container row a table owns.
 
-- Each test opens a test database with `@fabrika/db/testing`'s `testDatabase`: a fresh
-  schema `app_test_<hex>` that the real migration runner fills from `db/migrations/`.
-  Without `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and registers
-  no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The module
-  refuses to load when `FABRIKA_RELEASE` is set.
-- `@fabrika/app/testing/isolation`'s `isolationKit(contract, tables, table, postgres)`
-  serves the table through a probe contract over the application's own vocabulary,
-  booted by `testKit` on a data layer of its own. A request takes the production path;
-  only the handler is the kit's. Every attempt seeds two fresh rows in containment
-  chains that share no value, with each container row a table owns, and asks as a
-  caller holding every action of the table in the grant dimension of one of them: a
-  dimension table's container, or its own dimension at the top; a child's parent's.
-- The cases: the own row is read, updated and removed, and a list and a count reach
-  it alone; the other row is 404 for get, update and remove; insert into the other
-  scope is 403; a child row is also 404 through the caller's own parent with the other
-  key; a `Ref` for the read action is refused by update and remove; a column with its
-  own read action is never returned. Insert into a top-level table is checked only for
-  the other scope: the `in` form answers 404 for an object that does not exist yet.
-- `move` has no case: an access form hands a handler one capability, and a move needs
-  the source and the target `Ref`.
-- `@fabrika/check` regenerates the tests from the policies it reads statically. A test
-  whose content differs from its header hash, a missing one, one written for another
-  policy and a generated test of no table are `generated-test-hash` findings. The fixture
-  fills a required column the test does not name with a sample of its type; a required
-  foreign key outside the containment chain cannot be filled, so such a column needs a
-  default or must be nullable.
+- **Policy isolation tests**, `src/db/__tests__/<table>.policy-isolation.test.ts` for
+  every dimension and child table, from the policies alone. They prove that the data
+  layer enforces the declared policy, not that the application uses it:
+  `policyIsolationKit` serves the table through a probe contract over the
+  application's vocabulary, booted by `testKit` on a data layer of its own, so a request
+  takes the production path and only the handler is the kit's. The caller holds every
+  action of the table in the grant dimension of one row: a dimension table's container,
+  or its own dimension at the top; a child's parent's. The cases: the own row is read,
+  updated and removed, and a list and a count reach it alone; the other row is 404 for
+  get, update and remove; insert into the other scope is 403; a child row is also 404
+  through the caller's own parent with the other key; a `Ref` for the read action is
+  refused by update and remove; a column with its own read action is never returned.
+  Insert into a top-level table is checked only for the other scope: the `in` form
+  answers 404 for an object that does not exist yet.
+- **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
+  contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
+  export) through `testKit`, on the application's own data layer, once: that layer
+  binds once per process. For every procedure with an `on` or `in` access form, a
+  caller holding the action in one scope names the other scope's object or value and
+  gets 404 (`on`) or 403 (`in`). For every `on` and `over` procedure, a caller of the
+  other scope asks first, then a caller of one scope asks for its own; the second answer
+  must be a 200 that holds no key or scope value of the other scope's rows. The input is a fixed
+  literal of the input schema, written into the test; an endpoint whose schema the
+  scaffold cannot sample (a `regex`) gets no case and a comment saying so. `deps` runs
+  with an empty environment.
+- **What neither kind catches:** an application bug that needs other data or another
+  order of requests, such as a handler-level cache keyed by something the test does not
+  vary. The kits refuse to load or run in a process the generated entrypoint started
+  (`markProductionProcess`), whatever the environment says.
+- **`move` has no case yet.** An access form hands a handler one capability, and a move
+  needs the source and the target `Ref`, so no handler can call `t.move`.
+- `@fabrika/check` regenerates every generated test from the contract and policies it
+  reads statically and compares the files byte for byte: a missing, edited or replaced
+  one (header or not) and a generated test the scaffold no longer writes are
+  `generated-test-hash` findings. `bunfig.toml` may not set `[test] root`,
+  `pathIgnorePatterns` or `retry` (`skipped-test`).
+- **The platform runs them** at container start on Zerops, after `fabrika db migrate`
+  and `fabrika db codegen --verify` (the build has no database): `fabrika db
+  test-isolation` runs exactly the generated files with an empty `bunfig.toml`, so no
+  preload or root of the application applies, against a throwaway schema of the
+  application's database, and fails unless every case name the scaffold wrote is
+  reported as passed in the JUnit report. A failure leaves nothing to answer the
+  readiness check.
+- The seeding fills a required column it does not place with a sample of its type; a
+  required foreign key outside the containment chain cannot be filled, so such a column
+  needs a default or must be nullable.
 
 ## What the platform writes into an application
 

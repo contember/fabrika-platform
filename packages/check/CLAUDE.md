@@ -34,27 +34,30 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
   `files` means no policies. `readContractSource` uses it unless `tables` (the artifact form) is given.
 
-| Module              | What it owns                                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `check.ts`          | `checkApplication`, the disk reader, and the order the rules run in.                                   |
-| `ast.ts`            | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.      |
-| `graph.ts`          | The one static resolver: what a name denotes through consts, imports and exports, without executing.   |
-| `layout.ts`         | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.     |
-| `references.ts`     | Every way a module names another, and which names a direct load takes.                                 |
-| `resolution.ts`     | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
-| `trust.ts`          | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
-| `jsonc.ts`          | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
-| `toml.ts`           | The TOML subset `bunfig.toml` is read in, keys decoded as Bun decodes them; anything else is refused.  |
-| `limits.ts`         | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
-| `finding.ts`        | The rule ids, the `Finding` shape and its one-line format.                                             |
-| `rules/literal.ts`  | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
-| `rules/contract.ts` | What the reader refuses, run by the checker once the literal rule passes.                              |
-| `rules/*.ts`        | One file per rule group.                                                                               |
-| `contract.ts`       | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.          |
-| `reader/value.ts`   | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                 |
-| `reader/schema.ts`  | Each `z` factory and method applied to real zod, with its arguments and options checked.               |
-| `reader/surface.ts` | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.  |
-| `reader/tables.ts`  | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`. |
+| Module               | What it owns                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `check.ts`           | `checkApplication`, the disk reader, and the order the rules run in.                                   |
+| `ast.ts`             | `@babel/parser` with `typescript` + `estree` (+ `jsx` for `.tsx`/`.jsx`), and structural readers.      |
+| `graph.ts`           | The one static resolver: what a name denotes through consts, imports and exports, without executing.   |
+| `layout.ts`          | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.     |
+| `references.ts`      | Every way a module names another, and which names a direct load takes.                                 |
+| `resolution.ts`      | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
+| `trust.ts`           | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
+| `jsonc.ts`           | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |
+| `toml.ts`            | The TOML subset `bunfig.toml` is read in, keys decoded as Bun decodes them; anything else is refused.  |
+| `limits.ts`          | `CONTRACT_LIMITS`, the reader's resource budget.                                                       |
+| `finding.ts`         | The rule ids, the `Finding` shape and its one-line format.                                             |
+| `rules/literal.ts`   | D5: the contract, its schema modules and `src/db/tables.ts` are literals, across their import graph.   |
+| `rules/contract.ts`  | What the reader refuses, run by the checker once the literal rule passes.                              |
+| `rules/*.ts`         | One file per rule group.                                                                               |
+| `contract.ts`        | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.          |
+| `scaffold.ts`        | The tests `fabrika db test-scaffold` writes: policy isolation and endpoint access (`generatedTests`).  |
+| `scaffold-sample.ts` | The fixed input literal of an endpoint's schema that an endpoint access case sends.                    |
+| `rules/isolation.ts` | Every generated test is byte for byte what the scaffold writes now; none it no longer writes.          |
+| `reader/value.ts`    | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                 |
+| `reader/schema.ts`   | Each `z` factory and method applied to real zod, with its arguments and options checked.               |
+| `reader/surface.ts`  | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.  |
+| `reader/tables.ts`   | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`. |
 
 Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id; `direct-forms.test.ts` holds the
 directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
@@ -72,7 +75,7 @@ directory that no table registers fails the test.
 | `literal`                    | anything but the literal subset below in the contract graph, including every runtime import and export of its modules                                                                                                                                                                                                                                                                                                       |
 | `contract`                   | what the static reader refuses once the contract is a literal (the wrong builder or value type for a field, a hand-written mount), and a schema `describeContract` refuses                                                                                                                                                                                                                                                  |
 | `forbidden-import`           | database drivers (Kysely included), S3 clients (`aws-sdk` too), `jose`, `node:http`/`https`/`http2`/`net`/`tls`/`dgram`, `child_process`, `@fabrika/db/framework` (the framework's binding of the data layer)                                                                                                                                                                                                               |
-| `test-only-import`           | outside a test file (`*.test.*`, `*.spec.*`, `__tests__/`): a load or re-export of `@fabrika/app/testing`, directly or through an import map, and of a test module, which may load it                                                                                                                                                                                                                                       |
+| `test-only-import`           | outside a test file (`*.test.*`, `*.spec.*`, `__tests__/`): a load or re-export of `@fabrika/app/testing` (and its subpaths) or `@fabrika/db/testing`, directly, through an import map or a directory index, and of a test module, which may load it                                                                                                                                                                        |
 | `unchecked-import`           | an import outside what the checker reads: above the root, absolute or `file:`, into `node_modules`/`dist`/a dot-directory, also through an import map or `tsconfig` path; a symbolic link; a relative import with two candidates or into a directory with a `package.json`; configuration that can redirect a trusted package (below)                                                                                       |
 | `forbidden-global`           | `Bun.sql`/`SQL`/`S3Client`/`s3`/`serve`/`connect`/`listen`/`udpSocket`/`spawn`/`spawnSync`/`$`, the same from `bun` by any load or re-export, `Bun` as a bare value                                                                                                                                                                                                                                                         |
 | `raw-sql`                    | an `…sql` tagged template, `sql(…)`, `….sql.raw`/`lit`/`ref`/`id`/`table`/`val`/`join`/`unsafe`, importing `sql`                                                                                                                                                                                                                                                                                                            |
@@ -91,9 +94,9 @@ directory that no table registers fails the test.
 | `migration-name`             | a file in `db/migrations/` not named `YYYYMMDDHHMMSS_slug.sql` with a real UTC timestamp, or in a subdirectory                                                                                                                                                                                                                                                                                                              |
 | `crontab`                    | a `zerops.yaml` setup whose `run.crontab` is not exactly the contract's `c.cron` jobs with explicit, equal timings; a background `run.start`                                                                                                                                                                                                                                                                                |
 | `package-replacement`        | a trusted name (`@fabrika/*`, `zod`) as any `package.json`'s `name`, which Bun resolves to the application itself; an `exports` map in the root one; `patchedDependencies`/`overrides`/`resolutions` in a `package.json`; a non-registry specifier of `@fabrika/*` or `zod`; their `bun.lock` entry without a registry version and a `sha512-` hash; another registry in `bunfig.toml` or `.npmrc`; `declare module` of one |
-| `skipped-test`               | `.skip`, `.only`, `.todo`, `.skipIf`, `.if`, `.todoIf`, `.failing`, `xit`/`fit`/… in test files                                                                                                                                                                                                                                                                                                                             |
+| `skipped-test`               | `.skip`, `.only`, `.todo`, `.skipIf`, `.if`, `.todoIf`, `.failing`, `xit`/`fit`/… in test files; `[test] root`, `pathIgnorePatterns` or `retry` in `bunfig.toml`                                                                                                                                                                                                                                                            |
 | `test-without-assertion`     | a `test`/`it` registration (also `.concurrent`, `.each(…)(…)`) that runs no matcher on `expect(…)` and no `expect…`/`assert…` helper                                                                                                                                                                                                                                                                                        |
-| `generated-test-hash`        | a generated isolation test whose content no longer matches its header hash, or whose header is not the first line                                                                                                                                                                                                                                                                                                           |
+| `generated-test-hash`        | a generated test whose content no longer matches its header hash, or whose header is not the first line; a generated test that is missing or differs from the scaffold's output byte for byte (header or not); one the scaffold no longer writes; a contract or `src/db/tables.ts` the reader refuses                                                                                                                       |
 | `parse-error`                | a source file the parser does not accept                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## The literal subset (shared with B1)
@@ -210,6 +213,13 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   (A15) and the generated-test header `// @generated by fabrika db test-scaffold sha256:<hex>`, whose hash is the
   SHA-256 of everything after the first line (A11, `generatedTestHeader`). Change one only together with its
   producer.
+- **The scaffold and the check are one function.** `fabrika db test-scaffold` writes exactly `generatedTests` of what
+  `scaffoldInputs` reads (`readTablesSource`, and `readContractSource` against those policies), and
+  `rules/isolation.ts` compares the tree with the same call, byte for byte. The case names are what `fabrika db
+  test-isolation` requires as passed in the JUnit report, so keep them unique within a file. The output is
+  dprint-stable under this repository's configuration; an application's formatter must skip the generated files. A
+  change to the generated text, or to `@fabrika/app/testing/isolation`'s API, regenerates `packages/cli`'s fixture
+  tests in the same change.
 - **`@babel/parser` is pinned exactly (8.0.7).** It is plain JavaScript and also runs in a Worker, which B1 needs.
   A parser upgrade can move positions and change node shapes; rerun the spike fixture test.
 - **The reader evaluates no application code, and normalizes nothing itself.** It calls only zod's own builders on
@@ -232,6 +242,6 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
 - A setup in `zerops.yaml` without a `run` section is not checked for jobs; every other setup carries them all.
 - The checker runs the reader without table policies, so `buildArtifact`'s checks (unknown actions, paths, table
   links) run only where the tables are known: in Control and `compileContract`. The reader reads `src/db/tables.ts`
-  (`readTablesSource`); the checker does not compile the contract against it yet.
-- Not here yet: squawk rules and destructive-migration markers (deferred, not in v1), deletion of a generated test (A11), timers as
+  (`readTablesSource`); the checker compiles the contract against it only for the generated tests.
+- Not here yet: squawk rules and destructive-migration markers (deferred, not in v1), timers as
   job substitutes (A15), store functions that take bare ids.

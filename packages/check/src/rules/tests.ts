@@ -1,5 +1,7 @@
 import { type AstNode, child, children, type Comment, identifierName, memberPath, walk } from '../ast'
-import type { Report } from '../finding'
+import type { Finding, Report } from '../finding'
+import { isKey, parseToml } from '../toml'
+import { BUNFIG_FILE } from '../trust'
 
 const TEST_ROOTS = new Set(['test', 'it', 'describe', 'bench'])
 const NOT_RUN = new Set(['skip', 'only', 'todo', 'skipIf', 'if', 'todoIf', 'failing'])
@@ -117,4 +119,33 @@ export const checkGeneratedTest = async (text: string, comments: readonly Commen
 		'this generated test differs from what fabrika db test-scaffold wrote',
 		'the file as generated; rerun fabrika db test-scaffold after a table change',
 	)
+}
+
+/** `[test]` keys that pick other test files, skip some, or let a failing test pass on a later attempt. */
+const SUITE_NARROWING_TEST_KEYS = ['root', 'pathIgnorePatterns', 'retry'] as const
+
+/**
+ * The `bunfig.toml` of an application must not narrow its own suite. The platform's run of the generated tests ignores
+ * the file (`fabrika db test-isolation`); this keeps the application's own run whole too. A file outside the TOML
+ * subset is reported by the trust rules.
+ */
+export const checkTestSuiteConfig = (text: string): Finding[] => {
+	const document = parseToml(text)
+	if (!document.ok) return []
+	const findings: Finding[] = []
+	for (const entry of document.entries) {
+		for (const key of SUITE_NARROWING_TEST_KEYS) {
+			if (isKey(entry, 'test', key)) {
+				findings.push({
+					file: BUNFIG_FILE,
+					line: entry.line,
+					column: 1,
+					rule: 'skipped-test',
+					message: `[test] ${key} changes which tests run or whether a failure counts`,
+					allowed: 'no [test] root, pathIgnorePatterns or retry in bunfig.toml',
+				})
+			}
+		}
+	}
+	return findings
 }

@@ -40,6 +40,11 @@
 			"types": "./src/migrations.ts",
 			"default": "./src/migrations.ts"
 		},
+		"./production": {
+			"bun": "./src/production.ts",
+			"types": "./src/production.ts",
+			"default": "./src/production.ts"
+		},
 		"./codegen": {
 			"bun": "./src/codegen.ts",
 			"types": "./src/codegen.ts",

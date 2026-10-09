@@ -10,14 +10,17 @@ import { type CatalogColumn, introspectSchema } from './codegen'
 import { applicationSchema, Database } from './database'
 import type { Primitive } from './description'
 import { type Container, modelOf, type TableModel, type TableModels, tableModels, type Tables } from './policy'
+import { refuseInProduction } from './production'
 import { frameworkSideOf } from './registry'
 import type { TableProbe } from './store'
 
 export type { TableProbe } from './store'
 
+const MODULE = '@fabrika/db/testing'
+refuseInProduction(MODULE)
 const release = process.env['FABRIKA_RELEASE']
 if (release !== undefined && release !== '') {
-	throw new Error('@fabrika/db/testing is a test helper and does not load in a release (FABRIKA_RELEASE is set)')
+	throw new Error(`${MODULE} is a test helper and does not load in a release (FABRIKA_RELEASE is set)`)
 }
 
 export const TEST_POSTGRES_URL = 'FABRIKA_TEST_POSTGRES_URL'
@@ -137,6 +140,20 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 	return undefined
 }
 
+/** Runs every step even when an earlier one throws, then throws what failed. */
+async function settleAll(steps: readonly (() => Promise<void>)[]): Promise<void> {
+	const failures: unknown[] = []
+	for (const step of steps) {
+		try {
+			await step()
+		} catch (error) {
+			failures.push(error)
+		}
+	}
+	if (failures.length === 1) throw failures[0]
+	if (failures.length > 1) throw new AggregateError(failures, 'several cleanup steps failed')
+}
+
 function migrationsDirectory(migrations: string | URL): string {
 	return migrations instanceof URL ? fileURLToPath(migrations) : migrations
 }
@@ -147,6 +164,7 @@ function migrationsDirectory(migrations: string | URL): string {
  * a missing URL throws instead. The URL is a credential: no message names it.
  */
 export async function testDatabase(options: TestDatabaseOptions): Promise<TestDatabase | null> {
+	refuseInProduction(MODULE)
 	const url = process.env[TEST_POSTGRES_URL] ?? ''
 	if (url === '') {
 		if (process.env[TEST_POSTGRES_REQUIRED] === '1') {
@@ -158,13 +176,19 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	const appId = `test-${randomHex()}${randomHex()}`
 	const schema = applicationSchema(appId)
 	const migrations = definePostgresApplicationMigrations({ appId, directory: migrationsDirectory(options.migrations) })
+	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+	const dropSchema = async (): Promise<void> => {
+		await admin.unsafe(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
+	}
 	const runner = PostgresDatabase.connect(url, { max: 1 })
 	try {
 		await migrations.apply(runner)
-	} finally {
-		await runner.close()
+	} catch (error) {
+		// The runner creates the schema and its ledger before a failing migration, so a failed start leaves them behind.
+		await settleAll([() => runner.close(), dropSchema, () => admin.close()])
+		throw error
 	}
-	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+	await runner.close()
 	const database = Database.postgres({ url, schema, max: 2 })
 	let catalog: Promise<readonly CatalogColumn[]> | undefined
 
@@ -292,14 +316,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			}
 			return values
 		},
-		async close() {
-			await database.close()
-			try {
-				await admin.unsafe(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
-			} finally {
-				await admin.close()
-			}
-		},
+		close: () => settleAll([() => database.close(), dropSchema, () => admin.close()]),
 	}
 }
 
@@ -308,6 +325,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
  * has bound that layer. Every runtime check of a store applies: kind, dimension, action and the request's authority.
  */
 export function tableProbe(layer: unknown, table: string): TableProbe {
+	refuseInProduction(MODULE)
 	const side = frameworkSideOf(layer)
 	if (side === undefined) {
 		throw new TypeError('not a data layer scoped(tables) created')

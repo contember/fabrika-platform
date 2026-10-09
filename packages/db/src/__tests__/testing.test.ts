@@ -26,14 +26,11 @@ if (!hasPostgres) {
 const migrations = mkdtempSync(join(tmpdir(), 'fabrika-db-testing-'))
 writeFileSync(join(migrations, '20261009120000_init.sql'), migration)
 
-/** Loads `@fabrika/db/testing` in a child process with only `env` set and calls `testDatabase`. */
-async function inChild(env: Readonly<Record<string, string>>): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
-	const script = [
-		"const { testDatabase } = await import('@fabrika/db/testing')",
-		`const database = await testDatabase({ migrations: ${JSON.stringify(migrations)}, label: 'child.test.ts' })`,
-		"console.log(database === null ? 'null' : 'database')",
-	].join('\n')
-	const child = Bun.spawn(['bun', '-e', script], {
+type ChildResult = { readonly code: number; readonly stdout: string; readonly stderr: string }
+
+/** Runs `lines` as a Bun program in a child process with only `env` set. */
+async function runChild(lines: readonly string[], env: Readonly<Record<string, string>>): Promise<ChildResult> {
+	const child = Bun.spawn(['bun', '-e', lines.join('\n')], {
 		cwd: join(import.meta.dir, '..', '..'),
 		env: { PATH: process.env['PATH'] ?? '', ...env },
 		stdout: 'pipe',
@@ -41,6 +38,15 @@ async function inChild(env: Readonly<Record<string, string>>): Promise<{ readonl
 	})
 	const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
 	return { code, stdout, stderr }
+}
+
+/** Loads `@fabrika/db/testing` in a child process with only `env` set and calls `testDatabase`. */
+function inChild(env: Readonly<Record<string, string>>): Promise<ChildResult> {
+	return runChild([
+		"const { testDatabase } = await import('@fabrika/db/testing')",
+		`const database = await testDatabase({ migrations: ${JSON.stringify(migrations)}, label: 'child.test.ts' })`,
+		"console.log(database === null ? 'null' : 'database')",
+	], env)
 }
 
 afterAll(() => {
@@ -64,6 +70,32 @@ describe('without a test database', () => {
 		const result = await inChild({ FABRIKA_RELEASE: 'r1' })
 		expect(result.code).not.toBe(0)
 		expect(result.stderr).toContain('does not load in a release (FABRIKA_RELEASE is set)')
+	})
+})
+
+describe('in a process that serves an application', () => {
+	test('the kit refuses to load once the process is marked, whatever the environment says', async () => {
+		const result = await runChild([
+			"const { markProductionProcess } = await import('@fabrika/db/production')",
+			'markProductionProcess()',
+			"await import('@fabrika/db/testing')",
+		], {})
+		expect(result.code).not.toBe(0)
+		expect(result.stderr).toContain('@fabrika/db/testing is a test helper; this process serves an application')
+	})
+
+	test('a kit loaded before the mark refuses to run after it', async () => {
+		const result = await runChild([
+			"const { testDatabase, tableProbe } = await import('@fabrika/db/testing')",
+			"const { markProductionProcess } = await import('@fabrika/db/production')",
+			'markProductionProcess()',
+			'const refused = (run) => { try { run(); return false } catch (error) { return String(error).includes("serves an application") } }',
+			`const database = await testDatabase({ migrations: ${
+				JSON.stringify(migrations)
+			}, label: 'child.test.ts' }).then(() => false, (error) => String(error).includes('serves an application'))`,
+			"console.log(JSON.stringify([database, refused(() => tableProbe({}, 'notes'))]))",
+		], {})
+		expect(result).toMatchObject({ code: 0, stdout: '[true,true]\n' })
 	})
 })
 
@@ -102,6 +134,21 @@ describe.skipIf(!hasPostgres)('a test database on Postgres', () => {
 			expect(namespaces).toEqual([])
 		} finally {
 			await sql.close()
+		}
+	})
+
+	test('a migration that fails leaves no schema behind', async () => {
+		const failing = mkdtempSync(join(tmpdir(), 'fabrika-db-testing-failing-'))
+		writeFileSync(join(failing, '20261009120000_partial.sql'), 'CREATE TABLE partial (id TEXT); SELECT * FROM missing_a11_table;')
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const schemas = async (): Promise<unknown> => sql.unsafe("SELECT nspname FROM pg_namespace WHERE nspname LIKE 'app_test_%' ORDER BY nspname")
+		try {
+			const before = await schemas()
+			await expect(testDatabase({ migrations: failing, label: 'failing.test.ts' })).rejects.toThrow()
+			expect(await schemas()).toEqual(before)
+		} finally {
+			await sql.close()
+			rmSync(failing, { recursive: true, force: true })
 		}
 	})
 

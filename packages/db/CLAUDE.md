@@ -34,6 +34,8 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | `migrations.ts`       | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
 | `codegen.ts`          | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                                         |
 | `testing.ts`          | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
+| -------------------   | -------------------------------------------------------------------------------------------------------------------------                      |
+| `production.ts`       | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                        |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
@@ -54,7 +56,9 @@ built yet: a store for `reference` tables, and reading an inbox.
 `testDatabase` migrates a fresh `app_test_<hex>` schema through `@fabrika/platform-node`'s application runner, or
 answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
 chains that share no value, every container row a table owns first; `tableProbe` reaches one table of a layer by
-name. `@fabrika/app/testing/isolation` builds the requests on them.
+name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them.
+There is no generated `move` case yet: an access form hands a handler one capability, and `t.move` needs the source
+and the target `Ref`, so no handler can call it.
 
 ## Invariants
 
@@ -73,9 +77,11 @@ name. `@fabrika/app/testing/isolation` builds the requests on them.
   `probe`, which calls the same internals as `DimensionTable` and `ChildTable` (`insertIntoDimension`,
   `objectPredicate`, …), so kind, dimension, action and the authority run on every call. It exists for the generated
   tests, which address a table by name; add no operation to it that a store does not have.
-- **`@fabrika/db/testing` is for test files only.** It refuses to load when `FABRIKA_RELEASE` is set, and
-  `@fabrika/check`'s `test-only-import` refuses it outside a test file: it seeds rows past the data layer, through a
-  raw connection of its own. Its seeding fills a required column it does not place with a sample of the column's type,
+- **`@fabrika/db/testing` is for test files only.** It refuses to load or run once `markProductionProcess` ran (the
+  generated entrypoint calls it before it imports the application, and nothing unmarks it), and when `FABRIKA_RELEASE`
+  is set; the mark is what holds after the framework scrubbed `FABRIKA_*` from the process. `@fabrika/check`'s
+  `test-only-import` refuses it outside a test file: it seeds rows past the data layer, through a raw connection of
+  its own. A test database whose migrations fail drops its schema, and `close` runs every cleanup step. Its seeding fills a required column it does not place with a sample of the column's type,
   and refuses a type codegen refuses.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.

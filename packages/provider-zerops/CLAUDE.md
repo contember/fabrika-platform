@@ -115,8 +115,9 @@ bun test
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
   the checker fetched by THIS package's version (`FABRIKA_CHECK_VERSION`), `tsc` with the platform tsconfig and
   the scripts. Keep the tests before every step that produces or checks what deploys. The start script runs
-  `fabrika db migrate`, then `fabrika db codegen --verify`, then `exec`s the server, so a failed migration or a
-  stale `schema.generated.ts` fails the httpGet readiness check whether or not a failed `initCommands` stops
+  `fabrika db migrate`, then `fabrika db codegen --verify`, then `fabrika db test-isolation` (the generated tests on
+  a throwaway schema), then `exec`s the server, so a failed migration, a stale `schema.generated.ts` or a generated
+  case that did not pass fails the httpGet readiness check whether or not a failed `initCommands` stops
   activation (UNVERIFIED); the build has no database. Generated file lines go through
   `printf` single-quoted: they may hold no `'` and no `$`, which is why the app id must match
   `[a-z0-9][a-z0-9-]*` and the health path is a literal path.

@@ -191,14 +191,21 @@ const migrateScript = (appId: string): readonly string[] => [
 	`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db migrate`,
 ]
 
-// The server starts only after the migrations it expects are applied and the committed schema types match the migrated
-// schema, so either failure fails the readiness check, whether or not a failed `initCommands` stops the activation (an
-// unverified platform fact). The build has no database, so this is where the types are verified.
+// The server starts only after the migrations it expects are applied, the committed schema types match the migrated
+// schema and every generated isolation test passed on a throwaway schema, so any failure fails the readiness check,
+// whether or not a failed `initCommands` stops the activation (an unverified platform fact). The build has no
+// database, so this is where the types and the generated tests run.
 const startScript = (appId: string, database: boolean): readonly string[] => [
 	'#!/bin/sh',
 	'set -eu',
 	`cd ${RUNTIME_ROOT}`,
-	...(database ? [`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`, `FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`] : []),
+	...(database
+		? [
+			`sh ${RUNTIME_ROOT}/${MIGRATE_SCRIPT}`,
+			`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db codegen --verify`,
+			`FABRIKA_APP_ID=${appId} ${FABRIKA_BIN} db test-isolation`,
+		]
+		: []),
 	'exec bun fabrika/entry.generated.ts',
 ]
 

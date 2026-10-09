@@ -24,18 +24,20 @@ export function generatedEntry(runtime: EntryRuntime): string {
 		case 'bun':
 			return [
 				HEADER,
-				"import { serveContract } from '@fabrika/app/bun'",
+				"import { markProductionProcess, serveContract } from '@fabrika/app/bun'",
 				'',
-				'// The application is imported only after the framework took its variables out of the process.',
+				'// The test kits refuse to load from here on; the application is imported only after the framework took its variables.',
+				'markProductionProcess()',
 				"await serveContract(() => import('../src/app'), process.env)",
 				'',
 			].join('\n')
 		case 'cloudflare':
 			return [
 				HEADER,
-				"import { createContractWorker } from '@fabrika/app/cloudflare'",
+				"import { createContractWorker, markProductionProcess } from '@fabrika/app/cloudflare'",
 				'',
-				'// The application is imported only after the framework took its variables out of the process.',
+				'// The test kits refuse to load from here on; the application is imported only after the framework took its variables.',
+				'markProductionProcess()',
 				"export default createContractWorker(() => import('../src/app'))",
 				'',
 			].join('\n')

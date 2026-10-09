@@ -9,6 +9,8 @@ import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
 import type { ContractImplementation } from './implement/implement.js'
 
+export { markProductionProcess } from '@fabrika/db/production'
+
 /** Minimal structural view of a Workers `ExecutionContext`. */
 export interface CloudflareExecutionContext extends RequestExecutionContext {
 	passThroughOnException(): void
