@@ -125,11 +125,12 @@ export function incompatibleChanges(before: ExportDescription, after: ExportDesc
 	for (const path of procedures) {
 		const old = Object.hasOwn(before.procedures, path) ? before.procedures[path] : undefined
 		const now = Object.hasOwn(after.procedures, path) ? after.procedures[path] : undefined
-		if (now === undefined) {
-			problems.push(`removes '${path}'`)
+		// A procedure the export never had is the consumer's mistake, which its own deploy is refused for.
+		if (old === undefined) {
 			continue
 		}
-		if (old === undefined) {
+		if (now === undefined) {
+			problems.push(`removes '${path}'`)
 			continue
 		}
 		if (!acceptsEveryInput(old.input, now.input)) {

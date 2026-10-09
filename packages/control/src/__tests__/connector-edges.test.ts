@@ -60,7 +60,7 @@ const digestOf = (source: string): string => {
 	return description.digest
 }
 
-const shopSource = (digest: string, app = 'catalog') =>
+const shopSource = (digest: string, app = 'catalog', procedures = "'get'") =>
 	`import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
 
@@ -74,7 +74,7 @@ export const contract = defineContract({
 		show: c.query({ input: z.strictObject({ sku: z.string() }), output: z.strictObject({ name: z.string() }), access: { action: 'shop.view', over: 'shop' } }),
 	}),
 	imports: {
-		catalog: { app: '${app}', export: 'products', version: 1, digest: '${digest}', procedures: ['get'], usedBy: ['api.show'] },
+		catalog: { app: '${app}', export: 'products', version: 1, digest: '${digest}', procedures: [${procedures}], usedBy: ['api.show'] },
 	},
 }))
 `
@@ -206,6 +206,15 @@ describe('a consumer deploy', () => {
 		expect(await deploy(w, 'shop', withoutImport)).toBe('succeeded')
 		expect(w.revoked).toEqual(['catalog@stage/app:shop'])
 		expect(Object.keys(w.deploys.at(-1)?.managedEnvironment ?? {}).filter((name) => name.startsWith('FABRIKA_CONNECT_'))).toEqual([])
+	})
+
+	test('is refused when it imports a procedure the export does not have, which then blocks no owner publish', async () => {
+		const w = await world()
+		expect(await deploy(w, 'catalog', CATALOG)).toBe('succeeded')
+		expect(await deploy(w, 'shop', shopSource(digestOf(CATALOG), 'catalog', "'get', 'doesNotExist'"))).toBe('failed')
+		expect(runLog(w)).toContain("imports 'doesNotExist', which catalog@stage does not export")
+		expect(w.issued).toEqual([])
+		expect(await deploy(w, 'catalog', CATALOG)).toBe('succeeded')
 	})
 
 	test('is refused when its vendored snapshot is not what the owner serves, or the owner exports nothing to it', async () => {

@@ -25,7 +25,8 @@ async function approvedContract(registry: Pick<Registry, 'getAppEnv'>, appId: st
 
 /**
  * Why the consumer's candidate cannot publish: an import whose owner environment does not export that version to it,
- * or whose vendored snapshot is not the owner's approved export. A consumer imports exactly what the owner serves.
+ * whose vendored snapshot is not the owner's approved export, or that names a procedure the export does not have. A
+ * consumer imports exactly what the owner serves.
  */
 export async function consumerEdgeProblems(registry: Registry, appId: string, env: string, candidate: ContractArtifact): Promise<string[]> {
 	const problems: string[] = []
@@ -37,8 +38,14 @@ export async function consumerEdgeProblems(registry: Registry, appId: string, en
 			problems.push(`${named}: ${imported.app}@${env} has approved no export ${imported.export}@${imported.version} for ${appId}`)
 			continue
 		}
-		if (exportDescription(owner, imported.export)?.digest !== imported.digest) {
+		const served = exportDescription(owner, imported.export)
+		if (served?.digest !== imported.digest) {
 			problems.push(`${named}: the vendored snapshot is not what ${imported.app}@${env} serves; run fabrika connect pull`)
+			continue
+		}
+		const missing = imported.procedures.filter((path) => !Object.hasOwn(served.procedures, path))
+		if (missing.length > 0) {
+			problems.push(`${named}: imports ${missing.map((path) => `'${path}'`).join(', ')}, which ${imported.app}@${env} does not export`)
 		}
 	}
 	return problems

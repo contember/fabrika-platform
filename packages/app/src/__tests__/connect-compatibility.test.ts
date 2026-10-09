@@ -49,8 +49,9 @@ describe('incompatibleChanges', () => {
 		expect(incompatibleChanges(before, catalog({ withList: false }), ['get'])).toEqual([])
 	})
 
-	test('a removed procedure the consumer imports is refused', () => {
+	test("a removed procedure the consumer imports is refused; one the export never had is not the owner's change", () => {
 		expect(incompatibleChanges(before, catalog({ withList: false }), ['get', 'list'])).toEqual(["removes 'list'"])
+		expect(incompatibleChanges(before, before, ['get', 'doesNotExist'])).toEqual([])
 	})
 
 	test('an output field removed, added or retyped is refused: the consumer parses every answer strictly', () => {
