@@ -20,4 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 - [MCP application authoring](sprint-2026-10-07-mcp-authoring.md) — employees author apps from Claude/ChatGPT through MCP in Control: Git workspaces, stage deploys, pull requests; Zerops first. Decisions in ADR-0049.
-- [B-M3 — workloads and platform](sprint-2026-10-09-b-m3-workloads-and-platform.md) — workload credentials, connector edges, platform services on contracts.
