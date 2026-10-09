@@ -19,7 +19,7 @@ import {
 	serveStandInIam,
 	workloadTokensFor,
 } from './fixtures/implement/harness'
-import { type JobHooks, jobsApp, startingJobsApp } from './fixtures/jobs-notes/app'
+import { filesJobsApp, type JobHooks, jobsApp, startingJobsApp } from './fixtures/jobs-notes/app'
 import { migration } from './fixtures/scoped-notes/migration'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
@@ -510,6 +510,32 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			await expect(run(env)).rejects.toThrow('supplies no IAM membership transport')
 			const withTransport = { ...env, FABRIKA_IAM_RPC_URL: iam.origin, FABRIKA_IAM_RPC_KEY: `px_${'m'.repeat(27)}` }
 			expect(await run(withTransport)).toEqual({ status: 'succeeded', attempts: 1 })
+		} finally {
+			await iam.stop()
+		}
+	})
+
+	test('fabrika job run boots a contract with a file collection on the object storage the platform wrote', async () => {
+		const iam = serveStandInIam(filesJobsApp())
+		const env = {
+			...frameworkEnvFor(filesJobsApp()),
+			FABRIKA_IAM_ISSUER: iam.origin,
+			FABRIKA_APP_ID: appId,
+			FABRIKA_APP_DATABASE_URL: url,
+			FABRIKA_PROXY_SECRET: PROXY_SECRET,
+		}
+		const run = (variables: Readonly<Record<string, string>>) =>
+			keepingProcessEnvironment(() => runContractJob(() => Promise.resolve({ default: filesJobsApp() }), variables, 'purge'))
+		try {
+			await expect(run(env)).rejects.toThrow('supplies no object storage')
+			const withStorage = {
+				...env,
+				FABRIKA_APP_STORAGE_ENDPOINT: 'http://storage.invalid:9000',
+				FABRIKA_APP_STORAGE_BUCKET: 'notes-files',
+				FABRIKA_APP_STORAGE_ACCESS_KEY_ID: 'notes',
+				FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: 's'.repeat(32),
+			}
+			expect(await run(withStorage)).toEqual({ status: 'succeeded', attempts: 1 })
 		} finally {
 			await iam.stop()
 		}

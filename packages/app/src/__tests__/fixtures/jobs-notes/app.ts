@@ -3,7 +3,7 @@
 import { implement, type JobContext } from '@fabrika/app/implement'
 import { type Ref, scoped, type Within } from '@fabrika/db'
 import { tables } from '../scoped-notes/src/db/tables'
-import { contract, startingContract } from './fabrika.contract'
+import { contract, filesContract, startingContract } from './fabrika.contract'
 
 type Dimension = 'workspace' | 'note'
 
@@ -56,6 +56,22 @@ export function startingJobsApp() {
 		deps: () => ({}),
 		handlers: () => ({
 			api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) },
+			jobs: { purge: () => Promise.resolve() },
+		}),
+	})
+}
+
+/** The jobs contract with a file collection, so `boot` needs the object storage the platform wrote. */
+export function filesJobsApp() {
+	const database = scoped(tables)
+	const notes = database.defineStore('notes', (t) => ({
+		list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
+	}))
+	return implement(filesContract, {
+		database,
+		deps: () => ({}),
+		handlers: () => ({
+			api: { notes: { list: async ({ ctx }) => ({ items: await notes.list(ctx.within) }) } },
 			jobs: { purge: () => Promise.resolve() },
 		}),
 	})

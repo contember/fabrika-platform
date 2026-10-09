@@ -62,3 +62,31 @@ export const startingContract = defineContract({
 		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
 	},
 }))
+
+/** A contract with a job and a file collection, so `boot` needs the object storage the platform wrote. */
+export const filesContract = defineContract({
+	app: 'notes',
+	dimensions: {
+		workspace: {},
+		note: { in: 'workspace' },
+	},
+	actions: {
+		'notes.read': 'Read notes',
+		'notes.write': 'Create and edit notes',
+		'notes.delete': 'Delete notes',
+	},
+	roles: {
+		editor: { grants: ['notes.read', 'notes.write', 'notes.delete'] },
+	},
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+		notes: { list: c.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } }) },
+	}),
+	files: {
+		attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.delete', maxBytes: 1024, types: ['text/plain'] }),
+	},
+	health: c.health('/healthz'),
+	jobs: {
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
+	},
+}))

@@ -277,7 +277,17 @@ export async function runContractJob(
 	try {
 		const workloadTokens = workloadTokensOf(environment.framework)
 		const membership = httpMembership(environment.framework)
-		return await boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, membership, workloadTokens, requireProxySecret: true })
+		const files = openFileStorage(environment.framework)
+		return await boot(app, {
+			environment,
+			iam,
+			assets: diskAssets(process.cwd()),
+			database,
+			files,
+			membership,
+			workloadTokens,
+			requireProxySecret: true,
+		})
 			.jobs.run(name, options)
 	} finally {
 		await database?.close()
