@@ -67,6 +67,12 @@ every app whose entry carries one; an entry carrying both is refused. Part A gen
 gates from its contract as an intermediate path. Work unit B2 built the endpoint tables, B3 the
 authenticated hop and B4 the response headers.
 
+Work unit B10 moves the installation's own services from gates to endpoint tables too, as
+**installation entries** (rule 3): an endpoint table that trusted platform composition marks
+`installation: true` and that may use five forms no application may declare. B10a added the forms and
+their hop treatment; until the later B10 units switch each service, no producer emits one, and the
+services keep their gates.
+
 ### 1. Only the proxy is publicly routed
 
 An application service has no public address. On Zerops that is the platform default. On Cloudflare
@@ -107,8 +113,9 @@ table say:
    Cloudflare proxy Worker.
 2. `forward_auth` to `/verify?app=<id>`. The app id is pinned in the route, never derived from a
    client-influenced header.
-3. `reverse_proxy` to the private upstream, with every `__Host-px_*` cookie stripped and the proxy
-   secret set. Caddy reads the secret from a managed variable through an `{env.…}` placeholder.
+3. `reverse_proxy` to the private upstream, with every `__Host-px_*` cookie stripped and, for an
+   application, the proxy secret set. Caddy reads the secret from a managed variable through an
+   `{env.…}` placeholder.
 
 Step 1 must be a delete, not an overwrite: `copy_headers` skips an empty auth-response value, so a
 client's own `X-Fabrika-Token` would otherwise reach the app on a `public` path.
@@ -118,10 +125,11 @@ application and on its own denials: Caddy through its response operations, the C
 in code, and `@fabrika/proxy-core` on every answer it writes. The proxy **replaces** whatever the
 application set for these names, so an application can neither omit nor weaken the policy. The
 framework sets the same policy in-process; both read the one definition in
-`@fabrika/proxy-core/headers`. An answer that belongs to no contract application (a gate app's denial,
-a forward refused before an app is selected) carries the policy without named origins; an installation
-service's own answers pass through unchanged. Per-endpoint profiles and caching of static assets are
-not part of v1.
+`@fabrika/proxy-core/headers`. An answer that belongs to no contract application (the denial of a gate
+app or of an installation entry, a forward refused before an app is selected) carries the policy
+without named origins; an installation service's own answers pass through unchanged, because IAM and
+Control set their own per-response CSPs for login, consent and their console flows. Per-endpoint
+profiles and caching of static assets are not part of v1.
 
 The proxy also **deletes** four headers an application may not send at all, on every answer and every
 download: `Content-Security-Policy-Report-Only`, `Report-To`, `Reporting-Endpoints` and `NEL`. Each names
@@ -221,7 +229,8 @@ here. The proxy makes one pass over one selected endpoint:
 
 **Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, and the shell
 of a link SPA) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
-It does not forward a `px_` key or a session that arrives on such a request. Admission still applies:
+It does not forward a `px_` key or a session that arrives on such a request; only an installation
+entry's `protocol` row keeps the `Authorization` header (below). Admission still applies:
 a form admits only its content type. Its body limit is the framework's, because `forward_auth` hands
 the proxy the headers and never the body. A webhook's signature is verified by the framework, not by
 the proxy.
@@ -230,7 +239,9 @@ the proxy.
 `link`, `app`, `job` and `webhook`, each added with the feature that needs it. The caller `human`
 admits a session or a `user` key; `machine` a `service` key; `link` a `link` key; `app:<id>` the
 connector key of application `<id>`, and only on export paths. Job and webhook keys are accepted by no
-mount. The proxy refuses an unknown kind, on cached paths too.
+mount. The proxy refuses an unknown kind, on cached paths too. An OAuth resource token is no `px_` key:
+`callerOf` maps it to the caller `oauth`, which only an installation entry's row may admit, so every
+application endpoint refuses it.
 
 A workload token carries its kind in `ptype` and names its workload in `workload`: the job's or the
 webhook's name, or for `app` the consuming application's id. `callerOf` maps `app` to `app:<workload>`
@@ -250,6 +261,52 @@ origin, which signs only for a workload key of the named application: it checks 
 bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503. Work unit B9a built this for jobs
 and webhooks. Connector keys of kind `app`, their edges and compatibility checks are B9b; until then an
 export also admits `machine` for an operator-provisioned edge key.
+
+**Installation entries.** An endpoint table that protects one of the installation's own services is a
+manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,
+oauthResources? }`. The marker comes from trusted platform composition — the installation's platform
+proxy manifest and its Cloudflare proxy Workers — never from the shape of an id; that the id holds no
+`@` is only a consistency check. Such an entry has no contract, so it carries no `snapshot`, no `csp` and
+no `operationsOrigin`. Its rows are `{ id, kind, method, path, callers, requirement, admission,
+delegation, oauth, digest }`, with `delegation` always `null`. They may use five forms that no
+application may declare:
+
+- **Kind `protocol`**: anonymous like `health`, for an endpoint the service authenticates itself (IAM's
+  login, handoff, OAuth, JWKS, `/admin/*` and `/rpc/*`; Operations' ingest and upload; a signed webhook).
+  The proxy reads no credential and mints no token, but it forwards the request **with**
+  `Authorization`, which the service reads.
+- **Kind `service`**: credentialed, served by a raw handler of the service (its console, a typed RPC
+  mount, a gateway). The kinds of an installation row are `service`, `protocol` and `health`.
+- **Method `*`**: any method. For the ambiguity check it overlaps every method of the same path shape,
+  so `*` and `GET` on one shape are refused like two `GET`s.
+- **Caller `oauth`**, with `oauth: { scopes }` on the row; every other row carries `oauth: null`. A
+  bearer that is not a `px_` key, on a row that admits `oauth`, is verified locally as an RFC 9068
+  resource token for the entry's registered OAuth resource whose path is the row's path, and must carry
+  every scope of the row. A refusal carries the RFC 6750 `WWW-Authenticate` challenge with the resource
+  metadata URL, and so does a request without a bearer when `human` is not a caller. It is never a login
+  bounce. A `px_` key whose caller kind the row does not list is a 403. The callers of an installation
+  row are `human`, `machine` and `oauth`.
+- **Requirement `authenticated`**: the caller kind must be listed, and no permission is needed. It is
+  the only requirement of an installation row: an administrator of IAM alone holds no permission of the
+  console, and a typed RPC mount authorizes each procedure itself.
+
+Otherwise an installation row is decided by the same steps 1 to 6. The digest covers the row's OAuth
+scopes as well; the resource URI is bound by the producer and checked by the manifest parser, not by the
+digest. An application row's digest is unchanged by the field, byte for byte. The caller `human` admits a
+`user` key without a session here too: a console row that serves only the static shell therefore admits a
+`user` key, which we accept as a bounded exception because the shell carries no privilege.
+
+Three layers refuse the five forms for an application: the contract build and the artifact schema of
+`@fabrika/app/contract`, the static reader (which reads only `defineContract`), and the manifest parser.
+The parser reads an entry without `installation: true` as an application, whose rows admit none of the
+forms. It refuses an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
+`operationsOrigin`, or whose `oauth` row has no registered resource on its path or asks for a scope the
+resource does not support.
+
+An installation entry gets the hop of a gate entry: the proxy keeps `Authorization` on the upstream
+hop, sets no proxy secret and sets no response policy; its own denials carry the base policy. It also
+copies `X-Fabrika-Endpoint` to the service, and the proxy answers the entry's RFC 9728 metadata paths and
+the handoff callback before selecting an endpoint, as it does for a gate entry.
 
 The requirement check and the admission check are part of the proxy's decision whether a request
 reaches the application. The requirement reads only the token; it needs no application-owned object.
@@ -312,6 +369,12 @@ For a contract application, the hop carries more facts, and the application chec
   equals its own; a missing header or any disagreement is a 503. A request is therefore never served by
   code that expects different rules than the proxy applied. A health endpoint alone may arrive without
   the header, because the platform's liveness probe dials the application directly.
+
+An installation service checks the endpoint as well, with one stated exception: it requires the header
+on its credentialed rows only. A `protocol` or `health` row may arrive without it, because the service
+authenticates such a request itself, and such requests also arrive unfronted — at IAM's own Worker on
+Cloudflare, and over the private hops between the services. An installation service gets no proxy
+secret, as it gets none under gates.
 
 Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the one list of every
 `X-Fabrika-*` name a hop carries; Caddy and the Cloudflare proxy Worker delete exactly it. The secret
@@ -398,6 +461,8 @@ principal kind `link`: its token carries no `ptype` and names its link mount and
   providers. A fix lands once.
 - **A narrower endpoint really narrows.** An absent credential no longer falls through to a later rule
   for a contract application. Fall-through stays for installation gates only.
+- **Installation-only forms widen what an installation entry can say, never what an application can.**
+  The marker comes from platform composition, and three layers refuse the forms in an application.
 - **The proxy checks what an agent can loosen inside the application:** the caller kind, the
   requirement and admission. A loosened handler or a skipped framework check no longer opens an
   endpoint the contract does not open.
@@ -446,6 +511,10 @@ principal kind `link`: its token carries no `ptype` and names its link mount and
 - **Compile gates into Caddy routes,** normalising the glob or making every rule terminal. Either
   changes the product in the permissive direction to suit a proxy, and normalising still cannot express
   fall-through.
+- **Put the installation services on application contracts** (`defineContract` and `implement`).
+  Rejected: `boot` deletes the framework variables and binds `@fabrika/db`, and the services would need
+  more exceptions than the five installation forms. An installation entry reuses the endpoint table and
+  the matcher instead.
 - **Keep generated gates for contract applications.** Rejected: an absent credential falls through, so
   a gate can only add access, and the proxy cannot check the caller kind or the requirement.
 - **Let the application select the endpoint again from the path.** Rejected: two selections can

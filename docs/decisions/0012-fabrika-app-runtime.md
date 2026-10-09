@@ -92,8 +92,13 @@ for an undeclared endpoint, a missing handler, or a handler of the wrong kind is
   request and checked at runtime too, because TypeScript cannot prevent every widening.
 - Errors map to 400, 403, 404 and 409 with one envelope.
 
-The installation's own services (IAM, Control, Operations) keep `defineApp()` and their hand-written
-gates, including the `oauth` gates of MCP authoring. This ADR does not move them to contracts.
+The installation's own services (IAM, Control, Operations) do not use `defineContract`. Work unit B10
+moves them from `defineApp()` and their hand-written gates to **service contracts**: one endpoint table
+per service and a thin dispatcher over `planEndpoint`. The proxy reads such a table as an installation
+entry, which platform composition marks and which may use five forms no application contract can
+declare ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation entries"). Until the
+B10 unit of a service lands, it keeps `defineApp()` and its gates, including the `oauth` gates of MCP
+authoring.
 
 ### 3. The router and the proxy select from one endpoint table
 
@@ -173,8 +178,10 @@ Other ADRs make the contract binding outside the application process:
 - The platform owns the run section and the server build on Zerops
   ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)) and builds the proxy Worker
   on Cloudflare ([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
-- Whether the installation's own services move to contracts is **not decided**. Until part B, work
-  unit B10 decides it, they keep `defineApp()` and gates.
+- The installation's own services move to service contracts, not to `defineContract`, and their
+  tables reach the proxy as installation entries
+  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). Work unit B10 does it service by
+  service; until then they keep `defineApp()` and gates.
 
 None of these is built yet; until they are, the framework is the only check.
 
