@@ -9,7 +9,7 @@ import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { generateFixture } from './generate'
+import { applicationFixtureRoot, generateFixture } from './generate'
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const CLI = join(REPO_ROOT, 'packages', 'cli', 'src', 'index.ts')
@@ -62,8 +62,8 @@ describe('the application fixture archive', () => {
 
 describe.skipIf(url === '')('the application fixture archive on Postgres', () => {
 	test("passes the start script's steps: migrate, codegen --verify and every generated case", async () => {
-		// The build installed the packages; the workspace's own stand in for them.
-		await symlink(join(REPO_ROOT, 'node_modules'), join(root, 'node_modules'))
+		// The build installed the example's packages; its workspace install stands in for them.
+		await symlink(join(applicationFixtureRoot, 'node_modules'), join(root, 'node_modules'))
 		expect(await fabrika('migrate')).toMatchObject({ code: 0 })
 		expect(await fabrika('codegen')).toMatchObject({ code: 0 })
 		const isolation = await fabrika('test-isolation')
