@@ -129,7 +129,7 @@ async function readCandidate(
 	try {
 		const root = input.root
 		if (root === null) {
-			throw new SnapshotRefused(['the application root (`workerDir`) is not a relative directory inside the repository; fix it in the registry'])
+			throw new SnapshotRefused('root-invalid')
 		}
 		const commit = await deps.commits.open({
 			repoUrl: input.app.repo_url,
@@ -140,8 +140,7 @@ async function readCandidate(
 		snapshot = await readAccessSnapshot(commit, root, input.app.id)
 	} catch (error) {
 		invocation.signal.throwIfAborted()
-		// The build log is the only feedback an agent over MCP gets (ADR-0049): one line per refusal.
-		if (error instanceof SnapshotRefused) { for (const line of error.lines) input.log(line) }
+		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; \`fabrika-check\` names the problems`)
 		if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error
 	}
@@ -170,6 +169,11 @@ function logClassification(log: (line: string) => void, classification: StoredCl
 		: classification.outcome === 'removal'
 		? 'access only narrows'
 		: `access widens${classification.protected ? ` on protected \`${env}\`` : ''}`
-	log(`access: ${summary} (against ${classification.baselineRunId === null ? 'nothing published' : `run ${classification.baselineRunId}`})`)
-	for (const change of classification.changes) log(`  ${change.widens ? '+' : '-'} ${change.line}`)
+	const widening = classification.changes.filter((change) => change.widens).length
+	// Counts only: the change lines quote the checkout, and the approval page shows them.
+	log(
+		`access: ${summary} (${classification.changes.length} changes, ${widening} widening; against ${
+			classification.baselineRunId === null ? 'nothing published' : `run ${classification.baselineRunId}`
+		})`,
+	)
 }

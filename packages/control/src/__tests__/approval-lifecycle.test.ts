@@ -9,7 +9,7 @@ import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider, ProviderDeployInput, ProviderNamespaceMember } from '@fabrika/provider-contract'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { republishNamespace } from '../api/namespaces'
 import { deleteAppUseCase } from '../api/registry/apps'
@@ -38,11 +38,13 @@ interface World {
 	readonly logs: Map<string, string>
 	/** The source each run's commit reads: the contract the next deploy brings. */
 	contract: string | null
+	/** Every other file of that commit. */
+	files: Record<string, string>
 }
 
 function world(): World {
 	const { db, sqlite } = createHarness()
-	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE }
+	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE, files: {} }
 }
 
 function provider(w: World): ControlProvider {
@@ -84,7 +86,7 @@ function deps(w: World): RunDeps {
 		queue: { send: (message) => Promise.resolve(void w.queued.push(message)) },
 		logs,
 		commits: {
-			open: (input) => memoryCommits(w.contract === null ? {} : { 'fabrika.contract.ts': w.contract }).open(input),
+			open: (input) => memoryCommits({ ...w.files, ...(w.contract === null ? {} : { 'fabrika.contract.ts': w.contract }) }).open(input),
 		},
 	}
 }
@@ -261,7 +263,7 @@ describe('approved access through the run lifecycle', () => {
 		await seed(w, 'a/../b')
 		const refused = await deploy(w, 'stage')
 		expect(refused.status).toBe('failed')
-		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('the application root (`workerDir`) is not a relative directory')
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('access: snapshot refused (root-invalid, 1 problem)')
 		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 0 })
 		expect(w.deploys).toEqual([])
 	})
@@ -373,13 +375,33 @@ describe('approved access through the run lifecycle', () => {
 		expect(await published(w, 'prod')).toEqual({ runId: removal.runId, generation: 2 })
 	})
 
+	test('the run log carries counts and codes, never a name from the checkout, parked or refused', async () => {
+		const w = world()
+		await seed(w)
+		const secret = 'sk-live-0f3a9c'
+		w.files = { [`db/migrations/0001_${secret}.sql`]: 'CREATE TABLE notes (id TEXT);' }
+		const printed: string[] = []
+		const info = spyOn(console, 'info').mockImplementation((...args: unknown[]) => void printed.push(args.map(String).join(' ')))
+		try {
+			expect((await deploy(w, 'prod')).status).toBe('awaiting_approval')
+			w.contract = edited("app: 'notes',", `app: '${secret}',`)
+			expect((await deploy(w, 'stage')).status).toBe('failed')
+		} finally {
+			info.mockRestore()
+		}
+		const logged = [...w.logs.values(), ...printed].join('\n')
+		expect(logged).toContain('access: access widens on protected `prod` (')
+		expect(logged).toContain('access: snapshot refused (contract-app-mismatch, 1 problem)')
+		expect(logged).not.toContain(secret)
+	})
+
 	test('a contract the reader refuses fails the run with one actionable line per refusal, and publishes nothing', async () => {
 		const w = world()
 		await seed(w)
 		w.contract = edited("app: 'notes',", 'app: `notes${1}`,')
 		const refused = await deploy(w, 'stage')
 		expect(refused.status).toBe('failed')
-		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('fabrika.contract.ts:')
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('access: snapshot refused (contract-invalid, 1 problem)')
 		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 0 })
 		expect(w.deploys).toEqual([])
 	})

@@ -9,7 +9,6 @@ import {
 	ContractError,
 	contractReaderInputs,
 	ContractSourceError,
-	formatFinding,
 	MIGRATIONS_DIR,
 	readContractSource,
 } from '@fabrika/check/contract'
@@ -27,14 +26,24 @@ export const SNAPSHOT_LIMITS = {
 
 const MIGRATION_READS_AT_ONCE = 8
 
-/** The commit cannot be read as an access snapshot. `lines` are the build-log lines, each actionable. */
+/** Why a commit cannot be read as an access snapshot. A fixed code, never text from the checkout. */
+export type SnapshotRefusalCode =
+	| 'root-invalid'
+	| 'contract-too-large'
+	| 'contract-invalid'
+	| 'contract-unreadable'
+	| 'contract-app-mismatch'
+	| 'migrations-too-many'
+
+/**
+ * The commit cannot be read as an access snapshot. The run log gets only the code and the number of problems: the
+ * snapshot is logged before the run's secrets are known, and checkout text can carry one (`fabrika-check` names them).
+ */
 export class SnapshotRefused extends Error {
 	override readonly name = 'SnapshotRefused'
-	readonly lines: readonly string[]
 
-	constructor(lines: readonly string[]) {
-		super(`the access snapshot cannot be read:\n${lines.join('\n')}`)
-		this.lines = lines
+	constructor(readonly code: SnapshotRefusalCode, readonly problems = 1) {
+		super(`snapshot refused (${code}, ${problems} problem${problems === 1 ? '' : 's'})`)
 	}
 }
 
@@ -53,13 +62,13 @@ export async function readAccessSnapshot(commit: CommitFiles, root: string, appI
 		const missing = contractReaderInputs(files, exists)
 		if (missing.length === 0) break
 		if (round >= SNAPSHOT_LIMITS.readerRounds || files.size + missing.length > SNAPSHOT_LIMITS.readerFiles) {
-			throw new SnapshotRefused([`${CONTRACT_FILE}: the contract reaches more than ${SNAPSHOT_LIMITS.readerFiles} files`])
+			throw new SnapshotRefused('contract-too-large')
 		}
 		for (const path of missing) files.set(path, await commit.read(inRepository(path), SNAPSHOT_LIMITS.readerFileBytes))
 	}
 	const contract = readContract(files)
 	if (contract.app !== appId) {
-		throw new SnapshotRefused([`${CONTRACT_FILE}: the contract names the application '${contract.app}', but it is deployed as '${appId}'`])
+		throw new SnapshotRefused('contract-app-mismatch')
 	}
 	return { version: 1, contract, migrations, checker: CHECKER_VERSION }
 }
@@ -68,9 +77,10 @@ function readContract(files: ReadonlyMap<string, string>) {
 	try {
 		return readContractSource(files)
 	} catch (error) {
-		if (error instanceof ContractSourceError) throw new SnapshotRefused(error.findings.map(formatFinding))
-		if (error instanceof ContractError) throw new SnapshotRefused(error.problems.map((problem) => `${CONTRACT_FILE}: ${problem}`))
-		throw error
+		if (error instanceof ContractSourceError) throw new SnapshotRefused('contract-invalid', error.findings.length)
+		if (error instanceof ContractError) throw new SnapshotRefused('contract-invalid', error.problems.length)
+		// An unexpected reader error may quote the checkout; only the code leaves this function.
+		throw new SnapshotRefused('contract-unreadable')
 	}
 }
 
@@ -79,7 +89,7 @@ async function readMigrations(commit: CommitFiles, root: string): Promise<Migrat
 	const directory = root === '' ? MIGRATIONS_DIR : `${root}/${MIGRATIONS_DIR}`
 	const paths = [...commit.paths].filter((path) => path.startsWith(directory)).sort()
 	if (paths.length > SNAPSHOT_LIMITS.migrations) {
-		throw new SnapshotRefused([`${MIGRATIONS_DIR}: more than ${SNAPSHOT_LIMITS.migrations} migration files`])
+		throw new SnapshotRefused('migrations-too-many')
 	}
 	const migrations: MigrationEntry[] = []
 	for (let start = 0; start < paths.length; start += MIGRATION_READS_AT_ONCE) {
