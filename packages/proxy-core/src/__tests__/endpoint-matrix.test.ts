@@ -82,7 +82,7 @@ const EXPORTED = endpointRow({
 	kind: 'query',
 	method: 'POST',
 	path: '/__fabrika/connect/products.v1.get',
-	callers: ['app:shop', 'machine'],
+	callers: ['app:shop'],
 	requirement: { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } },
 	admission: JSON_BODY,
 })
@@ -254,6 +254,11 @@ describe('step 3 — principal kinds', () => {
 			}
 		}
 		expect(iam.mintFromKeyCalls).toBe(1)
+	})
+
+	test('a service key holding the export\'s action is refused on the export: only a consumer\'s app key reaches it', async () => {
+		const { verify } = service({ mintFromKey: await minted('service', [grant('notes.read')]) })
+		expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/__fabrika/connect/products.v1.get', bearer: 'px_service' })), 403)
 	})
 
 	test('the connector key of another application is refused on the export', async () => {
