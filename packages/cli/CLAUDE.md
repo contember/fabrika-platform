@@ -95,14 +95,17 @@ arguments and reports.
 ## The `connect` area
 
 `src/connect.ts` vendors another application's export into the consumer's
-`fabrika/connect/<app>.<export>.v<version>.ts`, from the description the owner serves at
-`POST <origin>/__fabrika/connect/<export>.v<version>`. It resolves no provider. The snapshot source is
+`fabrika/connect/<app>.<export>.v<version>.ts`, from the description the owner's environment approved, as Control's
+`connectors.describe` answers it (`POST <control>/api/rpc`). It resolves no provider. The snapshot source is
 `@fabrika/app/contract`'s `snapshotSource`; this file only fetches, checks and writes.
 
-- `connect add <app>/<export>@<version> --origin=<owner origin>` writes a new snapshot and never overwrites;
-  `connect pull` with the same arguments rewrites an existing one and says whether the digest changed.
-- The edge key comes from `FABRIKA_CONNECT_KEY` in the ENVIRONMENT ONLY and is the only bearer sent. No message
-  carries it, nor the answer's body. The origin is https, plain http only for `localhost`.
+- `connect add <app>/<export>@<version> --consumer=<app> --env=<env>` writes a new snapshot and never overwrites;
+  `connect pull` with the same arguments rewrites an existing one and says whether the digest changed. Control's
+  origin is `--url` or `FABRIKA_CONTROL_URL`.
+- The Control key comes from `FABRIKA_CONTROL_KEY` in the ENVIRONMENT ONLY and is the only bearer sent; it needs
+  `deploy.read` on the consumer. No message carries it, nor the answer's body. The origin is https, plain http only
+  for `localhost`. Nobody sets an import's `FABRIKA_CONNECT_<IMPORT>_*`: Control writes them when it deploys the
+  consumer.
 - A description is written only when `parseExportDescription` accepts it — its digest is the digest of what it
   describes — and it names the requested `<app>/<export>@<version>`. A redirect is an error and never
   followed (`redirect: 'manual'`); the body must be `application/json` and at most

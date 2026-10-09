@@ -27,7 +27,7 @@ Usage:
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
   fabrika db <new|migrate|codegen|test-scaffold|test-isolation> [options]
   fabrika job run <name>
-  fabrika connect <add|pull> <app>/<export>@<version> --origin=<owner origin>
+  fabrika connect <add|pull> <app>/<export>@<version> --consumer=<app> --env=<env> [--url=<control origin>]
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
@@ -45,8 +45,8 @@ control credential from FABRIKA_CONTROL_KEY alone; a changed manifest is \`contr
 \`fabrika job run <name>\` runs one c.cron job of a contract application: the command each crontab entry runs. Run
 \`fabrika job --help\` for its surface.
 
-\`fabrika connect\` vendors another application's export into fabrika/connect/, from the description its owner
-serves, with the edge key in FABRIKA_CONNECT_KEY. Run \`fabrika connect --help\` for its surface.
+\`fabrika connect\` vendors another application's export into fabrika/connect/, from the description the owner's
+environment approved, as Control answers it to FABRIKA_CONTROL_KEY. Run \`fabrika connect --help\` for its surface.
 
 \`fabrika control\` is the operator's non-browser client for the control plane (ADR-0033). It is
 provider-neutral, loads no installation package, and speaks the same typed API the console does. Run

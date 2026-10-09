@@ -1,6 +1,6 @@
-// `fabrika connect`: the snapshot is written from the description the owner serves to the edge key, and only from a
-// description that is what it claims to be. The owner here is a fake `fetch` that serves a compiled contract's
-// description; the key is a credential, so no message may carry it.
+// `fabrika connect`: the snapshot is written from the description Control answers for the owner's approved export, and
+// only from a description that is what it claims to be. Control here is a fake `fetch` that serves a compiled
+// contract's description; the key is a credential, so no message may carry it.
 
 import { compileContract, CONNECT_LIMITS, defineContract, exportDescription, snapshotNames, snapshotSource } from '@fabrika/app/contract'
 import { type ExportDescription, exportDigest } from '@fabrika/auth-core'
@@ -12,8 +12,8 @@ import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { type ConnectCommandDependencies, runConnectCommand } from '../connect'
 
-const KEY = 'px_edge_key_for_the_shop'
-const ORIGIN = 'https://catalog.example.com'
+const KEY = 'px_control_key_for_the_shop'
+const ORIGIN = 'https://control.example.com'
 
 function catalog(price: z.ZodType): ExportDescription {
 	const contract = defineContract({
@@ -60,7 +60,7 @@ interface Owner {
 	readonly fetch: ConnectCommandDependencies['fetch']
 }
 
-/** Serves `answer` to a request that carries the edge key, and 403 to any other. */
+/** Serves `answer` to a request that carries the Control key, and 403 to any other. */
 function owner(answer: () => Response): Owner {
 	const requests: Request[] = []
 	return {
@@ -79,7 +79,7 @@ async function run(
 	command: string,
 	argv: readonly string[],
 	fetchOwner: ConnectCommandDependencies['fetch'],
-	source: Record<string, string> = { FABRIKA_CONNECT_KEY: KEY },
+	source: Record<string, string> = { FABRIKA_CONTROL_KEY: KEY, FABRIKA_CONTROL_URL: ORIGIN },
 ): Promise<{ readonly out: string; readonly notes: string }> {
 	const out: string[] = []
 	const notes: string[] = []
@@ -96,7 +96,7 @@ async function failure(work: Promise<unknown>): Promise<string> {
 	throw new Error('the command did not fail')
 }
 
-const target = ['catalog/products@1', `--origin=${ORIGIN}`]
+const target = ['catalog/products@1', '--consumer=shop', '--env=prod']
 const file = snapshotNames('catalog', 'products', 1).file
 
 describe('fabrika connect add', () => {
@@ -109,8 +109,10 @@ describe('fabrika connect add', () => {
 		expect(readFileSync(join(root, file), 'utf8')).toBe(snapshotSource(served))
 		expect(notes).toContain("import { catalogProductsV1Digest } from './fabrika/connect/catalog.products.v1'")
 		const [request] = fake.requests
-		expect(request?.url).toBe(`${ORIGIN}/__fabrika/connect/products.v1`)
+		expect(request?.url).toBe(`${ORIGIN}/api/rpc`)
 		expect(request?.method).toBe('POST')
+		const body: unknown = await request?.json()
+		expect(body).toEqual({ method: 'connectors.describe', input: { consumer: 'shop', env: 'prod', app: 'catalog', export: 'products', version: 1 } })
 		const findings = await checkApplication({ root, files: new Map([[file, readFileSync(join(root, file), 'utf8')]]) })
 		expect(findings.map(formatFinding)).toEqual([])
 	})
@@ -133,25 +135,37 @@ describe('fabrika connect add', () => {
 		expect(() => readFileSync(join(root, file))).toThrow()
 	})
 
-	test('a refused key, an unreachable owner and a missing key never print the key', async () => {
+	test('a refused key, an unreachable Control and a missing key never print the key', async () => {
 		const root = appRoot()
-		const refused = await failure(run(root, 'add', target, serving(catalog(z.int())).fetch, { FABRIKA_CONNECT_KEY: 'px_other' }))
-		expect(refused).toBe(`${ORIGIN} refused FABRIKA_CONNECT_KEY for catalog/products@1 (403); the key must hold the export's actions`)
+		const refused = await failure(
+			run(root, 'add', target, serving(catalog(z.int())).fetch, { FABRIKA_CONTROL_KEY: 'px_other', FABRIKA_CONTROL_URL: ORIGIN }),
+		)
+		expect(refused).toBe(`${ORIGIN} refused FABRIKA_CONTROL_KEY for catalog/products@1 (403); the key must hold deploy.read on shop`)
 		const down = await failure(run(root, 'add', target, () => Promise.reject(new TypeError(`connect failed with ${KEY}`))))
 		expect(down).toBe(`${ORIGIN} could not be reached for catalog/products@1`)
-		expect(await failure(run(root, 'add', target, serving(catalog(z.int())).fetch, {}))).toContain('FABRIKA_CONNECT_KEY must hold')
+		expect(await failure(run(root, 'add', target, serving(catalog(z.int())).fetch, { FABRIKA_CONTROL_URL: ORIGIN }))).toContain(
+			'FABRIKA_CONTROL_KEY must hold',
+		)
 		expect(`${refused}${down}`).not.toContain(KEY)
 	})
 
-	test('a plain-http origin is refused except on localhost, and so is one with a path', async () => {
+	test('an export the owner environment did not approve for the consumer is a 404 that names the request', async () => {
+		const root = appRoot()
+		const fake = owner(() => Response.json({ error: { type: 'not_found' } }, { status: 404 }))
+		expect(await failure(run(root, 'add', target, fake.fetch))).toBe('catalog@prod has approved no export products@1 for shop')
+	})
+
+	test("needs the consumer and the environment, and Control's https origin unless it is localhost", async () => {
 		const root = appRoot()
 		const fake = serving(catalog(z.int()))
-		for (const origin of ['http://catalog.example.com', `${ORIGIN}/api`, 'https://user:pass@catalog.example.com']) {
-			expect(await failure(run(root, 'add', ['catalog/products@1', `--origin=${origin}`], fake.fetch))).toContain('--origin must be an https origin')
+		expect(await failure(run(root, 'add', ['catalog/products@1', '--env=prod'], fake.fetch))).toContain('needs --consumer=')
+		expect(await failure(run(root, 'add', target, fake.fetch, { FABRIKA_CONTROL_KEY: KEY }))).toContain("needs Control's origin")
+		for (const origin of ['http://control.example.com', `${ORIGIN}/api`, 'https://user:pass@control.example.com']) {
+			expect(await failure(run(root, 'add', [...target, `--url=${origin}`], fake.fetch))).toContain("Control's origin must be an https origin")
 		}
 		expect(fake.requests).toEqual([])
-		await run(root, 'add', ['catalog/products@1', '--origin=http://catalog.localhost:8080'], fake.fetch)
-		expect(fake.requests[0]?.url).toBe('http://catalog.localhost:8080/__fabrika/connect/products.v1')
+		await run(root, 'add', [...target, '--url=http://control.fabrika.localhost:18080'], fake.fetch)
+		expect(fake.requests[0]?.url).toBe('http://control.fabrika.localhost:18080/api/rpc')
 	})
 })
 
@@ -177,7 +191,7 @@ describe('fabrika connect add against an owner that misbehaves', () => {
 		const renamed = { ...served, procedures: { [KEY]: served.procedures['get'] ?? { input: null, output: { type: 'null' } } } }
 		const fake = serving({ ...renamed, digest: exportDigest(renamed) })
 		const message = await failure(run(root, 'add', target, fake.fetch))
-		expect(message).toBe(`${ORIGIN} answered catalog/products@1 with a description that contains FABRIKA_CONNECT_KEY; nothing was written`)
+		expect(message).toBe(`${ORIGIN} answered catalog/products@1 with a description that contains FABRIKA_CONTROL_KEY; nothing was written`)
 		expect(() => readFileSync(join(root, file))).toThrow()
 	})
 
