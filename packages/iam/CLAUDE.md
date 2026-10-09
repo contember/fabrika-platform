@@ -112,7 +112,8 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **`/admin/*` IS BEARER-ONLY.** `resolveAdmin` accepts a registered-audience proxy JWT (what
   Control's console gateway forwards as a bearer) or a `px_` key, and reads no session cookie. With
   no ambient credential there is nothing for a CSRF check to defend, so IAM keeps no admin-origin
-  registry; the console's admission is Control's gateway origin guard. A request with no bearer is
+  registry. A bearer request without an `Origin` passes; admission of a console session is the
+  proxy's (`Sec-Fetch-Site`, ADR-0022 rule 3), before Control's gateway forwards it. A request with no bearer is
   401 in every environment — there is no credential-less local caller.
 - **REVOKING AN IAM SESSION REVOKES EVERY APP SESSION DERIVED FROM IT, AND THAT IS A JOIN, NOT A
   SWEEP.** `getActiveSessionByHash`/`ById` join to `parent_session_id` on every lookup, so a child
