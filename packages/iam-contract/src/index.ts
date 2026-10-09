@@ -452,7 +452,7 @@ type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 
 /**
  * Issue a fresh key for one workload of an application (ADR-0022 "Principal kinds"). The key resolves to the actions
- * the app's reconciled schema declares for the workload, and the workload's older keys except the newest are revoked.
+ * the app's reconciled schema declares for the workload. Every other key of the workload is revoked except `keep`.
  */
 export interface IssueWorkloadKeyRequest {
 	/** The IAM application id `<app>@<env>`. */
@@ -461,6 +461,11 @@ export interface IssueWorkloadKeyRequest {
 	name: string
 	/** Absolute expiry (unix seconds), after now and at most 30 days ahead. */
 	expiresAt: number
+	/**
+	 * The credential id of the key the caller has recorded as active, which stays valid until the caller replaces it; null
+	 * when it has none. A key issued earlier and never recorded is an orphan, and is revoked.
+	 */
+	keep: string | null
 }
 
 /** The plaintext key is returned once. */

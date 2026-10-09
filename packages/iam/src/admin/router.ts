@@ -23,7 +23,7 @@
  * caller is resolved in one place for both.
  */
 
-import { API_KEY_PREFIX, type PermissionEntry, permits, type PrincipalType } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, permits, type PrincipalType } from '@fabrika/auth-core'
 import { resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -102,7 +102,8 @@ export async function resolveAdmin(
 		if (!services.config.adminAudiences.has(claims.aud)) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
 		}
-		if (claims.ptype === undefined) {
+		// Refused before any permission is resolved: a workload token never administers (ADR-0022 "Principal kinds").
+		if (claims.ptype === undefined || isWorkloadKind(claims.ptype)) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
 		}
 		const principal = await services.repositories.principals.getPrincipalById(claims.sub)

@@ -116,8 +116,6 @@ export async function mintFromKey(
 	services: Services,
 	env: MintEnv,
 	input: { app: string; key: string; requestId: string },
-	/** Mint only for a credential of one of these principal kinds; any other is `invalid_key`. Absent, any kind. */
-	kinds?: readonly TokenPrincipalType[],
 ): Promise<MintFromKeyOutcome> {
 	const cred = await services.repositories.credentials.getActiveCredentialByHash(await hashToken(input.key))
 	if (!cred) {
@@ -130,9 +128,6 @@ export async function mintFromKey(
 		// not learn that it exists, and there is nothing it can do differently here.
 		const reason = effective.reason === 'wrong_app' ? 'invalid_key' : effective.reason
 		return { result: { ok: false, reason }, principalId: cred.principal_id, credentialId: cred.id }
-	}
-	if (kinds !== undefined && (effective.type === undefined || !kinds.includes(effective.type))) {
-		return { result: { ok: false, reason: 'invalid_key' }, principalId: cred.principal_id, credentialId: cred.id }
 	}
 
 	const now = Math.floor(Date.now() / 1000)
@@ -153,6 +148,47 @@ export async function mintFromKey(
 	)
 	if (token === null) {
 		return { result: { ok: false, reason: 'token_too_large' }, principalId: cred.principal_id, credentialId: cred.id }
+	}
+	return { result: { ok: true, token, expiresAt }, principalId: cred.principal_id, credentialId: cred.id }
+}
+
+/**
+ * The token of a job's or a webhook's own key, for `POST /auth/workload/token`. The kind and the application are
+ * checked before anything about the principal is read, so every key that is not a live job or webhook key of `app` —
+ * absent, revoked, expired, of another kind or app, or of a disabled principal — answers the same `invalid_key`.
+ * A storage failure throws: the route answers it as "IAM could not be asked", never as a refusal.
+ */
+export async function mintFromWorkloadKey(services: Services, env: MintEnv, input: { app: string; key: string }): Promise<MintFromKeyOutcome> {
+	const refused: MintFromKeyOutcome = { result: { ok: false, reason: 'invalid_key' }, principalId: null, credentialId: null }
+	const cred = await services.repositories.credentials.getActiveCredentialByHash(await hashToken(input.key))
+	if (cred === null || cred.principal_id === null || cred.app !== input.app) {
+		return refused
+	}
+	const workload = await services.repositories.workloads.getByPrincipal(cred.principal_id)
+	if (workload === null || workload.kind === 'app' || workload.app !== input.app) {
+		return refused
+	}
+	const effective = await resolveCredential(services, cred, input.app)
+	if (!effective.ok || effective.type !== workload.kind) {
+		return refused
+	}
+	const now = Math.floor(Date.now() / 1000)
+	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, cred.expires_at ?? Number.POSITIVE_INFINITY)
+	const token = await boundedToken(
+		signAccessToken(services, env, {
+			app: input.app,
+			subject: effective.subject,
+			type: workload.kind,
+			workload: workload.name,
+			label: effective.label,
+			permissions: effective.permissions,
+			issuedAt: now,
+			expiresAt,
+		}),
+		{ app: input.app, subject: effective.subject },
+	)
+	if (token === null) {
+		return refused
 	}
 	return { result: { ok: true, token, expiresAt }, principalId: cred.principal_id, credentialId: cred.id }
 }

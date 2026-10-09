@@ -7,6 +7,9 @@ import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } f
 export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantDto> {
 	const principalId = input.principalId
 	if (principalId.trim() === '') return fail(400, 'principalId required')
+	if (await c.services.repositories.grants.isWorkloadPrincipal(principalId)) {
+		return fail(409, 'a job, a webhook or a connector holds no grant: its actions come from the application schema')
+	}
 	const appResult = await appField(c, input)
 	if (!appResult.ok) {
 		return fail(400, 'unknown app')

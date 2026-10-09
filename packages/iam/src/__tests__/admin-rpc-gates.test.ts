@@ -78,7 +78,7 @@ const INPUTS: Record<string, unknown> = {
 	'apiKeys.provision': { label: 'l', type: 'service', permissions: ['*'] },
 	'apiKeys.rotate': { principalId: 'nobody' },
 	'apiKeys.revoke': { principalId: 'nobody' },
-	'workloads.issueKey': { app: 'nowhere@prod', kind: 'job', name: 'nightly', expiresAt: 4_102_444_800 },
+	'workloads.issueKey': { app: 'nowhere@prod', kind: 'job', name: 'nightly', expiresAt: 4_102_444_800, keep: null },
 	'shareLinks.issue': { app: 'nowhere', grants: [{ action: 'a' }], expiresAt: 1 },
 	'shareLinks.revoke': { id: 'nobody' },
 }

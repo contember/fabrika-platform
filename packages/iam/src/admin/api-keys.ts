@@ -125,7 +125,7 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<OkResponse> {
 	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	if (principal?.type !== 'service') {
+	if (principal?.type !== 'service' || (await c.services.repositories.grants.isWorkloadPrincipal(principalId))) {
 		return fail(404, 'service principal not found')
 	}
 
@@ -154,7 +154,7 @@ export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId:
 export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyInput): Promise<RotateApiKeyResponse> {
 	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	if (principal?.type !== 'service') {
+	if (principal?.type !== 'service' || (await c.services.repositories.grants.isWorkloadPrincipal(principalId))) {
 		return fail(404, 'service principal not found')
 	}
 	if (principal.disabled_at !== null) {

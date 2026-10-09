@@ -150,14 +150,24 @@ fails if that stops being true — it is the guard, not documentation of one.
   webhook principal is a `service` row (`external_id` `workload:<app>:<kind>:<name>`) with a `workload_principals`
   row naming its kind; a token minted from its key has `ptype` = that kind and `workload` = its name.
   `resolveCredential` resolves it to the actions of its `app_workloads` row (written by the schema reconcile from
-  `AppSchema.workloads`, contract applications only, exact catalog actions), app-wide, and to nothing without one —
-  never to a grant, so an administrator cannot widen a workload with one. A reconcile that drops a workload revokes its
-  keys in the same batch. `workloads.issueKey` (admin RPC, `iam.admin`, which the provisioning key holds) creates the
-  principal on first use, issues a key of at most 30 days and revokes every older key but the newest, which the
-  running version still holds during a rollout. A workload key mints at `POST /auth/workload/token` on the public
-  origin (`src/workload-token.ts`, the key as the bearer, `{ app }` as the body, only job and webhook kinds of that
-  app, `invalid_key` for anything else), and `resolveCaller` refuses it for every management and membership
-  operation. Workload principals are not listed as API keys.
+  `AppSchema.workloads`, contract applications only, exact catalog actions), app-wide, and to nothing without one. A
+  reconcile that drops a workload revokes its keys in the same batch.
+- **A WORKLOAD PRINCIPAL RESOLVES NO GRANT ON ANY PATH, AND HOLDS NONE.** The one grant read every permission goes
+  through, `getActiveGrantsForApp`, excludes workload principals in its SQL; `createGrant` and
+  `createRoleGrantUnlessHeld` throw `WorkloadGrantError` for one, and `grants.create` answers 409 before anything else.
+  A workload token is refused before any permission is resolved: by `resolveAdmin`'s token branch, by `resolveCaller`
+  for every management and membership operation. `apiKeys.list`, `rotate` and `revoke` do not see workload principals.
+- **`workloads.issueKey` NEVER REVOKES THE KEY THE CALLER NAMES AS ACTIVE.** It creates the principal on first use,
+  issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
+  Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance
+  revokes, and the running version's key stays valid until Control records its replacement.
+- **`POST /auth/workload/token` IS PUBLIC, SO ITS COST IS BOUNDED BEFORE ANY LOOKUP** (`src/workload-token.ts`). In
+  order: the body `{ app }`, the key's exact format (`px_` + 27 base64url characters), the per-client bucket of the
+  password and device routes (`recordLoginFailure`, only where the composition names a client address; none
+  otherwise, never a guess; 429), one lookup by the key's hash. `mintFromWorkloadKey` checks the kind and the app
+  before it reads anything about the principal, so an absent, revoked, expired, disabled or non-workload key all
+  answer the same `invalid_key`. A refusal writes no auth-log row; refusals are one aggregated warning per minute. A
+  storage failure is a 503, never a refusal.
 - **AN APPLICATION TOKEN CARRIES ONLY THE GRANTS OF ITS OWN APP ID (ADR-0022 rule 6).** Every
   permission question goes through `resolvePermissionsAt` (`src/resolve.ts`): a cross-app (`NULL`)
   grant and the bootstrap `admin` reach a token only when the app is a PLATFORM AUDIENCE

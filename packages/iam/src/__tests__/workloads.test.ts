@@ -4,15 +4,17 @@
 
 import { type AccessTokenClaims, type AppSchema, parseAccessClaims, WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
+import { resolveAdmin } from '../admin/router'
 import { createIamApp } from '../app'
 import { resolveCaller } from '../auth'
 import type { Env } from '../env'
 import { prop } from '../json'
+import { WorkloadGrantError } from '../repositories/grants'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
-import { createHarness, type Harness, seedGrant, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import { CONSOLE_APP, createHarness, type Harness, seedGrant, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ISSUER = 'https://propustka.test'
 const PROVISIONING_KEY = `px_${'p'.repeat(43)}`
@@ -67,16 +69,24 @@ interface Issued {
 	principalId: string
 }
 
-async function issueKey(h: Harness, input: { kind: 'job' | 'webhook'; name: string; expiresAt?: number; app?: string }): Promise<Response> {
+interface IssueInput {
+	kind: 'job' | 'webhook'
+	name: string
+	expiresAt?: number
+	app?: string
+	keep?: string | null
+}
+
+async function issueKey(h: Harness, input: IssueInput): Promise<Response> {
 	const expiresAt = input.expiresAt ?? Math.floor(Date.now() / 1000) + 30 * DAY
 	return call(h, '/admin/rpc', {
 		method: 'POST',
 		bearer: PROVISIONING_KEY,
-		body: { method: 'workloads.issueKey', input: { app: input.app ?? APP, kind: input.kind, name: input.name, expiresAt } },
+		body: { method: 'workloads.issueKey', input: { app: input.app ?? APP, kind: input.kind, name: input.name, expiresAt, keep: input.keep ?? null } },
 	})
 }
 
-async function issued(h: Harness, input: { kind: 'job' | 'webhook'; name: string; app?: string }): Promise<Issued> {
+async function issued(h: Harness, input: IssueInput): Promise<Issued> {
 	const response = await issueKey(h, input)
 	expect(response.status).toBe(200)
 	const result = prop(await response.json(), 'result')
@@ -151,17 +161,22 @@ describe('a workload key', () => {
 })
 
 describe('workloads.issueKey', () => {
-	test('keeps the newest older key for the rollout and revokes every older one', async () => {
+	test('keeps the active key a failed record left in place, and revokes the orphan the failed attempt issued', async () => {
 		const h = createHarness()
 		expect((await reconcile(h, schema([{ kind: 'job', name: 'nightly', actions: ['notes.purge'] }]))).status).toBe(200)
-		const first = await issued(h, { kind: 'job', name: 'nightly' })
-		const second = await issued(h, { kind: 'job', name: 'nightly' })
-		expect(second.principalId).toBe(first.principalId)
-		expect(actionsOf(await minted(h, first.key))).toEqual(['notes.purge@global'])
-		const third = await issued(h, { kind: 'job', name: 'nightly' })
-		expect(await minted(h, first.key)).toBe('invalid_key')
-		expect(actionsOf(await minted(h, second.key))).toEqual(['notes.purge@global'])
-		expect(actionsOf(await minted(h, third.key))).toEqual(['notes.purge@global'])
+		const active = await issued(h, { kind: 'job', name: 'nightly' })
+		// Control asks for B and fails to record it: A stays its active key.
+		const orphan = await issued(h, { kind: 'job', name: 'nightly', keep: active.credentialId })
+		expect(orphan.principalId).toBe(active.principalId)
+		const retried = await issued(h, { kind: 'job', name: 'nightly', keep: active.credentialId })
+		expect(actionsOf(await minted(h, active.key))).toEqual(['notes.purge@global'])
+		expect(await minted(h, orphan.key)).toBe('invalid_key')
+		expect(actionsOf(await minted(h, retried.key))).toEqual(['notes.purge@global'])
+		// Once the retried key is recorded, the next rotation keeps it and revokes the key it replaced.
+		const next = await issued(h, { kind: 'job', name: 'nightly', keep: retried.credentialId })
+		expect(await minted(h, active.key)).toBe('invalid_key')
+		expect(actionsOf(await minted(h, retried.key))).toEqual(['notes.purge@global'])
+		expect(actionsOf(await minted(h, next.key))).toEqual(['notes.purge@global'])
 	})
 
 	test('refuses an expiry beyond 30 days, a name that is not a contract name, and a caller that is not an administrator', async () => {
@@ -181,6 +196,49 @@ describe('workloads.issueKey', () => {
 		const response = await call(h, '/admin/rpc', { method: 'POST', bearer: PROVISIONING_KEY, body: { method: 'apiKeys.list', input: {} } })
 		const items = prop(prop(await response.json(), 'result'), 'items')
 		expect(Array.isArray(items) ? items.map((item: unknown) => prop(item, 'label')) : items).toEqual(['provisioning'])
+	})
+})
+
+describe('a workload principal holds no grant', () => {
+	test('a workload token of an admin audience with a global admin grant does not administer IAM', async () => {
+		const h = createHarness()
+		const job = await issued(h, { kind: 'job', name: 'nightly', app: CONSOLE_APP })
+		// Written past every guard, as a hand-edited database would hold it.
+		h.sqlite.run('INSERT INTO grants (id, principal_id, role_key, scope_type, scope_value, app, created_at) VALUES (?, ?, ?, NULL, NULL, NULL, ?)', [
+			'grant-on-a-job',
+			job.principalId,
+			'admin',
+			Math.floor(Date.now() / 1000),
+		])
+		const services = h.makeServices({ environment: 'stage', issuer: ISSUER })
+		const { result } = await mintFromKey(services, TEST_SIGNING_ENV, { app: CONSOLE_APP, key: job.key, requestId: 'r' })
+		if (!result.ok) throw new Error(result.reason)
+		const { payload } = await jwtVerify(result.token, createLocalJWKSet((await getSigner(TEST_SIGNING_ENV)).jwks()), { issuer: ISSUER })
+		expect(parseAccessClaims(payload)?.perms).toEqual([])
+		expect((await call(h, '/admin/rpc', { method: 'POST', bearer: result.token, body: { method: 'me', input: undefined } })).status).toBe(403)
+		const admin = await resolveAdmin(services, { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }, { bearer: result.token, requestId: 'r' })
+		expect(admin).toEqual({ ok: false, status: 403, reason: 'not_allowed' })
+	})
+
+	test('no grant can be written for a workload principal', async () => {
+		const h = createHarness()
+		const job = await issued(h, { kind: 'job', name: 'nightly' })
+		const response = await call(h, '/admin/rpc', {
+			method: 'POST',
+			bearer: PROVISIONING_KEY,
+			body: { method: 'grants.create', input: { principalId: job.principalId, permissions: ['notes.read'], app: APP } },
+		})
+		expect(response.status).toBe(409)
+		await expect(h.repositories.grants.createGrant({ principalId: job.principalId, app: APP, roleKey: 'admin' })).rejects.toBeInstanceOf(
+			WorkloadGrantError,
+		)
+		expect(h.sqlite.query('SELECT id FROM grants WHERE principal_id = ?').all(job.principalId)).toEqual([])
+		const rotate = await call(h, '/admin/rpc', {
+			method: 'POST',
+			bearer: PROVISIONING_KEY,
+			body: { method: 'apiKeys.rotate', input: { principalId: job.principalId } },
+		})
+		expect(rotate.status).toBe(404)
 	})
 })
 
@@ -212,14 +270,78 @@ describe(`POST ${WORKLOAD_TOKEN_PATH}`, () => {
 		expect(typeof prop(answer, 'token')).toBe('string')
 	})
 
-	test('refuses another application, any key that is not a workload key, and no key at all', async () => {
+	test('answers every key that is not a live workload key of the application with the same invalid_key', async () => {
 		const h = createHarness()
 		expect((await reconcile(h, schema([{ kind: 'job', name: 'nightly', actions: ['notes.purge'] }]))).status).toBe(200)
 		const job = await issued(h, { kind: 'job', name: 'nightly' })
+		const disabledJob = await issued(h, { kind: 'job', name: 'weekly' })
+		h.sqlite.run('UPDATE principals SET disabled_at = 1 WHERE id = ?', [disabledJob.principalId])
+		const revokedJob = await issued(h, { kind: 'webhook', name: 'github' })
+		h.sqlite.run('UPDATE credentials SET revoked_at = 1 WHERE id = ?', [revokedJob.credentialId])
+		// An ordinary service key, live and disabled: its principal status is never read here.
+		const service = await call(h, '/admin/api-keys', {
+			method: 'POST',
+			bearer: PROVISIONING_KEY,
+			body: { label: 'ci', type: 'service', permissions: ['notes.read'], app: APP },
+		})
+		const serviceKey = prop(await service.json(), 'apiKey')
+		if (typeof serviceKey !== 'string') throw new Error('no service key')
+		const disabledService = await call(h, '/admin/api-keys', {
+			method: 'POST',
+			bearer: PROVISIONING_KEY,
+			body: { label: 'old', type: 'service', permissions: ['notes.read'], app: APP },
+		})
+		const disabled = await disabledService.json()
+		const disabledKey = prop(disabled, 'apiKey')
+		const disabledId = prop(disabled, 'principalId')
+		if (typeof disabledKey !== 'string' || typeof disabledId !== 'string') throw new Error('no service key')
+		h.sqlite.run('UPDATE principals SET disabled_at = 1 WHERE id = ?', [disabledId])
 		const refused = { ok: false, reason: 'invalid_key' }
+		const absent = `px_${'A'.repeat(27)}`
+		for (const key of [absent, serviceKey, disabledKey, disabledJob.key, revokedJob.key, PROVISIONING_KEY, 'px_short']) {
+			expect(await exchange(h, key, { app: APP })).toEqual(refused)
+		}
 		expect(await exchange(h, job.key, { app: 'notes@stage' })).toEqual(refused)
-		expect(await exchange(h, PROVISIONING_KEY, { app: APP })).toEqual(refused)
 		expect(await exchange(h, undefined, { app: APP })).toEqual(refused)
+		// A refusal writes no auth-log row; only the exchange that succeeds is recorded.
+		expect(await exchange(h, job.key, { app: APP })).toMatchObject({ ok: true })
+		expect(h.sqlite.query("SELECT reason FROM auth_log WHERE reason LIKE '%workload%' OR decision = 'deny'").all()).toEqual([
+			{ reason: 'mint_workload_key' },
+		])
+	})
+
+	test('a storage failure is a 503, never a refused key', async () => {
+		const h = createHarness()
+		const job = await issued(h, { kind: 'job', name: 'nightly' })
+		h.sqlite.run('DROP TABLE workload_principals')
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const response = await call(h, WORKLOAD_TOKEN_PATH, { method: 'POST', bearer: job.key, body: { app: APP } })
+			expect(response.status).toBe(503)
+			const body: unknown = await response.json()
+			expect(body).toEqual({ error: 'unavailable' })
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test('a client over the bucket the password and device routes share is refused before the key is looked up', async () => {
+		const h = createHarness()
+		const job = await issued(h, { kind: 'job', name: 'nightly' })
+		const app = createIamApp({ clientAddressHeader: 'X-Fabrika-Client-Ip' })
+		const send = () =>
+			app.fetch(
+				new Request(`${ISSUER}${WORKLOAD_TOKEN_PATH}`, {
+					method: 'POST',
+					headers: { authorization: `Bearer ${job.key}`, 'content-type': 'application/json', 'X-Fabrika-Client-Ip': '203.0.113.9' },
+					body: JSON.stringify({ app: APP }),
+				}),
+				env(h),
+				exec,
+			)
+		expect((await send()).status).toBe(200)
+		h.sqlite.run('UPDATE password_login_throttles SET blocked_until = ?', [Math.floor(Date.now() / 1000) + 600])
+		expect((await send()).status).toBe(429)
 	})
 
 	test('refuses a body that names no application, and every method but POST', async () => {

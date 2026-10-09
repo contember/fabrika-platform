@@ -11,9 +11,9 @@ const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
 
 /**
  * Issue a fresh key for one workload (ADR-0022 "Principal kinds"). The principal is created on first use; what the key
- * may do is the app's reconciled declaration of the workload, never part of this request. The newest older key stays
- * valid, so the version still running keeps working while the deploy that carries the new key rolls out; every older
- * one is revoked.
+ * may do is the app's reconciled declaration of the workload, never part of this request. The key the caller recorded
+ * as active (`keep`) stays valid, so the version still running keeps working until the caller has recorded the new one;
+ * every other key of the workload is an orphan of an attempt whose record failed, and is revoked.
  */
 export async function issueWorkloadKeyUseCase(c: AdminContext, input: IssueWorkloadKeyRequest): Promise<IssueWorkloadKeyResponse> {
 	if (!WORKLOAD_NAME.test(input.name)) {
@@ -38,14 +38,15 @@ export async function issueWorkloadKeyUseCase(c: AdminContext, input: IssueWorkl
 		expiresAt: input.expiresAt,
 		grants: [],
 	})
-	for (const stale of previous.slice(1)) {
-		await c.services.repositories.credentials.revokeCredential(stale.id)
+	const orphans = previous.filter((row) => row.id !== input.keep)
+	for (const orphan of orphans) {
+		await c.services.repositories.credentials.revokeCredential(orphan.id)
 	}
 	await adminAudit(c, {
 		action: 'iam.workload.key.issue',
 		resourceType: 'principal',
 		resourceId: principal.id,
-		metadata: { app: input.app, kind: input.kind, name: input.name, expiresAt: input.expiresAt, revoked: Math.max(previous.length - 1, 0) },
+		metadata: { app: input.app, kind: input.kind, name: input.name, expiresAt: input.expiresAt, kept: input.keep, revoked: orphans.length },
 	})
 	return { key, credentialId, principalId: principal.id, expiresAt: input.expiresAt }
 }

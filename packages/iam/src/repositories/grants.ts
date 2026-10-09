@@ -1,6 +1,14 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { firstRow, unixNow } from './sql'
 
+/** A grant written for a workload principal: its authority is its declared actions, never a grant. */
+export class WorkloadGrantError extends Error {
+	override readonly name = 'WorkloadGrantError'
+	constructor() {
+		super('a workload principal holds no grant')
+	}
+}
+
 export interface GrantRow {
 	id: string
 	principal_id: string
@@ -50,11 +58,13 @@ export class GrantRepository {
 	 */
 	async getActiveGrantsForApp(principalId: string, app: string, options: { includeCrossApp: boolean }): Promise<GrantRow[]> {
 		const appFilter = options.includeCrossApp ? '(app = ? OR app IS NULL)' : 'app = ?'
+		// A workload principal resolves no grant on any path: its authority is its declared actions (ADR-0022).
 		const { results } = await this.db
 			.prepare(`SELECT * FROM grants
 				WHERE principal_id = ?
 					AND ${appFilter}
-					AND (expires_at IS NULL OR expires_at > ?)`)
+					AND (expires_at IS NULL OR expires_at > ?)
+					AND NOT EXISTS (SELECT 1 FROM workload_principals w WHERE w.principal_id = grants.principal_id)`)
 			.bind(principalId, app, unixNow())
 			.all<GrantRow>()
 		return results
@@ -107,7 +117,20 @@ export class GrantRepository {
 	 * null = global). The handler validates which is set; this layer just persists it.
 	 */
 	async createGrant(input: CreateGrantInput): Promise<GrantRow> {
+		await this.refuseWorkload(input.principalId)
 		return firstRow<GrantRow>(this.insertGrant(input, ''))
+	}
+
+	/** Whether `principalId` is a job's, a webhook's or a connector's principal, which holds no grant. */
+	async isWorkloadPrincipal(principalId: string): Promise<boolean> {
+		return (await this.db.prepare('SELECT principal_id FROM workload_principals WHERE principal_id = ?').bind(principalId).first()) !== null
+	}
+
+	/** A principal is a workload from the batch that creates it, so this check cannot race a later change. */
+	private async refuseWorkload(principalId: string): Promise<void> {
+		if (await this.isWorkloadPrincipal(principalId)) {
+			throw new WorkloadGrantError()
+		}
 	}
 
 	/**
@@ -116,6 +139,7 @@ export class GrantRepository {
 	 * the statement itself decides on both engines and any other failure still throws.
 	 */
 	async createRoleGrantUnlessHeld(input: CreateGrantInput & { roleKey: string; permissions?: null }): Promise<GrantRow | null> {
+		await this.refuseWorkload(input.principalId)
 		const target = input.scopeValue == null
 			? `(principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL`
 			: `(principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL`
