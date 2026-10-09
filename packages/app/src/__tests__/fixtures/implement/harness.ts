@@ -211,6 +211,23 @@ export async function token(kind: TokenKind, perms: PermissionEntry[], audience 
 	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
 }
 
+/** A connector token: an `app` workload naming the consuming application, as IAM mints it from that consumer's key. */
+export async function appToken(consumer: string, perms: PermissionEntry[], audience = APP_ID): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const claims = buildAccessClaims({
+		iss: ISSUER,
+		app: audience,
+		subject: `app-${consumer}`,
+		type: 'app',
+		workload: consumer,
+		label: null,
+		permissions: perms,
+		issuedAt: now - 10,
+		expiresAt: now + 300,
+	})
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+}
+
 /** A share-link token: no principal type, bound to `mount` and `chain` (the object first), as IAM mints from a link key. */
 export async function linkToken(perms: PermissionEntry[], link: LinkTokenClaims): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)

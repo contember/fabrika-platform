@@ -16,7 +16,7 @@ import { defineContract } from '../contract/define'
 import type { ContractApp } from '../implement/boot'
 import { mintRef, RequestFrame, requestIsReadOnly, runInRequest } from '../implement/capability'
 import { implement } from '../implement/implement'
-import { bootApp, grant, resultOf, send, token } from './fixtures/implement/harness'
+import { appToken, bootApp, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { ById, contract as notesContract, Note, NoteList } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { tables } from './fixtures/scoped-notes/src/db/tables'
@@ -181,7 +181,7 @@ const keyRequest = { 'Content-Type': 'application/json', Authorization: 'Bearer 
 
 describe.skipIf(!hasPostgres)('an export handler cannot write', () => {
 	test('the export reads through a READ ONLY request, to its edge key', async () => {
-		const edge = await token('service', [grant('notes.read', { type: 'workspace', value: 'w1' })])
+		const edge = await appToken('digest', [grant('notes.read', { type: 'workspace', value: 'w1' })])
 		const listed = await send(booted, '/__fabrika/connect/notes.v1.list', { token: edge, body: {}, headers: keyRequest })
 		expect(resultOf(listed)).toEqual({ items: [{ id: expect.any(String), title: 'kept' }] })
 		const probed = await send(booted, '/__fabrika/connect/notes.v1.probe', { token: edge, body: {}, headers: keyRequest })
@@ -189,10 +189,11 @@ describe.skipIf(!hasPostgres)('an export handler cannot write', () => {
 	})
 
 	test("the access check's locator runs READ ONLY in an export, and only there", async () => {
-		const edge = await token('service', [grant('notes.read', { type: 'workspace', value: 'w1' })])
+		const edge = await appToken('digest', [grant('notes.read', { type: 'workspace', value: 'w1' })])
 		const exported = await send(viewBooted, '/__fabrika/connect/notes.v1.get', { token: edge, body: { id: viewNote }, headers: keyRequest })
 		expect(resultOf(exported)).toEqual({ id: viewNote, title: 'located' })
-		const procedure = await send(viewBooted, '/api/get', { token: edge, body: { id: viewNote }, headers: keyRequest })
+		const machine = await token('service', [grant('notes.read', { type: 'workspace', value: 'w1' })])
+		const procedure = await send(viewBooted, '/api/get', { token: machine, body: { id: viewNote }, headers: keyRequest })
 		expect(procedure.status).toBe(404)
 	})
 
