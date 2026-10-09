@@ -263,6 +263,7 @@ describe('classifyAccess — the artifact access of an application without a con
 			}
 			for (const link of Object.values(schema.links ?? {})) check('link', link, IAM_SCHEMA_FIELDS.link)
 			for (const delegation of Object.values(schema.delegations ?? {})) check('delegation', delegation, IAM_SCHEMA_FIELDS.delegation)
+			for (const workload of schema.workloads ?? []) check('workload', workload, IAM_SCHEMA_FIELDS.workload)
 			return missing
 		}
 		expect(unclassified(parsed)).toEqual([])

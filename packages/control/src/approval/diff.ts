@@ -9,6 +9,7 @@ import {
 	type AppLinkMountDef,
 	type AppSchema,
 	type AppScopeDef,
+	type AppWorkloadDef,
 	type ArtifactAccess,
 	artifactAccessDigest,
 	canonicalArtifactAccess,
@@ -167,6 +168,12 @@ const DELEGATION_FIELDS: FieldLines<AppDelegationDef> = {
 	purpose: (subject, before, after) => valueLine('purpose')(subject, before.purpose, after.purpose),
 }
 
+const WORKLOAD_FIELDS: FieldLines<AppWorkloadDef> = {
+	kind: (subject, before, after) => valueLine('kind')(subject, before.kind, after.kind),
+	name: (subject, before, after) => valueLine('name')(subject, before.name, after.name),
+	actions: (subject, before, after) => setLines(subject, before.actions, after.actions, 'gains', 'loses'),
+}
+
 const SCHEMA_FIELDS: FieldLines<AppSchema> = {
 	scopes: (_, before, after) =>
 		keyedWidenings(catalog(before.scopes, (scope) => scope.type), catalog(after.scopes, (scope) => scope.type), {
@@ -206,6 +213,14 @@ const SCHEMA_FIELDS: FieldLines<AppSchema> = {
 			removed: (key) => `IAM delegation for endpoint \`${key}\` is removed`,
 			changed: (key, from, to) => fieldChanges(`IAM delegation for endpoint \`${key}\``, from, to, DELEGATION_FIELDS),
 		}),
+	workloads: (_, before, after) => {
+		const id = (workload: AppWorkloadDef): string => `${workload.kind}:${workload.name}`
+		return keyedWidenings(catalog(before.workloads ?? [], id), catalog(after.workloads ?? [], id), {
+			added: (key, workload) => `New IAM workload \`${key}\` with ${listOf(workload.actions, 'no actions')}`,
+			removed: (key) => `IAM workload \`${key}\` is removed`,
+			changed: (key, from, to) => fieldChanges(`IAM workload \`${key}\``, from, to, WORKLOAD_FIELDS),
+		})
+	},
 }
 
 /** The field tables, by the entry they describe; the tests hold every field IAM reads to one of them. */
@@ -217,6 +232,7 @@ export const IAM_SCHEMA_FIELDS = {
 	roleMember: ROLE_MEMBER_FIELDS,
 	link: LINK_FIELDS,
 	delegation: DELEGATION_FIELDS,
+	workload: WORKLOAD_FIELDS,
 } as const
 
 /** Every field's lines; a change no field describes still widens. */

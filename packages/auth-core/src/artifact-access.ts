@@ -42,7 +42,7 @@ function canonicalGateRule(rule: GateRule): GateRule {
 }
 
 function canonicalSchema(schema: AppSchema): AppSchema {
-	const { links, ...rest } = schema
+	const { links, workloads, ...rest } = schema
 	return {
 		...rest,
 		scopes: sortedCatalog('IAM scopes', schema.scopes, (scope) => scope.type),
@@ -51,6 +51,14 @@ function canonicalSchema(schema: AppSchema): AppSchema {
 		...(links === undefined
 			? {}
 			: { links: Object.fromEntries(Object.entries(links).map(([key, link]) => [key, { ...link, grants: sortedSet('link grants', link.grants) }])) }),
+		...(workloads === undefined
+			? {}
+			: {
+				workloads: sortedCatalog('IAM workloads', workloads, (workload) => `${workload.kind}:${workload.name}`).map((workload) => ({
+					...workload,
+					actions: sortedSet('workload actions', workload.actions),
+				})),
+			}),
 	}
 }
 
