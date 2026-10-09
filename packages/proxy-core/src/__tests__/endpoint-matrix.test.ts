@@ -10,6 +10,7 @@ import {
 	formatEndpointHeader,
 	type MintTokenResult,
 	type PermissionEntry,
+	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
@@ -23,6 +24,7 @@ import {
 	FakeIam,
 	type FakeIamOptions,
 	ISSUER,
+	signRawClaims,
 	signToken,
 	verifyRequest,
 	type VerifyRequestOptions,
@@ -75,6 +77,25 @@ const SHARED = endpointRow({
 	requirement: { kind: 'action', action: 'notes.read', access: { form: 'on', dimension: 'note', from: null } },
 	admission: JSON_BODY,
 })
+const EXPORTED = endpointRow({
+	id: 'products.v1.get',
+	kind: 'query',
+	method: 'POST',
+	path: '/__fabrika/connect/products.v1.get',
+	callers: ['app:shop', 'machine'],
+	requirement: { kind: 'action', action: 'notes.read', access: { form: 'over', dimension: 'workspace' } },
+	admission: JSON_BODY,
+})
+// An `app:<id>` caller off an export path: what a manifest must never be able to open.
+const PARTNER = endpointRow({
+	id: 'partner.list',
+	kind: 'query',
+	method: 'POST',
+	path: '/partner/list',
+	callers: ['app:shop'],
+	requirement: { kind: 'member' },
+	admission: JSON_BODY,
+})
 const SPA = endpointRow({ id: 'web', kind: 'spa', method: 'GET', path: '/*', callers: ['human'], requirement: { kind: 'member' }, admission: null })
 const HEALTH = anonymousRow({ id: 'health', kind: 'health', method: 'GET', path: '/healthz', admission: null })
 const CONTACT = anonymousRow({
@@ -85,8 +106,8 @@ const CONTACT = anonymousRow({
 	admission: { contentTypes: ['application/x-www-form-urlencoded'], maxBytes: 4096 },
 })
 
-const TABLE = [ME, REMOVE, INVITE, IMPORT, SHARED, SPA, HEALTH, CONTACT]
-const RESERVED = ['/api', '/machine', '/s/api']
+const TABLE = [ME, REMOVE, INVITE, IMPORT, SHARED, EXPORTED, PARTNER, SPA, HEALTH, CONTACT]
+const RESERVED = ['/api', '/machine', '/s/api', '/__fabrika/connect', '/partner']
 
 const grant = (action: string, scope: PermissionEntry['scope'] = null): PermissionEntry => ({ action, scope, source: 'grant' })
 const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
@@ -94,10 +115,12 @@ const SESSION = '__Host-px_session=s'
 const JSON_POST: VerifyRequestOptions = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' } }
 
 async function minted(
-	type: 'user' | 'service' | undefined,
+	type: TokenPrincipalType | undefined,
 	permissions: PermissionEntry[] = [grant('notes.read')],
+	workload?: string,
 ): Promise<Extract<MintTokenResult, { ok: true }>> {
-	return { ok: true, token: await signToken({ ...(type === undefined ? {} : { type }), permissions }), expiresAt: future() }
+	const token = await signToken({ ...(type === undefined ? {} : { type }), ...(workload === undefined ? {} : { workload }), permissions })
+	return { ok: true, token, expiresAt: future() }
 }
 
 function service(options: FakeIamOptions, delegations?: DelegationIssuer | null): { iam: FakeIam; verify: VerifyService } {
@@ -208,6 +231,53 @@ describe('step 3 — a presented key is terminal', () => {
 	test('an unreachable IAM is a 503', async () => {
 		const { verify } = service({ unreachable: true })
 		expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/api/me', bearer: 'px_k' })), 503)
+	})
+})
+
+describe('step 3 — principal kinds', () => {
+	test.each(['job', 'webhook'] as const)("a %s key is refused on the application's own machine mount, also from the cache", async (kind) => {
+		const { iam, verify } = service({ mintFromKey: await minted(kind, [grant('notes.write'), grant('notes.read')], 'nightly') })
+		for (let attempt = 0; attempt < 2; attempt++) {
+			for (const path of ['/machine/import', '/api/me', '/__fabrika/connect/products.v1.get']) {
+				expectDenied(await verify(verifyRequest({ ...JSON_POST, path, bearer: 'px_workload' })), 403)
+			}
+		}
+		expect(iam.mintFromKeyCalls).toBe(1)
+	})
+
+	test('an app:<id> key reaches its export path and nothing else, also from the cache', async () => {
+		const { iam, verify } = service({ mintFromKey: await minted('app', [grant('notes.read')], 'shop') })
+		for (let attempt = 0; attempt < 2; attempt++) {
+			expect((await verify(verifyRequest({ ...JSON_POST, path: '/__fabrika/connect/products.v1.get', bearer: 'px_edge' }))).status).toBe(204)
+			for (const path of ['/partner/list', '/api/me', '/machine/import']) {
+				expectDenied(await verify(verifyRequest({ ...JSON_POST, path, bearer: 'px_edge' })), 403)
+			}
+		}
+		expect(iam.mintFromKeyCalls).toBe(1)
+	})
+
+	test('the connector key of another application is refused on the export', async () => {
+		const { verify } = service({ mintFromKey: await minted('app', [grant('notes.read')], 'crm') })
+		expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/__fabrika/connect/products.v1.get', bearer: 'px_crm' })), 403)
+	})
+
+	test('a token of an unknown principal kind is refused every time and never cached', async () => {
+		const now = Math.floor(Date.now() / 1000)
+		const token = await signRawClaims({
+			iss: ISSUER,
+			aud: 'example-app',
+			sub: 'p-1',
+			iat: now,
+			exp: now + 300,
+			perms: [grant('notes.write')],
+			label: null,
+			ptype: 'robot',
+		})
+		const { iam, verify } = service({ mintFromKey: { ok: true, token, expiresAt: future() } })
+		for (let attempt = 0; attempt < 2; attempt++) {
+			expectDenied(await verify(verifyRequest({ ...JSON_POST, path: '/machine/import', bearer: 'px_robot' })), 401)
+		}
+		expect(iam.mintFromKeyCalls).toBe(2)
 	})
 })
 

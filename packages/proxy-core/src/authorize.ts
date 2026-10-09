@@ -25,10 +25,12 @@ import {
 	API_KEY_PREFIX,
 	AUTH_CODE_PARAM,
 	AUTH_HANDOFF_STATE_PARAM,
+	callerAdmittedAt,
 	callerOf,
 	type CompiledEndpointTable,
 	formatEndpointHeader,
 	type GateRule,
+	isWorkloadKind,
 	planEndpoint,
 	satisfies,
 	SESSION_COOKIE,
@@ -62,7 +64,10 @@ export type DenyReason =
 	| 'token_too_large'
 	/** A contract application's table has no endpoint for the method and path. No fall-through. */
 	| 'no_endpoint'
-	/** The credential's caller kind is not one of the endpoint's callers, or is no caller kind at all. */
+	/**
+	 * The credential's caller kind is not one of the endpoint's callers, is no caller kind at all (a job or a webhook
+	 * key), or is a connector caller off an export path.
+	 */
 	| 'caller_kind'
 	/** The token does not satisfy the endpoint's requirement. */
 	| 'insufficient_permission'
@@ -295,7 +300,7 @@ export class Authorizer {
 			return caller.decision
 		}
 		const kind = callerOf(caller.claims)
-		if (kind === null || !row.callers.includes(kind)) {
+		if (kind === null || !row.callers.includes(kind) || !callerAdmittedAt(kind, row.path)) {
 			return { outcome: 'deny', status: 403, reason: 'caller_kind' }
 		}
 		if (!satisfies(row.requirement, caller.claims.perms)) {
@@ -400,9 +405,14 @@ export class Authorizer {
 	 */
 	private async authorizeBearer(app: ProxyApp, bearer: string, requestId: string): Promise<Decision> {
 		const key = await this.exchangeKey(app, bearer, requestId)
-		return key.ok
-			? { outcome: 'allow', gate: 'service', token: key.token, subject: key.claims.sub, endpoint: null, delegation: null }
-			: key.denial
+		if (!key.ok) {
+			return key.denial
+		}
+		// A workload key is accepted by no mount, a gate included (ADR-0022 "Principal kinds").
+		if (isWorkloadKind(key.claims.ptype)) {
+			return { outcome: 'deny', status: 403, reason: 'caller_kind' }
+		}
+		return { outcome: 'allow', gate: 'service', token: key.token, subject: key.claims.sub, endpoint: null, delegation: null }
 	}
 
 	/** Exchange a `px_` key for a verified token, through the cache. A non-`px_` bearer is refused with no IAM call. */

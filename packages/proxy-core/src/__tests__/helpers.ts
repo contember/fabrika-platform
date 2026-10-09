@@ -18,6 +18,7 @@ import {
 	type PermissionEntry,
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
+	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import {
@@ -73,7 +74,9 @@ export interface SignOptions {
 	ttlSeconds?: number
 	subject?: string
 	/** Omit for an ANONYMOUS token (a standalone share link). */
-	type?: 'user' | 'service'
+	type?: TokenPrincipalType
+	/** The workload a `job`, `webhook` or `app` token names. */
+	workload?: string
 	audience?: string
 	issuer?: string
 	key?: KeyLike
@@ -88,6 +91,7 @@ export async function signToken(options: SignOptions = {}): Promise<string> {
 		app: options.audience ?? APP,
 		subject: options.subject ?? 'user-1',
 		...(options.type === undefined ? {} : { type: options.type }),
+		...(options.workload === undefined ? {} : { workload: options.workload }),
 		label: 'a@b.cz',
 		permissions: options.permissions ?? PERMS,
 		issuedAt: now,
@@ -128,6 +132,11 @@ export async function signResourceToken(options: ResourceSignOptions = {}): Prom
 	const typ = options.typ === undefined ? RESOURCE_ACCESS_TOKEN_TYP : options.typ
 	const header = typ === null ? { alg: 'ES256', kid: 'k1' } : { alg: 'ES256', kid: 'k1', typ }
 	return new SignJWT(claims).setProtectedHeader(header).sign(options.key ?? primary.privateKey)
+}
+
+/** A token whose claims no builder would write: a payload signed as it is, with the suite's published key. */
+export function signRawClaims(claims: Record<string, unknown>): Promise<string> {
+	return new SignJWT(claims).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(primary.privateKey)
 }
 
 /** A principal-bound token, i.e. what `mintToken` / `mintFromKey` return for a real caller. */

@@ -90,6 +90,22 @@ describe('deny — nothing matched', () => {
 	})
 })
 
+describe('deny — a workload key on a service gate', () => {
+	test.each([['job', 'nightly'], ['webhook', 'github'], ['app', 'shop']] as const)(
+		'a %s key is refused 403, also from the cache',
+		async (type, workload) => {
+			const iam = iamWith({ mintFromKey: { ok: true, token: await signToken({ type, workload }), expiresAt: future() } })
+			const verify = service(SERVICE, iam)
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const response = await verify(verifyRequest({ path: '/api/x', bearer: 'px_workload' }))
+				expect(response.status).toBe(403)
+				expectDenied(response)
+			}
+			expect(iam.mintFromKeyCalls).toBe(1)
+		},
+	)
+})
+
 describe('deny — the forwarded request is not describable', () => {
 	test('a missing X-Forwarded-Uri denies rather than falling back to the /verify path', async () => {
 		// Critical: /verify would match a `/*` public rule and let everything through.
