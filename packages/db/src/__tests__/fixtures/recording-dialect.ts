@@ -8,11 +8,14 @@ import {
 	PostgresIntrospector,
 	PostgresQueryCompiler,
 	type QueryResult,
+	type TransactionSettings,
 } from 'kysely'
 
 /** Records every compiled statement instead of sending it, and answers with no rows. */
 export class RecordingDialect implements Dialect {
 	readonly log: CompiledQuery[] = []
+	/** The settings of every transaction begun, in order. */
+	readonly transactions: TransactionSettings[] = []
 
 	createAdapter() {
 		return new PostgresAdapter()
@@ -34,7 +37,9 @@ export class RecordingDialect implements Dialect {
 			async acquireConnection() {
 				return connection
 			},
-			async beginTransaction() {},
+			async beginTransaction(_connection, settings) {
+				dialect.transactions.push(settings)
+			},
 			async commitTransaction() {},
 			async rollbackTransaction() {},
 			async releaseConnection() {},

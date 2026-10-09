@@ -63,7 +63,7 @@ export interface PostgresOptions {
 	readonly max?: number
 }
 
-let openSession: (database: Database) => Session
+let openSession: (database: Database, readOnly: boolean) => Session
 
 /** The connection the data layer runs on. It has no public query method: everything goes through a store. */
 export class Database {
@@ -75,7 +75,7 @@ export class Database {
 	}
 
 	static {
-		openSession = (database) => new Session(database.#kysely, database.#kysely)
+		openSession = (database, readOnly) => new Session(database.#kysely, database.#kysely, readOnly)
 	}
 
 	/**
@@ -101,8 +101,9 @@ export class Database {
 }
 Object.freeze(Database.prototype)
 
-export function sessionOf(database: Database): Session {
-	return openSession(database)
+/** A read-only session refuses every write and lock before it reaches the database, and reads in `READ ONLY` transactions. */
+export function sessionOf(database: Database, readOnly = false): Session {
+	return openSession(database, readOnly)
 }
 
 let executeFixed: (session: Session, compiled: CompiledQuery) => Promise<readonly unknown[]>
@@ -111,10 +112,12 @@ let executeFixed: (session: Session, compiled: CompiledQuery) => Promise<readonl
 export class Session {
 	readonly #executor: Executor
 	readonly #kysely: Kysely<LooseDB> | undefined
+	readonly #readOnly: boolean
 
-	constructor(executor: Executor, kysely: Kysely<LooseDB> | undefined) {
+	constructor(executor: Executor, kysely: Kysely<LooseDB> | undefined, readOnly: boolean) {
 		this.#executor = executor
 		this.#kysely = kysely
+		this.#readOnly = readOnly
 		Object.freeze(this)
 	}
 
@@ -124,18 +127,29 @@ export class Session {
 
 	async run<O>(node: RootOperationNode, context: GuardContext): Promise<O[]> {
 		assertAllowedTree(node, context)
+		if (this.#readOnly && (context.root !== 'SelectQueryNode' || context.lock === true)) {
+			throw new QueryRefusedError('this request is read-only: it reads, and no operation may write or lock a row')
+		}
 		// CompiledQuery's row type is a phantom: this is the one place where generated row types meet the wire.
 		const compiled: CompiledQuery<O> = compiler.compileQuery(node, createQueryId())
+		const kysely = this.#kysely
+		if (this.#readOnly && kysely !== undefined) {
+			const result = await kysely.transaction().setAccessMode('read only').execute((transaction) => transaction.executeQuery(compiled))
+			return result.rows
+		}
 		const result = await this.#executor.executeQuery(compiled)
 		return result.rows
 	}
 
-	/** Runs `work` in one transaction; inside one, it runs in the transaction already open. */
+	/** Runs `work` in one transaction (`READ ONLY` in a read-only session); inside one, it runs in the transaction already open. */
 	async transaction<T>(work: (session: Session) => Promise<T>): Promise<T> {
 		if (this.#kysely === undefined) {
 			return work(this)
 		}
-		return this.#kysely.transaction().execute((transaction) => work(new Session(transaction, undefined)))
+		const builder = this.#kysely.transaction()
+		return (this.#readOnly ? builder.setAccessMode('read only') : builder).execute((transaction) =>
+			work(new Session(transaction, undefined, this.#readOnly))
+		)
 	}
 }
 Object.freeze(Session.prototype)

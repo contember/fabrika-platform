@@ -85,6 +85,8 @@ import { type TablePolicies, tablePolicies } from './tables'
 export interface DataLayerRuntime {
 	readonly database: Database
 	readonly capabilities: CapabilityAuthority
+	/** Whether the request running now may only read (an export's); its every statement then runs `READ ONLY`. */
+	readonly readOnly?: () => boolean
 }
 
 /** Empty until the framework connects the layer at boot; every table handle of one `scoped` call shares it. */
@@ -283,7 +285,8 @@ function guard(context: TableContext, root: RootKind, scope: OperationNode | und
 }
 
 function session(context: TableContext): Session {
-	return sessionOf(runtimeOf(context.connection).database)
+	const runtime = runtimeOf(context.connection)
+	return sessionOf(runtime.database, runtime.readOnly?.() === true)
 }
 
 /**
@@ -901,7 +904,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			if (connection.runtime !== undefined) {
 				throw new CapabilityError('the data layer is already connected; only the framework connects it, once, at boot')
 			}
-			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities })
+			const bound: DataLayerRuntime = freeze({ database: runtime.database, capabilities: runtime.capabilities, readOnly: runtime.readOnly })
 			connection.runtime = bound
 			return async (dimension, id) => locateObject(models, bound, dimension, id)
 		},
