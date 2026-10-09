@@ -228,10 +228,10 @@ export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceMa
  * HMAC with that connection's vault secret and triggers exactly the apps bound to it. The run then
  * resolves and archives the private repository through a token minted with the connection's own App key.
  */
-export const triggerByScopedWebhook = async (webhookSecret: string, commitSha: string): Promise<string> => {
+export const triggerByScopedWebhook = async (webhookSecret: string, commitSha: string, stateDirectory: string = STATE_DIR): Promise<string> => {
 	// The push moves `main` in the GitHub double first, as GitHub has moved it before it sends the event.
 	const head: LocalSourceBranchHead = { version: 1, commitSha }
-	await Bun.write(resolve(STATE_DIR, LOCAL_SOURCE_BRANCH_HEAD_FILE), `${JSON.stringify(head)}\n`)
+	await Bun.write(resolve(stateDirectory, LOCAL_SOURCE_BRANCH_HEAD_FILE), `${JSON.stringify(head)}\n`)
 	const body = JSON.stringify({
 		ref: NOTES_TRIGGER_REF,
 		after: commitSha,
