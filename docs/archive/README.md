@@ -9,6 +9,7 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [A-M4 — companions (2026-10-09)](sprint-2026-10-09-a-m4-companions.md)
 - [B-M2 — locked providers (2026-10-09)](sprint-2026-10-09-b-m2-locked-providers.md)
 - [B-M1 — binding contract (2026-10-09)](sprint-2026-10-08-b-m1-binding-contract.md)
 - [A-M2 — data (2026-10-09)](sprint-2026-10-08-a-m2-data.md)
