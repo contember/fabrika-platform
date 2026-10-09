@@ -68,6 +68,20 @@ test('an export may declare no action a table writes with', () => {
 	expect(() => compileContract(writing, tables)).toThrow("'notes.write' writes table 'notes'; an export reads only (allowed: a read action)")
 })
 
+test('an export may declare no action that manages members', () => {
+	const managing = defineContract(notesContract.vocabulary, (c) => ({
+		exports: {
+			notes: c.export({
+				version: 1,
+				consumers: ['digest'],
+				audience: 'any consumer user',
+				procedures: { members: c.query({ output: NoteList, access: { action: 'notes.admin', over: 'workspace' } }) },
+			}),
+		},
+	}))
+	expect(() => compileContract(managing, tables)).toThrow("'notes.admin' manages the members of 'workspace'; an export reads only")
+})
+
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
 const hasPostgres = url !== ''

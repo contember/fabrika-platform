@@ -355,7 +355,7 @@ src/
 - **An export is served read-only.** Its procedures are handlers under `handlers.exports.<export>`,
   each run in a `RequestFrame` with `readOnly`; `boot` binds the data layer with `requestIsReadOnly`, so
   `@fabrika/db` refuses every write and lock in that request and reads `READ ONLY`. `buildArtifact`
-  refuses an export procedure whose action a table writes with. An export's context carries its
+  refuses an export procedure whose action a table writes with or that manages a dimension's members. An export's context carries its
   capability only: no `ctx.connect`, no membership or file API.
 - **An export's callers are its consumers' `app:<id>` and, until B9, `machine`**
   (`EXPORT_EDGE_KEY_CALLER`): an operator provisions one service principal with a `px_` key per edge,

@@ -473,7 +473,7 @@ The owner side:
   It also passes any other owner endpoint `machine` may call with those actions.
 - An export handler runs read-only. The data layer refuses every write and lock in its request, whatever
   capability it carries, and reads in `READ ONLY` transactions. An export may not declare an action a
-  table writes with. Its context has no `ctx.connect` and no membership or file API.
+  table writes with, nor one that manages members. Its context has no `ctx.connect` and no membership or file API.
 
 The consumer side:
 

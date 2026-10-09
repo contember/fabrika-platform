@@ -725,7 +725,7 @@ class ArtifactBuilder {
 		return exports
 	}
 
-	/** An export runs read-only, so its action may not be one a table writes with. */
+	/** An export runs read-only, so its action may not be one a table writes with, nor one that manages members. */
 	#readAction(where: string, access: AccessDeclaration): void {
 		if (!('action' in access)) {
 			return
@@ -734,6 +734,11 @@ class ArtifactBuilder {
 			const { insert, update, delete: remove } = policy.actions
 			if (access.action === insert || access.action === update || access.action === remove) {
 				this.#problem(where, `'${access.action}' writes table '${table}'; an export reads only (allowed: a read action)`)
+			}
+		}
+		for (const [dimension, declared] of Object.entries(this.#contract.dimensions)) {
+			if (declared.members?.manage === access.action) {
+				this.#problem(where, `'${access.action}' manages the members of '${dimension}'; an export reads only (allowed: a read action)`)
 			}
 		}
 	}
