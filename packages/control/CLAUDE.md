@@ -333,16 +333,21 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   commit's tree and files through the GitHub metadata client; `contractReaderInputs` names the files), stores it
   on the run, classifies it against the active snapshot (`classifyAccess`, pure, conservative) and either parks
   the run in `awaiting_approval` (a widening on a `protected` environment without a matching approval) or
-  publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` fenced on the run lease and
-  taken under the namespace lease; a lost swap classifies again. `providerEnvironment` and `namespaceMembers`
-  attach `approvedProviderAccess`, so every deploy, cancel, reconcile, registry hook and namespace job hands the
-  provider the approved access and nothing else. A new write path must take it the same way; reading access
+  publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` and `protection_revision`
+  fenced on the run lease and taken under the namespace lease; a lost swap classifies again. The snapshot is read
+  at `provider.applicationRoot(source)`, the provider's own normalization of `workerDir`. `providerEnvironment` and
+  `namespaceMembers` attach `approvedProviderAccess`, so every deploy, cancel, reconcile, registry hook and
+  namespace job hands the provider the approved access and nothing else: `access`, or `artifactAccess` only when
+  `app_envs.contract_app = 0` (Control's own snapshots say the application has no contract). A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header, on a request that passes
-  `sameOrigin` against `controlPublicOrigin`. The decision is written under the run lease (a busy environment
-  answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
+  `sameOrigin` against `controlPublicOrigin` (`src/approval/human.ts`). The decision is written under the run lease
+  (a busy environment answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
+  Deleting a protected environment, or an app with one, takes the same human (`requireHumanForProtectedDelete`,
+  over `RegistryUseCaseContext.admission`). The flag outlives the row in `app_env_protection`; a change of it
+  bumps `protection_revision` and `generation`, so an in-flight publication loses.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

@@ -81,9 +81,11 @@ image's own copy — from the contract's endpoint table for a contract applicati
 config hands it otherwise — and writes the contract digest into the application Worker; a config Worker that
 binds `APP` is refused; the exposure and name refusals above are checked on the wrangler configs oblaka
 generates, before provisioning and again before deploying; Control sends its registry of Cloudflare
-deployments with each job. Until work unit B6 sends the run's snapshot, the deployer reads the contract from
-the checkout with the same static reader, so a contract application is one whose checkout has
-`fabrika.contract.ts`. IAM still receives the schema from the runner's outcome until B6.
+deployments with each job. Work unit B6 sends the run's approved access in the job: the deployer builds
+the proxy and writes the digest from the approved contract, and refuses a checkout with a contract when
+Control read none. IAM receives the approved contract's schema; a runner-reported schema applies only to
+an application Control's registry knows has no contract. Outside Control (a local deploy) the deployer
+reads the contract from the checkout with the same static reader.
 
 ### On Cloudflare these are a strong default, not a security boundary
 

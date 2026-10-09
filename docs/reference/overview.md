@@ -256,10 +256,12 @@ Right after the provider pins the run's commit, Control reads the run's **access
 `db/migrations/` file with its SHA-256. It classifies the snapshot against the environment's active snapshot
 (that of `app_envs.published_run_id`). A widening on an environment with `protected` set (`prod` by
 default) parks the run in `awaiting_approval`; it publishes nothing until a person approves it in the
-console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation`, under
-the namespace lease. Every provider environment and namespace member then carries `approvedSnapshot`'s
-access, and the providers publish a contract application's endpoint table and reconcile its IAM schema from
-it, never from the artifact. Approving needs `access.approve` (authorization) from a human user principal on a
+console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
+`protection_revision`, under the namespace lease. Every provider environment and namespace member then carries
+`approvedSnapshot`'s access, and the providers publish a contract application's endpoint table and reconcile
+its IAM schema from it, never from the artifact. Without approved access a provider publishes nothing, unless
+Control's registry records that the application has no contract (`app_envs.contract_app = 0`, from Control's
+own snapshots); then its artifact's gates and schema apply (`artifactAccess`). Approving needs `access.approve` (authorization) from a human user principal on a
 console request from Control's own origin (admission).
 
 For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete

@@ -49,6 +49,8 @@ lifecycle stay in `CLAUDE.md`.
   status. `operations_release_sync` references `runs` with `ON DELETE CASCADE`: its rows are copied aside and
   restored around the rebuild, because dropping the parent would cascade into them. Rebuild a referenced table
   the same way.
+- **`app_env_protection` has no foreign key, on purpose.** It keeps an environment's `protected` flag after the
+  environment or its app is deleted; `upsertAppEnv` seeds a new row from it. Never add an `ON DELETE CASCADE`.
 - **The Bun migration wrapper owns `control_schema_migrations`, bundle `control`, and advisory lock
   `4471902583`.** Bundle and filename form the migration identity; see ADR-0017.
 

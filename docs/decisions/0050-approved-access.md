@@ -37,8 +37,20 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 - The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
   every file under `db/migrations/` is listed.
 - The snapshot digest covers the canonical contract and the migration list, not the checker version.
-- A commit without `fabrika.contract.ts` has a snapshot without a contract; such an application keeps the
-  gates and IAM schema of its artifact until B10. Dropping the contract from a commit is a widening.
+- A commit without `fabrika.contract.ts` has a snapshot without a contract. Dropping the contract from a
+  commit is a widening.
+- Control's registry records whether an application has a contract, in `app_envs.contract_app`, from
+  its own snapshots and never from an upload. A recorded snapshot with a contract sets it to 1 at once,
+  before anything is published. Only a published snapshot without one sets it to 0. Only at 0 does the
+  provider receive `artifactAccess` and apply its artifact's gates and IAM schema, until B10. Otherwise,
+  without approved access, a provider routes nothing, reconciles no IAM schema and refuses a non-dry
+  deploy.
+- Control reads the snapshot at the provider's `applicationRoot`, the directory the provider executes
+  from, with the same normalization (`checkoutRelativeDirectory` on Cloudflare). A root outside the
+  repository fails the run.
+- The Cloudflare runner job carries the approved access: the contract and its digest, or `artifact`.
+  The runner hands it to the executor in a file beside the checkout. The deployer builds the proxy
+  table and `FABRIKA_CONTRACT_DIGEST` from it, never from the checkout.
 - A run records its actor as `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`.
 - `approvals.complete` approves or refuses; a refused run fails. The protected flag changes through
   `apps.environments.protect`. A parked run can be cancelled.
@@ -61,8 +73,8 @@ Uploads carry no gates and no IAM schema. A snapshot comes only from the commit.
 
 ### 2. Publication is a compare-and-swap on the environment
 
-`app_envs` gains `published_run_id` and `generation`. The published run's snapshot is the
-environment's **active snapshot**.
+`app_envs` gains `published_run_id`, `generation` and `protection_revision`. The published run's
+snapshot is the environment's **active snapshot**.
 
 One function, `approvedSnapshot(app, env)`, feeds every path that publishes a proxy table or
 reconciles IAM:
@@ -73,8 +85,9 @@ reconciles IAM:
 - the Zerops `reconcile-schema` step, cancel and reconcile;
 - the Cloudflare deploy and reconcile.
 
-A run publishes with `UPDATE … WHERE generation = ?`, inside the existing namespace lease. A concurrent
-publication therefore loses.
+A run publishes with `UPDATE … WHERE generation = ? AND protection_revision = ?`, inside the existing
+namespace lease. A concurrent publication therefore loses. A change of the `protected` flag advances
+both values, so a run that classified under the old flag also loses.
 
 A run that loses the compare-and-swap is classified again against the new active snapshot. This holds
 while the run waits and after it is approved. An approval is valid only for the baseline digest it
@@ -122,6 +135,11 @@ The diff is a pure function. It produces plain-language lines for the approver, 
 Each environment has a `protected` flag, a column of Control's `app_envs`. `prod` is protected by
 default; every other environment is not. Changing the flag requires `access.approve` from a human user
 principal, the same rule as approving (section 5). Control's audit log records every change.
+
+The flag outlives its environment. Control keeps it per `<app>@<env>` in `app_env_protection`, which
+deleting the environment or the application leaves in place. A recreated environment starts with the
+kept value, else with the default. Deleting a protected environment, or an application with one, takes
+the same human with `access.approve`.
 
 Unprotected environments do not wait. Every environment with `protected = true` requires approval
 for a widening, whatever its name or role. Staging and MCP authoring targets are unprotected by

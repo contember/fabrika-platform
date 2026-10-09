@@ -28,8 +28,15 @@ this one import.
   applies IAM's own `isActionAllowed` rule to every role permission — and only then calls the
   `SchemaReconciler` with its own key and the projected return origins. With Control's approved access
   (`environment.access`, ADR-0050) the deploy and the reconcile apply `access.schema` instead, whatever the
-  runner reported; without it a reported `contract: true` schema fails the run, because a contract
-  application's IAM vocabulary comes only from the contract Control read at the commit.
+  runner reported. A reported schema applies only with `environment.artifactAccess` (Control's registry knows
+  the application has no contract), and never a `contract: true` one; with neither, a report fails the run.
+- **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
+  digest, or `artifact`). `buildJob` refuses a non-dry deploy without it, and `cloudflareRunnerJobSchema`
+  parses the contract and checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside
+  the checkout and names it in `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the
+  executor reads it (`readApprovedContract`) before the config runs. Unset outside a runner (a local deploy).
+- **`checkoutRelativeDirectory` is the one application-root normalization.** The runner resolves `workerDir`
+  with it, and `applicationRoot` hands it to Control, which reads the run's snapshot there. Never add a second.
 - **`cloudflareRunnerJobSchema` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading
   `-` and no whitespace, `[a-z0-9-]` env, contained relative `workerDir`/`configPath`, literal
   `domain`. Every field becomes an argv element, a path or a hostname inside the container.
@@ -97,10 +104,10 @@ this one import.
   application Worker; a Worker that binds `APP` (a proxy of its own) is refused. The deployer wraps it in
   `createCloudflareProxyWorker`, named `<app>-proxy`, from this package's own entrypoint and directory — the
   runner image's copy, never a checkout's `node_modules` copy. What the proxy enforces:
-  - a contract application's endpoint table (`contractProxyTable(artifact)`). The application is a contract
-    application when the run carries its snapshot (`CloudflareDeployRun.contract`, B6's seam) or, until then,
-    when the config's directory holds `fabrika.contract.ts`, read by `@fabrika/check/contract`'s static reader
-    (`readContract` collaborator) — never evaluated. The deployer writes `FABRIKA_CONTRACT_DIGEST` into the
+  - a contract application's endpoint table (`contractProxyTable(artifact)`). The contract is the one Control
+    approved (`CloudflareDeployRun.contract`); `null` means Control read none, and a checkout that has one is
+    refused. Only outside Control is it read from the config's directory by `@fabrika/check/contract`'s static
+    reader (`readContract` collaborator) — never evaluated. The deployer writes `FABRIKA_CONTRACT_DIGEST` into the
     application Worker. An IAM schema whose `contract: true` disagrees with the contract is refused, and so are
     `gates` beside a contract;
   - otherwise the config's `gates`, parsed with `proxyAppGatesSchema`;
