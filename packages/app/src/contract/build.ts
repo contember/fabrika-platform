@@ -705,6 +705,10 @@ class ArtifactBuilder {
 				if (procedure.type !== 'query') {
 					this.#problem(`procedure '${id}'`, 'an export serves queries only (allowed: c.query)')
 				}
+				if (!('action' in procedure.access)) {
+					// The consumer's key holds exactly the export's actions, so a `member` procedure would have none to hold.
+					this.#problem(`procedure '${id}'`, 'an export procedure names its action (allowed: { action, over })')
+				}
 				this.#readAction(`procedure '${id}'`, procedure.access)
 				this.#procedure(source, id, joinPath(CONNECT_PREFIX, id), callers, procedure)
 			}

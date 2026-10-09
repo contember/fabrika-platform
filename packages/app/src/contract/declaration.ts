@@ -79,6 +79,9 @@ export type AccessDeclaration =
 	| { readonly action: string; readonly creates: string }
 
 /** A link procedure acts on the object its key is bound to, so it names only the action. */
+/** An export procedure's access: an action, never `member`, because the consumer's key holds exactly the actions. */
+export type ExportAccessDeclaration = Exclude<AccessDeclaration, { readonly member: true }>
+
 export interface LinkAccessDeclaration {
 	readonly action: string
 }
@@ -185,7 +188,7 @@ export interface ExportDeclaration<S> extends OptionsRecord {
 	readonly version: number
 	readonly consumers: readonly string[]
 	readonly audience: string
-	readonly procedures: ProcedureTreeDeclaration<S>
+	readonly procedures: ProcedureTreeDeclaration<S, ExportAccessDeclaration>
 }
 
 export interface ImportDeclaration {

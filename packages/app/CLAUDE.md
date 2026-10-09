@@ -399,7 +399,9 @@ src/
   `app:<id>`, and `buildArtifact`, the reader and `parseContractArtifact` refuse one on any other row.
   `schemaFromContract` declares each consumer as an `app` workload holding the actions of the export rows it may
   call: what the key Control issues for that consumer resolves to at IAM. `presentedBy` gives an `app` token an
-  `AppPrincipal`. `<export>.v<n>` (no procedure) serves the export's description, the
+  `AppPrincipal`. An export procedure names its action: `{ member: true }` would give the consumer's key no action
+  to hold, so the types (`ExportAccessDeclaration`), `buildArtifact`, the reader and `parseContractArtifact` refuse
+  it. `<export>.v<n>` (no procedure) serves the export's description, the
   schemas and digest a consumer vendors, to the same callers and with the same requirement as its
   procedures: v1 exports declare one action in one dimension for every procedure, and `buildArtifact`
   refuses one that does not. Never give the description a weaker requirement.

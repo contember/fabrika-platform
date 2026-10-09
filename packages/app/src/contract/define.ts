@@ -6,6 +6,7 @@ import type { z } from 'zod/v4'
 import {
 	type CronDeclaration,
 	type CspDeclaration,
+	type ExportAccessDeclaration,
 	type ExportDeclaration,
 	type FilesDeclaration,
 	type FormMountDeclaration,
@@ -136,7 +137,7 @@ export type LinkProcedureTree = ProcedureTreeDeclaration<Schema, LinkAccessDecla
 
 /** Exports serve queries only: a read-only context, so retrying one is safe. */
 export interface QueryTree {
-	readonly [name: string]: (ProcedureDeclaration<Schema> & { readonly type: 'query' }) | QueryTree
+	readonly [name: string]: (ProcedureDeclaration<Schema, ExportAccessDeclaration> & { readonly type: 'query' }) | QueryTree
 }
 
 export interface ProcedureDef<I, O, Acc> extends Owned<'~kind' | 'type'> {

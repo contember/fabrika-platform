@@ -216,6 +216,9 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 			if (row.source.kind !== 'export' && row.callers.some((caller) => caller.startsWith('app:'))) {
 				context.addIssue({ code: 'custom', path: [index, 'callers'], message: 'an app:<id> caller reaches only an export row' })
 			}
+			if (row.source.kind === 'export' && row.requirement?.kind !== 'action') {
+				context.addIssue({ code: 'custom', path: [index, 'requirement'], message: 'an export row requires an action' })
+			}
 		}
 	}),
 	reservedPrefixes: names,

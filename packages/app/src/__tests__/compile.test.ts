@@ -189,6 +189,12 @@ describe('parseContractArtifact', () => {
 		expect(parseContractArtifact(replaced(anonymous, {}))).toEqual(artifact)
 	})
 
+	test("refuses an export row that requires no action: the consumer's key holds exactly the export's actions", () => {
+		const endpoints = artifact.endpoints.map((row) => (row.source.kind === 'export' ? { ...row, requirement: { kind: 'member' } } : row))
+		expect(endpoints.some((row) => row.source.kind === 'export')).toBe(true)
+		expect(() => parseContractArtifact({ ...artifact, endpoints })).toThrow('an export row requires an action')
+	})
+
 	test('refuses an app:<id> caller anywhere but an export row', () => {
 		const index = artifact.endpoints.findIndex((row) => row.source.kind === 'mount' && row.callers.length > 0)
 		const row = artifact.endpoints[index]

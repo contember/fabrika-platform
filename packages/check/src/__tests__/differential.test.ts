@@ -180,6 +180,7 @@ const MISTAKES: Readonly<Record<string, string>> = {
 		"procedure 'api.workspaces.create': creates a 'note', which lies in 'workspace' (allowed: a dimension without in; a contained value is a row a store inserts)",
 	'21-oauth-caller-on-rpc-mount.ts': "fabrika.contract.ts:30:40 'oauth' is not a caller of an RPC mount",
 	'22-app-caller-on-rpc-mount.ts': "fabrika.contract.ts:30:40 'app:billing' is not a caller of an RPC mount",
+	'23-member-access-in-export.ts': 'fabrika.contract.ts:36:55 an export procedure names its action',
 }
 
 /** The first refusal, as a finding line without its rule id and allowed form, or as a compile problem. */

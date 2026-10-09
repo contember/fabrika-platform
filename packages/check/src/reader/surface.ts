@@ -11,6 +11,7 @@ import {
 	type CspDeclaration,
 	type DimensionDef,
 	type Export,
+	type ExportAccessDeclaration,
 	type FileCollection,
 	type ImportDeclaration,
 	type LinkAccessDeclaration,
@@ -375,7 +376,7 @@ class SurfaceReader {
 			consumers: texts(options.get('consumers'), at, 'consumers'),
 			audience: text(options.get('audience'), at, 'audience'),
 			procedures: this.#tree(options.get('procedures'), at, 'surface', (leaf) => {
-				const procedure = this.#procedure(leaf, 'surface', accessDeclaration)
+				const procedure = this.#procedure(leaf, 'surface', exportAccessDeclaration)
 				if (procedure.type !== 'query') {
 					throw new Refused(leaf.at, 'an export serves queries only', 'c.query')
 				}
@@ -588,6 +589,15 @@ function accessDeclaration(value: LiteralValue | undefined, at: BuilderValue): A
 		return { action: field('action'), creates: field('creates') }
 	}
 	throw new Refused(value?.at ?? at.at, 'access is not one access form', ACCESS_ALLOWED)
+}
+
+/** An export procedure names its action: the consumer's key holds exactly the actions, so `member` would hold none. */
+function exportAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue): ExportAccessDeclaration {
+	const access = accessDeclaration(value, at)
+	if ('member' in access) {
+		throw new Refused(value?.at ?? at.at, 'an export procedure names its action', '{ action, over } (or in, on, creates)')
+	}
+	return access
 }
 
 function linkAccessDeclaration(value: LiteralValue | undefined, at: BuilderValue): LinkAccessDeclaration {

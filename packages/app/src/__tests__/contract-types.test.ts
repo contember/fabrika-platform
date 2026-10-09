@@ -24,6 +24,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'20-creates-contained-dimension.ts': `Type '"note"' is not assignable to type '"workspace"'`,
 	'21-oauth-caller-on-rpc-mount.ts': `Type '"oauth"' is not assignable to type 'RpcCaller'`,
 	'22-app-caller-on-rpc-mount.ts': `Type '"app:billing"' is not assignable to type 'RpcCaller'`,
+	'23-member-access-in-export.ts': `Type '{ readonly member: true; }' is not assignable to type 'ExportAccessDeclaration'`,
 }
 
 describe('the contract mistakes are type errors', () => {
