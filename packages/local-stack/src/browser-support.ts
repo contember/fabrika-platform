@@ -215,6 +215,8 @@ async function operationsRpc(session: string, method: string, input: unknown): P
 			'content-type': 'application/json',
 			cookie: `${SESSION_COOKIE}=${session}`,
 			origin: CONTROL_ORIGIN,
+			// The proxy admits a session's state change only from the console itself, as a browser marks it.
+			'sec-fetch-site': 'same-origin',
 		},
 		body: JSON.stringify({ method, input }),
 	})
