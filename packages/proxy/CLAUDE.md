@@ -86,6 +86,15 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
   stateless, so never make it shared or persistent.
+- **A contract app's answer gets the header policy with `set`, never a default** (ADR-0022 "Response
+  headers"): step 3's `reverse_proxy` `headers.response` runs on the upstream's headers before they are
+  copied, so the app's own value is replaced, never doubled. A download endpoint is selected by the
+  `X-Fabrika-Endpoint` the decision asserted (`header` matcher on `<id>@*`) and gets the file treatment:
+  the disposition type is forced to `attachment` keeping its parameters, two deferred `headers` handlers
+  around the upstream add an absent one and turn it back to `inline` for an exact inert image type. A
+  deferred handler earlier in the chain runs LATER, so their order is code; `caddy.live.test.ts` proves it.
+  The `Connection` refusal and the unmatched-host 404 carry the policy as `static_response` headers; the
+  auth service's denials carry the one `@fabrika/proxy-core` set. A gate app's answers are untouched.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
   different denials. Both deny; only the second is an incident — including on the human path, where a
   503 must NOT degrade into a bounce to login (that is a login loop hiding an outage). A cache entry

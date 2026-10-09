@@ -64,8 +64,8 @@ per service. Both forms are evaluated only by the proxy, with the matchers in `@
 
 The proxy evaluates gates for every app whose manifest entry carries gates, and the endpoint table for
 every app whose entry carries one; an entry carrying both is refused. Part A generates an application's
-gates from its contract as an intermediate path. Work unit B2 built the endpoint tables and B3 the
-authenticated hop; the response headers (B4) are not built yet.
+gates from its contract as an intermediate path. Work unit B2 built the endpoint tables, B3 the
+authenticated hop and B4 the response headers.
 
 ### 1. Only the proxy is publicly routed
 
@@ -113,29 +113,47 @@ table say:
 Step 1 must be a delete, not an overwrite: `copy_headers` skips an empty auth-response value, so a
 client's own `X-Fabrika-Token` would otherwise reach the app on a `public` path.
 
-**Response headers.** The proxy sets one conservative header policy on every application response and
-on its own denials: Caddy through its response operations, the Cloudflare proxy Worker in code, and
-`@fabrika/proxy-core` on every denial it answers. An application cannot omit the policy. The framework
-sets the same policy in-process. Per-endpoint profiles and caching of static assets are not part of v1.
+**Response headers.** The proxy sets one conservative header policy on every response of a contract
+application and on its own denials: Caddy through its response operations, the Cloudflare proxy Worker
+in code, and `@fabrika/proxy-core` on every answer it writes. The proxy **replaces** whatever the
+application set for these names, so an application can neither omit nor weaken the policy. The
+framework sets the same policy in-process; both read the one definition in
+`@fabrika/proxy-core/headers`. An answer that belongs to no contract application (a gate app's denial,
+a forward refused before an app is selected) carries the policy without named origins; an installation
+service's own answers pass through unchanged. Per-endpoint profiles and caching of static assets are
+not part of v1.
 
 The policy:
 
 - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
   img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' <operations ingest>;
   form-action 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. `<operations ingest>`
-  is the installation's Operations ingest origin. The contract may extend `connect-src`, `img-src` and
-  `frame-ancestors` with named origins; such an extension is approvable
+  is the installation's Operations ingest origin; the framework takes it from `FABRIKA_OPERATIONS_DSN`,
+  and the proxy from its manifest entry's `operationsOrigin`, which the Cloudflare provider fills from the
+  same DSN. A Zerops namespace proxy has no source for it yet, so its `connect-src` omits it. The contract
+  may extend `connect-src`, `img-src` and `frame-ancestors` with named origins — exact `https://` origins
+  with a literal host, never a pattern; such an extension is approvable
   ([ADR-0050](0050-approved-access.md)).
 - `X-Content-Type-Options: nosniff`.
 - `Cache-Control: no-store`, static assets included.
 - `Referrer-Policy: no-referrer`.
 - `Cross-Origin-Opener-Policy: same-origin`.
-- `Permissions-Policy` with every powerful feature off. Work unit B4 decides the exact value.
+- `Permissions-Policy` with every powerful feature off: `accelerometer`, `ambient-light-sensor`,
+  `autoplay`, `bluetooth`, `browsing-topics`, `camera`, `clipboard-read`, `display-capture`,
+  `encrypted-media`, `fullscreen`, `gamepad`, `geolocation`, `gyroscope`, `hid`,
+  `identity-credentials-get`, `idle-detection`, `local-fonts`, `magnetometer`, `microphone`, `midi`,
+  `otp-credentials`, `payment`, `picture-in-picture`, `publickey-credentials-create`,
+  `publickey-credentials-get`, `screen-wake-lock`, `serial`, `storage-access`, `usb`, `web-share`,
+  `window-management` and `xr-spatial-tracking`, each `=()`. `clipboard-write` stays on: copying is
+  an ordinary application feature and reads nothing.
 
-A download endpoint gets the **file treatment** instead:
+A download endpoint gets the **file treatment** instead. The proxy recognises it by the endpoint the
+decision selected, never by a path of its own:
 
 - `Content-Disposition: attachment` for every type except the inert images `image/png`, `image/jpeg`,
-  `image/gif` and `image/webp`, which are served `inline`. SVG and HTML are always attachments.
+  `image/gif` and `image/webp`, which are served `inline`. SVG and HTML are always attachments. The
+  proxy sets the disposition type from the answer's exact `Content-Type` and keeps its parameters
+  (the file name).
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.
@@ -165,7 +183,8 @@ is denied.
   ([ADR-0049](0049-author-applications-through-mcp-in-control.md)).
 
 **Endpoint tables (contract applications).** The manifest carries `{ id, hosts, upstream, scheme,
-endpoints, reservedPrefixes, snapshot }` per application; `snapshot` is the contract digest. Each
+endpoints, reservedPrefixes, snapshot, csp, operationsOrigin? }` per application; `snapshot` is the
+contract digest and `csp` the contract's named origins. Each
 endpoint row is `{ id, kind, method, path, callers, requirement, admission, delegation, digest }`, and
 the manifest parser refuses a row whose digest does not describe its rules. Array order has no meaning
 here. The proxy makes one pass over one selected endpoint:

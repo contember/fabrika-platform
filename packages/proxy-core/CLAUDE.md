@@ -30,10 +30,17 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
   `@fabrika/provider-cloudflare` is published and needs the decision — it must never need the Caddy
   deployment. Anything added here becomes public API; the release gate (`bun run release:validate`)
   enforces the direction and the public inventory in `scripts/release.ts` is deliberate.
-- **`@fabrika/proxy-core/manifest` imports only zod and `@fabrika/auth-core` types.** Producers
+- **`@fabrika/proxy-core/manifest` imports only zod, `@fabrika/auth-core` and `./headers`.** Producers
   (providers, control, local-stack) import it without the decision, so never import `jose`, the
   verifier, or anything else from `src/` into `src/manifest.ts`. Malformed input never becomes a
   partially accepted manifest.
+- **`@fabrika/proxy-core/headers` is the one definition of the response header policy and the file
+  treatment** (ADR-0022), imported by the framework, Caddy's config and the Cloudflare Worker. It imports
+  nothing at runtime, so the browser-safe `@fabrika/app/contract` can use `isPolicyOrigin`. Every answer
+  `createVerifyService` writes for a request carries it — the contract app's policy, the file treatment
+  when the request selects a `download` endpoint, the base policy otherwise; the allow (a 204 to Caddy)
+  carries none. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
+  accepts `*` in a host, so `isPolicyOrigin` checks the host itself).
 - **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname
   (labels 1–63 chars, ≤ 253 total), and `proxyAppSchema` rejects the whole manifest when a host fails
   it. The manifest is the authority on hosts (ADR-0022), and Caddy's `host` matcher reads `*` as a

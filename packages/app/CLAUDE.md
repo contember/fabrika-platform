@@ -400,8 +400,9 @@ src/
   keeps it from `deps`); the request URL names the owner's host, which its proxy Worker selects the
   application by. `connect-binding.test.ts` pins in Lopata that a binding routes by the binding. Without
   a binding the call uses `fetch`.
-- The header policy (`headers.ts`) is ADR-0022's; B4 sets the same policy at the
-  proxy and decides the final `Permissions-Policy`. Keep the two equal.
+- The header policy and the file treatment are ADR-0022's, defined once in
+  `@fabrika/proxy-core/headers`; `headers.ts` and `files/treatment.ts` only apply them, and the
+  proxy applies the same definition. Never restate a header value here.
 
 ## File collections
 

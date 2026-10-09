@@ -366,7 +366,8 @@ service on Zerops, and a thin Worker calling the same code in-process on Cloudfl
 Caddy owns HTTP correctness and gets no vote on authorization: its configuration is a
 fixed three-step chain per app — delete every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` in `@fabrika/auth-core`:
 token, client address, endpoint, delegation grant, proxy secret), the request id and the forwarding headers;
-`forward_auth`; proxy to the private upstream, with a contract app's proxy secret set — and gate rules are never compiled into
+`forward_auth`; proxy to the private upstream, with a contract app's proxy secret set and its answer given the
+response header policy (the file treatment for a download) — and gate rules are never compiled into
 route matchers. Gates and endpoint tables are evaluated once, in TypeScript, against the
 manifest. Before any gate or endpoint is matched, the proxy refuses a non-canonical raw path with 400 and a request without a
 forwarded method; the application router refuses the same paths.

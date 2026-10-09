@@ -264,7 +264,8 @@ the move reaches nothing.
 Errors share one envelope, `{ error: { type, message, issues? } }`: 400, 401, 403,
 404, 409, 500 and 503. Every 5xx and every refused capability answers a fixed message
 with no metadata; the server log gets one short line without the error object.
-Every response carries the header policy of ADR-0022.
+Every response carries the header policy of ADR-0022, and the proxy sets it again on the way out,
+replacing whatever the application sent (`@fabrika/proxy-core/headers` is the one definition).
 
 ### File collections
 
@@ -305,8 +306,9 @@ the same pipeline:
   and loses its control characters.
 - **The file treatment** is on every answer of the download endpoint, its denials and errors
   included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
-  default-src 'none'` and `Cache-Control: private, no-store`, and `Content-Disposition:
-  attachment` on any body. The file itself gets `Content-Type` from the recorded type,
+  default-src 'none'` and `Cache-Control: private, no-store`, and a `Content-Disposition`
+  whose type follows the exact `Content-Type` (`attachment` unless an inert image). The proxy
+  applies the same treatment to the answer of the endpoint it selected. The file itself gets `Content-Type` from the recorded type,
   `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
   `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
 - **One table per collection**, `fabrika_files_<name>`, created by an application migration

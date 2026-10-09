@@ -114,7 +114,9 @@ this one import.
     refused. Only outside Control is it read from the config's directory by `@fabrika/check/contract`'s static
     reader (`readContract` collaborator) — never evaluated. The deployer writes `FABRIKA_CONTRACT_DIGEST` into the
     application Worker. An IAM schema whose `contract: true` disagrees with the contract is refused, and so are
-    `gates` beside a contract;
+    `gates` beside a contract. The manifest entry carries the contract's CSP origins and the origin of the run's
+    `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
+    the application's answer, or applies the file treatment for a download endpoint (ADR-0022);
   - otherwise the config's `gates`, parsed with `proxyAppGatesSchema`;
   - neither: no proxy, and the application Worker is reachable by nothing.
     `createCloudflareProxyWorker` takes `endpoints` or `gates`, never both. Its `IAM` binding is also the
