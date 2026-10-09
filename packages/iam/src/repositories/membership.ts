@@ -58,8 +58,26 @@ const RENEW_EXPIRED_MEMBERSHIP = `ON CONFLICT (principal_id, role_key, scope_typ
 	DO UPDATE SET expires_at = NULL, granted_by = excluded.granted_by, created_at = excluded.created_at
 	WHERE grants.expires_at IS NOT NULL AND grants.expires_at <= ?`
 
+/** How an acceptance ended: written, refused because the inviter holds no assigning role there now, or no longer open. */
+export type InvitationAcceptance = 'accepted' | 'not_allowed' | 'not_open'
+
+export interface MembershipRepositoryOptions {
+	/**
+	 * Lock the inviter's assigning grant while an acceptance commits (`FOR SHARE`), so a removal of that grant waits
+	 * for it. Postgres only: SQLite has no row locks, and D1 runs a batch alone, which is atomic already.
+	 */
+	readonly lockInviterGrant?: boolean
+}
+
 export class MembershipRepository {
-	constructor(protected readonly db: SqlDatabase) {}
+	readonly #inviterLock: string
+
+	constructor(
+		protected readonly db: SqlDatabase,
+		options: MembershipRepositoryOptions = {},
+	) {
+		this.#inviterLock = options.lockInviterGrant === true ? 'FOR SHARE' : ''
+	}
 
 	async issueDelegationGrant(input: {
 		grantHash: string
@@ -248,20 +266,43 @@ export class MembershipRepository {
 
 	/**
 	 * Accept an invitation for `principalId` and write its grant, in one transaction. The guarded UPDATE
-	 * stamps a fresh acceptance id on the invitation only when it was still open, and the grant is written
+	 * stamps a fresh acceptance id on the invitation only when it is still open AND the inviter still holds one
+	 * of `assigners` in the value — the authority re-check is part of the statement that consumes the
+	 * invitation, so a removal of the inviter cannot land between a check and the write. The grant is written
 	 * only for the attempt holding that id — never on the strength of a timestamp another attempt can share.
-	 * An expired grant of the role is renewed; an active one is left as it is. Answers whether this call
-	 * accepted the invitation.
+	 * An expired grant of the role is renewed; an active one is left as it is. A refused acceptance leaves the
+	 * invitation open.
 	 */
-	async acceptInvitation(invitation: InvitationRow, principalId: string): Promise<boolean> {
+	async acceptInvitation(invitation: InvitationRow, principalId: string, assigners: readonly string[]): Promise<InvitationAcceptance> {
+		if (assigners.length === 0) {
+			return 'not_allowed'
+		}
 		const now = unixNow()
 		const acceptanceId = uuidv7()
+		const placeholders = assigners.map(() => '?').join(', ')
 		const [accepted] = await this.db.batch<{ id: string }>([
 			this.db
 				.prepare(`UPDATE membership_invitations SET accepted_at = ?, accepted_by = ?, acceptance_id = ?
 					WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+						AND EXISTS (
+							SELECT 1 FROM grants
+							WHERE app = ? AND principal_id = ? AND scope_type = ? AND scope_value = ? AND role_key IN (${placeholders})
+								AND (expires_at IS NULL OR expires_at > ?)
+							${this.#inviterLock})
 					RETURNING id`)
-				.bind(now, principalId, acceptanceId, invitation.id, now),
+				.bind(
+					now,
+					principalId,
+					acceptanceId,
+					invitation.id,
+					now,
+					invitation.app,
+					invitation.invited_by,
+					invitation.scope_type,
+					invitation.scope_value,
+					...assigners,
+					now,
+				),
 			this.db
 				.prepare(`INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, scope_value, granted_by, expires_at, created_at)
 					SELECT ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?
@@ -281,7 +322,12 @@ export class MembershipRepository {
 					now,
 				),
 		])
-		return (accepted?.results.length ?? 0) > 0
+		if ((accepted?.results.length ?? 0) > 0) {
+			return 'accepted'
+		}
+		const current = await this.getInvitationById(invitation.id)
+		const open = current !== null && current.accepted_at === null && current.revoked_at === null && current.expires_at > now
+		return open ? 'not_allowed' : 'not_open'
 	}
 
 	/** Open, unexpired invitations to `scope`. */

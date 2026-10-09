@@ -72,7 +72,7 @@ class TestSqlStatement implements SqlStatement {
 	}
 }
 
-class TestSqlDatabase implements SqlDatabase {
+export class TestSqlDatabase implements SqlDatabase {
 	constructor(private readonly db: Database) {}
 
 	prepare(query: string): SqlStatement {

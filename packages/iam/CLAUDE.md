@@ -204,7 +204,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   (`#token=`, never in a log) and stores its hash. `/auth/invitations/accept` accepts it, same-origin,
   for the principal signed in on IAM's host whose normalized `email` equals the invitation's — the
   token proves the mailbox, the session the principal. The inviter's authority is checked again at
-  acceptance. The guarded UPDATE stamps a fresh `acceptance_id`, and the grant is written in the same
+  acceptance, and its assigning role once more inside the UPDATE that consumes the invitation (`EXISTS`
+  over the inviter's grant, `FOR SHARE` on Postgres through `createPostgresIamRepositories`; a D1 batch runs
+  alone): a removal either commits first and the acceptance is `not_allowed` with the invitation still
+  open, or waits until the acceptance committed. The guarded UPDATE stamps a fresh `acceptance_id`, and the grant is written in the same
   batch only for the attempt holding it — never on a timestamp a replay can share. Without an email service, an invitation is `invitations_disabled`; assigning an existing
   principal by id still works. Invitations live `INVITATION_TTL_SECONDS` (7 days).
 - **A SHARE LINK IS BOUND TO ITS MOUNT AND ITS CHAIN** (`credentials.link_mount`, `link_dimension`,

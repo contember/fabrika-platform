@@ -1,8 +1,11 @@
 import { type AppSchema, buildAccessClaims } from '@fabrika/auth-core'
+import type { Scope } from '@fabrika/auth-core'
 import type { EmailDeliveryResult, EmailMessage, EmailSender } from '@fabrika/email'
+import type { SqlDatabase } from '@fabrika/platform'
 import { handleAdmin } from '../../admin/router'
-import type { IamRepositories, PrincipalRow } from '../../db'
+import { type IamRepositories, type InvitationRow, MembershipRepository, type MembershipRepositoryOptions, type PrincipalRow } from '../../db'
 import type { RequestContext } from '../../env'
+import type { InvitationAcceptance } from '../../repositories/membership'
 import { resolvePermissionsAt } from '../../resolve'
 import type { Services } from '../../services'
 import { getSigner } from '../../signing'
@@ -152,5 +155,25 @@ export async function membershipFixture(repositories: IamRepositories, options: 
 			const principal = await repositories.principals.createUser(`sub-${name}`, `${name}@example.test`)
 			return { id: principal.id, token: (app = APP) => mintedToken(services, principal, app) }
 		},
+	}
+}
+
+/**
+ * The deterministic interleaving of an acceptance and a removal: the inviter's role is removed after
+ * `acceptInvitation` checked the inviter's authority and before the write that consumes the invitation.
+ */
+export class InviterRemovedBeforeAcceptance extends MembershipRepository {
+	removeBeforeAcceptance: { app: string; principalId: string; roleKey: string; scope: Scope } | null = null
+
+	constructor(db: SqlDatabase, options: MembershipRepositoryOptions = {}) {
+		super(db, options)
+	}
+
+	override async acceptInvitation(invitation: InvitationRow, principalId: string, assigners: readonly string[]): Promise<InvitationAcceptance> {
+		const removal = this.removeBeforeAcceptance
+		if (removal !== null) {
+			await this.deleteRoleGrant(removal.app, removal.principalId, removal.roleKey, removal.scope)
+		}
+		return super.acceptInvitation(invitation, principalId, assigners)
 	}
 }

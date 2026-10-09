@@ -524,7 +524,8 @@ export type AcceptInvitationOutcome =
 /**
  * Accept an invitation for a signed-in principal. The emailed one-time token proves control of the
  * mailbox, and the principal must own that mailbox. The inviter's authority is checked again here,
- * against its permissions now, so an invitation outlives no revocation of the person who sent it.
+ * against its permissions now, and its assigning role once more inside the write that consumes the
+ * invitation, so an invitation outlives no revocation of the person who sent it.
  */
 export async function acceptInvitation(services: Services, principal: PrincipalRow, token: string): Promise<AcceptInvitationOutcome> {
 	const invitation = await services.repositories.membership.getInvitationByHash(await hashToken(token))
@@ -546,8 +547,10 @@ export async function acceptInvitation(services: Services, principal: PrincipalR
 	if (!manage.ok || (await roleAuthorityProblem(services, actor, scope, role)) !== null) {
 		return { ok: false, reason: 'not_allowed' }
 	}
-	if (!(await services.repositories.membership.acceptInvitation(invitation, principal.id))) {
-		return { ok: false, reason: 'invalid' }
+	const assigners = role.assignable_by === null ? [] : parseJsonStringArray(role.assignable_by)
+	const accepted = await services.repositories.membership.acceptInvitation(invitation, principal.id, assigners)
+	if (accepted !== 'accepted') {
+		return { ok: false, reason: accepted === 'not_allowed' ? 'not_allowed' : 'invalid' }
 	}
 	return { ok: true, invitation }
 }

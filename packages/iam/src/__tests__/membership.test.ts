@@ -9,13 +9,14 @@ import { createIamRpc } from '../rpc'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
-import { createHarness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import { createHarness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
 import {
 	APP,
 	CALLER_ENV,
 	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
+	InviterRemovedBeforeAcceptance,
 	type MembershipFixture,
 	membershipFixture,
 	NOTES_SCHEMA,
@@ -724,11 +725,31 @@ describe('review round 1', () => {
 		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		const invitee = await f.person('invitee')
 		if (invitation === null) throw new Error('fixture')
-		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id)).toBe(true)
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, ['owner'])).toBe('accepted')
 		await f.repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
 		// The second attempt passed its checks with the same open row before the first committed.
-		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id)).toBe(false)
+		expect(await f.repositories.membership.acceptInvitation(invitation, invitee.id, ['owner'])).toBe('not_open')
 		expect(await rolesOf(f, invitee, scope)).toEqual([])
+	})
+
+	test('an inviter removed after the acceptance checks passed and before its write grants nothing, and the invitation stays open', async () => {
+		const email = new CapturingEmail()
+		const harness = createHarness()
+		const removing = new InviterRemovedBeforeAcceptance(new TestSqlDatabase(harness.sqlite))
+		const f = await membershipFixture({ ...harness.repositories, membership: removing }, { email })
+		const owner = await f.person('owner')
+		const scope = await workspaceOf(f, owner)
+		const second = await f.person('second-owner')
+		await assign(f, owner, scope, 'owner', { principalId: second.id })
+		await assign(f, owner, scope, 'editor', { email: 'invitee@example.test' })
+		const person = await f.person('invitee')
+		const invitee = await f.repositories.principals.getPrincipalById(person.id)
+		if (invitee === null) throw new Error('fixture')
+		removing.removeBeforeAcceptance = { app: APP, principalId: owner.id, roleKey: 'owner', scope }
+		expect(await acceptInvitation(f.services, invitee, email.lastToken())).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await rolesOf(f, person, scope)).toEqual([])
+		const invitation = await f.repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])
 	})
 
 	test('assigning over an expired grant renews it; an active one stays as it is', async () => {

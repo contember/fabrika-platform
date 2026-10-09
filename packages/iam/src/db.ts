@@ -24,7 +24,14 @@ export { type CredentialGrantRow, CredentialRepository, type CredentialRow } fro
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { GrantRepository, type GrantRow } from './repositories/grants'
 export { type AuthCodeRow, HandoffRepository } from './repositories/handoff'
-export { type DelegationGrantRow, type InvitationRow, type MemberGrantRow, MembershipRepository } from './repositories/membership'
+export {
+	type DelegationGrantRow,
+	type InvitationAcceptance,
+	type InvitationRow,
+	type MemberGrantRow,
+	MembershipRepository,
+	type MembershipRepositoryOptions,
+} from './repositories/membership'
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
@@ -59,4 +66,9 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		oauth: replacements.oauth ?? new OAuthRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
 	}
+}
+
+/** The bundle on Postgres: the same statements, plus the row lock an acceptance takes on the inviter's grant. */
+export function createPostgresIamRepositories(db: SqlDatabase): IamRepositories {
+	return createIamRepositories(db, { membership: new MembershipRepository(db, { lockInviterGrant: true }) })
 }

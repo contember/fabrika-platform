@@ -5,8 +5,9 @@
 
 import type { Scope } from '@fabrika/auth-core'
 import { PostgresDatabase } from '@fabrika/platform-node'
+import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createIamRepositories, type IamRepositories } from '../db'
+import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import { acceptInvitation, assignMember, createScope, issueLink, listMembers, requestDelegation, revokeMember } from '../membership'
 import { hashToken } from '../secret'
 import {
@@ -14,6 +15,7 @@ import {
 	CapturingEmail,
 	CREATE_ENDPOINT,
 	INVITE_ENDPOINT,
+	InviterRemovedBeforeAcceptance,
 	type MembershipFixture,
 	membershipFixture,
 	NOTES_SCHEMA,
@@ -35,10 +37,10 @@ let concurrent: IamRepositories
 beforeAll(async () => {
 	if (!hasPostgres || postgresUrl === null) return
 	fixture = await createPostgres('iam_membership')
-	repositories = createIamRepositories(fixture.db)
+	repositories = createPostgresIamRepositories(fixture.db)
 	// A second pool on the same schema with room for two transactions at once.
 	pool = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 4 })
-	concurrent = createIamRepositories(pool)
+	concurrent = createPostgresIamRepositories(pool)
 })
 
 afterAll(async () => {
@@ -161,10 +163,76 @@ describe.skipIf(!hasPostgres)('membership on Postgres', () => {
 		const invitee = await f.person(`accept-invitee-${fixtureSeq}`)
 		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
 		if (invitation === null) throw new Error('fixture')
-		const outcomes = await Promise.all([1, 2, 3].map(() => concurrent.membership.acceptInvitation(invitation, invitee.id)))
-		expect(outcomes.filter(Boolean)).toHaveLength(1)
+		const outcomes = await Promise.all([1, 2, 3].map(() => concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner'])))
+		expect(outcomes.filter((outcome) => outcome === 'accepted')).toHaveLength(1)
 		await repositories.membership.deleteRoleGrant(APP, invitee.id, 'editor', scope)
-		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id)).toBe(false)
+		expect(await concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner'])).toBe('not_open')
+		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
+	})
+
+	test('an inviter removed after the acceptance checks passed and before its write grants nothing, and the invitation stays open', async () => {
+		if (fixture === null) throw new Error('fixture')
+		const email = new CapturingEmail()
+		const removing = new InviterRemovedBeforeAcceptance(fixture.db, { lockInviterGrant: true })
+		const f = await membershipFixture({ ...repositories, membership: removing }, { email })
+		fixtureSeq += 1
+		const owner = await f.person(`removed-owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		const second = await f.person(`remaining-owner-${fixtureSeq}`)
+		await assignMember(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, owner)), scope, role: 'owner', member: { principalId: second.id } })
+		const invitedEmail = `removed-invitee-${fixtureSeq}@example.test`
+		await assignMember(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, owner)), scope, role: 'editor', member: { email: invitedEmail } })
+		const invitee = await repositories.principals.getPrincipalById((await f.person(`removed-invitee-${fixtureSeq}`)).id)
+		if (invitee === null) throw new Error('fixture')
+		removing.removeBeforeAcceptance = { app: APP, principalId: owner.id, roleKey: 'owner', scope }
+		expect(await acceptInvitation(f.services, invitee, email.lastToken())).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
+		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		expect([invitation?.accepted_at, invitation?.revoked_at]).toEqual([null, null])
+	})
+
+	test("an acceptance waits for a removal that holds the inviter's grant, then grants nothing", async () => {
+		if (fixture === null || postgresUrl === null) throw new Error('fixture')
+		const email = new CapturingEmail()
+		const f = await membershipFixture(repositories, { email })
+		fixtureSeq += 1
+		const owner = await f.person(`locked-owner-${fixtureSeq}`)
+		const scope = await workspaceOf(f, owner)
+		const second = await f.person(`locked-second-${fixtureSeq}`)
+		await assignMember(f.services, CALLER_ENV, f.ctx, { ...(await delegated(f, owner)), scope, role: 'owner', member: { principalId: second.id } })
+		await assignMember(f.services, CALLER_ENV, f.ctx, {
+			...(await delegated(f, owner)),
+			scope,
+			role: 'editor',
+			member: { email: `locked-invitee-${fixtureSeq}@example.test` },
+		})
+		const invitee = await f.person(`locked-invitee-${fixtureSeq}`)
+		const invitation = await repositories.membership.getInvitationByHash(await hashToken(email.lastToken()))
+		if (invitation === null) throw new Error('fixture')
+
+		// The removal's transaction has deleted the inviter's grant and not committed yet.
+		const removal = new SQL({ url: postgresUrl, max: 1, connection: { search_path: fixture.schema } })
+		const reserved = await removal.reserve()
+		try {
+			await reserved.unsafe('BEGIN')
+			await reserved.unsafe('DELETE FROM grants WHERE app = $1 AND principal_id = $2 AND role_key = $3 AND scope_value = $4', [
+				APP,
+				owner.id,
+				'owner',
+				scope.value,
+			])
+			let settled = false
+			const acceptance = concurrent.membership.acceptInvitation(invitation, invitee.id, ['owner']).finally(() => {
+				settled = true
+			})
+			await Bun.sleep(300)
+			expect(settled).toBe(false)
+			await reserved.unsafe('COMMIT')
+			expect(await acceptance).toBe('not_allowed')
+		} finally {
+			reserved.release()
+			await removal.close()
+		}
 		expect(await repositories.membership.listRoleGrantsAt(APP, invitee.id, scope)).toEqual([])
 	})
 

@@ -12,7 +12,7 @@
 
 import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
-import { createIamRepositories } from '../db'
+import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { parseOAuthConfig } from '../oauth-config'
 
@@ -94,7 +94,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const env: Env = {
 		DB: db,
-		REPOSITORIES: createIamRepositories(db),
+		REPOSITORIES: createPostgresIamRepositories(db),
 		HUMAN_EMAIL_DOMAINS: source['HUMAN_EMAIL_DOMAINS'] ?? '[]',
 		HUMAN_EMAILS: source['HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['IAM_BOOTSTRAP_ADMINS'] ?? '[]',
