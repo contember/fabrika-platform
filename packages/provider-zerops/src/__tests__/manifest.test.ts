@@ -336,6 +336,26 @@ describe('managed key manifest boundary', () => {
 		}
 	})
 
+	test('refuses an application that sets or copies its IAM membership transport: only the platform writes its key', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		for (const name of ['FABRIKA_IAM_RPC_URL', 'FABRIKA_IAM_RPC_KEY']) {
+			for (const kind of ['vars', 'secrets']) {
+				expect(() => parseFabrikaManifest({ ...manifest, app: { ...manifest.app, pipeline: { ...manifest.app.pipeline, [kind]: [name] } } }))
+					.toThrow('Fabrika-managed')
+			}
+			for (const envVariables of [{ [name]: 'authored' }, { COPY: `\${RUNTIME_${name}}` }]) {
+				expect(() => assertAuthoredManagedDocument([{ hostname: 'notesapi', envVariables }])).toThrow('Fabrika-managed')
+			}
+			for (const phase of ['build', 'run']) {
+				const descriptor = await createZeropsArtifactSourceDescriptor(
+					`zerops:\n  - setup: notesapi\n    ${phase}:\n      envVariables:\n        ${name}: authored\n`,
+				)
+				expect(() => compileFabrikaManifest({ ...notesConfig, target: { ...notesConfig.target, zeropsSetup: 'notesapi' } }, 'prod', descriptor))
+					.toThrow('Fabrika-managed')
+			}
+		}
+	})
+
 	test('checks decoded descriptor policy in selected and unselected setups, including build/run mappings', async () => {
 		for (const phase of ['build', 'run']) {
 			for (const env of ['FABRIKA_RELEASE: authored', 'FABRIKA_APP_ID: authored']) {

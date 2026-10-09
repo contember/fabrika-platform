@@ -63,6 +63,8 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
 	FABRIKA_PROXY_SECRET: null,
+	FABRIKA_IAM_RPC_URL: null,
+	FABRIKA_IAM_RPC_KEY: null,
 }
 const checkpointFor = (triggered: boolean): JsonValue => ({ appVersionId: 'version-1', triggered })
 const PROXY_SOURCE = {

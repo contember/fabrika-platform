@@ -284,6 +284,8 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
 	FABRIKA_PROXY_SECRET: null,
+	FABRIKA_IAM_RPC_URL: null,
+	FABRIKA_IAM_RPC_KEY: null,
 }
 
 const checkpointLabel = (state: JsonValue): string => {
@@ -440,6 +442,8 @@ describe('Zerops provider', () => {
 				FABRIKA_ENVIRONMENT: 'prod',
 				FABRIKA_SERVICE_KEY: 'private-service-key',
 				FABRIKA_PROXY_SECRET: 'private-proxy-secret',
+				FABRIKA_IAM_RPC_URL: 'https://iam.test',
+				FABRIKA_IAM_RPC_KEY: 'px_private-membership-key',
 			},
 		}, provider)
 
@@ -448,6 +452,8 @@ describe('Zerops provider', () => {
 			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod' },
 			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
 			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
+			{ key: 'FABRIKA_IAM_RPC_URL', value: 'https://iam.test' },
+			{ key: 'FABRIKA_IAM_RPC_KEY', value: 'px_private-membership-key' },
 		])
 		expect(recorded.envDeletes).toEqual(['env-issuer', 'env-release'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
@@ -465,6 +471,8 @@ describe('Zerops provider', () => {
 				'FABRIKA_ENVIRONMENT',
 				'FABRIKA_SERVICE_KEY',
 				'FABRIKA_PROXY_SECRET',
+				'FABRIKA_IAM_RPC_URL',
+				'FABRIKA_IAM_RPC_KEY',
 			]
 		) {
 			expect(yaml).not.toContain(key)

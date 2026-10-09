@@ -101,7 +101,8 @@ bun test
 - **Only `FABRIKA_RELEASE` (and, for a contract application, `FABRIKA_CONTRACT_DIGEST`) is bound to a
   version (ADR-0044).** `overlayRelease` (`src/managed-env.ts`) writes the release as a LITERAL into the
   selected setup's `run.envVariables` of the execution descriptor; it is never a service variable, and
-  `write-service-env` deletes a stray one. The other managed keys (`FABRIKA_PROXY_SECRET` among them) are plain service variables each deploy
+  `write-service-env` deletes a stray one. The other managed keys (`FABRIKA_PROXY_SECRET` and the membership transport's
+  `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY` among them) are plain service variables each deploy
   overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
   the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.

@@ -21,6 +21,8 @@ export type ManagedKey = Extract<
 	| 'FABRIKA_ENVIRONMENT'
 	| 'FABRIKA_SERVICE_KEY'
 	| 'FABRIKA_PROXY_SECRET'
+	| 'FABRIKA_IAM_RPC_URL'
+	| 'FABRIKA_IAM_RPC_KEY'
 >
 
 export const MANAGED_KEYS: readonly ManagedKey[] = [
@@ -32,6 +34,8 @@ export const MANAGED_KEYS: readonly ManagedKey[] = [
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_SERVICE_KEY',
 	'FABRIKA_PROXY_SECRET',
+	'FABRIKA_IAM_RPC_URL',
+	'FABRIKA_IAM_RPC_KEY',
 ]
 
 /** The managed keys written as service variables; `FABRIKA_RELEASE` travels only in the execution descriptor (ADR-0044). */
@@ -43,6 +47,8 @@ export const SERVICE_MANAGED_KEYS: readonly Exclude<ManagedKey, 'FABRIKA_RELEASE
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_SERVICE_KEY',
 	'FABRIKA_PROXY_SECRET',
+	'FABRIKA_IAM_RPC_URL',
+	'FABRIKA_IAM_RPC_KEY',
 ]
 
 export type ManagedValues = Record<ManagedKey, string | null>
@@ -56,15 +62,18 @@ const managedValuesSchema = z.object({
 	FABRIKA_ENVIRONMENT: z.string().nullable(),
 	FABRIKA_SERVICE_KEY: z.string().nullable(),
 	FABRIKA_PROXY_SECRET: z.string().nullable(),
+	// IAM's membership transport (ADR-0022 rule 6): its public origin and this environment's key, or both null.
+	FABRIKA_IAM_RPC_URL: z.string().nullable(),
+	FABRIKA_IAM_RPC_KEY: z.string().nullable(),
 }).strict()
 
 export function parseManagedValues(value: unknown): ManagedValues {
 	const result = managedValuesSchema.safeParse(value)
-	if (!result.success) throw new Error('zerops: managed environment must name exactly the eight managed keys')
+	if (!result.success) throw new Error('zerops: managed environment must name exactly the ten managed keys')
 	return result.data
 }
 
-/** What Control hands a deploy: the eight managed keys, and the key of each job and webhook of the approved contract. */
+/** What Control hands a deploy: the ten managed keys, and the key of each job and webhook of the approved contract. */
 export interface ManagedEnvironment {
 	readonly values: ManagedValues
 	/** `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key. */
