@@ -32,17 +32,36 @@ export function contentDisposition(contentType: string, name: string | null): st
 	return `${disposition}${name === null ? '' : filenameParameter(name)}`
 }
 
+/** What every response of a download endpoint carries, its errors included: nothing it holds runs as this origin. */
+const FILE_TREATMENT: readonly (readonly [string, string])[] = [
+	['X-Content-Type-Options', 'nosniff'],
+	['Content-Security-Policy', "sandbox; default-src 'none'"],
+	// A revoked user must not read a cached copy.
+	['Cache-Control', 'private, no-store'],
+]
+
 export function fileResponse(file: FileDownload): Response {
-	return new Response(file.body, {
-		status: 200,
-		headers: {
-			'Content-Type': file.contentType,
-			'Content-Length': String(file.size),
-			'Content-Disposition': contentDisposition(file.contentType, file.name),
-			'X-Content-Type-Options': 'nosniff',
-			'Content-Security-Policy': "sandbox; default-src 'none'",
-			// A revoked user must not read a cached copy.
-			'Cache-Control': 'private, no-store',
-		},
+	const headers = new Headers({
+		'Content-Type': file.contentType,
+		'Content-Length': String(file.size),
+		'Content-Disposition': contentDisposition(file.contentType, file.name),
+		// A Range request gets the whole file: ignoring Range is always a valid answer, and no partial path exists to get wrong.
+		'Accept-Ranges': 'none',
 	})
+	for (const [name, value] of FILE_TREATMENT) {
+		headers.set(name, value)
+	}
+	return new Response(file.body, { status: 200, headers })
+}
+
+/** An error of a download endpoint, with the file treatment in place of the header policy. */
+export function withFileTreatment(response: Response): Response {
+	const headers = new Headers(response.headers)
+	for (const [name, value] of FILE_TREATMENT) {
+		headers.set(name, value)
+	}
+	if (response.body !== null) {
+		headers.set('Content-Disposition', 'attachment')
+	}
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }

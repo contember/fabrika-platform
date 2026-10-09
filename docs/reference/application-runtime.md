@@ -269,27 +269,43 @@ the same pipeline:
 | `GET /api/files.<name>/:fileId`        | `read` `on` `file:<name>`, `:fileId`         | streams the object with the file treatment                                                                                            |
 | `POST /api/files.<name>.remove`        | `delete` `on` `file:<name>`, body `{ id }`   | marks the row removed, then sweeps: deletes the objects of removed and orphaned files of the collection (at most 20), then their rows |
 
-- **A file reaches what its owner reaches.** The locator of `file:<name>` reads the live
-  file row, then its owner row through the owner table's locator, on every request: a
-  file is 404 when it is removed, when its owner is gone, and to a caller who may not act
-  on the owner; after the owner moves, the old container reaches it no more.
+- **A file reaches what its owner reaches, now.** A file row carries its owner's key and the
+  owner's whole containment chain under a composite foreign key with `ON UPDATE CASCADE`, so
+  a move of the owner moves its files in the same statement. The locator of `file:<name>`
+  reads the live row's chain on every request, and every operation after the access check —
+  the pending insert, its completion, the download read, the remove — takes the minted `Ref`
+  and is scoped by that whole chain in `@fabrika/db`. A move between the check and the
+  operation therefore makes it match nothing (404): the request never acts on a file in a
+  container the caller was not checked against. Deleting the owner orphans its files (every
+  owner column becomes null) for the sweep.
+- **An upload has two phases, and the row is the cleanup intent.** It inserts a `pending` row
+  under a `FOR SHARE` lock of the owner row, matched on the owner `Ref`'s chain, then writes
+  the object `<name>/<id>`, then flips the row to `live` under the same lock and chain. A move
+  that starts during a phase waits for it; one that commits between them fails the
+  completion. Whatever fails after the insert — the write, a lost answer of the store, the
+  completion — deletes the object and the pending row, and when that fails too, the row stays
+  for the sweep. The sweep deletes the objects and rows of removed and orphaned files, and of
+  pending rows older than one hour (an upload fails after ten minutes), so it never touches
+  an upload in progress; a failed delete is retried on its next pass.
 - **The upload is checked while it streams.** A `Content-Length` over `maxBytes` is 413
   before the body is read; otherwise the object store stops reading past `maxBytes`, keeps
   nothing and the answer is 413. The first 512 bytes must be the declared type (415):
   each binary type by its signature, a text type (`text/plain`, `text/csv`,
   `text/markdown`, `application/json`, `image/svg+xml`) as UTF-8 without NUL bytes or a
-  binary signature. `maxPerOwner` is counted before and again after the insert (409), so
-  concurrent uploads never leave more. The object key is `<name>/<uuidv7>`.
-- **The file treatment** replaces the header policy on a download: `Content-Type` from the
-  recorded type, `Content-Disposition: inline` for PNG, JPEG, GIF and WebP and `attachment`
-  for every other type, the file name as RFC 8187 `filename*`, `X-Content-Type-Options:
-  nosniff`, `Content-Security-Policy: sandbox; default-src 'none'` and `Cache-Control:
-  private, no-store`. Errors of the endpoint carry the ordinary policy.
+  binary signature. `maxPerOwner` is counted before and again once the file is live (409),
+  so concurrent uploads never leave more. The file name (`?name=`) is cut at 255 code points
+  and loses its control characters.
+- **The file treatment** is on every answer of the download endpoint, its denials and errors
+  included: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox;
+  default-src 'none'` and `Cache-Control: private, no-store`, and `Content-Disposition:
+  attachment` on any body. The file itself gets `Content-Type` from the recorded type,
+  `Content-Disposition: inline` only for PNG, JPEG, GIF and WebP, the file name as RFC 8187
+  `filename*`, and `Accept-Ranges: none`: a `Range` request gets the whole file.
 - **One table per collection**, `fabrika_files_<name>`, created by an application migration
-  with `fileTableSql(name, { table, key, keyType })` of `@fabrika/db`. Its foreign key is on
-  the owner's key with `ON DELETE SET NULL`: deleting an owner orphans its files, and the
-  next sweep deletes their objects. Codegen leaves the table out; only the framework reads
-  it (`@fabrika/db/framework`'s `fileTablesOf`).
+  with `fileTableSql(name, { table, key, chain })` of `@fabrika/db`, where `chain` lists the
+  owner's containment columns, nearest first; the owner table needs `UNIQUE (<key>, <chain
+  columns>)`, as a child table's parent does. Codegen leaves the table out; only the
+  framework reads it (`@fabrika/db/framework`'s `fileTablesOf`).
 - `boot` refuses a collection whose name is not lowercase snake_case of at most 39
   characters, which admits a type the framework cannot sniff, which sets `link: true`, or
   which has no object storage or no `scoped(tables)` data layer. `serveContract` opens the

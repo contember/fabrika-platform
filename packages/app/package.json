@@ -77,6 +77,8 @@
 	"devDependencies": {
 		"@fabrika/check": "workspace:*",
 		"@types/bun": "latest",
+		"kysely": "0.29.6",
+		"kysely-postgres-js": "5.0.1",
 		"typescript": "^5.9.3",
 		"zod": "^3.25.76"
 	}

@@ -294,25 +294,27 @@ src/
 
 - **The generated file endpoints are framework code** (`src/files/`), dispatched like every
   row: the dispatcher checks the caller, the requirement, admission and the access form, and
-  only then hands the minted `Ref` to the files runtime, which resolves it through
-  `requestCapabilities` and checks its dimension and action again. The access value of an
-  upload or a download is the path parameter its `from` names; `remove` is a procedure.
-- **A file has no access of its own.** `file:<name>` is located through its live row and then
-  its owner row, on every request; never store or cache an owner's containers in the file
-  row, or a moved owner would leave its files reachable from the old container.
-- **A download answers a `FileDownload`, never a `Response`.** `ContractRuntime.fetch` gives
-  it the file treatment (`files/treatment.ts`) instead of the header policy, so no handler or
-  store can set a download's headers. Keep the treatment equal to ADR-0022's.
+  only then hands the minted `Ref` to the files runtime. The access value of an upload or a
+  download is the path parameter its `from` names; `remove` is a procedure.
+- **Every database operation of a file request takes that `Ref`.** `@fabrika/db`'s file
+  tables scope it by the `Ref`'s whole chain, so a move after the access check makes it match
+  nothing. Never look a file up by its id alone after the check; `locate` is the only id-keyed
+  read, and it is the access check's.
+- **The pending row is written before the object and is the cleanup intent.** Any failure
+  after it deletes the object and the row, or leaves the row for the sweep, which deletes
+  pending rows only after `PENDING_GRACE_MS` (longer than `UPLOAD_TIMEOUT_MS`), so it never
+  touches an upload in progress. Never write an object without a row first.
+- **Every answer of a download endpoint carries the file treatment**, denials and errors
+  included: `ContractRuntime.fetch` chooses it by the planned endpoint's kind, and a file is a
+  `FileDownload`, never a `Response`, so no handler or store can set its headers. Keep the
+  treatment equal to ADR-0022's.
 - **The type is the sniffed one.** An upload is stored only when its first `SNIFF_BYTES`
   are the declared type, and the recorded type is what a download sends; `boot` refuses a
   collection that admits a type `sniff.ts` cannot verify. The size bound is the object
   store's (`FileObjectStore.write`), enforced while the body streams.
-- **Deletion is retry-safe, never a cascade.** `remove` marks the row; the sweep deletes the
-  object first and the row after it, so a failed delete is retried by the next sweep, and an
-  owner's deletion only orphans its rows (`ON DELETE SET NULL`). `FileCollections.sweep()` is
-  the seam a framework job calls on a schedule.
-- `serveContract` opens the object storage from `FABRIKA_APP_STORAGE_*` (all or none);
-  without it a contract with files does not boot. Never return a storage URL or presign one.
+- `FileCollections.sweep()` is the seam a framework job calls on a schedule; until then a
+  remove sweeps its collection. `serveContract` opens the object storage from
+  `FABRIKA_APP_STORAGE_*` (all or none). Never return a storage URL or presign one.
 
 ## The typed client and the test kit
 

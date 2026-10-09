@@ -7,7 +7,7 @@ import { BootError, type ContractApp } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
-import type { FileObjectStore } from '@fabrika/platform'
+import type { FileObjectStore, ObjectMetadata, ObjectWriteOptions, StoredObject } from '@fabrika/platform'
 import { S3BlobStore } from '@fabrika/platform-node'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { SQL } from 'bun'
@@ -30,6 +30,7 @@ import {
 	token,
 } from './fixtures/implement/harness'
 import { MAX_BYTES, MAX_PER_NOTE } from './fixtures/scoped-files/fabrika.contract'
+import { hookedDatabase } from './fixtures/scoped-files/hooked-database'
 import { migration } from './fixtures/scoped-files/migration'
 import { filesApp } from './fixtures/scoped-files/src/app'
 import { tables } from './fixtures/scoped-files/src/db/tables'
@@ -146,7 +147,9 @@ async function download(app: ContractApp, id: string, callerToken: string): Prom
 
 async function rows(): Promise<readonly Record<string, unknown>[]> {
 	return admin((sql) =>
-		sql.unsafe(`select id, owner_id, object_key, size, content_type, sha256, original_name, deleted_at from ${schema}.fabrika_files_attachments`)
+		sql.unsafe(
+			`select id, owner_id, status, object_key, size, content_type, sha256, original_name, deleted_at from ${schema}.fabrika_files_attachments`,
+		)
 	)
 }
 
@@ -378,17 +381,48 @@ for (const [label, store] of stores) {
 	})
 }
 
-describe.skipIf(!hasPostgres)('a missing object', () => {
-	test('is a 500 with the fixed envelope and one log line', async () => {
-		const store = new MemoryFileObjects()
-		const app = bootApp(filesApp(scoped(tables)), { database, files: store })
+const FILE_TREATMENT = { csp: "sandbox; default-src 'none'", nosniff: 'nosniff', cache: 'private, no-store' }
+
+function expectFileTreatment(response: Response): void {
+	expect(response.headers.get('Content-Security-Policy')).toBe(FILE_TREATMENT.csp)
+	expect(response.headers.get('X-Content-Type-Options')).toBe(FILE_TREATMENT.nosniff)
+	expect(response.headers.get('Cache-Control')).toBe(FILE_TREATMENT.cache)
+}
+
+describe.skipIf(!hasPostgres)('every answer of the download endpoint carries the file treatment', () => {
+	let store: MemoryFileObjects
+	let app: ContractApp
+
+	beforeAll(() => {
+		if (hasPostgres) {
+			store = new MemoryFileObjects()
+			app = bootApp(filesApp(scoped(tables)), { database, files: store })
+		}
+	})
+
+	test('a refused credential, a missing permission and a missing file', async () => {
 		const note = await seedNote('w1')
 		const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
-		store.objects.clear()
+		const unauthenticated = await app.fetch(new Request(`${ORIGIN}/api/files.attachments/${id}`))
+		const forbidden = await download(app, id, await token('user', [grant('notes.write', W1)]))
+		const missing = await download(app, Bun.randomUUIDv7(), await editorOf(W1))
+		expect([unauthenticated.status, forbidden.status, missing.status]).toEqual([401, 403, 404])
+		for (const response of [unauthenticated, forbidden, missing]) {
+			expectFileTreatment(response)
+			expect(response.headers.get('Content-Disposition')).toBe('attachment')
+		}
+	})
+
+	test('a missing object is a 500 with the fixed envelope, the file treatment and one log line', async () => {
+		const note = await seedNote('w1')
+		const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
+		store.objects.delete(`attachments/${id}`)
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			const response = await download(app, id, await editorOf(W1))
 			expect(response.status).toBe(500)
+			expectFileTreatment(response)
+			expect(response.headers.get('Content-Disposition')).toBe('attachment')
 			expect(await response.json()).toEqual({ error: { type: 'internal', message: 'Internal error' } })
 			expect(log.mock.calls.map((call) => String(call[0]))).toEqual([
 				"fabrika: files.attachments.download: the object of a file in 'attachments' is missing from storage",
@@ -396,6 +430,213 @@ describe.skipIf(!hasPostgres)('a missing object', () => {
 		} finally {
 			log.mockRestore()
 		}
+	})
+
+	test('a Range request gets the whole file, with the treatment and no ranges offered', async () => {
+		const note = await seedNote('w1')
+		const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
+		const response = await app.fetch(
+			new Request(`${ORIGIN}/api/files.attachments/${id}`, { headers: { [PROXY_TOKEN_HEADER]: await editorOf(W1), Range: 'bytes=0-3' } }),
+		)
+		expect(response.status).toBe(200)
+		expect(response.headers.get('Accept-Ranges')).toBe('none')
+		expectFileTreatment(response)
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG)
+	})
+})
+
+/** Moves a note in a committed transaction of its own, as another request would. */
+async function moveNote(note: string, workspace: string): Promise<void> {
+	await admin((sql) => sql.unsafe(`update ${schema}.notes set workspace_id = $2 where id = $1`, [note, workspace]))
+}
+
+describe.skipIf(!hasPostgres)('an owner that moves while a request runs takes its files along', () => {
+	/** Runs once, after the next statement that `matches` returned. */
+	let pending: { readonly matches: (sql: string) => boolean; readonly run: () => Promise<void> } | null = null
+	let hooked: Database
+	let store: MemoryFileObjects
+	let app: ContractApp
+
+	beforeAll(() => {
+		if (hasPostgres) {
+			hooked = hookedDatabase(url, schema, async (sql) => {
+				const hook = pending
+				if (hook?.matches(sql)) {
+					pending = null
+					await hook.run()
+				}
+			})
+			store = new MemoryFileObjects()
+			app = bootApp(filesApp(scoped(tables)), { database: hooked, files: store })
+		}
+	})
+
+	afterAll(async () => {
+		if (hasPostgres) {
+			await hooked.close()
+		}
+	})
+
+	const after = (prefix: string, run: () => Promise<void>) => {
+		pending = { matches: (sql) => sql.startsWith(prefix), run }
+	}
+	const LOCATE_NOTE = 'select "notes"."id"'
+	const LOCATE_FILE = 'select "fabrika_files_attachments"."owner_id"'
+
+	test('upload: a move after the access check makes the pending insert match nothing', async () => {
+		const note = await seedNote('w1')
+		const before = (await rows()).length
+		after(LOCATE_NOTE, () => moveNote(note, 'w2'))
+		const sent = await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' })
+		expect(sent.status).toBe(404)
+		expect((await rows()).length).toBe(before)
+		expect(store.objects.size).toBe(0)
+	})
+
+	test('upload: a move that starts while the owner is locked waits for the pending insert, then fails the completion', async () => {
+		const note = await seedNote('w1')
+		const before = (await rows()).length
+		let move: Promise<void> = Promise.resolve()
+		let movedWhileLocked = true
+		pending = {
+			matches: (sql) => sql.startsWith('select "notes"."id" from "notes"') && sql.endsWith('for share'),
+			run: async () => {
+				let moved = false
+				move = moveNote(note, 'w2').then(() => {
+					moved = true
+				})
+				await Bun.sleep(200)
+				movedWhileLocked = moved
+			},
+		}
+		const sent = await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' })
+		await move
+		expect(movedWhileLocked).toBe(false)
+		expect(sent.status).toBe(404)
+		expect((await rows()).length).toBe(before)
+	})
+
+	test('upload: a move while the object is written fails the completion, and the object and its row are cleaned up', async () => {
+		const note = await seedNote('w1')
+		const before = (await rows()).length
+		const moving = new HookedStore(store, { afterWrite: () => moveNote(note, 'w2') })
+		const moved = bootApp(filesApp(scoped(tables)), { database, files: moving })
+		const sent = await upload(moved, note, PNG, { token: await editorOf(W1), type: 'image/png' })
+		expect(sent.status).toBe(404)
+		expect((await rows()).length).toBe(before)
+		expect(moving.written.every((key) => !store.objects.has(key))).toBe(true)
+	})
+
+	test('download: a move after the access check is 404, not the file', async () => {
+		const note = await seedNote('w1')
+		const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
+		after(LOCATE_FILE, () => moveNote(note, 'w2'))
+		const response = await download(app, id, await editorOf(W1))
+		expect(response.status).toBe(404)
+		expectFileTreatment(response)
+	})
+
+	test('remove: a move after the access check is 404, and the file stays live', async () => {
+		const note = await seedNote('w1')
+		const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
+		after(LOCATE_FILE, () => moveNote(note, 'w2'))
+		const removed = await send(app, '/api/files.attachments.remove', { token: await editorOf(W1), body: { id } })
+		expect(removed.status).toBe(404)
+		expect((await rows()).find((row) => row['id'] === id)).toMatchObject({ status: 'live', deleted_at: null })
+		expect((await download(app, id, await editorOf(W2))).status).toBe(200)
+	})
+})
+
+/** An object store that a test can make fail: a write whose answer is lost, a delete that fails. */
+class HookedStore implements FileObjectStore {
+	readonly written: string[] = []
+	readonly #inner: FileObjectStore
+	readonly #faults: { afterWrite?: () => Promise<void>; loseWriteAnswer?: boolean; failDeletes?: number }
+
+	constructor(inner: FileObjectStore, faults: { afterWrite?: () => Promise<void>; loseWriteAnswer?: boolean; failDeletes?: number }) {
+		this.#inner = inner
+		this.#faults = { ...faults }
+	}
+
+	async write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata> {
+		this.written.push(key)
+		const written = await this.#inner.write(key, body, options)
+		await this.#faults.afterWrite?.()
+		if (this.#faults.loseWriteAnswer === true) {
+			throw new Error('the connection reset before the answer arrived')
+		}
+		return written
+	}
+
+	read(key: string): Promise<StoredObject | null> {
+		return this.#inner.read(key)
+	}
+
+	async delete(key: string): Promise<void> {
+		if ((this.#faults.failDeletes ?? 0) > 0) {
+			this.#faults.failDeletes = (this.#faults.failDeletes ?? 0) - 1
+			throw new Error('the store is unavailable')
+		}
+		await this.#inner.delete(key)
+	}
+}
+
+/** Makes the collection's pending rows look abandoned: older than the grace period. */
+async function agePendingRows(): Promise<void> {
+	await admin((sql) => sql.unsafe(`update ${schema}.fabrika_files_attachments set created_at = now() - interval '2 hours' where status = 'pending'`))
+}
+
+/** A remove triggers the sweep. */
+async function sweepThrough(app: ContractApp): Promise<void> {
+	const note = await seedNote('w1')
+	const id = uploadedId(await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' }))
+	resultOf(await send(app, '/api/files.attachments.remove', { token: await editorOf(W1), body: { id } }))
+}
+
+describe.skipIf(!hasPostgres)('the pending row is the intent to clean an object up', () => {
+	test('a lost write answer followed by a failed delete leaves a pending row, and the sweep deletes both after the grace', async () => {
+		const inner = new MemoryFileObjects()
+		const faulty = new HookedStore(inner, { loseWriteAnswer: true, failDeletes: 1 })
+		const app = bootApp(filesApp(scoped(tables)), { database, files: faulty })
+		const note = await seedNote('w1')
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' })).status).toBe(500)
+		} finally {
+			log.mockRestore()
+		}
+		const [key] = faulty.written
+		const id = key?.slice('attachments/'.length) ?? ''
+		expect(inner.objects.has(key ?? '')).toBe(true)
+		expect((await rows()).find((row) => row['id'] === id)).toMatchObject({ status: 'pending' })
+
+		// Not swept while it might still be an upload in progress.
+		await sweepThrough(bootApp(filesApp(scoped(tables)), { database, files: inner }))
+		expect(inner.objects.has(key ?? '')).toBe(true)
+
+		await agePendingRows()
+		await sweepThrough(bootApp(filesApp(scoped(tables)), { database, files: inner }))
+		expect(inner.objects.has(key ?? '')).toBe(false)
+		expect((await rows()).some((row) => row['id'] === id)).toBe(false)
+	})
+
+	test('a failure of the final metadata write deletes the object and abandons the row', async () => {
+		const store = new MemoryFileObjects()
+		const recording = new HookedStore(store, {})
+		const app = bootApp(filesApp(scoped(tables)), { database, files: recording })
+		const note = await seedNote('w1')
+		const before = (await rows()).length
+		await admin((sql) => sql.unsafe(`alter table ${schema}.fabrika_files_attachments add constraint no_live check (status <> 'live') not valid`))
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await upload(app, note, PNG, { token: await editorOf(W1), type: 'image/png' })).status).toBe(500)
+		} finally {
+			log.mockRestore()
+			await admin((sql) => sql.unsafe(`alter table ${schema}.fabrika_files_attachments drop constraint no_live`))
+		}
+		expect(recording.written).toHaveLength(1)
+		expect(store.objects.size).toBe(0)
+		expect((await rows()).length).toBe(before)
 	})
 })
 

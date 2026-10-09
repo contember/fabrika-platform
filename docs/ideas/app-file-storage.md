@@ -65,11 +65,11 @@ Handlers that need files outside the generated endpoints get the same API, bound
   `deps` and removes it from `process.env`; the checker refuses S3 and R2 clients in application code.
 - **Object keys are generated:** `<collection>/<uuidv7>`. The client's file name is metadata only.
 - **One table per collection** in the application's schema, created by an application migration from
-  `fileTableSql` of `@fabrika/db`: `fabrika_files_attachments (id, owner_id, object_key, size, content_type,
-  sha256, original_name, created_by, created_at, deleted_at)`, with a foreign key to the owner's key,
-  `ON DELETE SET NULL`. The row stores none of the owner's containers: the framework reads them through the owner
-  row on every request, so they cannot go stale. A polymorphic table for every collection could carry no foreign
-  key at all. (Built in part A: [application runtime](../reference/application-runtime.md#file-collections).)
+  `fileTableSql` of `@fabrika/db`: `fabrika_files_attachments (id, owner_id, <owner chain columns>, status,
+  object_key, size, content_type, sha256, original_name, created_by, created_at, deleted_at)`, with a composite
+  foreign key to the owner over its key and chain columns, `ON UPDATE CASCADE`, so a move of the owner moves its
+  files and ownership cannot go stale. A polymorphic table for every collection cannot carry such a foreign key.
+  (Built in part A: [application runtime](../reference/application-runtime.md#file-collections).)
 
 ## Serving
 

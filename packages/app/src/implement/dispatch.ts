@@ -8,6 +8,7 @@ import {
 	type CompiledEndpointTable,
 	type CredentialedEndpoint,
 	ENDPOINT_HEADER,
+	type EndpointPlan,
 	type EndpointRow,
 	parseEndpointHeader,
 	type PermissionEntry,
@@ -34,7 +35,7 @@ import {
 	toErrorResponse,
 	UnauthorizedError,
 } from '../errors'
-import { FileDownload, fileResponse } from '../files/treatment'
+import { FileDownload, fileResponse, withFileTreatment } from '../files/treatment'
 import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
@@ -120,15 +121,19 @@ export class ContractRuntime {
 		this.#parts = parts
 	}
 
+	/** Every answer of a download endpoint, a denial included, carries the file treatment; every other one the policy. */
 	async fetch(request: Request): Promise<Response> {
-		const answer = await this.#answer(request)
-		return answer instanceof FileDownload ? fileResponse(answer) : withHeaderPolicy(answer, this.#parts.policy)
+		const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
+		const answer = await this.#answer(request, plan)
+		if (answer instanceof FileDownload) {
+			return fileResponse(answer)
+		}
+		return plan.outcome === 'endpoint' && plan.endpoint.kind === 'download' ? withFileTreatment(answer) : withHeaderPolicy(answer, this.#parts.policy)
 	}
 
-	async #answer(request: Request): Promise<Response | FileDownload> {
+	async #answer(request: Request, plan: EndpointPlan): Promise<Response | FileDownload> {
 		let where = 'request'
 		try {
-			const plan = planEndpoint(this.#parts.table, request.method, rawRequestTarget(request.url).pathname)
 			const served = plan.outcome === 'endpoint' ? this.#parts.endpoints.get(plan.endpoint.id) : undefined
 			// Before any other answer: a direct dial learns nothing, not even whether its path exists.
 			if (served?.kind !== 'health' && !this.#throughProxy(request)) {

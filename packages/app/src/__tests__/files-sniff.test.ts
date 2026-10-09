@@ -1,6 +1,7 @@
 // What an upload's first bytes must be for its declared type, and the disposition a download carries.
 
 import { describe, expect, test } from 'bun:test'
+import { originalName } from '../files/collections'
 import { bytesAreOfType, SNIFFABLE_TYPES } from '../files/sniff'
 import { contentDisposition } from '../files/treatment'
 
@@ -54,5 +55,22 @@ describe('the disposition of a download', () => {
 			"attachment; filename*=UTF-8''a%22%3B%20filename%3Devil.html%0D%0AX%3A%20y",
 		)
 		expect(contentDisposition('application/pdf', "zpráva (1)'s.pdf")).toBe("attachment; filename*=UTF-8''zpr%C3%A1va%20%281%29%27s.pdf")
+	})
+})
+
+describe('the file name an upload records', () => {
+	const named = (name: string) => originalName(new Request(`https://notes.test/api/files.attachments.upload/n?name=${encodeURIComponent(name)}`))
+
+	test('is cut at 255 code points, never inside a character', () => {
+		const emoji = '\u{1F600}'
+		expect(named(`${'a'.repeat(254)}${emoji}`)).toBe(`${'a'.repeat(254)}${emoji}`)
+		expect(named(`${'a'.repeat(255)}${emoji}`)).toBe('a'.repeat(255))
+		expect(named(`${'a'.repeat(254)}${emoji}`)?.includes('\uFFFD')).toBe(false)
+	})
+
+	test('loses its control characters, and an empty name is none', () => {
+		expect(named('a\r\nb.pdf')).toBe('ab.pdf')
+		expect(named('  ')).toBeNull()
+		expect(originalName(new Request('https://notes.test/x'))).toBeNull()
 	})
 })
