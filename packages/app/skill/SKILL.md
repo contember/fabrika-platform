@@ -92,7 +92,8 @@ refuses the shortcuts around both. Keep all three intact.
   declare one `object-storage` service in `fabrika.config.ts`; the platform writes `FABRIKA_APP_STORAGE_*` from it.
 - **Jobs:** background work is a job in the contract: `jobs: { purge: c.cron('0 3 * * *', { actions, scope: 'app' }) }`
   and `handlers.jobs.purge`. Use `ctx.within(action, dimension)` and `ctx.ref(action, dimension, id)`. No
-  `setInterval`, self-scheduled timers or loops. A failed attempt is retried, so make each write idempotent.
+  `setInterval`, self-scheduled timers or loops. A failed attempt is retried, so make each write idempotent. The
+  platform gives each job and webhook its own key; never read, set or copy `FABRIKA_JOB_*` or `FABRIKA_WEBHOOK_*`.
 - **Connectors:** to use another application's data, import its export. If the export does not exist, ask the
   owner application's maintainer. Run `fabrika connect add <app>/<export>@<version> --origin=<owner origin>`, then
   add `imports` to the contract and `connect` to `implement`. `ctx.connect.<import>.<procedure>()` answers an
