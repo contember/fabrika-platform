@@ -295,7 +295,7 @@ function session(context: TableContext): Session {
 function mutation<T>(context: TableContext, work: (transaction: Session) => Promise<T>): Promise<T> {
 	const runtime = runtimeOf(context.connection)
 	const fence = runtime.capabilities.fence()
-	const session = sessionOf(runtime.database)
+	const session = sessionOf(runtime)
 	return fence === null ? session.transaction(work) : fencedTransaction(session, fence, work)
 }
 

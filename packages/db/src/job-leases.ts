@@ -247,7 +247,7 @@ export async function fencedTransaction<T>(session: Session, fence: LeaseFence, 
 }
 
 export function jobLeases(runtime: () => DataLayerRuntime): JobLeases {
-	const session = () => sessionOf(runtime().database)
+	const session = () => sessionOf(runtime())
 	return Object.freeze({
 		async now(): Promise<Date> {
 			const [row] = await rows(session(), SQL_NOW, [])

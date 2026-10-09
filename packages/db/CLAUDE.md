@@ -130,7 +130,7 @@ and the target `Ref`, so no handler can call it.
 
 - **A read-only request writes nothing.** `DataLayerRuntime.readOnly` (the framework's
   `requestIsReadOnly`, true in an export's request) makes every session read-only — a store's, the
-  locator's, the file and webhook tables' — because `sessionOf` takes the runtime, never the bare
+  locator's, the file, webhook and job-lease tables' — because `sessionOf` takes the runtime, never the bare
   connection: `Session.run` refuses
   any root but a select, and any lock, before compiling, whatever capability the operation carries,
   and runs each statement in a `READ ONLY` transaction (`transaction()` opens one too). Never route a
