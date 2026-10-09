@@ -25,7 +25,7 @@
 import { numberField, prop, stringField } from './json'
 import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
 import type { ResolvedPrincipal } from './rpc'
-import type { PermissionEntry, PermissionSource, PrincipalType, Scope } from './types'
+import { isWorkloadKind, type PermissionEntry, type PermissionSource, type Scope, type TokenPrincipalType } from './types'
 
 // ── Names & knobs on the wire (both sides agree) ───────────────────────────────
 
@@ -90,7 +90,12 @@ export interface AccessTokenClaims {
 	/** Resolved/effective permissions; `can(action, scope?)` = `permits(perms, action, scope)`. */
 	perms: PermissionEntry[]
 	/** Present only when the token is bound to a principal (`sub` is that principal). */
-	ptype?: PrincipalType
+	ptype?: TokenPrincipalType
+	/**
+	 * Present exactly when `ptype` is a workload kind: the job's or the webhook's name, or for `app` the id of the
+	 * consuming application, which the proxy admits as the caller `app:<id>`.
+	 */
+	workload?: string
 	/** Audit actor label — the principal's label, or the credential label, or null (anonymous). */
 	label: string | null
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
@@ -107,10 +112,10 @@ export interface LinkTokenClaims {
 }
 
 /**
- * The principal kind of a token (ADR-0022 rule 3): a user or a service principal, or a share link. Null
+ * The principal kind of a token (ADR-0022 rule 3): a user or a service principal, a workload, or a share link. Null
  * for an anonymous credential that is not a link, which no contract mount admits.
  */
-export type PrincipalKind = PrincipalType | 'link'
+export type PrincipalKind = TokenPrincipalType | 'link'
 
 export function principalKind(claims: AccessTokenClaims): PrincipalKind | null {
 	if (claims.ptype !== undefined) return claims.ptype
@@ -167,7 +172,9 @@ export interface AccessTokenParams {
 	/** Subject id (becomes `sub`) — a principal id when `type` is given, else a credential id. */
 	subject: string
 	/** Principal type — omit for an anonymous credential (share link). */
-	type?: PrincipalType
+	type?: TokenPrincipalType
+	/** The workload's name; required with a workload `type`, refused with any other. */
+	workload?: string
 	/** Audit actor label, or null for an unlabeled anonymous token. */
 	label: string | null
 	permissions: PermissionEntry[]
@@ -237,6 +244,12 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 	if (params.type !== undefined) {
 		claims.ptype = params.type
 	}
+	if (isWorkloadKind(params.type) !== (params.workload !== undefined) || (params.workload !== undefined && !isWorkloadName(params.workload))) {
+		throw new Error('A workload token names its workload, and only a workload token does')
+	}
+	if (params.workload !== undefined) {
+		claims.workload = params.workload
+	}
 	if (params.link !== undefined) {
 		if (params.type !== undefined) throw new Error('A share-link token has no principal type')
 		claims.link = { mount: params.link.mount, chain: params.link.chain.map((scope) => ({ type: scope.type, value: scope.value })) }
@@ -274,9 +287,16 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (link === undefined || (link !== null && (ptype !== null || oauth !== null))) {
 		return null
 	}
+	const workload = parseWorkload(prop(payload, 'workload'), ptype)
+	if (workload === undefined) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
+	}
+	if (workload !== null) {
+		claims.workload = workload
 	}
 	if (oauth !== null) {
 		claims.oauth = oauth
@@ -285,6 +305,21 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 		claims.link = link
 	}
 	return claims
+}
+
+/** A job, webhook or mount name, or an application id. */
+const WORKLOAD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+
+function isWorkloadName(value: string): boolean {
+	return WORKLOAD_NAME.test(value)
+}
+
+/** A workload kind requires its name and every other kind refuses one: the name → the name, none → null, else undefined. */
+function parseWorkload(value: unknown, ptype: TokenPrincipalType | null): string | null | undefined {
+	if (!isWorkloadKind(ptype)) {
+		return value === undefined ? null : undefined
+	}
+	return typeof value === 'string' && isWorkloadName(value) ? value : undefined
 }
 
 /** Absent → null; a mount and a non-empty chain → the claims; anything else → undefined. */
@@ -330,11 +365,11 @@ function parseOAuthClaims(payload: unknown): OAuthTokenClaims | null | undefined
 
 /**
  * Map a verified PRINCIPAL-bound access token into the `ResolvedPrincipal` the existing
- * `AuthContext` consumes. Returns null for an anonymous token (no `ptype`) — the caller handles
- * the anonymous case separately.
+ * `AuthContext` consumes. Returns null for an anonymous token (no `ptype`) and for a workload token,
+ * which no `AuthContext` represents — the caller handles both separately.
  */
 export function accessClaimsToResolved(claims: AccessTokenClaims, requestId: string): ResolvedPrincipal | null {
-	if (claims.ptype === undefined) {
+	if (claims.ptype === undefined || isWorkloadKind(claims.ptype)) {
 		return null
 	}
 	return {
@@ -348,12 +383,12 @@ export function accessClaimsToResolved(claims: AccessTokenClaims, requestId: str
 
 // ── Structural parsers (no `as`) ───────────────────────────────────────────────
 
-/** Read `ptype`: a valid principal type, explicit-absent (→ null), or malformed (→ undefined). */
-function parseOptionalPrincipalType(value: unknown): PrincipalType | null | undefined {
+/** Read `ptype`: a valid principal kind, explicit-absent (→ null), or malformed or unknown (→ undefined). */
+function parseOptionalPrincipalType(value: unknown): TokenPrincipalType | null | undefined {
 	if (value === undefined || value === null) {
 		return null
 	}
-	return value === 'user' || value === 'service' ? value : undefined
+	return value === 'user' || value === 'service' || isWorkloadKind(value) ? value : undefined
 }
 
 /** Accept a string or explicit-null/absent (→ null); reject any other type (→ undefined). */

@@ -37,6 +37,12 @@ export interface EndpointTable {
 /** Who may call a credentialed endpoint. There is no public caller: anonymous traffic is a fixed endpoint kind. */
 export type Caller = 'human' | 'machine' | 'link' | `app:${string}`
 
+/** `app:<id>`: the connector of the consuming application `<id>`. */
+export const APP_CALLER_PREFIX = 'app:'
+
+/** Every export procedure and description is served under this prefix; an `app:<id>` caller reaches nothing else. */
+export const CONNECT_PREFIX = '/__fabrika/connect'
+
 /** A link holder reaches only its own link mount, never an RPC mount. */
 export type RpcCaller = Exclude<Caller, 'link'>
 

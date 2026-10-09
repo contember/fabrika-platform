@@ -1,4 +1,4 @@
-import { API_KEY_PREFIX, type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
 import type { SessionRow } from './db'
 import type { Env } from './env'
 import { hashToken, timingSafeEqualHex } from './secret'
@@ -98,6 +98,10 @@ export async function resolveCaller(
 			// A credential presented to the wrong app is indistinguishable from one that does not exist.
 			return { ok: false, reason: eff.reason === 'wrong_app' ? 'invalid_token' : eff.reason }
 		}
+		// A workload key calls no management or membership operation: it only mints for its own application.
+		if (isWorkloadKind(eff.type)) {
+			return { ok: false, reason: 'invalid_token' }
+		}
 		return {
 			ok: true,
 			caller: { id: eff.subject, ...(eff.type === undefined ? {} : { type: eff.type }), label: eff.label, permissions: eff.permissions },
@@ -112,7 +116,7 @@ export async function resolveCaller(
 	// ARE the caller's resolved permissions for that app (the same snapshot the SDK's `can()` trusts).
 	const signer = await getSigner(env)
 	const claims = await verifyAccessToken(signer, input.credential, { issuer: services.config.issuer, audience: input.app })
-	if (!claims) {
+	if (!claims || isWorkloadKind(claims.ptype)) {
 		return { ok: false, reason: 'invalid_token' }
 	}
 	return {

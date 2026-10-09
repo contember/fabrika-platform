@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { FABRIKA_IAM_APP_ID } from '../app-environment'
 import { FABRIKA_IAM_ISSUER } from '../environment'
-import { FRAMEWORK_VARIABLE_NAMES, frameworkVariableReference, isFrameworkVariableName } from '../framework-variables'
+import { FRAMEWORK_VARIABLE_NAMES, frameworkVariableReference, isFrameworkVariableName, workloadKeyVariable } from '../framework-variables'
 
 describe('framework-only variable names', () => {
 	test('include the names auth-core itself defines', () => {
@@ -18,6 +18,21 @@ describe('framework-only variable names', () => {
 		for (const name of ['NOTES_DATABASE_URL', 'FABRIKA_PUBLIC_API_ORIGIN', 'fabrika_release', 'FABRIKA_RELEASE ']) {
 			expect(isFrameworkVariableName(name)).toBe(false)
 		}
+	})
+
+	test('reserve every name of a workload or connector family', () => {
+		for (const name of ['FABRIKA_JOB_NIGHTLY_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', 'FABRIKA_CONNECT_CATALOG_KEY', 'FABRIKA_CONNECT_CATALOG_URL']) {
+			expect(isFrameworkVariableName(name)).toBe(true)
+		}
+		for (const name of ['FABRIKA_JOB_', 'FABRIKA_JOBS', 'FABRIKA_CONNECT']) {
+			expect(isFrameworkVariableName(name)).toBe(false)
+		}
+		expect(frameworkVariableReference('${RUNTIME_FABRIKA_JOB_NIGHTLY_KEY}')).not.toBeNull()
+	})
+
+	test('name a workload key after its kind and its name', () => {
+		expect(workloadKeyVariable('job', 'nightlyDigest')).toBe('FABRIKA_JOB_NIGHTLY_DIGEST_KEY')
+		expect(workloadKeyVariable('webhook', 'github')).toBe('FABRIKA_WEBHOOK_GITHUB_KEY')
 	})
 
 	test('list each name once', () => {

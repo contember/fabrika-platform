@@ -17,7 +17,7 @@ export const CONTRACT_DEFAULTS = {
 export const FILES_PREFIX = '/api'
 
 /** Export procedures are served here, one path per procedure, and each export's description at its own path. */
-export const CONNECT_PREFIX = '/__fabrika/connect'
+export { CONNECT_PREFIX } from '@fabrika/auth-core'
 
 /**
  * The caller an export admits besides its consumers' `app:<id>`: until Control reconciles connector credentials (B9),

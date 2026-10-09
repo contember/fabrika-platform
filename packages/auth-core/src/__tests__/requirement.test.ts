@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { EndpointRequirement } from '../contract'
-import { callerOf, satisfies } from '../requirement'
+import { callerAdmittedAt, callerOf, satisfies } from '../requirement'
 import type { PermissionEntry, Scope } from '../types'
 
 const grant = (action: string, scope: Scope | null = null): PermissionEntry => ({ action, scope, source: 'grant' })
@@ -47,7 +47,30 @@ describe('callerOf', () => {
 		expect(callerOf(base)).toBe('link')
 	})
 
+	test('a connector key of application <id> is the caller app:<id>; a job or a webhook key is no caller', () => {
+		expect(callerOf({ ...base, ptype: 'app', workload: 'shop' })).toBe('app:shop')
+		expect(callerOf({ ...base, ptype: 'job', workload: 'nightly' })).toBeNull()
+		expect(callerOf({ ...base, ptype: 'webhook', workload: 'github' })).toBeNull()
+		expect(callerOf({ ...base, ptype: 'app' })).toBeNull()
+	})
+
 	test('an OAuth resource token is no caller', () => {
 		expect(callerOf({ ...base, ptype: 'user', oauth: { app: 'notes@prod', clientId: 'c', scopes: [], grantId: 'g', tokenId: 't' } })).toBeNull()
+	})
+})
+
+describe('callerAdmittedAt', () => {
+	test('an app:<id> caller reaches only an export path', () => {
+		expect(callerAdmittedAt('app:shop', '/__fabrika/connect/products.v1.get')).toBe(true)
+		expect(callerAdmittedAt('app:shop', '/__fabrika/connect/products.v1')).toBe(true)
+		for (const path of ['/api/notes.list', '/__fabrika/connect', '/__fabrika/connectx/a', '/', '/api/__fabrika/connect/a']) {
+			expect(callerAdmittedAt('app:shop', path)).toBe(false)
+		}
+	})
+
+	test('every other caller is not limited by the path', () => {
+		for (const caller of ['human', 'machine', 'link'] as const) {
+			expect(callerAdmittedAt(caller, '/api/notes.list')).toBe(true)
+		}
 	})
 })

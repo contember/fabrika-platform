@@ -16,7 +16,7 @@
  * service that owns identity.
  */
 
-import { isOAuthResourceUri, PROXY_TOKEN_HEADER, type TokenAudienceProfile } from '@fabrika/auth-core'
+import { isOAuthResourceUri, isWorkloadKind, PROXY_TOKEN_HEADER, type TokenAudienceProfile } from '@fabrika/auth-core'
 import { buildAuthContext, IamClient } from './client'
 import { readRequestId } from './request'
 import type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalList } from './types'
@@ -150,6 +150,10 @@ export class Iam {
 			return verified.reason === 'unavailable'
 				? { ok: false, reason: 'unavailable', status: 503 }
 				: { ok: false, reason: 'invalid_token', status: 401 }
+		}
+		// A workload token is accepted by no mount (ADR-0022 "Principal kinds"), so no request carries one.
+		if (isWorkloadKind(verified.claims.ptype)) {
+			return { ok: false, reason: 'invalid_token', status: 401 }
 		}
 		return { ok: true, context: buildAuthContext(this.binding, token, verified.claims, requestId) }
 	}

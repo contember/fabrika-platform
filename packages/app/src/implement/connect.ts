@@ -2,7 +2,14 @@
 // to the owner's export procedure with the edge key as the bearer, and answers a typed outcome. A deadline bounds the
 // call and its retries; the answer is validated against the vendored output schema, so drift shows on the first call.
 
-import { API_KEY_PREFIX, type ContractArtifact, type ExportDescription, type ImportArtifact, type SchemaShape } from '@fabrika/auth-core'
+import {
+	API_KEY_PREFIX,
+	type ContractArtifact,
+	type ExportDescription,
+	type ImportArtifact,
+	type SchemaShape,
+	variableSegment,
+} from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { type ConnectSnapshot, describeSnapshot } from '../contract/connect'
 import { CONNECT_LIMITS, CONNECT_PREFIX, exportBase, joinPath } from '../contract/defaults'
@@ -35,7 +42,7 @@ export const CONNECT_BINDING_PREFIX = 'FABRIKA_CONNECT_'
 
 /** `catalog` → `FABRIKA_CONNECT_CATALOG_*`, `productCatalog` → `FABRIKA_CONNECT_PRODUCT_CATALOG_*`. */
 export function connectVariables(importName: string): ConnectVariables {
-	const binding = `${CONNECT_BINDING_PREFIX}${importName.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}`
+	const binding = `${CONNECT_BINDING_PREFIX}${variableSegment(importName)}`
 	return { url: `${binding}_URL`, key: `${binding}_KEY`, binding }
 }
 

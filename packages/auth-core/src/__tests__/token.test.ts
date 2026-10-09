@@ -192,3 +192,40 @@ describe('share-link claims', () => {
 		}
 	})
 })
+
+describe('workload claims', () => {
+	const workloadParams = {
+		iss: ISS,
+		app: 'notes@prod',
+		subject: 'principal-job',
+		label: 'job:nightly',
+		permissions: [{ action: 'notes.purge', scope: null, source: 'grant' as const }],
+		issuedAt: 1,
+		expiresAt: 2,
+	}
+
+	test.each(['job', 'webhook', 'app'] as const)('a %s token round-trips its kind and its workload', (type) => {
+		const built = buildAccessClaims({ ...workloadParams, type, workload: type === 'app' ? 'shop' : 'nightly' })
+		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(built)))
+		expect(parsed).toEqual(built)
+		expect(parsed === null ? null : principalKind(parsed)).toBe(type)
+		expect(parsed === null ? 'unparsed' : accessClaimsToResolved(parsed, 'req-1')).toBeNull()
+	})
+
+	test('a workload kind names its workload, and no other kind does', () => {
+		expect(() => buildAccessClaims({ ...workloadParams, type: 'job' })).toThrow()
+		expect(() => buildAccessClaims({ ...workloadParams, type: 'service', workload: 'nightly' })).toThrow()
+		expect(() => buildAccessClaims({ ...workloadParams, type: 'job', workload: 'a b' })).toThrow()
+		const job = buildAccessClaims({ ...workloadParams, type: 'job', workload: 'nightly' })
+		expect(parseAccessClaims({ ...job, workload: undefined })).toBeNull()
+		expect(parseAccessClaims({ ...job, workload: '' })).toBeNull()
+		expect(parseAccessClaims({ ...job, workload: 7 })).toBeNull()
+		expect(parseAccessClaims({ ...principalClaims(), workload: 'nightly' })).toBeNull()
+	})
+
+	test('an unknown principal kind rejects the whole token', () => {
+		for (const ptype of ['robot', 'App', 'link', 'machine']) {
+			expect(parseAccessClaims({ ...principalClaims(), ptype })).toBeNull()
+		}
+	})
+})

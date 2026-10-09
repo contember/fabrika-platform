@@ -1,6 +1,22 @@
 export type PrincipalType = 'user' | 'service'
 
 /**
+ * The principal kind of a workload credential (ADR-0022 "Principal kinds"): a contract job, a webhook, or the connector
+ * of a consuming application. IAM stores a workload principal as a `service` row and mints its key with this kind, so
+ * a workload key is never a `machine` caller.
+ */
+export type WorkloadKind = 'job' | 'webhook' | 'app'
+
+export const WORKLOAD_KINDS: readonly WorkloadKind[] = ['job', 'webhook', 'app']
+
+/** The principal kind a token carries in `ptype`: a stored principal type, or a workload kind. */
+export type TokenPrincipalType = PrincipalType | WorkloadKind
+
+export function isWorkloadKind(value: unknown): value is WorkloadKind {
+	return value === 'job' || value === 'webhook' || value === 'app'
+}
+
+/**
  * Where a resolved permission entry came from. Used for debuggability in the admin UI
  * ("why does this user have this permission?"); `can()`/`scopedTo()` ignore it.
  *  - 'grant'             — explicit `grants` row
@@ -115,6 +131,18 @@ export interface AppSchema {
 	links?: Record<string, AppLinkMountDef>
 	/** Endpoint id -> what the endpoint may spend through a delegation grant. */
 	delegations?: Record<string, AppDelegationDef>
+	/**
+	 * The workloads of a contract application and their exact actions. A workload key resolves to these actions, app-wide,
+	 * and to nothing once its workload is no longer declared; removing one revokes its keys.
+	 */
+	workloads?: AppWorkloadDef[]
+}
+
+/** A job or a webhook of a contract application: the actions its credential carries. */
+export interface AppWorkloadDef {
+	kind: Exclude<WorkloadKind, 'app'>
+	name: string
+	actions: string[]
 }
 
 // ── Per-path access gates (the propustka-native front door, enforced by the proxy) ──

@@ -1,5 +1,5 @@
 import type { AccessTokenClaims, DomainEvent, LinkTokenClaims, OAuthTokenClaims, PermissionEntry, Scope } from '@fabrika/auth-core'
-import { permits, scopedValues } from '@fabrika/auth-core'
+import { isWorkloadKind, permits, scopedValues } from '@fabrika/auth-core'
 import { readCredentials } from './request'
 import type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
 
@@ -65,9 +65,11 @@ class RealAuthContext implements AuthContext {
  * (`principal: null`).
  */
 export function buildAuthContext(binding: IamBinding, token: string, claims: AccessTokenClaims, requestId: string): AuthContext {
-	const principal: PrincipalIdentity | null = claims.ptype === undefined
-		? null
-		: { id: claims.sub, type: claims.ptype, label: claims.label ?? claims.sub }
+	const type = claims.ptype
+	if (isWorkloadKind(type)) {
+		throw new Error('a workload token has no AuthContext')
+	}
+	const principal: PrincipalIdentity | null = type === undefined ? null : { id: claims.sub, type, label: claims.label ?? claims.sub }
 	const auditLabel = claims.label ?? (principal === null ? `credential:${claims.sub}` : claims.sub)
 	return new RealAuthContext(
 		binding,

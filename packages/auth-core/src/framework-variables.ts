@@ -29,11 +29,27 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]
 
+/**
+ * The name families only the platform writes: one variable per job, webhook or import, named after it
+ * (`workloadKeyVariable`, the connector's `FABRIKA_CONNECT_<IMPORT>_*`). Every name under one is framework-only.
+ */
+export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_CONNECT_'] as const
+
 const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAMES)
 
 /** Whether only the platform may write `name`. */
-export function isFrameworkVariableName(name: string): name is FrameworkVariableName {
-	return FRAMEWORK_VARIABLES.has(name)
+export function isFrameworkVariableName(name: string): boolean {
+	return FRAMEWORK_VARIABLES.has(name) || FRAMEWORK_VARIABLE_PREFIXES.some((prefix) => name.length > prefix.length && name.startsWith(prefix))
+}
+
+/** A contract name as one segment of a variable name: `nightlyDigest` → `NIGHTLY_DIGEST`. */
+export function variableSegment(name: string): string {
+	return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()
+}
+
+/** The variable a job's or a webhook's credential travels under: `FABRIKA_JOB_NIGHTLY_DIGEST_KEY`. */
+export function workloadKeyVariable(kind: 'job' | 'webhook', name: string): string {
+	return `FABRIKA_${kind.toUpperCase()}_${variableSegment(name)}_KEY`
 }
 
 /** A Zerops reference: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}` or `${RUNTIME_<host>_NAME}`. */

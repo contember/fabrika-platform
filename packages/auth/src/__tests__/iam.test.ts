@@ -38,6 +38,7 @@ interface SignOptions {
 	ttl?: number
 	perms?: PermissionEntry[]
 	anonymous?: true
+	workload?: 'job' | 'webhook' | 'app'
 }
 
 async function sign(opts: SignOptions = {}): Promise<string> {
@@ -45,7 +46,7 @@ async function sign(opts: SignOptions = {}): Promise<string> {
 		iss: opts.iss ?? ISSUER,
 		app: opts.aud ?? APP,
 		subject: opts.anonymous === true ? 'cred-1' : 'user-1',
-		...(opts.anonymous === true ? {} : { type: 'user' as const }),
+		...(opts.anonymous === true ? {} : opts.workload === undefined ? { type: 'user' as const } : { type: opts.workload, workload: 'nightly' }),
 		label: opts.anonymous === true ? 'share' : 'a@b.cz',
 		permissions: opts.perms ?? PERMS,
 		issuedAt: now() - 60,
@@ -268,6 +269,12 @@ describe('authenticate — the token is bound to this app, this issuer and this 
 	test("another app's token denies (aud)", async () => {
 		const iam = createIam(iamEnv(new IamRpcStub({ jwks: JWKS })))
 		const result = await iam.authenticate(proxied(await sign({ aud: 'other-app' })))
+		expect(result).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
+	})
+
+	test.each(['job', 'webhook', 'app'] as const)('a %s token denies: no request carries a workload token', async (workload) => {
+		const iam = createIam(iamEnv(new IamRpcStub({ jwks: JWKS })))
+		const result = await iam.authenticate(proxied(await sign({ workload })))
 		expect(result).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
 	})
 
