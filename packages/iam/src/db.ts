@@ -7,6 +7,7 @@ import { DeviceAuthorizationRepository } from './repositories/device'
 import { GrantRepository } from './repositories/grants'
 import { HandoffRepository } from './repositories/handoff'
 import { MembershipRepository } from './repositories/membership'
+import { MembershipTransportKeyRepository } from './repositories/membership-transport'
 import { OAuthRepository } from './repositories/oauth'
 import { PrincipalRepository } from './repositories/principals'
 import { SessionRepository } from './repositories/sessions'
@@ -33,6 +34,7 @@ export {
 	MembershipRepository,
 	type MembershipRepositoryOptions,
 } from './repositories/membership'
+export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from './repositories/membership-transport'
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
@@ -52,6 +54,7 @@ export interface IamRepositories {
 	oauth: OAuthRepository
 	audit: AuditRepository
 	workloads: WorkloadRepository
+	membershipTransport: MembershipTransportKeyRepository
 }
 
 /** The portable repository bundle. A composition root may replace one complete capability. */
@@ -69,6 +72,7 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		oauth: replacements.oauth ?? new OAuthRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
 		workloads: replacements.workloads ?? new WorkloadRepository(db),
+		membershipTransport: replacements.membershipTransport ?? new MembershipTransportKeyRepository(db),
 	}
 }
 

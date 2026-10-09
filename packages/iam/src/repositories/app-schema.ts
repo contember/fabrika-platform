@@ -364,6 +364,14 @@ export class AppSchemaRepository {
 						WHERE m.app = credentials.app AND m.mount = credentials.link_mount AND m.dimension = credentials.link_dimension)`)
 				.bind(unixNow(), app),
 		)
+		// An app left with no delegated endpoint and no link mount calls no membership operation, so it keeps no transport key.
+		statements.push(
+			this.db
+				.prepare(`DELETE FROM membership_transport_keys
+					WHERE app = ? AND NOT EXISTS (SELECT 1 FROM app_delegated_endpoints d WHERE d.app = ?)
+						AND NOT EXISTS (SELECT 1 FROM app_link_mounts m WHERE m.app = ?)`)
+				.bind(app, app, app),
+		)
 
 		await this.db.batch(statements)
 	}

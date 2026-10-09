@@ -476,6 +476,29 @@ export interface IssueWorkloadKeyResponse {
 	expiresAt: number
 }
 
+// ── Membership transport keys (Control's reconcile of applications without an IAM binding) ──
+
+/**
+ * Issue a fresh membership transport key for one application environment (ADR-0022 rule 6). The key authenticates
+ * IAM's `/membership/*` surface and pins the application id; it carries no authority. Every other key of the
+ * application environment is deleted except `keep`.
+ */
+export interface IssueMembershipKeyRequest {
+	/** The IAM application id `<app>@<env>`. */
+	app: string
+	/** Absolute expiry (unix seconds), after now and at most 30 days ahead. */
+	expiresAt: number
+	/** The id of the key the caller has recorded as active, which stays valid until the caller replaces it; null when it has none. */
+	keep: string | null
+}
+
+/** The issued key, shown once. `id` is what a later issuance keeps. */
+export interface IssueMembershipKeyResponse {
+	key: string
+	id: string
+	expiresAt: number
+}
+
 export interface IamAdminRpcContract {
 	me: RpcProcedure<void, MeDto>
 	principals: {
@@ -525,6 +548,9 @@ export interface IamAdminRpcContract {
 	}
 	workloads: {
 		issueKey: RpcProcedure<IssueWorkloadKeyRequest, IssueWorkloadKeyResponse>
+	}
+	membershipKeys: {
+		issue: RpcProcedure<IssueMembershipKeyRequest, IssueMembershipKeyResponse>
 	}
 	shareLinks: {
 		list: RpcProcedure<ListShareLinksInput, CursorList<ShareLinkListItem>>

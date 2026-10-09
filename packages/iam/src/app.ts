@@ -7,6 +7,7 @@ import { handleAuth } from './auth/routes'
 import { readClientAddress } from './client-address'
 import { handleDeviceAuthorization } from './device-http'
 import type { Env } from './env'
+import { handleMembershipTransport } from './membership-http'
 import { handleOAuth, OAUTH_METADATA_PATH } from './oauth-http'
 import { readRequestId } from './request-id'
 import { createIamRpc } from './rpc'
@@ -31,6 +32,11 @@ export interface IamAppOptions {
 	readonly rpcKey?: string
 	/** Shared secret for the process-only proxy mint transport. Empty disables the surface. */
 	readonly proxyKey?: string
+	/**
+	 * Mount the membership transport (`src/membership-http.ts`) for applications that have no IAM service binding. Each
+	 * call is authenticated by its application's own key, not by a composition secret.
+	 */
+	readonly membershipTransport?: boolean
 	/** Process liveness is mounted explicitly because the public Worker does not expose it. */
 	readonly health?: boolean
 	/**
@@ -76,6 +82,14 @@ export function createIamApp(options: IamAppOptions = {}) {
 			route.rpc('/admin/rpc', adminRpcRouter, { use: [adminRpcAuth] }),
 			route.all('/admin', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
 			route.all('/admin/*path', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
+			...(options.membershipTransport === true
+				? [
+					route.all<IamAppContext, '/membership/*method'>(
+						'/membership/*method',
+						(ctx) => handleMembershipTransport(ctx.request, ctx.services, createIamRpc(ctx.env, ctx.exec)),
+					),
+				]
+				: []),
 			route.all('/rpc', (ctx) => handleIamRpc(ctx, options)),
 			route.all('/rpc/*method', (ctx) => handleIamRpc(ctx, options)),
 			route.all('/*path', () =>

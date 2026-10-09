@@ -144,6 +144,12 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.issueWorkloadKey(context(ctx), input)),
 	}),
+	membershipKeys: t.router({
+		issue: t.procedure
+			.input(z.object({ app: nonEmpty, expiresAt: z.number().int(), keep: nonEmpty.nullable() }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.issueMembershipKey(context(ctx), input)),
+	}),
 	shareLinks: t.router({
 		list: t.procedure
 			.input(z.object({ app: nonEmpty.optional(), includeRevoked: z.boolean().optional(), ...pageInput }).default({}))

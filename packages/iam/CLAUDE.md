@@ -23,6 +23,7 @@ bun test src/__tests__/entrypoint-isolation.test.ts   # the import-graph guard, 
 | ---------- | ----------------------------------------- | ------------------------------------------------ |
 | entrypoint | `src/index.ts` (`cloudflare:workers`)     | `src/node/server.ts` (`Bun.serve`)               |
 | `IamRpc`   | service binding on the `WorkerEntrypoint` | HTTP via `src/rpc-http.ts`, shared-secret gated  |
+| membership | `PropustkaApplication` methods            | `src/membership-http.ts`, per-application key    |
 | cron       | `scheduled()` → `runIamMaintenance`       | platform crontab → `src/node/prune.ts`           |
 | migrations | `migrations/` (SQLite/D1)                 | `migrations-postgres/` via `src/node/migrate.ts` |
 
@@ -157,6 +158,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   `createRoleGrantUnlessHeld` throw `WorkloadGrantError` for one, and `grants.create` answers 409 before anything else.
   A workload token is refused before any permission is resolved: by `resolveAdmin`'s token branch, by `resolveCaller`
   for every management and membership operation. `apiKeys.list`, `rotate` and `revoke` do not see workload principals.
+- **AN APPLICATION WITHOUT A BINDING CALLS `/membership/<method>`, AND ITS KEY ONLY PINS THE APPLICATION** (ADR-0022
+  rule 6, `src/membership-http.ts`, mounted by the Bun composition only). The bearer is the environment's membership
+  transport key (`membership_transport_keys`, hash only, no `credentials` row, so no `px_` path finds it and it mints
+  nothing); a call whose `app` is not the key's is `not_allowed` before the operation runs. It serves `createScope`,
+  `assignMember`, `revokeMember`, `listMembers`, `issueLink` and `revokeLink`, never `requestDelegation`: only the
+  proxy obtains a grant. The caller is still the token in the body. `membershipKeys.issue` (admin RPC) issues a key
+  for an `<app>@<env>` id only, ≤30 days, and deletes every other key of it except `keep`; a reconcile that leaves the
+  app no delegated endpoint and no link mount deletes its keys in the same batch.
 - **`workloads.issueKey` NEVER REVOKES THE KEY THE CALLER NAMES AS ACTIVE.** It creates the principal on first use,
   issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance

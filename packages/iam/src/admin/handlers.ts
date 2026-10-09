@@ -4,6 +4,7 @@ import { listAuditUseCase, listAuthLogUseCase } from './audit'
 import { type AdminContext } from './context'
 import { createGrantUseCase, deleteGrantUseCase } from './grants'
 import { json, readJson } from './http'
+import { issueMembershipKeyUseCase } from './membership-keys'
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
 import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePolicyUseCase } from './policies'
 import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, updatePrincipalUseCase } from './principals'
@@ -72,6 +73,7 @@ export const adminUseCases = {
 	listAudit: listAuditUseCase,
 	listAuthLog: listAuthLogUseCase,
 	issueWorkloadKey: issueWorkloadKeyUseCase,
+	issueMembershipKey: issueMembershipKeyUseCase,
 }
 
 export { putAppSchema } from './app-schema'

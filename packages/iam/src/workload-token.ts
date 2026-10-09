@@ -11,12 +11,10 @@ import type { MintFromKeyResult } from '@fabrika/auth-core'
 import { z } from 'zod'
 import type { Env, RequestContext } from './env'
 import { logError } from './log'
-import { hashToken } from './secret'
+import { hashToken, ISSUED_KEY_FORMAT } from './secret'
 import type { Services } from './services'
 import { mintFromWorkloadKey } from './tokens'
 
-/** `px_` and the 160-bit base64url secret `generateToken` writes: anything else is refused before any lookup. */
-const WORKLOAD_KEY = /^px_[A-Za-z0-9_-]{27}$/
 const bodySchema = z.object({ app: z.string().min(1).max(160) }).strict()
 
 /** Generous on purpose: a project's jobs and webhooks may share one egress address, and each mints once per token lifetime. */
@@ -43,7 +41,7 @@ function countRefusal(): void {
 function bearerOf(request: Request): string | null {
 	const match = /^Bearer\s+(\S+)$/i.exec(request.headers.get('Authorization')?.trim() ?? '')
 	const key = match?.[1] ?? null
-	return key !== null && WORKLOAD_KEY.test(key) ? key : null
+	return key !== null && ISSUED_KEY_FORMAT.test(key) ? key : null
 }
 
 async function appOf(request: Request): Promise<string | null> {

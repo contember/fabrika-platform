@@ -27,6 +27,9 @@ export function timingSafeEqualHex(a: string, b: string): boolean {
 	return diff === 0
 }
 
+/** A key IAM issued: `px_` and the 27 base64url characters `generateToken` writes. A public route refuses anything else before any lookup. */
+export const ISSUED_KEY_FORMAT = /^px_[A-Za-z0-9_-]{27}$/
+
 /**
  * Generate a high-entropy random token (160 bits, > the 128-bit minimum) as
  * URL-safe base64url. The plaintext is shown once at issue and never stored.

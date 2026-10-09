@@ -25,6 +25,8 @@ export function createFetchHandler(runtime: Runtime): (request: Request) => Prom
 	const app = createIamApp({
 		rpcKey: runtime.config.rpcKey,
 		proxyKey: runtime.config.proxyKey,
+		// An application on Zerops has no IAM binding; its membership operations arrive here, each with its own key.
+		membershipTransport: true,
 		health: true,
 		// This process is not publicly routed (ADR-0022 rule 1): the Caddy proxy is the only thing that
 		// can reach the port, and it deletes a caller's copy before writing its own. It fails safe — an
