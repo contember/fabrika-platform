@@ -250,9 +250,12 @@ services:
         bun ../../packages/cli/src/index.ts db codegen --verify &&
         bun ../../packages/cli/src/index.ts db test-isolation &&
         exec bun fabrika/entry.generated.ts
+    # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`); `up` writes it before Notes starts.
     env_file:
       - .state/notes.env
       - .state/notes-contract.env
+      - path: .state/notes-workloads.env
+        required: false
     environment:
       PORT: "3000"
       FABRIKA_APP_ID: notes

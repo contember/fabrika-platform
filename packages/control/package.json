@@ -44,6 +44,11 @@
 			"types": "./src/lease.ts",
 			"default": "./src/lease.ts"
 		},
+		"./workload-credentials": {
+			"bun": "./src/workload-credentials.ts",
+			"types": "./src/workload-credentials.ts",
+			"default": "./src/workload-credentials.ts"
+		},
 		"./vault": {
 			"bun": "./src/vault.ts",
 			"types": "./src/vault.ts",

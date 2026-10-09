@@ -1,17 +1,13 @@
 import { rmSync } from 'node:fs'
-import { registerLocalApps } from './app-registration'
 import { compose } from './compose'
-import { ensureMachineKey } from './machine-key'
-import { prepareLocalStack, STATE_DIR } from './prepare'
+import { STATE_DIR } from './prepare'
+import { upLocalComposition } from './up'
 
 const command = Bun.argv[2] ?? ''
 
 try {
 	if (command === 'up') {
-		await prepareLocalStack()
-		await compose(['up', '--detach', '--wait', '--remove-orphans'])
-		await registerLocalApps()
-		await ensureMachineKey()
+		await upLocalComposition()
 	} else if (command === 'status') {
 		await compose(['ps'])
 	} else if (command === 'down') {
@@ -19,10 +15,7 @@ try {
 	} else if (command === 'reset') {
 		await compose(['down', '--volumes', '--remove-orphans'])
 		rmSync(STATE_DIR, { recursive: true, force: true })
-		await prepareLocalStack()
-		await compose(['up', '--detach', '--wait', '--remove-orphans'])
-		await registerLocalApps()
-		await ensureMachineKey()
+		await upLocalComposition()
 	} else {
 		throw new Error('usage: bun src/cli.ts <up|status|reset|down>')
 	}

@@ -66,6 +66,7 @@ import {
 	webhookTriggeredSchema,
 } from './smoke-schemas'
 import { LOCAL_SOURCE_CONNECTIONS } from './source-connection-fixture'
+import { notesWorkloadKeys, workloadKeyExchanges, writeNotesWorkloadKeys } from './workload-keys'
 import { parseSnapshot } from './zerops-emulator/snapshot'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
@@ -584,7 +585,14 @@ const proveManagedOperationsEnvironment = async (
 	// No retired protocol record survives: every Fabrika-prefixed service variable is a managed key, and every other
 	// Fabrika-prefixed record is the active version's generated run section. A contract application also gets its proxy
 	// secret, and a bucket the import created is marked as the platform's.
-	const managedKeys = new Set<string>([...expected.keys(), FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_PROXY_SECRET, STORAGE_PROVENANCE_VARIABLE])
+	const managedKeys = new Set<string>([
+		...expected.keys(),
+		FABRIKA_IAM_ISSUER,
+		FABRIKA_IAM_APP_ID,
+		FABRIKA_PROXY_SECRET,
+		STORAGE_PROVENANCE_VARIABLE,
+		...notesWorkloadKeys().keys(),
+	])
 	const unexpected = records.filter((record) =>
 		record.key.startsWith('FABRIKA_')
 		&& (record.type === 'ENV' ? version.runEnvVariables?.[record.key] !== record.content : !managedKeys.has(record.key))
@@ -604,6 +612,23 @@ const soleSecret = (snapshot: EmulatorSnapshot, serviceId: string, key: string, 
 		throw new Error(`Zerops emulator holds no single sensitive ${description}`)
 	}
 	return record.content
+}
+
+/**
+ * Control issued each Notes job and webhook its own key and wrote it as a sensitive service variable, which IAM
+ * exchanges. The composed container then holds those keys, as the deployed version does.
+ */
+const proveWorkloadKeys = async (): Promise<void> => {
+	const snapshot = await emulatorSnapshot()
+	const serviceId = notesServiceId(snapshot)
+	const keys = new Map<string, string>()
+	for (const variable of notesWorkloadKeys().keys()) {
+		const key = soleSecret(snapshot, serviceId, variable, `${variable} on the Notes service`)
+		if (!await workloadKeyExchanges(key)) throw new Error(`IAM does not exchange the key the deploy wrote as ${variable}`)
+		keys.set(variable, key)
+	}
+	await writeNotesWorkloadKeys(keys)
+	await compose(['up', '--detach', '--wait', 'notes'])
 }
 
 /**
@@ -984,6 +1009,7 @@ const main = async (): Promise<void> => {
 		commitSha: deployment.commitSha,
 	})
 	await proveManagedOperationsEnvironment(deployedConfig, release, deployment.checkpoint)
+	await proveWorkloadKeys()
 	await proveOperationsIngestPersistence(machineKey, deployedConfig, release)
 	await proveIamAndNotes(provisioningKey)
 	await proveNamespaceIsolation()

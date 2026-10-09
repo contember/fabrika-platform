@@ -4,11 +4,9 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { z } from 'zod'
-import { registerLocalApps } from './app-registration'
 import { type browserFixtureSourceSchema, type browserIdentitySchema, parseBrowserFixtures, parseBrowserIdentity } from './browser-fixture-schemas'
 import { compose } from './compose'
-import { ensureMachineKey } from './machine-key'
-import { prepareLocalStack, STATE_DIR } from './prepare'
+import { STATE_DIR } from './prepare'
 import {
 	alertChannelFixtureSchema,
 	alertsFixtureSchema,
@@ -19,6 +17,7 @@ import {
 	rpcResponseSchema,
 	sourceFixtureSchema,
 } from './response-schemas'
+import { upLocalComposition } from './up'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
@@ -58,10 +57,7 @@ export async function createBrowserIdentity(role: BrowserIdentityRole): Promise<
 }
 
 export async function startBrowserStack(): Promise<void> {
-	await prepareLocalStack()
-	await compose(['up', '--detach', '--wait', '--remove-orphans'], { browser: true })
-	await registerLocalApps()
-	await ensureMachineKey()
+	await upLocalComposition({ browser: true })
 	await seedBrowserFixtures()
 }
 

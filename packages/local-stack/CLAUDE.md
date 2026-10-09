@@ -53,6 +53,12 @@ bun run test:browser  # the opice suites in tests/browser/
   origins against the manifest hosts, because a drift between them is invisible until someone logs in.
   `__tests__/proxy-gates.test.ts` (deliberately outside `src/`, so `typecheck` never follows its
   oblaka import) pins the other side: what a deployed Cloudflare proxy Worker actually bakes in.
+- **The composed Notes container holds its workloads' keys before it starts.** It refuses to start without a key per
+  job and webhook (ADR-0022 "Principal kinds"), and nothing deploys it. So `upLocalComposition` (`src/up.ts`) starts
+  the platform first, registers the apps, and `src/workload-keys.ts` makes Control's own `workloads.issueKey` call into
+  `.state/notes-workloads.env`, keeping a key while IAM still exchanges it; only then does Notes start. `local:smoke`
+  checks the keys its deploy wrote on the emulator and hands those to the container: each issuance revokes the
+  workload's other keys, so the container would otherwise hold a revoked one.
 - **A script needs a `px_` service key, not the provisioning key.** `local:up` provisions one through
   IAM and writes `.state/machine.env`; `mintFromKey` cannot resolve `FABRIKA_IAM_PROVISIONING_KEY`
   (it has no `credentials` row), so the proxy refuses it before control sees the bearer.
