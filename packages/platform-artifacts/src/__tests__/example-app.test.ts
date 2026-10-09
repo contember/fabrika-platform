@@ -200,6 +200,7 @@ const makeRun = (
 	env: 'prod',
 	target,
 	artifact: MANIFEST,
+	artifactAccess: true,
 	secrets: {},
 	vars: {},
 	managedEnvironment: {

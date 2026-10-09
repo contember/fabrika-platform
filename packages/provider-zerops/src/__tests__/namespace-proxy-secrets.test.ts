@@ -1,7 +1,8 @@
-import { proxySecretVariable } from '@fabrika/auth-core'
+import { contractDigest, proxySecretVariable } from '@fabrika/auth-core'
 import type { ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { defineApp } from '../authoring'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
@@ -31,6 +32,9 @@ const member = (appId: string, options: { contract: boolean; proxySecret?: strin
 		env: 'prod',
 		domain: `${appId}.example.com`,
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
+		...(options.contract
+			? { access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) } }
+			: { artifactAccess: true }),
 		...(options.proxySecret === undefined ? {} : { proxySecret: options.proxySecret }),
 	}
 }

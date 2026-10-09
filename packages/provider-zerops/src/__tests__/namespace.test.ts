@@ -1,4 +1,4 @@
-import { proxySecretVariable } from '@fabrika/auth-core'
+import { contractDigest, proxySecretVariable } from '@fabrika/auth-core'
 import {
 	type JsonValue,
 	PROVIDER_NAMESPACE_IMMUTABLE,
@@ -11,6 +11,7 @@ import {
 } from '@fabrika/provider-contract'
 import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import { describe, expect, spyOn, test } from 'bun:test'
+import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	createZeropsApi,
@@ -1319,6 +1320,7 @@ describe('Zerops namespace lifecycle', () => {
 			env: 'prod',
 			domain: 'notes.example.test',
 			artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
+			access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) },
 		}
 		const events = { checkpoint: async () => {}, boundary: async () => {} }
 

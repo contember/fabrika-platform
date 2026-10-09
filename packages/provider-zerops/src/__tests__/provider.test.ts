@@ -487,7 +487,9 @@ describe('Zerops provider', () => {
 			target: { ...app([API]).target, contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } },
 		}
 		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
-		const run = { ...deployRun(recorded), appId: 'notes', artifact }
+		const { artifactAccess: _trusted, ...base } = deployRun(recorded)
+		const access = { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) }
+		const run = { ...base, appId: 'notes', artifact, access }
 		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
 		expect(recorded.timeline).toEqual([])
 		// A dry run writes nothing, so it needs no secret.
