@@ -66,6 +66,9 @@ export function isPolicyOrigin(value: string, protocols: readonly string[] = ['h
 	}
 }
 
+/** The most named origins one directive may carry: the contract build and the manifest parser refuse more. */
+export const MAX_CSP_ORIGINS = 16
+
 export const NO_CSP_ORIGINS: CspOrigins = Object.freeze({ connectSrc: [], imgSrc: [], frameAncestors: [] })
 
 export function cspOrigins(csp: CspExtensions): CspOrigins {

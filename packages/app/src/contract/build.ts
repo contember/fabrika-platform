@@ -25,7 +25,7 @@ import {
 	type ScopeBinding,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
-import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
+import { isPolicyOrigin, MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { contractArtifactSchema } from './artifact-schema'
 import {
 	type AccessDeclaration,
@@ -858,6 +858,9 @@ class ArtifactBuilder {
 	}
 
 	#cspSources(where: string, sources: readonly CspSource[]): CspSource[] {
+		if (sources.length > MAX_CSP_ORIGINS) {
+			this.#problem(where, `${sources.length} origins exceed the limit of ${MAX_CSP_ORIGINS}`)
+		}
 		for (const source of sources) {
 			this.#keys(where, source, ['origin', 'purpose'])
 			if (!isPolicyOrigin(source.origin)) {

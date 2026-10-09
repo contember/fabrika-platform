@@ -2,6 +2,7 @@
 // reader of source could produce. Every refusal names where it is and the allowed form.
 
 import type { SchemaShape, TablePolicyArtifact } from '@fabrika/auth-core'
+import { MAX_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
@@ -116,6 +117,13 @@ describe('compileContract refuses what the types let through', () => {
 			"csp connectSrc: 'https://maps.example.com/tiles' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
 			"csp frameAncestors: 'https://*.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
 		])
+	})
+
+	test('at most 16 origins per CSP directive, the bound the proxy manifest also holds', () => {
+		const origins = (count: number) => Array.from({ length: count }, (_, index) => ({ origin: `https://tiles${index}.example`, purpose: 'Map tiles' }))
+		const withImgSrc = (count: number) => defineContract(vocabulary, () => ({ csp: { imgSrc: origins(count) } }))
+		expect(compileContract(withImgSrc(MAX_CSP_ORIGINS), {}).csp.imgSrc).toHaveLength(16)
+		expect(compileProblems(withImgSrc(MAX_CSP_ORIGINS + 1))).toEqual(['csp imgSrc: 17 origins exceed the limit of 16'])
 	})
 
 	test('table policies that disagree with the contract', () => {

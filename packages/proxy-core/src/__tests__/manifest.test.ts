@@ -7,6 +7,7 @@
 import { type ContractArtifact, contractDigest, type EndpointRow, isDigest } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { MAX_CSP_ORIGINS } from '../headers'
 import {
 	contractProxyTable,
 	encodeProxyManifestJson,
@@ -253,6 +254,12 @@ describe('contract apps — the endpoint table', () => {
 		expect(table.csp).toEqual({ connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [] })
 	})
 
+	test('a directive may name 16 origins', () => {
+		const imgSrc = Array.from({ length: MAX_CSP_ORIGINS }, (_, index) => `https://tiles${index}.example`)
+		expect(MAX_CSP_ORIGINS).toBe(16)
+		expect(parseProxyManifest({ apps: [{ ...app, csp: { ...app.csp, imgSrc } }] })).not.toBeNull()
+	})
+
 	test('an Operations ingest origin parses on http and https', () => {
 		for (const operationsOrigin of ['https://operations.example.com', 'http://operations.fabrika.localhost']) {
 			expect(parseProxyManifest({ apps: [{ ...app, operationsOrigin }] })?.apps[0]).toEqual({ ...app, scheme: 'https', operationsOrigin })
@@ -294,6 +301,10 @@ describe('contract apps — the endpoint table', () => {
 		['a CSP origin that is not https', { ...app, csp: { ...app.csp, imgSrc: ['http://tiles.example'] } }],
 		['a CSP origin with a path', { ...app, csp: { ...app.csp, connectSrc: ['https://api.example/v1'] } }],
 		['a CSP wildcard', { ...app, csp: { ...app.csp, frameAncestors: ['https://*.example.com'] } }],
+		['a 17th origin in one directive', {
+			...app,
+			csp: { ...app.csp, imgSrc: Array.from({ length: MAX_CSP_ORIGINS + 1 }, (_, index) => `https://tiles${index}.example`) },
+		}],
 		['a CSP source that would end the directive', { ...app, csp: { ...app.csp, connectSrc: ["https://a.example; script-src 'unsafe-inline'"] } }],
 		['a table without its CSP origins', Object.fromEntries(Object.entries(app).filter(([key]) => key !== 'csp'))],
 		['an Operations origin with a path', { ...app, operationsOrigin: 'https://operations.example.com/api' }],

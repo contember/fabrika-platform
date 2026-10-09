@@ -40,7 +40,8 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
   `createVerifyService` writes for a request carries it — the contract app's policy, the file treatment
   when the request selects a `download` endpoint, the base policy otherwise; the allow (a 204 to Caddy)
   carries none. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
-  accepts `*` in a host, so `isPolicyOrigin` checks the host itself).
+  accepts `*` in a host, so `isPolicyOrigin` checks the host itself), at most `MAX_CSP_ORIGINS` (16) per
+  directive — the same bound the contract build applies.
 - **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname
   (labels 1–63 chars, ≤ 253 total), and `proxyAppSchema` rejects the whole manifest when a host fails
   it. The manifest is the authority on hosts (ADR-0022), and Caddy's `host` matcher reads `*` as a

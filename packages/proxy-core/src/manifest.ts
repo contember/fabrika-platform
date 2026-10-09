@@ -18,7 +18,7 @@ import {
 	requirementDigest,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
-import { type CspOrigins, cspOrigins, isPolicyOrigin } from './headers'
+import { type CspOrigins, cspOrigins, isPolicyOrigin, MAX_CSP_ORIGINS } from './headers'
 import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
 
 export * from './oauth-resource'
@@ -211,10 +211,11 @@ export const proxyEndpointRowSchema = z.union([
 >
 
 const cspOriginSchema = z.string().refine((value) => isPolicyOrigin(value))
+const cspDirectiveSchema = z.array(cspOriginSchema).max(MAX_CSP_ORIGINS)
 const cspOriginsSchema = z.object({
-	connectSrc: z.array(cspOriginSchema),
-	imgSrc: z.array(cspOriginSchema),
-	frameAncestors: z.array(cspOriginSchema),
+	connectSrc: cspDirectiveSchema,
+	imgSrc: cspDirectiveSchema,
+	frameAncestors: cspDirectiveSchema,
 }).strict() satisfies z.ZodType<CspOrigins, z.ZodTypeDef, unknown>
 
 export const contractProxyAppSchema = z.object({
