@@ -6,8 +6,9 @@ HTTP routing, middleware, typed RPC, structural errors, and a typed browser clie
 [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md) makes the contract the
 target: an application declares `fabrika.contract.ts` and serves it through
 `implement` (`@fabrika/app/implement`), booted by the generated entrypoint that
-`fabrika app build` writes (`@fabrika/app/build`). `defineApp()` stays for the
-installation's own services (IAM, Control, Operations). The remaining surface is
+`fabrika app build` writes (`@fabrika/app/build`). The installation's own services
+(IAM, Control, Operations) move from `defineApp()` to service contracts
+(`@fabrika/app/service`) in work units B10c–e; until then they keep `defineApp()`. The remaining surface is
 the A-M1 work of the
 [implementation plan](../../docs/ideas/app-framework-implementation-plan.md).
 
@@ -43,6 +44,9 @@ src/
   app.ts              runtime-neutral request pipeline
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
+  service/            @fabrika/app/service — the installation services' own tables and dispatcher
+    define.ts         defineServiceContract: an endpoint table with the installation forms
+    serve.ts          serveService: the dispatcher over planEndpoint
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes
   router.ts           typed HTTP and RPC route matching
   middleware.ts       middleware runner over @fabrika/auth's canonical contract
@@ -212,6 +216,27 @@ src/
   (`WEBHOOKS_PREFIX`), for a holder of that dimension's `members.manage`; their shapes
   (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `implement` parses with
   (`webhook.ts`) must describe each other (`membership-shapes.test.ts`).
+
+## Service contracts (the installation's own services only)
+
+- **`@fabrika/app/service` is for IAM, Control and Operations, never an application.** `@fabrika/check`
+  refuses the import (`forbidden-import`), the static reader refuses `defineServiceContract`, and the
+  manifest parser reads the installation forms only in an entry platform composition marks
+  `installation: true` (ADR-0022 "Installation entries"). It imports only `@fabrika/auth-core`, so a
+  service's table module stays as dependency-light as its gate module was.
+- `defineServiceContract(id, (s) => ({ endpoints, reservedPrefixes }))` keys each row by its id;
+  `s.health`, `s.protocol` and `s.service` write the row, and `null` is a row this composition does not
+  serve (a switched-off transport). It refuses an `<app>@<env>` id, an `oauth` caller without scopes or
+  scopes without it, and every table `compileEndpointTable` refuses. The proxy reads the same artifact
+  through `serviceProxyTable` (`@fabrika/proxy-core/manifest`); never write manifest rows by hand.
+- **`serveService` dispatches only through `planEndpoint`**, in this order: non-canonical path 400, no
+  row 404, a `service` row without `X-Fabrika-Endpoint` naming that row and its digest 503, a path
+  parameter that does not decode 400, then the row's handler. A `protocol` or `health` row ignores the
+  header: the service authenticates it itself, and it also arrives unfronted or over a private hop that
+  carries the calling service's own header (ADR-0022 rule 5). It checks no proxy secret; an installation
+  service gets none. It needs a handler for every row it serves.
+- `dispatchRpcRequest`, `initRpc` and `createRpcClient` stay for the installation's typed RPC mounts;
+  a row handler of a `{ method, input }` mount calls `dispatchRpcRequest`.
 
 ## Serving a contract
 

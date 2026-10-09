@@ -201,6 +201,15 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/db/bind.ts:1:1', 'src/db/bind.ts:3:27', 'src/db/bind.ts:4:1'],
 	},
 	{
+		name: "the installation services' dispatcher",
+		rule: 'forbidden-import',
+		files: {
+			'src/server.ts': "import { serveService } from '@fabrika/app/service'\nexport const serve = serveService\n"
+				+ "export const late = await import('@fabrika/app/service')\nexport { defineServiceContract } from '@fabrika/app/service'\n",
+		},
+		expected: ['src/server.ts:1:1', 'src/server.ts:3:27', 'src/server.ts:4:1'],
+	},
+	{
 		name: 'qualified eval and Function through call and apply',
 		rule: 'dynamic-code',
 		files: {

@@ -93,8 +93,10 @@ bun test   # deny-matrix (gates), endpoint-matrix (application tables) and insta
   `webhook`, `app`) with 403 `caller_kind`, also from the cache (ADR-0022 "Principal kinds").
 - **A row's digest is checked where the manifest is parsed.** The parser recomputes
   `requirementDigest` and refuses a row whose digest differs, so the digest the proxy sends always
-  describes the rules it applied. Producers build rows with `contractProxyTable(artifact)`, never by
-  hand.
+  describes the rules it applied. Producers build rows with `contractProxyTable(artifact)` for an
+  application and `serviceProxyTable(service, { oauth })` for an installation service's contract, never
+  by hand. Without an authorization server (`oauth: false`) `serviceProxyTable` drops every row that
+  admits `oauth`; the service must then serve the same table, or that path answers 503 there.
 - **A delegation grant is fresh per request.** A row marked `members` or `creates` gets a single-use
   grant from `delegations` (a structural subset of IAM's membership RPC) after every other check
   passed, also on a warm token cache, and it rides in `X-Fabrika-Delegation`. A refused grant is a

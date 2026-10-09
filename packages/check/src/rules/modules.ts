@@ -53,11 +53,15 @@ const FORBIDDEN_PACKAGES: ReadonlyMap<string, Forbidden> = new Map([
 	['child_process', PROCESSES],
 ])
 
-/** Subpaths the framework imports and an application never does. */
+/** Subpaths only the framework or the installation's own services import; an application never does. */
 const FRAMEWORK_ONLY: ReadonlyMap<string, Forbidden> = new Map([
 	['@fabrika/db/framework', {
 		what: "the framework's binding of the data layer to its connection",
 		allowed: 'implement({ database: scoped(tables) }); boot binds it',
+	}],
+	['@fabrika/app/service', {
+		what: "the installation services' own router, which bypasses the contract",
+		allowed: 'endpoints declared in fabrika.contract.ts, served by implement',
 	}],
 ])
 

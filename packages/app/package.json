@@ -47,6 +47,11 @@
 			"types": "./src/implement/index.ts",
 			"default": "./src/implement/index.ts"
 		},
+		"./service": {
+			"bun": "./src/service/index.ts",
+			"types": "./src/service/index.ts",
+			"default": "./src/service/index.ts"
+		},
 		"./build": {
 			"bun": "./src/build.ts",
 			"types": "./src/build.ts",

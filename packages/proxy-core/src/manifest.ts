@@ -13,6 +13,7 @@ import {
 	EndpointTableError,
 	type GateRule,
 	type InstallationEndpointRow,
+	type InstallationEndpointTable,
 	isDigest,
 	isOAuthResourceUri,
 	parseAppEnvironmentId,
@@ -387,6 +388,27 @@ export function contractProxyTable(artifact: ContractArtifact): ContractProxyTab
 		reservedPrefixes: [...artifact.reservedPrefixes],
 		snapshot: contractDigest(artifact),
 		csp: cspOrigins(artifact.csp),
+	}
+}
+
+/** What a producer adds to an installation service's placement: the output of `serviceProxyTable`. */
+export type InstallationProxyTable = Pick<InstallationProxyApp, 'installation' | 'endpoints' | 'reservedPrefixes'>
+
+/**
+ * The manifest form of a service contract: every row with its digest. Without an authorization server (`oauth:
+ * false`) every row that admits `oauth` is dropped, because the parser refuses such a row without its registered
+ * resource; the service must then serve the same table, or the dropped path answers 503 there.
+ */
+export function serviceProxyTable(service: InstallationEndpointTable, options: { readonly oauth: boolean }): InstallationProxyTable {
+	return {
+		installation: true,
+		endpoints: service.endpoints
+			.filter((row) => options.oauth || row.oauth === null)
+			.map((row): InstallationProxyEndpointRow => {
+				const rules = { ...row, delegation: null }
+				return { ...rules, digest: requirementDigest(rules) }
+			}),
+		reservedPrefixes: [...service.reservedPrefixes],
 	}
 }
 

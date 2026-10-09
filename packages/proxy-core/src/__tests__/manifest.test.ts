@@ -20,12 +20,14 @@ import { MAX_CSP_ORIGINS } from '../headers'
 import {
 	contractProxyTable,
 	encodeProxyManifestJson,
+	type InstallationProxyApp,
 	isApplicationEntry,
 	isGateProxyApp,
 	isProxyHost,
 	parseProxyManifest,
 	parseProxyManifestJson,
 	type ProxyManifest,
+	serviceProxyTable,
 } from '../manifest'
 import { createVerifyService } from '../service'
 import { contractAppWith, FakeIam, HOST, installationAppWith, installationRow, ISSUER, OAUTH_RESOURCE, verifyRequest } from './helpers'
@@ -436,5 +438,64 @@ describe('installation entries — the forms no application may declare', () => 
 	test('a * row and a row of another method on one path shape are ambiguous', () => {
 		const get = installationRow({ ...adminRules, id: 'admin.get', method: 'GET' })
 		expect(parses({ ...entry, endpoints: [mcp, admin, get] })).toBe(false)
+	})
+})
+
+describe('serviceProxyTable — the manifest form of a service contract', () => {
+	const mcp: InstallationCredentialedEndpoint = {
+		id: 'mcp',
+		kind: 'service',
+		method: '*',
+		path: '/mcp',
+		callers: ['oauth'],
+		requirement: { kind: 'authenticated' },
+		admission: null,
+		oauth: { scopes: ['mcp:read'] },
+	}
+	const rpc: InstallationCredentialedEndpoint = {
+		id: 'rpc',
+		kind: 'service',
+		method: 'POST',
+		path: '/api/rpc',
+		callers: ['human', 'machine'],
+		requirement: { kind: 'authenticated' },
+		admission: { contentTypes: ['application/json'], maxBytes: null },
+		oauth: null,
+	}
+	const health: InstallationAnonymousEndpoint = {
+		id: 'health',
+		kind: 'health',
+		method: 'GET',
+		path: '/healthz',
+		callers: [],
+		requirement: null,
+		admission: null,
+		oauth: null,
+	}
+	const service = { endpoints: [mcp, rpc, health], reservedPrefixes: ['/api'] }
+	const placement: Pick<InstallationProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'> = {
+		id: 'vozka',
+		hosts: [HOST],
+		upstream: 'control:3000',
+		scheme: 'https',
+	}
+
+	test('without an authorization server it drops every row that admits oauth, so the entry parses without a resource', () => {
+		const table = serviceProxyTable(service, { oauth: false })
+		expect(table.endpoints.map((row) => row.id)).toEqual(['rpc', 'health'])
+		expect(parseProxyManifest({ apps: [{ ...placement, ...table }] })).toEqual({ apps: [{ ...placement, ...table }] })
+	})
+
+	test('every row carries the digest of its rules, scopes included, and the entry is an installation entry', () => {
+		const table = serviceProxyTable(service, { oauth: true })
+		expect(table.installation).toBe(true)
+		expect(table.reservedPrefixes).toEqual(['/api'])
+		for (const row of table.endpoints) {
+			expect(row.delegation).toBeNull()
+			expect(row.digest).toBe(requirementDigest({ ...row, delegation: null }))
+		}
+		const parsed = parseProxyManifest({ apps: [{ ...placement, ...table, oauthResources: [OAUTH_RESOURCE] }] })
+		const entry = parsed?.apps[0]
+		expect(entry !== undefined && !isApplicationEntry(entry) && !isGateProxyApp(entry)).toBe(true)
 	})
 })
