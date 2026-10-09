@@ -76,6 +76,7 @@ describe('requirementDigest', () => {
 
 describe('an application row keeps its digest byte for byte', () => {
 	// Recorded before installation rows existed: a proxy that changed one would answer 503 to an unchanged application.
+	// The export rows were recorded again when their callers lost `machine` (B9b); the fixture changed, not the digest.
 	const RECORDED: Readonly<Record<string, string>> = {
 		'api.me': 'sha256:f3520c5f8d3aac6a513c85955fc80df9d96bd274d7622b535ddf626dd727993b',
 		'api.notes.list': 'sha256:7f19734a6423280509d19742686a24b0e7fc9988c7d2fabc631d0c02707d4357',
@@ -88,14 +89,14 @@ describe('an application row keeps its digest byte for byte', () => {
 		health: 'sha256:f180f636975e69016cea9bf60a44f559f8c5b00572f70903979674bf936c086f',
 		github: 'sha256:229adc2a88ead1f8339c1011bd25edf9b5f36c87ce4baeb206426ce32ea644d2',
 		contact: 'sha256:efb169deafb5b76cab8f703afd28f1717c327f9aa18d915570f338bb1b9bc1f5',
-		'products.v1': 'sha256:f0f22a05c6ed25d2d4aa106439aeb3cd20a3b4705f7fbfa30f70f203c0480437',
-		'products.v1.get': 'sha256:b6be4a2f5cddea9e794af62d53ed984c01cd0cb31b2293e0ce41b34f7a92db07',
+		'products.v1': 'sha256:cca03e9445364ca460edbe4cb97d3de612e39f694fc8440d891ed49d4721fa95',
+		'products.v1.get': 'sha256:34c4d50ffab81f3ce51a30bba52c1af431759314a3f9ade739dc313b576faa65',
 		spa: 'sha256:5accf6e8b1921c5fb3cb84af6dc8f7614ac5859232795f23cfa908b7655ae6f1',
 	}
 
 	test('every endpoint of the notes artifact, and the contract digest', () => {
 		expect(Object.fromEntries(notesArtifact.endpoints.map((endpoint) => [endpoint.id, endpointDigest(notesArtifact, endpoint)]))).toEqual(RECORDED)
-		expect(contractDigest(notesArtifact)).toBe('sha256:aef0ee6909bbca73aa8773febd566301d5c4f096b9b24f69a8e006f3f364c65c')
+		expect(contractDigest(notesArtifact)).toBe('sha256:453d550ebe2c8a8215a06661e001e78cdec9ce9abf3dae96c460f88edcf72500')
 	})
 })
 
