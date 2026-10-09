@@ -25,8 +25,17 @@ export const CONNECT_PREFIX = '/__fabrika/connect'
  */
 export const EXPORT_EDGE_KEY_CALLER = 'machine'
 
-/** Every connector call has a deadline; it bounds the retries too. Queries are safe to retry. */
-export const CONNECT_LIMITS = { defaultTimeoutMs: 3000, maxTimeoutMs: 10_000, retries: 2 } as const
+/**
+ * Every connector call has a deadline; it bounds the retries too. Queries are safe to retry. An answer and a
+ * description are read under a byte budget, so another application cannot make the consumer buffer without bound.
+ */
+export const CONNECT_LIMITS = {
+	defaultTimeoutMs: 3000,
+	maxTimeoutMs: 10_000,
+	retries: 2,
+	maxAnswerBytes: 1024 * 1024,
+	maxDescriptionBytes: 256 * 1024,
+} as const
 
 /** `products` version 1 → `products.v1`: the description's endpoint id, and the prefix of each procedure's. */
 export function exportBase(name: string, version: number): string {

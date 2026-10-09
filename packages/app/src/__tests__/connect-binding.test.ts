@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createTestEnv } from 'lopata/testing'
 import { z } from 'zod/v4'
+import { describeSnapshot } from '../contract/connect'
 import { type ConnectFetch, Connector } from '../implement/connect'
 
 const OWNER_ORIGIN = 'https://catalog.example.com'
@@ -57,7 +58,15 @@ describe('a service binding routes by the binding, not by the URL', () => {
 				key: 'px_edge_key',
 				fetch: bindingOf(testEnv.env, 'FABRIKA_CONNECT_CATALOG'),
 				timeoutMs: 1000,
-				procedures: { get: { input: null, output: z.strictObject({ host: z.string(), path: z.string(), bearer: z.boolean() }) } },
+				description: describeSnapshot({
+					app: 'catalog',
+					export: 'products',
+					version: 1,
+					audience: 'any consumer user',
+					digest: '',
+					procedures: { get: { input: null, output: z.strictObject({ host: z.string(), path: z.string(), bearer: z.boolean() }) } },
+				}),
+				procedures: ['get'],
 			})
 			expect(await connector.call('get', {})).toEqual({
 				outcome: 'ok',

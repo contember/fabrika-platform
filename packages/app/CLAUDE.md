@@ -29,6 +29,7 @@ bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share li
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
+bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
 bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
@@ -69,6 +70,7 @@ src/
     platform.ts       schemaFromContract: the IAM vocabulary a deploy reconciles
     connect.ts        exportDescription, ConnectSnapshot, describeSnapshot, parseExportDescription
     snapshot-source.ts  snapshotSource: the vendored snapshot module fabrika connect writes
+    schema-from-shape.ts  schemaFromShape and declaredPath: what a connector validates with and reports
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
@@ -83,7 +85,8 @@ src/
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
     environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
-    connect.ts        Connector (ctx.connect's calls), wireImports, connectVariables
+    connect.ts        Connector, wireImports, connectContext (ctx.connect per request), connectVariables
+    bounded.ts        readBoundedBytes: a body under a byte budget and a deadline
   files/              c.files: served by implement, never imported by an application
     collections.ts    the upload, download and remove endpoints, the file locator, the sweep
     sniff.ts          the declared type checked against the first bytes
@@ -354,25 +357,37 @@ src/
   `contract-scale.test.ts`; both generate their source in `scale-fixture.ts`.
 - **An export is served read-only.** Its procedures are handlers under `handlers.exports.<export>`,
   each run in a `RequestFrame` with `readOnly`; `boot` binds the data layer with `requestIsReadOnly`, so
-  `@fabrika/db` refuses every write and lock in that request and reads `READ ONLY`. `buildArtifact`
+  `@fabrika/db` refuses every write and lock in that request and reads `READ ONLY` — the access check's
+  locator and the framework tables included, because every session asks the runtime. `buildArtifact`
   refuses an export procedure whose action a table writes with or that manages a dimension's members. An export's context carries its
   capability only: no `ctx.connect`, no membership or file API.
 - **An export's callers are its consumers' `app:<id>` and, until B9, `machine`**
   (`EXPORT_EDGE_KEY_CALLER`): an operator provisions one service principal with a `px_` key per edge,
   holding the export's actions. B9 replaces it with Control-reconciled `app:<id>` credentials; then drop
   `machine` there and nowhere else. `<export>.v<n>` (no procedure) serves the export's description, the
-  schemas and digest a consumer vendors, to the same callers with a `member` requirement.
+  schemas and digest a consumer vendors, to the same callers and with the same requirement as its
+  procedures: v1 exports declare one action in one dimension for every procedure, and `buildArtifact`
+  refuses one that does not. Never give the description a weaker requirement.
 - **`ctx.connect` exists only in the handlers an import's `usedBy` names**, both in the types
-  (`ConnectContext`) and at runtime (`wireImports`). `implement({ connect })` takes the vendored snapshot
+  (`ConnectContext`) and at runtime (`wireImports`). Its methods are built per request
+  (`connectContext`) and bound to that `RequestFrame`: one kept past its request, called from another
+  request, from an export's request or from an endpoint the import does not name answers `denied` and
+  sends nothing. `implement({ connect })` takes the vendored snapshot
   of each import; `boot` refuses one whose app, export or version differ, whose digest is not the
   import's, whose schemas no longer describe to its own digest (edited), or that lacks an imported
   procedure, and an import without `FABRIKA_CONNECT_<IMPORT>_URL` (an http(s) origin, no credentials)
-  and `_KEY` (a `px_` key). Both are `FABRIKA_*`, so the application never reads them.
+  and `_KEY` (a `px_` key). Both are `FABRIKA_*`, so the application never reads them. A connector validates
+  against zod schemas the framework builds from the checked, deep-frozen description (`schemaFromShape`),
+  never against the snapshot's own schema objects, which application code could replace after `boot`.
 - **A connector call never throws for the owner's answer.** It validates the input against the
   snapshot (`invalid_input`, nothing sent), posts to `<origin>/__fabrika/connect/<export>.v<n>.<path>`
   with the edge key as the bearer, and answers `ok`, `denied` (401/403/404), `invalid_input` (400),
-  `unavailable` (408, 429, 5xx, network), `timeout` or `contract_violation` (an answer the vendored
-  output schema refuses, or a status no export answers; logged once, without the key). The import's
+  `unavailable` (408, 429, 5xx, network, any 3xx: `redirect: 'manual'`, never followed), `timeout` or
+  `contract_violation` (an answer that is not `application/json`, is larger than
+  `CONNECT_LIMITS.maxAnswerBytes`, is no JSON, or that the vendored output schema refuses; logged once). A
+  message names a fixed code and the path as the vendored schema declares it (`declaredPath`), never a
+  record key or anything else the owner wrote, and the edge key is cut out of every message regardless.
+  The deadline aborts the fetch and cancels the body reader (`readBoundedBytes`). The import's
   `timeoutMs` (3 s by default, at most 10 s, `CONNECT_LIMITS`) bounds the call and its two retries on
   `unavailable` and `timeout`; the remaining time is shared by the attempts left.
 - **On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding carries the call** (the Worker adapter

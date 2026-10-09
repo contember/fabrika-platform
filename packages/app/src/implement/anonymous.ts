@@ -4,37 +4,13 @@
 
 import { LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
+import { readBoundedBytes } from './bounded'
 
 /** The body as bytes, read until `maxBytes`; a longer one stops the read and is a 413. */
 export async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> {
-	const tooLarge = () => new HttpError(413, 'too_large', `The body is larger than ${maxBytes} bytes`)
-	const declared = Number(request.headers.get('Content-Length') ?? '')
-	if (Number.isFinite(declared) && declared > maxBytes) {
-		throw tooLarge()
-	}
-	const reader = request.body?.getReader()
-	if (reader === undefined) {
-		return new Uint8Array()
-	}
-	const chunks: Uint8Array[] = []
-	let size = 0
-	for (;;) {
-		const { done, value } = await reader.read()
-		if (done) {
-			break
-		}
-		size += value.byteLength
-		if (size > maxBytes) {
-			await reader.cancel()
-			throw tooLarge()
-		}
-		chunks.push(value)
-	}
-	const body = new Uint8Array(size)
-	let offset = 0
-	for (const chunk of chunks) {
-		body.set(chunk, offset)
-		offset += chunk.byteLength
+	const body = await readBoundedBytes(request.body, { maxBytes, declaredLength: request.headers.get('Content-Length') })
+	if (body === null) {
+		throw new HttpError(413, 'too_large', `The body is larger than ${maxBytes} bytes`)
 	}
 	return body
 }

@@ -82,11 +82,19 @@ export const exportDescriptionSchema: z.ZodType<ExportDescription> = z.strictObj
 	digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
 })
 
+const DESCRIPTION_FIELDS: readonly string[] = ['app', 'export', 'version', 'audience', 'procedures', 'digest']
+
 /** A served description, parsed, whose digest is the digest of what it describes; throws `ContractError` otherwise. */
 export function parseExportDescription(value: unknown): ExportDescription {
 	const parsed = exportDescriptionSchema.safeParse(value)
 	if (!parsed.success) {
-		throw new ContractError(parsed.error.issues.map((issue) => `description ${issue.path.map(String).join('.')}: ${issue.message}`))
+		// Another application wrote the value: name only the fields this parser declares and zod's fixed codes.
+		const problems = parsed.error.issues.map((issue) => {
+			const [top] = issue.path
+			const field = typeof top === 'string' && DESCRIPTION_FIELDS.includes(top) ? top : '(root)'
+			return `description: invalid at ${field} (${issue.code})`
+		})
+		throw new ContractError([...new Set(problems)])
 	}
 	const { digest, ...described } = parsed.data
 	if (exportDigest(described) !== digest) {

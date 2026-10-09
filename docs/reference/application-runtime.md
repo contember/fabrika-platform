@@ -466,13 +466,15 @@ show: async ({ input, ctx }) => {
 The owner side:
 
 - Each procedure is `POST /__fabrika/connect/<export>.v<version>.<procedure>`, and the export's
-  description — its schemas and `exportDigest` — is `POST /__fabrika/connect/<export>.v<version>`.
+  description — its schemas and `exportDigest` — is `POST /__fabrika/connect/<export>.v<version>`. The
+  description has the callers and the requirement of the procedures it describes; in v1 every procedure of
+  an export declares the same action in the same dimension.
 - Their callers are the consumers' `app:<id>` and `machine`. Until Control reconciles connector
   credentials, an operator provisions one service principal per edge, with a `px_` key bound to the
   consumer's environment and holding the export's actions at the owner; that key is a `machine` caller.
   It also passes any other owner endpoint `machine` may call with those actions.
 - An export handler runs read-only. The data layer refuses every write and lock in its request, whatever
-  capability it carries, and reads in `READ ONLY` transactions. An export may not declare an action a
+  capability it carries, and reads in `READ ONLY` transactions — the access check's own reads included. An export may not declare an action a
   table writes with, nor one that manages members. Its context has no `ctx.connect` and no membership or file API.
 
 The consumer side:
@@ -482,14 +484,19 @@ The consumer side:
   `FABRIKA_CONNECT_<IMPORT>_URL` and the edge key from `FABRIKA_CONNECT_<IMPORT>_KEY` (`catalog` →
   `CATALOG`, `productCatalog` → `PRODUCT_CATALOG`). Both are framework variables, so no application
   module reads them; in part A an operator sets them, for example as secrets the app declares.
-- `ctx.connect.<import>.<procedure>` exists only in the handlers `usedBy` names. A call validates its
+- `ctx.connect.<import>.<procedure>` exists only in the handlers `usedBy` names, and only for the
+  request that received it: a method kept and called later, from another request or from an export
+  handler is `denied` and sends nothing. A call validates its
   input against the snapshot and resolves to `ok`, `denied`, `invalid_input`, `unavailable`, `timeout`
   or `contract_violation`; it never throws for the owner's answer, and `unavailable` is never reported
   as `denied`.
 - A deadline bounds every call and its retries: the import's `timeoutMs`, 3 s by default and at most
   10 s. A call is retried at most twice on `unavailable` or `timeout`, inside the deadline.
-- The answer is validated against the vendored output schema. An answer that breaks it is
-  `contract_violation`, logged once, so a drifted owner is caught on the first call.
+- The answer is validated against schemas the framework built from the checked snapshot. An answer
+  that breaks them, that is not `application/json` or that is larger than 1 MiB is
+  `contract_violation`, logged once with a fixed code and the schema's own path, so a drifted owner is
+  caught on the first call. A redirect is `unavailable` and never followed; the deadline also cancels
+  a body still being read.
 - On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding to the owner's proxy Worker carries the call,
   its URL naming the owner's host; a binding routes by the binding, not by the URL. Elsewhere the call
   goes to the owner's public origin with `fetch`. Whether the Zerops balancer forwards `Authorization`

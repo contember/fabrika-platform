@@ -12,8 +12,8 @@ import {
 	ENDPOINT_HEADER,
 	type EndpointPlan,
 	type EndpointRow,
-	type LinkTokenClaims,
 	type ExportDescription,
+	type LinkTokenClaims,
 	parseEndpointHeader,
 	type PermissionEntry,
 	permits,
@@ -52,8 +52,8 @@ import {
 	withBootstrap,
 } from './anonymous'
 import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
+import { connectContext, type ImportWire } from './connect'
 import { ServerFault } from './faults'
-import type { ConnectContextValue } from './connect'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
@@ -92,7 +92,7 @@ export type ServedEndpoint =
 		/** An export procedure: its request may only read. */
 		readonly readOnly?: true
 		/** `ctx.connect`, for an endpoint an import's `usedBy` names. */
-		readonly connect?: ConnectContextValue
+		readonly connect?: readonly ImportWire[]
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -313,7 +313,7 @@ export class ContractRuntime {
 	async #procedure(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
 		const input = await readInput(served, request)
-		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true })
+		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
 		let result: unknown
 		try {
 			result = await runInRequest(frame, async () => {
@@ -324,7 +324,7 @@ export class ContractRuntime {
 					requestId: frame.id,
 					...access.context,
 					...this.#facilities(served.facilities, served.row, membership),
-					...(served.connect === undefined ? {} : { connect: served.connect }),
+					...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
 				})
 				return await served.handler({ input: access.input, ctx })
 			})

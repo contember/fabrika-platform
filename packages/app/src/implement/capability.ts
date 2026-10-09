@@ -34,12 +34,18 @@ export class RequestFrame {
 	readonly fence: LeaseFence | null
 	/** An export's request: the data layer runs its every statement `READ ONLY` and refuses every write. */
 	readonly readOnly: boolean
+	/** The endpoint the request is served by; `ctx.connect` checks it against each import's `usedBy`. */
+	readonly endpoint: string | null
 	#ended = false
 
-	constructor(id: string, options: { readonly fence?: LeaseFence | null; readonly readOnly?: boolean } = {}) {
+	constructor(
+		id: string,
+		options: { readonly fence?: LeaseFence | null; readonly readOnly?: boolean; readonly endpoint?: string | null } = {},
+	) {
 		this.id = id
 		this.fence = options.fence ?? null
 		this.readOnly = options.readOnly ?? false
+		this.endpoint = options.endpoint ?? null
 	}
 
 	get ended(): boolean {
@@ -56,6 +62,11 @@ const currentRequest = new AsyncLocalStorage<RequestFrame>()
 /** Run `work` as the request `frame`: every capability check inside it compares against this frame. */
 export function runInRequest<T>(frame: RequestFrame, work: () => Promise<T>): Promise<T> {
 	return currentRequest.run(frame, work)
+}
+
+/** The request running now, or `undefined` outside every request. */
+export function activeRequest(): RequestFrame | undefined {
+	return currentRequest.getStore()
 }
 
 /** Whether the request running now may only read; `@fabrika/db` asks it before every statement. */

@@ -2,12 +2,14 @@
 // to the owner's export procedure with the edge key as the bearer, and answers a typed outcome. A deadline bounds the
 // call and its retries; the answer is validated against the vendored output schema, so drift shows on the first call.
 
-import { API_KEY_PREFIX, type ContractArtifact, type ImportArtifact } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, type ContractArtifact, type ExportDescription, type ImportArtifact, type SchemaShape } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { type ConnectSnapshot, describeSnapshot } from '../contract/connect'
 import { CONNECT_LIMITS, CONNECT_PREFIX, exportBase, joinPath } from '../contract/defaults'
-import type { InputSchema, Schema } from '../contract/define'
 import { ContractError } from '../contract/problems'
+import { declaredPath, schemaFromShape } from '../contract/schema-from-shape'
+import { readBoundedBytes } from './bounded'
+import { activeRequest, type RequestFrame } from './capability'
 
 export type ConnectFailure = 'denied' | 'invalid_input' | 'unavailable' | 'timeout' | 'contract_violation'
 
@@ -37,6 +39,17 @@ export function connectVariables(importName: string): ConnectVariables {
 	return { url: `${binding}_URL`, key: `${binding}_KEY`, binding }
 }
 
+/**
+ * One procedure as the connector validates it: zod schemas built by the framework from the snapshot's described
+ * shapes, never the application's schema objects, so nothing the application changes after `boot` reaches them.
+ */
+interface CompiledProcedure {
+	readonly input: z.ZodType | null
+	readonly inputShape: SchemaShape | null
+	readonly output: z.ZodType
+	readonly outputShape: SchemaShape
+}
+
 export interface ConnectorOptions {
 	/** The import's name in the contract, for the log line of a contract violation. */
 	readonly name: string
@@ -46,11 +59,9 @@ export interface ConnectorOptions {
 	readonly key: string
 	readonly fetch: ConnectFetch
 	readonly timeoutMs: number
-	readonly procedures: Readonly<Record<string, { readonly input: InputSchema | null; readonly output: Schema }>>
-}
-
-class AttemptTimeout extends Error {
-	override readonly name = 'AttemptTimeout'
+	/** The imported procedures of the checked description, by path. */
+	readonly description: ExportDescription
+	readonly procedures: readonly string[]
 }
 
 type Attempt = ConnectResult<unknown> & { readonly retry: boolean }
@@ -59,26 +70,47 @@ function failure(outcome: ConnectFailure, message: string, retry = false): Attem
 	return { outcome, message, retry }
 }
 
-/** One import's calls. Each method of `ctx.connect.<import>` is `call` bound to one imported procedure. */
+/** `application/json`, with or without parameters, is the only media type an export answers in. */
+export function isJsonMediaType(header: string | null): boolean {
+	return header?.split(';')[0]?.trim().toLowerCase() === 'application/json'
+}
+
+async function discard(response: Response): Promise<void> {
+	await response.body?.cancel().catch(() => {})
+}
+
+/** One import's calls. A message names only what the framework wrote; the edge key is cut out of it regardless. */
 export class Connector {
 	readonly #options: ConnectorOptions
+	readonly #procedures: ReadonlyMap<string, CompiledProcedure>
 
 	constructor(options: ConnectorOptions) {
 		this.#options = options
+		const procedures = new Map<string, CompiledProcedure>()
+		for (const path of options.procedures) {
+			const described = Object.hasOwn(options.description.procedures, path) ? options.description.procedures[path] : undefined
+			if (described !== undefined) {
+				procedures.set(path, {
+					input: described.input === null ? null : schemaFromShape(described.input),
+					inputShape: described.input,
+					output: schemaFromShape(described.output),
+					outputShape: described.output,
+				})
+			}
+		}
+		this.#procedures = procedures
 	}
 
 	async call(path: string, input: unknown): Promise<ConnectResult<unknown>> {
-		const procedure = Object.hasOwn(this.#options.procedures, path) ? this.#options.procedures[path] : undefined
+		const procedure = this.#procedures.get(path)
 		if (procedure === undefined) {
-			return { outcome: 'invalid_input', message: `'${path}' is not an imported procedure` }
+			return { outcome: 'invalid_input', message: 'not an imported procedure' }
 		}
 		const parsed = procedure.input === null ? null : z.safeParse(procedure.input, input ?? {})
 		if (parsed !== null && !parsed.success) {
 			const issue = parsed.error.issues[0]
-			return {
-				outcome: 'invalid_input',
-				message: issue === undefined ? 'Invalid input' : `${issue.path.map(String).join('.') || 'input'}: ${issue.message}`,
-			}
+			const at = procedure.inputShape === null || issue === undefined ? '(root)' : declaredPath(procedure.inputShape, issue.path)
+			return { outcome: 'invalid_input', message: this.#redact(`the input breaks the vendored input schema at ${at} (${issue?.code ?? 'invalid'})`) }
 		}
 		const body = JSON.stringify(parsed === null ? {} : parsed.data)
 		const deadline = Date.now() + this.#options.timeoutMs
@@ -89,64 +121,65 @@ export class Connector {
 				break
 			}
 			// The remaining time is shared by the attempts still allowed, so a hung first try leaves room for a retry.
-			last = await this.#attempt(path, body, procedure.output, Math.max(1, Math.floor(remaining / (CONNECT_LIMITS.retries + 1 - attempt))))
+			last = await this.#attempt(path, body, procedure, Math.max(1, Math.floor(remaining / (CONNECT_LIMITS.retries + 1 - attempt))))
 			if (!last.retry) {
 				break
 			}
 		}
+		const message = this.#redact(last.outcome === 'ok' ? '' : last.message)
 		if (last.outcome === 'contract_violation') {
-			console.error(`fabrika: connect '${this.#options.name}.${path}': contract_violation: ${last.message}`)
+			console.error(`fabrika: connect '${this.#options.name}.${path}': contract_violation: ${message}`)
 		}
-		return last.outcome === 'ok' ? { outcome: 'ok', value: last.value } : { outcome: last.outcome, message: last.message }
+		return last.outcome === 'ok' ? { outcome: 'ok', value: last.value } : { outcome: last.outcome, message }
 	}
 
-	async #attempt(path: string, body: string, output: Schema, timeoutMs: number): Promise<Attempt> {
+	/** Defence in depth: no framework message quotes the answer, and the edge key is cut out of every one anyway. */
+	#redact(message: string): string {
+		return message.replaceAll(this.#options.key, '[edge key]')
+	}
+
+	/** One request under its own deadline; the deadline aborts the fetch and cancels the body reader. */
+	async #attempt(path: string, body: string, procedure: CompiledProcedure, timeoutMs: number): Promise<Attempt> {
 		const { origin, key } = this.#options
 		const url = new URL(joinPath(CONNECT_PREFIX, `${exportBase(this.#options.export, this.#options.version)}.${path}`), origin)
 		const controller = new AbortController()
-		let timer: ReturnType<typeof setTimeout> | undefined
-		const expired = new Promise<never>((_, reject) => {
-			timer = setTimeout(() => {
-				controller.abort()
-				reject(new AttemptTimeout())
-			}, timeoutMs)
-		})
+		const timedOut = failure('timeout', `no answer within ${timeoutMs} ms`, true)
+		const expired = new Promise<Attempt>((resolve) => controller.signal.addEventListener('abort', () => resolve(timedOut), { once: true }))
+		const timer = setTimeout(() => controller.abort(), timeoutMs)
 		try {
 			const request = new Request(url, {
 				method: 'POST',
 				headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
 				body,
 				signal: controller.signal,
+				redirect: 'manual',
 			})
-			return await Promise.race([this.#exchange(request, output), expired])
-		} catch (error) {
-			return error instanceof AttemptTimeout
-				? failure('timeout', `no answer within ${timeoutMs} ms`, true)
-				: failure('unavailable', 'the owner could not be reached', true)
+			const exchanged = this.#exchange(request, procedure, controller.signal).catch(() =>
+				controller.signal.aborted ? timedOut : failure('unavailable', 'the owner could not be reached', true)
+			)
+			return await Promise.race([exchanged, expired])
 		} finally {
 			clearTimeout(timer)
+			// Whatever is still reading or waiting after the answer — or the deadline — stops here.
+			controller.abort()
 		}
 	}
 
-	async #exchange(request: Request, output: Schema): Promise<Attempt> {
+	async #exchange(request: Request, procedure: CompiledProcedure, signal: AbortSignal): Promise<Attempt> {
 		const response = await this.#options.fetch(request)
 		const status = response.status
-		if (status === 200) {
-			let answer: unknown
-			try {
-				answer = await response.json()
-			} catch {
-				return failure('contract_violation', 'the answer is not JSON')
-			}
-			const result = typeof answer === 'object' && answer !== null && 'result' in answer ? answer.result : undefined
-			const parsed = z.safeParse(output, result)
-			if (!parsed.success) {
-				const issue = parsed.error.issues[0]
-				return failure('contract_violation', `the answer breaks the vendored output schema at '${issue?.path.map(String).join('.') ?? ''}'`)
-			}
-			return { outcome: 'ok', value: parsed.data, retry: false }
+		if (signal.aborted || status !== 200) {
+			await discard(response)
 		}
-		await response.body?.cancel()
+		if (signal.aborted) {
+			return failure('timeout', 'no answer before the deadline', true)
+		}
+		if (status === 200) {
+			return await this.#answer(response, procedure, signal)
+		}
+		if (status >= 300 && status < 400) {
+			return failure('unavailable', `the owner answered ${status}, a redirect, which a connector never follows`)
+		}
 		if (status === 400) {
 			return failure('invalid_input', 'the owner refused the input')
 		}
@@ -158,10 +191,70 @@ export class Connector {
 		}
 		return failure('contract_violation', `the owner answered ${status}, which no export procedure answers`)
 	}
+
+	async #answer(response: Response, procedure: CompiledProcedure, signal: AbortSignal): Promise<Attempt> {
+		if (!isJsonMediaType(response.headers.get('Content-Type'))) {
+			await discard(response)
+			return failure('contract_violation', 'the answer is not application/json')
+		}
+		const bytes = await readBoundedBytes(response.body, {
+			maxBytes: CONNECT_LIMITS.maxAnswerBytes,
+			declaredLength: response.headers.get('Content-Length'),
+			signal,
+		})
+		if (bytes === null) {
+			return failure('contract_violation', `the answer is larger than ${CONNECT_LIMITS.maxAnswerBytes} bytes`)
+		}
+		let answer: unknown
+		try {
+			answer = JSON.parse(new TextDecoder().decode(bytes))
+		} catch {
+			return failure('contract_violation', 'the answer is not JSON')
+		}
+		const result = typeof answer === 'object' && answer !== null && 'result' in answer ? answer.result : undefined
+		const parsed = z.safeParse(procedure.output, result)
+		if (!parsed.success) {
+			const issue = parsed.error.issues[0]
+			const at = issue === undefined ? '(root)' : declaredPath(procedure.outputShape, issue.path)
+			return failure('contract_violation', `the answer breaks the vendored output schema at ${at} (${issue?.code ?? 'invalid'})`)
+		}
+		return { outcome: 'ok', value: parsed.data, retry: false }
+	}
 }
 
-/** `ctx.connect` of one endpoint: each import its `usedBy` names, with the procedures the contract imports. */
+/** `ctx.connect` of one request: each import its endpoint's `usedBy` names, with the procedures the contract imports. */
 export type ConnectContextValue = Readonly<Record<string, Readonly<Record<string, (input?: unknown) => Promise<ConnectResult<unknown>>>>>>
+
+/** One import as an endpoint may use it. */
+export interface ImportWire {
+	readonly name: string
+	readonly connector: Connector
+	readonly procedures: readonly string[]
+	readonly usedBy: ReadonlySet<string>
+}
+
+const REFUSED: ConnectResult<never> = Object.freeze({
+	outcome: 'denied',
+	message: 'ctx.connect works only inside the request that received it, in a handler the import names in usedBy',
+})
+
+/**
+ * The `ctx.connect` of one request, bound to its frame. A method kept past its request, called from another request,
+ * from an export's (read-only) request or from an endpoint the import does not name is `denied`, and sends nothing.
+ */
+export function connectContext(imports: readonly ImportWire[], frame: RequestFrame): ConnectContextValue {
+	const call = (wire: ImportWire, path: string, input: unknown): Promise<ConnectResult<unknown>> => {
+		const endpoint = frame.endpoint
+		if (activeRequest() !== frame || frame.ended || frame.readOnly || endpoint === null || !wire.usedBy.has(endpoint)) {
+			return Promise.resolve(REFUSED)
+		}
+		return wire.connector.call(path, input)
+	}
+	return Object.freeze(Object.fromEntries(imports.map((wire) => [
+		wire.name,
+		Object.freeze(Object.fromEntries(wire.procedures.map((path) => [path, (input?: unknown) => call(wire, path, input)]))),
+	])))
+}
 
 export interface ImportWiring {
 	readonly artifact: ContractArtifact
@@ -174,12 +267,13 @@ export interface ImportWiring {
 }
 
 /**
- * The connectors of every import, as the `ctx.connect` of each endpoint that may use them. Each import must come
- * with the snapshot its digest names, unedited, and with its owner's URL and edge key; otherwise `problems` says why.
+ * The imports each endpoint may use. Each import must come with the snapshot its digest names, unedited, and with its
+ * owner's URL and edge key; otherwise `problems` says why. What a connector validates against is compiled here, once,
+ * from the checked description, before the application's `deps` run.
  */
-export function wireImports(wiring: ImportWiring, problems: string[]): ReadonlyMap<string, ConnectContextValue> {
+export function wireImports(wiring: ImportWiring, problems: string[]): ReadonlyMap<string, readonly ImportWire[]> {
 	const { artifact, snapshots, framework } = wiring
-	const contexts = new Map<string, Record<string, ConnectContextValue[string]>>()
+	const byEndpoint = new Map<string, ImportWire[]>()
 	const bindings = new Map<string, string>()
 	for (const name of Object.keys(snapshots)) {
 		if (!Object.hasOwn(artifact.imports, name)) {
@@ -193,7 +287,8 @@ export function wireImports(wiring: ImportWiring, problems: string[]): ReadonlyM
 			problems.push(`${where} has no snapshot; pass implement({ connect: { ${name}: <the snapshot in fabrika/connect/> } })`)
 			continue
 		}
-		if (!matchesSnapshot(where, declared, snapshot, problems)) {
+		const description = checkedDescription(where, declared, snapshot, problems)
+		if (description === null) {
 			continue
 		}
 		const variables = connectVariables(name)
@@ -211,57 +306,68 @@ export function wireImports(wiring: ImportWiring, problems: string[]): ReadonlyM
 		if (origin === null || !key.startsWith(API_KEY_PREFIX)) {
 			continue
 		}
-		const procedures = Object.fromEntries(declared.procedures.flatMap((path) => {
-			const procedure = snapshot.procedures[path]
-			return procedure === undefined ? [] : [[path, procedure]]
-		}))
-		const connector = new Connector({
+		const procedures = Object.freeze([...declared.procedures])
+		const wire: ImportWire = Object.freeze({
 			name,
-			export: declared.export,
-			version: declared.version,
-			origin,
-			key,
-			fetch: Object.hasOwn(wiring.bindings, variables.binding) ? (wiring.bindings[variables.binding] ?? wiring.fallback) : wiring.fallback,
-			timeoutMs: declared.timeoutMs ?? CONNECT_LIMITS.defaultTimeoutMs,
 			procedures,
+			usedBy: new Set(declared.usedBy),
+			connector: new Connector({
+				name,
+				export: declared.export,
+				version: declared.version,
+				origin,
+				key,
+				fetch: Object.hasOwn(wiring.bindings, variables.binding) ? (wiring.bindings[variables.binding] ?? wiring.fallback) : wiring.fallback,
+				timeoutMs: declared.timeoutMs ?? CONNECT_LIMITS.defaultTimeoutMs,
+				description,
+				procedures,
+			}),
 		})
-		const calls = Object.freeze(Object.fromEntries(declared.procedures.map((path) => [path, (input?: unknown) => connector.call(path, input)])))
 		for (const id of declared.usedBy) {
-			const context = contexts.get(id) ?? {}
-			context[name] = calls
-			contexts.set(id, context)
+			byEndpoint.set(id, [...(byEndpoint.get(id) ?? []), wire])
 		}
 	}
-	return new Map([...contexts].map(([id, context]) => [id, Object.freeze(context)]))
+	return byEndpoint
 }
 
-function matchesSnapshot(where: string, declared: ImportArtifact, snapshot: ConnectSnapshot, problems: string[]): boolean {
+function deepFreeze<T>(value: T): T {
+	if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+		Object.freeze(value)
+		for (const child of Object.values(value)) {
+			deepFreeze(child)
+		}
+	}
+	return value
+}
+
+/** The snapshot's description, deep-frozen and independent of the snapshot object, when it is the import's. */
+function checkedDescription(where: string, declared: ImportArtifact, snapshot: ConnectSnapshot, problems: string[]): ExportDescription | null {
 	const named = `${snapshot.app}/${snapshot.export}@${snapshot.version}`
 	if (snapshot.app !== declared.app || snapshot.export !== declared.export || snapshot.version !== declared.version) {
 		problems.push(`${where} imports ${declared.app}/${declared.export}@${declared.version}, and its snapshot is ${named}`)
-		return false
+		return null
 	}
 	if (snapshot.digest !== declared.digest) {
 		problems.push(`${where} names digest ${declared.digest}, and its snapshot is ${snapshot.digest}; import the digest from the snapshot`)
-		return false
+		return null
 	}
-	let described: string
+	let description: ExportDescription
 	try {
-		described = describeSnapshot(snapshot).digest
+		description = describeSnapshot(snapshot)
 	} catch (error) {
 		problems.push(...(error instanceof ContractError ? error.problems : [`the snapshot ${named} does not describe`]))
-		return false
+		return null
 	}
-	if (described !== snapshot.digest) {
+	if (description.digest !== declared.digest) {
 		problems.push(`the snapshot ${named} was edited after fabrika connect wrote it; run fabrika connect pull`)
-		return false
+		return null
 	}
-	const missing = declared.procedures.filter((path) => !Object.hasOwn(snapshot.procedures, path))
+	const missing = declared.procedures.filter((path) => !Object.hasOwn(description.procedures, path))
 	if (missing.length > 0) {
 		problems.push(`${where} imports ${missing.join(', ')}, which ${named} does not export`)
-		return false
+		return null
 	}
-	return true
+	return deepFreeze(description)
 }
 
 /** The owner's origin; the value is never quoted, since an operator may paste a URL with credentials in it. */

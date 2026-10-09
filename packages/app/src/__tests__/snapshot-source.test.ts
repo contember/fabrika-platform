@@ -12,6 +12,7 @@ import { z } from 'zod/v4'
 import { compileContract } from '../contract/compile'
 import { type ConnectSnapshot, describeSnapshot, exportDescription } from '../contract/connect'
 import { ContractError } from '../contract/problems'
+import { schemaFromShape } from '../contract/schema-from-shape'
 import { snapshotNames, snapshotSource } from '../contract/snapshot-source'
 import { contract as catalog } from './fixtures/connect-catalog/fabrika.contract'
 import { catalogProductsV1 } from './fixtures/connect-shop/fabrika/connect/catalog.products.v1'
@@ -112,6 +113,13 @@ describe('the snapshot reads back into what it was written from', () => {
 		const { snapshot, digest } = await load(fixed)
 		expect(digest).toBe(fixed.digest)
 		expect(describeSnapshot(snapshot)).toEqual(fixed)
+		// The schemas a connector validates with are built from the same shapes and read back into them.
+		const every = fixed.procedures['every']
+		if (every === undefined) {
+			throw new Error('no procedure')
+		}
+		const rebuilt = describeSnapshot({ ...snapshot, procedures: { every: { input: null, output: schemaFromShape(every.output) } } })
+		expect(rebuilt.procedures['every']?.output).toEqual(every.output)
 	})
 
 	test('strings that would end a literal are written as their own characters', async () => {
