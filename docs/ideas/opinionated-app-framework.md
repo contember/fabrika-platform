@@ -403,6 +403,8 @@ The same rules reach every agent: the builder catalog, the MCP server's instruct
 - Before adding an anonymous endpoint, a CSP origin, a connector, a job action or a table policy change, explain to
   the human in one sentence what it lets someone do, and wait for a yes.
 - Never edit generated files.
+- A webhook handler runs at least once per delivery: a failed run is run again on GitHub's redelivery, after its
+  writes committed. Make each write idempotent, keyed on `ctx.delivery.key`.
 
 ## 10. Testing
 

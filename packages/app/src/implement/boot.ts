@@ -480,7 +480,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const asking = [...endpoints.values()].find(asksIam)
 	if (asking !== undefined && options.membership === undefined) {
 		problems.push(
-			`'${asking.row.id}' asks IAM to create a scope, manage members or issue a link, and the runtime adapter supplies no IAM membership transport`,
+			`'${asking.row.id}' asks IAM to create a scope, manage members or issue a link, and the runtime adapter supplies no IAM membership transport (the IAM binding on Cloudflare; FABRIKA_IAM_RPC_URL and FABRIKA_IAM_RPC_KEY on Bun)`,
 		)
 	}
 	if (problems.length > 0) {

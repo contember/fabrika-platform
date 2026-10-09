@@ -289,6 +289,10 @@ src/
 - **A link procedure re-reads the object's chain on every request** and answers 404 when
   it differs from the chain the key was issued for, so a link stops working once its
   object moves. It admits only a key of its own mount.
+- **Revocation takes effect within the token lifetime** (ADR-0022 rule 6, plan D12): a
+  removed member or revoked link keeps access until its cached token expires, at most
+  300 s. The framework checks the token, not IAM, per request; never add an IAM call per
+  request to close that window.
 - **The share SPA's bootstrap is the document's first script.** `withBootstrap` inserts
   `<script src="<prefix>/__fabrika-share.js">` right after `<head>`, so it runs before
   every module and every telemetry script; it removes the fragment and keeps the key in a
@@ -300,9 +304,17 @@ src/
   limit is per form per instance (`FORM_RATE_LIMIT`).
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the
   raw body with that binding's secret (401), account (403), input after dropping every
-  undeclared field (400, `project` then the strict schema), delivery id. The id is
-  recorded before the handler runs and forgotten when it throws, so a replay is ignored
-  and a redelivery of a failure runs. Never verify the signature after parsing.
+  undeclared field (400, `project` then the strict schema), delivery key. Never verify
+  the signature after parsing.
+- **Replay protection keys on authenticated content only**: the delivery key is
+  `sha256(bindingId ‖ raw body)`, kept per binding for `WEBHOOK_REPLAY_RETENTION_MS`
+  (30 days). `X-GitHub-Delivery` is unsigned: it names the delivery in the log and decides
+  nothing. A redelivery of one event therefore has the same key and is ignored.
+- **A webhook handler is at-least-once.** The key is recorded before the handler runs and
+  forgotten when it throws, so GitHub's redelivery runs a failed delivery again, after
+  whatever the failed run committed. The handler gets the key as `ctx.delivery.key`;
+  idempotent writes key on it. Never make the delivery record and the handler's writes
+  one transaction: the handler's stores own their transactions.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
   before any application module loads.** The runtime adapter calls
   `captureEnvironment`, which keeps them in a frozen record and deletes them from

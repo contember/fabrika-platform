@@ -1,14 +1,15 @@
-// The framework's side of its own tables (`@fabrika/db/migrations`): webhook bindings and the delivery ids that
-// make a replay a no-op. Only `@fabrika/app`'s webhook runtime reaches them, through `frameworkTablesOf`. Every
+// The framework's side of its own tables (`@fabrika/db/migrations`): webhook bindings and the delivery keys that
+// make a replay a no-op. A delivery key is derived from authenticated content (`@fabrika/app` hashes the binding
+// and the signed body), never from a header; the `delivery_id` column holds it. Only `@fabrika/app`'s webhook runtime reaches them, through `frameworkTablesOf`. Every
 // statement is a guarded tree like a store's, keyed by equalities on the framework table itself.
 
 import { SQL } from 'bun'
-import type { OperationNode } from 'kysely'
+import { BinaryOperationNode, type OperationNode, OperatorNode, ValueNode } from 'kysely'
 import { sessionOf } from './database'
 import { QueryRefusedError } from './errors'
 import type { GuardContext } from './guard'
 import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
-import { acknowledgement, allOf, deleteNode, equals, insertNode, locateNode, scopedWhere } from './nodes'
+import { acknowledgement, allOf, column, deleteNode, equals, insertNode, locateNode, scopedWhere } from './nodes'
 import type { DataLayerRuntime } from './store'
 
 /** One webhook binding: the scope value it reaches, the provider account it accepts, and its signing secret. */
@@ -33,10 +34,13 @@ export interface WebhookTables {
 	binding(webhook: string, id: string): Promise<WebhookBinding | null>
 	/** Removes the binding when it belongs to `webhook` and `scope`; `false` when there was none. */
 	removeBinding(webhook: string, id: string, scope: { readonly type: string; readonly value: string }): Promise<boolean>
-	/** Records a delivery id; `false` when the binding already received it. */
-	recordDelivery(bindingId: string, deliveryId: string, receivedAt: number): Promise<boolean>
+	/**
+	 * Records a delivery key; `false` when the binding already received it within the retention window. Keys of the
+	 * binding older than `retainedSince` are dropped first, so the table stays bounded.
+	 */
+	recordDelivery(bindingId: string, deliveryKey: string, receivedAt: number, retainedSince: number): Promise<boolean>
 	/** Forgets a delivery whose handler failed, so the provider's redelivery runs it again. */
-	forgetDelivery(bindingId: string, deliveryId: string): Promise<void>
+	forgetDelivery(bindingId: string, deliveryKey: string): Promise<void>
 }
 
 const BINDING_COLUMNS = ['id', 'webhook', 'scope_type', 'scope_value', 'account', 'secret']
@@ -108,8 +112,18 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 			return removed.length > 0
 		},
 
-		async recordDelivery(bindingId: string, deliveryId: string, receivedAt: number): Promise<boolean> {
-			const values = new Map<string, string | number>([['binding_id', bindingId], ['delivery_id', deliveryId], ['received_at', receivedAt]])
+		async recordDelivery(bindingId: string, deliveryKey: string, receivedAt: number, retainedSince: number): Promise<boolean> {
+			const binding = equals(WEBHOOK_DELIVERIES_TABLE, 'binding_id', bindingId)
+			const expired = BinaryOperationNode.create(
+				column(WEBHOOK_DELIVERIES_TABLE, 'received_at'),
+				OperatorNode.create('<'),
+				ValueNode.create(retainedSince),
+			)
+			await session().run(
+				deleteNode(WEBHOOK_DELIVERIES_TABLE, scopedWhere(expired, binding), 'delivery_id'),
+				guard('DeleteQueryNode', WEBHOOK_DELIVERIES_TABLE, binding),
+			)
+			const values = new Map<string, string | number>([['binding_id', bindingId], ['delivery_id', deliveryKey], ['received_at', receivedAt]])
 			const node = insertNode(WEBHOOK_DELIVERIES_TABLE, values, acknowledgement(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', undefined))
 			try {
 				await session().run(node, guard('InsertQueryNode', WEBHOOK_DELIVERIES_TABLE, undefined))
@@ -123,8 +137,8 @@ export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
 			}
 		},
 
-		async forgetDelivery(bindingId: string, deliveryId: string): Promise<void> {
-			const predicate = allOf([equals(WEBHOOK_DELIVERIES_TABLE, 'binding_id', bindingId), equals(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', deliveryId)])
+		async forgetDelivery(bindingId: string, deliveryKey: string): Promise<void> {
+			const predicate = allOf([equals(WEBHOOK_DELIVERIES_TABLE, 'binding_id', bindingId), equals(WEBHOOK_DELIVERIES_TABLE, 'delivery_id', deliveryKey)])
 			await session().run(
 				deleteNode(WEBHOOK_DELIVERIES_TABLE, scopedWhere(undefined, predicate), 'delivery_id'),
 				guard('DeleteQueryNode', WEBHOOK_DELIVERIES_TABLE, predicate),

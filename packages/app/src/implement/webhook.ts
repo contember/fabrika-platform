@@ -31,12 +31,36 @@ export function webhookSubject(bindingId: string): string {
 	return `webhook:${bindingId}`
 }
 
-/** GitHub's delivery id: a UUID today; anything of this shape is accepted, anything else is not a delivery. */
+/** GitHub's delivery id, for the log only: the header is not signed, so it decides nothing. */
 const DELIVERY_ID = /^[A-Za-z0-9-]{1,100}$/
 
 export function deliveryIdOf(request: Request): string | null {
 	const id = request.headers.get('X-GitHub-Delivery')
 	return id !== null && DELIVERY_ID.test(id) ? id : null
+}
+
+/**
+ * A delivery key is kept this long per binding. GitHub signs no timestamp, so a body replayed after the window
+ * runs again; GitHub itself redelivers for three days.
+ */
+export const WEBHOOK_REPLAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * `sha256:<hex>` of the binding id and the signed body: what replay protection and an idempotent handler key on.
+ * A redelivery of one event has the same key, whatever its `X-GitHub-Delivery` says.
+ */
+export async function deliveryKey(bindingId: string, body: Uint8Array<ArrayBuffer>): Promise<string> {
+	const id = new TextEncoder().encode(bindingId)
+	const content = new Uint8Array(id.byteLength + body.byteLength)
+	content.set(id, 0)
+	content.set(body, id.byteLength)
+	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', content))
+	return `sha256:${Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+/** What a handler knows of its delivery. Handlers run at least once: write idempotently, keyed on `key`. */
+export interface WebhookDelivery {
+	readonly key: string
 }
 
 /** 32 random bytes as hex: the HMAC key GitHub signs with, shown once to the member who binds. */

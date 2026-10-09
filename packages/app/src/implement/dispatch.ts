@@ -57,7 +57,7 @@ import type { ContractDatabase } from './implement'
 import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
-import { deliveryIdOf, type WebhookPrincipal, webhookSubject } from './webhook'
+import { deliveryIdOf, deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
 export function proxySecretDigest(secret: string): Uint8Array {
@@ -482,8 +482,9 @@ export class ContractRuntime {
 
 	/**
 	 * A GitHub delivery, in order: the binding the path names, the signature over the raw body with that binding's
-	 * secret, the account the payload names, the input, then the delivery id, so a replay is ignored. The handler
-	 * gets a `Ref` of the bound value for each declared action, and nothing else.
+	 * secret, the account the payload names, the input, then the delivery key — the hash of the binding and the
+	 * signed body, so a replay is ignored whatever its unsigned headers say. The handler gets a `Ref` of the bound
+	 * value for each declared action and the key, and runs at least once: a failed run is forgotten and redelivered.
 	 */
 	async #webhook(served: Extract<ServedEndpoint, { kind: 'webhook' }>, request: Request, params: Readonly<Record<string, string>>): Promise<Response> {
 		admitContentType(served.row, request)
@@ -501,10 +502,6 @@ export class ContractRuntime {
 		if (!githubAccounts(payload).includes(binding.account)) {
 			throw new ForbiddenError('The delivery names another account than its binding accepts')
 		}
-		const deliveryId = deliveryIdOf(request)
-		if (deliveryId === null) {
-			throw new BadRequestError('A delivery carries its X-GitHub-Delivery id')
-		}
 		const input = strictInput(served.row, served.input, stripped(served, payload))
 		if (binding.scope.type !== served.dimension) {
 			throw new ServerFault(`binding '${binding.id}' reaches a '${binding.scope.type}', and '${served.webhook}' is bound to '${served.dimension}'`)
@@ -513,7 +510,9 @@ export class ContractRuntime {
 		if (chain === null) {
 			throw new NotFoundError('The bound value no longer exists')
 		}
-		if (!(await tables.recordDelivery(binding.id, deliveryId, Date.now()))) {
+		const key = await deliveryKey(binding.id, body)
+		const now = Date.now()
+		if (!(await tables.recordDelivery(binding.id, key, now, now - WEBHOOK_REPLAY_RETENTION_MS))) {
 			return jsonResponse({ result: { received: true } }, 200)
 		}
 		const frame = new RequestFrame(crypto.randomUUID())
@@ -524,11 +523,14 @@ export class ContractRuntime {
 					Object.fromEntries(served.actions.map((action) => [action, mintRef(frame, served.dimension, action, subject, binding.scope.value, chain)])),
 				)
 				const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
-				await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs }) })
+				const delivery = Object.freeze({ key })
+				await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs, delivery }) })
 			})
 		} catch (error) {
 			// The provider redelivers a failed delivery; forgetting its id lets the redelivery run.
-			await tables.forgetDelivery(binding.id, deliveryId)
+			// The header is GitHub's word, unsigned: it names the delivery in the log and decides nothing.
+			console.error(`fabrika: ${served.row.id}: delivery ${deliveryIdOf(request) ?? '(unnamed)'} failed; GitHub's redelivery runs it again`)
+			await tables.forgetDelivery(binding.id, key)
 			throw error
 		} finally {
 			frame.end()

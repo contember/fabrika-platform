@@ -71,9 +71,10 @@ built yet: `@fabrika/db/testing`, a store for `reference` tables, and reading an
   driver.
   `framework-tables.ts` needs `bun` too (it reads a unique violation off `SQL.PostgresError`); `framework.ts` imports
   only its types, and `store.ts` builds the implementation.
-- **A delivery id is recorded by its primary key.** Two concurrent copies of one delivery insert the same
-  `(binding_id, delivery_id)`; exactly one succeeds and the other answers "already recorded". Never replace this with
-  a read before the insert.
+- **A delivery key is recorded by its primary key.** The `delivery_id` column holds the key `@fabrika/app` derives
+  from the binding and the signed body, never an unsigned header. Two concurrent copies of one delivery insert the
+  same `(binding_id, delivery_id)`; exactly one succeeds and the other answers "already recorded". Never replace this
+  with a read before the insert. `recordDelivery` first drops the binding's keys older than its retention bound.
 - **The framework migrations are migration identity** (ADR-0017): never edit an entry of `FRAMEWORK_MIGRATIONS`,
   add one.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);

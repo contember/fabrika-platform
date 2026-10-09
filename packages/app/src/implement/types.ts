@@ -7,7 +7,7 @@ import type { InputOf, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Sch
 import type { Ref, Within } from './capability'
 import type { LinkIssuing, MemberManagement } from './membership'
 import type { LinkHolder, PrincipalOf } from './principal'
-import type { WebhookPrincipal } from './webhook'
+import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
 /** What every handler gets: who called, and this request's id. */
 export interface RequestContext<P> {
@@ -72,10 +72,13 @@ type LinkHandlers<D extends string, T> = {
 		: LinkHandlers<D, T[K]>
 }
 
-/** A delivery's handler: the declared input, and a `Ref` of the bound value for each declared action. */
+/**
+ * A delivery's handler: the declared input, a `Ref` of the bound value for each declared action, and the delivery's
+ * stable key. It runs at least once per delivery: a failed run is run again on GitHub's redelivery.
+ */
 export type WebhookHandler<B extends string, Acts extends string, I> = (args: {
 	readonly input: z.output<I>
-	readonly ctx: RequestContext<WebhookPrincipal> & { readonly refs: { readonly [A in Acts]: Ref<B, A> } }
+	readonly ctx: RequestContext<WebhookPrincipal> & { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
 }) => void | Promise<void>
 
 type MountHandlers<C, M> = M extends RpcMount<infer Callers, infer T> ? RpcHandlers<C, PrincipalOf<Callers[number]>, T>

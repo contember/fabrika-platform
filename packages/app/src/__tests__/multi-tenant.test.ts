@@ -55,7 +55,7 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 /** A fresh boot over the shared schema: its own data layer, IAM stand-in, webhook record and form rate limit. */
 function start(): { app: ContractApp; iam: RecordingMembership; seen: Seen } {
 	const iam = new RecordingMembership()
-	const seen: Seen = { pushes: [], failNextPush: false }
+	const seen: Seen = { pushes: [], keys: [], failNextPush: false }
 	const connection = Database.postgres({ url, schema, max: 2 })
 	opened.push(connection)
 	return { app: bootApp(multiTenantApp(seen), { database: connection, membership: iam, assets: htmlAssets }), iam, seen }
@@ -324,6 +324,20 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 		expect(await count('notes', `title = 'first push'`)).toBe(1)
 	})
 
+	test('a replay with only its unsigned delivery header changed is still a replay', async () => {
+		const { app, seen } = start()
+		const binding = await bind(app, 'repository:42')
+		expect((await deliver(app, binding.url, binding.secret, push(42, 'header replay'), 'd-original')).status).toBe(200)
+		expect((await deliver(app, binding.url, binding.secret, push(42, 'header replay'), 'd-forged')).status).toBe(200)
+		expect(seen.pushes).toHaveLength(1)
+		expect(await count('notes', `title = 'header replay'`)).toBe(1)
+		// The key is the binding's hash of the signed body: another binding of the same body is another delivery.
+		const other = await bind(app, 'repository:42')
+		expect((await deliver(app, other.url, other.secret, push(42, 'header replay'), 'd-original')).status).toBe(200)
+		expect(seen.keys).toHaveLength(2)
+		expect(seen.keys[0]).not.toBe(seen.keys[1])
+	})
+
 	test('a delivery signed for another binding is refused, and so is one naming another account', async () => {
 		const { app, seen } = start()
 		const ours = await bind(app, 'repository:42')
@@ -334,19 +348,28 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 		expect(seen.pushes).toEqual([])
 	})
 
-	test("a failed handler forgets the delivery, so GitHub's redelivery runs it", async () => {
+	test('a handler runs at least once: a run that failed after its write runs again with the same key, a success never', async () => {
 		const { app, seen } = start()
 		const binding = await bind(app, 'repository:42')
 		seen.failNextPush = true
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5')).status).toBe(500)
+			expect(log.mock.calls.map((call) => String(call[0]))).toContain(
+				"fabrika: github: delivery d-5 failed; GitHub's redelivery runs it again",
+			)
 		} finally {
 			log.mockRestore()
 		}
-		expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5')).status).toBe(200)
-		expect(seen.pushes).toHaveLength(2)
+		// The failed run's write stays: the handler is at-least-once, and the key is what makes its writes idempotent.
 		expect(await count('notes', `title = 'retried'`)).toBe(1)
+		expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5-redelivered')).status).toBe(200)
+		expect(seen.keys).toHaveLength(2)
+		expect(seen.keys[1]).toBe(seen.keys[0])
+		expect(seen.keys[0]).toMatch(/^sha256:[0-9a-f]{64}$/)
+		expect(await count('notes', `title = 'retried'`)).toBe(2)
+		expect((await deliver(app, binding.url, binding.secret, push(42, 'retried'), 'd-5-again')).status).toBe(200)
+		expect(seen.keys).toHaveLength(2)
 	})
 
 	test('unbinding removes the binding from its own workspace only', async () => {

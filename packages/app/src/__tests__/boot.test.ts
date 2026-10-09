@@ -146,7 +146,7 @@ describe('what this version does not serve yet stops the boot', () => {
 		const app = implement(unserved, { database: noteDatabase(new Map()), deps: () => null, handlers })
 		const options = { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets }
 		expect(problemsOf(() => boot(app, options))).toEqual([
-			"'api.start' asks IAM to create a scope, manage members or issue a link, and the runtime adapter supplies no IAM membership transport",
+			"'api.start' asks IAM to create a scope, manage members or issue a link, and the runtime adapter supplies no IAM membership transport (the IAM binding on Cloudflare; FABRIKA_IAM_RPC_URL and FABRIKA_IAM_RPC_KEY on Bun)",
 		])
 		expect(() => boot(app, { ...options, membership: new RecordingMembership() })).not.toThrow()
 	})
@@ -185,7 +185,7 @@ describe('what this version does not serve yet stops the boot', () => {
 		}))
 		const connection = Database.postgres({ url: 'postgres://unused@127.0.0.1:1/unused', schema: 'app_notes' })
 		try {
-			const base = multiTenantApp({ pushes: [], failNextPush: false })
+			const base = multiTenantApp({ pushes: [], keys: [], failNextPush: false })
 			const app: ContractImplementation = { ...base, contract: extended }
 			const options = { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets, database: connection }
 			expect(problemsOf(() => boot(app, { ...options, membership: new RecordingMembership() }))).toEqual([

@@ -362,11 +362,17 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   answers it once with the URL. `webhooks.<name>.unbind` removes one. A delivery is
   checked in order: the binding (404), `X-Hub-Signature-256` over the raw body with that
   binding's secret (401), the payload's account (403), the input, parsed with its
-  schema after every undeclared field is dropped (400), and `X-GitHub-Delivery`: a
-  delivery id already recorded is answered 200 and not run again. The handler gets
-  `ctx.refs`, a `Ref` of the bound value for each declared action, and nothing else; a
-  failing handler forgets the delivery id so the redelivery runs. Bindings and delivery
-  ids live in the framework's `fabrika_*` tables, which `fabrika db migrate` applies.
+  schema after every undeclared field is dropped (400), and the delivery key,
+  `sha256(bindingId ‖ raw body)`: a key the binding already received in the last 30 days
+  is answered 200 and not run again, whatever its unsigned `X-GitHub-Delivery` says (that
+  header only names the delivery in the log). The handler gets `ctx.refs`, a `Ref` of the
+  bound value for each declared action, and `ctx.delivery.key`. **It runs at least
+  once**: a failing handler forgets the key so GitHub's redelivery runs it again, after
+  whatever the failed run wrote, so a handler writes idempotently, keyed on
+  `ctx.delivery.key`. Bindings and delivery keys live in the framework's `fabrika_*`
+  tables, which `fabrika db migrate` applies.
+- Revocation takes effect within the token lifetime: a removed member or revoked link
+  keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
 
 ## Runtime boundary
 

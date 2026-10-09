@@ -59,24 +59,26 @@ describe('createContractWorker', () => {
 	})
 })
 
+const starting = defineContract({
+	app: 'notes',
+	dimensions: { workspace: { creator: 'owner' } },
+	actions: { 'notes.read': 'Read', 'workspaces.create': 'Start' },
+	roles: { owner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+		start: c.mutation({ output: z.strictObject({ workspace: z.string() }), access: { action: 'workspaces.create', creates: 'workspace' } }),
+	}),
+}))
+/** A contract that creates scopes, so it needs IAM's membership operations to boot. */
+const startingApp = implement(starting, {
+	database: null,
+	deps: () => null,
+	handlers: () => ({ api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) } }),
+})
+
 describe('createContractWorker: IAM membership on the IAM binding', () => {
-	const starting = defineContract({
-		app: 'notes',
-		dimensions: { workspace: { creator: 'owner' } },
-		actions: { 'notes.read': 'Read', 'workspaces.create': 'Start' },
-		roles: { owner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
-	}, (c) => ({
-		api: c.rpc('/api', { callers: ['human'] }, {
-			start: c.mutation({ output: z.strictObject({ workspace: z.string() }), access: { action: 'workspaces.create', creates: 'workspace' } }),
-		}),
-	}))
-	const app = implement(starting, {
-		database: null,
-		deps: () => null,
-		handlers: () => ({ api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) } }),
-	})
-	const worker = createContractWorker(() => Promise.resolve({ default: app }))
-	const header = endpointHeaderFor(app, 'POST', '/api/start') ?? ''
+	const worker = createContractWorker(() => Promise.resolve({ default: startingApp }))
+	const header = endpointHeaderFor(startingApp, 'POST', '/api/start') ?? ''
 	const unused = () => Promise.reject(new Error('not called'))
 	const binding = (createScope: (input: unknown) => Promise<unknown>) => ({
 		...keySource,
@@ -107,14 +109,14 @@ describe('createContractWorker: IAM membership on the IAM binding', () => {
 			asked.push(input)
 			return Promise.resolve({ ok: true, scope: { type: 'workspace', value: 'w9' }, role: 'owner' })
 		}
-		const env = { ...frameworkEnvFor(app), IAM: binding(createScope) }
+		const env = { ...frameworkEnvFor(startingApp), IAM: binding(createScope) }
 		const response = await keepingProcessEnvironment(async () => worker.fetch(await start(), env, exec))
 		expect(await response.json()).toEqual({ result: { workspace: 'w9' } })
 		expect(asked).toEqual([expect.objectContaining({ delegation: 'grant-1', dimension: 'workspace', app: 'notes@prod' })])
 	})
 
 	test('an answer that breaks the contract is IAM unavailable, a 503', async () => {
-		const env = { ...frameworkEnvFor(app), IAM: binding(() => Promise.resolve({ ok: true, scope: 'w9' })) }
+		const env = { ...frameworkEnvFor(startingApp), IAM: binding(() => Promise.resolve({ ok: true, scope: 'w9' })) }
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
 			const response = await keepingProcessEnvironment(async () => worker.fetch(await start(), env, exec))
@@ -125,13 +127,21 @@ describe('createContractWorker: IAM membership on the IAM binding', () => {
 	})
 
 	test('a binding without the membership operations does not boot a contract that needs them', async () => {
-		const env = { ...frameworkEnvFor(app), IAM: keySource }
+		const env = { ...frameworkEnvFor(startingApp), IAM: keySource }
 		const refused = keepingProcessEnvironment(async () => worker.fetch(await start(), env, exec))
 		await expect(refused).rejects.toThrow('the runtime adapter supplies no IAM membership transport')
 	})
 })
 
 describe('serveContract', () => {
+	test('a contract that asks IAM does not boot without the membership transport, and the refusal names it', async () => {
+		await keepingProcessEnvironment(async () => {
+			const env = { ...frameworkEnvFor(startingApp), FABRIKA_PROXY_SECRET: PROXY_SECRET, PORT: '0' }
+			const served = serveContract(() => Promise.resolve({ default: startingApp }), env)
+			await expect(served).rejects.toThrow('FABRIKA_IAM_RPC_URL and FABRIKA_IAM_RPC_KEY on Bun')
+		})
+	})
+
 	test('imports the application only after the framework variables left the process', async () => {
 		await keepingProcessEnvironment(async () => {
 			const port = process.env['PORT']

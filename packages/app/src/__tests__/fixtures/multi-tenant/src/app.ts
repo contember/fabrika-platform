@@ -8,6 +8,9 @@ import { tables } from './db/tables'
 
 export interface Seen {
 	readonly pushes: unknown[]
+	/** The delivery key of every run, in order. */
+	readonly keys: string[]
+	/** Make the next run fail after it wrote its note. */
 	failNextPush: boolean
 }
 
@@ -58,11 +61,12 @@ export function multiTenantApp(seen: Seen) {
 			},
 			github: async ({ input, ctx }) => {
 				seen.pushes.push(input)
+				seen.keys.push(ctx.delivery.key)
+				await notes.create(ctx.refs['notes.write'], input.head_commit?.message ?? input.ref)
 				if (seen.failNextPush) {
 					seen.failNextPush = false
-					throw new Error('the handler failed')
+					throw new Error('the handler failed after its write')
 				}
-				await notes.create(ctx.refs['notes.write'], input.head_commit?.message ?? input.ref)
 			},
 		}),
 	})

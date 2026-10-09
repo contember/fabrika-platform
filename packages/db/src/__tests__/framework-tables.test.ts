@@ -103,7 +103,7 @@ describe.skipIf(!hasPostgres)('the framework tables on Postgres', () => {
 		expect(await framework.webhooks.binding('github', 'b1')).toBeNull()
 	})
 
-	test('a delivery id is recorded once per binding, concurrent copies included, and can be forgotten', async () => {
+	test('a delivery key is recorded once per binding, concurrent copies included, and can be forgotten', async () => {
 		await framework.webhooks.createBinding({
 			id: 'b2',
 			webhook: 'github',
@@ -122,10 +122,25 @@ describe.skipIf(!hasPostgres)('the framework tables on Postgres', () => {
 			createdBy: 'u',
 			createdAt: 1,
 		})
-		const copies = await Promise.all([1, 2, 3, 4].map(() => framework.webhooks.recordDelivery('b2', 'd1', 10)))
+		const copies = await Promise.all([1, 2, 3, 4].map(() => framework.webhooks.recordDelivery('b2', 'd1', 10, 0)))
 		expect(copies.filter((recorded) => recorded)).toHaveLength(1)
-		expect(await framework.webhooks.recordDelivery('b3', 'd1', 10)).toBe(true)
+		expect(await framework.webhooks.recordDelivery('b3', 'd1', 10, 0)).toBe(true)
 		await framework.webhooks.forgetDelivery('b2', 'd1')
-		expect(await framework.webhooks.recordDelivery('b2', 'd1', 11)).toBe(true)
+		expect(await framework.webhooks.recordDelivery('b2', 'd1', 11, 0)).toBe(true)
+	})
+
+	test('a delivery key is kept for the retention window only', async () => {
+		await framework.webhooks.createBinding({
+			id: 'b4',
+			webhook: 'github',
+			scope: W1,
+			account: 'repository:7',
+			secret: 's',
+			createdBy: 'u',
+			createdAt: 1,
+		})
+		expect(await framework.webhooks.recordDelivery('b4', 'k1', 100, 0)).toBe(true)
+		expect(await framework.webhooks.recordDelivery('b4', 'k1', 150, 50)).toBe(false)
+		expect(await framework.webhooks.recordDelivery('b4', 'k1', 300, 200)).toBe(true)
 	})
 })
