@@ -3,7 +3,7 @@
 // generated endpoint access test boots the same application, and its data layer binds once per process.
 
 import { createClient, RpcError } from '@fabrika/app/client'
-import { testKit } from '@fabrika/app/testing'
+import { type TestCaller, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -26,7 +26,8 @@ const statusOf = async (call: Promise<unknown>): Promise<number | undefined> => 
 
 if (postgres !== null) {
 	afterAll(() => postgres.close())
-	const kit = testKit(app, { database: postgres.database, files: new MemoryFileObjects() })
+	const objects = new MemoryFileObjects()
+	const kit = testKit(app, { database: postgres.database, files: objects })
 	const inW1 = (role: 'reader' | 'author' | 'editor') => kit.testCaller([{ role, scope: { type: 'workspace', value: 'w1' } }])
 	const author = inW1('author')
 	const authorApi = createClient(contract, 'api', { fetch: kit.browser(author) })
@@ -85,6 +86,39 @@ if (postgres !== null) {
 
 			const outsider = kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }])
 			expect((await kit.browser(outsider)(`/api/files.attachments/${fileId}`)).status).toBe(404)
+		})
+
+		const uploadAs = (caller: TestCaller, noteId: string) =>
+			kit.browser(caller)(`/api/files.attachments.upload/${noteId}?name=hello.txt`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'text/plain' },
+				body: 'hello',
+			})
+		const removeAs = (caller: TestCaller, fileId: string) =>
+			kit.browser(caller)('/api/files.attachments.remove', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id: fileId }),
+			})
+
+		test('an author uploads; a reader of the workspace and an editor of another store nothing', async () => {
+			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Uploads' })
+			const stored = objects.objects.size
+			expect((await uploadAs(inW1('reader'), id)).status).toBe(403)
+			expect((await uploadAs(kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }]), id)).status).toBe(404)
+			expect(objects.objects.size).toBe(stored)
+			expect((await uploadAs(author, id)).status).toBe(200)
+			expect(objects.objects.size).toBe(stored + 1)
+		})
+
+		test('an editor removes a file; an author of the workspace and an editor of another remove nothing', async () => {
+			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Removals' })
+			const fileId = Uploaded.parse(await (await uploadAs(author, id)).json()).result.id
+			expect((await removeAs(author, fileId)).status).toBe(403)
+			expect((await removeAs(kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }]), fileId)).status).toBe(404)
+			expect((await kit.browser(author)(`/api/files.attachments/${fileId}`)).status).toBe(200)
+			expect((await removeAs(inW1('editor'), fileId)).status).toBe(200)
+			expect((await kit.browser(author)(`/api/files.attachments/${fileId}`)).status).toBe(404)
 		})
 
 		test('a type the collection does not declare is refused', async () => {
