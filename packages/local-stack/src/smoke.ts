@@ -579,32 +579,41 @@ const proveControlTable = async (): Promise<void> => {
 /**
  * The proxy admits a session's state change only from the console itself: a signed-in person's cookie on a cross-site
  * or same-site POST is refused before Control is asked, on all three JSON mounts, and the same POST from the console
- * is served.
+ * is served on each — by Control, by IAM through its admin gateway and by Operations through its gateway.
  */
 const FOREIGN_SITES = [
 	{ site: 'cross-site', origin: 'https://attacker.example' },
 	{ site: 'same-site', origin: 'http://sibling.fabrika.localhost:18080' },
 ]
 
+const CONSOLE_MOUNTS = [
+	{ path: '/api/rpc', method: 'installation', input: null },
+	{ path: '/iam/admin/rpc', method: 'me', input: null },
+	{ path: '/operations/api/rpc', method: 'issues', input: { query: 'local-smoke-admission', limit: 1 } },
+]
+
 const proveConsoleAdmission = async (): Promise<void> => {
 	const cookie = await signInToConsole(CONTROL_ORIGIN)
-	const post = (path: string, site: string, origin: string) =>
-		fetch(`${CONTROL_ORIGIN}${path}`, {
+	const post = (call: (typeof CONSOLE_MOUNTS)[number], site: string, origin: string) =>
+		fetch(`${CONTROL_ORIGIN}${call.path}`, {
 			method: 'POST',
 			redirect: 'manual',
 			headers: { accept: 'application/json', 'content-type': 'application/json', cookie, origin, 'sec-fetch-site': site },
-			body: JSON.stringify({ method: 'installation', input: null }),
+			body: JSON.stringify({ method: call.method, input: call.input }),
 		})
-	for (const path of ['/api/rpc', '/iam/admin/rpc', '/operations/api/rpc']) {
+	for (const call of CONSOLE_MOUNTS) {
 		for (const { site, origin } of FOREIGN_SITES) {
-			const refused = await post(path, site, origin)
+			const refused = await post(call, site, origin)
 			if (refused.status !== 403 || (refused.headers.get('content-type') ?? '').startsWith('application/json')) {
-				throw new Error(`a ${site} session POST to ${path} answered ${refused.status}, expected a proxy refusal`)
+				throw new Error(`a ${site} session POST to ${call.path} answered ${refused.status}, expected a proxy refusal`)
 			}
 		}
+		const served = await post(call, 'same-origin', CONTROL_ORIGIN)
+		const body = served.status === 200 ? rpcResponseSchema.safeParse(await served.json()) : null
+		if (body === null || !body.success) {
+			throw new Error(`a same-origin session call of ${call.method} on ${call.path} answered ${served.status}, expected its result`)
+		}
 	}
-	const served = await post('/api/rpc', 'same-origin', CONTROL_ORIGIN)
-	if (served.status !== 200) throw new Error(`a same-origin session POST to /api/rpc answered ${served.status}`)
 }
 
 /**
