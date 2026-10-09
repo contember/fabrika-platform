@@ -368,7 +368,9 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   answers it once with the URL. `webhooks.<name>.unbind` removes one. A delivery is
   checked in order: the binding (404), `X-Hub-Signature-256` over the raw body with that
   binding's secret (401), the payload's account (403), the input, parsed with its
-  schema after every undeclared field is dropped (400), and the delivery key,
+  schema after every undeclared field is dropped (400), the webhook's credential (503
+  when IAM refuses its key, cannot be asked, or signs a token without a declared action;
+  nothing is recorded, so GitHub redelivers), and the delivery key,
   `sha256(bindingId ‖ raw body)`: a key the binding already received in the last 30 days
   is answered 200 and not run again, whatever its unsigned `X-GitHub-Delivery` says (that
   header only names the delivery in the log). The handler gets `ctx.refs`, a `Ref` of the
@@ -412,8 +414,9 @@ process first — and runs one job:
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
    times with jittered exponential backoff, under a new generation each time.
 4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
-   `driver_failed`, `crashed`, and `boot_failed` from the CLI. An application error's
-   name and message are never logged or reported.
+   `driver_failed`, `crashed`, `unauthorized` (IAM refused the job's key),
+   `iam_unavailable` (IAM could not be asked for its token), and `boot_failed` from the
+   CLI. An application error's name and message are never logged or reported.
 5. A run that failed after its retries, and a run that crashed (its lease expired
    before it finished), is a `JobFailed` error event in Operations. A job that has not
    succeeded within twice its period is `JobMissed`, at most once per period. The
@@ -425,18 +428,27 @@ process first — and runs one job:
 
 Job reports are informational, not authenticated: they use the public ingest key, so
 whoever holds the browser DSN can forge one, as they can forge any error event.
-Operations treats the `fabrika-job-*` fingerprints like any other. With platform
-enforcement, the job's workload credential authenticates its reports.
+Operations treats the `fabrika-job-*` fingerprints like any other. The job's workload
+key exists, but Operations' ingest cannot verify a `px_` key without asking IAM per
+event, so it does not authenticate the reports yet (backlog 96).
 
-A job has no caller and no token. Its `ctx` mints capabilities in process, for the
-job's declared actions only: `ctx.within(action, dimension)` reaches every value
-(`scope: 'app'`), and `ctx.ref(action, dimension, id)` locates one object, 404 when it is
-missing. The principal of its writes is `job:<name>`. A job cannot create scopes, manage
-members or issue share links. `boot` refuses a job scoped to a dimension (per-binding
-jobs are not built), a job without `@fabrika/db`, a schedule that is not a five-field
-cron expression, and a missing or undeclared job handler. With platform enforcement a
-job runs with its own workload credential of principal kind `job`, which no mount
-accepts (ADR-0022); until then the in-process mint is the whole of its authority.
+A job has no caller. It has a **workload key** of principal kind `job` (ADR-0022
+"Principal kinds"): Control issues it at IAM for each job of the approved contract,
+seals it in its vault, and writes it as `FABRIKA_JOB_<NAME>_KEY`. At the start of every
+attempt the runner exchanges the key at IAM's public `POST /auth/workload/token` for a
+token, which carries the actions IAM's reconciled schema declares for the job. Its
+`ctx` mints a capability only for an action the contract declares **and** the token
+carries: `ctx.within(action, dimension)` reaches every value (`scope: 'app'`), and
+`ctx.ref(action, dimension, id)` locates one object, 404 when it is missing. On a first
+deploy IAM's reconcile runs after the new version is active, so an attempt that starts
+before it gets no capability. The principal of its writes is `job:<name>`. A job cannot
+create scopes, manage members or issue share links, and no mount accepts its key.
+`boot` refuses a job scoped to a dimension (per-binding jobs are not built), a job
+without `@fabrika/db`, a job without its key or without a token exchange, a schedule that
+is not a five-field cron expression, and a missing or undeclared job handler. A webhook
+has a key of principal kind `webhook` the same way (`FABRIKA_WEBHOOK_<NAME>_KEY`), one
+per webhook declaration: its `ctx.refs` exist only when the token carries every declared
+action. A Cloudflare deploy refuses a workload key, because a Worker runs neither.
 
 ## Connectors
 

@@ -51,6 +51,13 @@ bun test               # app-environment · canonical-path · contract-canonical
 - **The membership RPC is a SEPARATE interface too.** `IamMembershipRpc` is what an application's IAM
   entrypoint serves on top of the SDK's `IamRpc` subset; a platform component implementing `IamRpc`
   does not implement it. Its requests carry the caller's own credential and never an actor.
+- **A workload token has `ptype` `job`, `webhook` or `app` and names its workload in `workload`** (ADR-0022
+  "Principal kinds"); `parseAccessClaims` refuses a workload kind without a name, a name on any other kind, and an
+  unknown kind. `callerOf` maps `app` to `app:<workload>` and the other two to no caller; `callerAdmittedAt` admits
+  `app:<id>` only under `CONNECT_PREFIX`. `PrincipalType` stays `user | service` (what IAM stores);
+  `TokenPrincipalType` adds the workload kinds, so a consumer that builds a principal from a token must decide what a
+  workload token is. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job and webhook key families
+  (`workloadKeyVariable`, `isWorkloadKeyVariable`); the connector family joins when Control writes it (B9b).
 - **A share-link token has no `ptype` and carries `link: { mount, chain }`.** `principalKind` reads the
   kind ADR-0022 rule 3 checks (`user`, `service`, `link`); a plain anonymous token has none, so no
   contract mount admits it. `parseAccessClaims` rejects a link claim next to a `ptype` or OAuth claims.

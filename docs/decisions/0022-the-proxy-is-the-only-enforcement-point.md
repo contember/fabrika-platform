@@ -232,6 +232,22 @@ admits a session or a `user` key; `machine` a `service` key; `link` a `link` key
 connector key of application `<id>`, and only on export paths. Job and webhook keys are accepted by no
 mount. The proxy refuses an unknown kind, on cached paths too.
 
+A workload token carries its kind in `ptype` and names its workload in `workload`: the job's or the
+webhook's name, or for `app` the consuming application's id. `callerOf` maps `app` to `app:<workload>`
+and `job` and `webhook` to no caller; `callerAdmittedAt` admits `app:<id>` only under
+`/__fabrika/connect/`. A `service` gate refuses a workload token too, and neither `@fabrika/auth` nor
+IAM's management and membership operations accept one. IAM stores a workload principal as a `service`
+row whose `workload_principals` row names its kind. A workload key resolves to exactly the actions the
+reconciled schema declares for the workload (`AppSchema.workloads`, app-wide), never to a grant, and a
+reconcile that no longer declares the workload revokes its keys. Control issues one key per job and per
+webhook declaration of the approved contract (`workloads.issueKey` on IAM's admin RPC, with the
+provisioning key), seals it in its vault and writes it as `FABRIKA_<KIND>_<NAME>_KEY`; it rotates a key
+once less than half of its 30 days is left, and IAM keeps the newest older key valid for the rollout.
+The application exchanges its own job or webhook key at `POST /auth/workload/token` on IAM's public
+origin, which signs only for a workload key of the named application. Work unit B9a built this for jobs
+and webhooks. Connector keys of kind `app`, their edges and compatibility checks are B9b; until then an
+export also admits `machine` for an operator-provisioned edge key.
+
 The requirement check and the admission check are part of the proxy's decision whether a request
 reaches the application. The requirement reads only the token; it needs no application-owned object.
 The application repeats the caller and requirement checks as **authorization** (rule 5).
@@ -321,8 +337,8 @@ decision, and the proxy's decision never replaces them.
 **Invariant: an application issues no credentials.** `@fabrika/auth` issues and redeems nothing.
 IAM issues every `px_` credential: share links on an application's request, checked against its
 caller's live permissions ([ADR-0012](0012-fabrika-app-runtime.md)), share links and API keys from
-its admin surface, machine keys through `fabrika control key issue`, builder credentials through
-device authorization
+its admin surface, machine keys through `fabrika control key issue`, a job's and a webhook's key through
+Control's reconcile, builder credentials through device authorization
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)
 or a `px_` credential (`mintFromKey`); there is no free-standing signed token to present.
 

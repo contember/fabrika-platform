@@ -22,8 +22,10 @@ the public ingest key, so a holder of the browser DSN can forge one, as they can
 
 - An Operations ingest kind for job runs (start, terminal outcome with its failure code, attempts, duration, run id),
   stored per application and environment, shown in the console as a run history per job.
-- The reports are authenticated by the job's workload credential (B9 of the application framework plan, principal
-  kind `job`), not by the public ingest key, and Operations binds the job and run coordinates server-side.
+- The reports are authenticated by the job's workload key (built: `FABRIKA_JOB_<NAME>_KEY`, principal kind `job`,
+  exchanged at IAM's `POST /auth/workload/token`), not by the public ingest key, and Operations binds the job and run
+  coordinates server-side. Operations' ingest cannot verify a `px_` key without asking IAM per event, so this needs a
+  verification path of its own: the job's short-lived token verified against IAM's JWKS is the cheap one.
 - Witness: a successful run and a crashed run each appear in the job's history; an envelope sent with the public key
   cannot write a job run.
 

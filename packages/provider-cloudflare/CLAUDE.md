@@ -39,6 +39,8 @@ this one import.
   the digests agree). The proxy, the report and the IAM schema all come from that value; never read
   `config.gates` or `config.schema` after it. A protected mismatch writes a `pending` report and throws
   before provisioning, and a finished deploy reports `deployed`. The runner keeps a `pending` report of a failed run.
+- **A deploy that carries a job's or a webhook's key is refused** before the runner is asked: a Worker runs no
+  job and no webhook (they need `@fabrika/db` on Postgres), and the key would only sit in a generated config.
 - **Every framework variable of each generated config is the platform's** (`assertFrameworkVariables` in
   `src/bounds.ts`, before provisioning and before each deploy): a binding's `configureBinding` writes the config
   after the deployer injected its values, so the config is where `FABRIKA_CONTRACT_DIGEST` is checked.

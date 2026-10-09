@@ -105,6 +105,9 @@ bun test
   overwrites (null removes), all written before the build request so it never meets `userDataSyncRunning`.
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
   the one list Control refuses too); `MANAGED_KEYS` is the part of it Control hands every deploy.
+  Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`, `parseManagedEnvironment`,
+  a `px_` key or the deploy is refused): `write-service-env` writes each and deletes every service variable of the
+  job or webhook family that this deploy did not hand, so a removed workload's key does not stay readable.
 - **A contract application's setup is the platform's (ADR-0043, `src/execution.ts`).** A config with
   `target.contract` compiles to a manifest with `target.contract` (digest, health path, jobs) and optional
   `runtimePackages` from `ZEROPS_RUNTIME_PACKAGES`. `lockedAuthoredBuild` refuses every key of the selected

@@ -200,7 +200,7 @@ src/
   providers refuse a contract application whose proxy carries gates (ADR-0022 rule 3).
 - **`schemaFromContract` (`platform.ts`) reads only the artifact**, so the static
   reader's artifact compiles to the same schema. It emits every
-  field of A12's `AppSchema`, and its output must parse unchanged with
+  field of A12's `AppSchema`, `workloads` included (each job and webhook with its sorted actions), and its output must parse unchanged with
   `@fabrika/auth`'s `appSchemaSchema`, which resolves every name it carries.
 - **What IAM would refuse is refused at the source, not in the generator.** `buildArtifact`
   and `contractArtifactSchema` both refuse a `*` in any action name and a role named after
@@ -239,9 +239,9 @@ src/
   which adds the header the way the proxy does.
 - **Caller kinds** come from the token through `@fabrika/auth-core`'s `callerOf`, the
   mapping the proxy applies too (`presentedBy` only adds the principal): `ptype:
-  'user'` is `human`, `ptype: 'service'` is `machine`, an anonymous token (a share
-  link) is `link`. No token is an `app:<id>` caller yet, and an OAuth resource token
-  is no caller. Never map a token to a caller kind anywhere else.
+  'user'` is `human`, `ptype: 'service'` is `machine`, `ptype: 'app'` is `app:<workload>`, an
+  anonymous token (a share link) is `link`. A job or webhook token and an OAuth resource token
+  are no caller. Never map a token to a caller kind anywhere else.
 - **Admission** treats a request without an `Authorization` header as a session
   request: when it is not a `GET` it needs `Sec-Fetch-Site: same-origin`. A
   cross-site page cannot add that header without a preflight, and the application
@@ -330,8 +330,10 @@ src/
   limit is per form per instance (`FORM_RATE_LIMIT`).
 - **A webhook delivery is checked in a fixed order**: binding (404), signature over the
   raw body with that binding's secret (401), account (403), input after dropping every
-  undeclared field (400, `project` then the strict schema), delivery key. Never verify
-  the signature after parsing.
+  undeclared field (400, `project` then the strict schema), the webhook's credential (503:
+  IAM refused or could not sign its key, or the token lacks a declared action), delivery
+  key. The credential is asked before the key is recorded, so GitHub redelivers a delivery
+  that could not run. Never verify the signature after parsing.
 - **Replay protection keys on authenticated content only**: the delivery key is
   `sha256(bindingId ‖ raw body)`, kept per binding for `WEBHOOK_REPLAY_RETENTION_MS`
   (30 days). `X-GitHub-Delivery` is unsigned: it names the delivery in the log and decides
@@ -368,9 +370,9 @@ src/
   locator and the framework tables included, because every session asks the runtime. `buildArtifact`
   refuses an export procedure whose action a table writes with or that manages a dimension's members. An export's context carries its
   capability only: no `ctx.connect`, no membership or file API.
-- **An export's callers are its consumers' `app:<id>` and, until B9, `machine`**
+- **An export's callers are its consumers' `app:<id>` and, until B9b, `machine`**
   (`EXPORT_EDGE_KEY_CALLER`): an operator provisions one service principal with a `px_` key per edge,
-  holding the export's actions. B9 replaces it with Control-reconciled `app:<id>` credentials; then drop
+  holding the export's actions. B9b replaces it with Control-reconciled `app:<id>` credentials; then drop
   `machine` there and nowhere else. `<export>.v<n>` (no procedure) serves the export's description, the
   schemas and digest a consumer vendors, to the same callers and with the same requirement as its
   procedures: v1 exports declare one action in one dimension for every procedure, and `buildArtifact`
@@ -459,6 +461,8 @@ src/
   creates scopes, manages members or issues links does not boot in the kit.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
+- The kit stands in for Control and IAM for workloads too: each job and webhook gets a random `px_` key, and the
+  kit's token exchange signs its declared actions for it, with the kit's own key.
 - `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
   it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision.
 - Its tokens are signed with a generated key and verified by the application's own
@@ -511,11 +515,18 @@ src/
   retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.
 - **Lease times are the database's**: the runner passes durations, never a timestamp, so a container whose clock is
   minutes off cannot take a live lease over. `JobClock` has only the waits and the jitter.
-- **A job's capabilities are minted in process for its declared actions only** (part A). `ctx.within(action, dim)`
-  is a `Within` over every value, `ctx.ref(action, dim, id)` a located `Ref`; both refuse an undeclared action, an
-  unknown dimension and an ended attempt. The grants' principal is `job:<name>`. There is no IAM key, no token and
-  no unscoped handle: B9 replaces the in-process mint with a workload credential of principal kind `job`, which no
-  mount accepts (ADR-0022). A job cannot create scopes, manage members or issue links: its `ctx` has no such method.
+- **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
+  writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
+  `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own
+  verifier and requires `ptype: 'job'` and `workload: <name>`. `ctx.within(action, dim)` is a `Within` over every
+  value, `ctx.ref(action, dim, id)` a located `Ref`; both refuse an undeclared action, an action the token lacks, an
+  unknown dimension and an ended attempt. A refused key fails the attempt `unauthorized`, an unreachable IAM
+  `iam_unavailable`; no handler runs. The token is cached until `TOKEN_REFRESH_SKEW_SECONDS` before it expires. The
+  grants' principal is `job:<name>`. There is no in-process mint and no unscoped handle; keep no second path. A job
+  cannot create scopes, manage members or issue links: its `ctx` has no such method.
+- **A webhook's refs come from its key the same way** (`FABRIKA_WEBHOOK_<NAME>_KEY`, one per webhook declaration,
+  not per binding: a binding is runtime data no snapshot names). `boot` refuses a job or webhook without its key or
+  without a token exchange (`BootOptions.workloadTokens`); the test kit and the harness stand in for both.
 - **`boot` refuses** a job scoped to a dimension (per-binding jobs are not built), a job without a bound
   `scoped(tables)` (the lease and the fence live in the application's schema), a schedule `schedule.ts` cannot read,
   a missing handler, a `handlers.jobs` entry the contract does not declare, and an Operations DSN that is not an
@@ -533,8 +544,8 @@ src/
   `last_started_at`, `last_duration_ms`) and out of Operations (backlog 96).
 - **Job reports are informational, not authenticated.** They travel under the public ingest key, which any holder of
   the browser DSN has, so one can forge a `JobFailed` or `JobMissed` like any other error event. Operations gives the
-  `fabrika-job-*` fingerprints no special meaning: no auto-resolve, no state change. B9's workload credential is the
-  fix: it authenticates the job's reports.
+  `fabrika-job-*` fingerprints no special meaning: no auto-resolve, no state change. The job's key could
+  authenticate them, but Operations' ingest would have to ask IAM per event (backlog 96).
 - An attempt without a `timeout` is cancelled after `DEFAULT_JOB_TIMEOUT_MS` (15 min); the lease lasts the timeout
   plus `LEASE_GRACE_MS`. Retries back off exponentially from one second, capped at five minutes, half jittered.
 - The type witnesses live in `src/__tests__/job-mistakes/`, compiled by `job-types.test.ts`.

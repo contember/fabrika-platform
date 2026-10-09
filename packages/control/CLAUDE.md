@@ -203,6 +203,17 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 - **A namespace member carries `operationsOrigin`, the origin of its active ingest DSN** (`namespaceMembers` in
   `src/api/namespaces.ts`), so a Zerops proxy's header policy admits the same Operations origin the framework
   does. The DSN carries the ingest key; only its origin leaves Control this way.
+- **A job's and a webhook's key come from the APPROVED contract (`src/workload-credentials.ts`, ADR-0022 "Principal
+  kinds").** `executeDeploy` reconciles one key per job and per webhook declaration of
+  `registration.environment.access.contract` before the provider runs (never on a dry run): a recorded key with more
+  than half its 30 days left is read back from the vault, otherwise IAM's `workloads.issueKey` issues a new one with
+  the provisioning key (`iamWorkloadKeyIssuer`, at `FABRIKA_IAM_ISSUER`), sealed under
+  `workloadKeyPurpose(app, env, kind, name)` and recorded in `app_env_workload_credentials` (ref and expiry only). A
+  removed workload's record and vault row are deleted. Each key is handed as `FABRIKA_<KIND>_<NAME>_KEY` and redacted
+  from the run log. Two workloads whose names map to one variable are refused. Without a vault, an issuer or a
+  provisioning key a contract with a workload fails the run. What a key may do is IAM's: the schema reconcile
+  declares the actions. A key the running version holds outlives this deploy only because IAM keeps the newest older
+  one; an environment not deployed for 30 days loses its workloads' keys.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a

@@ -146,6 +146,18 @@ fails if that stops being true — it is the guard, not documentation of one.
   repository with exact actions, and the CLI passes the operator's list. An expiry or action refusal
   is `not_allowed` over RPC and a 400 naming the problem on the admin share-link path
   (`IssueOutcome.problem`).
+- **A WORKLOAD KEY CARRIES EXACTLY WHAT THE SCHEMA DECLARES FOR ITS WORKLOAD (ADR-0022 "Principal kinds").** A job or
+  webhook principal is a `service` row (`external_id` `workload:<app>:<kind>:<name>`) with a `workload_principals`
+  row naming its kind; a token minted from its key has `ptype` = that kind and `workload` = its name.
+  `resolveCredential` resolves it to the actions of its `app_workloads` row (written by the schema reconcile from
+  `AppSchema.workloads`, contract applications only, exact catalog actions), app-wide, and to nothing without one —
+  never to a grant, so an administrator cannot widen a workload with one. A reconcile that drops a workload revokes its
+  keys in the same batch. `workloads.issueKey` (admin RPC, `iam.admin`, which the provisioning key holds) creates the
+  principal on first use, issues a key of at most 30 days and revokes every older key but the newest, which the
+  running version still holds during a rollout. A workload key mints at `POST /auth/workload/token` on the public
+  origin (`src/workload-token.ts`, the key as the bearer, `{ app }` as the body, only job and webhook kinds of that
+  app, `invalid_key` for anything else), and `resolveCaller` refuses it for every management and membership
+  operation. Workload principals are not listed as API keys.
 - **AN APPLICATION TOKEN CARRIES ONLY THE GRANTS OF ITS OWN APP ID (ADR-0022 rule 6).** Every
   permission question goes through `resolvePermissionsAt` (`src/resolve.ts`): a cross-app (`NULL`)
   grant and the bootstrap `admin` reach a token only when the app is a PLATFORM AUDIENCE

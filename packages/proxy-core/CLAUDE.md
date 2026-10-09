@@ -70,10 +70,13 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
   OAuth resources beside a table, is refused whole. A contract app's request is one pass over the row
   `planEndpoint` selects (ADR-0022 rule 3): no row → 403; a presented `Authorization` header is a
   `px_` key and terminal, and its caller kind (`callerOf`, re-checked on cached tokens) must be one
-  of the row's callers → 403; no key and no `human` caller → 401, never a bounce; the session or the
+  of the row's callers, and an `app:<id>` caller must be on an export path (`callerAdmittedAt`) → 403;
+  a job or webhook key is no caller kind, so every row refuses it; no key and no `human` caller → 401, never a bounce; the session or the
   login bounce; `satisfies` → 403; admission (a session non-`GET` needs `Sec-Fetch-Site:
   same-origin` → 403, the media type must be one the row admits → 400). An anonymous kind reads no
   credential and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`.
+- **A workload key opens no gate either.** A `service` gate refuses a key whose token has a workload kind (`job`,
+  `webhook`, `app`) with 403 `caller_kind`, also from the cache (ADR-0022 "Principal kinds").
 - **A row's digest is checked where the manifest is parsed.** The parser recomputes
   `requirementDigest` and refuses a row whose digest differs, so the digest the proxy sends always
   describes the rules it applied. Producers build rows with `contractProxyTable(artifact)`, never by
