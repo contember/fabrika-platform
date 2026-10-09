@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 import type { z } from 'zod'
 import { type browserFixtureSourceSchema, type browserIdentitySchema, parseBrowserFixtures, parseBrowserIdentity } from './browser-fixture-schemas'
 import { compose } from './compose'
+import { seedNotesAgentChange } from './notes-agent-change'
 import { STATE_DIR } from './prepare'
 import {
 	alertChannelFixtureSchema,
@@ -19,7 +20,18 @@ import {
 } from './response-schemas'
 import { upLocalComposition } from './up'
 
+export {
+	issueNotesKey,
+	NOTES_AGENT_CHANGE_WORKSPACE,
+	type NotesAgentChange,
+	type NotesKey,
+	readNotesAgentChange,
+	waitForNotesDeploy,
+} from './notes-agent-change'
+export { followNotesDeploy } from './notes-follow'
+
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
+const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const FIXTURES_FILE = resolve(STATE_DIR, 'browser-fixtures.json')
 const IDENTITIES_DIR = resolve(STATE_DIR, 'browser-identities')
@@ -90,6 +102,7 @@ async function seedBrowserFixtures(): Promise<void> {
 		seedSourceEvents(fixtures.hidden, 'Hidden browser fixture failure', 1),
 	])
 	await completeBrowserOperatorFixtures()
+	await seedNotesAgentChange({ origin: IAM_ORIGIN, session: (await createBrowserIdentity('admin')).session })
 }
 
 export async function completeBrowserOperatorFixtures(): Promise<void> {

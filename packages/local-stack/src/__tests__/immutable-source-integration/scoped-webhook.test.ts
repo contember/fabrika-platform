@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { triggerByScopedWebhook } from '../../smoke'
+import { triggerByScopedWebhook } from '../../notes-deploy'
 import { LOCAL_SOURCE_CONNECTIONS } from '../../source-connection-fixture'
 
 const COMMIT_SHA = 'a'.repeat(40)

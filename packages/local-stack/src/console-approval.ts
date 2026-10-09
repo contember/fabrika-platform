@@ -1,6 +1,7 @@
-// The smoke approves a parked deploy the way a person does (ADR-0050 §5): signed in to the console through the real
-// proxy-and-IAM handoff (`LOCAL_DEV_LOGIN` makes IAM's step non-interactive), and calling `approvals.complete` with
-// the session cookie from the console's own origin. No key, so it is the same authorization and admission a human gets.
+// The smoke and the browser seeds approve a parked deploy the way a person does (ADR-0050 §5): signed in to the console
+// through the real proxy-and-IAM handoff (`LOCAL_DEV_LOGIN`, or a seeded IAM login on the browser stack, makes IAM's step
+// non-interactive), and calling `approvals.complete` with the session cookie from the console's own origin. No key, so
+// it is the same authorization and admission a human gets.
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { z } from 'zod'
@@ -36,14 +37,29 @@ class CookieJar {
 		this.#hosts.set(url.host, cookies)
 	}
 
+	set(origin: string, name: string, value: string): void {
+		const host = new URL(origin).host
+		this.#hosts.set(host, new Map(this.#hosts.get(host)).set(name, value))
+	}
+
 	get(origin: string, name: string): string | undefined {
 		return this.#hosts.get(new URL(origin).host)?.get(name)
 	}
 }
 
-/** Follow the console's login redirects by hand and return the console host's session cookie. */
-export const signInToConsole = async (consoleOrigin: string): Promise<string> => {
+/** A sign-in IAM already holds, planted on IAM's own host as a browser would carry it. */
+export interface IamLogin {
+	readonly origin: string
+	readonly session: string
+}
+
+/**
+ * Follow the console's login redirects by hand and return the console host's session cookie. Without `login`, IAM's
+ * step relies on `LOCAL_DEV_LOGIN`; with it, IAM finds the browser already signed in on its own host.
+ */
+export const signInToConsole = async (consoleOrigin: string, login?: IamLogin): Promise<string> => {
 	const jar = new CookieJar()
+	if (login !== undefined) jar.set(login.origin, SESSION_COOKIE, login.session)
 	let url = new URL(`${consoleOrigin}/`)
 	for (let hop = 0; hop < MAX_HOPS; hop++) {
 		const response = await fetch(url, { redirect: 'manual', headers: { cookie: jar.header(url) } })
@@ -81,8 +97,8 @@ const consoleRpc = async (consoleOrigin: string, cookie: string, method: string,
 }
 
 /** Approve one parked run as the signed-in admin, naming the two digests the approval page shows. */
-export const approveInConsole = async (consoleOrigin: string, runId: string): Promise<void> => {
-	const cookie = await signInToConsole(consoleOrigin)
+export const approveInConsole = async (consoleOrigin: string, runId: string, login?: IamLogin): Promise<void> => {
+	const cookie = await signInToConsole(consoleOrigin, login)
 	const approval = approvalSchema.parse(await consoleRpc(consoleOrigin, cookie, 'approvals.get', { runId }))
 	for (let attempt = 1;; attempt++) {
 		try {

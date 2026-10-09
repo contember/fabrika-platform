@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
-import { controlRequest } from '../../smoke'
+import { controlRequest } from '../../notes-deploy'
 
 test('Control list RPCs omit input on the wire while keyed calls preserve their coordinates', async () => {
 	const requests: Request[] = []

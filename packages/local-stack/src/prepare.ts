@@ -18,7 +18,7 @@ import {
 	platformServiceTableDigest,
 } from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import { contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { type ContractProxyTable, contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { NOTES_APP_ID, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -284,9 +284,10 @@ export const LOCAL_NOTES_IAM_APP_ID = appEnvironmentId(NOTES_APP_ID, LOCAL_NOTES
 
 /**
  * The apps proxy fronts the Notes example by its contract's endpoint table, as a namespace proxy fronts a contract
- * application whose snapshot Control approved, and the SDK witness by its gates.
+ * application whose snapshot Control approved, and the SDK witness by its gates. `followNotesDeploy` passes the table
+ * Control published instead; the placement stays local.
  */
-export const localAppsProxyManifest = (): ProxyManifest => ({
+export const localAppsProxyManifest = (table: ContractProxyTable = contractProxyTable(notesContract)): ProxyManifest => ({
 	apps: [
 		{
 			id: LOCAL_NOTES_IAM_APP_ID,
@@ -295,24 +296,42 @@ export const localAppsProxyManifest = (): ProxyManifest => ({
 			scheme: 'http',
 			// The origin of the local ingest DSN; the proxy's CSP lets the browser report to it.
 			operationsOrigin: LOCAL_OPERATIONS_ORIGIN,
-			...contractProxyTable(notesContract),
+			...table,
 		},
 		{ id: WITNESS_IAM_APP_ID, hosts: [WITNESS_HOST], upstream: WITNESS_UPSTREAM, gates: WITNESS_GATES, scheme: 'http' },
 	],
 })
+
+/** The digest the composed container starts under; it refuses to start under another contract. */
+export const writeNotesContractDigest = (digest: string): Promise<void> =>
+	writeEnv(STATE_DIR, 'notes-contract.env', { [FABRIKA_CONTRACT_DIGEST]: digest })
 
 /**
  * Rewritten on every prepare, so a contract edit reaches the composed container: its digest (the container refuses to
  * start under another) and the entrypoint the platform build writes.
  */
 const prepareNotesApplication = async (): Promise<void> => {
-	await writeEnv(STATE_DIR, 'notes-contract.env', { [FABRIKA_CONTRACT_DIGEST]: contractDigest(notesContract) })
+	await writeNotesContractDigest(contractDigest(notesContract))
 	await writeGeneratedEntry(applicationFixtureRoot, 'bun')
+}
+
+/** The apps proxy's manifest and its Caddy configuration; the containers read them when they start. */
+export const writeAppsProxyConfig = async (appsManifest: ProxyManifest): Promise<void> => {
+	await Promise.all([
+		writeJson('apps-proxy.manifest.json', appsManifest),
+		writeJson(
+			'apps-caddy.json',
+			buildCaddyConfig(appsManifest, {
+				authUpstream: '127.0.0.1:9000',
+				listen: [':18081'],
+				healthListen: [':19081'],
+			}),
+		),
+	])
 }
 
 const generateProxyConfigs = async (mcpClients: readonly McpClient[] | undefined): Promise<void> => {
 	const platformManifest = localPlatformProxyManifest(mcpClients)
-	const appsManifest = localAppsProxyManifest()
 	await Promise.all([
 		writeJson('platform-proxy.manifest.json', platformManifest),
 		writeJson(
@@ -324,15 +343,7 @@ const generateProxyConfigs = async (mcpClients: readonly McpClient[] | undefined
 				healthListen: [':19080'],
 			}),
 		),
-		writeJson('apps-proxy.manifest.json', appsManifest),
-		writeJson(
-			'apps-caddy.json',
-			buildCaddyConfig(appsManifest, {
-				authUpstream: '127.0.0.1:9000',
-				listen: [':18081'],
-				healthListen: [':19081'],
-			}),
-		),
+		writeAppsProxyConfig(localAppsProxyManifest()),
 	])
 }
 

@@ -108,6 +108,16 @@ the browser report errors. The bucket `notes-files` is on `apps-storage`, a Seaw
 of the `apps-prod` network only, so the application never reaches the platform's
 storage. A `.state` from before the contract application asks for `local:reset`.
 
+Nothing deploys the container, and the emulator runs no code. `followNotesDeploy`
+(`src/notes-follow.ts`) makes the composition serve what the emulator's active Notes
+version deployed: the endpoint table Control published on the namespace proxy, the
+contract digest and workload keys the deploy wrote, and the source of that commit. The
+browser stack uses it: its `notes-agent-change` seed deploys and approves the pinned
+commit, follows it, and pushes the agent change commit through the notes connection's
+webhook, where it waits for approval. The scenario
+`tests/browser/notes-agent-adds-endpoint-and-table.test.ts` approves it in the console and
+follows the deploy. Every `up` returns the container to the workspace example.
+
 The apps proxy also fronts the Operations browser SDK witness at
 `http://sdk.fabrika.localhost:18081`, an application without a contract behind a
 `human` gate (`src/operations-witness/`): a contract application cannot hand its
@@ -118,9 +128,13 @@ browser the managed DSN yet (backlog 102).
 Local preparation creates two deterministic Git repositories, the platform's from
 `packages/local-stack/fixtures/source/platform/` and the application's from the complete
 Notes example as its repository holds it, plus the entrypoint the build writes
-(`applicationFixtureSource`). `deployable.test.ts` checks that archive as a production
-build does: the checker, and on Postgres `fabrika db migrate`, `fabrika db codegen
---verify` and `fabrika db test-isolation`. Preparation stores their manifests and archives
+(`applicationFixtureSource`). The application repository has a second commit on top of
+that one, `agentChange`: an agent's change to Notes under the fabrika-app skill
+(`fixtures/source/notes-agent-change.patch`) — the endpoint `api.notes.rename`, the child
+table `note_labels` with its policy and migration, and the regenerated code and tests.
+`deployable.test.ts` checks both archives as a production build does: the checker, and
+on Postgres `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db
+test-isolation`. Preparation stores their manifests and archives
 under `.state/source-fixtures/`. Their commits do not depend on the enclosing
 checkout's HEAD, index, or uncommitted files. Control receives the platform
 fixture's immutable proxy source pin. Conflicting existing pins require an
@@ -133,6 +147,10 @@ and each file of the application commit only when its bytes on disk still have t
 pinned blob id (`readFixtureFiles`). The pinned tree is
 `fixtures/source/manifest.json`: an edit of the example moves it, and `fixture.test.ts`
 fails until `bun run fixtures:pin` (in `packages/local-stack`) regenerates it.
+The double answers the application repository's `main` with the commit the last push
+moved it to: `triggerByScopedWebhook` writes `.state/github-branch-head.json` before it
+sends the push event, because Control resolves the pushed ref and refuses a different
+commit than the event named.
 The upload transport maps a capability-bearing logical Zerops HTTPS URL to the
 private emulator endpoint. Production destination validation is unchanged, and
 unknown coordinates or destinations have no network fallback.

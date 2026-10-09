@@ -242,16 +242,17 @@ services:
 
   # The Notes example as the platform starts a contract application on Zerops: the generated start script's steps,
   # then the generated entrypoint, with the variables the deploy writes (`prepare.ts` generates the local ones).
+  # `followNotesDeploy` points it at another fixture commit the emulator activated (`src/notes-follow.ts`).
   notes:
     <<: *bun
-    working_dir: /workspace/examples/zerops-app
+    working_dir: ${FABRIKA_LOCAL_NOTES_ROOT:-/workspace/examples/zerops-app}
     command:
       - sh
       - -c
       - >-
-        bun ../../packages/cli/src/index.ts db migrate &&
-        bun ../../packages/cli/src/index.ts db codegen --verify &&
-        bun ../../packages/cli/src/index.ts db test-isolation &&
+        bun /workspace/packages/cli/src/index.ts db migrate &&
+        bun /workspace/packages/cli/src/index.ts db codegen --verify &&
+        bun /workspace/packages/cli/src/index.ts db test-isolation &&
         exec bun fabrika/entry.generated.ts
     # `notes-workloads.env` holds the jobs' and webhooks' keys (`workload-keys.ts`); `up` writes it before Notes starts.
     env_file:

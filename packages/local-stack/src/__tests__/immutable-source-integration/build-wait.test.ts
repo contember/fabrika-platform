@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { DURABLE_BUILD_WAIT_MS, poll } from '../../smoke'
+import { DURABLE_BUILD_WAIT_MS, poll } from '../../notes-deploy'
 
 test('durable build wait admits a slow reservation and upload beyond 30 seconds and returns at the first triggered checkpoint', async () => {
 	let now = 0

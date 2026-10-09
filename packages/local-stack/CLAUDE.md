@@ -77,6 +77,13 @@ bun run test:browser  # the opice suites in tests/browser/
   Postgres, the start script's steps over the archive itself. The container runs
   the platform's start-script steps and the generated entrypoint with the variables `prepare.ts` writes. Never give it
   a variable the platform would not write, and never route it by gates: the apps proxy serves its endpoint table.
+- **The composition follows a deploy only when told to (`src/notes-follow.ts`).** The emulator runs no code, so
+  `followNotesDeploy` makes the composed Notes container and the apps proxy serve what the emulator's active Notes
+  version deployed: the endpoint table Control published on the namespace proxy (never one computed here), the contract
+  digest and workload keys the deploy wrote, and the source of that commit — the workspace example, or the agent change
+  fixture copied to `.state/notes-source/` (`FABRIKA_LOCAL_NOTES_ROOT`). Every `up` returns it to the example. The
+  `notes-agent-change` browser seed (`src/notes-agent-change.ts`) deploys and approves the pinned commit, follows it,
+  and parks the agent change commit (`fixtures/source/notes-agent-change.patch`, pinned as `agentChange`) for its scenario.
 - **The Operations SDK witness is an application without a contract on its own host** (`src/operations-witness/`),
   because a contract application cannot hand its browser the managed DSN yet (backlog 102). Delete it when that lands.
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
