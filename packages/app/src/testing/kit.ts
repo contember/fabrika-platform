@@ -203,8 +203,13 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		const via = kind === 'human' ? (callerOptions.via ?? 'session') : 'key'
 		issued += 1
 		const credential = crypto.randomUUID().replaceAll('-', '')
+		const consumer = kind === 'app' ? (callerOptions.app ?? '') : null
+		if (consumer === '') {
+			throw new Error("an app caller names the consuming application: testCaller(grants, { kind: 'app', app: '<id>' })")
+		}
 		const caller: TestCaller = Object.freeze({
 			kind,
+			app: consumer,
 			id: callerOptions.id ?? `${kind}-${issued}`,
 			label: kind === 'link' ? null : (callerOptions.label ?? `${kind}-${issued}@${name}.test`),
 			perms: Object.freeze(resolveGrants(app.contract, grants)),
@@ -226,7 +231,8 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 			iss: TEST_ISSUER,
 			app: appId,
 			subject: caller.id,
-			...(caller.kind === 'link' ? {} : { type: caller.kind === 'human' ? 'user' : 'service' }),
+			...(caller.kind === 'link' ? {} : { type: caller.kind === 'human' ? 'user' : caller.kind === 'app' ? 'app' : 'service' }),
+			...(caller.app === null ? {} : { workload: caller.app }),
 			label: caller.label,
 			permissions: [...caller.perms],
 			issuedAt: now,

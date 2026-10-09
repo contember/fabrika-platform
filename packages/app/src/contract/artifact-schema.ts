@@ -83,7 +83,7 @@ const recordShape: z.ZodType<RecordShape> = z.lazy(() =>
 )
 
 const caller = z.union([z.enum(['human', 'machine', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
-const rpcCaller = z.union([z.enum(['human', 'machine']), z.templateLiteral(['app:', z.string().min(1)])])
+const rpcCaller = z.enum(['human', 'machine'])
 
 const accessForm = z.discriminatedUnion('form', [
 	z.strictObject({ form: z.literal('over'), dimension: name }),
@@ -211,7 +211,13 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 	})),
 	csp: z.strictObject({ connectSrc: z.array(cspSource), imgSrc: z.array(cspSource), frameAncestors: z.array(cspSource) }),
 	tables: record(tablePolicy),
-	endpoints: z.array(endpointRow),
+	endpoints: z.array(endpointRow).superRefine((rows, context) => {
+		for (const [index, row] of rows.entries()) {
+			if (row.source.kind !== 'export' && row.callers.some((caller) => caller.startsWith('app:'))) {
+				context.addIssue({ code: 'custom', path: [index, 'callers'], message: 'an app:<id> caller reaches only an export row' })
+			}
+		}
+	}),
 	reservedPrefixes: names,
 })
 

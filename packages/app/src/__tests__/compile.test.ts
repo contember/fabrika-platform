@@ -189,6 +189,16 @@ describe('parseContractArtifact', () => {
 		expect(parseContractArtifact(replaced(anonymous, {}))).toEqual(artifact)
 	})
 
+	test('refuses an app:<id> caller anywhere but an export row', () => {
+		const index = artifact.endpoints.findIndex((row) => row.source.kind === 'mount' && row.callers.length > 0)
+		const row = artifact.endpoints[index]
+		const api = artifact.mounts['api']
+		if (row === undefined || api?.kind !== 'rpc') throw new Error('the notes fixture changed')
+		const endpoints = artifact.endpoints.map((each, at) => (at === index ? { ...each, callers: ['app:billing'] } : each))
+		expect(() => parseContractArtifact({ ...artifact, endpoints })).toThrow('an app:<id> caller reaches only an export row')
+		expect(() => parseContractArtifact({ ...artifact, mounts: { ...artifact.mounts, api: { ...api, callers: ['app:billing'] } } })).toThrow()
+	})
+
 	test('refuses a wildcard wherever the artifact names an action', () => {
 		const owner = artifact.roles['owner']
 		const workspace = artifact.dimensions['workspace']

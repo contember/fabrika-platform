@@ -43,8 +43,8 @@ export const APP_CALLER_PREFIX = 'app:'
 /** Every export procedure and description is served under this prefix; an `app:<id>` caller reaches nothing else. */
 export const CONNECT_PREFIX = '/__fabrika/connect'
 
-/** A link holder reaches only its own link mount, never an RPC mount. */
-export type RpcCaller = Exclude<Caller, 'link'>
+/** An RPC mount's callers: a link holder reaches only its own link mount, and an `app:<id>` only an export. */
+export type RpcCaller = 'human' | 'machine'
 
 export type EndpointMethod = 'GET' | 'POST'
 

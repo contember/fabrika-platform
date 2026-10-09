@@ -11,7 +11,7 @@ import { contract as notesContract } from './fixtures/notes-app/fabrika.contract
 const Empty = z.strictObject({})
 const ById = z.strictObject({ id: z.uuid() })
 
-/** Both caller kinds on one mount, and another application as a caller. */
+/** Both caller kinds on one mount, and another application as the consumer of an export. */
 const mixedContract = defineContract({
 	app: 'mixed',
 	dimensions: { queue: {} },
@@ -21,9 +21,14 @@ const mixedContract = defineContract({
 	tasks: c.rpc('/tasks', { callers: ['human', 'machine'] }, {
 		run: c.mutation({ input: Empty, output: Empty, access: { action: 'jobs.run', over: 'queue' } }),
 	}),
-	partner: c.rpc('/partner', { callers: ['app:billing'] }, {
-		ping: c.query({ output: Empty, access: { member: true } }),
-	}),
+	exports: {
+		queue: c.export({
+			version: 1,
+			consumers: ['billing'],
+			audience: 'any consumer user',
+			procedures: { depth: c.query({ output: Empty, access: { action: 'jobs.run', over: 'queue' } }) },
+		}),
+	},
 	health: c.health('/healthz'),
 }))
 
@@ -98,10 +103,15 @@ describe('schemaFromContract', () => {
 				'webhooks.github.unbind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
 			},
 			workloads: [
+				{ kind: 'app', name: 'shop', actions: ['notes.read'] },
 				{ kind: 'job', name: 'purgeDeleted', actions: ['notes.delete'] },
 				{ kind: 'webhook', name: 'github', actions: ['notes.write'] },
 			],
 		})
+	})
+
+	test("an export's consumer is an app workload holding the actions of the export rows it may call", () => {
+		expect(schemaFromContract(mixed).workloads).toEqual([{ kind: 'app', name: 'billing', actions: ['jobs.run'] }])
 	})
 
 	test("a delegation is an endpoint that creates a value or holds its dimension's members.manage action", () => {

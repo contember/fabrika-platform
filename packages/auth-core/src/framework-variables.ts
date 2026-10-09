@@ -32,11 +32,10 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]
 
 /**
- * The name families only the platform writes: one variable per job or webhook, named after it (`workloadKeyVariable`).
- * Every name under one is framework-only. A connector's `FABRIKA_CONNECT_<IMPORT>_*` joins once Control writes it; an
- * operator still provisions those today.
+ * The name families only the platform writes: one variable per job or webhook, named after it (`workloadKeyVariable`),
+ * and a connector import's address, key and Worker binding (`connectVariables`). Every name under one is framework-only.
  */
-export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_'] as const
+export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_CONNECT_'] as const
 
 const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAMES)
 
@@ -60,6 +59,22 @@ export function isWorkloadKeyVariable(name: string): boolean {
 /** The variable a job's or a webhook's credential travels under: `FABRIKA_JOB_NIGHTLY_DIGEST_KEY`. */
 export function workloadKeyVariable(kind: 'job' | 'webhook', name: string): string {
 	return `FABRIKA_${kind.toUpperCase()}_${variableSegment(name)}_KEY`
+}
+
+/** The variables that carry one connector import, and the Cloudflare service binding that carries its calls. */
+export interface ConnectVariables {
+	/** The owner's origin, `https://<owner host>`; on Cloudflare also the URL a binding request carries. */
+	readonly url: string
+	/** The consumer's `app` key at the owner. */
+	readonly key: string
+	/** The service binding to the owner's proxy Worker. */
+	readonly binding: string
+}
+
+/** `catalog` → `FABRIKA_CONNECT_CATALOG_URL`, `_KEY` and the binding `FABRIKA_CONNECT_CATALOG`. */
+export function connectVariables(importName: string): ConnectVariables {
+	const binding = `FABRIKA_CONNECT_${variableSegment(importName)}`
+	return { url: `${binding}_URL`, key: `${binding}_KEY`, binding }
 }
 
 /** A Zerops reference: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}` or `${RUNTIME_<host>_NAME}`. */

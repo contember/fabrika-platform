@@ -29,7 +29,7 @@ function post(body: unknown, headers: Record<string, string> = {}): RequestInit 
 /** The catalog, and a shop whose import reaches it through `fetch`, with an edge key holding `grants`. */
 function connected(fetchOwner?: (owner: ConnectFetch) => ConnectFetch, edge: 'reader' | 'none' = 'reader') {
 	const owner = testKit(catalogApp(products))
-	const key = owner.testCaller(edge === 'reader' ? [{ role: 'reader' }] : [], { kind: 'machine' }).key ?? ''
+	const key = owner.testCaller(edge === 'reader' ? [{ role: 'reader' }] : [], { kind: 'app', app: 'shop' }).key ?? ''
 	const toOwner: ConnectFetch = (request) => owner.fetch(request)
 	const consumer = testKit(shopApp, { connect: { catalog: { origin: owner.origin, key, fetch: fetchOwner?.(toOwner) ?? toOwner } } })
 	const visitor = consumer.testCaller([{ role: 'visitor' }])
@@ -54,7 +54,7 @@ describe('the owner serves its export to the edge key, and to nothing else', () 
 		const { owner } = connected()
 		const person = owner.testCaller([{ role: 'reader' }])
 		expect((await owner.browser(person)('/__fabrika/connect/products.v1.get', post({ sku: 'p1' }))).status).toBe(401)
-		const stranger = owner.testCaller([{ action: 'catalog.product.write' }], { kind: 'machine' })
+		const stranger = owner.testCaller([{ action: 'catalog.product.write' }], { kind: 'app', app: 'shop' })
 		const refused = await owner.fetch('/__fabrika/connect/products.v1.get', post({ sku: 'p1' }, { Authorization: `Bearer ${stranger.key}` }))
 		expect(refused.status).toBe(403)
 	})
@@ -75,9 +75,21 @@ describe('the owner serves its export to the edge key, and to nothing else', () 
 		expect(anonymous.status).toBe(401)
 	})
 
+	test("only a consumer's app key reaches an export: a machine key or another application's key holding the action is refused", async () => {
+		const { owner } = connected()
+		for (
+			const caller of [owner.testCaller([{ role: 'reader' }], { kind: 'machine' }), owner.testCaller([{ role: 'reader' }], { kind: 'app', app: 'crm' })]
+		) {
+			for (const path of ['/__fabrika/connect/products.v1.get', '/__fabrika/connect/products.v1']) {
+				const response = await owner.fetch(path, post({ sku: 'p1' }, { Authorization: `Bearer ${caller.key}` }))
+				expect(response.status).toBe(403)
+			}
+		}
+	})
+
 	test("the description needs the export's own action: a key holding another action of the owner is refused", async () => {
 		const { owner } = connected()
-		const writer = owner.testCaller([{ action: 'catalog.product.write' }], { kind: 'machine' })
+		const writer = owner.testCaller([{ action: 'catalog.product.write' }], { kind: 'app', app: 'shop' })
 		const response = await owner.fetch('/__fabrika/connect/products.v1', post({}, { Authorization: `Bearer ${writer.key}` }))
 		expect(response.status).toBe(403)
 	})
@@ -161,7 +173,7 @@ describe('ctx.connect in the consumer', () => {
 			deps: () => ({}),
 			handlers: () => ({ exports: { products: { get: ({ input }) => ({ sku: input.sku, name: 7 }) } } }),
 		}))
-		const key = owner.testCaller([{ action: 'catalog.product.read' }], { kind: 'machine' }).key ?? ''
+		const key = owner.testCaller([{ action: 'catalog.product.read' }], { kind: 'app', app: 'shop' }).key ?? ''
 		const consumer = testKit(shopApp, { connect: { catalog: { origin: owner.origin, key, fetch: (request) => owner.fetch(request) } } })
 		const log = spyOn(console, 'error').mockImplementation(() => {})
 		try {
@@ -199,8 +211,8 @@ describe('boot refuses an import it cannot serve', () => {
 
 	test('without the owner origin and the edge key', () => {
 		expect(problems(() => bootApp(shopApp, { environment: framework({}) }))).toEqual([
-			"FABRIKA_CONNECT_CATALOG_URL is not set; it is the origin of the owner's proxy",
-			"FABRIKA_CONNECT_CATALOG_KEY is not set to a px_ key; it is the edge key the owner's proxy admits import 'catalog' with",
+			"FABRIKA_CONNECT_CATALOG_URL is not set; the platform writes the origin of the owner's proxy",
+			"FABRIKA_CONNECT_CATALOG_KEY is not set to a px_ key; the platform writes the key the owner's proxy admits import 'catalog' with",
 		])
 	})
 

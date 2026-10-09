@@ -34,9 +34,6 @@ export const contract = defineContract({
 		},
 		me: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true } }),
 	}),
-	partner: c.rpc('/partner', { callers: ['app:billing'] }, {
-		usage: c.query({ output: z.strictObject({ tasks: z.int() }), access: { action: 'tasks.read', over: 'project' } }),
-	}),
 	shared: c.link('/share', {
 		spa: 'dist/share',
 		dimension: 'task',

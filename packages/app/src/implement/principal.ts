@@ -1,6 +1,6 @@
 // Who called: the caller kind a verified token presents, and the principal a handler sees for it.
 
-import { type AccessTokenClaims, type Caller, callerOf } from '@fabrika/auth-core'
+import { type AccessTokenClaims, APP_CALLER_PREFIX, type Caller, callerOf } from '@fabrika/auth-core'
 
 /** A person: the IAM session, or a `px_` key bound to a user principal. */
 export interface UserPrincipal {
@@ -52,8 +52,9 @@ export function presentedBy(claims: AccessTokenClaims): Presented | null {
 			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
 		case 'link':
 			return { caller, principal: { kind: 'link', credentialId: claims.sub } }
-		default:
-			// No token kind is an application's connector key yet, so no request is an `app:<id>` caller.
+		case null:
 			return null
+		default:
+			return { caller, principal: { kind: 'app', app: caller.slice(APP_CALLER_PREFIX.length), id: claims.sub } }
 	}
 }

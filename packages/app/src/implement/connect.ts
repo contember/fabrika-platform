@@ -4,11 +4,12 @@
 
 import {
 	API_KEY_PREFIX,
+	type ConnectVariables,
+	connectVariables,
 	type ContractArtifact,
 	type ExportDescription,
 	type ImportArtifact,
 	type SchemaShape,
-	variableSegment,
 } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { type ConnectSnapshot, describeSnapshot } from '../contract/connect'
@@ -28,23 +29,10 @@ export type ConnectResult<T> =
 /** How a request reaches the owner's proxy: `fetch` over HTTPS, or a service binding to its proxy Worker. */
 export type ConnectFetch = (request: Request) => Promise<Response>
 
-/** The framework variables that configure one import, and the Worker binding that carries it on Cloudflare. */
-export interface ConnectVariables {
-	/** The owner's origin, `https://<owner host>`; on Cloudflare also the URL a binding request carries. */
-	readonly url: string
-	/** The edge's `px_` key. Until B9 an operator provisions it; application code never reads it. */
-	readonly key: string
-	readonly binding: string
-}
-
-/** Every import's variables and binding are named under it. */
+/** Every import's variables and binding are named under it (`connectVariables`, `@fabrika/auth-core`). */
 export const CONNECT_BINDING_PREFIX = 'FABRIKA_CONNECT_'
 
-/** `catalog` → `FABRIKA_CONNECT_CATALOG_*`, `productCatalog` → `FABRIKA_CONNECT_PRODUCT_CATALOG_*`. */
-export function connectVariables(importName: string): ConnectVariables {
-	const binding = `${CONNECT_BINDING_PREFIX}${variableSegment(importName)}`
-	return { url: `${binding}_URL`, key: `${binding}_KEY`, binding }
-}
+export { type ConnectVariables, connectVariables }
 
 /**
  * One procedure as the connector validates it: zod schemas built by the framework from the snapshot's described
@@ -308,7 +296,7 @@ export function wireImports(wiring: ImportWiring, problems: string[]): ReadonlyM
 		const origin = readOrigin(variables.url, framework[variables.url], problems)
 		const key = framework[variables.key] ?? ''
 		if (!key.startsWith(API_KEY_PREFIX)) {
-			problems.push(`${variables.key} is not set to a ${API_KEY_PREFIX} key; it is the edge key the owner's proxy admits ${where} with`)
+			problems.push(`${variables.key} is not set to a ${API_KEY_PREFIX} key; the platform writes the key the owner's proxy admits ${where} with`)
 		}
 		if (origin === null || !key.startsWith(API_KEY_PREFIX)) {
 			continue
@@ -380,7 +368,7 @@ function checkedDescription(where: string, declared: ImportArtifact, snapshot: C
 /** The owner's origin; the value is never quoted, since an operator may paste a URL with credentials in it. */
 function readOrigin(name: string, raw: string | undefined, problems: string[]): string | null {
 	if (raw === undefined || raw.trim() === '') {
-		problems.push(`${name} is not set; it is the origin of the owner's proxy`)
+		problems.push(`${name} is not set; the platform writes the origin of the owner's proxy`)
 		return null
 	}
 	try {

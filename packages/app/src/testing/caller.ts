@@ -4,7 +4,8 @@
 import type { PermissionEntry } from '@fabrika/auth-core'
 import type { ActionOf, AnyContract, DimensionOf, RoleOf } from '../contract/define'
 
-export type TestCallerKind = 'human' | 'machine' | 'link'
+/** `app` is the connector of another application: its key reaches only the exports that application consumes. */
+export type TestCallerKind = 'human' | 'machine' | 'link' | 'app'
 
 export interface TestScope<D extends string = string> {
 	readonly type: D
@@ -23,10 +24,14 @@ export interface TestCallerOptions {
 	readonly via?: 'session' | 'key'
 	readonly id?: string
 	readonly label?: string
+	/** The consuming application's id, for an `app` caller. */
+	readonly app?: string
 }
 
 export interface TestCaller {
 	readonly kind: TestCallerKind
+	/** The consuming application of an `app` caller, `null` for every other kind. */
+	readonly app: string | null
 	/** The principal id, or the share key's credential id for a link. */
 	readonly id: string
 	readonly label: string | null

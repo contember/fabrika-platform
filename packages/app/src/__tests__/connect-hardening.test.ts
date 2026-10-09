@@ -111,7 +111,7 @@ describe('a captured ctx.connect method sends nothing outside its own request', 
 
 	function setup() {
 		const owner = testKit(catalogApp(new Map<string, ProductRow>()))
-		const key = owner.testCaller([{ role: 'reader' }], { kind: 'machine' }).key ?? ''
+		const key = owner.testCaller([{ role: 'reader' }], { kind: 'app', app: 'shop' }).key ?? ''
 		let sent = 0
 		const kept: Get[] = []
 		const outcomes: string[] = []
@@ -187,7 +187,7 @@ describe('a captured ctx.connect method sends nothing outside its own request', 
 	test("kept and called from an export handler: denied, so an export's request never calls out", async () => {
 		const { consumer, visitor, sent } = setup()
 		await consumer.browser(visitor)('/api/products.show', post({ sku: 'p1' }))
-		const portal = consumer.testCaller([{ action: 'shop.view' }], { kind: 'machine' })
+		const portal = consumer.testCaller([{ action: 'shop.view' }], { kind: 'app', app: 'portal' })
 		const response = await consumer.fetch('/__fabrika/connect/mirror.v1.get', post({}, { Authorization: `Bearer ${portal.key}` }))
 		expect(await response.json()).toEqual({ result: { connect: true } })
 		expect(sent()).toBe(1)

@@ -138,9 +138,12 @@ export interface AppSchema {
 	workloads?: AppWorkloadDef[]
 }
 
-/** A job or a webhook of a contract application: the actions its credential carries. */
+/**
+ * A job or a webhook of a contract application, or a consuming application of its exports (`app`, named by that
+ * application's id): the actions its credential carries.
+ */
 export interface AppWorkloadDef {
-	kind: Exclude<WorkloadKind, 'app'>
+	kind: WorkloadKind
 	name: string
 	actions: string[]
 }

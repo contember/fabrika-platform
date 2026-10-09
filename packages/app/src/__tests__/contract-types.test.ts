@@ -23,6 +23,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'19-options-set-builder-fields.ts': `is not assignable to type 'Owned<"kind" | "path">'`,
 	'20-creates-contained-dimension.ts': `Type '"note"' is not assignable to type '"workspace"'`,
 	'21-oauth-caller-on-rpc-mount.ts': `Type '"oauth"' is not assignable to type 'RpcCaller'`,
+	'22-app-caller-on-rpc-mount.ts': `Type '"app:billing"' is not assignable to type 'RpcCaller'`,
 }
 
 describe('the contract mistakes are type errors', () => {

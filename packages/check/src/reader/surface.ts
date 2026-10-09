@@ -527,12 +527,12 @@ function schema(value: LiteralValue | undefined, owner: Owner, field: string): S
 }
 
 function isRpcCaller(caller: string): caller is RpcCaller {
-	return caller === 'human' || caller === 'machine' || caller.startsWith('app:')
+	return caller === 'human' || caller === 'machine'
 }
 
 function rpcCallers(value: LiteralValue | undefined, at: BuilderValue): readonly [RpcCaller, ...RpcCaller[]] {
 	const [first, ...rest] = texts(value, at, 'callers')
-	const allowed = "callers: ['human'], ['machine'] or ['app:<another application id>']"
+	const allowed = "callers: ['human'] or ['machine']; another application reaches only an export"
 	if (first === undefined) {
 		throw new Refused(value?.at ?? at.at, 'callers is empty', allowed)
 	}

@@ -49,7 +49,6 @@ import {
 	CONNECT_LIMITS,
 	CONNECT_PREFIX,
 	CONTRACT_DEFAULTS,
-	EXPORT_EDGE_KEY_CALLER,
 	exportBase,
 	FILES_PREFIX,
 	joinPath,
@@ -790,7 +789,8 @@ class ArtifactBuilder {
 			this.#problem(where, 'names no consumer (allowed: consumers: [<application ids>]; there is no wildcard)')
 			return null
 		}
-		return [EXPORT_EDGE_KEY_CALLER, ...declaration.consumers.map((consumer): Caller => `app:${consumer}`)]
+		const [first, ...rest] = declaration.consumers.map((consumer): Caller => `app:${consumer}`)
+		return first === undefined ? null : [first, ...rest]
 	}
 
 	#imports(): Record<string, ImportArtifact> {
@@ -957,9 +957,10 @@ class ArtifactBuilder {
 	#callers(where: string, callers: readonly string[]): void {
 		this.#unique(where, 'callers', callers)
 		for (const caller of callers) {
-			const app = caller.startsWith('app:') ? caller.slice('app:'.length) : null
-			if (caller !== 'human' && caller !== 'machine' && (app === null || !APP_ID.test(app) || app === this.#contract.app)) {
-				this.#problem(where, `'${caller}' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'app:<another application id>')`)
+			if (caller.startsWith('app:')) {
+				this.#problem(where, `'${caller}' reaches only an export; declare an export with consumers: ['${caller.slice('app:'.length)}'] instead`)
+			} else if (caller !== 'human' && caller !== 'machine') {
+				this.#problem(where, `'${caller}' is not a caller of an RPC mount (allowed: 'human' or 'machine')`)
 			}
 		}
 	}

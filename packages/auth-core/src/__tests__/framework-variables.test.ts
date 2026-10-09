@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { FABRIKA_IAM_APP_ID } from '../app-environment'
 import { FABRIKA_IAM_ISSUER } from '../environment'
 import {
+	connectVariables,
 	FRAMEWORK_VARIABLE_NAMES,
 	frameworkVariableReference,
 	isFrameworkVariableName,
@@ -27,10 +28,10 @@ describe('framework-only variable names', () => {
 	})
 
 	test('reserve every name of a workload family', () => {
-		for (const name of ['FABRIKA_JOB_NIGHTLY_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', 'FABRIKA_JOB_ANYTHING']) {
+		for (const name of ['FABRIKA_JOB_NIGHTLY_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', 'FABRIKA_JOB_ANYTHING', 'FABRIKA_CONNECT_CATALOG_KEY']) {
 			expect(isFrameworkVariableName(name)).toBe(true)
 		}
-		for (const name of ['FABRIKA_JOB_', 'FABRIKA_JOBS', 'FABRIKA_CONNECT_CATALOG_KEY']) {
+		for (const name of ['FABRIKA_JOB_', 'FABRIKA_JOBS', 'FABRIKA_CONNECT_', 'FABRIKA_CONNECTOR']) {
 			expect(isFrameworkVariableName(name)).toBe(false)
 		}
 		expect(frameworkVariableReference('${RUNTIME_FABRIKA_JOB_NIGHTLY_KEY}')).not.toBeNull()
@@ -41,6 +42,18 @@ describe('framework-only variable names', () => {
 		expect(workloadKeyVariable('webhook', 'github')).toBe('FABRIKA_WEBHOOK_GITHUB_KEY')
 		expect(isWorkloadKeyVariable(workloadKeyVariable('job', 'nightlyDigest'))).toBe(true)
 		for (const name of ['FABRIKA_JOB__KEY', 'FABRIKA_CONNECT_CATALOG_KEY', 'FABRIKA_JOB_NIGHTLY', 'FABRIKA_PROXY_SECRET']) {
+			expect(isWorkloadKeyVariable(name)).toBe(false)
+		}
+	})
+
+	test("name a connector import's variables and binding after the import", () => {
+		expect(connectVariables('productCatalog')).toEqual({
+			url: 'FABRIKA_CONNECT_PRODUCT_CATALOG_URL',
+			key: 'FABRIKA_CONNECT_PRODUCT_CATALOG_KEY',
+			binding: 'FABRIKA_CONNECT_PRODUCT_CATALOG',
+		})
+		for (const name of Object.values(connectVariables('catalog'))) {
+			expect(isFrameworkVariableName(name)).toBe(true)
 			expect(isWorkloadKeyVariable(name)).toBe(false)
 		}
 	})

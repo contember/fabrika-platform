@@ -20,12 +20,6 @@ export const FILES_PREFIX = '/api'
 export { CONNECT_PREFIX } from '@fabrika/auth-core'
 
 /**
- * The caller an export admits besides its consumers' `app:<id>`: until Control reconciles connector credentials (B9),
- * each edge is an operator-provisioned `px_` key of a service principal, which presents itself as `machine`.
- */
-export const EXPORT_EDGE_KEY_CALLER = 'machine'
-
-/**
  * Every connector call has a deadline; it bounds the retries too. Queries are safe to retry. An answer and a
  * description are read under a byte budget, so another application cannot make the consumer buffer without bound.
  */

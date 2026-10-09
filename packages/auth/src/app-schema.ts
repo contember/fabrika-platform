@@ -35,13 +35,13 @@ const delegationSchema = z.object({
 	purpose: z.enum(['members', 'creates']),
 })
 
-/** A job, webhook or mount name of a contract. */
+/** A job or webhook name of a contract; an `app` workload is named by the consuming application's id. */
 const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
-const workloadSchema = z.object({
-	kind: z.enum(['job', 'webhook']),
-	name: z.string().regex(WORKLOAD_NAME),
-	actions: z.array(z.string().min(1)),
-})
+const APP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+const workloadSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.enum(['job', 'webhook']), name: z.string().regex(WORKLOAD_NAME), actions: z.array(z.string().min(1)) }),
+	z.object({ kind: z.literal('app'), name: z.string().regex(APP_ID), actions: z.array(z.string().min(1)) }),
+])
 
 type Issue = { path: (string | number)[]; message: string }
 

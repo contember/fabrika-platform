@@ -182,16 +182,6 @@ describe('compileContract refuses what the types let through', () => {
 		])
 	})
 
-	test('an application caller without an id, or with the id of this application', () => {
-		const contract = defineContract(vocabulary, (c) => ({
-			connect: c.rpc('/connect', { callers: ['app:', 'app:tasks'] }, { list: c.query({ output: Id, access: { member: true } }) }),
-		}))
-		expect(compileProblems(contract)).toEqual([
-			"mount 'connect': 'app:' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'app:<another application id>')",
-			"mount 'connect': 'app:tasks' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'app:<another application id>')",
-		])
-	})
-
 	test('a string literal or an enum is a scope coordinate', () => {
 		const contract = defineContract(vocabulary, (c) => ({
 			api: c.rpc('/api', { callers: ['human'] }, {
