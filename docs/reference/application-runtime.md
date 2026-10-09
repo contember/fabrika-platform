@@ -203,8 +203,13 @@ field must be a column of its inbox), when an SPA or a link mount has no asset s
 when an endpoint asks IAM for a scope, a membership change or a share link and the
 adapter supplies no membership transport, or when a handler is missing or undeclared.
 The membership transport is IAM's application entrypoint on the `IAM` binding on
-Cloudflare, and `HttpIamRpc` on `FABRIKA_IAM_RPC_URL` and `FABRIKA_IAM_RPC_KEY` on Bun
-when the platform sets both.
+Cloudflare, and `HttpIamMembership` on Bun: `POST <FABRIKA_IAM_RPC_URL>/membership/<method>`
+with `FABRIKA_IAM_RPC_KEY` as the bearer. On Zerops Control issues that key per
+application environment while the approved contract has an endpoint with a delegation
+or a share-link mount, and the provider writes both variables (IAM's public origin and
+the key); an application may not set either. The key pins the application id and adds
+no authority: each operation still acts as the caller's token, and every write spends
+the proxy's delegation grant. The surface serves no `requestDelegation`.
 
 Where the hop is not a service binding, `boot` also takes the proxy secret
 `FABRIKA_PROXY_SECRET` (ADR-0022 rule 5). The Bun adapter, which serves Zerops, refuses

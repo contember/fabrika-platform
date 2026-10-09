@@ -71,6 +71,12 @@ four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`), plus
 so it never imports IAM. How far that separation actually goes per provider is in
 [`cross-host-sso.md`](cross-host-sso.md).
 
+A contract application on Zerops reaches neither surface for its membership operations either. It calls
+`POST /membership/<method>` on IAM's public origin with its own membership transport key, which Control issues per
+application environment and which pins the application id; the authority stays the caller's token and the proxy's
+delegation grant (ADR-0022 rule 6). In the application that key is named `FABRIKA_IAM_RPC_KEY`; it is not the
+installation's key of the same name.
+
 A job or a webhook of a contract application reaches neither surface. It exchanges its own workload key at
 `POST /auth/workload/token` on IAM's public origin, which needs no transport secret because the key is the whole
 authority, and which signs only for a job or webhook key of the named application (ADR-0022 "Principal kinds").

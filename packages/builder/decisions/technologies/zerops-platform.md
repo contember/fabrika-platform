@@ -81,6 +81,6 @@ A `c.files` collection needs one `object-storage` service in `fabrika.config.ts`
 the provider writes `FABRIKA_APP_STORAGE_*` from it as references Zerops resolves,
 and refuses a second bucket.
 
-Not built yet: the provider does not write the IAM membership transport
-(`FABRIKA_IAM_RPC_URL`, `FABRIKA_IAM_RPC_KEY`) into an application, so an endpoint
-with `creates`, `ctx.members` or `ctx.links` does not boot on Zerops yet.
+An endpoint with `creates`, `ctx.members` or `ctx.links` reaches IAM through the
+membership transport: the platform writes `FABRIKA_IAM_RPC_URL` and the
+environment's own `FABRIKA_IAM_RPC_KEY`, and refuses an app config that sets them.

@@ -1102,7 +1102,8 @@ Each application deploy writes `FABRIKA_RELEASE` as a literal into the selected 
 `run.envVariables` of the execution descriptor, so the release travels with the version; the source
 descriptor's bytes and digest are unchanged. The other managed keys (`FABRIKA_OPERATIONS_DSN`,
 `FABRIKA_IAM_ISSUER`, `FABRIKA_IAM_APP_ID`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`) are ordinary
-service variables, overwritten before the build, and so is each job's and webhook's key
+service variables, overwritten before the build, and so are the membership transport's `FABRIKA_IAM_RPC_URL` and
+`FABRIKA_IAM_RPC_KEY` of an application whose approved contract needs one, and each job's and webhook's key
 (`FABRIKA_<KIND>_<NAME>_KEY`); a key of a workload the deploy no longer hands is deleted. Application-authored inputs and
 secret writes may not use a framework-only name (`FRAMEWORK_VARIABLE_NAMES` and the job and webhook families of
 `FRAMEWORK_VARIABLE_PREFIXES` in `@fabrika/auth-core`). The run checkpoint is `{ appVersionId, triggered }`; recovery polls a triggered

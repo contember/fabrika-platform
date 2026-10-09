@@ -52,8 +52,10 @@ scope, 403 when not held). Handlers reach rows only through the stores of
 `src/db/tables.ts` with the `Ref` or `Within` they are handed; they never take an
 owner, user or tenant id from the input and never read `process.env`.
 
-Not built on Zerops yet: the IAM membership transport, so an endpoint with
-`creates`, `ctx.members` or `ctx.links` does not boot there.
+On Zerops an endpoint with `creates`, `ctx.members` or `ctx.links` reaches IAM
+through the membership transport the platform writes (`FABRIKA_IAM_RPC_URL`,
+`FABRIKA_IAM_RPC_KEY`). The key only pins the application; the caller's token
+and the proxy's delegation grant carry the authority.
 
 ## Local authentication is the same model
 

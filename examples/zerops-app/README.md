@@ -42,8 +42,9 @@ and the type check. The start script runs `fabrika db migrate`, `fabrika db code
 the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
 secret, the contract digest and the Operations DSN.
 
-Not built yet on Zerops: the IAM membership transport, so this example has no `creates`, members or share links; and
-handing the browser its Operations DSN (fabrika-platform backlog 102).
+Not built yet on Zerops: handing the browser its Operations DSN (fabrika-platform backlog 102). This example has no
+`creates`, members or share links; an application that has them gets IAM's membership transport (`FABRIKA_IAM_RPC_URL`,
+`FABRIKA_IAM_RPC_KEY`) from the platform.
 
 ## Running it
 

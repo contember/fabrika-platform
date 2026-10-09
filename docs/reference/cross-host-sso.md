@@ -189,7 +189,8 @@ the provider:
   management, gated by `FABRIKA_IAM_RPC_KEY`, and `/auth/mint/*` for the proxy, gated by
   `FABRIKA_IAM_PROXY_KEY` (the value the proxy holds as `FABRIKA_IAM_KEY`). The proxy
   calls `POST /auth/mint/exchange` with the code and verifier in its body. A holder of the RPC key cannot redeem, and an unset
-  key makes its surface 404 as if never mounted. The split is a real boundary.
+  key makes its surface 404 as if never mounted. The split is a real boundary. An application's own membership
+  transport key reaches only `/membership/*`, which redeems nothing.
 - **Cloudflare.** IAM is one `WorkerEntrypoint` implementing both contracts, so
   `exchangeAuthCode` is an ordinary method on it and every holder of the `IAM` service
   binding reaches it. No key is involved. The separation survives only as a type: an SDK

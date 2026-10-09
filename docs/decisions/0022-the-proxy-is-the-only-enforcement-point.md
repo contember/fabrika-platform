@@ -404,8 +404,8 @@ decision, and the proxy's decision never replaces them.
 **Invariant: an application issues no credentials.** `@fabrika/auth` issues and redeems nothing.
 IAM issues every `px_` credential: share links on an application's request, checked against its
 caller's live permissions ([ADR-0012](0012-fabrika-app-runtime.md)), share links and API keys from
-its admin surface, machine keys through `fabrika control key issue`, a job's and a webhook's key through
-Control's reconcile, builder credentials through device authorization
+its admin surface, machine keys through `fabrika control key issue`, a job's and a webhook's key and an application
+environment's membership transport key through Control's reconcile, builder credentials through device authorization
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)). IAM signs an access token only from a session (`mintToken`)
 or a `px_` credential (`mintFromKey`); there is no free-standing signed token to present.
 
@@ -456,6 +456,15 @@ refused for an application token; an application lists the members of a value wi
 `listMembers`, which checks the dimension's `members.list` action there. A share-link key has the
 principal kind `link`: its token carries no `ptype` and names its link mount and containment chain.
 
+On Zerops an application has no IAM binding. It reaches IAM's membership operations at `POST /membership/<method>` on
+IAM's public origin, with a **membership transport key** of its application environment as the bearer. Control
+issues that key from the approved snapshot while the contract has an endpoint with a delegation or a share-link mount,
+rotates it like a workload key, and writes it with IAM's origin as `FABRIKA_IAM_RPC_KEY` and `FABRIKA_IAM_RPC_URL`;
+a reconcile that leaves the application neither deletes it. The key pins the application id: a call for another
+application or environment is refused. It adds no authority, because every operation still acts as the caller's token
+and every write spends the proxy's grant. It is no principal kind and no `px_` credential IAM resolves, so it mints
+nothing. The surface serves no `requestDelegation`: only the proxy obtains a grant. Work unit F3 built this.
+
 ## Consequences
 
 - **Unreachability is structural**, and one implementation of the security-critical path serves both
@@ -487,8 +496,8 @@ principal kind `link`: its token carries no `ptype` and names its link mount and
 - **The proxy refuses to boot without `FABRIKA_IAM_ISSUER` and `FABRIKA_IAM_KEY`**, rather than boot
   and answer 503 to everything.
 - **The least-privilege split around redemption is real only on Zerops**, where `/rpc/*` takes
-  `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, and an unset key makes its surface
-  404. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,
+  `FABRIKA_IAM_RPC_KEY`, `/auth/mint/*` takes `FABRIKA_IAM_PROXY_KEY`, an unset key makes its surface
+  404, and an application's own membership transport key reaches only `/membership/*`. On Cloudflare an application's proxy and application Workers bind one IAM `WorkerEntrypoint`,
   `PropustkaApplication`, which serves both the proxy's mint and redemption calls and the SDK's, so any
   application Worker can call `exchangeAuthCode`. We accept this: exploiting it needs a first-party Worker
   with the binding, a live code and that browser's handoff verifier. Key issuing and device approval are
