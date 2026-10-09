@@ -15,8 +15,8 @@ Decision: [ADR-0049](../decisions/0049-author-applications-through-mcp-in-contro
 3. IAM mints an `at+jwt` access token for that one resource of the `vozka` app. Its permissions are
    the user's live grants narrowed by the `authoring` scope grant.
 4. The console table's `mcp` row admits the `oauth` caller for that resource and scope. The proxy
-   injects `X-Fabrika-Token` and `X-Fabrika-Endpoint`. Control verifies the token and evaluates no
-   gate (ADR-0022).
+   injects `X-Fabrika-Token` and `X-Fabrika-Endpoint`. Control verifies the token and makes no
+   enforcement decision (ADR-0022).
 5. Each MCP tool calls a Control use case. Control authorizes it against the token's permissions at
    the app/environment coordinates.
 6. Control performs every Git read and write itself, through the GitHub App of the app's connection.

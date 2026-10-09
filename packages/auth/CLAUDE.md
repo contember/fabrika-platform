@@ -8,9 +8,9 @@ that entrypoint. Assumes the root CLAUDE.md.
 
 **This package does not enforce anything.** [ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)
 makes `@fabrika/proxy` the only enforcement point, and the duplicate in-process path is gone. There is
-no gate evaluation here, no session→token exchange, no login bounce, and no cookie is ever written.
+no enforcement decision here, no session→token exchange, no login bounce, and no cookie is ever written.
 `can()` and the contract framework's requirement check in `@fabrika/app` are **authorization** in the
-vocabulary of `docs/reference/overview.md`, not a second gate evaluator.
+vocabulary of `docs/reference/overview.md`, not a second enforcement decision.
 
 `createIam(env, opts)` is the single request-time entry point. It returns an `Iam` carrying:
 
@@ -19,7 +19,7 @@ vocabulary of `docs/reference/overview.md`, not a second gate evaluator.
 | `authenticate(request)` | Read the proxy-injected `PROXY_TOKEN_HEADER`, verify it LOCALLY against the JWKS, return an `AuthContext`. |
 | `listPrincipals`        | The app's people directory, delegated to `IamClient`.                                                      |
 
-Around it: `anonymousContext()` (what an app sets on a `public`-gated request), `applyScope`,
+Around it: `anonymousContext()` (what a service sets on a request to an anonymous endpoint), `applyScope`,
 `requirePermission`, `UnauthenticatedError` / `ForbiddenError`, `TokenVerifier`, `HttpIamRpc`, and the
 deploy-time `reconcileSchema`.
 
@@ -39,14 +39,14 @@ the service that owns identity.
   deny; only the second is an incident. Never collapse the two, and never map a transport failure onto
   a `reason` that claims we checked. Neither method throws for either case.
 - **The JWKS cache is keyed by the BINDING OBJECT, in a module-level WeakMap** — not by the `Iam`
-  instance. `@fabrika/app` calls its `middleware(env)` factory on every request, so an SDK object built
-  there is per-request while the binding lives for the isolate/process. The unknown-`kid` refetch
+  instance. A service may build the SDK object per request, while the binding lives for the
+  isolate/process. The unknown-`kid` refetch
   cooldown lives in that same per-binding slot — a per-request verifier would otherwise reset it, and
   the bound would do nothing. An unknown `kid` forces at most ONE refetch per cooldown; a fetch failure
   never falls back to the stale key set.
 - **THE SDK ISSUES AND REDEEMS NOTHING.** An app reaches a credential only as the token the proxy
-  injected. A share link is a `px_` key the proxy resolves at a `service` gate, so it arrives as an
-  anonymous token (ADR-0022); a link of a contract link mount also carries `link: { mount, chain }`,
+  injected. A share link is a `px_` key the proxy exchanges on an endpoint whose callers include `link`,
+  so it arrives as an anonymous token (ADR-0022); a link of a contract link mount also carries `link: { mount, chain }`,
   exposed as `AuthContext.link`. `issueLink` returns the key IAM issued — the SDK only asked for it.
   `HttpIamRpc` still carries `issueKey` / `revokeKey` because they are `IamRpc` members other callers
   use, not SDK surface.
@@ -92,18 +92,15 @@ the service that owns identity.
   runs first because it is what REGISTERS the app, and `apps.setReturnOrigins` 404s for an app IAM
   has never heard of. Omitting `returnOrigins` leaves IAM's registry untouched; an EMPTY array is a
   caller error, refused before any request, because clearing the registry is its own admin operation.
-- **`Middleware<Ctx>` / `AuthCarrier` are owned here and consumed by `@fabrika/app`** — do not add a
-  duplicate compatibility interface there. The SDK itself ships no middleware. Today each service
-  writes the ~10 lines that call `authenticate`; with the contract (ADR-0012) an application writes
-  none: the framework's `boot` verifies the token with the same `@fabrika/jwks` verifier, because the
+- **`AuthCarrier` (`src/types.ts`) is owned here** — a request context with an `auth` slot, which the
+  installation services' RPC contexts extend. Do not add a duplicate interface elsewhere. The SDK ships no
+  middleware. Each installation service writes the few lines that call `authenticate`; with the contract
+  (ADR-0012) an application writes none: the framework's `boot` verifies the token with the same `@fabrika/jwks` verifier, because the
   requirement check needs the token's permission list, which `AuthContext` does not expose.
 - **Never log credentials, secret values, or request headers.**
 
 ## Notes
 
-- `AppGates` & co. are still re-exported: gates go to the PROXY manifest (`fabrika.config.ts`).
-  Nothing in this package reads them. The target (A-M1): an application's gates are generated from
-  its contract; hand-written gates remain for the installation's own services.
 - The authz vocabulary each app declares (`AppSchema`: scope dimensions, action catalog, roles) is the
   app's own; the first reconcile is also how it registers itself in IAM. The target (A-M1): an
   application's `AppSchema` is generated from its contract.

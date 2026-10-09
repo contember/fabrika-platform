@@ -46,5 +46,5 @@ adopted native Propustka sessions.
 ## Relationships — why
 
 - **conflicts `propustka`** — current Propustka owns native SSO sessions and
-  in-process path gates; it no longer expects a Cloudflare Access edge.
+  request authorization; it no longer expects a Cloudflare Access edge.
 - **conflicts `auth-password-kv`** — both fill the `authentication` slot. Access = managed SSO; auth-password-kv = app-owned password+session. Pick one.

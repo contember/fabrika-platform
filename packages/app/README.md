@@ -1,11 +1,13 @@
 # `@fabrika/app`
 
-The server framework for Fabrika applications: Fetch-based HTTP routing,
-middleware, typed RPC, object-level authorization, and a typed browser client.
+The server framework for Fabrika applications: the contract, the runtime that
+serves it, typed RPC, structural errors, and a typed browser client.
 
-Proxy gates remain the application's structural front door. The app receives a
-verified Fabrika authorization context and uses `.require(action, scope)` for
-checks that depend on application-owned objects.
+An application declares its whole access surface in `fabrika.contract.ts` and
+serves it through `implement`. The platform builds the proxy's endpoint table from
+the same contract, and the proxy is the only enforcement point. The application
+receives a verified Fabrika token and checks application-owned objects through the
+access form of each endpoint.
 
 ## Installation
 
@@ -13,72 +15,79 @@ checks that depend on application-owned objects.
 bun add @fabrika/app
 ```
 
-## Example
+## Entrypoints
+
+| Entrypoint                | What it is                                                                          |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| `@fabrika/app`            | Typed RPC (`initRpc`, `createRpcClient`), structural errors, `FetchService` type.   |
+| `@fabrika/app/contract`   | `defineContract` and the `c.*` kit; browser-safe.                                   |
+| `@fabrika/app/implement`  | `implement`: the handlers of a contract.                                            |
+| `@fabrika/app/client`     | `createClient`: the typed browser client of a contract mount.                       |
+| `@fabrika/app/build`      | The generated entrypoint `fabrika app build` writes.                                |
+| `@fabrika/app/bun`        | `createBunHandler`, `serveContract`.                                                |
+| `@fabrika/app/cloudflare` | `createCloudflareWorker`, `createContractWorker`.                                   |
+| `@fabrika/app/service`    | The installation's own services only: `defineServiceContract`, `serveService`.      |
+| `@fabrika/app/testing`    | `testKit`: the application behind the production proxy decision and a stand-in IAM. |
+
+## A contract application
 
 ```ts
-import {
-	type AuthContext,
-	createRpcClient,
-	defineApp,
-	initRpc,
-	type Middleware,
-	route,
-} from '@fabrika/app'
-import { z } from 'zod'
+// fabrika.contract.ts
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
 
-interface Env {
-	ASSETS: { fetch(request: Request): Promise<Response> }
-}
+export const NoteList = z.strictObject({
+	items: z.array(z.strictObject({ id: z.uuid(), title: z.string() })),
+})
 
-interface Ctx {
-	env: Env
-	auth: AuthContext
-}
-
-const rpc = initRpc<Ctx>()
-
-const appRouter = rpc.router({
-	projects: rpc.router({
-		rename: rpc.procedure
-			.input(z.object({ id: z.string(), name: z.string() }))
-			.require('project:write', (input) => ({
-				type: 'project',
-				value: input.id,
-			}))
-			.mutation(async ({ ctx, input }) => {
-				await renameProject(ctx.env, input.id, input.name)
-				return { ok: true }
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: {} },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human', 'machine'] }, {
+		notes: {
+			list: c.query({
+				output: NoteList,
+				access: { action: 'notes.read', over: 'workspace' },
 			}),
+		},
 	}),
-})
-
-export type AppRouter = typeof appRouter
-
-const auth: Middleware<Ctx> = async (_request, ctx, next) => {
-	ctx.auth = await readFabrikaAuth(ctx.env)
-	return next()
-}
-
-export const app = defineApp<Env, Ctx>({
-	context: (env) => ({ env, auth: anonymousAuth() }),
-	middleware: () => [auth],
-	routes: [
-		route.get('/health', () => new Response('ok')),
-		route.rpc('/api/rpc', appRouter),
-	],
-	assets: (env) => env.ASSETS,
-})
-
-export const api = createRpcClient<AppRouter>({ baseUrl: '/api/rpc' })
+	health: c.health('/healthz'),
+}))
 ```
 
-Input and output validators may use any Standard Schema implementation.
+```ts
+// src/app.ts
+import { implement } from '@fabrika/app/implement'
+import { contract } from '../fabrika.contract'
+import { database } from './db/database'
+import { notes } from './db/stores/notes'
+
+export default implement(contract, {
+	database,
+	deps: () => ({}),
+	handlers: () => ({
+		api: {
+			notes: {
+				list: async ({ ctx }) => ({ items: await notes.list(ctx.within) }),
+			},
+		},
+	}),
+})
+```
+
+An application has no middleware, no raw routes and no custom server.
+`fabrika app build` writes the generated entrypoint, which boots the
+implementation with `serveContract` on Bun or `createContractWorker` on Cloudflare.
+See `examples/zerops-app` and the `fabrika-app` agent skill (`skill/SKILL.md`).
 
 ## Portable RPC contracts
 
-Put only DTOs and type-only procedure declarations in a browser-safe contract
-package. The browser does not need to import the server router, its validators,
-or its context:
+The RPC library serves the `{ method, input }` wire protocol. Put only DTOs and
+type-only procedure declarations in a browser-safe contract package. The browser
+does not need to import the server router, its validators, or its context:
 
 ```ts
 import type { RpcProcedureContract } from '@fabrika/app'
@@ -111,32 +120,31 @@ export const appRouter = rpc.router({
 export const api = createRpcClient<AppRpcContract>({ baseUrl: '/api/rpc' })
 ```
 
+Input and output validators may use any Standard Schema implementation. A row
+handler of an installation service serves such a router with `dispatchRpcRequest`
+from `@fabrika/app/service`.
+
 ## Runtime adapters
 
-`defineApp()` builds the runtime-neutral Fetch request pipeline. Runtime
-entrypoints adapt that application explicitly.
+Both adapters serve a `FetchService<Env>`: an object with
+`fetch(request, env, exec)`. `serveService` returns one for a service contract.
 
 A Cloudflare Worker module imports `@fabrika/app/cloudflare`:
 
 ```ts
 import { createCloudflareWorker } from '@fabrika/app/cloudflare'
-import { app } from './app'
+import { service } from './app'
 
-export default createCloudflareWorker(app)
+export default createCloudflareWorker(service)
 ```
 
-A long-running Bun process wraps the app with `createBunHandler()`:
+A long-running Bun process wraps the service with `createBunHandler()`:
 
 ```ts
-import { defineApp, route } from '@fabrika/app'
 import { createBunHandler } from '@fabrika/app/bun'
+import { service } from './app'
 
-const app = defineApp<Deps, Ctx>({
-	context: (deps, request, exec) => ({ deps, request, exec }),
-	routes: [route.get('/healthz', () => Response.json({ status: 'ok' }))],
-})
-
-const handler = createBunHandler(app, deps, {
+const handler = createBunHandler(service, env, {
 	onBackgroundError: () => console.error('background task failed'),
 })
 
@@ -152,23 +160,3 @@ const shutdown = async (): Promise<void> => {
 `drain()` waits for every task registered through the request execution context's
 `waitUntil()`. Stop accepting requests before draining, then close databases and
 other process resources.
-
-## Runtime conformance
-
-Use the test-runner-neutral `@fabrika/app/testing` entrypoint to prove that a
-portable route behaves the same through direct Fetch dispatch and both runtime
-adapters:
-
-```ts
-import { assertAppRuntimeConformance } from '@fabrika/app/testing'
-
-const response = await assertAppRuntimeConformance({
-	app,
-	createEnv: () => createIsolatedTestEnv(),
-	createRequest: () => new Request('https://app.test/healthz'),
-})
-```
-
-The helper drains registered background work and compares normalized status,
-headers, and text body. Do not use it for routes that exist in only one runtime
-composition.

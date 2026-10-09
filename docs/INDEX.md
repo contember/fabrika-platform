@@ -37,7 +37,7 @@ shipped on 2026-10-08.
 - **Live test installations must be reinstalled.** Migrations are squashed to one initial file per
   bundle ([ADR-0017](decisions/0017-service-owned-postgres-migrations.md)) and both clouds use
   vault-backed GitHub connections ([ADR-0029](decisions/0029-github-app-sources.md)).
-- **Auth has one enforcement point.** The proxy runs the only gate evaluator
+- **Auth has one enforcement point.** The proxy makes the only enforcement decision, from an endpoint table
   ([ADR-0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md)); a browser gets an app
   session only through the one-time handoff
   ([ADR-0023](decisions/0023-one-session-per-host.md),

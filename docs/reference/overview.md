@@ -14,7 +14,7 @@ the first useful Poplach slice under
 [ADR-0016](../decisions/0016-independent-operations-plane.md):
 
 - **propustka** — IAM & audit: OIDC SSO, opaque `px_` API keys, AWS-IAM-style
-  policies over app-owned scope dimensions, per-path gates, an audit log.
+  policies over app-owned scope dimensions, an audit log.
 - **vozka** — deploy control plane: an app declares its cloud resources, its
   authorization schema and its build pipeline in one config file; a control-plane
   Worker hands each deploy to a Cloudflare Container that clones the repo and runs
@@ -46,7 +46,7 @@ installation stands up, and that list differs per provider.
 
 A **Zerops** installation runs four platform services. `fabrika platform deploy`
 owns their order — `iam` and `operations` first, then `proxy`, then `control` —
-so the enforcement point is always ahead of the service whose gates just widened
+so the enforcement point is always ahead of the service whose table just widened
 ([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)):
 
 | Service      | What it is                                                                   |
@@ -85,36 +85,36 @@ App at all.
 
 ## The packages
 
-| Package                        | What it is                                                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `@fabrika/auth-core`           | Shared authz kernel: policy model, contract artifact, gate and endpoint matchers, token, RPC.  |
-| `@fabrika/auth`                | The published app-facing SDK. Verifies the proxy-injected token; enforces nothing.             |
-| `@fabrika/jwks`                | The one JWKS-backed token verifier the SDK and the proxy both wrap (ADR-0040).                 |
-| `@fabrika/app`                 | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
-| `@fabrika/iam`                 | The IAM service itself: human authentication, identity, keys, policies, and audit.             |
-| `@fabrika/iam-contract`        | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                    |
-| `@fabrika/email`               | Portable outbound email contract and fetch-based provider adapters.                            |
-| `@fabrika/operations-contract` | Runtime-neutral ingest, catalog, release, access, operator DTOs, and typed RPC contract.       |
-| `@fabrika/operations`          | Error ingest, grouping, triage, releases, source maps, health, and runtime compositions.       |
-| `@fabrika/provider-contract`   | Control-provider contract, shared `runSteps`, envelopes; `/installation` command contract.     |
-| `@fabrika/provider-cloudflare` | Cloudflare authoring, deploy, control adapter; `/runner` job contract; `/installation`.        |
-| `@fabrika/provider-zerops`     | Zerops authoring, manifest compiler, API client, deploy, control adapter; `/installation`.     |
-| `@fabrika/platform`            | Runtime ports shared by control, IAM, and Operations.                                          |
-| `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                        |
-| `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
-| `@fabrika/control-contract`    | Runtime-neutral control DTOs, typed RPC contract, and deploy log line shape.                   |
-| `@fabrika/platform-artifacts`  | Private Zerops installation codegen: generated `zerops.yaml`, import YAMLs, and schemas.       |
-| `@fabrika/installation-init`   | The operator-side `init` mechanics both installations share.                                   |
-| `@fabrika/builder`             | Guided specification, review, and agent-assisted implementation loop.                          |
-| `@fabrika/cli`                 | The single public `fabrika` command and provider-aware command router.                         |
-| `@fabrika/check`               | The application checker (`fabrika-check`) and the static contract reader (`/contract`).        |
-| `@fabrika/dashboard`           | Unified Delivery, Access, and Operations console served by control.                            |
-| `@fabrika/runner-container`    | Plain-Bun process and container image that execute Cloudflare runner jobs.                     |
-| `@fabrika/runner-cloudflare`   | Out-of-band Cloudflare Worker that hosts and relays the deploy container.                      |
-| `@fabrika/github-app`          | Published GitHub App client: manifest builder and exchange, installation tokens, webhooks.     |
-| `@fabrika/proxy-core`          | The runtime-neutral enforcement decision; `/manifest` is the wire contract and strict parser.  |
-| `@fabrika/proxy`               | The Caddy deployment of that decision: generated config, Bun process, and binary.              |
-| `@fabrika/local-stack`         | The Docker development stack behind every `local:*` command.                                   |
+| Package                        | What it is                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `@fabrika/auth-core`           | Shared authz kernel: policy model, contract artifact, endpoint matcher, token, RPC.           |
+| `@fabrika/auth`                | The published app-facing SDK. Verifies the proxy-injected token; enforces nothing.            |
+| `@fabrika/jwks`                | The one JWKS-backed token verifier the SDK and the proxy both wrap (ADR-0040).                |
+| `@fabrika/app`                 | Contract runtime (`implement`), service dispatcher, typed RPC, client, runtime adapters.      |
+| `@fabrika/iam`                 | The IAM service itself: human authentication, identity, keys, policies, and audit.            |
+| `@fabrika/iam-contract`        | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                   |
+| `@fabrika/email`               | Portable outbound email contract and fetch-based provider adapters.                           |
+| `@fabrika/operations-contract` | Runtime-neutral ingest, catalog, release, access, operator DTOs, and typed RPC contract.      |
+| `@fabrika/operations`          | Error ingest, grouping, triage, releases, source maps, health, and runtime compositions.      |
+| `@fabrika/provider-contract`   | Control-provider contract, shared `runSteps`, envelopes; `/installation` command contract.    |
+| `@fabrika/provider-cloudflare` | Cloudflare authoring, deploy, control adapter; `/runner` job contract; `/installation`.       |
+| `@fabrika/provider-zerops`     | Zerops authoring, manifest compiler, API client, deploy, control adapter; `/installation`.    |
+| `@fabrika/platform`            | Runtime ports shared by control, IAM, and Operations.                                         |
+| `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                       |
+| `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.   |
+| `@fabrika/control-contract`    | Runtime-neutral control DTOs, typed RPC contract, and deploy log line shape.                  |
+| `@fabrika/platform-artifacts`  | Private Zerops installation codegen: generated `zerops.yaml`, import YAMLs, and schemas.      |
+| `@fabrika/installation-init`   | The operator-side `init` mechanics both installations share.                                  |
+| `@fabrika/builder`             | Guided specification, review, and agent-assisted implementation loop.                         |
+| `@fabrika/cli`                 | The single public `fabrika` command and provider-aware command router.                        |
+| `@fabrika/check`               | The application checker (`fabrika-check`) and the static contract reader (`/contract`).       |
+| `@fabrika/dashboard`           | Unified Delivery, Access, and Operations console served by control.                           |
+| `@fabrika/runner-container`    | Plain-Bun process and container image that execute Cloudflare runner jobs.                    |
+| `@fabrika/runner-cloudflare`   | Out-of-band Cloudflare Worker that hosts and relays the deploy container.                     |
+| `@fabrika/github-app`          | Published GitHub App client: manifest builder and exchange, installation tokens, webhooks.    |
+| `@fabrika/proxy-core`          | The runtime-neutral enforcement decision; `/manifest` is the wire contract and strict parser. |
+| `@fabrika/proxy`               | The Caddy deployment of that decision: generated config, Bun process, and binary.             |
+| `@fabrika/local-stack`         | The Docker development stack behind every `local:*` command.                                  |
 
 `@fabrika/auth` is the published application-facing IAM SDK; the rename from the
 predecessor packages was a deliberate, one-time break — see
@@ -170,32 +170,34 @@ from provider envelopes or DNS names.
 
 ## Application runtime
 
-`@fabrika/app` is the server framework for Fabrika applications. It owns the
-Fetch-based request pipeline: typed HTTP routes, middleware, nested RPC routers,
-Standard Schema validation, structural error responses, and the typed browser RPC
-client.
+`@fabrika/app` is the server framework for Fabrika applications. An application
+declares `fabrika.contract.ts` and serves it through `implement`
+(`@fabrika/app/implement`). The package root holds the typed RPC library, the
+structural error responses, the typed browser RPC client, and the `FetchService`
+type that the runtime adapters serve.
 
 The package root is runtime-neutral. Cloudflare and Bun lifecycle APIs live under
 `@fabrika/app/cloudflare` and `@fabrika/app/bun`.
 
-The platform's own IAM, Delivery, and Operations services use the same model.
-Each defines a runtime-neutral `app.ts` and keeps Cloudflare/Bun lifecycle code
-in its composition root. Delivery and Operations authenticate through the IAM SDK;
+The platform's own IAM, Delivery, and Operations services do not use a contract.
+Each declares a service contract (`defineServiceContract` in
+`@fabrika/app/service`) and serves it with `serveService`, a runtime-neutral
+`FetchService`; Cloudflare/Bun lifecycle code stays in its composition root. Delivery and Operations authenticate through the IAM SDK;
 IAM owns the identity boundary behind it. Control and Operations expose typed
 RPC administration alongside protocol-specific HTTP and service bindings.
 The three concrete compositions, protocol surfaces, and shared Postgres
 migration wiring are documented in
 [`core-application-composition.md`](core-application-composition.md).
 
-The proxy and the application perform different checks. The proxy evaluates
-static path gates before a request reaches the private app service. Each app's own
-middleware calls `iam.authenticate(request)`, which verifies the injected Fabrika
-token and provides the canonical `@fabrika/auth` `AuthContext` — the SDK ships no
-middleware of its own. An RPC procedure's `.require(action, scope)` then
-checks the application-owned object coordinate that a path gate cannot know. A
-contract application writes none of this: `implement` serves its contract, and the
-generated entrypoint's `boot` verifies the token and checks the caller kind, the
-requirement, admission and the access form of each endpoint. See
+The proxy and the application perform different checks. The proxy decides from
+the endpoint table before a request reaches the private app service. An
+application writes no authentication code: `implement` serves its contract, and
+the generated entrypoint's `boot` verifies the injected token and checks the
+caller kind, the requirement, admission and the access form of each endpoint. Control
+and Operations call `iam.authenticate(request)` in their row handlers, which
+verifies the injected Fabrika token and provides the canonical `@fabrika/auth`
+`AuthContext`. An RPC procedure's `.require(action, scope)` then checks the
+application-owned object coordinate that an endpoint row cannot know. See
 [`application-runtime.md`](application-runtime.md) and
 [ADR-0012](../decisions/0012-fabrika-app-runtime.md) and
 [ADR-0013](../decisions/0013-explicit-runtime-adapter-entrypoints.md).
@@ -334,24 +336,25 @@ Three kinds of check refuse a request, and only the first is what ADR-0022 calls
 enforcement:
 
 - **Enforcement** — the proxy's decision whether a request reaches a private
-  service at all. A gate-protected application (the SDK path) is protected by ordered
-  path gates; there is exactly one gate evaluator, in `@fabrika/auth-core`, and the
-  proxy is the only thing that runs it. A contract application is protected by its endpoint table: the
-  proxy selects one endpoint with `planEndpoint` and checks its caller kind, its
-  requirement and admission there, with no fall-through to another endpoint, then
-  names the endpoint and the digest of those rules in `X-Fabrika-Endpoint`. An
-  installation entry is an endpoint table that platform composition marks
-  `installation: true`; it may use five forms no application may declare (`protocol`
-  and `service` rows, the method `*`, the caller `oauth`, the requirement
-  `authenticated`), and its hop keeps `Authorization`, sets no proxy secret and leaves
-  the service's answers untouched. The console, Operations and IAM are each fronted
-  by theirs. Each service's table is a service contract (`@fabrika/app/service`),
-  proved against its frozen gates by the differential in
-  `platform-artifacts/src/__tests__/service-parity/`. The console's table has an MCP
-  variant; Control reads which one its proxy publishes from
-  `FABRIKA_SERVICE_TABLE_DIGEST` and refuses to start under any other.
+  service at all. Every manifest entry is an endpoint table, in one of two forms. A
+  contract application is protected by its application table; an installation
+  service by its installation entry. There is exactly one enforcement decision, in
+  `@fabrika/proxy-core` over `@fabrika/auth-core`'s `planEndpoint`, and the proxy is
+  the only thing that runs it. The proxy selects one endpoint and checks its caller
+  kind, its requirement and admission there, with no fall-through to another
+  endpoint, then names the endpoint and the digest of those rules in
+  `X-Fabrika-Endpoint`. An installation entry is an endpoint table that platform
+  composition marks `installation: true`; it may use five forms no application may
+  declare (`protocol` and `service` rows, the method `*`, the caller `oauth`, the
+  requirement `authenticated`), and its hop keeps `Authorization`, sets no proxy
+  secret and leaves the service's answers untouched. The console, Operations and IAM
+  are each fronted by theirs. Each service's table is a service contract
+  (`@fabrika/app/service`). `packages/proxy-core/src/__tests__/installation-matrix.test.ts`
+  proves that the real installation tables refuse what no service may receive. The
+  console's table has an MCP variant; Control reads which one its proxy publishes
+  from `FABRIKA_SERVICE_TABLE_DIGEST` and refuses to start under any other.
 - **Authorization** — the action-and-scope check a service makes against an
-  application-owned object coordinate. A path gate cannot make it, because the
+  application-owned object coordinate. An endpoint row cannot make it, because the
   coordinate is known only once request data is validated. Every
   `.require(action, scope)`, every `can()` call, control's per-route
   `authorize`, and a contract application's caller-kind, requirement and access-form
@@ -363,10 +366,10 @@ enforcement:
   request is considered at all; a bearer is explicit authority and passes without
   them. Control reads no `Origin`, and IAM's own admin surface reads no cookie — it
   accepts only a bearer. They resolve no principal and read no policy, so none of
-  them is a second gate evaluator.
+  them is a second enforcement decision.
 
-A gate never replaces an authorization check, an authorization check never
-replaces a gate, and an admission check substitutes for neither.
+The enforcement decision never replaces an authorization check, an authorization
+check never replaces it, and an admission check substitutes for neither.
 
 The **proxy is the only enforcement point**, on both providers
 ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Only the
@@ -377,10 +380,10 @@ Caddy owns HTTP correctness and gets no vote on authorization: its configuration
 fixed three-step chain per app — delete every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` in `@fabrika/auth-core`:
 token, client address, endpoint, delegation grant, proxy secret), the request id and the forwarding headers;
 `forward_auth`; proxy to the private upstream, with a contract app's proxy secret set and its answer given the
-response header policy (the file treatment for a download) — and gate rules are never compiled into
-route matchers. Gates and endpoint tables are evaluated once, in TypeScript, against the
-manifest. Before any gate or endpoint is matched, the proxy refuses a non-canonical raw path with 400 and a request without a
-forwarded method; the application router refuses the same paths.
+response header policy (the file treatment for a download) — and endpoint rows are never compiled into
+route matchers. Endpoint tables are decided once, in TypeScript, against the
+manifest. Before any endpoint is selected, the proxy refuses a non-canonical raw path with 400 and a request without a
+forwarded method; `implement` and `serveService` refuse the same paths.
 
 Nothing downstream of the proxy enforces. An application reads the proxy-injected
 `X-Fabrika-Token`, verifies it locally against IAM's JWKS, and builds its
@@ -388,7 +391,7 @@ Nothing downstream of the proxy enforces. An application reads the proxy-injecte
 `X-Fabrika-Endpoint` names, with the digest of its own rules, and answers 503
 otherwise. On Zerops it first refuses, with 403, a request without its proxy secret
 (`X-Fabrika-Proxy-Secret`), because a sibling service in the namespace can dial it
-directly; on Cloudflare the service binding is the authenticated hop; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
+directly; on Cloudflare the service binding is the authenticated hop; `@fabrika/auth` cannot make an enforcement decision, exchange a session, or write a
 cookie.
 
 A browser that authenticated at IAM reaches an app through a one-time code the proxy

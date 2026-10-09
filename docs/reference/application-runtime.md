@@ -1,41 +1,42 @@
 # Application runtime
 
 `@fabrika/app` is the first-party server framework for applications deployed by
-Fabrika. It combines Fetch-based HTTP routing, middleware, typed RPC, structural
-error handling, object-level authorization, and a typed browser client.
+Fabrika. An application declares one contract and serves it through `implement`.
+The package also holds typed RPC, structural error handling, object-level
+authorization, a typed browser client, and the dispatcher of the installation's own
+services.
 
-## Request pipeline
+## Serving surfaces
 
-`defineApp()` builds the runtime-neutral request application. For each request it:
+Two surfaces serve requests. Both dispatch through `planEndpoint` from
+`@fabrika/auth-core`, the matcher the proxy selects with, so a request reaches the
+endpoint whose rules the proxy applied:
 
-1. answers 400 for a non-canonical raw path (`isCanonicalPath` from `@fabrika/auth-core`: an
-   empty segment, `.` or `..`, an encoded `/` or `\`, a malformed percent escape), before anything
-   else runs;
-2. builds the caller-owned context;
-3. runs global middleware in declaration order;
-4. matches an HTTP or RPC route;
-5. runs route-scoped middleware;
-6. invokes the handler or RPC dispatcher;
-7. maps thrown structural errors to a response;
-8. serves the optional asset fallback for an unmatched `GET`.
+- **A contract application** declares `fabrika.contract.ts` and implements it with
+  `implement` (`@fabrika/app/implement`). The generated entrypoint that
+  `fabrika app build` writes boots it: `serveContract()` from `@fabrika/app/bun` on
+  Zerops, `createContractWorker()` from `@fabrika/app/cloudflare` on Cloudflare. See
+  [Contracts](#contracts) and [Serving a contract](#serving-a-contract).
+- **An installation service** (IAM, Delivery, Operations) declares a service contract
+  with `defineServiceContract` and serves it with `serveService` (`@fabrika/app/service`).
+  Per request `serveService` answers 400 for a non-canonical raw path, 404 when no row
+  is selected, and 503 for a `service` row that arrives without the proxy's
+  `X-Fabrika-Endpoint` for that row and its digest. It then calls the row's handler. An
+  application may not import `@fabrika/app/service`; `@fabrika/check` refuses it.
 
-Middleware may mutate context, short-circuit with a response, or wrap the
-downstream response. `@fabrika/auth` owns the canonical `Middleware` type;
-`@fabrika/app` consumes and re-exports it.
+A non-canonical raw path is `isCanonicalPath` from `@fabrika/auth-core` refusing it:
+an empty segment, `.` or `..`, an encoded `/` or `\`, a malformed percent escape.
 
-HTTP route patterns support typed `:segment` parameters and one optional terminal
-wildcard such as `/public/*path`. The wildcard captures the decoded remaining
-path; it can never contain an encoded `/`, because step 1 refuses one. A trailing `/` is
-significant and matched literally: `/a/` and `/a` are different routes, and a `:segment`
-never matches the empty segment after a trailing `/`. A wildcard below the root needs the
-`/` before it, like the gate glob: `/public/*path` matches `/public/` with an empty
-remainder, not `/public`; `/*path` still matches `/`. `route.all()` mounts a Fetch-style handler for every method. It is the
-compatibility seam for an established REST surface that joins the shared
-application pipeline without changing its wire contract.
+Endpoint paths support `:name` parameters and one terminal `*` wildcard. A trailing
+`/` is significant and matched literally: `/a/` and `/a` are different paths, and a
+`:name` never matches the empty segment after a trailing `/`. A wildcard below the
+root needs the `/` before it: `/x/*` matches `/x/`, not `/x`; `/*` still matches `/`.
+The most specific row wins: a literal segment beats a parameter, and a parameter beats
+a wildcard. There is no fall-through to another row.
 
-IAM, Delivery, and Operations are first-party reference applications. They
-dispatch through the same application on Cloudflare and Bun while retaining the
-protocol surfaces required by their platform roles. See
+IAM, Delivery, and Operations are first-party reference services. They dispatch
+through the same `serveService` on Cloudflare and Bun while retaining the protocol
+surfaces required by their platform roles. See
 [`core-application-composition.md`](core-application-composition.md) for their
 RPC, authorization, persistence, protocol, and environment boundaries.
 
@@ -49,32 +50,34 @@ there is no compatibility reader left to consult.
 ## Authorization boundary
 
 The proxy is the only enforcement point
-([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)): one gate
-evaluator, in `@fabrika/auth-core`, and the proxy is the only thing that runs it.
-Zerops uses Caddy plus the shared TypeScript auth service. Cloudflare authoring
-creates a public proxy Worker with a private application Worker child and the same
-authorizer. No application evaluates a gate: `@fabrika/auth` exports nothing that
-can.
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)): one
+enforcement decision, in `@fabrika/proxy-core` over `@fabrika/auth-core`'s
+`planEndpoint`, and the proxy is the only thing that runs it. Zerops uses Caddy plus
+the shared TypeScript auth service. Cloudflare authoring creates a public proxy
+Worker with a private application Worker child and the same authorizer. No
+application makes the enforcement decision: `@fabrika/auth` exports nothing that can.
 
 Enforcement is one of three layers that refuse a request; [`overview.md`](overview.md)
-names all three. This section covers the first two — gates and object-level
-authorization. The third, admission, belongs to the services that accept browser
-sessions and is described in
+names all three. This section covers the first two — the endpoint decision and
+object-level authorization. The third, admission, belongs to the services that accept
+browser sessions and is described in
 [`core-application-composition.md`](core-application-composition.md).
 
-Proxy gates and procedure requirements are complementary:
+The proxy's endpoint decision and procedure requirements are complementary:
 
-- The proxy evaluates the ordered static gate list and prevents unauthorized
-  requests from reaching the private app service on both providers.
-- An application's own middleware calls `iam.authenticate(request)`, which verifies
-  the proxy-injected `X-Fabrika-Token` locally against IAM's JWKS and builds the
-  canonical `AuthContext` from `@fabrika/auth`.
+- The proxy selects one endpoint from the endpoint table, checks its caller kind,
+  requirement and admission, and prevents unauthorized requests from reaching the
+  private app service on both providers.
+- The service verifies the proxy-injected `X-Fabrika-Token` locally against IAM's
+  JWKS and builds the canonical `AuthContext` from `@fabrika/auth`: `boot` does it for
+  a contract application, and an installation service's row handler calls
+  `iam.authenticate(request)`.
 - `.require(action, scopeResolver?)` calls `ctx.auth.can()` before the procedure
   handler. The optional resolver maps validated input and context to an
   application-owned `{ type, value }` coordinate.
 
-A `.require()` check does not replace a proxy gate. A proxy gate cannot replace an
-object-level check whose scope depends on application data.
+A `.require()` check does not replace the proxy's decision. The proxy's decision
+cannot replace an object-level check whose scope depends on application data.
 
 ## Typed RPC
 
@@ -118,8 +121,9 @@ hands both to its provider: `target.proxy` (`{ upstream, ...contractProxyTable(a
 and `schema`. On Cloudflare the config returns only the application Worker and `schema`; the
 deployer reads `fabrika.contract.ts` from the checkout with `@fabrika/check/contract` and
 builds the proxy Worker from `contractProxyTable(artifact)` itself (ADR-0048), refusing a
-config Worker that binds `APP`. A contract application generates no gates; both providers refuse
-one whose proxy carries gates.
+config Worker that binds `APP`. An application is protected by this table only: the proxy
+manifest's strict parser refuses any other form, and both providers refuse a config or a
+manifest that still declares `gates`.
 
 - `contractProxyTable(artifact)` (`@fabrika/proxy-core/manifest`) emits every endpoint row's
   rules — kind, method, path, callers, requirement, admission — with its delegation and
@@ -541,16 +545,18 @@ Control joins the two sides (ADR-0022 "Principal kinds"):
 
 ## Runtime boundary
 
-Routing, middleware, RPC, validation, and the client use Web Fetch API types.
-Runtime adapters add process lifecycle without changing request behavior:
+Dispatch, RPC, validation, and the client use Web Fetch API types. A
+`FetchService<Env>` (a type from `@fabrika/app`) is `{ fetch(request, env, exec) }`;
+`serveService` returns one. Runtime adapters add process lifecycle without changing
+request behavior:
 
 - `@fabrika/app/cloudflare` exports `createCloudflareWorker()`. It builds a
-  Worker-shaped `{ fetch, scheduled?, queue? }` module from a `FabrikaApp`.
+  Worker-shaped `{ fetch, scheduled?, queue? }` module from a `FetchService`.
   Minimal structural types for the execution context, cron, and queues remain in
   this entrypoint. `createContractWorker()` boots a contract application with the
   first request's environment, verifying tokens through the `IAM` binding and serving
   the SPA from `ASSETS`.
-- `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FabrikaApp` to
+- `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FetchService` to
   its process dependencies and returns `fetch()` plus `drain()`. It tracks every
   `waitUntil()` promise, reports rejected background tasks through a required
   callback, and drains all pending work during shutdown. A service that already
@@ -566,13 +572,16 @@ deployment entrypoint imports its runtime adapter.
 
 ## Runtime conformance tests
 
-`@fabrika/app/testing` runs an equivalent fresh request through direct
-`FabrikaApp.fetch()`, the Bun adapter, and the Cloudflare adapter. It normalizes
-the response status, headers, and text body and can assert that all three values
-match. The helper has no test-runner dependency.
+The installation's services prove that a request answers the same on every runtime.
+A private test fixture, `packages/app/src/__tests__/fixtures/runtime-conformance.ts`,
+runs an equivalent fresh request through a direct `fetch()` of the `FetchService`,
+the Bun adapter, and the Cloudflare adapter. It normalizes the response status,
+headers, and text body and asserts that all three values match. The
+`runtime-conformance.test.ts` suites of IAM, Control and Operations use it. It is
+not part of `@fabrika/app/testing`.
 
 Each execution receives fresh environment state and a fresh `Request`. Use these
-tests for routes that are intentionally portable. Keep composition-specific
+tests for rows that are intentionally portable. Keep composition-specific
 surfaces separate; for example, IAM's process health and shared-secret HTTP RPC
 transports exist only in the Bun composition.
 
@@ -788,8 +797,8 @@ runtime values:
 
 Applications may pass these two values to a browser, but must not expose other
 runtime configuration. A contract application cannot do it yet: neither its handlers nor its
-SPA mount see the two values (backlog 102). The local stack's SDK witness, an application
-without a contract (`packages/local-stack/src/operations-witness/`), demonstrates the boundary
+SPA mount see the two values (backlog 102). The local stack's SDK witness, a stand-in behind a
+minimal contract (`packages/local-stack/src/operations-witness/`), demonstrates the boundary
 at `/operations-sdk` and initializes `@sentry/browser` **10.69.0** from a JSON config response
 containing only `dsn` and `release`.
 

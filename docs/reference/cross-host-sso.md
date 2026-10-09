@@ -30,8 +30,8 @@ navigation, a **401** carrying `{ error: { type, message, loginUrl } }` for anyt
 else. The signal is `Sec-Fetch-Mode`; both forms carry the same login URL.
 
 The reserved callback path is `/__fabrika/auth/callback`. The proxy answers it
-itself, **before gate matching** — it is how a browser becomes able to satisfy a
-gate, so it cannot be behind one. Caddy returns a non-2xx auth response verbatim, so
+itself, **before it selects an endpoint** — it is how a browser obtains a session,
+so it cannot be behind an endpoint. Caddy returns a non-2xx auth response verbatim, so
 the 302 and its `Set-Cookie` reach the browser and the code never reaches the
 application.
 
@@ -186,7 +186,7 @@ management contract every SDK consumer holds. How much separation that buys depe
 the provider:
 
 - **Zerops.** IAM serves two HTTP surfaces behind two different secrets: `/rpc/*` for
-  management, gated by `FABRIKA_IAM_RPC_KEY`, and `/auth/mint/*` for the proxy, gated by
+  management, guarded by `FABRIKA_IAM_RPC_KEY`, and `/auth/mint/*` for the proxy, guarded by
   `FABRIKA_IAM_PROXY_KEY` (the value the proxy holds as `FABRIKA_IAM_KEY`). The proxy
   calls `POST /auth/mint/exchange` with the code and verifier in its body. A holder of the RPC key cannot redeem, and an unset
   key makes its surface 404 as if never mounted. The split is a real boundary. An application's own membership

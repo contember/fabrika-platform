@@ -14,18 +14,14 @@ bun run --filter @fabrika/platform-artifacts gen:schemas    # refetch the pinned
 
 - `src/render.ts` — writes or checks: the root `zerops.yaml`, `generated/*.zerops-import.yaml`, and
   `provider-zerops/src/installation/generated/*.ts`. Every Zerops document is schema-validated before it is written.
-- `src/proxy-manifest.ts` — the three fronted apps and their gates or service tables. The ONE declaration of the platform's
+- `src/proxy-manifest.ts` — the three fronted apps and their service tables. The ONE declaration of the platform's
   app list; `local-stack` imports it through `./proxy-manifest`.
 - `src/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control` as data.
 - `generated/` — committed import documents. Generated; never hand-edit.
 - `schemas/` — pinned upstream JSON schemas, `refresh.ts` and the read-only drift `check.ts`.
 - `src/__tests__/` — drift and contract tests over the generated artifacts, including the example app.
-- `src/__tests__/service-parity/` — work unit B10's proof that each service contract allows only what its gates
-  allowed: `frozen.ts` (the gates and `defineApp` routes before B10, as data), the differential
-  `service-parity.test.ts` (method × path × credential through the real proxy decision: verdict, injected credential,
-  selected row against the route it replaces, every accepted difference listed), and `route-coverage.test.ts` (every
-  route maps to its rows or explicitly to none). Never edit a frozen copy to make a test pass; list the difference.
-  Deleted with the gates in B10h.
+- What the real service tables refuse is tested in `proxy-core`'s `installation-matrix.test.ts` (describe "the real
+  installation tables refuse what no service may receive"), not here.
 
 ## Invariants
 

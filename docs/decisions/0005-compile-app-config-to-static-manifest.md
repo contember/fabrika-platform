@@ -55,7 +55,7 @@ such values. It refuses any other form with the file, the line and the allowed f
 The same reader runs in `fabrika contract check`, in the platform build and in the
 checker.
 
-An application's manifest carries no gates and no IAM schema. Access data comes
+An application's manifest carries no proxy table and no IAM schema. Access data comes
 only from the commit.
 
 The control plane reads static JSON and parses literal source. **It never executes

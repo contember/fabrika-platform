@@ -15,63 +15,71 @@ is also publicly routable, "the app forgot to check" and "the world can reach it
 deployment. Cloudflare Access solves this on Cloudflare only; fabrika also runs on Zerops.
 
 The enforcement point has two different jobs. **HTTP correctness** (WebSockets, streaming bodies,
-HTTP/2, hop-by-hop headers, timeouts) is subtle and app-visible when wrong. **Authorization** (gate
-evaluation, token minting and verification) is the security-critical path and exists in TypeScript.
+HTTP/2, hop-by-hop headers, timeouts) is subtle and app-visible when wrong. **Authorization** (the
+endpoint decision, token minting and verification) is the security-critical path and exists in TypeScript.
 Cloudflare does the first job for a Worker. Zerops needs a real reverse proxy, and Caddy's
 `forward_auth` calls an external service and either forwards the request with copied headers or
 returns the service's own response (a redirect to login works unchanged).
 
-Gate rules do not map onto Caddy's route matchers. Checked against Caddy v2.10.2:
+Endpoint selection does not map onto Caddy's route matchers. Checked against Caddy v2.10.2:
 
-- **Fall-through is inexpressible.** A matching rule whose credential is absent falls through. Presence
-  can depend on a declared header, query or cookie location, and validity on an IAM call. A matcher
-  decides before either is known.
-- **Caddy's path matcher is case-insensitive**; the gate glob is not. `/PUBLIC/health` would match a
-  `/public/*` route in Caddy.
-- **Caddy's `*` does not cross `/`**, and Caddy merges `//` before matching; the gate glob matches the
-  raw pathname with `*` as `.*`.
+- **The decision needs facts a matcher cannot know.** Which credential a request carries, its caller
+  kind and whether its token satisfies the endpoint's requirement are known only after the credential
+  is read and, on the cold path, after an IAM call. A matcher decides before either is known.
+- **Caddy's path matcher is case-insensitive**; the endpoint matcher is not. `/API/rpc` would match an
+  `/api/rpc` route in Caddy.
+- **Caddy merges `//` before matching**; the endpoint matcher reads the raw path and refuses a
+  non-canonical one.
 
-The last two fail silently: a second evaluator gates a slightly different set of requests than the
-app declared, in the permissive direction.
+The last two fail silently: a second evaluator decides a slightly different set of requests than the
+application declared, in the permissive direction.
 
 Browsers also constrain how a session reaches an app. `*.zerops.app` is on the Public Suffix List, so
 a cookie scoped to a parent domain is refused there, and a platform that hosts apps on their own
 domains cannot require them to share one with IAM.
 
-An application now declares its whole access surface in one contract
-([ADR-0012](0012-fabrika-app-runtime.md)). Gates generated from that contract leave three gaps at the
-proxy:
+An application declares its whole access surface in one contract
+([ADR-0012](0012-fabrika-app-runtime.md)), and Fabrika deploys no application without one
+([ADR-0050](0050-approved-access.md)). The enforcement point must decide from that contract, not from a
+looser summary of it:
 
-- **A gate can only add access.** An absent credential falls through to every later matching rule, so
-  a narrower rule for one endpoint does not narrow it.
-- **The proxy does not know the requirement.** It tells a session from a `px_` key, but it does not
-  know which kind of key a caller holds, which action an endpoint requires, or whether a request is a
-  cross-site write. Only the application checks these, inside the process an agent can edit.
-- **Nothing authenticates the hop to the application.** A service in the same Zerops namespace can dial
-  the application directly, and the application cannot tell whether the proxy applied the rules it
-  expects.
+- **Each endpoint has its own rules.** A narrower rule for one endpoint must narrow it. A request must
+  never reach a broader rule because its credential is absent.
+- **The requirement belongs to the decision.** The caller kind, the action an endpoint requires and
+  whether a request is a cross-site write are known from the contract. If only the application checks
+  them, the check sits inside the process an agent can edit.
+- **The hop to the application must be authenticated.** A service in the same Zerops namespace can dial
+  the application directly, and the application must be able to tell that the proxy applied the rules
+  it expects.
+
+The installation's own services (IAM, Control, Operations) need the same decision, plus a few forms an
+application must never have: a protocol the service authenticates itself, any method on a path, and an
+OAuth resource token.
 
 ## Decision
 
 **We will make the proxy the single enforcement point for every request to every application.** Six
 rules.
 
-The proxy evaluates one of two forms of policy. **Gates** are an ordered rule list. They protect the
-installation's own services (IAM, Control, Operations), including the `oauth` gates of
-[ADR-0049](0049-author-applications-through-mcp-in-control.md). An **endpoint table** is compiled from
-an application's contract. It protects every contract application. Control's metadata selects the form
-per service. Both forms are evaluated only by the proxy, with the matchers in `@fabrika/auth-core`.
+Every entry of a proxy manifest is an endpoint table, in exactly one of two forms:
 
-The proxy evaluates gates for every app whose manifest entry carries gates, and the endpoint table for
-every app whose entry carries one; an entry carrying both is refused. Part A generates an application's
-gates from its contract as an intermediate path. Work unit B2 built the endpoint tables, B3 the
-authenticated hop and B4 the response headers.
+- An **application table** protects a contract application. Producers compile it from the approved
+  contract with `contractProxyTable` (`ContractProxyApp`).
+- An **installation entry** protects one of the installation's own services. Producers compile it from
+  the service contract with `serviceProxyTable` (`InstallationProxyApp`, `installation: true`). Only
+  trusted platform composition writes one, and it may use five forms no application may declare
+  (rule 3).
 
-Work unit B10 moves the installation's own services from gates to endpoint tables too, as
-**installation entries** (rule 3): an endpoint table that trusted platform composition marks
-`installation: true` and that may use five forms no application may declare. B10a added the forms and
-their hop treatment; until the later B10 units switch each service, no producer emits one, and the
-services keep their gates.
+**There is exactly one evaluator: the endpoint decision of `@fabrika/proxy-core`, over the planner of
+`@fabrika/auth-core` (`planEndpoint`), and only the proxy runs it.** It makes one pass over one selected
+endpoint. Two other layers refuse requests and are not the enforcement decision:
+
+- **Authorization** — `.require`, `can()`, a contract application's caller-kind, requirement and
+  access-form checks, and Control's scoped use-case checks (rule 5).
+- **Admission** — the proxy's `Sec-Fetch-Site` and content-type checks (rule 3, step 6). They resolve
+  no principal and read no policy. Control reads no `Origin`, and IAM's `/admin/*` is bearer-only.
+
+`docs/reference/overview.md` defines all three; keep the vocabulary.
 
 ### 1. Only the proxy is publicly routed
 
@@ -101,11 +109,10 @@ shared or persistent.
 ### 2. Caddy owns HTTP correctness and gets no vote on authorization
 
 On Zerops the proxy is Caddy plus a loopback Bun auth service. On Cloudflare a thin Worker runs the
-same `@fabrika/proxy-core` code in-process. Caddy's admin API is disabled; the gate configuration is
-baked into the deploy artifact.
+same `@fabrika/proxy-core` code in-process. Caddy's admin API is disabled; the manifest is baked into
+the deploy artifact.
 
-The Caddy configuration is a **fixed chain per app**, identical whatever the gates or the endpoint
-table say:
+The Caddy configuration is a **fixed chain per app**, identical whatever the endpoint table says:
 
 1. **Delete** the headers a client must not assert — every `X-Fabrika-*` header, the request id, the
    client address and the forwarding headers — and set the client address from Caddy's own
@@ -118,16 +125,16 @@ table say:
    `{env.…}` placeholder.
 
 Step 1 must be a delete, not an overwrite: `copy_headers` skips an empty auth-response value, so a
-client's own `X-Fabrika-Token` would otherwise reach the app on a `public` path.
+client's own `X-Fabrika-Token` would otherwise reach the app on an anonymous endpoint.
 
 **Response headers.** The proxy sets one conservative header policy on every response of a contract
 application and on its own denials: Caddy through its response operations, the Cloudflare proxy Worker
 in code, and `@fabrika/proxy-core` on every answer it writes. The proxy **replaces** whatever the
 application set for these names, so an application can neither omit nor weaken the policy. The
 framework sets the same policy in-process; both read the one definition in
-`@fabrika/proxy-core/headers`. An answer that belongs to no contract application (the denial of a gate
-app or of an installation entry, a forward refused before an app is selected) carries the policy
-without named origins; an installation service's own answers pass through unchanged, because IAM and
+`@fabrika/proxy-core/headers`. An answer that belongs to no contract application (the denial of an
+installation entry, a forward refused before an app is selected) carries the policy without named
+origins; an installation service's own answers pass through unchanged, because IAM and
 Control set their own per-response CSPs for login, consent and their console flows. Per-endpoint
 profiles and caching of static assets are not part of v1.
 
@@ -186,36 +193,27 @@ decision selected, never by a path of its own:
 header and its own cookies, never a fabrika session or handoff cookie. The one exception is the
 platform proxy's route to IAM, which keeps IAM's own login cookie.
 
-### 3. Gates and endpoint tables are evaluated once, in TypeScript, by the proxy
+### 3. The endpoint decision is made once, in TypeScript, by the proxy
 
-A gate rule or an endpoint row never compiles into a route matcher, a firewall rule or any other
-engine's configuration. The proxy receives the gate list or the endpoint table verbatim in its
-manifest and evaluates it with the canonical matchers in `@fabrika/auth-core`.
+An endpoint row never compiles into a route matcher, a firewall rule or any other engine's
+configuration. The proxy receives the endpoint table verbatim in its manifest and decides with the
+canonical matcher in `@fabrika/auth-core`.
 
-**Gates (installation services).** Array order is precedence. A matching rule with an **absent**
-credential falls through; with a **present** credential it is terminal. A request that matches no rule
-is denied.
+**The manifest parser is strict.** An entry parses as an application table or as an installation
+entry, and as nothing else. It refuses an unknown key — `gates` among them — instead of ignoring it.
 
-- `public` — terminal allow, no credential read, no IAM call, no token.
-- `service` — a `px_` credential, as a bearer or at the declared location. A share link is one. Any
-  other credential there is a 401 with no IAM call.
-- `human` — a resolved **user** principal. A valid token is not enough; every tier checks the claim.
-- `oauth` — an OAuth access token for the declared resource and scopes
-  ([ADR-0049](0049-author-applications-through-mcp-in-control.md)).
-
-**Endpoint tables (contract applications).** The manifest carries `{ id, hosts, upstream, scheme,
-endpoints, reservedPrefixes, snapshot, csp, operationsOrigin? }` per application; `snapshot` is the
-contract digest and `csp` the contract's named origins. Each
-endpoint row is `{ id, kind, method, path, callers, requirement, admission, delegation, digest }`, and
-the manifest parser refuses a row whose digest does not describe its rules. Array order has no meaning
-here. The proxy makes one pass over one selected endpoint:
+**Application tables.** The manifest carries `{ id, hosts, upstream, scheme, endpoints,
+reservedPrefixes, snapshot, csp, operationsOrigin? }` per application; `snapshot` is the contract digest
+and `csp` the contract's named origins. Each endpoint row is `{ id, kind, method, path, callers,
+requirement, admission, delegation, digest }`, and the manifest parser refuses a row whose digest does
+not describe its rules. Array order has no meaning. The proxy makes one pass over one selected endpoint:
 
 1. **Canonical path.** The raw path must have no empty segment, no `.` or `..`, no encoded `/` or `\`
    and no literal `\`. Otherwise the answer is 400. A request without a method is denied. A trailing
    `/` is significant and matched literally: `/a/` and `/a` are different paths.
 2. **Selection.** `planEndpoint` selects the most specific endpoint: a literal segment beats a
    parameter, and a parameter beats a wildcard. An RPC prefix is reserved for its procedures. No
-   endpoint is a 403. There is no fall-through to another endpoint.
+   endpoint is a 403 (`no_endpoint`). There is no fall-through to another endpoint.
 3. **A `px_` key is present.** The proxy mints from it with `mintFromKey`. The key's principal kind must
    be one of the endpoint's callers. This step is terminal: a rejected key never falls back to a
    session.
@@ -248,7 +246,7 @@ application endpoint refuses it.
 A workload token carries its kind in `ptype` and names its workload in `workload`: the job's or the
 webhook's name, or for `app` the consuming application's id. `callerOf` maps `app` to `app:<workload>`
 and `job` and `webhook` to no caller; `callerAdmittedAt` admits `app:<id>` only under
-`/__fabrika/connect/`. A `service` gate refuses a workload token too, and neither `@fabrika/auth` nor
+`/__fabrika/connect/`. The caller `machine` refuses a workload token too, and neither `@fabrika/auth` nor
 IAM's management and membership operations accept one. IAM stores a workload principal as a `service`
 row whose `workload_principals` row names its kind. A workload key resolves to exactly the actions the
 reconciled schema declares for the workload (`AppSchema.workloads`, app-wide), never to a grant, and a
@@ -279,8 +277,8 @@ that consumer, remove an imported procedure, accept less input, change an output
 procedure, a new optional input field and a new version are compatible; an output may not gain a field, because a
 consumer parses every answer strictly.
 
-**Installation entries.** An endpoint table that protects one of the installation's own services is a
-manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,
+**Installation entries.** An endpoint table that protects one of the installation's own services (IAM,
+Control, Operations) is a manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,
 oauthResources? }`. The marker comes from trusted platform composition — the installation's platform
 proxy manifest and its Cloudflare proxy Workers — never from the shape of an id; that the id holds no
 `@` is only a consistency check. Such an entry has no contract, so it carries no `snapshot`, no `csp` and
@@ -316,15 +314,21 @@ digest. An application row's digest is unchanged by the field, byte for byte. Th
 
 Three layers refuse the five forms for an application: the contract build and the artifact schema of
 `@fabrika/app/contract`, the static reader (which reads only `defineContract`), and the manifest parser.
-The parser reads an entry without `installation: true` as an application, whose rows admit none of the
-forms. It refuses an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
+The parser reads an entry without `installation: true` as an application table, whose rows admit none of
+the forms. It refuses an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
 `operationsOrigin`, or whose `oauth` row has no registered resource on its path or asks for a scope the
 resource does not support.
 
-An installation entry gets the hop of a gate entry: the proxy keeps `Authorization` on the upstream
-hop, sets no proxy secret and sets no response policy; its own denials carry the base policy. It also
-copies `X-Fabrika-Endpoint` to the service, and the proxy answers the entry's RFC 9728 metadata paths and
-the handoff callback before selecting an endpoint, as it does for a gate entry.
+**The hop of an installation entry.** The proxy keeps `Authorization` on the upstream hop, sets no proxy
+secret and sets no response policy; its own denials carry the base policy. It copies
+`X-Fabrika-Endpoint` to the service. Before it selects an endpoint, the proxy answers the entry's
+RFC 9728 metadata paths and the handoff callback.
+
+**Reserved prefixes of a service.** A service table reserves the prefixes of its mounts, as a contract
+reserves its RPC prefixes. Under a reserved prefix only the rows declared under it compete. The console
+reserves `/webhooks` and `/mcp` among others, so no path under them reaches the console's SPA row: the
+proxy refuses a path that no row under the prefix serves. The prefix path itself is a row of its own:
+the service answers 404 on `/webhooks`, and on `/mcp` when MCP is off.
 
 A service with more than one table — the console, whose `/mcp` row admits `oauth` only when the installation
 registers an authorization server for its resource — learns which one its proxy publishes from one composition
@@ -333,9 +337,10 @@ digest and the reserved prefixes. The composition writes it from the manifest it
 refuses to start when the value is missing or names no table it serves, so a disagreement fails the deploy instead
 of answering 503 at runtime.
 
-The requirement check and the admission check are part of the proxy's decision whether a request
-reaches the application. The requirement reads only the token; it needs no application-owned object.
-The application repeats the caller and requirement checks as **authorization** (rule 5).
+The requirement check is part of the proxy's decision whether a request reaches the application, and
+the proxy runs the admission checks in the same pass. The requirement reads only the token; it needs no
+application-owned object. The application repeats the caller and requirement checks as
+**authorization** (rule 5).
 
 **Invariant: every unexpected condition denies.**
 
@@ -344,14 +349,14 @@ The application repeats the caller and requirement checks as **authorization** (
 
 ### 4. A session reaches an app through a one-time code the proxy redeems
 
-On a `human` gate miss, or on an endpoint whose callers include `human` when the request has no
-session, the proxy answers with the login URL: a **302** for a document navigation, a **401** with
+On an endpoint whose callers include `human`, when the request carries no key and no usable session,
+the proxy answers with the login URL: a **302** for a document navigation, a **401** with
 `{ error: { type, message, loginUrl } }` otherwise. The signal is `Sec-Fetch-Mode`, which the browser
 writes and page script cannot. An absent value reads as a navigation.
 
 IAM authenticates the human, issues a single-use code bound to `(session, app, return URL)`, and
-redirects to `/__fabrika/auth/callback` on the app's own host. The proxy answers that path before gate
-or endpoint matching, redeems the code with IAM, sets the returned **child app session** as a host-only
+redirects to `/__fabrika/auth/callback` on the app's own host. The proxy answers that path before it
+selects an endpoint, redeems the code with IAM, sets the returned **child app session** as a host-only
 cookie and redirects to the stored return URL. [ADR-0023](0023-one-session-per-host.md) makes this the
 only session-delivery mechanism and binds each code to the browser that started the login.
 
@@ -377,8 +382,8 @@ the callback. The only other cookie it writes is the transient handoff verifier 
 
 The proxy injects a verified access token as `X-Fabrika-Token`. `@fabrika/auth` verifies it locally
 against IAM's JWKS (signature, `iss`, `aud`, `exp`) with the shared verifier of
-[ADR-0040](0040-share-one-token-verifier.md) and builds the `AuthContext`. It evaluates no gate,
-exchanges no session, writes no cookie and issues no login bounce. Verifying the audience keeps a token
+[ADR-0040](0040-share-one-token-verifier.md) and builds the `AuthContext`. It makes no enforcement
+decision, exchanges no session, writes no cookie and issues no login bounce. Verifying the audience keeps a token
 minted for another app out.
 
 For a contract application, the hop carries more facts, and the application checks them:
@@ -399,7 +404,7 @@ An installation service checks the endpoint as well, with one stated exception: 
 on its credentialed rows only. A `protocol` or `health` row may arrive without it, because the service
 authenticates such a request itself, and such requests also arrive unfronted — at IAM's own Worker on
 Cloudflare, and over the private hops between the services. An installation service gets no proxy
-secret, as it gets none under gates.
+secret.
 
 Work unit B3 built the hop. `FABRIKA_HOP_HEADERS` in `@fabrika/auth-core` is the one list of every
 `X-Fabrika-*` name a hop carries; Caddy and the Cloudflare proxy Worker delete exactly it. The secret
@@ -420,7 +425,7 @@ refuses to start on a mismatch.
 The publish order stays proxy, application, IAM. Because of the digest check the order is safe in both
 directions. During a switch, changed endpoints answer 503 and new endpoints answer 404.
 
-An app owns the check a path gate or an endpoint row cannot make: `can(action, scope)` over an
+An app owns the check an endpoint row cannot make: `can(action, scope)` over an
 application-owned object, resolved from validated request data. The framework of ADR-0012 also repeats
 the caller-kind and requirement checks. These checks are authorization. They never replace the proxy's
 decision, and the proxy's decision never replaces them.
@@ -463,8 +468,8 @@ still refuses any `Authorization` header, as authorization.
   application's schema lists under `delegations`, to a user principal, and consumes it like a handoff
   code: once, before its binding to the caller, the endpoint and the request id is compared.
 - **Exact actions on every write path.** For a contract application, IAM refuses a wildcard action on
-  every write path. In every application, contract or not, IAM refuses a global grant of a role
-  declared with `member.scope`, and such a grant resolves to no permission.
+  every write path. In every IAM schema, an installation service's included, IAM refuses a
+  global grant of a role declared with `member.scope`, and such a grant resolves to no permission.
 - **A bound on token size**, so that a person in many workspaces cannot exceed the proxy's header
   limit. IAM signs no access token above 8 KiB and answers `token_too_large`, which the proxy turns
   into a 403, never a login bounce. Bun, the application runtime on Zerops, refuses more than
@@ -497,8 +502,10 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
 
 - **Unreachability is structural**, and one implementation of the security-critical path serves both
   providers. A fix lands once.
-- **A narrower endpoint really narrows.** An absent credential no longer falls through to a later rule
-  for a contract application. Fall-through stays for installation gates only.
+- **A narrower endpoint really narrows.** The proxy decides from the one selected endpoint, so an
+  absent credential never reaches a broader rule.
+- **The proxy decides from one shape.** Every manifest entry is an endpoint table, and the strict parser
+  refuses any other form, so a manifest cannot carry a rule the decision does not read.
 - **Installation-only forms widen what an installation entry can say, never what an application can.**
   The marker comes from platform composition, and three layers refuse the forms in an application.
 - **The proxy checks what an agent can loosen inside the application:** the caller kind, the
@@ -537,8 +544,8 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
   only be found one at a time.
 - **Cloudflare Access.** Does not exist on Zerops.
 - **Per-project IAM, or a sidecar per app.** The first splits the identity database and audit log, which
-  is the product. The second multiplies deployables, caches and gate copies for the same guarantee.
-- **Let the proxy ask the app for its gates.** Makes the protected component authoritative over its own
+  is the product. The second multiplies deployables, caches and table copies for the same guarantee.
+- **Let the proxy ask the app for its table.** Makes the protected component authoritative over its own
   protection. The same reason keeps the endpoint table out of anything the running application reports:
   Control reads it from the commit ([ADR-0050](0050-approved-access.md)).
 - **A Go plugin in Caddy.** A second implementation of the authorization check, bound to diverge from
@@ -546,15 +553,13 @@ nothing. The surface serves no `requestDelegation`: only the proxy obtains a gra
 - **Traefik, nginx `auth_request`, or a TypeScript proxy on both platforms.** Traefik plugins run
   interpreted and its discovery is irrelevant here; `auth_request` cannot return the login redirect
   without extra machinery; our own proxy puts WebSocket, streaming and HTTP/2 correctness on us.
-- **Compile gates into Caddy routes,** normalising the glob or making every rule terminal. Either
-  changes the product in the permissive direction to suit a proxy, and normalising still cannot express
-  fall-through.
+- **Compile endpoint tables into Caddy routes.** Rejected: a matcher cannot read the credential, the
+  caller kind or the requirement, and Caddy's case-insensitive, `//`-merging path matcher would select
+  for a slightly different set of paths, in the permissive direction.
 - **Put the installation services on application contracts** (`defineContract` and `implement`).
   Rejected: `boot` deletes the framework variables and binds `@fabrika/db`, and the services would need
   more exceptions than the five installation forms. An installation entry reuses the endpoint table and
   the matcher instead.
-- **Keep generated gates for contract applications.** Rejected: an absent credential falls through, so
-  a gate can only add access, and the proxy cannot check the caller kind or the requirement.
 - **Let the application select the endpoint again from the path.** Rejected: two selections can
   diverge. The application serves the id the proxy selected; its own selection only has to agree.
 - **One digest for the whole contract instead of one per endpoint.** Rejected: every endpoint would

@@ -111,18 +111,19 @@ needed only when there is no app config. Platform commands load the provider's
   cast — ask first.
 - **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env only;
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
-- **The proxy is the ONLY enforcement point: exactly one gate evaluator, in `@fabrika/auth-core`,
-  and only the proxy runs it** (ADR-0022). App services are not publicly routed; an application
-  reads the proxy-injected `X-Fabrika-Token`, verifies it locally, and evaluates no gate. Never add
-  a second gate evaluator — not in `@fabrika/auth`, not in Caddy config, not in a provider package.
-  Two other layers refuse requests and are **not** gate evaluators: **authorization** (`.require`,
-  `can()`, control's scoped use-case checks) and **admission** (the proxy's `Sec-Fetch-Site` and content-type checks; Control reads no `Origin`, and IAM's `/admin/*` is bearer-only).
+- **The proxy is the ONLY enforcement point: exactly one enforcement decision, in `@fabrika/proxy-core`
+  over `@fabrika/auth-core`'s planner, and only the proxy runs it** (ADR-0022). App services are not
+  publicly routed; an application reads the proxy-injected `X-Fabrika-Token`, verifies it locally, and
+  makes no enforcement decision. Never add a second one — not in `@fabrika/auth`, not in Caddy config,
+  not in a provider package. Two other layers refuse requests and are **not** the enforcement decision:
+  **authorization** (`.require`, `can()`, control's scoped use-case checks) and **admission** (the proxy's
+  `Sec-Fetch-Site` and content-type checks; Control reads no `Origin`, and IAM's `/admin/*` is bearer-only).
   `docs/reference/overview.md` defines all three; keep the vocabulary.
-  Array order is precedence for an SDK application's gates only. A contract application and each
-  installation service get an endpoint table instead: the most specific endpoint wins, and the service
-  serves only the endpoint id the proxy sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3). Only an entry that platform
-  composition marks `installation: true` may use the installation-only forms (`protocol`, `service`,
-  method `*`, caller `oauth`, requirement `authenticated`); never let an application declare one.
+  Every manifest entry is an endpoint table: a contract application's, or an installation service's. The
+  most specific endpoint wins, with no fall-through, and the service serves only the endpoint id the proxy
+  sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3). Only an entry that platform composition marks
+  `installation: true` may use the installation-only forms (`protocol`, `service`, method `*`, caller
+  `oauth`, requirement `authenticated`); never let an application declare one.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned
@@ -138,9 +139,9 @@ needed only when there is no app config. Platform commands load the provider's
 Read the package's own CLAUDE.md before editing it. Beyond the packages that only carry a short
 contract note (`*-contract`), the substantial ones are:
 
-- `packages/auth-core/` — the authz kernel all three auth components share (gate matcher, token
+- `packages/auth-core/` — the authz kernel all three auth components share (endpoint planner, token
   claims, `IamRpc`) · `packages/auth/` — the app-facing IAM SDK, which verifies the injected token
-  and nothing else · `packages/app/` — the request pipeline, typed RPC, runtime adapters ·
+  and nothing else · `packages/app/` — the contract framework, service contracts, typed RPC, runtime adapters ·
   `packages/iam/` — the Access service, on both runtimes.
 - `packages/daemon-kit/` — reusable Bun daemon primitives · `packages/annotations/` — runtime-neutral
   annotation state and UI · `packages/canvas-kernel/` — the Agent Canvas compiler, store, renderer, and components.

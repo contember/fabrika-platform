@@ -37,7 +37,7 @@ bun run test:browser  # the opice suites in tests/browser/
   `src/__tests__/platform-manifest.test.ts` pins exactly which fields this composition is allowed to
   differ in. No synthetic persona exists anywhere — the app SDK has none to select.
   The single dev bypass is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at
-  use once the flag is off; the browser composition runs with it off. Never widen a local gate to make
+  use once the flag is off; the browser composition runs with it off. Never widen a local endpoint table to make
   something pass: a refusal here is a refusal in production.
 - **MCP authoring is OFF locally by default.** A managed MCP client is a CIMD document IAM fetches over
   HTTPS, and there is no local one — do not add a fake CIMD server. Setting `FABRIKA_LOCAL_MCP_CLIENTS_JSON`
@@ -52,7 +52,7 @@ bun run test:browser  # the opice suites in tests/browser/
   there is no local-only branch in IAM or the proxy to support it; an app missing from that list is a
   400 naming its address at sign-in. `src/__tests__/app-registration.test.ts` pins the registered
   origins against the manifest hosts, because a drift between them is invisible until someone logs in.
-  `__tests__/proxy-gates.test.ts` (deliberately outside `src/`, so `typecheck` never follows its
+  `__tests__/proxy-tables.test.ts` (deliberately outside `src/`, so `typecheck` never follows its
   oblaka import) pins the other side: what a deployed Cloudflare proxy Worker actually bakes in.
 - **The composed Notes container holds its workloads' keys before it starts.** It refuses to start without a key per
   job and webhook (ADR-0022 "Principal kinds"), and nothing deploys it. So `upLocalComposition` (`src/up.ts`) starts
@@ -76,7 +76,7 @@ bun run test:browser  # the opice suites in tests/browser/
   the example moves the pin: run `bun run fixtures:pin` here. `deployable.test.ts` runs the build's checker and, on
   Postgres, the start script's steps over the archive itself. The container runs
   the platform's start-script steps and the generated entrypoint with the variables `prepare.ts` writes. Never give it
-  a variable the platform would not write, and never route it by gates: the apps proxy serves its endpoint table.
+  a variable the platform would not write: the apps proxy serves its endpoint table.
 - **The composition follows a deploy only when told to (`src/notes-follow.ts`).** The emulator runs no code, so
   `followNotesDeploy` makes the composed Notes container and the apps proxy serve what the emulator's active Notes
   version deployed: the endpoint table Control published on the namespace proxy (never one computed here), the contract
@@ -84,10 +84,12 @@ bun run test:browser  # the opice suites in tests/browser/
   fixture copied to `.state/notes-source/` (`FABRIKA_LOCAL_NOTES_ROOT`). Every `up` returns it to the example. The
   `notes-agent-change` browser seed (`src/notes-agent-change.ts`) deploys and approves the pinned commit, follows it,
   and parks the agent change commit (`fixtures/source/notes-agent-change.patch`, pinned as `agentChange`) for its scenario.
-- **The Operations SDK witness is an application without a contract on its own host** (`src/operations-witness/`),
+- **The Operations SDK witness is a stand-in behind a minimal contract on its own host** (`src/operations-witness/`),
   because a contract application cannot hand its browser the managed DSN yet (backlog 102). Delete it when that lands.
-  Control refuses a contractless application, so the witness never goes through Control: `prepare.ts` writes its
-  gated entry into the apps proxy manifest and Compose runs it.
+  Its `contract.ts` (app `sdk-witness`) has an anonymous `health` row and an SPA row for any member; the apps proxy
+  fronts it with `contractProxyTable(witnessContract)` and `operationsOrigin`, and its own proxy secret
+  (`.state/operations-witness.env`, `apps-proxy-secret.env`). The witness checks the proxy secret and the injected token
+  itself. It never goes through Control: `prepare.ts` writes its entry into the apps proxy manifest and Compose runs it.
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
   remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.

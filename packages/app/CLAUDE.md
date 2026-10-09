@@ -1,14 +1,16 @@
 # @fabrika/app
 
-The first-party server framework for Fabrika applications. It provides Fetch-based
-HTTP routing, middleware, typed RPC, structural errors, and a typed browser client.
+The first-party server framework for Fabrika applications. It provides the contract
+framework, the installation services' service contracts, typed RPC, structural errors,
+the runtime adapters, and a typed browser client.
 
 [ADR-0012](../../docs/decisions/0012-fabrika-app-runtime.md) makes the contract the
 target: an application declares `fabrika.contract.ts` and serves it through
 `implement` (`@fabrika/app/implement`), booted by the generated entrypoint that
 `fabrika app build` writes (`@fabrika/app/build`). The installation's own services
-(IAM, Control, Operations) move from `defineApp()` to service contracts
-(`@fabrika/app/service`) in work units B10c–e; until then they keep `defineApp()`. The remaining surface is
+(IAM, Control, Operations) declare service contracts and serve them with `serveService`
+(`@fabrika/app/service`). The runtime adapters (`@fabrika/app/bun`, `@fabrika/app/cloudflare`) serve a
+`FetchService` (`{ fetch(request, env, exec) }`, `src/fetch.ts`). The remaining surface is
 the A-M1 work of the
 [implementation plan](../../docs/ideas/app-framework-implementation-plan.md).
 
@@ -41,21 +43,19 @@ skill/SKILL.md        the agent skill `fabrika-app`: the one text of the applica
 src/
   index.ts            public surface
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/SKILL.md; renderAgentsFile (node:fs)
-  app.ts              runtime-neutral request pipeline
+  fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract
   service/            @fabrika/app/service — the installation services' own tables and dispatcher
     define.ts         defineServiceContract: an endpoint table with the installation forms
     serve.ts          serveService: the dispatcher over planEndpoint
   build.ts            @fabrika/app/build — the generated entrypoint fabrika app build writes
-  router.ts           typed HTTP and RPC route matching
-  middleware.ts       middleware runner over @fabrika/auth's canonical contract
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
     contract.ts       createClient: the typed client of a contract mount
     share.ts          shareKey: the key the share SPA's bootstrap kept
-    rpc.ts            createRpcClient: the defineApp() RPC client (exported from the root)
+    rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
     transport.ts      RpcError, the login bounce, reading the { result } / { error } envelope
   testing/            @fabrika/app/testing — no test-runner dependency
     kit.ts            testKit: boot behind the production proxy decision and a stand-in IAM
@@ -64,7 +64,7 @@ src/
     isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
     policy-isolation.ts  policyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
-    conformance.ts    the cross-runtime conformance helper of defineApp() services
+    runner.ts         the test functions the generated tests register through
   contract/           @fabrika/app/contract — browser-safe
     define.ts         defineContract, the c.* kit and every type an agent meets
     declaration.ts    the contract as plain data, generic over its schema type
@@ -106,39 +106,37 @@ src/
 
 ## Invariants
 
-- `AuthContext`, `Scope`, and `Middleware` come from `@fabrika/auth`. Do not
-  duplicate their shapes.
-- Proxy gates decide whether a request reaches the app; the proxy is the only gate
-  evaluator. `.require()` and the contract's requirement check are **authorization**
-  in the vocabulary of `docs/reference/overview.md`; the same-origin check of
-  `implement` is **admission**. Neither evaluates a gate rule. Never add one here.
-- `defineApp()` answers 400 for a non-canonical raw path (`isCanonicalPath` from
-  `@fabrika/auth-core`) before context, middleware or routing run. Middleware that
-  reads the path therefore sees what the router and the proxy's gates saw.
-- The router splits paths literally: a trailing `/` is significant, so `/a/` and
-  `/a` are different routes, and `/x/*rest` needs the `/` (it matches `/x/`, not
-  `/x`). Never drop empty segments again — the gate matcher compares the raw path,
-  and the two must agree (`provider-cloudflare`'s `proxy-to-router.test.ts`).
+- `AuthContext` and `Scope` come from `@fabrika/auth`. Do not duplicate their shapes.
+- The proxy's endpoint decision decides whether a request reaches the app; the proxy is
+  the only enforcement point. `.require()` and the contract's requirement check are
+  **authorization** in the vocabulary of `docs/reference/overview.md`; the same-origin
+  check of `implement` is **admission**. Neither is the enforcement decision. Never add
+  one here.
+- `implement` and `serveService` answer 400 for a non-canonical raw path
+  (`isCanonicalPath` from `@fabrika/auth-core`) and select only through `planEndpoint`,
+  the planner the proxy selects with. A trailing `/` is significant, so `/a/` and `/a`
+  are different paths. Never add a second router or normalize a path.
 - Error handling is structural. Never rely on cross-package `instanceof`.
-- The `defineApp()` RPC wire protocol is `{ method, input }` requests and
-  `{ result }` or `{ error }` responses. `{ batch }` is removed: one request is one
-  call, and a `{ batch }` body is a 400.
+- The RPC wire protocol (`dispatchRpcRequest`, `createRpcClient`) is `{ method, input }`
+  requests and `{ result }` or `{ error }` responses. `{ batch }` is removed: one request
+  is one call, and a `{ batch }` body is a 400.
 - Browser-safe procedure contracts may be implemented with `RpcRouterFor` and
   consumed with `createRpcClient`; they must not import a server runtime.
-- `defineApp()` owns request behavior. Runtime adapters only supply lifecycle
+- The `FetchService` owns request behavior. Runtime adapters only supply lifecycle
   capabilities and must not fork routing or RPC semantics.
 - Applications get no middleware, raw routes, `authenticate` or custom server.
-  `implement` has no slot for them, and `defineApp()` is for the installation's own
-  services only. `defineApp()` is never a way to serve a contract.
+  `implement` has no slot for them, and `@fabrika/app/service` is for the installation's
+  own services only. `serveService` is never a way to serve a contract.
 - The package root is runtime-neutral. Provider lifecycle APIs are exported only
   from `@fabrika/app/cloudflare` and `@fabrika/app/bun`. `@fabrika/app/implement`
   imports `node:async_hooks`, so neither the root nor `/contract` may import it:
   the SPA imports both.
 - The Bun adapter tracks every `waitUntil()` task. Shutdown drains them before
   application resources close.
-- Conformance tests create fresh requests and environment state for every runtime.
+- The runtime-conformance tests (`src/__tests__/fixtures/runtime-conformance.ts`, used by IAM, Control and
+  Operations) create fresh requests and environment state for every runtime.
 - Contract schemas are zod 4 (`zod/v4`), restricted to a serializable subset:
-  strict objects, no transforms, no `passthrough` (ADR-0012). `defineApp()`
+  strict objects, no transforms, no `passthrough` (ADR-0012). `initRpc`
   procedures and validation inside a handler stay library-neutral (Standard Schema).
   `zod` is a peer dependency, so an application and the framework share one copy.
 - Never log credentials, secret values, or request headers.
@@ -199,9 +197,9 @@ src/
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook
   appends `/:bindingId`. No authored path may lie under `/__fabrika`.
-- **A contract application has no gates.** The proxy reads its endpoint table,
-  `contractProxyTable(artifact)` from `@fabrika/proxy-core/manifest`, and both
-  providers refuse a contract application whose proxy carries gates (ADR-0022 rule 3).
+- **The proxy reads the contract's endpoint table**, `contractProxyTable(artifact)` from
+  `@fabrika/proxy-core/manifest`; nothing else describes an application to the proxy, and
+  the strict manifest parser refuses any other form (ADR-0022 rule 3).
 - **`schemaFromContract` (`platform.ts`) reads only the artifact**, so the static
   reader's artifact compiles to the same schema. It emits every
   field of A12's `AppSchema`, `workloads` included (each job and webhook with its sorted actions), and its output must parse unchanged with
@@ -223,7 +221,7 @@ src/
   refuses the import (`forbidden-import`), the static reader refuses `defineServiceContract`, and the
   manifest parser reads the installation forms only in an entry platform composition marks
   `installation: true` (ADR-0022 "Installation entries"). It imports only `@fabrika/auth-core`, so a
-  service's table module stays as dependency-light as its gate module was.
+  service's table module stays dependency-light.
 - `defineServiceContract(id, (s) => ({ endpoints, reservedPrefixes }))` keys each row by its id;
   `s.health`, `s.protocol` and `s.service` write the row, and `null` is a row this composition does not
   serve (a switched-off transport). It refuses an `<app>@<env>` id, an `oauth` caller without scopes or
@@ -253,7 +251,7 @@ src/
   requirement (`satisfies`) → admission → strict input → access form → remove the
   `from` field → handler → output projection → the header policy. Caller kind,
   requirement and access form are authorization; same-origin and content type are
-  admission. Neither evaluates a gate; never reorder them so that admission or input
+  admission. Neither is the proxy's enforcement decision; never reorder them so that admission or input
   parsing answers a caller the requirement refused.
 - **The proxy names the endpoint, and the application agrees or answers 503**
   (ADR-0022 rule 5). `X-Fabrika-Endpoint: <id>@<digest>` must name the endpoint

@@ -2,22 +2,22 @@
 
 A minimal contract application on Cloudflare Workers. It declares who may call what in
 [`fabrika.contract.ts`](./fabrika.contract.ts) and implements it in [`src/app.ts`](./src/app.ts). The proxy Worker
-enforces the contract's endpoint table; the application verifies the token the proxy injected and evaluates no gate
-([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
+enforces the contract's endpoint table; the application verifies the token the proxy injected and makes no enforcement
+decision ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
 
 The rules an agent follows when it changes this application are `@fabrika/app`'s skill
 ([`packages/app/skill/SKILL.md`](../../packages/app/skill/SKILL.md)).
 
 ## What is where
 
-| File                            | What it is                                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `fabrika.contract.ts`           | The vocabulary (dimensions, actions, roles) and every endpoint with its callers and access form.  |
-| `src/app.ts`                    | `implement(contract, …)`: one handler per procedure.                                              |
-| `fabrika/entry.generated.ts`    | The Worker entrypoint `fabrika app build` writes (`createContractWorker`). Do not edit it.        |
-| `fabrika.config.ts`             | The deploy surface: the application Worker and the IAM schema the contract compiles to. No gates. |
-| `oblaka.ts`, `lopata.config.ts` | A local run of the proxy, the application and IAM over service bindings.                          |
-| `src/__tests__/app.test.ts`     | The endpoints behind the production proxy decision (`testKit`), denied callers included.          |
+| File                            | What it is                                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `fabrika.contract.ts`           | The vocabulary (dimensions, actions, roles) and every endpoint with its callers and access form. |
+| `src/app.ts`                    | `implement(contract, …)`: one handler per procedure.                                             |
+| `fabrika/entry.generated.ts`    | The Worker entrypoint `fabrika app build` writes (`createContractWorker`). Do not edit it.       |
+| `fabrika.config.ts`             | The deploy surface: the application Worker and the IAM schema the contract compiles to.          |
+| `oblaka.ts`, `lopata.config.ts` | A local run of the proxy, the application and IAM over service bindings.                         |
+| `src/__tests__/app.test.ts`     | The endpoints behind the production proxy decision (`testKit`), denied callers included.         |
 
 Cloudflare has no `@fabrika/db` yet, so this application has no tables: each endpoint answers from the caller's own
 grants (`member: true` for the caller's identity, `over` for the values it may read in) and reads no application data.

@@ -1,9 +1,8 @@
 # Core application composition
 
-IAM, Delivery, and Operations are first-party reference applications for the
-same application model exposed to deployed apps. They share the
-`@fabrika/app` request pipeline, typed RPC transport, IAM SDK integration,
-runtime adapters, and process-side database wiring. Their product roles still
+IAM, Delivery, and Operations are the installation's own first-party services. They
+share the `@fabrika/app` service dispatcher (`serveService`), typed RPC transport,
+IAM SDK integration, runtime adapters, and process-side database wiring. Their product roles still
 require additional protocol-specific HTTP surfaces.
 
 ## Shared shape
@@ -11,18 +10,22 @@ require additional protocol-specific HTTP surfaces.
 | Plane        | Server application                    | Typed browser contract                                    | RPC endpoint | Authentication                                                                     | Postgres bundle |
 | ------------ | ------------------------------------- | --------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------- | --------------- |
 | Access / IAM | `@fabrika/iam` `createIamApp()`       | `IamAdminRpcContract` in `@fabrika/iam-contract`          | `/admin/rpc` | IAM resolves its own sessions, API keys, provisioning caller, and bootstrap caller | `iam`           |
-| Delivery     | `@fabrika/control` `controlApp`       | `ControlRpcContract` in `@fabrika/control-contract`       | `/api/rpc`   | Own middleware over `@fabrika/auth` `iam.authenticate()`                           | `control`       |
+| Delivery     | `@fabrika/control` `controlApp`       | `ControlRpcContract` in `@fabrika/control-contract`       | `/api/rpc`   | `serveService` row handler over `@fabrika/auth` `iam.authenticate()`               | `control`       |
 | Operations   | `@fabrika/operations` `operationsApp` | `OperationsRpcContract` in `@fabrika/operations-contract` | `/api/rpc`   | `serveService` row handler over `iam.authenticate()`, plus IAM principal lookup    | `operations`    |
 
-`@fabrika/auth` ships no middleware. It owns the `Middleware<Ctx>` type that
-`@fabrika/app` consumes, and each application writes the handful of lines that call
-`iam.authenticate(request)` and shape its own error envelope.
+`@fabrika/auth` ships no middleware. Each service writes the handful of lines that
+call `iam.authenticate(request)` in its credentialed row handlers and shape its own
+error envelope.
 
-Each server defines a runtime-neutral application with `defineApp()`. The
-application owns context construction, middleware, routes, RPC dispatch, and
-structural error mapping. The Cloudflare Worker and Bun process entrypoints
-bind runtime services to that same application through `@fabrika/app/cloudflare`
-and `@fabrika/app/bun`; they do not maintain a second route tree.
+Each service declares a service contract with `defineServiceContract`
+(`@fabrika/app/service`): IAM's in `packages/iam/src/service.ts`, Control's in
+`packages/control/fabrika.service.ts`, Operations' in
+`packages/operations/src/service.ts`. `serveService` dispatches the contract's rows
+to one handler each and returns a runtime-neutral `FetchService`; a typed RPC row's
+handler calls `dispatchRpcRequest`. The proxy decides from the same table, as an
+installation entry. The Cloudflare Worker and Bun process entrypoints bind runtime
+services to that same `FetchService` through `@fabrika/app/cloudflare` and
+`@fabrika/app/bun`; they do not maintain a second route tree.
 
 The contract packages are browser-safe and contain the named procedure shapes.
 Server routers implement those shapes through `RpcRouterFor`; the dashboard,
@@ -59,9 +62,9 @@ key — and a browser never attaches a bearer on its own.
 ### The proxy's surface is not the management surface
 
 The proxy never calls `IamRpc`. On the Bun composition it calls `/auth/mint/*` —
-`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange`, `/auth/mint/delegation` — gated by
+`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange`, `/auth/mint/delegation` — guarded by
 `FABRIKA_IAM_PROXY_KEY`, which is a different secret from the `FABRIKA_IAM_RPC_KEY`
-that gates `/rpc/*`. Either key left unset makes its surface answer 404 as though it
+that guards `/rpc/*`. Either key left unset makes its surface answer 404 as though it
 were never mounted; neither surface exists at all in the Cloudflare composition,
 where both are service-binding method calls. `@fabrika/proxy` narrows the binding to
 four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`), plus
@@ -82,18 +85,20 @@ authority, and which signs only for a job or webhook key of the named applicatio
 ## Authorization boundary
 
 **The proxy is the only enforcement point**
-([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)): one gate
-evaluator, in `@fabrika/auth-core`, and the proxy is the only thing that runs it.
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)): one
+enforcement decision, in `@fabrika/proxy-core` over `@fabrika/auth-core`'s
+`planEndpoint`, and the proxy is the only thing that runs it.
 Delivery and Operations use the application-facing `@fabrika/auth` SDK, whose whole
 request-time job is to read the proxy-injected `X-Fabrika-Token`, verify it locally
-against IAM's JWKS, and build the canonical `AuthContext`. It cannot evaluate a gate,
-exchange a session, or write a cookie. A procedure or shared use case then performs
+against IAM's JWKS, and build the canonical `AuthContext`. It cannot make an enforcement
+decision, exchange a session, or write a cookie. A procedure or shared use case then performs
 the action and object-scope check that depends on validated application data.
 
 That object-scope check is **authorization**, a separate layer from enforcement, and
 the proxy's session check above is a third one, **admission** ([`overview.md`](overview.md) names all three). A
-service that refuses a request is not thereby a second gate evaluator; only a
-component that evaluates the gate list would be, and only the proxy does.
+service that refuses a request is not thereby a second enforcement decision; only a
+component that decides from the endpoint table whether a request reaches a service
+would be, and only the proxy does.
 
 IAM is different only at the identity boundary: it authenticates its own admin
 callers before invoking the same typed RPC dispatcher. Every administration
@@ -103,8 +108,8 @@ by transport for them. `/admin/*` REST retains four machine-provisioning
 operations only (below); they share the same use cases and the same credential
 resolution code — `extractCredentials`, `resolveAdmin`.
 
-On both providers, proxy gates run before application code and decide whether a
-request may reach a private service. Cloudflare authoring materializes a public
+On both providers, the proxy's endpoint decision runs before application code and
+decides whether a request may reach a private service. Cloudflare authoring materializes a public
 proxy Worker and a private application Worker child; its provider lifecycle
 deploys every generated Worker config. Application authorization then decides
 whether the resolved principal may perform the requested action on the specific
@@ -205,11 +210,13 @@ ownership.
 
 ## Runtime conformance
 
-`@fabrika/app/testing` sends a fresh equivalent request through direct
-`FabrikaApp.fetch()`, the Bun adapter, and the Cloudflare adapter. It drains
-background work and compares normalized status, headers, and body. IAM,
-Delivery, and Operations each use this scaffold for routes whose behavior is
-intentionally portable.
+A private test fixture of `@fabrika/app`
+(`packages/app/src/__tests__/fixtures/runtime-conformance.ts`) sends a fresh
+equivalent request through a direct `fetch()` of the service's `FetchService`, the
+Bun adapter, and the Cloudflare adapter. It drains background work and compares
+normalized status, headers, and body. IAM, Delivery, and Operations each use it in
+their `runtime-conformance.test.ts` for rows whose behavior is intentionally
+portable. It is not a public export.
 
 Composition-specific protocols remain outside a parity assertion. For example,
 IAM's process health and shared-secret HTTP transport exist only in the Bun

@@ -26,7 +26,7 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   `@fabrika/operations-contract`. Keep server code, persistence types and runtime bindings out. Keep browser code away from the runtime entrypoints of `@fabrika/control`, `@fabrika/iam`, and
   `@fabrika/runner-container` or `@fabrika/runner-cloudflare`.
 - **Auth uses Fabrika IAM (no Cloudflare Access edge).** Delivery calls use the typed
-  `ControlRpcContract` client in `src/lib/api.ts`. On a human-gated 401 carrying a `loginUrl`, the shared
+  `ControlRpcContract` client in `src/lib/api.ts`. On the proxy's 401 for a `human` row, carrying a `loginUrl`, the shared
   RPC client opens IAM login with `redirect` rewritten to the current page. A short `sessionStorage`
   guard breaks the loop if IAM returns an identity that is still unauthorized. The overview's IAM
   snapshot uses `IamAdminRpcContract` directly with auth bounce disabled because that panel is

@@ -148,7 +148,7 @@ bootstrap password.
 surface, which is not behind the proxy. It is **not** a credential for any other
 service. It has no `credentials` row, so `mintFromKey` cannot resolve it, and the
 proxy refuses it with `invalid_key` before the request reaches the application
-behind the gate.
+behind it.
 
 A machine that calls the control plane, Operations, or any deployed app uses an
 **IAM-issued service key**: an operator (or CI, once bootstrapped) provisions one

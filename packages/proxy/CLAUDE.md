@@ -1,7 +1,8 @@
 # @fabrika/proxy
 
 The **Caddy deployment** of the auth enforcement point: the configuration that fronts the decision
-service, plus the Bun process that serves it. Nothing reaches an app until its gates pass
+service, plus the Bun process that serves it. Nothing reaches an app until the endpoint the proxy
+selects admits the request
 ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md), which supersedes
 0007/0008/0010/0021). Assumes the root CLAUDE.md.
 
@@ -9,7 +10,7 @@ service, plus the Bun process that serves it. Nothing reaches an app until its g
 and shared verbatim with the Cloudflare proxy Worker. This package is an ARTIFACT rather than an API
 and stays `private: true`: `bun run build` compiles `src/main.ts` into a static musl binary with
 `caddy.json` beside it. The manifest wire contract and its strict parser live in
-`@fabrika/proxy-core/manifest`; the gate matcher and its compiled form live in `@fabrika/auth-core`.
+`@fabrika/proxy-core/manifest`; the endpoint planner and its compiled table live in `@fabrika/auth-core`.
 
 Most of the invariants below are properties of the DECISION and therefore hold in `proxy-core`; they
 are documented here because this is where the enforcement point is described end to end. What is
@@ -21,21 +22,23 @@ specific to this package is the Caddy configuration, `src/env.ts`, and the proce
 bun run dev           # run src/main.ts directly
 bun run build         # generate caddy.json + compile the fabrika-proxy binary (musl, static)
 bun run build:check   # the same against fixtures/empty.manifest.json
-bun test              # deny-matrix.test.ts is the authorization truth table — keep it exhaustive
+bun test              # the Caddy config and env; the authorization truth tables live in proxy-core — keep them exhaustive
 FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the chain in a real caddy 2.10.2
 ```
 
 ## Invariants
 
-- **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
-  condition. A request matching no gate rule is denied.
-- **A `human` gate admits only `ptype: 'user'`.** A valid token is not a human: `mintFromKey` signs
-  `ptype: 'service'` for a machine key and no `ptype` for a share link.
+- **Every `catch` maps to a deny.** Nothing in `proxy-core`'s `src/authorize.ts` returns an allow on an
+  unexpected condition. A request that selects no endpoint is denied (403 `no_endpoint`).
+- **A session admits only `ptype: 'user'`.** A valid token is not a human: `mintFromKey` signs
+  `ptype: 'service'` for a machine key and no `ptype` for a share link. The caller `human` admits a session
+  or a `user` key; `machine` admits only a `service` key.
   Browser authentication starts from the host-only opaque `__Host-px_session`; the short-lived JWT
   exists only in the proxy cache and the injected header.
-- **A `service` gate admits only a `px_` key.** Any other credential at that location is a 401 with no
-  IAM call; a share link is a `px_` key at the gate's declared location.
-- **A `human` gate miss answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
+- **A bearer on a credentialed row is a `px_` key.** Any other `Authorization` credential is a 401 with no IAM call,
+  except on an installation row that admits `oauth`, where it is verified as an OAuth resource token. A
+  share link is a `px_` key as a bearer.
+- **A `human` row reached without a usable session answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
   the header absent, → the 302 bounce; any other value → **401** with
   `{ error: { type: 'auth', message, loginUrl } }`, the envelope `@fabrika/app`'s browser RPC client
   bounces on. A redirect a page's `fetch` cannot follow is an opaque failure, and a 302 turns an
@@ -48,30 +51,28 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read this
   request's own method or path; a missing `X-Forwarded-Uri` or `X-Forwarded-Method` must deny, not
-  fall back. A non-canonical raw path (`isCanonicalPath`) is a 400 before any gate is matched.
+  fall back. A non-canonical raw path (`isCanonicalPath`) is a 400 before any endpoint is planned.
 - **The generated Caddy config deletes every `X-Fabrika-*` hop header (`FABRIKA_HOP_HEADERS` in
   `@fabrika/auth-core`), the request id AND every name a client address travels under from the inbound
   request before `forward_auth` runs** (the Cloudflare Worker deletes the same list). Caddy's `copy_headers` skips empty values rather than deleting, so without the strip a client
-  could present its own token header on a `public` path and have it reach the app — and the request id
+  could present its own token header on an anonymous endpoint and have it reach the app — and the request id
   it chose would land in IAM's `auth_log` and `audit_events`. The token and the request id are written
   back from the auth response on a 2xx; the client address is not, because it describes the request as
   the EDGE saw it and no inner hop gets a vote. A header a client can set never reaches a decision.
-- **Gate rules are NOT compiled into Caddy routes** — every request goes to `/verify` and gates are
-  evaluated once, in TypeScript. Caddy's `path` matcher is case-insensitive, its `*` stops at `/`,
-  and it normalizes the path; the SDK's glob does none of those, and fall-through is not expressible
-  as a matcher at all. Any of those mismatches silently widens or narrows an authorization rule. Read
-  the header of `src/caddy.ts` before revisiting this.
-- **Gate semantics are `AppGates`', verbatim:** array order IS precedence; a matching rule whose
-  credential is ABSENT falls through; a matching rule whose credential is PRESENT is terminal. A
-  rejected human session therefore never falls through to a later public or service rule. **This holds
-  for installation gates only.** A contract application's endpoint table selects the most specific
-  endpoint, array order means nothing, and an absent credential falls through to no other endpoint
-  (ADR-0022 rule 3; the steps are in `../proxy-core/CLAUDE.md`).
+- **Endpoint rows are NOT compiled into Caddy routes** — every request goes to `/verify` and the
+  endpoint is planned once, in TypeScript. Caddy's `path` matcher is case-insensitive, its interior `*`
+  stops at `/`, and it merges `//`; `planEndpoint` reads the raw, case-sensitive path and selects the most
+  specific row, and the caller, requirement and admission checks need a resolved credential, which no
+  matcher has. Any of those mismatches silently widens or narrows an authorization rule. Read the header
+  of `src/caddy.ts` before revisiting this.
+- **One pass over one selected endpoint.** Array order means nothing, the most specific endpoint wins,
+  and an absent credential falls through to no other endpoint; a presented key is terminal (ADR-0022
+  rule 3; the steps are in `../proxy-core/CLAUDE.md`).
 - **The endpoint and the delegation grant are proxy-asserted like the token.** Step 1 deletes a
   client's `X-Fabrika-Endpoint` and `X-Fabrika-Delegation`; the 2xx branch copies them back from the
   auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
-  `Authorization`, so a key the proxy did not read never reaches the app. An installation service — a
-  gate app or an installation entry (`isApplicationEntry` false) — keeps it: IAM's `/admin/*` reads its
+  `Authorization`, so a key the proxy did not read never reaches the app. An installation entry
+  (`isApplicationEntry` false) keeps it: IAM's `/admin/*` reads its
   own bearer, and a `protocol` row is one the service authenticates itself.
 - **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).
   Within one `HeaderOps` a named delete runs AFTER the set, so the strip and the client-address set are two
@@ -155,9 +156,9 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
   header with one meaning on both clouds beats a provider-specific one that silently means "a caller
   wrote this" on the other. IAM's own Worker is the exception and reads it directly — it holds its own
   Custom Domain and is not behind a proxy Worker, so the edge is the hop in front of it.
-- **A rate limiter is admission control, not authorization.** It lives nowhere near the gate matcher
-  and must never grow gate semantics; there is still exactly one gate evaluator, in
-  `@fabrika/auth-core`.
+- **A rate limiter is admission control, not authorization.** It lives nowhere near the endpoint
+  decision and must never grow its semantics; there is still exactly one enforcement decision, in
+  `@fabrika/proxy-core` over `@fabrika/auth-core`'s planner.
 
 ## The session handoff (ADR-0022, ADR-0023)
 
@@ -171,14 +172,14 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
   the app receives identity through the verified `X-Fabrika-Token` header only.
   Caddy preserves only IAM's exact login cookie on the trusted `iamSessionOwner` route (sole host,
   scheme and upstream must match). Supply the owner through platform composition, never app IDs or
-  gates; namespace builds set `FABRIKA_PROXY_SESSION_OWNER_JSON` to `null`.
+  endpoint rows; namespace builds set `FABRIKA_PROXY_SESSION_OWNER_JSON` to `null`.
 - **The session cookie's attributes are fixed by its `__Host-` prefix**: `Secure`, `Path=/`, no
   `Domain`. `Secure` is UNCONDITIONAL and no longer follows `ProxyApp.scheme` — the prefix requires
   it, so a conditional could only emit a cookie the browser discards. It is right behind a
   TLS-terminating balancer (plain HTTP socket, HTTPS browser) and on `*.localhost`, which browsers
   treat as potentially trustworthy; measured in Chromium 151, not assumed.
-- **`/__fabrika/auth/callback` is reserved on every app host** and is answered BEFORE gate matching —
-  it is how a browser becomes able to satisfy a gate, so it cannot be behind one. It must not shadow
+- **`/__fabrika/auth/callback` is reserved on every app host** and is answered BEFORE an endpoint is
+  planned — it is how a browser obtains a session, so it cannot be behind an endpoint. It must not shadow
   an application route, the same hazard `src/caddy.ts` documents for the health route. Its `?code=`
   and `?state=` are stripped from structured request logs; the Cloudflare proxy disables automatic
   invocation logs because they would otherwise capture the raw callback URL.
@@ -189,6 +190,6 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
 ## Patterns
 
 - `src/generate-config.ts` runs at BUILD time: `proxy.manifest.json` → `caddy.json`, baked into the
-  artifact, so a gate change ships with the app's next deploy rather than being pushed to Caddy's
+  artifact, so an endpoint table change ships with the app's next deploy rather than being pushed to Caddy's
   admin API.
 - Deny reasons are coarse on purpose — they are logged, never returned to clients.

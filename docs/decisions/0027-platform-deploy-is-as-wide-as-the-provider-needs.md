@@ -39,7 +39,7 @@ that the two providers do not have the same shape of work to order:
 - **The proxy manifest is cross-service state that must move with the code it describes.** Enforcement
   configuration for IAM, the console and Operations is one `FABRIKA_PROXY_MANIFEST_JSON` document on
   one proxy service. Regenerating it and applying it must happen in the same run as the deploy, or
-  enforcement silently describes a previous version of the gate modules. No single pipeline step owns
+  enforcement silently describes a previous version of the service contracts. No single pipeline step owns
   that document, because it spans every service the pipeline deploys.
 - **The order carries a security property, not just a dependency.** Since
   [ADR-0022](./0022-the-proxy-is-the-only-enforcement-point.md) the application enforces nothing, so

@@ -35,8 +35,12 @@ contract and classify what it changed instead.
    Documents (Claude, ChatGPT); there is no open dynamic registration. An access token is minted for
    one resource of one app. Its permissions are the user's live grants narrowed by the consented
    scope. No token delegation exists.
-3. **The proxy enforces it** with an `oauth` gate kind and serves the RFC 9728 resource metadata.
-   ADR-0022 holds: Control verifies the injected token for the resource profile and evaluates no gate.
+3. **The proxy enforces it.** `/mcp` is a `service` row of the console's installation entry that
+   admits the caller `oauth`, with `oauth: { scopes }` on the row and a registered `oauthResources`
+   entry for its path ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation
+   entries"). The proxy verifies the bearer as a resource token for that resource and scopes, and serves
+   the RFC 9728 resource metadata. ADR-0022 holds: Control verifies the injected token for the resource
+   profile and makes no enforcement decision.
 4. **A workspace is a Git branch** `fabrika/<workspace id>` created from the default branch. Edits
    are ordinary commits that name the expected head; a stale head fails. Control stores workspace
    metadata only, never file contents. Control performs every GitHub read and write itself, through

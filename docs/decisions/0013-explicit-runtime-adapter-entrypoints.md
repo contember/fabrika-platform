@@ -21,9 +21,10 @@ and queue handlers do not participate in request routing.
 
 ## Decision
 
-The `@fabrika/app` package root will expose only the runtime-neutral application
-API. `defineApp()` produces one `FabrikaApp` that owns routing, middleware, RPC,
-error mapping, and request context creation.
+The `@fabrika/app` package root will expose only the runtime-neutral API: the
+typed RPC library, structural errors, the client, and the `FetchService` type. A
+`FetchService<Env>` is `{ fetch(request, env, exec) }`. It owns request behavior;
+an installation service's `serveService` dispatcher is one.
 
 Runtime adapters will use explicit subpath exports:
 
@@ -32,8 +33,12 @@ Runtime adapters will use explicit subpath exports:
 - `@fabrika/app/bun` exposes `createBunHandler()` and Bun process lifecycle
   types.
 
-Adapters consume a `FabrikaApp`; they do not accept or duplicate its request
-configuration. Cloudflare cron and queue handlers belong to the Cloudflare
+Each subpath also exposes the entry for a contract application, which only the
+generated entrypoint calls: `serveContract()` on Bun, `createContractWorker()` on
+Cloudflare.
+
+Adapters consume a `FetchService`; they do not accept or duplicate its request
+behavior. Cloudflare cron and queue handlers belong to the Cloudflare
 adapter options. Bun background-task tracking and draining belong to the Bun
 adapter.
 
@@ -47,8 +52,8 @@ required while the adapters have no independent dependency or release boundary.
 - Runtime entrypoints state their target explicitly in source imports.
 - Worker and Bun deployments exercise the same request application.
 - Adding a runtime no longer expands the package root API.
-- The pre-release `defineServer()` API is removed in favor of composing
-  `defineApp()` with `createCloudflareWorker()`.
+- The pre-release `defineServer()` API is removed in favor of composing a
+  `FetchService` with `createCloudflareWorker()`.
 - A future adapter may become a separate package if it gains substantial
   provider dependencies or needs an independent release cycle.
 

@@ -100,8 +100,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   console's service table (`fabrika.service.ts`), resolves the credential, and injects the access token as
   `X-Fabrika-Token` and the selected row as `X-Fabrika-Endpoint`.
   `iam.authenticate(request)` re-verifies that token LOCALLY against IAM's JWKS — signature, `iss`,
-  `aud`, `exp` — and builds the `AuthContext` for `can(action, scope?)` + audit. Nothing here evaluates
-  a gate, exchanges a session, or writes a cookie, and a miss is a flat 401/403/503, never a login
+  `aud`, `exp` — and builds the `AuthContext` for `can(action, scope?)` + audit. Nothing here makes an
+  enforcement decision, exchanges a session, or writes a cookie, and a miss is a flat 401/403/503, never a login
   bounce (only `src/iam-admin.ts` / `src/operations-gateway.ts` attach a `loginUrl`, and theirs comes
   from an UPSTREAM 401). `env.IAM` is the `IamRpc` CONTRACT, so it is a service binding on Cloudflare
   and `HttpIamRpc` (`@fabrika/auth`, bearer `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private

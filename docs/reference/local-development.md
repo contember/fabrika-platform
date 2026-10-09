@@ -119,11 +119,15 @@ webhook, where it waits for approval. The scenario
 follows the deploy. Every `up` returns the container to the workspace example.
 
 The apps proxy also fronts the Operations browser SDK witness at
-`http://sdk.fabrika.localhost:18081`, an application without a contract behind a
-`human` gate (`src/operations-witness/`): a contract application cannot hand its
-browser the managed DSN yet (backlog 102). Control would refuse to deploy it, so it
-never takes Control's application path: `local:prepare` writes its entry into the
-apps proxy manifest and Compose runs it.
+`http://sdk.fabrika.localhost:18081` (`src/operations-witness/`). It is a stand-in,
+because a contract application cannot hand its browser the managed DSN yet
+(backlog 102). It sits behind a minimal contract (`contract.ts`, app `sdk-witness`):
+an anonymous `health` row and an SPA row that admits any member. The apps proxy
+fronts it with `contractProxyTable(witnessContract)` and `operationsOrigin`, and with
+its own proxy secret (`.state/operations-witness.env`, `apps-proxy-secret.env`). The
+witness checks the proxy secret and the injected token itself. Only the browser
+suite's `admin` role signs in to its host. It never takes Control's application path:
+`local:prepare` writes its entry into the apps proxy manifest and Compose runs it.
 
 ## Immutable source fixtures
 
@@ -214,13 +218,13 @@ all other Fabrika cookies are removed, including handoff verifiers. Application
 upstreams retain no Fabrika cookies. Zerops builds receive the same owner through
 `FABRIKA_PROXY_SESSION_OWNER_JSON`; namespace proxies and first-pass installation
 explicitly supply `null`.
-Nothing reaches an application until a gate passes, and the application only ever
-verifies the token the proxy injected. There is no second way in: `@fabrika/auth`
+Nothing reaches an application until the proxy's endpoint decision admits it, and
+the application only ever verifies the token the proxy injected. There is no second way in: `@fabrika/auth`
 has one code path and no local mode, so no synthetic persona exists anywhere.
 
 Opening the console therefore runs the real round trip:
 
-1. the proxy matches a `human` gate and answers `302` to
+1. the proxy selects the console's row, which admits `human`, finds no session and answers `302` to
    `iam.fabrika.localhost:18080/auth/login?app=vozka&redirect=<original URL>&state=…&code_challenge=…`,
    after storing the verifier in a short-lived cookie on the console host;
 2. IAM authenticates. `LOCAL_DEV_LOGIN=true` makes that step non-interactive: IAM
@@ -263,8 +267,8 @@ The **browser** composition (`browser:up`, `test:browser`) runs the same service
 with `LOCAL_DEV_LOGIN` off. Its scenarios seed a real principal, grant and `sessions`
 row directly in IAM, plant that login on **IAM's host**, and then drive the real
 handoff once per application host to obtain each host's own session. Nothing there is
-a shortcut past the proxy, and every request the suite makes is still gated and
-answered with an IAM-minted token. With the bypass off, the suite can also drive an
+a shortcut past the proxy, and every request the suite makes still passes the proxy's
+decision and is answered with an IAM-minted token. With the bypass off, the suite can also drive an
 unauthenticated browser and observe the proxy's `302` to IAM.
 
 `bun run test:browser` uses the configured critical tier. For every browser

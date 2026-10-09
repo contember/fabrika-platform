@@ -10,15 +10,15 @@ date: 2026-10-08
 ## Context
 
 fabrika owns an application's deployment, identity model, authorization policy, proxy enforcement and
-audit. `@fabrika/app` is its first-party server framework: Fetch routing, middleware, typed RPC and
-`.require()`. It came from the separate Trasa project, which was absorbed so that the auth contracts
+audit. `@fabrika/app` is its first-party server framework: typed RPC, `.require()`, the runtime adapters
+and the contract runtime. It came from the separate Trasa project, which was absorbed so that the auth contracts
 and the framework change in one repository.
 
-Today an application declares its access surface three times, by hand:
+Without one declaration, an application declares its access surface three times, by hand:
 
-- `fabrika.schema.ts` holds the IAM vocabulary (actions, roles, scope dimensions);
-- `fabrika.gates.ts` holds the proxy's path gates;
-- `defineApp()` holds the routes, the middleware and the `.require()` calls.
+- a schema module holds the IAM vocabulary (actions, roles, scope dimensions);
+- a rule list holds the proxy's path rules;
+- the router holds the routes, the middleware and the `.require()` calls.
 
 Nothing ties the three together. The likely mistakes, in order:
 
@@ -34,9 +34,9 @@ A coding agent makes these mistakes routinely, because it optimizes for "it work
 in this repository already bypasses the framework: it calls `Bun.serve`, opens `new SQL(...)` and
 verifies tokens with `jose` (`examples/zerops-app/src/`).
 
-The router and the gate matcher also read paths differently. The router drops empty segments
-(`packages/app/src/router.ts`); the gate matcher reads the raw path. The proxy can therefore evaluate
-one gate while the router serves a different handler.
+Two matchers can also read paths differently. A router that drops empty segments selects by a
+different path than a proxy that reads the raw path. The proxy can then decide for one rule while the
+router serves a different handler.
 
 Finally, the platform must be able to read the access surface without executing application code
 ([ADR-0005](0005-compile-app-config-to-static-manifest.md)). An application authored over MCP has no
@@ -50,8 +50,8 @@ the application's module graph runs cannot serve that purpose.
 
 ### 1. The contract is the declaration
 
-`fabrika.contract.ts` is a pure-data, browser-safe module. For applications it replaces
-`fabrika.schema.ts` and `fabrika.gates.ts`. It declares:
+`fabrika.contract.ts` is a pure-data, browser-safe module. It is the only declaration of an
+application's access surface; there is no separate schema module and no rule list. It declares:
 
 - the authorization vocabulary: scope dimensions with containment, actions, roles that list exact
   actions, and the actions that manage and list membership;
@@ -92,13 +92,12 @@ for an undeclared endpoint, a missing handler, or a handler of the wrong kind is
   request and checked at runtime too, because TypeScript cannot prevent every widening.
 - Errors map to 400, 403, 404 and 409 with one envelope.
 
-The installation's own services (IAM, Control, Operations) do not use `defineContract`. Work unit B10
-moves them from `defineApp()` and their hand-written gates to **service contracts**: one endpoint table
-per service and a thin dispatcher over `planEndpoint`. The proxy reads such a table as an installation
-entry, which platform composition marks and which may use five forms no application contract can
-declare ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation entries"). Until the
-B10 unit of a service lands, it keeps `defineApp()` and its gates, including the `oauth` gates of MCP
-authoring.
+The installation's own services (IAM, Control, Operations) do not use `defineContract`. Each declares
+a **service contract** (`defineServiceContract` in `@fabrika/app/service`): one endpoint table per
+service. `serveService` is its thin dispatcher over `planEndpoint`. The proxy reads such a table as an
+installation entry, which platform composition marks and which may use five forms no application
+contract can declare ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation
+entries"), among them the `oauth` caller of MCP authoring.
 
 ### 3. The router and the proxy select from one endpoint table
 
@@ -111,24 +110,24 @@ than the proxy applied, and `X-Fabrika-Endpoint` names the endpoint and the dige
 
 ### 4. The proxy reads the endpoint table; the contract generates the IAM schema
 
-The contract compiles into the two artifacts the proxy and IAM consume. It generates no gates:
+The contract compiles into the two artifacts the proxy and IAM consume:
 
 - **`contractProxyTable(artifact)`** (`@fabrika/proxy-core/manifest`) produces the endpoint table of
   the proxy manifest: every row's rules, its delegation and digest, the reserved prefixes and the
   contract digest. The proxy decides per endpoint with it
-  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3). Both providers refuse a contract
-  application whose proxy carries gates.
+  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3). The manifest parser refuses
+  any other form of entry.
 - **`schemaFromContract(contract)`** produces the `AppSchema` that the deploy reconciles into IAM:
   scopes with their membership metadata, actions, roles, link mounts, and the endpoints that spend
   membership authority (`creates`, and the dimension's `members.manage`) as delegations.
 
 Both providers take these from `fabrika.config.ts`. The application never writes either by hand.
 
-### 5. The framework authorizes; the proxy stays the only gate evaluator
+### 5. The framework authorizes; the proxy stays the only enforcement point
 
 The vocabulary is the one of [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) and
 [`overview.md`](../reference/overview.md). The proxy decides with the endpoint table and the canonical
-matchers, and it is the only enforcement point. The framework evaluates no gate rule.
+matcher, and it is the only enforcement point. The framework makes no enforcement decision.
 
 Per request, after the proxy has admitted it, the framework runs these steps in order:
 
@@ -145,11 +144,12 @@ Per request, after the proxy has admitted it, the framework runs these steps in 
 
 The caller-kind check (step 3), the requirement check (step 4) and the access form (step 6) are
 **authorization**. The same-origin and content-type check (step 5) is **admission**. Neither is a
-second gate evaluator: neither selects whether a request reaches the service, and the proxy has
+second enforcement decision: neither selects whether a request reaches the service, and the proxy has
 already made that decision.
 
-On today's platform the requirement check runs only in the framework. The proxy distinguishes a
-session from a `px_` key; the framework checks which kind of key it is.
+The proxy checks the caller kind and the requirement too
+([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 3). The framework repeats them as
+authorization.
 
 ### 6. Membership, scopes and share links come from IAM
 
@@ -178,10 +178,9 @@ Other ADRs make the contract binding outside the application process:
 - The platform owns the run section and the server build on Zerops
   ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)) and builds the proxy Worker
   on Cloudflare ([ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
-- The installation's own services move to service contracts, not to `defineContract`, and their
-  tables reach the proxy as installation entries
-  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)). Work unit B10 does it service by
-  service; until then they keep `defineApp()` and gates.
+- The installation's own services declare service contracts, not `defineContract`, and their tables
+  reach the proxy as installation entries
+  ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 
 None of these is built yet; until they are, the framework is the only check.
 
@@ -196,8 +195,9 @@ None of these is built yet; until they are, the framework is the only check.
 - The literal rule makes contracts more verbose. Shared schema fragments must be `const` imports;
   computed contracts are impossible.
 - Contracts depend on zod 4. Other validators cannot appear in a contract.
-- `@fabrika/app` now has two surfaces: `implement` for applications and `defineApp()` for the
-  installation's own services. Both share the router, the RPC wire and the runtime adapters.
+- `@fabrika/app` has two serving surfaces: `implement` for applications and `serveService` for the
+  installation's own services. Both dispatch through `planEndpoint` and run on the same runtime
+  adapters; a service's typed RPC mount uses the same RPC wire (`dispatchRpcRequest`).
 - RPC clients can no longer send `{ batch }`. One request is one procedure.
 - `@fabrika/auth-core` gains the contract model, `planEndpoint` and the requirement check. The proxy
   and the framework select with the same `planEndpoint`, and the per-endpoint digest proves they
@@ -207,18 +207,18 @@ None of these is built yet; until they are, the framework is the only check.
 
 ## Alternatives considered
 
-- **Keep `fabrika.schema.ts` and `fabrika.gates.ts` and add a consistency check.** Rejected: a check
+- **Keep a separate schema module and rule list and add a consistency check.** Rejected: a check
   catches disagreement between the files, not a widening that keeps them consistent.
-- **Code-first: mounts inside `defineApp()`, gates extracted by importing the application.** Rejected:
-  the build must execute the application's module graph, and the extracted data is the application's
-  self-report.
+- **Code-first: mounts inside a router, the access surface extracted by importing the application.**
+  Rejected: the build must execute the application's module graph, and the extracted data is the
+  application's self-report.
 - **File-based routing.** Rejected: per-endpoint requirements stay invisible outside the application,
   and URLs move with files.
 - **Resource-first: tables with policies and generated CRUD.** Rejected as the base: strong for CRUD,
   with an expressiveness cliff for everything else. It remains a candidate for sugar on top of the
   contract.
 - **Keep middleware and raw routes for applications next to the contract.** Rejected: any slot for
-  raw surface is a path that the contract and the gates do not describe.
+  raw surface is a path that the contract and the proxy's table do not describe.
 - **A computed contract.** Rejected: the platform could read it only by executing application code.
 - **Accept any Standard Schema validator in contracts.** Rejected: the contract must be readable
   without evaluation, which needs one known set of schema calls.

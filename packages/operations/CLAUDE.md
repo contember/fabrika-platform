@@ -43,7 +43,7 @@ against IAM's JWKS, and an unresolved caller never reaches a handler. Because th
 operator surface is fronted by the CONSOLE's proxy, `OPERATIONS_AUTH_APP_ID` is
 the console's app id, not `OPERATIONS_APP_ID` — see
 [`backlog 54`](../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md).
-Operations evaluates no gate, writes no cookie, and never produces a login URL.
+Operations makes no enforcement decision, writes no cookie, and never produces a login URL.
 
 Ingest redacts before it parses (`src/redact.ts`, called by `buildParsedEvent`): every URL fragment,
 every `Authorization` header (an object key or a `[name, value]` pair) and every `px_` credential pattern

@@ -1,24 +1,24 @@
 # @fabrika/proxy-core
 
 The auth enforcement **decision**, as a runtime-neutral library: take a forwarded request, decide,
-and mint or refuse. Nothing reaches an app until its gates pass
+and mint or refuse. Nothing reaches an app until the endpoint the proxy selects admits the request
 ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md), which supersedes
 0007/0008/0010/0021). Assumes the root CLAUDE.md.
 
 There are two enforcement points and they run the same code from here: the Bun service answering
 Caddy's `forward_auth` subrequest on Zerops (`@fabrika/proxy`), and the Cloudflare proxy Worker
 calling it in-process (`@fabrika/provider-cloudflare`). The manifest wire contract and its strict
-parser are `src/manifest.ts`, exported as `@fabrika/proxy-core/manifest`; the gate matcher and the token claims are `@fabrika/auth-core`;
+parser are `src/manifest.ts`, exported as `@fabrika/proxy-core/manifest`; the endpoint planner and the token claims are `@fabrika/auth-core`;
 the JWKS token verifier is `@fabrika/jwks`, the same class `@fabrika/auth` wraps.
 
 **The behavioural invariants live in [`../proxy/CLAUDE.md`](../proxy/CLAUDE.md)** — deny semantics,
-the three-state `verify`, the `human` gate's answer shape, the client-coordinate table, and the
+the three-state `verify`, the answer shape of a `human` row, the client-coordinate table, and the
 session handoff. They are properties of the decision, so they apply here; that file is not repeated.
 
 ## Commands (this package)
 
 ```bash
-bun test   # deny-matrix (gates), endpoint-matrix (application tables) and installation-matrix (installation entries) are the truth tables — keep them exhaustive
+bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and installation-matrix (installation entries) are the truth tables — keep them exhaustive
 ```
 
 ## Invariants
@@ -49,48 +49,49 @@ bun test   # deny-matrix (gates), endpoint-matrix (application tables) and insta
   wildcard label: on Zerops one proxy fronts every app in a namespace, so an accepted pattern captures
   the sibling apps' hostnames. Never relax it to accommodate a producer; fix the producer.
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
-  condition. A request matching no gate rule is denied.
+  condition. A request that selects no endpoint is denied (403 `no_endpoint`).
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read the
   incoming request's own method or path; a missing `X-Forwarded-Uri` or `X-Forwarded-Method` must
   deny, not fall back.
 - **The forwarded path is checked RAW, before any URL is built.** `isCanonicalPath` from
   `@fabrika/auth-core` runs on the header's path; a non-canonical one is a 400 (`non_canonical_path`)
-  before any gate is matched. Assigning a pathname resolves `..` and `%2e%2e`, so checking after it
+  before any endpoint is planned. Assigning a pathname resolves `..` and `%2e%2e`, so checking after it
   would match `/admin` while the upstream receives `/a/../admin`.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
   stateless, so never make it shared or persistent.
-- **There is exactly one gate evaluator, in `@fabrika/auth-core`.** This package composes it; it
-  does not reimplement or extend gate semantics. A gate path is a glob: `*` crosses `/`, and a whole
-  `:name` segment matches exactly one non-empty segment, the rule endpoint tables use. Array order
-  is precedence for installation gates only.
-- **A manifest app is exactly one of three forms.** `gates` makes a gate app; `endpoints` (with
-  `reservedPrefixes` and `snapshot`) makes a contract app — an application; `installation: true` with
-  `endpoints` makes an installation entry (ADR-0022 "Installation entries"). An app carrying two forms,
-  OAuth resources beside an application's table, or an `installation` key on a gate or contract app is
-  refused whole, never read as one of them. `isApplicationEntry` is the one predicate every hop rule
-  keys on (proxy secret, header policy, the `Authorization` delete, metadata routes); everything else is
-  an installation service. A contract app's request is one pass over the row
-  `planEndpoint` selects (ADR-0022 rule 3): no row → 403; a presented `Authorization` header is a
-  `px_` key and terminal, and its caller kind (`callerOf`, re-checked on cached tokens) must be one
-  of the row's callers, and an `app:<id>` caller must be on an export path (`callerAdmittedAt`) → 403;
-  a job or webhook key is no caller kind, so every row refuses it; no key and no `human` caller → 401, never a bounce; the session or the
-  login bounce; `satisfies` → 403; admission (a session non-`GET` needs `Sec-Fetch-Site:
-  same-origin` → 403, the media type must be one the row admits → 400). An anonymous kind reads no
-  credential and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`.
+- **There is exactly one enforcement decision, and it is `src/authorize.ts`.** It composes
+  `@fabrika/auth-core`'s planner (`planEndpoint`), `callerOf` and `satisfies`; it does not reimplement or
+  extend them. A whole `:name` segment matches exactly one non-empty segment, a terminal `*` the rest of
+  the path. Array order carries no meaning: the most specific endpoint wins.
+- **A manifest app is exactly one of two forms.** `endpoints` (with `reservedPrefixes`, `snapshot` and
+  `csp`) makes a contract app — an application; `installation: true` with `endpoints` makes an
+  installation entry (ADR-0022 "Installation entries"). Both schemas and `proxyManifestSchema` are
+  `.strict()`: a `gates` key, OAuth resources beside an application's table, an `installation` key on a
+  contract app, or any other unknown key refuses the whole manifest, never read as one of the forms.
+  `isApplicationEntry` is the one predicate every hop rule keys on (proxy secret, header policy, the
+  `Authorization` delete, metadata routes); everything else is an installation service. A request is one
+  pass over the row `planEndpoint` selects (ADR-0022 rule 3), with no fall-through: no row → 403; a
+  presented `Authorization` header is a `px_` key and terminal, and its caller kind (`callerOf`,
+  re-checked on cached tokens) must be one of the row's callers, and an `app:<id>` caller must be on an
+  export path (`callerAdmittedAt`) → 403; a job or webhook key is no caller kind, so every row refuses
+  it; no key and no `human` caller → 401, never a bounce; the session or the login bounce; `satisfies` →
+  403; admission (a session non-`GET` needs `Sec-Fetch-Site: same-origin` → 403, the media type must be
+  one the row admits → 400). An anonymous kind reads no credential and mints no token. The allow carries
+  `X-Fabrika-Endpoint: <id>@<digest>`.
 - **The installation-only forms exist in installation entries alone.** The parser refuses `protocol`,
   `service`, method `*`, caller `oauth`, requirement `authenticated` and an `oauth` row field in an
   application row; and an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
   `operationsOrigin`, or whose `oauth` row has no registered resource on its path (`oauthResourceOfRow`)
   or asks for an unsupported scope. On a row that admits `oauth`, a bearer that is not a `px_` key (or
-  no bearer, when `human` is not a caller) takes the same RFC 6750 path as an `oauth` gate
-  (`verifyOAuthBearer`): local verification for the row's resource, every row scope, the challenge on
+  no bearer, when `human` is not a caller) takes the RFC 6750 path (`verifyOAuthBearer`): local verification for the row's resource, every row scope, the challenge on
   401/403, never a bounce; a refused `px_` key there keeps its status and reason and gets the challenge too
   (`withBearerChallenge`). A `protocol` row reads no credential like any anonymous kind; only its hop
   differs.
-- **A workload key opens no gate either.** A `service` gate refuses a key whose token has a workload kind (`job`,
-  `webhook`, `app`) with 403 `caller_kind`, also from the cache (ADR-0022 "Principal kinds").
+- **A workload key opens no `machine` row.** The caller `machine` admits only a `service` key: a key whose token has
+  a workload kind (`job`, `webhook`, `app`) is 403 `caller_kind` there, also from the cache (ADR-0022 "Principal
+  kinds").
 - **A row's digest is checked where the manifest is parsed.** The parser recomputes
   `requirementDigest` and refuses a row whose digest differs, so the digest the proxy sends always
   describes the rules it applied. Producers build rows with `contractProxyTable(artifact)` for an

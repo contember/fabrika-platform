@@ -82,7 +82,7 @@ reader of [ADR-0005](0005-compile-app-config-to-static-manifest.md). The run sto
 - the baseline the candidate was compared with;
 - the approval, when one was needed.
 
-Uploads carry no gates and no IAM schema. A snapshot comes only from the commit.
+Uploads carry no proxy table and no IAM schema. A snapshot comes only from the commit.
 
 ### 2. Publication is a compare-and-swap on the environment
 

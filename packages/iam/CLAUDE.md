@@ -103,8 +103,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   the installation and has no service binding) and `POST /admin/api-keys` +
   `DELETE /admin/api-keys/:principalId` (the first machine caller, bootstrapped before a console
   exists). Every other `/admin/*` path is 404. About two dozen REST operations used to mirror
-  `/admin/rpc` procedure for procedure with no caller at all, and each was a second place a gate
-  could be forgotten (SEC-11) or an internal message could leak (CORR-4). Adding a route back means
+  `/admin/rpc` procedure for procedure with no caller at all, and each was a second place an
+  authorization check could be forgotten (SEC-11) or an internal message could leak (CORR-4). Adding a route back means
   showing no `/admin/rpc` procedure can serve the caller — otherwise "policy, audit and
   hidden-object behaviour must not diverge by transport" becomes a property somebody has to
   maintain again. `extractCredentials`/`resolveAdmin` live in `admin/router.ts` and are shared by

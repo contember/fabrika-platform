@@ -33,15 +33,16 @@ middleware, `authenticate` or custom server.
 `fabrika.config.ts` compiles it with `compileContract(contract, tables)` and hands
 the provider the artifact (`target.contract`), the endpoint table
 (`target.proxy: { upstream, ...contractProxyTable(artifact) }`) and the IAM
-schema (`schema: schemaFromContract(artifact)`). A contract application has no
-gates; the provider refuses one whose proxy carries gates. Control reads the
+schema (`schema: schemaFromContract(artifact)`). The proxy reads only that
+endpoint table; its manifest parser refuses any other form. Control reads the
 contract from the deployed commit, and a widening on a protected environment
 (`prod` by default) waits for a person to approve it in the console.
 
 The proxy alone selects the endpoint, handles login and the reserved
 `/__fabrika/auth/callback` route, checks the caller kind and the requirement, and
 injects `X-Fabrika-Token` and `X-Fabrika-Endpoint`. App services stay private.
-Never implement another gate evaluator in the app, the frontend or a Caddy route.
+Never implement a second enforcement decision in the app, the frontend or a Caddy
+route.
 
 The framework, not application code, verifies the injected token (signature,
 issuer, audience `<app>@<env>`, expiry), checks the proxy secret and the endpoint

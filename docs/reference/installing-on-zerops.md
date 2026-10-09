@@ -354,7 +354,7 @@ identically while replacing `iam-local` with `iam`.
 
 **The platform installation's proxy manifest is generated in two halves.** The installation-independent
 half — which apps exist, their ids, their private upstreams, the public listener each answers on and
-their gates or service tables — is declared in `packages/platform-artifacts/src/proxy-manifest.ts` and rendered into
+their service tables — is declared in `packages/platform-artifacts/src/proxy-manifest.ts` and rendered into
 the committed `packages/provider-zerops/src/installation/generated/platform-proxy-manifest.ts` by `bun run --filter
 @fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `controlServiceContract`,
 `OPERATIONS_PUBLIC_SERVICE` or IAM's service table. A table entry is resolved into an installation entry (ADR-0022 "Installation
@@ -367,7 +367,8 @@ from the control registry.
 
 IAM's app id on a deployed installation is `iam`. The live document said `iam-local` until this
 generator replaced it, inherited from the local composition it was copied from at bring-up; the id is
-inert for an app whose every gate rule is `public`, so correcting it costs nothing.
+inert because every row of IAM's table is a `protocol` or `health` row, for which the proxy mints no
+token, so correcting it costs nothing.
 
 ## Where each credential lives
 

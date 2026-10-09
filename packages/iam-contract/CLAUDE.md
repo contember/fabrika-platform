@@ -8,6 +8,6 @@ kept in step with a second one. What is left of `/admin/*` REST is machine provi
 schema reconcile and the first-machine-caller bootstrap) and it reuses these same shapes. A new
 operation is an RPC procedure; adding a REST route means showing no procedure can serve the caller.
 
-Keep `IamRpc`, policy evaluation, token shapes, and gate domain types in
+Keep `IamRpc`, policy evaluation, token shapes, and endpoint domain types in
 `@fabrika/auth-core`. Keep this package free of IAM runtime, database, and UI
 imports.

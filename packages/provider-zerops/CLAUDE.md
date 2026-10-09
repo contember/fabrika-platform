@@ -144,7 +144,7 @@ bun test
   `appVersionNotFound` counts as deleted). `triggered: true` → settle ONLY by polling, never by deletion;
   past run start + 75 min a non-terminal version is abandoned with a best-effort `cancelBuild`. A lost lease
   deletes and cancels nothing. Any other checkpoint shape fails the run without a platform call.
-- **An application's proxy target carries its endpoint table, never gates.** `target.proxy` is
+- **An application's proxy target carries its endpoint table, and nothing else.** `target.proxy` is
   `{ upstream, ...contractProxyTable(artifact) }`; the artifact parser refuses `proxy.gates` with a message that
   names it, and refuses a row whose digest does not describe its rules. The artifact's table is the build's
   self-report, so nothing publishes it.
@@ -291,9 +291,9 @@ Invariants:
 - A PostgreSQL URL is always `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
   port is the only one `postgresql:ha@18` offers, and it keeps the session state the migration lock needs.
 - **The proxy manifest is a committed template plus a deploy-time placement.** The template is
-  installation-independent and `gen:check` proves it matches the gate modules and service contracts; hosts
+  installation-independent and `gen:check` proves it matches the service contracts; hosts
   and scheme are arguments. `parseProxyManifest` refuses an app with no hosts, hence a separate template type.
-  An app carries `gates` or a service `table` (rows without digests); `resolvePlatformProxyManifest` turns a
+  Each app carries its service `table` (rows without digests); `resolvePlatformProxyManifest` turns the
   table into an installation entry with `serviceProxyTable`, registering its `oauthResource` and keeping its
   `oauth` rows only when the composition names an authorization server.
 - `enableSubdomainAccess` in a generated artifact is a DECLARATION, never a mechanism; the artifact's

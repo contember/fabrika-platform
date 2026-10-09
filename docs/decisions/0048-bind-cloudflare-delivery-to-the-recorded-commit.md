@@ -17,8 +17,8 @@ The neutral provider contract already resolves an immutable source before Contro
 release context. Zerops uses it. Cloudflare must use it too, and its container must prove that the
 checkout matches before it runs any repository code.
 
-The access surface has the same problem. Today a Cloudflare application config builds its own proxy
-Worker with its own gates, and IAM receives the schema from the runner's outcome. Both are written by
+The access surface has the same problem. Without this decision, a Cloudflare application config builds its own
+proxy Worker with its own rules, and IAM receives the schema from the runner's outcome. Both are written by
 repository code that runs in the container, so the platform enforces what the application reports
 about itself ([ADR-0050](0050-approved-access.md)).
 
@@ -120,7 +120,7 @@ Run ownership and how Control applies the runner's outcome follow the lease rule
 - **A source-protocol capability handshake** — Control checks the Worker's capability, the Worker checks
   the image's, before any job. It protects mixed-version installations, but costs an authenticated
   admission path across three components for a case that deploy order already prevents.
-- **Keep the authored proxy Worker and check its gates against the contract.** Rejected: the check
+- **Keep the authored proxy Worker and check its rules against the contract.** Rejected: the check
   would run inside the build the agent controls, and a check that agrees with a widened contract proves
   nothing.
 - **An approval path for exposure.** Rejected: a route, a preview URL or a foreign binding reaches the

@@ -1025,7 +1025,7 @@ Two ordering rules, both of which cost something if ignored:
 - **Write the variable, wait for its process, then push.** A deploy racing a `userData`
   synchronisation dies on `userDataSyncRunning` and leaves the app version stuck `UPLOADING`, which
   `deployAppVersion` does not recover from.
-- **Deploy the PROXY before the service it fronts, whenever the gate list is widening enforcement.**
+- **Deploy the PROXY before the service it fronts, whenever its endpoint table is changing enforcement.**
   The order that matters is not the dependency order (IAM → Operations → control) but the exposure
   order: the application no longer enforces anything (ADR-0022), so a control plane at `HEAD` behind a
   proxy still carrying an older, more permissive manifest is an open API. IAM → Operations →

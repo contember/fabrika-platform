@@ -119,7 +119,7 @@ plants an IAM login on IAM's host and runs one `/auth/login?app=…&redirect=…
   proxy-local; a verifier makes IAM enforce the browser proof and keeps the secret out of every URL.
 - **Store the challenge in a new column.** Binding it into the hashed code gives the same authenticated
   input without a migration or a second lookup key.
-- **Keep a browser JWT cookie as a fallback.** Another ambient credential and another gate branch; the
+- **Keep a browser JWT cookie as a fallback.** Another ambient credential and another branch in the proxy's decision; the
   app session and the proxy's token cache already cover renewal and the fast path.
 - **Forward fabrika cookies to the app and trust it not to read them.** Leaves a bearer credential in a
   less trusted process; stripping at the proxy is smaller and testable.
