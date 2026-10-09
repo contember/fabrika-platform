@@ -99,11 +99,22 @@ export class DaemonStartError extends Error {
 	}
 }
 
+/** A daemon of the wrong version still answers after `stop()`, so no second one is spawned onto its port. */
+export class DaemonStopError extends Error {
+	constructor(message: string, readonly pid: number) {
+		super(message)
+		this.name = 'DaemonStopError'
+	}
+}
+
 export interface DaemonLifecycle<H extends DaemonPid> {
 	health(timeoutMs?: number): Promise<DaemonHealth<H>>
 	isRunning(): Promise<boolean>
 	start(): Promise<DaemonHealthUp<H>>
-	/** A healthy daemon of the expected version, starting or restarting one if needed. */
+	/**
+	 * A healthy daemon of the expected version, starting or restarting one if needed.
+	 * Throws `DaemonStopError` when a daemon of another version cannot be stopped.
+	 */
 	ensure(): Promise<DaemonHealthUp<H>>
 	stop(): Promise<DaemonStopResult>
 	restart(): Promise<DaemonHealthUp<H>>
@@ -269,7 +280,12 @@ export function createDaemonLifecycle<H extends DaemonPid>(
 			const running = check?.of(current)
 			if (check && running && running !== check.expected) {
 				emit({ type: 'version-mismatch', running, expected: check.expected })
-				await stop()
+				const stopped = await stop()
+				// A spawned daemon would find the port taken, or take it the moment the old one exits.
+				const remaining = await health()
+				if (remaining.status === 'up') {
+					throw new DaemonStopError(`${stopped.message} Not starting a second daemon on ${config.baseUrl}.`, remaining.pid)
+				}
 				return await start()
 			}
 			return current

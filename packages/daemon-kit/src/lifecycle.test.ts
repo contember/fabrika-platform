@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { createDaemonLifecycle, type DaemonEvent, type DaemonLifecycle, DaemonStartError } from './lifecycle'
+import { createDaemonLifecycle, type DaemonEvent, type DaemonLifecycle, DaemonStartError, DaemonStopError } from './lifecycle'
 
 interface FixtureHealth {
 	pid: number
@@ -193,6 +193,39 @@ describe('start', () => {
 		expect(fresh.pid).not.toBe(old.pid)
 		expect(events[0]).toEqual({ type: 'version-mismatch', running: '0.9.0', expected: '1.0.0' })
 	}, 20_000)
+
+	test('a mismatched daemon that cannot be stopped is not raced by a second one', async () => {
+		const dead = Bun.spawn([process.execPath, '--version'], { stdout: 'ignore', stderr: 'ignore' })
+		await dead.exited
+		const server = Bun.serve({
+			port: 0,
+			hostname: 'localhost',
+			fetch: () => Response.json({ ok: true, version: '0.9.0', pid: dead.pid }),
+		})
+		servers.push(server)
+		const directory = mkdtempSync(join(tmpdir(), 'canvas-lifecycle-test-'))
+		directories.push(directory)
+		const pidFile = join(directory, 'daemon.pid')
+		const events: DaemonEvent[] = []
+
+		const lifecycle = createDaemonLifecycle<FixtureHealth>({
+			baseUrl: `http://localhost:${portOf(server)}`,
+			parseHealth,
+			pidFile,
+			command: [process.execPath, '--version'],
+			logFile: join(directory, 'daemon.log'),
+			versionCheck: { expected: '1.0.0', of: (health) => health.version },
+			onEvent: (event) => events.push(event),
+		})
+
+		const failure = await lifecycle.ensure().catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(DaemonStopError)
+		if (!(failure instanceof DaemonStopError)) throw failure
+		expect(failure.pid).toBe(dead.pid)
+		expect(failure.message).toContain('could not be signalled')
+		expect(existsSync(pidFile)).toBe(false)
+		expect(events.map((event) => event.type)).toEqual(['version-mismatch'])
+	})
 
 	test('a daemon someone else is starting is waited for, not raced', async () => {
 		const { lifecycle, pidFile, events } = createFixture()

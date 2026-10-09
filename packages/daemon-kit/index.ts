@@ -9,7 +9,7 @@ export type {
 	TopicChannel,
 } from './src/channel'
 export { corsHeaders, jsonResponse } from './src/http-utils'
-export { createDaemonLifecycle, DaemonStartError } from './src/lifecycle'
+export { createDaemonLifecycle, DaemonStartError, DaemonStopError } from './src/lifecycle'
 export type {
 	DaemonEvent,
 	DaemonHealth,

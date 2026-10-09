@@ -4,7 +4,7 @@ Bun daemon infrastructure without canvas or browser dependencies:
 
 - `createNotificationChannel`, `browserFrame`: topic-based WebSocket routing.
 - `waitForEvent`, `WaitError`: CLI waiting, reconnects and deadlines.
-- `createDaemonLifecycle`, `DaemonStartError`: process startup, health and shutdown.
+- `createDaemonLifecycle`, `DaemonStartError`, `DaemonStopError`: process startup, health and shutdown.
 - `dispatch`, `Route`: HTTP routing.
 - `jsonResponse`, `corsHeaders`: HTTP response helpers.
 
