@@ -652,7 +652,7 @@ describe('workload keys from the approved contract', () => {
 		const issuer: WorkloadKeyIssuer = {
 			issue: (input) => {
 				issued.push(`${input.app}/${input.kind}:${input.name}`)
-				return Promise.resolve({ key: `px_${'k'.repeat(40)}${issued.length}`, expiresAt: input.expiresAt })
+				return Promise.resolve({ key: `px_${'k'.repeat(40)}${issued.length}`, credentialId: `credential-${issued.length}`, expiresAt: input.expiresAt })
 			},
 		}
 		return { issued, workloadCredentials: new VaultWorkloadCredentials(w.db.workloadCredentials, () => Promise.resolve(vault), issuer) }

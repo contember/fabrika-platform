@@ -242,9 +242,12 @@ reconciled schema declares for the workload (`AppSchema.workloads`, app-wide), n
 reconcile that no longer declares the workload revokes its keys. Control issues one key per job and per
 webhook declaration of the approved contract (`workloads.issueKey` on IAM's admin RPC, with the
 provisioning key), seals it in its vault and writes it as `FABRIKA_<KIND>_<NAME>_KEY`; it rotates a key
-once less than half of its 30 days is left, and IAM keeps the newest older key valid for the rollout.
+once less than half of its 30 days is left. Each issuance names the key Control recorded as active, and IAM revokes
+every other key of the workload but the new one, so the running version keeps its key until Control records the
+replacement. A workload principal resolves no grant and can be given none.
 The application exchanges its own job or webhook key at `POST /auth/workload/token` on IAM's public
-origin, which signs only for a workload key of the named application. Work unit B9a built this for jobs
+origin, which signs only for a workload key of the named application: it checks the key's format and the per-client
+bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503. Work unit B9a built this for jobs
 and webhooks. Connector keys of kind `app`, their edges and compatibility checks are B9b; until then an
 export also admits `machine` for an operator-provisioned edge key.
 

@@ -208,12 +208,13 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `registration.environment.access.contract` before the provider runs (never on a dry run): a recorded key with more
   than half its 30 days left is read back from the vault, otherwise IAM's `workloads.issueKey` issues a new one with
   the provisioning key (`iamWorkloadKeyIssuer`, at `FABRIKA_IAM_ISSUER`), sealed under
-  `workloadKeyPurpose(app, env, kind, name)` and recorded in `app_env_workload_credentials` (ref and expiry only). A
-  removed workload's record and vault row are deleted. Each key is handed as `FABRIKA_<KIND>_<NAME>_KEY` and redacted
+  `workloadKeyPurpose(app, env, kind, name)` and recorded in `app_env_workload_credentials` (vault ref, IAM's
+  credential id and expiry). Every issuance names the recorded credential as `keep`, so IAM never revokes the key
+  the running version holds; a key issued by a deploy whose record failed is revoked by the next issuance, and its
+  vault row is deleted at once. A removed workload's record and vault row are deleted. Each key is handed as `FABRIKA_<KIND>_<NAME>_KEY` and redacted
   from the run log. Two workloads whose names map to one variable are refused. Without a vault, an issuer or a
   provisioning key a contract with a workload fails the run. What a key may do is IAM's: the schema reconcile
-  declares the actions. A key the running version holds outlives this deploy only because IAM keeps the newest older
-  one; an environment not deployed for 30 days loses its workloads' keys.
+  declares the actions. An environment not deployed for 30 days loses its workloads' keys.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a

@@ -12,12 +12,19 @@ import { createHarness, queryRows } from './helpers/harness'
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(5)))
 const T0 = 1_800_000_000
 
+/** IAM's issuance as `workloads.issueKey` does it: every key of the workload but `keep` and the new one is revoked. */
 class RecordingIssuer implements WorkloadKeyIssuer {
-	readonly issued: { app: string; kind: string; name: string; expiresAt: number }[] = []
+	readonly issued: { app: string; kind: string; name: string; expiresAt: number; keep: string | null }[] = []
+	readonly valid = new Set<string>()
 
-	issue(input: { app: string; kind: 'job' | 'webhook'; name: string; expiresAt: number }) {
+	issue(input: { app: string; kind: 'job' | 'webhook'; name: string; expiresAt: number; keep: string | null }) {
 		this.issued.push({ ...input })
-		return Promise.resolve({ key: `px_${input.kind}_${input.name}_${this.issued.length}`, expiresAt: input.expiresAt })
+		const credentialId = `${input.kind}:${input.name}:${this.issued.length}`
+		for (const id of [...this.valid]) {
+			if (id.startsWith(`${input.kind}:${input.name}:`) && id !== input.keep) this.valid.delete(id)
+		}
+		this.valid.add(credentialId)
+		return Promise.resolve({ key: `px_${input.kind}_${input.name}_${this.issued.length}`, credentialId, expiresAt: input.expiresAt })
 	}
 }
 
@@ -48,8 +55,8 @@ describe('VaultWorkloadCredentials', () => {
 			FABRIKA_WEBHOOK_GITHUB_KEY: 'px_webhook_github_2',
 		})
 		expect(issuer.issued).toEqual([
-			{ app: 'notes@prod', kind: 'job', name: 'purgeDeleted', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS },
-			{ app: 'notes@prod', kind: 'webhook', name: 'github', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS },
+			{ app: 'notes@prod', kind: 'job', name: 'purgeDeleted', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS, keep: null },
+			{ app: 'notes@prod', kind: 'webhook', name: 'github', expiresAt: T0 + MAX_KEY_LIFETIME_SECONDS, keep: null },
 		])
 	})
 
@@ -68,6 +75,44 @@ describe('VaultWorkloadCredentials', () => {
 			'platform:workload-key:notes@prod:job:purgeDeleted',
 			'platform:workload-key:notes@prod:webhook:github',
 		])
+	})
+
+	test('a rotation whose record fails keeps the active key valid, and its retry revokes the orphan', async () => {
+		const { harness, issuer, clock } = await setup()
+		const vault = await Vault.create(harness.d1, KEY)
+		const records = harness.repositories.workloadCredentials
+		let failNextPut = false
+		const flaky = new VaultWorkloadCredentials(
+			{
+				list: (appId, env) => records.list(appId, env),
+				delete: (appId, env, kind, name) => records.delete(appId, env, kind, name),
+				put: (row) => {
+					if (failNextPut) {
+						failNextPut = false
+						return Promise.reject(new Error('the database went away'))
+					}
+					return records.put(row)
+				},
+			},
+			() => Promise.resolve(vault),
+			issuer,
+			() => clock.now,
+		)
+		const first = await flaky.reconcile('notes', 'prod', notesArtifact)
+		const active = 'job:purgeDeleted:1'
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
+		failNextPut = true
+		await expect(flaky.reconcile('notes', 'prod', notesArtifact)).rejects.toThrow('the database went away')
+		// B (job 3) was issued and not recorded; A is still the active key, and still valid.
+		expect(issuer.valid.has(active)).toBe(true)
+		expect(issuer.valid.has('job:purgeDeleted:3')).toBe(true)
+		const retried = await flaky.reconcile('notes', 'prod', notesArtifact)
+		expect(issuer.issued.map((entry) => entry.keep)).toEqual([null, null, active, active, 'webhook:github:2'])
+		expect(issuer.valid.has(active)).toBe(true)
+		expect(issuer.valid.has('job:purgeDeleted:3')).toBe(false)
+		expect(retried['FABRIKA_JOB_PURGE_DELETED_KEY']).not.toBe(first['FABRIKA_JOB_PURGE_DELETED_KEY'])
+		// The failed attempt left no vault row behind: one per workload.
+		expect(queryRows(harness.sqlite, 'SELECT label FROM vault')).toHaveLength(2)
 	})
 
 	test('stores only vault refs, and the vault only ciphertext', async () => {

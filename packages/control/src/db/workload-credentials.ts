@@ -7,6 +7,8 @@ export interface WorkloadCredentialRow {
 	kind: 'job' | 'webhook'
 	name: string
 	value_ref: string
+	/** IAM's id of the active key: what the next issuance keeps. */
+	credential_id: string
 	expires_at: number
 }
 
@@ -24,9 +26,10 @@ export class WorkloadCredentialRepository {
 	/** Records the workload's current key, replacing the one before it. */
 	async put(row: WorkloadCredentialRow): Promise<void> {
 		await this.d1
-			.prepare(`INSERT INTO app_env_workload_credentials (app_id, env, kind, name, value_ref, expires_at) VALUES (?, ?, ?, ?, ?, ?)
-				ON CONFLICT (app_id, env, kind, name) DO UPDATE SET value_ref = excluded.value_ref, expires_at = excluded.expires_at`)
-			.bind(row.app_id, row.env, row.kind, row.name, row.value_ref, row.expires_at)
+			.prepare(`INSERT INTO app_env_workload_credentials (app_id, env, kind, name, value_ref, credential_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (app_id, env, kind, name) DO UPDATE SET
+					value_ref = excluded.value_ref, credential_id = excluded.credential_id, expires_at = excluded.expires_at`)
+			.bind(row.app_id, row.env, row.kind, row.name, row.value_ref, row.credential_id, row.expires_at)
 			.run()
 	}
 

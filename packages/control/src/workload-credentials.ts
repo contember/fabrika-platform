@@ -14,10 +14,21 @@ export type WorkloadKind = 'job' | 'webhook'
 /** A key with less than this left is replaced, so a running version never holds one that IAM stops honouring. */
 export const WORKLOAD_KEY_ROTATE_BELOW_SECONDS = MAX_KEY_LIFETIME_SECONDS / 2
 
-/** IAM's `workloads.issueKey`, as Control reaches it with the installation's provisioning key. */
+/**
+ * IAM's `workloads.issueKey`, as Control reaches it with the installation's provisioning key. IAM revokes every key of
+ * the workload except `keep` and the new one, so a key issued by an attempt whose record failed never outlives the next.
+ */
 export interface WorkloadKeyIssuer {
-	issue(input: { readonly app: string; readonly kind: WorkloadKind; readonly name: string; readonly expiresAt: number }): Promise<{
+	issue(input: {
+		readonly app: string
+		readonly kind: WorkloadKind
+		readonly name: string
+		readonly expiresAt: number
+		/** The credential id of the key Control has recorded as active, or null when it has none. */
+		readonly keep: string | null
+	}): Promise<{
 		readonly key: string
+		readonly credentialId: string
 		readonly expiresAt: number
 	}>
 }
@@ -58,7 +69,7 @@ export function declaredWorkloads(artifact: ContractArtifact | null): ReadonlyMa
 
 export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 	constructor(
-		private readonly records: WorkloadCredentialRepository,
+		private readonly records: Pick<WorkloadCredentialRepository, 'list' | 'put' | 'delete'>,
 		private readonly vault: () => Promise<Vault>,
 		private readonly issuer: WorkloadKeyIssuer,
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
@@ -80,14 +91,30 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 				keys[variable] = await vault.getSecretForPurpose(row.value_ref, purpose)
 				continue
 			}
+			// The recorded key stays IAM's active one until the record below names the new key; a failure in between
+			// leaves the new key an orphan, which the next issuance revokes.
 			const issued = await this.issuer.issue({
 				app: appEnvironmentId(appId, env),
 				kind: workload.kind,
 				name: workload.name,
 				expiresAt: now + MAX_KEY_LIFETIME_SECONDS,
+				keep: row?.credential_id ?? null,
 			})
 			const ref = await vault.putSecret(purpose.scope, purpose.label, issued.key)
-			await this.records.put({ app_id: appId, env, kind: workload.kind, name: workload.name, value_ref: ref, expires_at: issued.expiresAt })
+			try {
+				await this.records.put({
+					app_id: appId,
+					env,
+					kind: workload.kind,
+					name: workload.name,
+					value_ref: ref,
+					credential_id: issued.credentialId,
+					expires_at: issued.expiresAt,
+				})
+			} catch (error) {
+				await vault.delete(ref)
+				throw error
+			}
 			if (row !== undefined) {
 				await vault.delete(row.value_ref)
 			}
@@ -127,8 +154,14 @@ export function iamWorkloadKeyIssuer(options: IamWorkloadKeyIssuerOptions): Work
 	})
 	return {
 		async issue(input) {
-			const issued = await client.workloads.issueKey({ app: input.app, kind: input.kind, name: input.name, expiresAt: input.expiresAt })
-			return { key: issued.key, expiresAt: issued.expiresAt }
+			const issued = await client.workloads.issueKey({
+				app: input.app,
+				kind: input.kind,
+				name: input.name,
+				expiresAt: input.expiresAt,
+				keep: input.keep,
+			})
+			return { key: issued.key, credentialId: issued.credentialId, expiresAt: issued.expiresAt }
 		},
 	}
 }
