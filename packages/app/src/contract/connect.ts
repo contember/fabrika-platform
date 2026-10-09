@@ -2,7 +2,15 @@
 // the vendored snapshot a consumer imports, and the one way each is read back into shapes and a digest.
 // Browser-safe: the snapshot is imported by the contract, which the SPA imports.
 
-import { type ContractArtifact, type ExportDescription, exportDigest, type ExportProcedureDescription } from '@fabrika/auth-core'
+import {
+	canonicalJson,
+	canonicalShape,
+	type ContractArtifact,
+	type ExportDescription,
+	exportDigest,
+	type ExportProcedureDescription,
+	type SchemaShape,
+} from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { schemaShapeSchema } from './artifact-schema'
 import { exportBase } from './defaults'
@@ -101,4 +109,57 @@ export function parseExportDescription(value: unknown): ExportDescription {
 		throw new ContractError([`description ${described.app}/${described.export}@${described.version}: its digest does not match what it describes`])
 	}
 	return parsed.data
+}
+
+/**
+ * What an owner's change of one export version breaks for a consumer that imports `procedures` of it: a removed
+ * procedure, an input that accepts less, a changed output, or a changed audience. An output may not even gain a field,
+ * because the consumer parses every answer against its vendored schema, whose objects are strict; an input object may
+ * gain optional fields. Every other change is a new version. Empty when the change is compatible.
+ */
+export function incompatibleChanges(before: ExportDescription, after: ExportDescription, procedures: readonly string[]): string[] {
+	const problems: string[] = []
+	if (before.audience !== after.audience) {
+		problems.push('changes its audience')
+	}
+	for (const path of procedures) {
+		const old = Object.hasOwn(before.procedures, path) ? before.procedures[path] : undefined
+		const now = Object.hasOwn(after.procedures, path) ? after.procedures[path] : undefined
+		if (now === undefined) {
+			problems.push(`removes '${path}'`)
+			continue
+		}
+		if (old === undefined) {
+			continue
+		}
+		if (!acceptsEveryInput(old.input, now.input)) {
+			problems.push(`'${path}' accepts less input than before`)
+		}
+		if (canonicalJson(canonicalShape(old.output)) !== canonicalJson(canonicalShape(now.output))) {
+			problems.push(`'${path}' answers another output than before`)
+		}
+	}
+	return problems
+}
+
+function acceptsEveryInput(before: SchemaShape | null, after: SchemaShape | null): boolean {
+	if (before === null || after === null) {
+		return before === after
+	}
+	return widens(canonicalShape(before), canonicalShape(after))
+}
+
+/** Whether `after` accepts every value `before` does, by the one widening allowed: an object field that is new and optional. */
+function widens(before: SchemaShape, after: SchemaShape): boolean {
+	if (before.type === 'object' && after.type === 'object') {
+		const kept = Object.entries(before.fields).every(([name, field]) => {
+			const next = Object.hasOwn(after.fields, name) ? after.fields[name] : undefined
+			return next !== undefined && widens(field, next)
+		})
+		return kept && Object.entries(after.fields).every(([name, field]) => Object.hasOwn(before.fields, name) || field.type === 'optional')
+	}
+	if ((before.type === 'optional' && after.type === 'optional') || (before.type === 'nullable' && after.type === 'nullable')) {
+		return widens(before.inner, after.inner)
+	}
+	return canonicalJson(before) === canonicalJson(after)
 }

@@ -8,6 +8,7 @@ export {
 	describeSnapshot,
 	exportDescription,
 	exportDescriptionSchema,
+	incompatibleChanges,
 	parseExportDescription,
 	type SnapshotProcedure,
 } from './connect'
