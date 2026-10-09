@@ -707,7 +707,7 @@ describe('workload keys from the approved contract', () => {
 		w.contract = BASE
 		expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
 		expect(issued).toEqual([])
-		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_JOB_NIGHTLY_KEY'])).toEqual([undefined, undefined])
+		expect(w.deploys.map((input) => Object.hasOwn(input.managedEnvironment, 'FABRIKA_JOB_NIGHTLY_KEY'))).toEqual([false, false])
 	})
 })
 
