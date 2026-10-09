@@ -103,7 +103,8 @@ function sampleOf(table: string, column: CatalogColumn): Primitive {
 	if (type === 'int2' || type === 'int4' || type === 'float4' || type === 'float8') return 1
 	if (type === 'int8' || type === 'numeric') return '1'
 	if (type === 'bool') return false
-	if (type === 'date' || type === 'timestamp' || type === 'timestamptz') return new Date()
+	// ISO text, not a Date: the seed binds past the layer's compiler, where Bun.SQL would send Date#toString().
+	if (type === 'date' || type === 'timestamp' || type === 'timestamptz') return new Date().toISOString()
 	if (type === 'time' || type === 'timetz') return '12:00:00'
 	if (type === 'interval') return '1 hour'
 	throw new Error(`the isolation fixture cannot fill ${table}.${column.column_name} (${type}); give the column a default or make it nullable`)
@@ -267,6 +268,12 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		return column
 	}
 
+	/** A column the seeded row left to its default: null only where the column admits it. */
+	async function updateSample(table: string, name: string): Promise<SampleValue> {
+		const column = await columnOf(table, name)
+		return column.nullable ? null : sampleOf(table, column)
+	}
+
 	/** A value of `dimension` for the column that carries it: a uuid, or text that names the world it belongs to. */
 	async function scopeValue(table: string, column: string, dimension: string, world: string): Promise<string> {
 		const type = (await columnOf(table, column)).type_name
@@ -350,7 +357,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		const row = await insert(model.name, placement(model, values, key), markers)
 		const updates: Record<string, SampleValue> = {}
 		for (const name of namesOf(model.update)) {
-			updates[name] = row.get(name) ?? null
+			updates[name] = row.get(name) ?? await updateSample(model.name, name)
 		}
 		const dimension = grantDimension(models, model)
 		return {
