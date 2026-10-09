@@ -8,6 +8,10 @@ import { createTestEnv } from 'lopata/testing'
 import { z } from 'zod/v4'
 import { describeSnapshot } from '../contract/connect'
 import { type ConnectFetch, Connector } from '../implement/connect'
+import type { TestCallerOptions } from '../testing/caller'
+import { testKit } from '../testing/kit'
+import { catalogApp } from './fixtures/connect-catalog/app'
+import { app as shopApp } from './fixtures/connect-shop/src/app'
 
 const OWNER_ORIGIN = 'https://catalog.example.com'
 
@@ -74,6 +78,46 @@ describe('a service binding routes by the binding, not by the URL', () => {
 			})
 		} finally {
 			testEnv.dispose()
+		}
+	})
+})
+
+describe("a consumer reaches the owner through the platform's binding with its app key", () => {
+	const products = new Map([['p1', { sku: 'p1', name: 'Kettle', price: 2500, tags: ['new' as const], internalCost: 900 }]])
+
+	/** The shop, wired to the catalog through the binding with a key of the catalog's reader role presented as `as`. */
+	async function shopOverBinding(as: TestCallerOptions) {
+		const owner = testKit(catalogApp(products))
+		const key = owner.testCaller([{ role: 'reader' }], as).key ?? ''
+		// The binding's target is the owner's proxy: the kit's fetch decides at the endpoint table, as the proxy Worker does.
+		const testEnv = await createTestEnv({
+			worker: { fetch: (request: Request) => owner.fetch(request) },
+			bindings: { FABRIKA_CONNECT_CATALOG: { type: 'service', service: 'catalog-proxy' } },
+		})
+		const consumer = testKit(shopApp, {
+			connect: { catalog: { origin: owner.origin, key, fetch: bindingOf(testEnv.env, 'FABRIKA_CONNECT_CATALOG') } },
+		})
+		const show = async (): Promise<unknown> => {
+			const response = await consumer.browser(consumer.testCaller([{ role: 'visitor' }]))('/api/products.show', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ sku: 'p1' }),
+			})
+			const body: unknown = await response.json()
+			return typeof body === 'object' && body !== null && 'result' in body ? body.result : body
+		}
+		return { show, dispose: () => testEnv.dispose() }
+	}
+
+	test("the shop's app key reads the catalog; a machine key holding the same action is denied", async () => {
+		const connected = await shopOverBinding({ kind: 'app', app: 'shop' })
+		const machine = await shopOverBinding({ kind: 'machine' })
+		try {
+			expect(await connected.show()).toEqual({ outcome: 'ok', name: 'Kettle' })
+			expect(await machine.show()).toEqual({ outcome: 'denied', name: null })
+		} finally {
+			connected.dispose()
+			machine.dispose()
 		}
 	})
 })
