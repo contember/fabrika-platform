@@ -1,4 +1,4 @@
-// The deploy surface on Zerops: two services in the project the registry names, and the compiled contract. The
+// The deploy surface on Zerops: three services in the project the registry names, and the compiled contract. The
 // contract locks the setup down (ADR-0043): the platform generates the run section, so zerops.yaml keeps only the
 // build base. The proxy serves the contract's endpoint table and IAM reconciles the schema it compiles to.
 //
@@ -15,6 +15,8 @@ import { tables } from './src/db/tables'
 export const NOTES_SERVICE = 'notesapi'
 /** Its database, reached over the project's private network only. */
 export const NOTES_DATABASE_SERVICE = 'notesdb'
+/** The bucket of the `attachments` collection; the platform hands the runtime `FABRIKA_APP_STORAGE_*` from it. */
+export const NOTES_FILES_SERVICE = 'notesfiles'
 /** The port the generated entrypoint listens on; the proxy dials it once a request passes the endpoint table. */
 export const NOTES_UPSTREAM = `${NOTES_SERVICE}:3000`
 
@@ -22,6 +24,14 @@ export const NOTES_UPSTREAM = `${NOTES_SERVICE}:3000`
 export const NOTES_APP_ID = contract.vocabulary.app
 
 export const notesContract = compileContract(contract, tables)
+
+/** One private bucket; the platform refuses any other policy. Shared by the cheap-tier variant. */
+export const notesFiles: ZeropsServiceSpec = {
+	hostname: NOTES_FILES_SERVICE,
+	type: 'object-storage',
+	objectStorageSize: 1,
+	priority: 50,
+}
 
 /** The runtime, shared by the cheap-tier variant. Lowercase letters and digits only, at most 25 (Zerops). */
 export const notesRuntime: ZeropsServiceSpec = {
@@ -44,6 +54,7 @@ const services = (_ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 		// Created before the runtime, whose start script migrates into it.
 		priority: 100,
 	},
+	notesFiles,
 	notesRuntime,
 ]
 

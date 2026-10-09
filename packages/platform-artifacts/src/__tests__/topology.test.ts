@@ -6,7 +6,7 @@
 // services boot, or whether anything is reachable. Nobody has run this against a real account.
 
 import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
-import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE } from 'fabrika-example-zerops/fabrika.config'
+import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE } from 'fabrika-example-zerops/fabrika.config'
 import {
 	compileFabrikaManifest,
 	compileImport,
@@ -439,7 +439,7 @@ describe('a per-environment apps project is one call away', () => {
 })
 
 describe('cheap, mid, and full namespace fixtures', () => {
-	test('cheap owns one shared Postgres service and the app imports only its runtime', () => {
+	test('cheap owns one shared Postgres service and the app imports only its bucket and runtime', () => {
 		const namespace = compileTopology(
 			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'cheap', projectName: 'cheap-prod' }),
 			'prod',
@@ -448,7 +448,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
 		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')
-		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_FILES_SERVICE, NOTES_SERVICE])
 		expect(app.target.namespaceResources).toEqual([{
 			resourceKey: 'service:postgres',
 			hostname: 'postgres',
@@ -465,7 +465,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')
 	})
 
-	test('mid owns only the proxy while the app imports its prefixed database and runtime', () => {
+	test('mid owns only the proxy while the app imports its database, bucket and runtime', () => {
 		const namespace = compileTopology(
 			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'mid' }),
 			'prod',
@@ -474,7 +474,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 
 		expect(namespace.topology.namespacePreset).toBe('mid')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
-		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE])
 		expect(app.target.namespaceResources).toBeUndefined()
 	})
 
@@ -495,7 +495,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 		expect(namespace.topology.exclusiveAppId).toBe(notesConfig.id)
 		expect(namespace.steady.document.project?.name).toBe('notes-prod')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
-		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE])
 	})
 
 	test('exclusive ownership is accepted only by the full preset', () => {

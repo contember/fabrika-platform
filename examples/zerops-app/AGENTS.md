@@ -80,7 +80,8 @@ refuses the shortcuts around both. Keep all three intact.
 - **Files:** to attach files, declare a collection on the owner table, which must have a dimension scope:
   `files: { photos: c.files({ owner: '<table>', read, write, delete, maxBytes, types }) }`. Create its table
   `fabrika_files_<name>` in a migration, with the DDL that `fileTableSql(name, { table, key, chain })` of
-  `@fabrika/db` returns. Never return or build a storage URL; downloads go through the application.
+  `@fabrika/db` returns. Never return or build a storage URL; downloads go through the application. On Zerops,
+  declare one `object-storage` service in `fabrika.config.ts`; the platform writes `FABRIKA_APP_STORAGE_*` from it.
 - **Jobs:** background work is a job in the contract: `jobs: { purge: c.cron('0 3 * * *', { actions, scope: 'app' }) }`
   and `handlers.jobs.purge`. Use `ctx.within(action, dimension)` and `ctx.ref(action, dimension, id)`. No
   `setInterval`, self-scheduled timers or loops. A failed attempt is retried, so make each write idempotent.
@@ -134,9 +135,9 @@ missing endpoint fixtures; test kits imported outside test files; replaced `@fab
 - The data layer runs on Bun with Postgres only, so on Cloudflare a contract application has no `@fabrika/db`:
   files, forms, webhooks and jobs do not boot there. The Cloudflare build does not run `fabrika-check` yet; run it
   yourself.
-- On Zerops the platform does not yet write the object storage (`FABRIKA_APP_STORAGE_*`) or the IAM membership
-  transport (`FABRIKA_IAM_RPC_URL`, `FABRIKA_IAM_RPC_KEY`) into an application. A file collection, and an endpoint
-  with `creates`, `ctx.members` or `ctx.links`, does not boot there yet.
+- On Zerops the platform does not yet write the IAM membership transport (`FABRIKA_IAM_RPC_URL`,
+  `FABRIKA_IAM_RPC_KEY`) into an application. An endpoint with `creates`, `ctx.members` or `ctx.links` does not
+  boot there yet.
 - On Cloudflare the platform does not generate a connector's `FABRIKA_CONNECT_<IMPORT>` service binding yet. On
   both providers an operator sets `FABRIKA_CONNECT_<IMPORT>_URL` and `_KEY`.
 - Not supported: a job scoped to a dimension, a file collection with `link: true`, a webhook bound to `app`, a store

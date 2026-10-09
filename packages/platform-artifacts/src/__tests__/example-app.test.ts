@@ -30,7 +30,14 @@ import { assertOnlyPublicService, assertZeropsHostnames, validateYaml } from '@f
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { contractProxyTable, encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import notesConfig, { NOTES_APP_ID, NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM, notesContract } from 'fabrika-example-zerops/fabrika.config'
+import notesConfig, {
+	NOTES_APP_ID,
+	NOTES_DATABASE_SERVICE,
+	NOTES_FILES_SERVICE,
+	NOTES_SERVICE,
+	NOTES_UPSTREAM,
+	notesContract,
+} from 'fabrika-example-zerops/fabrika.config'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -51,6 +58,8 @@ interface Recorded {
 	externalStates: unknown[]
 	checkpoints: unknown[]
 	schemas: Array<{ url: string; app: string }>
+	/** The key of every service variable written, never its value. */
+	envWrites: string[]
 	logs: string[]
 }
 
@@ -65,6 +74,7 @@ const fresh = (): Recorded => ({
 	externalStates: [],
 	checkpoints: [],
 	schemas: [],
+	envWrites: [],
 	logs: [],
 })
 
@@ -79,7 +89,15 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		importServices: ({ projectId, yaml }) => {
 			rec.imports.push({ projectId, yaml })
 			return Promise.resolve(
-				record('importServices', { projectId, projectName: 'apps-prod', services: [{ id: 'svc-api', name: NOTES_SERVICE, processes: [] }] }),
+				record('importServices', {
+					projectId,
+					projectName: 'apps-prod',
+					// The first import creates the bucket, which is the platform's evidence that it is private (ADR-0043).
+					services: [
+						{ id: 'svc-files', name: NOTES_FILES_SERVICE, processes: [{ id: 'proc-create', actionName: 'stack.create' }] },
+						{ id: 'svc-api', name: NOTES_SERVICE, processes: [] },
+					],
+				}),
 			)
 		},
 		importProject: ({ clientId, yaml: _yaml }) => Promise.resolve(record('importProject', { projectId: clientId, projectName: 'p', services: [] })),
@@ -110,14 +128,18 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
 		configureAutoscaling: () => Promise.reject(new Error('an application deploy must not change autoscaling')),
 		getService: ({ serviceId }) => Promise.resolve(record('getService', { id: serviceId, name: NOTES_SERVICE })),
-		findService: ({ hostname }) => Promise.resolve(record('findService', { id: 'svc-api', name: hostname, subdomainAccess: false })),
+		findService: ({ hostname }) =>
+			Promise.resolve(record('findService', { id: hostname === NOTES_FILES_SERVICE ? 'svc-files' : 'svc-api', name: hostname, subdomainAccess: false })),
 		getProject: ({ projectId }) => Promise.resolve(record('getProject', { id: projectId, name: 'apps-prod' })),
 		listProjects: () => Promise.resolve(record('listProjects', [])),
 		findProjects: () => Promise.resolve(record('findProjects', [])),
 		listProjectServices: () => Promise.resolve(record('listProjectServices', [])),
 		listServiceEnv: () => Promise.resolve(record('listServiceEnv', [])),
 		createServiceEnv: () => Promise.resolve(record('createServiceEnv', undefined)),
-		putServiceEnv: () => Promise.resolve(record('putServiceEnv', undefined)),
+		putServiceEnv: ({ key }) => {
+			rec.envWrites.push(key)
+			return Promise.resolve(record('putServiceEnv', undefined))
+		},
 		deleteServiceEnv: () => Promise.resolve(record('deleteServiceEnv', undefined)),
 		getProjectEnv: ({ projectEnvId }) => Promise.resolve(record('getProjectEnv', { id: projectEnvId, key: 'K', content: 'V' })),
 		getLogAccess: () =>
@@ -190,6 +212,7 @@ const SOURCE_CONTENTS = readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zer
 const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(SOURCE_CONTENTS)
 const MANIFEST = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
 const RUN_ID = 'run-example-1'
+const PROXY_SECRET = 'proxy-secret-of-the-example-0123456789'
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 const REPOSITORY = { owner: 'contember', name: 'fabrika-platform' }
 
@@ -214,7 +237,8 @@ const makeRun = (
 		FABRIKA_APP_ID: null,
 		FABRIKA_ENVIRONMENT: null,
 		FABRIKA_SERVICE_KEY: null,
-		FABRIKA_PROXY_SECRET: null,
+		// Control generates one per application environment; a contract application does not deploy without it.
+		FABRIKA_PROXY_SECRET: PROXY_SECRET,
 	},
 	dryRun: false,
 	signal: new AbortController().signal,
@@ -286,6 +310,8 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 					FABRIKA_CONTRACT_DIGEST: contractDigest(notesContract),
 					// The TLS port, the database and the TLS mode are named, never left to the driver (zerops-platform.md).
 					FABRIKA_APP_DATABASE_URL: `\${${NOTES_DATABASE_SERVICE}_connectionTlsString}/\${${NOTES_DATABASE_SERVICE}_dbName}?sslmode=require`,
+					// The bucket reaches the runtime as references Zerops resolves; no storage credential passes through Fabrika.
+					FABRIKA_APP_STORAGE_BUCKET: `\${${NOTES_FILES_SERVICE}_bucketName}`,
 				},
 			},
 		}],
@@ -314,9 +340,10 @@ describe('the app compiles to an import that is applied INTO an existing project
 		expect(yaml.startsWith('services:')).toBe(true)
 	})
 
-	test('a database and a runtime, in creation order', () => {
-		expect(document.services.map((service) => service.hostname)).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
-		expect(document.services[0]?.priority).toBeGreaterThan(document.services[1]?.priority ?? 0)
+	test('a database, a bucket and a runtime, in creation order', () => {
+		expect(document.services.map((service) => service.hostname)).toEqual([NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE])
+		const priorities = document.services.map((service) => service.priority ?? 0)
+		expect(priorities).toEqual([...priorities].sort((left, right) => right - left))
 	})
 
 	test('the app service is NOT publicly routed — the proxy in this project is', () => {
@@ -324,8 +351,8 @@ describe('the app compiles to an import that is applied INTO an existing project
 		expect(() => assertOnlyPublicService(document)).not.toThrow()
 	})
 
-	test('envIsolation is `service` on both services and no secret rides along', () => {
-		expect(document.services.map((service) => service.envIsolation)).toEqual(['service', 'service'])
+	test('envIsolation is `service` on every service and no secret rides along', () => {
+		expect(document.services.map((service) => service.envIsolation)).toEqual(['service', 'service', 'service'])
 		expect(document.services.every((service) => service.envSecrets === undefined && service.dotEnvSecrets === undefined)).toBe(true)
 		expect(yaml).not.toContain('envSecrets')
 	})
@@ -377,13 +404,13 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		expect(result.status).toBe('succeeded')
 		const narrative = rec.logs.filter((line) => line.includes('[dry-run]')).map((line) => line.trim())
 		expect(narrative).toEqual([
-			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
+			`[dry-run] would POST the import for 3 service(s) to project ${TARGET.projectId}:`,
 			'[dry-run] would read back subdomain access and bucket provenance of every declared service',
-			`[dry-run] would write service variables on ${TARGET.serviceId}: (none)`,
-			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_PROXY_SECRET, FABRIKA_RELEASE`,
+			`[dry-run] would write service variables on ${TARGET.serviceId}: FABRIKA_PROXY_SECRET`,
+			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
-			'[dry-run] would trigger build+deploy with FABRIKA_RELEASE written into the execution descriptor',
+			'[dry-run] would trigger build+deploy with the generated run section and build checks',
 			'[dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log',
 			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}@prod\` against https://iam.example.test`,
 		])
@@ -412,13 +439,18 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		expect(rec.calls).toEqual([
 			// 1. bind the requested source to one immutable commit and descriptor digest.
 			'sourceResolve',
-			// 2. apply the import (`override: true` makes re-applying safe).
+			// 2. apply the import (`override: true` makes re-applying safe), and wait for the bucket it creates.
 			'importServices',
-			// 3. read back that neither service has a subdomain before any version exists.
-			'findService',
-			'findService',
-			// 4. write the managed service variables, read once.
+			'getProcess',
+			// 3. read back that no service has a subdomain before any version exists, and the bucket's provenance.
 			'listServiceEnv',
+			'findService',
+			'findService',
+			'findService',
+			// 4. write the managed service variables, read once: the provenance marker and the proxy secret.
+			'listServiceEnv',
+			'putServiceEnv',
+			'putServiceEnv',
 			// 5. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
 			'createAppVersion',
 			'sourceUpload',
@@ -472,13 +504,12 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		expect(rec.schemas).toEqual([{ url: 'https://iam.example.test', app: `${NOTES_APP_ID}@prod` }])
 	})
 
-	test('NO secret is pushed as part of the deploy, even though the app declares two', async () => {
-		expect(notesConfig.pipeline?.secrets).toEqual(['NOTES_SESSION_PEPPER', 'NOTES_WEBHOOK_SIGNING_KEY'])
-		const result = await deployExample(rec, ['ACTIVE'], { secrets: { NOTES_SESSION_PEPPER: 'x', NOTES_WEBHOOK_SIGNING_KEY: 'y' } })
+	test('NO application secret is pushed as part of the deploy: only the managed proxy secret and the bucket marker', async () => {
+		const result = await deployExample(rec, ['ACTIVE'], { secrets: { NOTES_SESSION_PEPPER: 'x' } })
 		expect(result.status).toBe('succeeded')
 		// On Zerops the platform is the system of record; a deploy-time write would silently correct a
-		// client's GUI edit (ADR-0004). So: no env write, and no `sync-secrets` step to make one.
-		expect(rec.calls).not.toContain('putServiceEnv')
+		// client's GUI edit (ADR-0004). So: no `sync-secrets` step, and only Fabrika's own variables are written.
+		expect(rec.envWrites.sort()).toEqual(['FABRIKA_PROXY_SECRET', 'FABRIKA_STORAGE_PROVENANCE'])
 		expect(rec.calls).not.toContain('createServiceEnv')
 		expect(rec.calls).not.toContain('deleteServiceEnv')
 	})
