@@ -259,9 +259,8 @@ default) parks the run in `awaiting_approval`; it publishes nothing until a pers
 console. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries
 `approvedSnapshot`'s access, and the providers publish a contract application's endpoint table and reconcile
-its IAM schema from it, never from the artifact. Without a contract the snapshot holds the artifact access (gates and
-IAM schema), and a provider applies an artifact's own gates and schema only when they hash to the approved digest;
-on a protected environment every change of them waits for a human. Approving needs `access.approve` (authorization) from a human user principal on a
+its IAM schema from it, never from the artifact. A commit without `fabrika.contract.ts` fails its run before the
+provider is called: Fabrika deploys an application only with a contract. Approving needs `access.approve` (authorization) from a human user principal on a
 console request from Control's own origin (admission).
 
 For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete

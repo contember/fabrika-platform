@@ -23,22 +23,19 @@ this one import.
   environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
 - **The executor REPORTS, it does not call IAM.** It writes `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`);
   the control-side `deploy` and `reconcile` decide what IAM hears, with the control plane's own key and the projected
-  return origins. With Control's approved contract (`environment.access`, ADR-0050) they apply `access.schema`,
-  whatever the runner reported. Without a contract (`environment.artifactAccess`) the runner's `artifactAccess`
-  report decides: `reportedArtifactAccess` bounds and parses it with the schemas the executor used, and
-  `judgeArtifactAccess` applies its schema only when it hashes to the approved digest or the environment is
-  unprotected, never a `contract: true` one, and hands Control a `pending` report only for a failed run on a
-  protected environment whose access differs. With neither, any report fails the run.
+  return origins. They apply Control's approved contract's `access.schema` (`environment.access`, ADR-0050),
+  whatever the runner reported. Without approved access, any report fails the run.
+- **An application deploys only with a contract.** With `platformResources: 'refuse'` the deployer refuses a
+  checkout without `fabrika.contract.ts` before anything runs, and always builds the proxy Worker from the
+  contract's endpoint table. `platformResources: 'allow'` (fabrika deploying its own components) needs none.
+  `configSchema` refuses a config that declares `gates` on either path, and reads the IAM `schema` ONCE, before
+  `resources()` runs the checkout's code (parsed with `appSchemaSchema`, deep-frozen); never read `config.schema`
+  after it. `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
-  digest, or the artifact approval `{ digest, protected }`). `buildJob` refuses a non-dry deploy without it, and
-  `cloudflareRunnerJobSchema` parses the contract and checks its digest. The runner writes it to
-  `<workspace>/<runId>.access.json` beside the checkout and names it in `FABRIKA_APPROVED_ACCESS_FILE`, set after
-  every job-supplied name; the executor reads it (`readApprovedAccess`) before the config runs. Unset outside a
-  runner (a local deploy). The executor reads the config's gates and schema ONCE, before `resources()` runs the
-  checkout's code (`configArtifactAccess`: parsed with the same schemas Control uses, canonical and deep-frozen, so
-  the digests agree). The proxy, the report and the IAM schema all come from that value; never read
-  `config.gates` or `config.schema` after it. A protected mismatch writes a `pending` report and throws
-  before provisioning, and a finished deploy reports `deployed`. The runner keeps a `pending` report of a failed run.
+  digest). `buildJob` refuses a non-dry deploy without it, and `cloudflareRunnerJobSchema` parses the contract and
+  checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
+  `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
+  before the config runs. Unset outside a runner (a local deploy).
 - **A deploy that carries a job's or a webhook's key is refused** before the runner is asked: a Worker runs no
   job and no webhook (they need `@fabrika/db` on Postgres), and the key would only sit in a generated config.
 - **Every framework variable of each generated config is the platform's** (`assertFrameworkVariables` in
@@ -112,23 +109,19 @@ this one import.
 - **Every application's proxy Worker is the platform's (ADR-0048).** The config's `resources` returns the
   application Worker; a Worker that binds `APP` (a proxy of its own) is refused. The deployer wraps it in
   `createCloudflareProxyWorker`, named `<app>-proxy`, from this package's own entrypoint and directory — the
-  runner image's copy, never a checkout's `node_modules` copy. What the proxy enforces:
-  - a contract application's endpoint table (`contractProxyTable(artifact)`). The contract is the one Control
-    approved (`CloudflareDeployRun.contract`); `null` means Control read none, and a checkout that has one is
-    refused. Only outside Control is it read from the config's directory by `@fabrika/check/contract`'s static
-    reader (`readContract` collaborator) — never evaluated. The deployer writes `FABRIKA_CONTRACT_DIGEST` into the
-    application Worker. An IAM schema whose `contract: true` disagrees with the contract is refused, and so are
-    `gates` beside a contract. The manifest entry carries the contract's CSP origins and the origin of the run's
-    `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
-    the application's answer, or applies the file treatment for a download endpoint, deletes the reporting
-    headers, and answers a throwing `APP` binding with a fixed 502 under the same treatment (ADR-0022);
-  - otherwise the config's `gates`, parsed with `proxyAppGatesSchema`;
-  - neither: no proxy, and the application Worker is reachable by nothing.
-    `createCloudflareProxyWorker` takes exactly one of `endpoints`, `installation` or `gates`. `installation`
-    (an installation service's `serviceProxyTable`) is the trusted marker of ADR-0022 "Installation
-    entries": only the platform's own service configs pass it, and the deployer never builds it from an
-    application's config. Its `IAM` binding is also the
-    delegation issuer the proxy asks for grants. An authored variable under a `FRAMEWORK_VARIABLE_NAMES` name is refused.
+  runner image's copy, never a checkout's `node_modules` copy. The proxy enforces the contract application's
+  endpoint table (`contractProxyTable(artifact)`). The contract is the one Control approved
+  (`CloudflareDeployRun.contract`). Only outside Control is it read from the config's directory by
+  `@fabrika/check/contract`'s static reader (`readContract` collaborator) — never evaluated. The deployer writes
+  `FABRIKA_CONTRACT_DIGEST` into the application Worker. An IAM schema whose `contract: true` disagrees with the
+  contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
+  `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
+  the application's answer, or applies the file treatment for a download endpoint, deletes the reporting
+  headers, and answers a throwing `APP` binding with a fixed 502 under the same treatment (ADR-0022).
+  `createCloudflareProxyWorker` takes exactly one of `endpoints` or `installation`. `installation`
+  (an installation service's `serviceProxyTable`) is the trusted marker of ADR-0022 "Installation
+  entries": only the platform's own service configs pass it, and the deployer never builds it from an
+  application's config. Its `IAM` binding is also the delegation issuer the proxy asks for grants. An authored variable under a `FRAMEWORK_VARIABLE_NAMES` name is refused.
 - **Another application's names are refused** (ADR-0048). Control sends `<app>@<env>` of every Cloudflare
   deployment in its registry (`CloudflareRunnerJob.installationApps` → `FABRIKA_INSTALLATION_APPS` →
   `CloudflareDeployRun.installationApps`). A remote name belongs to the deployment with the longest

@@ -36,47 +36,34 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 
 - The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
   every file under `db/migrations/` is listed.
-- The snapshot digest covers the canonical contract, the migration list and the artifact access, not the
-  checker version.
-- A commit without `fabrika.contract.ts` has a snapshot without a contract. Dropping the contract from a
-  commit is a widening.
-- An application without a contract is approved by its **artifact access**: its gates and IAM schema
-  (`ArtifactAccess`, `artifactAccessDigest` in `@fabrika/auth-core`). The snapshot holds it. The digest is
-  over `canonicalArtifactAccess`: catalogs (scopes, actions) are sorted by identifier and sets (permissions,
-  assigners, link grants, OAuth scopes) by value; gate rules keep their order, which is precedence. A list
-  that repeats an identifier is refused, not sorted. Every change
-  from the approved one is a widening, a removal included, so the first deploy to a protected
-  environment waits, and so does a contract removed (1 → 0). A provider receives the approved digest
-  (`ProviderEnvironment.artifactAccess`). It applies an artifact's gates and schema only when they hash to
-  that digest. Without approved access a provider routes nothing, reconciles no IAM schema and refuses a
-  non-dry deploy.
-- On Zerops, Control reads the artifact access from the registry's artifact before the deploy
-  (`ControlProvider.artifactAccess`). A registry write changes the artifact and advances `generation`,
-  so a run that classified the old one classifies again.
-- On Cloudflare the access is known only once the runner loads the config. A run without a contract
-  publishes the approved artifact access unchanged. The job carries its digest and the protection. The
-  executor reads the config's gates and schema once, before `resources()` runs, and hashes that frozen copy;
-  the proxy, the report and the IAM schema all come from it. On a protected mismatch it stops before provisioning
-  and reports them. Control fails that run and creates a new run, parked in `awaiting_approval` with
-  that access as its candidate. A new run, so the runner never sees a run id twice. Approving it
-  deploys with the approved digest. Otherwise the deploy reports what it applied. IAM applies only a
-  reported schema that matches the approved digest, or any on an unprotected environment. Control then
-  records it in the publication (`recordDeployedArtifactAccess`).
+- The snapshot digest covers the canonical contract and the migration list, not the checker version. It
+  keeps the trailing `null` that once stood for artifact access, so a digest an approval recorded stays valid.
+- **Fabrika deploys an application only with a contract.** A commit without `fabrika.contract.ts` fails its
+  run before any provider is called (`ContractMissing`), on every environment, protected or not, and publishes
+  nothing; the approved contract stays published. A run snapshot stored without a contract is refused the
+  same way. The trusted installation deploy needs no contract: on Cloudflare the deployer's
+  `platformResources: 'allow'`, on Zerops the platform deploy. Neither runs through Control's application path.
+- There is one kind of approved access, the contract. A provider receives it as `ProviderEnvironment.access`.
+  Without approved access a provider routes nothing, reconciles no IAM schema and refuses a non-dry deploy.
+  The Cloudflare deployer refuses an application checkout without a contract and a config that declares
+  `gates`; the Zerops manifest parser refuses `proxy.gates`.
+- A stored snapshot may still hold the `artifact` access of an application published before contracts
+  were required. It parses with that field dropped. A publication without a contract approves nothing:
+  `approvedSnapshot` reads it as the empty baseline, so the application's first contract is a widening
+  that a human approves on a protected environment. The empty unpublished baseline stays valid.
+  `runs.pending_access_json` is no longer read or written; a later migration drops it.
 - The published snapshot is stored on `app_envs.published_snapshot_json`, written by the same
   compare-and-swap as `published_run_id`.
 - Control reads the snapshot at the provider's `applicationRoot`, the directory the provider executes
   from, with the same normalization (`checkoutRelativeDirectory` on Cloudflare). A root outside the
   repository fails the run.
-- The Cloudflare runner job carries the approved access: the contract and its digest, or the artifact
-  approval. The runner hands it to the executor in a file beside the checkout. The deployer builds the
+- The Cloudflare runner job carries the approved access: the contract and its digest. The runner hands it to the executor in a file beside the checkout. The deployer builds the
   proxy table and `FABRIKA_CONTRACT_DIGEST` from it, never from the checkout. Every framework variable
   in each generated wrangler config must equal the value the platform wrote, so a binding's
   `configureBinding` cannot overwrite the digest.
 - The snapshot is logged before the run's secrets are known, so redaction cannot cover it. Its log
   lines carry fixed codes and counts only, never a name from the checkout. The change lines stay in
-  the classification the approval page shows. For artifact access they cover every field of the IAM
-  schema: each entry type has a field table the compiler holds complete (`IAM_SCHEMA_FIELDS`), and a
-  change no field describes still shows as a change.
+  the classification the approval page shows.
 - A run records its actor as `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`.
 - `approvals.complete` approves or refuses; a refused run fails. The protected flag changes through
   `apps.environments.protect`. A parked run can be cancelled.

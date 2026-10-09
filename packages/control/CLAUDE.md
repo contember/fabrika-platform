@@ -385,10 +385,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   fenced on the run lease and taken under the namespace lease; a lost swap classifies again. The snapshot is read
   at `provider.applicationRoot(source)`, the provider's own normalization of `workerDir`. `providerEnvironment` and
   `namespaceMembers` attach `approvedProviderAccess`, so every deploy, cancel, reconcile, registry hook and
-  namespace job hands the provider the approved access and nothing else: `access`, or, without a contract,
-  `artifactAccess` (the approved digest of the gates and IAM schema, and the protection). Zerops reads the candidate's
-  artifact access through `ControlProvider.artifactAccess`; Cloudflare reports it from the deploy, and
-  `settleArtifactAccessReport` parks a new run (`createParkedRun`) or records what an unprotected deploy applied. The
+  namespace job hands the provider the approved access and nothing else: `access`, the approved contract. A commit
+  without `fabrika.contract.ts` fails its run with `ContractMissing` before the provider is called, and publishes
+  nothing. A stored snapshot's legacy `artifact` field is dropped when it parses, and a publication without a contract
+  reads as the empty baseline (`approvedSnapshot`). `runs.pending_access_json` is no longer read or written. The
   published snapshot lives in `app_envs.published_snapshot_json`. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and

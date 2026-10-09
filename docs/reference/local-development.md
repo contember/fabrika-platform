@@ -121,7 +121,9 @@ follows the deploy. Every `up` returns the container to the workspace example.
 The apps proxy also fronts the Operations browser SDK witness at
 `http://sdk.fabrika.localhost:18081`, an application without a contract behind a
 `human` gate (`src/operations-witness/`): a contract application cannot hand its
-browser the managed DSN yet (backlog 102).
+browser the managed DSN yet (backlog 102). Control would refuse to deploy it, so it
+never takes Control's application path: `local:prepare` writes its entry into the
+apps proxy manifest and Compose runs it.
 
 ## Immutable source fixtures
 

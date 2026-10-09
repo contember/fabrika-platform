@@ -373,11 +373,11 @@ Cloudflare app resources are composed as a public proxy Worker with a private
 application Worker child (ADR-0048). The config's `resources` returns only the
 application Worker; the deployer builds the proxy Worker `<app>-proxy` from this
 package's own entrypoint and directory, never from the checkout, and refuses a
-config Worker that binds `APP`. The proxy enforces a contract application's
-endpoint table (`fabrika.contract.ts` in the checkout, read statically, until the
-run carries its snapshot) and the deployer writes `FABRIKA_CONTRACT_DIGEST` into
-the application Worker; an application without a contract hands its `gates` in the
-config. The checkout's Worker graph is rebuilt from the runner's own `Worker`
+config Worker that binds `APP`. The proxy enforces the application's endpoint
+table from the contract Control approved (outside Control, `fabrika.contract.ts`
+in the checkout, read statically) and the deployer writes `FABRIKA_CONTRACT_DIGEST`
+into the application Worker. A checkout without a contract, and a config that
+declares `gates`, are refused. The checkout's Worker graph is rebuilt from the runner's own `Worker`
 class, because the checkout installs its own `oblaka-iac`.
 
 The checks read the wrangler configs oblaka generates, whatever object emitted

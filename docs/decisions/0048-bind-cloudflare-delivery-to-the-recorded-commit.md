@@ -52,8 +52,7 @@ Control does not negotiate a source protocol with them.
   them statically ([ADR-0005](0005-compile-app-config-to-static-manifest.md)). The run stores the
   result as its snapshot (ADR-0050).
 - The deployer builds the proxy Worker from the snapshot's endpoint table. An application config that
-  builds its own proxy is refused. Until the installation's services move to contracts, an application
-  without a contract hands the deployer its gates, and the deployer builds that proxy too.
+  builds its own proxy is refused, and so is a checkout without a contract.
 - IAM receives the schema from `approvedSnapshot(app, env)`, never from the runner's outcome.
 - The application config is still imported inside the credentialed runner. The checker and the type
   checks therefore stay advisory on Cloudflare until the runner separates a credential-free step.
@@ -77,15 +76,12 @@ binding is the authenticated hop ([ADR-0022](0022-the-proxy-is-the-only-enforcem
 extensions in the contract are approvable ([ADR-0050](0050-approved-access.md)).
 
 What is built (work unit B8): the deployer builds every application's proxy Worker from the runner
-image's own copy — from the contract's endpoint table for a contract application, from the `gates` the
-config hands it otherwise — and writes the contract digest into the application Worker; a config Worker that
+image's own copy — from the contract's endpoint table — and writes the contract digest into the application Worker; a config Worker that
 binds `APP` is refused; the exposure and name refusals above are checked on the wrangler configs oblaka
 generates, before provisioning and again before deploying; Control sends its registry of Cloudflare
 deployments with each job. Work unit B6 sends the run's approved access in the job: the deployer builds
-the proxy and writes the digest from the approved contract, and refuses a checkout with a contract when
-Control read none. IAM receives the approved contract's schema. Without a contract the job carries the
-approved artifact access by its digest. The executor stops a protected mismatch before provisioning, and
-IAM applies a runner-reported schema only when it matches ([ADR-0050](0050-approved-access.md)). Every
+the proxy and writes the digest from the approved contract. IAM receives the approved contract's schema,
+never a runner-reported one ([ADR-0050](0050-approved-access.md)). Every
 framework variable of each generated config must equal the platform's value. Outside Control (a local
 deploy) the deployer reads the contract from the checkout with the same static reader.
 

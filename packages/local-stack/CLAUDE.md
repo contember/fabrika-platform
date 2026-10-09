@@ -86,6 +86,8 @@ bun run test:browser  # the opice suites in tests/browser/
   and parks the agent change commit (`fixtures/source/notes-agent-change.patch`, pinned as `agentChange`) for its scenario.
 - **The Operations SDK witness is an application without a contract on its own host** (`src/operations-witness/`),
   because a contract application cannot hand its browser the managed DSN yet (backlog 102). Delete it when that lands.
+  Control refuses a contractless application, so the witness never goes through Control: `prepare.ts` writes its
+  gated entry into the apps proxy manifest and Compose runs it.
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
   remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.
