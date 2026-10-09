@@ -1,5 +1,5 @@
 import { type ContractArtifact, contractDigest } from '@fabrika/auth-core'
-import type { ProviderApprovedAccess, ProviderNamespaceMember } from '@fabrika/provider-contract'
+import type { JsonValue, ProviderApprovedAccess, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { contractProxyTable, parseProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
@@ -54,6 +54,18 @@ const member = (
 	}
 }
 
+const isJsonObject = (value: JsonValue | undefined): value is { [key: string]: JsonValue } =>
+	typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** A member registered before applications needed a contract: its artifact's proxy carries gates, and nothing is approved. */
+const legacyMember = (appId: string, domain: string): ProviderNamespaceMember => {
+	const { access: _access, ...current } = member(appId, domain, { access: null })
+	const payload = current.artifact.payload
+	if (!isJsonObject(payload) || !isJsonObject(payload['target'])) throw new Error('the encoded artifact is not an object')
+	const target = { ...payload['target'], proxy: { upstream: `${appId}:3000`, gates: { rules: [{ path: '/*', kind: 'public' }] } } }
+	return { ...current, artifact: { ...current.artifact, payload: { ...payload, target } } }
+}
+
 describe('namespace proxy manifest', () => {
 	test('routes every public member on its lowercased domain over https and skips members without a proxy', () => {
 		expect(compileNamespaceProxyManifest('apps-prod', [
@@ -105,6 +117,14 @@ describe('namespace proxy manifest', () => {
 			...contractProxyTable(narrowed),
 		})
 		expect(compileNamespaceProxyManifest('apps-prod', [member('notes', 'notes.example.com', { access: null })])).toEqual({ apps: [] })
+	})
+
+	test('a legacy member whose artifact carries gates is not routed, and the approved members still are', () => {
+		const legacy = legacyMember('legacy', 'legacy.example.test')
+		expect(() => zeropsArtifactCodec.decode(legacy.artifact.payload)).toThrow('`gates` is gone')
+		const manifest = compileNamespaceProxyManifest('apps-prod', [legacy, member('notes', 'notes.example.test')])
+		expect(manifest.apps.map((app) => app.id)).toEqual(['notes@prod'])
+		expect(parseProxyManifest(manifest)).toEqual(manifest)
 	})
 
 	test('the artifact refuses an endpoint row whose digest does not describe its rules', () => {

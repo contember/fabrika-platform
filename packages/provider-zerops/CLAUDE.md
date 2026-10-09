@@ -151,7 +151,7 @@ bun test
 - **Published access comes from Control's approved snapshot (ADR-0050), never from the artifact.**
   `src/namespace/manifest.ts` builds a member's endpoint table from `member.access`
   (`contractProxyTable(access.contract)`, the upstream from the artifact); a member without approved access is
-  not routed. `lockedExecutionFor` locks the descriptor down whenever `environment.access` is present — a config
+  not routed and its artifact is not decoded, so a legacy `proxy.gates` artifact cannot stop a republish. `lockedExecutionFor` locks the descriptor down whenever `environment.access` is present — a config
   that drops `target.contract` cannot drop it — and refuses a non-dry deploy without it. `approvedSchemaOf` gives
   the IAM schema of deploy, cancel and reconcile: `access.schema`, otherwise none. Control refuses a commit
   without `fabrika.contract.ts` before it calls the provider.
