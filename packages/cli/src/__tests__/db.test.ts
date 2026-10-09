@@ -143,7 +143,9 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 	test('migrate applies new files once and refuses an edited one', async () => {
 		const { root, source } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')
-		expect(await run(root, 'migrate', [], { source })).toBe('migrations applied: fabrika/0001_webhooks.sql, app/20261008120000_init.sql\n')
+		expect(await run(root, 'migrate', [], { source })).toBe(
+			'migrations applied: fabrika/0001_webhooks.sql, fabrika/0002_job_leases.sql, app/20261008120000_init.sql\n',
+		)
 		expect(await run(root, 'migrate', [], { source })).toBe('migrations: already up to date\n')
 
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY)')

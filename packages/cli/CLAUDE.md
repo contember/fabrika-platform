@@ -1,7 +1,7 @@
 # @fabrika/cli
 
 The single public `fabrika` executable. It parses the top-level `platform`,
-`app`, `namespace`, `control`, `builder`, and `db` command areas, resolves one provider where a
+`app`, `namespace`, `control`, `builder`, `db`, and `job` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
 contains no provider implementation. The one exception is `src/namespace.ts`:
 `fabrika namespace` is a Control RPC client over the Zerops namespace planner,
@@ -65,6 +65,19 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message or a server-reported
   Postgres error; any other driver error is replaced, because it may quote the URL.
+
+## The `job` area
+
+`src/job.ts` runs one `c.cron` job of a contract application: `fabrika job run <name>`, the command every crontab
+entry runs (the platform's generated crontab and the template's checked one). It resolves no provider. The run is
+`@fabrika/app/bun`'s `runContractJob`, which boots the application like the server; this file only parses
+arguments and reports.
+
+- Run from the application root; it refuses a directory without `fabrika.contract.ts`.
+- One line to stdout, exit 1 when the job failed, 0 when it succeeded or another run holds the lease. The process
+  exits when the run ends, so nothing a handler left running outlives it.
+- A failure prints its fixed code. Only an `instanceof` `BootError` or `JobError` keeps its message; any other error,
+  whatever its name, is `boot_failed`, because its name or message may carry a secret or `FABRIKA_APP_DATABASE_URL`.
 
 ## The `app` area
 
