@@ -29,6 +29,7 @@ import type { RpcFetch } from '../client/transport'
 import { compileContract } from '../contract/compile'
 import type { AnyContract } from '../contract/define'
 import { boot, type ContractApp } from '../implement/boot'
+import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import { headerPolicy, withHeaderPolicy } from '../implement/headers'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -54,6 +55,17 @@ export interface TestKitOptions {
 	 * `boot` asks it as the adapter's transport, and the kit's proxy obtains each delegation grant from it.
 	 */
 	readonly membership?: IamMembershipRpc
+	/**
+	 * Each import's owner, by the import's name: its origin and edge key, which the platform writes as the import's
+	 * framework variables, and how a request reaches it — usually the owner kit's `fetch`.
+	 */
+	readonly connect?: Readonly<Record<string, TestConnection>>
+}
+
+export interface TestConnection {
+	readonly origin: string
+	readonly key: string
+	readonly fetch: ConnectFetch
 }
 
 export interface TestKit<C extends AnyContract> {
@@ -113,10 +125,23 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		}
 		return { keys: [{ kty, crv, x, y, kid: KEY_ID, alg: TOKEN_ALG, use: 'sig' }] }
 	})
+	const connectVariablesOf: Record<string, string> = {}
+	const connectBindings: Record<string, ConnectFetch> = {}
+	for (const [name, connection] of Object.entries(options.connect ?? {})) {
+		const variables = connectVariables(name)
+		connectVariablesOf[variables.url] = connection.origin
+		connectVariablesOf[variables.key] = connection.key
+		connectBindings[variables.binding] = connection.fetch
+	}
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
-			framework: { [FABRIKA_IAM_APP_ID]: appId, [FABRIKA_IAM_ISSUER]: TEST_ISSUER, [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact) },
+			framework: {
+				[FABRIKA_IAM_APP_ID]: appId,
+				[FABRIKA_IAM_ISSUER]: TEST_ISSUER,
+				[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
+				...connectVariablesOf,
+			},
 			application: options.env ?? {},
 		},
 		iam: { getJwks: () => jwks },
@@ -124,6 +149,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		database: options.database,
 		files: options.files,
 		membership: options.membership,
+		connectBindings,
 	})
 
 	const byKey = new Map<string, TestCaller>()

@@ -14,4 +14,4 @@ export {
 	type NormalizedAppResponse,
 	runAppRuntimeConformance,
 } from './conformance'
-export { TEST_ENVIRONMENT, TEST_ISSUER, type TestKit, testKit, type TestKitOptions } from './kit'
+export { TEST_ENVIRONMENT, TEST_ISSUER, type TestConnection, type TestKit, testKit, type TestKitOptions } from './kit'

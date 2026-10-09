@@ -13,6 +13,7 @@ import {
 	type EndpointPlan,
 	type EndpointRow,
 	type LinkTokenClaims,
+	type ExportDescription,
 	parseEndpointHeader,
 	type PermissionEntry,
 	permits,
@@ -52,6 +53,7 @@ import {
 } from './anonymous'
 import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
 import { ServerFault } from './faults'
+import type { ConnectContextValue } from './connect'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
 import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
@@ -87,7 +89,13 @@ export type ServedEndpoint =
 		readonly output: Schema
 		readonly handler: (args: { readonly input: Readonly<Record<string, unknown>>; readonly ctx: object }) => unknown
 		readonly facilities: Facilities
+		/** An export procedure: its request may only read. */
+		readonly readOnly?: true
+		/** `ctx.connect`, for an endpoint an import's `usedBy` names. */
+		readonly connect?: ConnectContextValue
 	}
+	/** What an export's consumer vendors, behind the export's own callers. */
+	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
 	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string }
 	| { readonly kind: 'health'; readonly row: EndpointRow }
 	| {
@@ -221,6 +229,10 @@ export class ContractRuntime {
 					return await this.#form(served, request)
 				case 'webhook':
 					return await this.#webhook(served, request, plan.params)
+				case 'description':
+					await this.#authorize(served.row, request)
+					await readInput({ row: served.row, input: null }, request)
+					return jsonResponse({ result: served.description }, 200)
 			}
 		} catch (error) {
 			return errorResponse(error, where)
@@ -301,7 +313,7 @@ export class ContractRuntime {
 	async #procedure(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
 		const input = await readInput(served, request)
-		const frame = new RequestFrame(crypto.randomUUID())
+		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true })
 		let result: unknown
 		try {
 			result = await runInRequest(frame, async () => {
@@ -312,6 +324,7 @@ export class ContractRuntime {
 					requestId: frame.id,
 					...access.context,
 					...this.#facilities(served.facilities, served.row, membership),
+					...(served.connect === undefined ? {} : { connect: served.connect }),
 				})
 				return await served.handler({ input: access.input, ctx })
 			})
@@ -647,7 +660,10 @@ function strictInput(row: EndpointRow, schema: Schema, value: unknown): Readonly
 }
 
 /** The strictly parsed input; a procedure without input takes an empty body or `{}`. */
-async function readInput(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Readonly<Record<string, unknown>>> {
+async function readInput(
+	served: { readonly row: CredentialedEndpoint; readonly input: Schema | null },
+	request: Request,
+): Promise<Readonly<Record<string, unknown>>> {
 	const text = await request.text()
 	let body: unknown = {}
 	if (text.trim() !== '') {

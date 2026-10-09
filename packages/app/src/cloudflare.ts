@@ -5,6 +5,7 @@ import type { IamMembershipRpc } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
 import type { FabrikaApp, RequestExecutionContext } from './app.js'
 import { boot, type ContractApp, type IamKeySource } from './implement/boot.js'
+import { CONNECT_BINDING_PREFIX, type ConnectFetch } from './implement/connect.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
 import type { ContractImplementation } from './implement/implement.js'
@@ -117,6 +118,31 @@ function bindingAssets(binding: unknown): SpaAssets | undefined {
 	}
 }
 
+/**
+ * The service bindings to owners' proxy Workers (`FABRIKA_CONNECT_<IMPORT>`), which `captureEnvironment` keeps from
+ * the application because no `FABRIKA_*` value reaches it. A binding routes by itself: the URL it is called with
+ * carries the owner's host, which the proxy Worker selects the application by.
+ */
+function connectBindings(env: Readonly<Record<string, unknown>>): Record<string, ConnectFetch> {
+	const bindings: Record<string, ConnectFetch> = {}
+	for (const [name, binding] of Object.entries(env)) {
+		// Read, not tested with `in`: a binding stub may answer `fetch` without owning the property (Lopata's does not).
+		const fetchOwner: unknown = name.startsWith(CONNECT_BINDING_PREFIX) && typeof binding === 'object' && binding !== null
+			? Reflect.get(binding, 'fetch')
+			: undefined
+		if (typeof fetchOwner === 'function') {
+			bindings[name] = async (request) => {
+				const response: unknown = await Reflect.apply(fetchOwner, binding, [request])
+				if (!(response instanceof Response)) {
+					throw new Error(`the ${name} binding answered something that is not a Response`)
+				}
+				return response
+			}
+		}
+	}
+	return bindings
+}
+
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
@@ -138,6 +164,7 @@ export function createContractWorker(load: ImplementationLoader): {
 			iam: bindingKeySource(env['IAM']),
 			assets: bindingAssets(env['ASSETS']),
 			membership: bindingMembership(env['IAM']),
+			connectBindings: connectBindings(env),
 		})
 	}
 	return {

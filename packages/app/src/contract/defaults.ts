@@ -16,8 +16,22 @@ export const CONTRACT_DEFAULTS = {
 /** Generated file endpoints live under this prefix, for signed-in people. */
 export const FILES_PREFIX = '/api'
 
-/** Export procedures are served here, one path per procedure. */
+/** Export procedures are served here, one path per procedure, and each export's description at its own path. */
 export const CONNECT_PREFIX = '/__fabrika/connect'
+
+/**
+ * The caller an export admits besides its consumers' `app:<id>`: until Control reconciles connector credentials (B9),
+ * each edge is an operator-provisioned `px_` key of a service principal, which presents itself as `machine`.
+ */
+export const EXPORT_EDGE_KEY_CALLER = 'machine'
+
+/** Every connector call has a deadline; it bounds the retries too. Queries are safe to retry. */
+export const CONNECT_LIMITS = { defaultTimeoutMs: 3000, maxTimeoutMs: 10_000, retries: 2 } as const
+
+/** `products` version 1 → `products.v1`: the description's endpoint id, and the prefix of each procedure's. */
+export function exportBase(name: string, version: number): string {
+	return `${name}.v${version}`
+}
 
 /** A link mount serves its procedures under `<prefix>/api`; everything else under the prefix is its SPA. */
 export const LINK_API_SEGMENT = 'api'

@@ -32,11 +32,14 @@ export class CapabilityLimitError extends Error {
 export class RequestFrame {
 	readonly id: string
 	readonly fence: LeaseFence | null
+	/** An export's request: the data layer runs its every statement `READ ONLY` and refuses every write. */
+	readonly readOnly: boolean
 	#ended = false
 
-	constructor(id: string, fence: LeaseFence | null = null) {
+	constructor(id: string, options: { readonly fence?: LeaseFence | null; readonly readOnly?: boolean } = {}) {
 		this.id = id
-		this.fence = fence
+		this.fence = options.fence ?? null
+		this.readOnly = options.readOnly ?? false
 	}
 
 	get ended(): boolean {
@@ -53,6 +56,11 @@ const currentRequest = new AsyncLocalStorage<RequestFrame>()
 /** Run `work` as the request `frame`: every capability check inside it compares against this frame. */
 export function runInRequest<T>(frame: RequestFrame, work: () => Promise<T>): Promise<T> {
 	return currentRequest.run(frame, work)
+}
+
+/** Whether the request running now may only read; `@fabrika/db` asks it before every statement. */
+export function requestIsReadOnly(): boolean {
+	return currentRequest.getStore()?.readOnly === true
 }
 
 /** The module-private token that makes a `Ref` or a `Within` constructible by the framework only. */

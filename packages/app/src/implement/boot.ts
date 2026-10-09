@@ -22,12 +22,15 @@ import { bindScopedDatabase, type FrameworkTables, frameworkTablesOf, isScopedDa
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
+import { exportDescription } from '../contract/connect'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
+import { exportBase } from '../contract/defaults'
 import type { Schema } from '../contract/define'
 import { fileCollections } from '../files/collections'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
-import { requestCapabilities } from './capability'
+import { requestCapabilities, requestIsReadOnly } from './capability'
+import { type ConnectFetch, wireImports } from './connect'
 import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { ServerFault } from './faults'
@@ -61,6 +64,11 @@ export interface BootOptions {
 	 * creates scopes, manages members or issues share links does not boot.
 	 */
 	readonly membership?: IamMembershipRpc
+	/**
+	 * Cloudflare service bindings to the owners' proxy Workers, by binding name (`FABRIKA_CONNECT_<IMPORT>`). An import
+	 * without one calls its owner with `fetch`.
+	 */
+	readonly connectBindings?: Readonly<Record<string, ConnectFetch>>
 }
 
 export interface ContractApp {
@@ -187,16 +195,6 @@ function unservable(
 			problems.push(`webhook '${name}' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')`)
 		}
 	}
-	for (
-		const [section, entries] of Object.entries({
-			exports: artifact.exports,
-			imports: artifact.imports,
-		})
-	) {
-		for (const name of Object.keys(entries)) {
-			problems.push(`${section} '${name}' is declared, and this version of @fabrika/app does not run ${section} yet`)
-		}
-	}
 	for (const row of artifact.endpoints) {
 		if (row.requirement?.kind !== 'action') {
 			continue
@@ -288,7 +286,7 @@ function contractDatabase(database: ImplementationDatabase | null, connection: D
 		return null
 	}
 	try {
-		const locate = bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities })
+		const locate = bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities, readOnly: requestIsReadOnly })
 		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database) }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
@@ -402,6 +400,13 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
 	const database = files === null || bound === null ? (bound?.database ?? null) : files.locating(bound.database)
+	const connect = wireImports({
+		artifact,
+		snapshots: app.connect ?? {},
+		framework: options.environment.framework,
+		bindings: options.connectBindings ?? {},
+		fallback: (request) => fetch(request),
+	}, problems)
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
@@ -447,6 +452,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						output: procedure.output,
 						handler: (args) => Reflect.apply(handler, undefined, [args]),
 						facilities: facilitiesOf(artifact, row),
+						connect: connect.get(id),
 					})
 				}
 			}
@@ -488,6 +494,36 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
+	}
+	for (const [name, declaration] of Object.entries(app.contract.surface.exports ?? {})) {
+		const base = exportBase(name, declaration.version)
+		for (const { path, procedure } of declaredProcedures(name, declaration.procedures)) {
+			const id = [base, ...path.slice(1)].join('.')
+			const at = ['exports', ...path]
+			declared.add(at.join('.'))
+			const row = rows.get(id)
+			const handler = at.reduce<unknown>(childAt, handlers)
+			if (!isCredentialed(row)) {
+				problems.push(`export procedure '${id}' has no endpoint row`)
+			} else if (typeof handler !== 'function') {
+				problems.push(`export procedure '${id}' has no handler; add it to handlers.${at.join('.')}`)
+			} else {
+				endpoints.set(id, {
+					kind: 'procedure',
+					row,
+					input: procedure.input,
+					output: procedure.output,
+					handler: (args) => Reflect.apply(handler, undefined, [args]),
+					facilities: NO_FACILITIES,
+					readOnly: true,
+				})
+			}
+		}
+		const row = rows.get(base)
+		const description = exportDescription(artifact, name)
+		if (isCredentialed(row) && description !== null) {
+			endpoints.set(base, { kind: 'description', row, description })
+		}
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const asking = [...endpoints.values()].find(asksIam)

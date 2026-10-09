@@ -2,12 +2,14 @@
 // with the context its access form grants and returning only the fields its output declares.
 
 import type { z } from 'zod/v4'
+import type { ConnectSnapshot } from '../contract/connect'
 import type { SurfaceSection } from '../contract/declaration'
-import type { InputOf, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Schema, WebhookMount } from '../contract/define'
+import type { Export, InputOf, InputSchema, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Schema, WebhookMount } from '../contract/define'
 import type { JobHandlersOf } from '../jobs/types'
 import type { Ref, Within } from './capability'
+import type { ConnectResult } from './connect'
 import type { LinkIssuing, MemberManagement } from './membership'
-import type { LinkHolder, PrincipalOf } from './principal'
+import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
 /** What every handler gets: who called, and this request's id. */
@@ -60,11 +62,55 @@ export type HandlerInput<I, Acc> = Acc extends { readonly from: infer F extends 
 
 export type Handler<In, Ctx, O extends Schema> = (args: { readonly input: In; readonly ctx: Ctx }) => z.input<O> | Promise<z.input<O>>
 
-type RpcHandlers<C, P, T> = {
-	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, infer Acc>
-		? Handler<HandlerInput<I, Acc>, RequestContext<P> & ContractContext<C, Acc>, O>
-		: RpcHandlers<C, P, T[K]>
+// ── Connectors: `ctx.connect` in the handlers an import's `usedBy` names, typed by the vendored snapshot ────────
+
+type ImportsOf<C> = SurfaceOf<C> extends { readonly imports: infer I } ? I : Record<never, never>
+
+/** What `implement({ connect })` takes: the vendored snapshot of each import, by the import's name. */
+export type ConnectSnapshots<C> = { readonly [K in keyof ImportsOf<C>]: ConnectSnapshot }
+
+type ImportsUsedBy<C, Id extends string> = {
+	[K in keyof ImportsOf<C>]: ImportsOf<C>[K] extends { readonly usedBy: readonly (infer U)[] } ? Id extends U ? K : never : never
+}[keyof ImportsOf<C>]
+
+type ImportedProcedures<C, K> = K extends keyof ImportsOf<C>
+	? ImportsOf<C>[K] extends { readonly procedures: readonly (infer P extends string)[] } ? P : never
+	: never
+
+/** A connector call never throws for the owner's answer: it resolves to a typed outcome. */
+export type ConnectCall<I, O extends Schema> = [I] extends [InputSchema] ? (input: z.input<I>) => Promise<ConnectResult<z.output<O>>>
+	: (input?: Record<never, never>) => Promise<ConnectResult<z.output<O>>>
+
+type ConnectorOf<S, P extends string> = {
+	readonly [Path in P]: S extends
+		{ readonly procedures: { readonly [Q in Path]: { readonly input: infer I; readonly output: infer O extends Schema } } } ? ConnectCall<I, O>
+		: never
 }
+
+/** `ctx.connect` with the imports whose `usedBy` names endpoint `Id`; nothing for any other endpoint. */
+export type ConnectContext<C, Snap, Id extends string> = [ImportsUsedBy<C, Id>] extends [never] ? unknown
+	: { readonly connect: { readonly [K in ImportsUsedBy<C, Id> & keyof Snap]: ConnectorOf<Snap[K], ImportedProcedures<C, K>> } }
+
+type RpcHandlers<C, P, T, Snap, Prefix extends string> = {
+	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, infer Acc> ? Handler<
+			HandlerInput<I, Acc>,
+			RequestContext<P> & ContractContext<C, Acc> & ConnectContext<C, Snap, `${Prefix}${K & string}`>,
+			O
+		>
+		: RpcHandlers<C, P, T[K], Snap, `${Prefix}${K & string}.`>
+}
+
+/** An export handler runs read-only: its context carries its capability and nothing that writes. */
+type ExportHandlers<T> = {
+	readonly [K in keyof T]: T[K] extends Procedure<'query', infer I, infer O, infer Acc>
+		? Handler<HandlerInput<I, Acc>, RequestContext<ServicePrincipal | AppPrincipal> & AccessContext<Acc>, O>
+		: ExportHandlers<T[K]>
+}
+
+type ExportsOf<C> = SurfaceOf<C> extends { readonly exports: infer E } ? E : Record<never, never>
+
+type ExportHandlersOf<C> = [keyof ExportsOf<C>] extends [never] ? unknown
+	: { readonly exports: { readonly [E in keyof ExportsOf<C>]: ExportsOf<C>[E] extends Export<infer T> ? ExportHandlers<T> : never } }
 
 /** A link procedure acts on the object its key is bound to. */
 type LinkHandlers<D extends string, T> = {
@@ -82,7 +128,8 @@ export type WebhookHandler<B extends string, Acts extends string, I> = (args: {
 	readonly ctx: RequestContext<WebhookPrincipal> & { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
 }) => void | Promise<void>
 
-type MountHandlers<C, M> = M extends RpcMount<infer Callers, infer T> ? RpcHandlers<C, PrincipalOf<Callers[number]>, T>
+type MountHandlers<C, M, Name extends string, Snap> = M extends RpcMount<infer Callers, infer T>
+	? RpcHandlers<C, PrincipalOf<Callers[number]>, T, Snap, `${Name}.`>
 	: M extends LinkMount<infer D, string, string, infer T> ? LinkHandlers<D, T>
 	: M extends WebhookMount<infer B, infer Acts, infer I> ? WebhookHandler<B, Acts, I>
 	: never
@@ -91,15 +138,21 @@ type ServedMount<M> = M extends { readonly kind: 'rpc' | 'link' | 'webhook' } ? 
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
 
-/** One handler tree per procedure mount and one handler per webhook, keyed like the contract, and one per job under `jobs`. */
-export type HandlersOf<C> =
+/**
+ * One handler tree per procedure mount and one handler per webhook, keyed like the contract, one per job under `jobs`,
+ * and the export handlers under `exports`.
+ */
+export type HandlersOf<C, Snap = unknown> =
 	& {
 		readonly [M in keyof SurfaceOf<C> as M extends SurfaceSection ? never : ServedMount<SurfaceOf<C>[M]> extends true ? M : never]: MountHandlers<
 			C,
-			SurfaceOf<C>[M]
+			SurfaceOf<C>[M],
+			M & string,
+			Snap
 		>
 	}
 	& JobHandlersOf<C>
+	& ExportHandlersOf<C>
 
 // ── Exactness: no handler outside the contract, no field outside the declared output ────────────
 

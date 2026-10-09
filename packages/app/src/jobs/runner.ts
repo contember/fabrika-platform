@@ -314,7 +314,7 @@ async function attemptOnce(
 	clock: JobClock,
 	context: RunnerContext,
 ): Promise<JobFailureCode | null> {
-	const frame = new RequestFrame(fence.holder, fence)
+	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
 	const timer = new AbortController()
 	const ctx = jobContext(job, frame, attempt, cancel.signal, context)

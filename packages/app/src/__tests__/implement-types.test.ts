@@ -16,6 +16,9 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'12-link-of-a-mount-the-ref-cannot-issue.ts': `Type '"public"' is not assignable to type '"shared"'`,
 	'13-webhook-ref-for-undeclared-action.ts': "Property 'notes.read' does not exist on type",
 	'14-handler-for-form-mount.ts': "'contact' is a form mount; it takes no handler. Remove it from handlers.",
+	'15-connect-outside-used-by.ts': "Property 'connect' does not exist on type",
+	'16-connect-input-breaks-the-snapshot.ts': "Type 'number' is not assignable to type 'string'",
+	'17-export-handler-missing.ts': "Property 'list' is missing",
 }
 
 describe('the handler mistakes are type errors', () => {

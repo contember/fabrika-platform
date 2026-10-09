@@ -47,7 +47,8 @@ const numberShape: z.ZodType<NumberShape> = z.strictObject({
 	multipleOf: z.number().positive().nullable(),
 })
 
-const schemaShape: z.ZodType<SchemaShape> = z.lazy(() =>
+/** A `SchemaShape` read back as JSON. */
+export const schemaShapeSchema: z.ZodType<SchemaShape> = z.lazy(() =>
 	z.union([
 		stringShape,
 		numberShape,
@@ -57,27 +58,29 @@ const schemaShape: z.ZodType<SchemaShape> = z.lazy(() =>
 		arrayShape,
 		tupleShape,
 		recordShape,
-		z.strictObject({ type: z.literal('object'), fields: z.record(z.string(), schemaShape) }),
-		z.strictObject({ type: z.literal('optional'), inner: schemaShape }),
-		z.strictObject({ type: z.literal('nullable'), inner: schemaShape }),
-		z.strictObject({ type: z.literal('union'), options: z.array(schemaShape) }),
+		z.strictObject({ type: z.literal('object'), fields: z.record(z.string(), schemaShapeSchema) }),
+		z.strictObject({ type: z.literal('optional'), inner: schemaShapeSchema }),
+		z.strictObject({ type: z.literal('nullable'), inner: schemaShapeSchema }),
+		z.strictObject({ type: z.literal('union'), options: z.array(schemaShapeSchema) }),
 	])
 )
 
 const arrayShape: z.ZodType<ArrayShape> = z.lazy(() =>
 	z.strictObject({
 		type: z.literal('array'),
-		items: schemaShape,
+		items: schemaShapeSchema,
 		minItems: z.int().nonnegative().nullable(),
 		maxItems: z.int().nonnegative().nullable(),
 	})
 )
 
 const tupleShape: z.ZodType<TupleShape> = z.lazy(() =>
-	z.strictObject({ type: z.literal('tuple'), items: z.array(schemaShape), rest: schemaShape.nullable() })
+	z.strictObject({ type: z.literal('tuple'), items: z.array(schemaShapeSchema), rest: schemaShapeSchema.nullable() })
 )
 
-const recordShape: z.ZodType<RecordShape> = z.lazy(() => z.strictObject({ type: z.literal('record'), key: schemaShape, value: schemaShape }))
+const recordShape: z.ZodType<RecordShape> = z.lazy(() =>
+	z.strictObject({ type: z.literal('record'), key: schemaShapeSchema, value: schemaShapeSchema })
+)
 
 const caller = z.union([z.enum(['human', 'machine', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
 const rpcCaller = z.union([z.enum(['human', 'machine']), z.templateLiteral(['app:', z.string().min(1)])])
@@ -100,8 +103,8 @@ const rowBase = {
 	method: z.enum(['GET', 'POST']),
 	path: z.string().startsWith('/'),
 	admission: z.strictObject({ contentTypes: z.tuple([name], name), maxBytes: z.int().positive().nullable() }).nullable(),
-	input: schemaShape.nullable(),
-	output: schemaShape.nullable(),
+	input: schemaShapeSchema.nullable(),
+	output: schemaShapeSchema.nullable(),
 }
 
 const endpointRow: z.ZodType<EndpointRow> = z.union([

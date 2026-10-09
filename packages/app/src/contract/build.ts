@@ -45,8 +45,11 @@ import {
 	type SpaAccessDeclaration,
 } from './declaration'
 import {
+	CONNECT_LIMITS,
 	CONNECT_PREFIX,
 	CONTRACT_DEFAULTS,
+	EXPORT_EDGE_KEY_CALLER,
+	exportBase,
 	FILES_PREFIX,
 	joinPath,
 	JSON_ADMISSION,
@@ -695,15 +698,44 @@ class ArtifactBuilder {
 			if (callers === null) {
 				continue
 			}
+			const source: EndpointSource = { kind: 'export', name }
+			const base = exportBase(name, declaration.version)
 			for (const [path, procedure] of procedures(declaration.procedures)) {
-				const id = `${name}.v${declaration.version}.${path}`
+				const id = `${base}.${path}`
 				if (procedure.type !== 'query') {
 					this.#problem(`procedure '${id}'`, 'an export serves queries only (allowed: c.query)')
 				}
-				this.#procedure({ kind: 'export', name }, id, joinPath(CONNECT_PREFIX, id), callers, procedure)
+				this.#readAction(`procedure '${id}'`, procedure.access)
+				this.#procedure(source, id, joinPath(CONNECT_PREFIX, id), callers, procedure)
 			}
+			// The description a consumer vendors, behind the same callers as the procedures it describes.
+			this.#row({
+				id: base,
+				source,
+				kind: 'query',
+				method: 'POST',
+				path: joinPath(CONNECT_PREFIX, base),
+				callers,
+				requirement: { kind: 'member' },
+				admission: JSON_ADMISSION,
+				input: null,
+				output: null,
+			})
 		}
 		return exports
+	}
+
+	/** An export runs read-only, so its action may not be one a table writes with. */
+	#readAction(where: string, access: AccessDeclaration): void {
+		if (!('action' in access)) {
+			return
+		}
+		for (const [table, policy] of Object.entries(this.#tables)) {
+			const { insert, update, delete: remove } = policy.actions
+			if (access.action === insert || access.action === update || access.action === remove) {
+				this.#problem(where, `'${access.action}' writes table '${table}'; an export reads only (allowed: a read action)`)
+			}
+		}
 	}
 
 	#consumers(where: string, declaration: ExportDeclaration<SchemaShape>): readonly [Caller, ...Caller[]] | null {
@@ -718,12 +750,11 @@ class ArtifactBuilder {
 				this.#problem(where, `consumer '${consumer}' is not another application's id`)
 			}
 		}
-		const [first, ...rest] = declaration.consumers
-		if (first === undefined) {
+		if (declaration.consumers.length === 0) {
 			this.#problem(where, 'names no consumer (allowed: consumers: [<application ids>]; there is no wildcard)')
 			return null
 		}
-		return [`app:${first}`, ...rest.map((consumer): Caller => `app:${consumer}`)]
+		return [EXPORT_EDGE_KEY_CALLER, ...declaration.consumers.map((consumer): Caller => `app:${consumer}`)]
 	}
 
 	#imports(): Record<string, ImportArtifact> {
@@ -775,6 +806,9 @@ class ArtifactBuilder {
 		}
 		if (declaration.timeoutMs !== undefined) {
 			this.#positiveInteger(`${where} timeoutMs`, declaration.timeoutMs)
+			if (declaration.timeoutMs > CONNECT_LIMITS.maxTimeoutMs) {
+				this.#problem(where, `timeoutMs ${declaration.timeoutMs} is above the ${CONNECT_LIMITS.maxTimeoutMs} ms every connector call is bounded by`)
+			}
 		}
 	}
 
