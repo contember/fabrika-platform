@@ -8,9 +8,10 @@
 	],
 	"scripts": {
 		"typecheck": "bun run --filter '*' typecheck && tsc --project scripts/tsconfig.json",
-		"test": "bun test --path-ignore-patterns='tests/browser/**' --path-ignore-patterns='packages/annotations/**' --path-ignore-patterns='packages/builder/**' --path-ignore-patterns='packages/canvas-kernel/**' --path-ignore-patterns='packages/daemon-kit/**' && bun run test:agent-interfaces && bun run test:builder",
+		"test": "bun test --path-ignore-patterns='tests/browser/**' --path-ignore-patterns='packages/annotations/**' --path-ignore-patterns='packages/builder/**' --path-ignore-patterns='packages/canvas-kernel/**' --path-ignore-patterns='packages/daemon-kit/**' --path-ignore-patterns='examples/zerops-app/**' && bun run test:agent-interfaces && bun run test:examples && bun run test:builder",
 		"test:agent-interfaces": "bun test --isolate packages/annotations packages/canvas-kernel packages/daemon-kit",
 		"test:builder": "bun run --filter @fabrika/builder test",
+		"test:examples": "bun test --isolate examples/zerops-app",
 		"test:live": "bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts",
 		"lint": "biome lint .",
 		"format": "dprint fmt",

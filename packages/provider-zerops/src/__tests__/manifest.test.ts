@@ -574,11 +574,11 @@ describe('cross-service variable references', () => {
 		await expect(compileNotes('zerops:\n  - setup: notesapi\n   bad: [1,\n')).rejects.toThrow('zerops.yaml is not parseable YAML')
 	})
 
-	test('accepts both committed example descriptors unchanged', async () => {
-		const own = await compileNotes(await exampleDescriptor('zerops.yaml'))
-		const shared = await compileNotes(await exampleDescriptor('zerops.shared-postgres.yaml'), sharedPostgresConfig)
-		expect(own.target.sourceDescriptor.contents).toContain('${notesdb_connectionTlsString}')
-		expect(shared.target.sourceDescriptor.contents).toContain('${postgres_connectionTlsString}')
+	test("accepts the committed example descriptor unchanged, with the app's own database or the namespace's", async () => {
+		const descriptor = await exampleDescriptor('zerops.yaml')
+		const own = await compileNotes(descriptor)
+		const shared = await compileNotes(descriptor, sharedPostgresConfig)
+		expect(own.target.sourceDescriptor.contents).toBe(descriptor)
 		expect(manifestServiceHostnames(own)).toEqual(['notesdb', 'notesapi'])
 		expect(manifestServiceHostnames(shared)).toEqual(['notesapi'])
 	})

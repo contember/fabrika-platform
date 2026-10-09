@@ -1,45 +1,22 @@
 {
-	"name": "@fabrika/example-zerops-app",
+	"name": "fabrika-example-zerops",
 	"private": true,
 	"type": "module",
-	"exports": {
-		".": {
-			"bun": "./fabrika.config.ts",
-			"types": "./fabrika.config.ts",
-			"default": "./fabrika.config.ts"
-		},
-		"./cheap": {
-			"bun": "./fabrika.cheap.config.ts",
-			"types": "./fabrika.cheap.config.ts",
-			"default": "./fabrika.cheap.config.ts"
-		},
-		"./gates": {
-			"bun": "./fabrika.gates.ts",
-			"types": "./fabrika.gates.ts",
-			"default": "./fabrika.gates.ts"
-		},
-		"./schema": {
-			"bun": "./fabrika.schema.ts",
-			"types": "./fabrika.schema.ts",
-			"default": "./fabrika.schema.ts"
-		}
-	},
 	"scripts": {
 		"build:manifest": "fabrika app build --env=prod",
-		"dev": "bun src/server.ts",
 		"typecheck": "tsc --noEmit",
-		"test": "bun test"
+		"test": "bun test --isolate"
 	},
 	"dependencies": {
 		"zod": "^3.25.76",
 		"@fabrika/app": "^0.0.4",
-		"@fabrika/auth-core": "^0.0.4",
+		"@fabrika/db": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",
-		"@sentry/browser": "10.69.0",
-		"jose": "^5.9.0"
+		"@fabrika/proxy-core": "^0.0.4"
 	},
 	"devDependencies": {
 		"@fabrika/cli": "^0.0.4",
+		"@fabrika/platform": "^0.0.4",
 		"@types/bun": "latest",
 		"typescript": "^5.9.3"
 	}

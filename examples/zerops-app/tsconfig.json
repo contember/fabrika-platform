@@ -19,5 +19,5 @@
 		"noEmit": true,
 		"types": ["@types/bun"]
 	},
-	"include": ["src/**/*", "fabrika.config.ts", "fabrika.cheap.config.ts", "fabrika.gates.ts", "fabrika.schema.ts"]
+	"include": ["src/**/*", "fabrika.contract.ts", "fabrika.config.ts", "fabrika.cheap.config.ts"]
 }

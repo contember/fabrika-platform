@@ -6,15 +6,13 @@
 // whole point of that seam, and the only way to exercise the path with no account.
 //
 // PROVEN HERE: the plan's shape and order, the exact ordered sequence of API calls a real run makes,
-// that a dry run makes NONE of them, that the compiled import is schema-valid and carries no secret, and
-// that the app's gates survive a round trip into the proxy's own manifest parser and Caddy generator.
+// that a dry run makes NONE of them, that the compiled import is schema-valid and carries no secret, that
+// the descriptor the build request carries is the platform's (ADR-0043), and that the contract's endpoint
+// table survives a round trip into the proxy's own manifest parser and Caddy generator.
 //
 // NOT PROVEN: that Zerops accepts any of it. No request in this file leaves the process.
 
-import { applicableGates, artifactAccessDigest, compileGates, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
-import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM } from '@fabrika/example-zerops-app'
-import { notesGates } from '@fabrika/example-zerops-app/gates'
-import { NOTES_APP_ID } from '@fabrika/example-zerops-app/schema'
+import { contractDigest, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import {
 	compileFabrikaManifest,
 	compileImport,
@@ -23,7 +21,6 @@ import {
 	createZeropsDeployer,
 	type ZeropsApi,
 	type ZeropsAppVersionStatus,
-	zeropsArtifactAccess,
 	type ZeropsCollaborators,
 	type ZeropsDeployRun,
 	type ZeropsRuntimeTarget,
@@ -31,8 +28,9 @@ import {
 } from '@fabrika/provider-zerops'
 import { assertOnlyPublicService, assertZeropsHostnames, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
+import notesConfig, { NOTES_APP_ID, NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -185,6 +183,9 @@ const TARGET: ZeropsRuntimeTarget = {
 	adminKey: 'px_admin_placeholder',
 }
 
+const notesSchema = notesConfig.schema
+if (notesSchema === undefined) throw new Error('the example hands its IAM schema to the deploy')
+
 const SOURCE_CONTENTS = readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8')
 const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(SOURCE_CONTENTS)
 const MANIFEST = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
@@ -201,7 +202,8 @@ const makeRun = (
 	env: 'prod',
 	target,
 	artifact: MANIFEST,
-	artifactAccess: { digest: artifactAccessDigest(zeropsArtifactAccess(MANIFEST)), protected: true },
+	// Control's approved snapshot of the commit (ADR-0050): it decides the lock-down and the schema, not the artifact.
+	access: { contract: notesContract, contractDigest: contractDigest(notesContract), schema: notesSchema },
 	secrets: {},
 	vars: {},
 	managedEnvironment: {
@@ -263,15 +265,32 @@ beforeEach(() => {
 	rec = fresh()
 })
 
+/** The build request carries the platform's setup, not the authored one: the authored file keeps only its build base. */
 const assertSubmittedDescriptor = (recorded: Recorded): void => {
-	expect(recorded.builds.map(({ zeropsYaml, ...coordinates }) => ({
-		...coordinates,
-		document: parseZeropsDescriptor(zeropsYaml).document,
-	}))).toEqual([{
+	expect(recorded.builds.map(({ appVersionId, zeropsYamlSetup }) => ({ appVersionId, zeropsYamlSetup }))).toEqual([{
 		appVersionId: 'ver-1',
 		zeropsYamlSetup: NOTES_SERVICE,
-		document: parseZeropsDescriptor(SOURCE_CONTENTS).document,
 	}])
+	const submitted = recorded.builds[0]?.zeropsYaml ?? ''
+	expect(validateYaml('zerops-yaml', submitted)).toEqual([])
+	expect(parseZeropsDescriptor(submitted).document).toMatchObject({
+		zerops: [{
+			setup: NOTES_SERVICE,
+			build: { base: 'alpine/bun@1.3' },
+			deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, retryPeriod: '10s', failureTimeout: '180s' } },
+			run: {
+				start: 'sh /var/www/fabrika/start.generated.sh',
+				healthCheck: { httpGet: { port: 3000, path: '/healthz' } },
+				crontab: [{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purge', allContainers: false }],
+				envVariables: {
+					FABRIKA_CONTRACT_DIGEST: contractDigest(notesContract),
+					// The TLS port, the database and the TLS mode are named, never left to the driver (zerops-platform.md).
+					FABRIKA_APP_DATABASE_URL: `\${${NOTES_DATABASE_SERVICE}_connectionTlsString}/\${${NOTES_DATABASE_SERVICE}_dbName}?sslmode=require`,
+				},
+			},
+		}],
+	})
+	expect(submitted).not.toContain('NOTES_DATABASE_URL')
 	expect(MANIFEST.target.sourceDescriptor).toEqual({
 		path: 'zerops.yaml',
 		contents: SOURCE_CONTENTS,
@@ -472,47 +491,41 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 	})
 })
 
-// ── gates → the proxy ─────────────────────────────────────────────────────────────────────────────
+// ── the endpoint table → the proxy ────────────────────────────────────────────────────────────────
 
-describe("the app's gates are enforced by the proxy, and survive the trip verbatim", () => {
+describe("the contract's endpoint table is enforced by the proxy, and survives the trip verbatim", () => {
+	const table = contractProxyTable(notesContract)
 	const manifest: ProxyManifest = {
-		apps: [{ id: NOTES_APP_ID, hosts: ['notes.example.test'], upstream: NOTES_UPSTREAM, gates: notesGates, scheme: 'https' }],
+		apps: [{ id: `${NOTES_APP_ID}@prod`, hosts: ['notes.example.test'], upstream: NOTES_UPSTREAM, scheme: 'https', ...table }],
 	}
 
-	test("the proxy's own strict parser accepts it, with rule ORDER preserved (order IS the precedence)", () => {
+	test("the proxy's own strict parser accepts it, every endpoint with its digest, and no gates", () => {
 		const parsed = parseProxyManifestJson(encodeProxyManifestJson(manifest))
-		expect(parsed).not.toBeNull()
-		expect(parsed?.apps[0]).toMatchObject({ gates: { rules: notesGates.rules } })
-		expect(parsed?.apps[0]?.upstream).toBe(`${NOTES_SERVICE}:3000`)
-	})
-
-	test('the ordered rules that apply to a path are the ones the app declared', () => {
-		const compiledGates = compileGates(notesGates)
-		const kinds = (path: string): string[] => applicableGates(compiledGates, path).map((gate) => `${gate.rule.kind} ${gate.rule.path}`)
-		expect(kinds('/healthz')).toEqual(['public /healthz', 'human /*'])
-		expect(kinds('/public/info')).toEqual(['public /public/*', 'human /*'])
-		// The fall-through pair: a machine credential is tried first, a human second.
-		expect(kinds('/api/notes')).toEqual(['service /api/*', 'human /api/*', 'human /*'])
-		expect(kinds('/settings')).toEqual(['human /*'])
-		// Case-sensitive, unlike a Caddy path matcher — which is one of ADR-0022's three reasons gates
-		// are never compiled into Caddy routes.
-		expect(kinds('/Public/info')).toEqual(['human /*'])
+		expect(parsed?.apps[0]).toMatchObject({ upstream: NOTES_UPSTREAM, endpoints: table.endpoints, snapshot: contractDigest(notesContract) })
+		expect(parsed?.apps[0]).not.toHaveProperty('gates')
+		expect(table.endpoints.map((row) => row.id).sort()).toEqual([
+			'api.notes.create',
+			'api.notes.get',
+			'api.notes.list',
+			'api.notes.remove',
+			'api.notes.trash',
+			'files.attachments.download',
+			'files.attachments.remove',
+			'files.attachments.upload',
+			'health',
+		])
 	})
 
 	test("the generated Caddy config routes to the app's PRIVATE address and deletes the token header first", () => {
 		const config = buildCaddyConfig(manifest, { authUpstream: '127.0.0.1:9000' })
 		const serialized = JSON.stringify(config)
 		expect(serialized).toContain(`"dial":"${NOTES_UPSTREAM}"`)
-		// ADR-0022: the delete is load-bearing — `copy_headers` cannot delete, so without it a
-		// client-supplied token would survive to the app on any `public` path. The request id rides
-		// along for the same reason: it is written to IAM's audit trail, so only the proxy mints one.
-		// The client address and its aliases join them so an upstream's abuse limit keys on what this
-		// hop observed and never on what the caller claimed.
+		// ADR-0022: `copy_headers` cannot delete, so without the delete a client-supplied token would survive to the
+		// app; the request id, the endpoint, the proxy secret and the client address are the proxy's to assert too.
 		expect(serialized).toContain(
 			`"delete":["${PROXY_TOKEN_HEADER}","X-Fabrika-Client-Ip","X-Fabrika-Endpoint","X-Fabrika-Delegation","X-Fabrika-Proxy-Secret","X-Request-Id","X-Forwarded-For","CF-Connecting-IP"]`,
 		)
 		expect(serialized).toContain('"set":{"X-Fabrika-Client-Ip":["{http.vars.client_ip}"]}')
-		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.
 		expect(config.admin.disabled).toBe(true)
 	})
 })

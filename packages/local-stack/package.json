@@ -28,7 +28,7 @@
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/control": "workspace:*",
-		"@fabrika/example-zerops-app": "workspace:*",
+		"fabrika-example-zerops": "workspace:*",
 		"@fabrika/github-app": "workspace:*",
 		"@fabrika/platform-artifacts": "workspace:*",
 		"@fabrika/operations": "workspace:*",

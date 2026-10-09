@@ -1,31 +1,19 @@
-import { defineApp, useSharedPostgres as sharedPostgres, type ZeropsResourceContext, type ZeropsServiceSpec } from '@fabrika/provider-zerops'
-import { NOTES_SERVICE, NOTES_UPSTREAM } from './fabrika.config'
-import { notesGates } from './fabrika.gates'
-import { NOTES_APP_ID, notesSchema } from './fabrika.schema'
+// The cheap-tier variant: one runtime that claims the namespace-owned `postgres` service instead of its own. The
+// platform generates the application's database URL from that claim, so zerops.yaml is the same file.
 
-/** Cheap-tier variant: the runtime consumes the namespace-owned `postgres` service. */
-const services = (_ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [{
-	hostname: NOTES_SERVICE,
-	type: 'alpine/bun@1.3',
-	priority: 10,
-	enableSubdomainAccess: false,
-	minContainers: 1,
-	maxContainers: 4,
-}]
+import { schemaFromContract } from '@fabrika/app/contract'
+import { defineApp, useSharedPostgres as sharedPostgres } from '@fabrika/provider-zerops'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { NOTES_APP_ID, NOTES_SERVICE, NOTES_UPSTREAM, notesContract, notesRuntime } from './fabrika.config'
 
 export default defineApp({
 	id: NOTES_APP_ID,
-	schema: notesSchema,
-	pipeline: {
-		secrets: ['NOTES_SESSION_PEPPER', 'NOTES_WEBHOOK_SIGNING_KEY'],
-	},
+	schema: schemaFromContract(notesContract),
 	target: {
 		platform: 'zerops',
-		services,
-		proxy: {
-			upstream: NOTES_UPSTREAM,
-			gates: notesGates,
-		},
+		services: () => [notesRuntime],
+		contract: notesContract,
+		proxy: { upstream: NOTES_UPSTREAM, ...contractProxyTable(notesContract) },
 		namespaceResources: [sharedPostgres()],
 		deployService: NOTES_SERVICE,
 		zeropsSetup: NOTES_SERVICE,

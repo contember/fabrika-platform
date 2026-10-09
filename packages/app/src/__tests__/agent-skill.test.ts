@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { APP_AGENT_SKILL_NAME, readAppAgentSkill, renderAgentsFile } from '../agent-skill'
 
 describe('the agent skill', () => {
@@ -19,5 +20,10 @@ describe('the agent skill', () => {
 		expect(agents.slice(0, agents.length - skill.body.length)).toBe(
 			'<!-- Generated from skill/SKILL.md of @fabrika/app. Change that file, not this one. -->\n\n',
 		)
+	})
+
+	test("the template's AGENTS.md is the rendered file: regenerate it, never edit it", () => {
+		const template = readFileSync(new URL('../../../../examples/zerops-app/AGENTS.md', import.meta.url), 'utf-8')
+		expect(template).toBe(renderAgentsFile(readAppAgentSkill()))
 	})
 })
