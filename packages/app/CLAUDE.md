@@ -26,6 +26,8 @@ bun test src/__tests__/client-types.test.ts     # the client and test-kit mistak
 bun test src/__tests__/locators.test.ts         # on, in and over through nested containment (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_POSTGRES_URL; FABRIKA_TEST_S3_* adds a real bucket)
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 ```
 
 ## Structure
@@ -78,6 +80,11 @@ src/
     collections.ts    the upload, download and remove endpoints, the file locator, the sweep
     sniff.ts          the declared type checked against the first bytes
     treatment.ts      FileDownload and the file treatment of ADR-0022
+  jobs/               c.cron at runtime; bound by boot, run by `fabrika job run <name>` (runContractJob)
+    types.ts          JobContext, JobHandler, JobHandlersOf: handlers.jobs.<name>
+    runner.ts         bindJobs, the run: lease, attempts, timeout, retries, reports
+    schedule.ts       five-field cron in UTC: the due minutes and the period
+    report.ts         failures and missed runs as error events to Operations' ingest
 ```
 
 ## Invariants
@@ -271,10 +278,10 @@ src/
   with no metadata, because a message may quote a connection string. The server log
   gets one line: a framework-authored message (`ServerFault`,
   `CapabilityRefusedError`) or only the error's name, never the error object.
-- **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`, jobs, exports, imports,
+- **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`, exports, imports,
   a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
-  form field that is not a column of its inbox, an endpoint that asks IAM with no
+  form field that is not a column of its inbox, a job that cannot run (see Jobs), an endpoint that asks IAM with no
   membership transport (`BootOptions.membership`), a handler outside the contract, a
   missing handler, an access form whose containment no table locates. Each refusal
   lifts when its work unit ships the runtime.
@@ -406,3 +413,42 @@ src/
   cookies before the application. The proxy's token and request id are then set.
 - The client and test-kit type witnesses live in `src/__tests__/client-mistakes/`,
   compiled by `client-types.test.ts` like the contract mistakes.
+
+## Jobs
+
+- **A job runs only under its lease.** `fabrika job run <name>` (the crontab's command, `runContractJob` in `bun.ts`)
+  captures the environment, boots like the server and takes the job's row in `fabrika_job_leases`. A live lease
+  held by another run means this run does not start (`skipped`). Each attempt holds its own generation and a
+  deadline the database enforces: `RequestFrame` carries the fence and `requestCapabilities.fence()` answers it, so
+  `@fabrika/db` refuses every write of an attempt that timed out, failed or lost the lease, and cancels one still
+  running when the attempt ends (`attemptOnce` calls `cancelInFlight` before the runner touches the lease again). A
+  retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.
+- **Lease times are the database's**: the runner passes durations, never a timestamp, so a container whose clock is
+  minutes off cannot take a live lease over. `JobClock` has only the waits and the jitter.
+- **A job's capabilities are minted in process for its declared actions only** (part A). `ctx.within(action, dim)`
+  is a `Within` over every value, `ctx.ref(action, dim, id)` a located `Ref`; both refuse an undeclared action, an
+  unknown dimension and an ended attempt. The grants' principal is `job:<name>`. There is no IAM key, no token and
+  no unscoped handle: B9 replaces the in-process mint with a workload credential of principal kind `job`, which no
+  mount accepts (ADR-0022). A job cannot create scopes, manage members or issue links: its `ctx` has no such method.
+- **`boot` refuses** a job scoped to a dimension (per-binding jobs are not built), a job without a bound
+  `scoped(tables)` (the lease and the fence live in the application's schema), a schedule `schedule.ts` cannot read,
+  a missing handler, a `handlers.jobs` entry the contract does not declare, and an Operations DSN that is not an
+  ingest DSN.
+- **A failure is a fixed code**: `timeout`, `lease_lost`, `handler_failed`, `driver_failed`, `crashed` in the run's
+  result, its log lines and its report, and `boot_failed` in the CLI. The code is chosen by `instanceof` against the
+  framework's own classes (`LeaseLostError` of `@fabrika/db/framework`), never by `name`. An application error's
+  name and message are never logged, returned or reported: either may carry a secret.
+- **Reports go through the ingest every application has** (`FABRIKA_OPERATIONS_DSN`): a run that failed after its
+  retries, or crashed (its lease expired before it finished, found by the next run or the check), is one `JobFailed`
+  error event; a job that has not succeeded within twice its period (from its first-seen time when it never did) is
+  `JobMissed`, claimed in the database at most once per period. The serving process (`serveContract`) registers
+  every job and runs `jobs.check()` every `JOB_CHECK_INTERVAL_MS`, so a schedule that never fires is reported too.
+  Operations ingests error events only, so successes stay in the lease row (`last_status`, `last_succeeded_at`,
+  `last_started_at`, `last_duration_ms`) and out of Operations (backlog 96).
+- **Job reports are informational, not authenticated.** They travel under the public ingest key, which any holder of
+  the browser DSN has, so one can forge a `JobFailed` or `JobMissed` like any other error event. Operations gives the
+  `fabrika-job-*` fingerprints no special meaning: no auto-resolve, no state change. B9's workload credential is the
+  fix: it authenticates the job's reports.
+- An attempt without a `timeout` is cancelled after `DEFAULT_JOB_TIMEOUT_MS` (15 min); the lease lasts the timeout
+  plus `LEASE_GRACE_MS`. Retries back off exponentially from one second, capped at five minutes, half jittered.
+- The type witnesses live in `src/__tests__/job-mistakes/`, compiled by `job-types.test.ts`.

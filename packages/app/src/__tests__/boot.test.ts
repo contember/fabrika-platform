@@ -127,18 +127,13 @@ describe('what this version does not serve yet stops the boot', () => {
 	}))
 	const handlers = () => ({ api: { start: () => ({ ok: true }) }, shared: { note: () => ({ ok: true }) } })
 
-	test('jobs, an SPA or a share SPA without assets, and a link whose object no table locates', () => {
-		const withJobs = defineContract(unserved.vocabulary, (c) => ({
-			...unserved.surface,
-			jobs: { purge: c.cron('0 3 * * *', { actions: ['notes.read'], scope: 'app' }) },
-		}))
-		const app = implement(withJobs, { database: null, deps: () => null, handlers })
+	test('an SPA or a share SPA without assets, and a link whose object no table locates', () => {
+		const app = implement(unserved, { database: null, deps: () => null, handlers })
 		const problems = problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))
 		expect(problems).toEqual([
 			"mount 'shared' serves an SPA, and the runtime adapter supplies no asset server",
 			"link mount 'shared' shares a 'note', but no table in src/db/tables.ts owns that dimension to locate it",
 			"mount 'spa' serves an SPA, and the runtime adapter supplies no asset server",
-			"jobs 'purge' is declared, and this version of @fabrika/app does not run jobs yet",
 		])
 	})
 

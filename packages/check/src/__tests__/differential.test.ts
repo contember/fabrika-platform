@@ -4,12 +4,14 @@
 
 import { compileContract, ContractError } from '@fabrika/app/contract'
 import { canonicalArtifactJson, type ContractArtifact, type TablePolicyArtifact } from '@fabrika/auth-core'
+import { tablePolicies } from '@fabrika/db/tables'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
 import { contract as implementContract } from '../../../app/src/__tests__/fixtures/implement/fabrika.contract'
 import { NOTE_TABLE } from '../../../app/src/__tests__/fixtures/implement/stores'
+import { contract as jobsContract } from '../../../app/src/__tests__/fixtures/jobs-notes/fabrika.contract'
 import { contract as multiTenantContract } from '../../../app/src/__tests__/fixtures/multi-tenant/fabrika.contract'
 import { tables as multiTenantTables } from '../../../app/src/__tests__/fixtures/multi-tenant/src/db/tables'
 import { contract as notesContract } from '../../../app/src/__tests__/fixtures/notes-app/fabrika.contract'
@@ -106,6 +108,12 @@ const fixtures: readonly Fixture[] = [
 		name: '@fabrika/app scoped-files (a file collection on a table read from source)',
 		root: join(APP_TESTS, 'fixtures', 'scoped-files'),
 		evaluated: () => compileContract(filesContract, filesTables),
+	},
+	{
+		name: '@fabrika/app jobs-notes (the scoped-notes tables)',
+		root: join(APP_TESTS, 'fixtures', 'jobs-notes'),
+		evaluated: () => compileContract(jobsContract, scopedTables),
+		tables: tablePolicies(scopedTables),
 	},
 	{
 		name: '@fabrika/app multi-tenant (src/db/tables.ts read from source)',

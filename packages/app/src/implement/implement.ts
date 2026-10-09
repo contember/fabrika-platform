@@ -53,5 +53,14 @@ export function implement<const C extends AnyContract, Deps, H extends HandlersO
 	},
 ): ContractImplementation<C> {
 	const { database, deps, handlers } = implementation
-	return Object.freeze({ contract, database, handlers: (env: ApplicationEnvironment, runtime: DepsRuntime) => handlers(deps(env, runtime)) })
+	const made = Object.freeze({ contract, database, handlers: (env: ApplicationEnvironment, runtime: DepsRuntime) => handlers(deps(env, runtime)) })
+	implementations.add(made)
+	return made
+}
+
+const implementations = new WeakSet<object>()
+
+/** Whether `value` is what `implement` returned: how a loader checks a module it imported by path. */
+export function isContractImplementation(value: unknown): value is ContractImplementation {
+	return typeof value === 'object' && value !== null && implementations.has(value)
 }

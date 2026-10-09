@@ -4,6 +4,7 @@
 import type { z } from 'zod/v4'
 import type { SurfaceSection } from '../contract/declaration'
 import type { InputOf, LinkMount, MemberAccess, Procedure, RoleOf, RpcMount, Schema, WebhookMount } from '../contract/define'
+import type { JobHandlersOf } from '../jobs/types'
 import type { Ref, Within } from './capability'
 import type { LinkIssuing, MemberManagement } from './membership'
 import type { LinkHolder, PrincipalOf } from './principal'
@@ -90,13 +91,15 @@ type ServedMount<M> = M extends { readonly kind: 'rpc' | 'link' | 'webhook' } ? 
 
 type SurfaceOf<C> = C extends { readonly surface: infer S } ? S : never
 
-/** One handler tree per procedure mount and one handler per webhook, keyed like the contract. */
-export type HandlersOf<C> = {
-	readonly [M in keyof SurfaceOf<C> as M extends SurfaceSection ? never : ServedMount<SurfaceOf<C>[M]> extends true ? M : never]: MountHandlers<
-		C,
-		SurfaceOf<C>[M]
-	>
-}
+/** One handler tree per procedure mount and one handler per webhook, keyed like the contract, and one per job under `jobs`. */
+export type HandlersOf<C> =
+	& {
+		readonly [M in keyof SurfaceOf<C> as M extends SurfaceSection ? never : ServedMount<SurfaceOf<C>[M]> extends true ? M : never]: MountHandlers<
+			C,
+			SurfaceOf<C>[M]
+		>
+	}
+	& JobHandlersOf<C>
 
 // ── Exactness: no handler outside the contract, no field outside the declared output ────────────
 

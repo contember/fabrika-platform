@@ -143,6 +143,7 @@ export function bootApp(app: ContractImplementation, options: Partial<BootOption
 			headers.set(ENDPOINT_HEADER, header)
 			return runtime.fetch(new Request(request, { headers }))
 		},
+		jobs: runtime.jobs,
 	}
 }
 

@@ -25,6 +25,7 @@ import { compileContract } from '../contract/compile'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { Schema } from '../contract/define'
 import { fileCollections } from '../files/collections'
+import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
 import { requestCapabilities } from './capability'
 import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
@@ -64,6 +65,8 @@ export interface BootOptions {
 
 export interface ContractApp {
 	fetch(request: Request): Promise<Response>
+	/** The contract's `c.cron` jobs; `fabrika job run <name>` runs one. */
+	readonly jobs: ContractJobs
 }
 
 /** Everything that stops a contract application from starting, with where it is and what to do. */
@@ -186,7 +189,6 @@ function unservable(
 	}
 	for (
 		const [section, entries] of Object.entries({
-			jobs: artifact.jobs,
 			exports: artifact.exports,
 			imports: artifact.imports,
 		})
@@ -476,6 +478,17 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	for (const [id, served] of files?.endpoints(rows, problems) ?? []) {
 		endpoints.set(id, served)
 	}
+	const jobs = bindJobs({
+		artifact,
+		handlers,
+		database,
+		framework,
+		ownedDimensions: owned,
+		variables: options.environment.framework,
+	}, problems)
+	for (const id of jobs.declared) {
+		declared.add(id)
+	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const asking = [...endpoints.values()].find(asksIam)
 	if (asking !== undefined && options.membership === undefined) {
@@ -487,7 +500,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		throw new BootError(problems)
 	}
 
-	return new ContractRuntime({
+	const runtime = new ContractRuntime({
 		table: compileEndpointTable(artifact),
 		endpoints,
 		digests: new Map(artifact.endpoints.map((row) => [row.id, endpointDigest(artifact, row)])),
@@ -503,4 +516,5 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		framework,
 		forms: new FormRateLimiter(),
 	})
+	return Object.freeze({ fetch: (request: Request) => runtime.fetch(request), jobs: jobs.jobs })
 }

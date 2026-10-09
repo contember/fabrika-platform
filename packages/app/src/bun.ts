@@ -18,7 +18,8 @@ import type { FabrikaApp, RequestExecutionContext } from './app.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
-import type { ContractImplementation } from './implement/implement.js'
+import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
+import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
 
 export interface ManagedBunHandlerOptions {
 	/** Required sink for rejected background tasks. Do not log raw errors or secret-bearing values. */
@@ -210,10 +211,52 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const files = openFileStorage(environment.framework)
 	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, files, membership, requireProxySecret: true })
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
+	// The crontab may never fire; the serving process notices a job that stopped succeeding without being invoked.
+	const check = () => void served.jobs.check()
+	const checks = served.jobs.names.length === 0 ? undefined : setInterval(check, JOB_CHECK_INTERVAL_MS)
+	if (checks !== undefined) {
+		check()
+	}
 	const stop = async (): Promise<void> => {
+		clearInterval(checks)
 		await server.stop(false)
 		await database?.close()
 	}
 	process.once('SIGTERM', () => void stop().then(() => process.exit(0)))
 	return { port: server.port ?? port, stop }
+}
+
+/** The application module at `path`, imported when the loader runs; its default export must be what `implement` returned. */
+export function implementationAt(path: string): ImplementationLoader {
+	return async () => {
+		const module: unknown = await import(path)
+		const value = typeof module === 'object' && module !== null ? Reflect.get(module, 'default') : undefined
+		if (!isContractImplementation(value)) {
+			throw new BootError([`${path} does not default-export implement(contract, { … })`])
+		}
+		return { default: value }
+	}
+}
+
+/**
+ * One run of the job `name` (`fabrika job run <name>`, the crontab's command): the framework's variables are captured
+ * and scrubbed before the application loads, exactly as `serveContract` does, then `boot` binds the job and the run
+ * takes its lease. The connection closes when the run ends.
+ */
+export async function runContractJob(
+	load: ImplementationLoader,
+	env: Readonly<Record<string, string | undefined>>,
+	name: string,
+	options: JobRunOptions = {},
+): Promise<JobRunResult> {
+	const environment = captureEnvironment(env)
+	const data = await import('@fabrika/db')
+	const { default: app } = await load()
+	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
+	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
+	try {
+		return await boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, requireProxySecret: true }).jobs.run(name, options)
+	} finally {
+		await database?.close()
+	}
 }
