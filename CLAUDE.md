@@ -116,7 +116,7 @@ needed only when there is no app config. Platform commands load the provider's
   reads the proxy-injected `X-Fabrika-Token`, verifies it locally, and evaluates no gate. Never add
   a second gate evaluator — not in `@fabrika/auth`, not in Caddy config, not in a provider package.
   Two other layers refuse requests and are **not** gate evaluators: **authorization** (`.require`,
-  `can()`, control's scoped use-case checks) and **admission** (the console gateways' same-origin guards; IAM's `/admin/*` is bearer-only).
+  `can()`, control's scoped use-case checks) and **admission** (the proxy's `Sec-Fetch-Site` and content-type checks; Control reads no `Origin`, and IAM's `/admin/*` is bearer-only).
   `docs/reference/overview.md` defines all three; keep the vocabulary.
   Array order is precedence for an SDK application's gates only. A contract application and each
   installation service get an endpoint table instead: the most specific endpoint wins, and the service

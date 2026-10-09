@@ -225,7 +225,9 @@ here. The proxy makes one pass over one selected endpoint:
    application), or the action in some scope. Otherwise the answer is 403.
 6. **Admission.** A session-authenticated request that is not `GET` must carry
    `Sec-Fetch-Site: same-origin`. An RPC request must carry `Content-Type: application/json`. An upload
-   admits only its declared content types.
+   admits only its declared content types. A request with a bearer is not session-authenticated, cookie or
+   not: a page cannot attach `Authorization` to another site's request without a preflight nobody answers,
+   so a bearer is explicit authority and needs no `Sec-Fetch-Site`.
 
 **Anonymous kinds.** An endpoint of an anonymous kind (`c.health`, `c.form`, `c.webhook`, and the shell
 of a link SPA) has no callers. The proxy skips steps 3 to 5, mints no token and forwards the request.
@@ -437,8 +439,11 @@ and `LOCAL_DEV_LOGIN=true`. No environment admits a credential-less caller.
 
 **Invariant: IAM's `/admin/*` is bearer-only.** It accepts the proxy token Control's console gateway
 forwards as a bearer (its audience must be a registered admin gateway) or a `px_` key, and reads no
-session cookie. Admission for the console is Control's gateway origin guard; IAM keeps no origin
-registry of its own.
+session cookie. Admission for the console is the proxy's (rule 3, step 6); neither Control nor IAM keeps an
+origin check. This relaxed Control's own guards for a bearer, which we accept: before, the Operations gateway and
+the GitHub connection mutations refused a bearer without the console's `Origin`, and the IAM gateway refused a
+bearer beside a cookie. A bearer is explicit authority, so none of these refusals stopped a forgery. An approval
+still refuses any `Authorization` header, as authorization.
 
 ### 6. An application token is minted for one application in one environment
 

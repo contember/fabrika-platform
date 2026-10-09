@@ -211,6 +211,8 @@ function controlAccepted(mcp: boolean): Accepted[] {
 			why: 'the Operations gateway serves only POST /operations/api/rpc',
 			covers: ({ probe, legacy, table }) => legacy === '/operations/api/rpc' && probe.method !== 'POST' && table.reason === 'no_endpoint',
 		},
+		// B10f also relaxed Control for a bearer, which no proxy decision shows: Control's guards refused one without the
+		// console's Origin, and nothing does now (ADR-0022 rule 3). `control/src/__tests__/console-admission.test.ts` pins it.
 		{
 			kind: 'narrowing',
 			why: "proxy admission replaces Control's same-origin guard: a cross-site session request that is not a GET is a 403",

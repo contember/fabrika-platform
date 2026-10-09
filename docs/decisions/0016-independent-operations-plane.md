@@ -53,7 +53,7 @@ and add the Fabrika-native context required to make it part of the platform:
 
 Operations will be a separate backend service with its own persistence,
 background work, and direct telemetry-ingest endpoints. Control will expose a
-narrow same-origin operator gateway, as it does for IAM administration, but it
+narrow operator gateway on the console's origin, as it does for IAM administration, but it
 will not proxy application telemetry or store Operations domain data.
 
 Control remains the authority for applications, environments, services, and

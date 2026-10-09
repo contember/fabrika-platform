@@ -357,13 +357,14 @@ enforcement:
   `.require(action, scope)`, every `can()` call, control's per-route
   `authorize`, and a contract application's caller-kind, requirement and access-form
   checks (`implement`, ADR-0012) are this layer.
-- **Admission** — the confused-deputy guards in front of ambient credentials:
-  control's origin guard on `/api/*`, the same-origin checks on the IAM and
-  Operations console gateways, and a contract application's `Sec-Fetch-Site` and
-  `Content-Type` checks. They decide whether a cookie-bearing request is
-  considered at all. IAM's own admin surface reads no cookie — it accepts only a
-  bearer — so it needs no admission check of its own. They resolve no
-  principal and read no policy, so none of them is a second gate evaluator.
+- **Admission** — the confused-deputy guards in front of ambient credentials: the
+  proxy's `Sec-Fetch-Site` check on a session's request that is not a `GET`, and its
+  `Content-Type` check, on every endpoint table — the console's three JSON mounts and
+  a contract application's endpoints alike. They decide whether a cookie-bearing
+  request is considered at all; a bearer is explicit authority and passes without
+  them. Control reads no `Origin`, and IAM's own admin surface reads no cookie — it
+  accepts only a bearer. They resolve no principal and read no policy, so none of
+  them is a second gate evaluator.
 
 A gate never replaces an authorization check, an authorization check never
 replaces a gate, and an admission check substitutes for neither.

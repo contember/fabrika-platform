@@ -19,7 +19,7 @@ Sharing payload validation reduces duplication but still leaves two route tables
 
 Preserve domain use cases, authorization, audit, persistence and failure semantics. Transfer behavioral tests to RPC or the domain boundary; replace obsolete REST availability assertions with tests that removed routes no longer dispatch operations.
 
-Protocol-specific HTTP remains: authentication and callbacks, webhooks, health checks, assets, Sentry ingest, source-map upload, and private catalog/release reconciliation. IAM's four provisioning REST operations are outside this decision. The Operations gateway forwards its RPC endpoint while retaining same-origin admission and token forwarding.
+Protocol-specific HTTP remains: authentication and callbacks, webhooks, health checks, assets, Sentry ingest, source-map upload, and private catalog/release reconciliation. IAM's four provisioning REST operations are outside this decision. The Operations gateway forwards its RPC endpoint and the proxy-injected token; the console's proxy does the admission (ADR-0022).
 
 ## Consequences
 

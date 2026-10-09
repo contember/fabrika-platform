@@ -59,16 +59,14 @@ that trusted token to `Authorization` and removes every console cookie before th
 verifies the signed calling-app audience and resolves IAM permissions live. Rewriting `Origin` to the
 private upstream's address is exactly the bug that answered 403 to the console's whole Access plane:
 the browser's origin is the console's, never the upstream's, so no rewriting scheme could make an
-issuer comparison correct. Control has ONE same-origin rule, `sameOrigin` in `src/origin-guard.ts`
-(`Sec-Fetch-Site`, `Origin: null`, the `Referer` fallback), compared against `FABRIKA_CONTROL_DOMAIN`
-(`controlPublicOrigin`) rather than the reconstructed request URL, which is plain HTTP behind a
-TLS-terminating balancer. Absent configuration fails CLOSED. Every state-changing request (anything but
-GET/HEAD/OPTIONS — an allowlist) passes it first: on `/api/*` (`controlOriginGuard`, mounted after auth;
-a bearer or a machine principal is exempt), in both gateways (the IAM gateway exempts only a bearer with
-no cookie), and in every source connection mutation. That check is the confused-deputy defense: a hostile
-page POSTing to the console's own origin with the victim's cookies is refused before the upstream is
-asked. Never add a second same-origin check. It is ADMISSION — not enforcement, not authorization
-(`docs/reference/overview.md` names all three). A trigger
+issuer comparison correct. Control reads no `Origin`: the confused-deputy defense is the proxy's session
+admission (ADR-0022). A session's state change on any credentialed row reaches Control only with
+`Sec-Fetch-Site: same-origin`; a cross-site or same-site one is refused before Control is asked. A bearer —
+with a cookie or without — is explicit authority, which no page attaches by itself, so it is admitted
+without that header. `src/__tests__/console-admission.test.ts` drives every mount, the GitHub mutations and
+the approvals through the real proxy. Never add a same-origin check here. Admission is not enforcement and
+not authorization (`docs/reference/overview.md` names all three). `controlPublicOrigin` remains the
+configured public origin, which the GitHub App manifest's callback is built from. A trigger
 writes a `pending` run to the
 database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
 namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.
@@ -395,8 +393,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
-  principal with no OAuth claims, no link claims and no `Authorization` header, on a request that passes
-  `sameOrigin` against `controlPublicOrigin` (`src/approval/human.ts`). The decision is written under the run lease
+  principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the
+  proxy admitted the session's POST from the console itself. The decision is written under the run lease
   (a busy environment answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
   Deleting a protected environment, or an app with one, takes the same human (`requireHumanForProtectedDelete`,
   over `RegistryUseCaseContext.admission`). The flag and the counters outlive the row in `app_env_protection`; a

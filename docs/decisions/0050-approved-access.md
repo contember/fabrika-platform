@@ -196,8 +196,8 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
 - **Only a user principal can approve.** A service principal, the builder key and any OAuth or MCP
   token are refused, even when they carry `access.approve`.
 - **The approval happens in the dashboard**, with a same-origin request. The `access.approve` check and
-  the user-principal check are authorization; the same-origin check is admission, in the vocabulary of
-  ADR-0022.
+  the user-principal check are authorization; the proxy's `Sec-Fetch-Site` check is admission, in the
+  vocabulary of ADR-0022.
 - **The approval records the candidate digest and the baseline digest.** It approves one change against
   one baseline.
 - **Runs record their actor**, including runs created through MCP. MCP's `get_deployment` reports a

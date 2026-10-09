@@ -47,12 +47,10 @@ not the control plane's. The IAM gateway translates that signed token to a beare
 and removes all console cookies before the private hop; IAM resolves IAM permissions
 live rather than trusting Control's permission snapshot.
 
-Each gateway performs its own same-origin check before forwarding, against
-`FABRIKA_CONTROL_DOMAIN` (the console's public origin) rather than the
-reconstructed request URL, which is plain HTTP behind a TLS-terminating balancer.
-That check is what stops a confused-deputy attack: a hostile page POSTing to the
-console's own origin with the victim's cookies is refused by the gateway before
-the downstream service is asked.
+Neither gateway checks the origin. The console's proxy admits a session's state
+change only with `Sec-Fetch-Site: same-origin`, which stops a confused-deputy
+attack: a hostile page POSTing to the console's own origin with the victim's
+cookies is refused before Control, and so the downstream service, is asked.
 
 IAM's `/admin/*` does not rely on that check: it accepts only a bearer — the
 console token the gateway forwards in place of the browser's cookie, or a `px_`
@@ -93,7 +91,7 @@ exchange a session, or write a cookie. A procedure or shared use case then perfo
 the action and object-scope check that depends on validated application data.
 
 That object-scope check is **authorization**, a separate layer from enforcement, and
-the gateway same-origin checks above are a third one, **admission** ([`overview.md`](overview.md) names all three). A
+the proxy's session check above is a third one, **admission** ([`overview.md`](overview.md) names all three). A
 service that refuses a request is not thereby a second gate evaluator; only a
 component that evaluates the gate list would be, and only the proxy does.
 
