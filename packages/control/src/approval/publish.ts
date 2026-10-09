@@ -5,6 +5,7 @@ import { type ArtifactAccess, artifactAccessDigest } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
 import type { ProviderArtifactAccessReport } from '@fabrika/provider-contract'
 import { z } from 'zod'
+import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure } from '../github/source/failure'
@@ -107,6 +108,7 @@ export async function publishRunSnapshot(
 		const appEnv = await requireAppEnv(deps.repositories, run)
 		const active = approvedSnapshot(appEnv)
 		const candidate = candidateAgainst(commit, run, active, appEnv, input.artifactAccess)
+		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
@@ -230,6 +232,30 @@ async function readCandidate(
 	}
 	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
 	return snapshot
+}
+
+/** A deploy that would break a connector edge fails, whoever approves it: the consumer would stop working. */
+export class ConnectorEdgeRefused extends Error {
+	constructor(readonly problems: readonly string[]) {
+		super(`the deploy breaks ${problems.length} connector edge${problems.length === 1 ? '' : 's'}`)
+		this.name = 'ConnectorEdgeRefused'
+	}
+}
+
+async function assertConnectorEdges(
+	registry: ControlRepositories['registry'],
+	run: RunRow,
+	candidate: AccessSnapshot,
+	active: ActiveSnapshot,
+	log: (line: string) => void,
+): Promise<void> {
+	const problems = [
+		...(candidate.contract === null ? [] : await consumerEdgeProblems(registry, run.app_id, run.env, candidate.contract)),
+		...await ownerEdgeProblems(registry, run.app_id, run.env, candidate.contract, active.snapshot.contract),
+	]
+	if (problems.length === 0) return
+	for (const problem of problems) log(`access: connector: ${problem}`)
+	throw new ConnectorEdgeRefused(problems)
 }
 
 /** The approval on the run counts only for the candidate and baseline it was given for. */

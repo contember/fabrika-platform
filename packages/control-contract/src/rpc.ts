@@ -1,4 +1,5 @@
 import type { RpcProcedureContract } from '@fabrika/app'
+import type { ExportDescription } from '@fabrika/auth-core'
 import type { BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest, GetBuilderConnectionReceiptRequest } from './builder-connections.js'
 import type {
 	ApproveDeviceAuthorizationResult,
@@ -203,4 +204,20 @@ export interface ControlRpcContract {
 	}
 	deploy: RpcProcedure<TriggerDeployRequest, RunDto>
 	register: RpcProcedure<RegisterAppRequest, RegisterAppResponse>
+	/** What a consumer vendors (`fabrika connect add`): the export its owner's environment approved for it. */
+	connectors: {
+		describe: RpcProcedure<DescribeConnectorRequest, ExportDescription>
+	}
+}
+
+/**
+ * One export version of `app` as the environment `env` approved it, read for its consumer `consumer`. Unknown, not
+ * approved, or not exported to that consumer: 404 alike.
+ */
+export interface DescribeConnectorRequest {
+	readonly consumer: string
+	readonly env: string
+	readonly app: string
+	readonly export: string
+	readonly version: number
 }

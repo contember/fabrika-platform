@@ -1,15 +1,20 @@
 // The workload credentials of one application environment (ADR-0022 "Principal kinds"). A deploy reconciles them from
-// the APPROVED snapshot: one IAM-issued key per job and per webhook of the contract, sealed in the vault and handed to
-// the provider as `FABRIKA_<KIND>_<NAME>_KEY`. What a key may do is not decided here: IAM resolves it to the actions the
-// approved schema declares for the workload. A key is never logged and never returned over the API.
+// the APPROVED snapshot: one IAM-issued key per job and per webhook of the contract, handed to the provider as
+// `FABRIKA_<KIND>_<NAME>_KEY`, and one connector key per owner application the contract imports from, handed as each
+// import's `FABRIKA_CONNECT_<IMPORT>_KEY`. Each is sealed in the vault. What a key may do is not decided here: IAM resolves
+// it to the actions the approved schema declares for the workload — the owner's, for a connector key. A key is never
+// logged and never returned over the API.
 
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
-import { appEnvironmentId, type ContractArtifact, MAX_KEY_LIFETIME_SECONDS, workloadKeyVariable } from '@fabrika/auth-core'
+import { appEnvironmentId, connectVariables, type ContractArtifact, MAX_KEY_LIFETIME_SECONDS, workloadKeyVariable } from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
-import type { WorkloadCredentialRepository } from './db'
+import type { WorkloadCredentialRepository, WorkloadCredentialRow } from './db'
 import type { Vault, VaultSecretPurpose } from './vault'
 
 export type WorkloadKind = 'job' | 'webhook'
+
+/** A recorded key: a job's, a webhook's, or the connector key at an owner application (`app`, named by the owner). */
+export type CredentialKind = WorkloadKind | 'app'
 
 /** A key with less than this left is replaced, so a running version never holds one that IAM stops honouring. */
 export const WORKLOAD_KEY_ROTATE_BELOW_SECONDS = MAX_KEY_LIFETIME_SECONDS / 2
@@ -21,7 +26,7 @@ export const WORKLOAD_KEY_ROTATE_BELOW_SECONDS = MAX_KEY_LIFETIME_SECONDS / 2
 export interface WorkloadKeyIssuer {
 	issue(input: {
 		readonly app: string
-		readonly kind: WorkloadKind
+		readonly kind: CredentialKind
 		readonly name: string
 		readonly expiresAt: number
 		/** The credential id of the key Control has recorded as active, or null when it has none. */
@@ -36,13 +41,14 @@ export interface WorkloadKeyIssuer {
 export interface WorkloadCredentialsPort {
 	/**
 	 * The keys `artifact` needs, by framework variable: each recorded key that is still fresh, or a newly issued one;
-	 * the record of a workload the contract no longer declares is dropped. A contract with no job or webhook needs none.
+	 * the record of a workload or an owner the contract no longer names is dropped. A contract with no job, webhook or
+	 * import needs none.
 	 */
 	reconcile(appId: string, env: string, artifact: ContractArtifact | null): Promise<Readonly<Record<string, string>>>
 }
 
 /** The `{ scope, label }` a workload key is sealed under — the only record of which workload owns its vault row. */
-export function workloadKeyPurpose(appId: string, env: string, kind: WorkloadKind, name: string): VaultSecretPurpose {
+export function workloadKeyPurpose(appId: string, env: string, kind: CredentialKind, name: string): VaultSecretPurpose {
 	return { scope: 'platform', label: `platform:workload-key:${appEnvironmentId(appId, env)}:${kind}:${name}` }
 }
 
@@ -67,6 +73,48 @@ export function declaredWorkloads(artifact: ContractArtifact | null): ReadonlyMa
 	return workloads
 }
 
+/**
+ * Every owner application the contract imports from, with the variables of its imports: one connector key per owner,
+ * because IAM keeps one active key per workload and the consumer is one workload at the owner.
+ */
+export function declaredConnectors(artifact: ContractArtifact | null): ReadonlyMap<string, readonly string[]> {
+	const owners = new Map<string, string[]>()
+	for (const [name, imported] of Object.entries(artifact?.imports ?? {})) {
+		owners.set(imported.app, [...(owners.get(imported.app) ?? []), connectVariables(name).key])
+	}
+	return owners
+}
+
+/** One key to keep: where IAM issues it, the record it is kept under, and the variables it is handed as. */
+interface CredentialSlot {
+	readonly kind: CredentialKind
+	/** The recorded name: the workload's, or the owner application's for a connector key. */
+	readonly name: string
+	readonly iamApp: string
+	/** The workload's name at IAM: for a connector key, the consuming application. */
+	readonly iamName: string
+	readonly variables: readonly string[]
+}
+
+function credentialSlots(appId: string, env: string, artifact: ContractArtifact | null): CredentialSlot[] {
+	const own = appEnvironmentId(appId, env)
+	const workloads = [...declaredWorkloads(artifact)].map(([variable, workload]): CredentialSlot => ({
+		kind: workload.kind,
+		name: workload.name,
+		iamApp: own,
+		iamName: workload.name,
+		variables: [variable],
+	}))
+	const connectors = [...declaredConnectors(artifact)].map(([owner, variables]): CredentialSlot => ({
+		kind: 'app',
+		name: owner,
+		iamApp: appEnvironmentId(owner, env),
+		iamName: appId,
+		variables,
+	}))
+	return [...workloads, ...connectors]
+}
+
 export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 	constructor(
 		private readonly records: Pick<WorkloadCredentialRepository, 'list' | 'put' | 'delete'>,
@@ -76,59 +124,71 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 	) {}
 
 	async reconcile(appId: string, env: string, artifact: ContractArtifact | null): Promise<Readonly<Record<string, string>>> {
-		const declared = declaredWorkloads(artifact)
+		const slots = credentialSlots(appId, env, artifact)
 		const recorded = await this.records.list(appId, env)
 		const keys: Record<string, string> = {}
-		if (declared.size === 0 && recorded.length === 0) {
+		if (slots.length === 0 && recorded.length === 0) {
 			return keys
 		}
 		const vault = await this.vault()
 		const now = this.now()
-		for (const [variable, workload] of declared) {
-			const purpose = workloadKeyPurpose(appId, env, workload.kind, workload.name)
-			const row = recorded.find((candidate) => candidate.kind === workload.kind && candidate.name === workload.name)
-			if (row !== undefined && row.expires_at - now > WORKLOAD_KEY_ROTATE_BELOW_SECONDS) {
-				keys[variable] = await vault.getSecretForPurpose(row.value_ref, purpose)
-				continue
+		for (const slot of slots) {
+			const key = await this.#keyOf(vault, appId, env, slot, recorded, now)
+			for (const variable of slot.variables) {
+				keys[variable] = key
 			}
-			// The recorded key stays IAM's active one until the record below names the new key; a failure in between
-			// leaves the new key an orphan, which the next issuance revokes.
-			const issued = await this.issuer.issue({
-				app: appEnvironmentId(appId, env),
-				kind: workload.kind,
-				name: workload.name,
-				expiresAt: now + MAX_KEY_LIFETIME_SECONDS,
-				keep: row?.credential_id ?? null,
-			})
-			const ref = await vault.putSecret(purpose.scope, purpose.label, issued.key)
-			try {
-				await this.records.put({
-					app_id: appId,
-					env,
-					kind: workload.kind,
-					name: workload.name,
-					value_ref: ref,
-					credential_id: issued.credentialId,
-					expires_at: issued.expiresAt,
-				})
-			} catch (error) {
-				await vault.delete(ref)
-				throw error
-			}
-			if (row !== undefined) {
-				await vault.delete(row.value_ref)
-			}
-			keys[variable] = issued.key
 		}
 		// IAM revokes the keys of a workload the reconciled schema no longer declares; Control forgets its copy.
 		for (const row of recorded) {
-			const stillDeclared = [...declared.values()].some((workload) => workload.kind === row.kind && workload.name === row.name)
-			if (!stillDeclared) {
+			if (!slots.some((slot) => slot.kind === row.kind && slot.name === row.name)) {
 				await this.records.delete(appId, env, row.kind, row.name)
 				await vault.delete(row.value_ref)
 			}
 		}
 		return keys
+	}
+
+	async #keyOf(
+		vault: Vault,
+		appId: string,
+		env: string,
+		slot: CredentialSlot,
+		recorded: readonly WorkloadCredentialRow[],
+		now: number,
+	): Promise<string> {
+		const purpose = workloadKeyPurpose(appId, env, slot.kind, slot.name)
+		const row = recorded.find((candidate) => candidate.kind === slot.kind && candidate.name === slot.name)
+		if (row !== undefined && row.expires_at - now > WORKLOAD_KEY_ROTATE_BELOW_SECONDS) {
+			return await vault.getSecretForPurpose(row.value_ref, purpose)
+		}
+		// The recorded key stays IAM's active one until the record below names the new key; a failure in between
+		// leaves the new key an orphan, which the next issuance revokes.
+		const issued = await this.issuer.issue({
+			app: slot.iamApp,
+			kind: slot.kind,
+			name: slot.iamName,
+			expiresAt: now + MAX_KEY_LIFETIME_SECONDS,
+			keep: row?.credential_id ?? null,
+		})
+		const ref = await vault.putSecret(purpose.scope, purpose.label, issued.key)
+		try {
+			await this.records.put({
+				app_id: appId,
+				env,
+				kind: slot.kind,
+				name: slot.name,
+				value_ref: ref,
+				credential_id: issued.credentialId,
+				expires_at: issued.expiresAt,
+			})
+		} catch (error) {
+			await vault.delete(ref)
+			throw error
+		}
+		if (row !== undefined) {
+			await vault.delete(row.value_ref)
+		}
+		return issued.key
 	}
 }
 

@@ -27,6 +27,7 @@ import { republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot, settleArtifactAccessReport } from './approval/publish'
 import { approvedProviderAccess, type ProviderAccessFields } from './approval/snapshot'
+import { connectorAddresses } from './connectors'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -47,7 +48,7 @@ import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './op
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
-import { declaredWorkloads, type WorkloadCredentialsPort } from './workload-credentials'
+import { declaredConnectors, declaredWorkloads, type WorkloadCredentialsPort } from './workload-credentials'
 
 export type RunOutcome = ProviderTerminalOutcome
 
@@ -602,7 +603,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		// From the approved contract only, like every other access the deploy publishes (ADR-0050); a dry run issues none.
 		const approvedContract = registration.environment.access?.contract ?? null
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
-		Object.assign(managedEnvironment, workloadKeys)
+		Object.assign(managedEnvironment, workloadKeys, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
 		const membershipKey = dryRun
 			? null
 			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract))
@@ -711,9 +712,9 @@ async function reconcileWorkloadKeys(
 	if (credentials !== undefined) {
 		return credentials.reconcile(appId, env, contract)
 	}
-	if (declaredWorkloads(contract).size > 0) {
+	if (declaredWorkloads(contract).size > 0 || declaredConnectors(contract).size > 0) {
 		throw new Error(
-			'the contract declares jobs or webhooks, and this installation cannot issue their keys (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
+			'the contract declares jobs, webhooks or imports, and this installation cannot issue their keys (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
 		)
 	}
 	return {}

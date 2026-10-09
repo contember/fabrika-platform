@@ -1,10 +1,13 @@
 import type { SqlDatabase } from '@fabrika/platform'
 
-/** One workload key of an application environment; the key itself lives in the vault (`value_ref`). */
+/**
+ * One workload key of an application environment; the key itself lives in the vault (`value_ref`). Kind `app` is the
+ * connector key at the owner application `name`.
+ */
 export interface WorkloadCredentialRow {
 	app_id: string
 	env: string
-	kind: 'job' | 'webhook'
+	kind: 'job' | 'webhook' | 'app'
 	name: string
 	value_ref: string
 	/** IAM's id of the active key: what the next issuance keeps. */
@@ -33,7 +36,7 @@ export class WorkloadCredentialRepository {
 			.run()
 	}
 
-	async delete(appId: string, env: string, kind: 'job' | 'webhook', name: string): Promise<void> {
+	async delete(appId: string, env: string, kind: WorkloadCredentialRow['kind'], name: string): Promise<void> {
 		await this.d1
 			.prepare('DELETE FROM app_env_workload_credentials WHERE app_id = ? AND env = ? AND kind = ? AND name = ?')
 			.bind(appId, env, kind, name)

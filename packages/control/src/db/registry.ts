@@ -562,6 +562,17 @@ export class ControlRegistryRepository {
 		return results
 	}
 
+	/** Every app environment named `env` that has published a snapshot: the applications a connector edge can join. */
+	async listPublishedAppEnvsNamed(env: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_envs
+				WHERE env = ? AND published_snapshot_json IS NOT NULL
+				ORDER BY app_id`)
+			.bind(env)
+			.all<AppEnvRow>()
+		return results
+	}
+
 	async listAppEnvsByNamespace(namespaceId: string): Promise<AppEnvRow[]> {
 		const { results } = await this.d1
 			.prepare(`SELECT * FROM app_envs

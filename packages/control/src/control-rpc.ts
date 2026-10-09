@@ -67,6 +67,7 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
+import { describeConnector } from './connectors'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
 import { startSourceConnection } from './github/connections/manifest'
@@ -182,6 +183,13 @@ const registerInput = z.object({
 	artifact: providerEnvelopeSchema,
 	...appOptionalFields,
 })
+const describeConnectorInput = z.object({
+	consumer: nonEmpty,
+	env: nonEmpty,
+	app: nonEmpty,
+	export: nonEmpty,
+	version: z.number().int().positive(),
+}).strict()
 const githubOwner = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
 const githubRepositoryName = z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)
 const sourceConnectionId = z.object({ connectionId: z.string().min(1).max(128) }).strict()
@@ -337,6 +345,14 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 		register: rpc.procedure.input(registerInput).require(ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => registerAppUseCase(registryContext(ctx), input))
 		),
+		connectors: rpc.router({
+			describe: rpc.procedure.input(describeConnectorInput).require(ACTIONS.DEPLOY_READ, ({ consumer }) => appScope(consumer)).query(({ ctx, input }) =>
+				controlCall(async () => {
+					const description = await describeConnector(buildDeps(ctx.env, ctx.provider, ctx.auth).repositories.registry, input)
+					return description ?? fail(404, `${input.app}@${input.env} has approved no export ${input.export}@${input.version} for ${input.consumer}`)
+				})
+			),
+		}),
 	})
 
 	function pairingContext(ctx: ControlRpcContext): BuilderPairingContext {

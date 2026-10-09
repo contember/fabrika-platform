@@ -472,6 +472,7 @@ export type {
 	AppNamedValueInput,
 	ControlRpcContract,
 	CreateAppRequest,
+	DescribeConnectorRequest,
 	GitHubSourceConnectionInput,
 	GitHubSourceConnectionRpcContract,
 	NamespaceIdInput,
