@@ -14,19 +14,35 @@ const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(5)))
 const workloadsOnly: ContractArtifact = { ...notesArtifact, imports: {} }
 const T0 = 1_800_000_000
 
-/** IAM's issuance as `workloads.issueKey` does it: every key of the workload but `keep` and the new one is revoked. */
+/**
+ * IAM's issuance as `workloads.issueKey` does it: every key of the workload but `keep` and the new one is revoked. A
+ * workload is its application and its kind and name, as IAM keys it.
+ */
 class RecordingIssuer implements WorkloadKeyIssuer {
 	readonly issued: { app: string; kind: string; name: string; expiresAt: number; keep: string | null }[] = []
-	readonly valid = new Set<string>()
+	readonly revoked: { app: string; kind: string; name: string }[] = []
+	/** Live credential id → its workload. */
+	readonly valid = new Map<string, string>()
+	failRevoke = false
 
 	issue(input: { app: string; kind: 'job' | 'webhook' | 'app'; name: string; expiresAt: number; keep: string | null }) {
 		this.issued.push({ ...input })
+		const workload = `${input.app}/${input.kind}:${input.name}`
 		const credentialId = `${input.kind}:${input.name}:${this.issued.length}`
-		for (const id of [...this.valid]) {
-			if (id.startsWith(`${input.kind}:${input.name}:`) && id !== input.keep) this.valid.delete(id)
+		for (const [id, of] of [...this.valid]) {
+			if (of === workload && id !== input.keep) this.valid.delete(id)
 		}
-		this.valid.add(credentialId)
+		this.valid.set(credentialId, workload)
 		return Promise.resolve({ key: `px_${input.kind}_${input.name}_${this.issued.length}`, credentialId, expiresAt: input.expiresAt })
+	}
+
+	revoke(input: { app: string; kind: 'job' | 'webhook' | 'app'; name: string }) {
+		if (this.failRevoke) return Promise.reject(new Error('IAM could not be asked'))
+		this.revoked.push({ ...input })
+		for (const [id, of] of [...this.valid]) {
+			if (of === `${input.app}/${input.kind}:${input.name}`) this.valid.delete(id)
+		}
+		return Promise.resolve()
 	}
 }
 
@@ -172,14 +188,33 @@ describe('VaultWorkloadCredentials for connectors', () => {
 		])
 	})
 
-	test('keeps the recorded key while it is fresh, and forgets an owner the contract no longer imports from', async () => {
-		const { harness, issuer, credentials } = await setup()
+	test('keeps the recorded key while it is fresh, and revokes every key of an owner the contract no longer imports from', async () => {
+		const { harness, issuer, clock, credentials } = await setup()
 		const first = await credentials.reconcile('notes', 'prod', importing({ catalog }))
 		expect(await credentials.reconcile('notes', 'prod', importing({ catalog }))).toEqual(first)
 		expect(issuer.issued).toHaveLength(1)
+		// A rotation keeps the recorded key beside the new one; removing the import revokes both.
+		clock.now = T0 + MAX_KEY_LIFETIME_SECONDS
+		await credentials.reconcile('notes', 'prod', importing({ catalog }))
+		expect(issuer.valid.size).toBe(2)
 		expect(await credentials.reconcile('notes', 'prod', importing({}))).toEqual({})
+		expect(issuer.revoked).toEqual([{ app: 'catalog@prod', kind: 'app', name: 'notes' }])
+		expect(issuer.valid.size).toBe(0)
 		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials')).toEqual([])
 		expect(queryRows(harness.sqlite, 'SELECT * FROM vault')).toEqual([])
+	})
+
+	test('a revocation IAM does not confirm fails the reconcile and keeps the record, so the retry revokes', async () => {
+		const { harness, issuer, credentials } = await setup()
+		await credentials.reconcile('notes', 'prod', importing({ catalog }))
+		issuer.failRevoke = true
+		await expect(credentials.reconcile('notes', 'prod', importing({}))).rejects.toThrow('IAM could not be asked')
+		expect(queryRows(harness.sqlite, 'SELECT kind, name FROM app_env_workload_credentials')).toEqual([{ kind: 'app', name: 'catalog' }])
+		expect(issuer.valid.size).toBe(1)
+		issuer.failRevoke = false
+		expect(await credentials.reconcile('notes', 'prod', importing({}))).toEqual({})
+		expect(issuer.valid.size).toBe(0)
+		expect(queryRows(harness.sqlite, 'SELECT * FROM app_env_workload_credentials')).toEqual([])
 	})
 })
 

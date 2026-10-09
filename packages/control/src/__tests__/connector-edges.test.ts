@@ -83,6 +83,7 @@ interface World {
 	readonly db: ControlRepositories
 	readonly deploys: ProviderDeployInput[]
 	readonly issued: string[]
+	readonly revoked: string[]
 	readonly logs: Map<string, string>
 	/** Each application's contract source at the next commit, by repository. */
 	readonly sources: Map<string, string>
@@ -95,16 +96,22 @@ async function world(): Promise<World> {
 	const { db } = createHarness()
 	const vault = await Vault.create(harnessDatabase(db), btoa(String.fromCharCode(...new Uint8Array(32).fill(9))))
 	const issued: string[] = []
+	const revoked: string[] = []
 	const issuer: WorkloadKeyIssuer = {
 		issue: (input) => {
 			issued.push(`${input.app}/${input.kind}:${input.name}`)
 			return Promise.resolve({ key: `px_${'e'.repeat(40)}${issued.length}`, credentialId: `credential-${issued.length}`, expiresAt: input.expiresAt })
+		},
+		revoke: (input) => {
+			revoked.push(`${input.app}/${input.kind}:${input.name}`)
+			return Promise.resolve()
 		},
 	}
 	const w: World = {
 		db,
 		deploys: [],
 		issued,
+		revoked,
 		logs: new Map(),
 		sources: new Map(),
 		workloadCredentials: new VaultWorkloadCredentials(db.workloadCredentials, () => Promise.resolve(vault), issuer),
@@ -188,6 +195,17 @@ describe('a consumer deploy', () => {
 		expect(managed['FABRIKA_CONNECT_CATALOG_URL']).toBe('https://stage.catalog.example.test')
 		expect(managed['FABRIKA_CONNECT_CATALOG_KEY']).toMatch(/^px_e+1$/)
 		expect(runLog(w)).not.toContain(String(managed['FABRIKA_CONNECT_CATALOG_KEY']))
+	})
+
+	test("that drops its last import of an owner revokes the pair's keys at the owner before the provider deploys", async () => {
+		const w = await world()
+		expect(await deploy(w, 'catalog', CATALOG)).toBe('succeeded')
+		expect(await deploy(w, 'shop', shopSource(digestOf(CATALOG)))).toBe('succeeded')
+		const withoutImport = shopSource(digestOf(CATALOG)).replace(/\timports: \{[\s\S]*?\n\t\},\n/, '')
+		expect(withoutImport).not.toContain('imports')
+		expect(await deploy(w, 'shop', withoutImport)).toBe('succeeded')
+		expect(w.revoked).toEqual(['catalog@stage/app:shop'])
+		expect(Object.keys(w.deploys.at(-1)?.managedEnvironment ?? {}).filter((name) => name.startsWith('FABRIKA_CONNECT_'))).toEqual([])
 	})
 
 	test('is refused when its vendored snapshot is not what the owner serves, or the owner exports nothing to it', async () => {

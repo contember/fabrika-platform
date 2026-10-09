@@ -655,6 +655,7 @@ describe('workload keys from the approved contract', () => {
 				issued.push(`${input.app}/${input.kind}:${input.name}`)
 				return Promise.resolve({ key: `px_${'k'.repeat(40)}${issued.length}`, credentialId: `credential-${issued.length}`, expiresAt: input.expiresAt })
 			},
+			revoke: () => Promise.reject(new Error('no import is removed here')),
 		}
 		return { issued, workloadCredentials: new VaultWorkloadCredentials(w.db.workloadCredentials, () => Promise.resolve(vault), issuer) }
 	}

@@ -36,6 +36,8 @@ export interface WorkloadKeyIssuer {
 		readonly credentialId: string
 		readonly expiresAt: number
 	}>
+	/** Revoke every key of the workload, the one a rotation kept included (`workloads.revokeKeys`). */
+	revoke(input: { readonly app: string; readonly kind: CredentialKind; readonly name: string }): Promise<void>
 }
 
 export interface WorkloadCredentialsPort {
@@ -138,9 +140,14 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 				keys[variable] = key
 			}
 		}
-		// IAM revokes the keys of a workload the reconciled schema no longer declares; Control forgets its copy.
+		// IAM revokes the keys of a job or webhook the reconciled schema no longer declares. An import removed here is
+		// still declared by its owner, so Control revokes the pair's keys itself, before it forgets the record: a failed
+		// revocation fails the deploy and keeps the record, and the retry revokes again.
 		for (const row of recorded) {
 			if (!slots.some((slot) => slot.kind === row.kind && slot.name === row.name)) {
+				if (row.kind === 'app') {
+					await this.issuer.revoke({ app: appEnvironmentId(row.name, env), kind: 'app', name: appId })
+				}
 				await this.records.delete(appId, env, row.kind, row.name)
 				await vault.delete(row.value_ref)
 			}
@@ -222,6 +229,9 @@ export function iamWorkloadKeyIssuer(options: IamWorkloadKeyIssuerOptions): Work
 				keep: input.keep,
 			})
 			return { key: issued.key, credentialId: issued.credentialId, expiresAt: issued.expiresAt }
+		},
+		async revoke(input) {
+			await client.workloads.revokeKeys({ app: input.app, kind: input.kind, name: input.name })
 		},
 	}
 }

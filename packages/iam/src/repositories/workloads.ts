@@ -57,6 +57,15 @@ export class WorkloadRepository {
 		)
 	}
 
+	/** The workload's principal id, or null when no key was ever issued for it. */
+	async findPrincipalId(app: string, kind: WorkloadKind, name: string): Promise<string | null> {
+		const row = await this.db
+			.prepare('SELECT principal_id FROM workload_principals WHERE app = ? AND kind = ? AND name = ?')
+			.bind(app, kind, name)
+			.first<{ principal_id: string }>()
+		return row?.principal_id ?? null
+	}
+
 	async getByPrincipal(principalId: string): Promise<WorkloadPrincipalRow | null> {
 		return this.db.prepare('SELECT * FROM workload_principals WHERE principal_id = ?').bind(principalId).first<WorkloadPrincipalRow>()
 	}

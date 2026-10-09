@@ -182,6 +182,25 @@ describe("a consuming application's connector key", () => {
 		expect(body).toEqual({ ok: false, reason: 'invalid_key' })
 	})
 
+	test('workloads.revokeKeys revokes every key of the pair, the one a rotation kept included', async () => {
+		const h = createHarness()
+		expect((await reconcile(h, schema([{ kind: 'app', name: 'shop', actions: ['notes.read'] }]))).status).toBe(200)
+		const kept = await issued(h, { kind: 'app', name: 'shop' })
+		const rotated = await issued(h, { kind: 'app', name: 'shop', keep: kept.credentialId })
+		const revoke = (name: string) =>
+			call(h, '/admin/rpc', {
+				method: 'POST',
+				bearer: PROVISIONING_KEY,
+				body: { method: 'workloads.revokeKeys', input: { app: APP, kind: 'app', name } },
+			})
+		const response = await revoke('shop')
+		expect(response.status).toBe(200)
+		expect(prop(await response.json(), 'result')).toEqual({ revoked: 2 })
+		expect(await minted(h, kept.key)).toBe('invalid_key')
+		expect(await minted(h, rotated.key)).toBe('invalid_key')
+		expect(prop(await (await revoke('crm')).json(), 'result')).toEqual({ revoked: 0 })
+	})
+
 	test('is named by an application id, and loses its actions once no export names the consumer', async () => {
 		const h = createHarness()
 		expect((await issueKey(h, { kind: 'app', name: 'Shop_Front' })).status).toBe(400)

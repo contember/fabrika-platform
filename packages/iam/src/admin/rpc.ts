@@ -145,6 +145,10 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			)
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.issueWorkloadKey(context(ctx), input)),
+		revokeKeys: t.procedure
+			.input(z.object({ app: nonEmpty, kind: z.enum(['job', 'webhook', 'app']), name: nonEmpty }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.revokeWorkloadKeys(context(ctx), input)),
 	}),
 	membershipKeys: t.router({
 		issue: t.procedure

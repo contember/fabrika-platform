@@ -477,6 +477,20 @@ export interface IssueWorkloadKeyResponse {
 	expiresAt: number
 }
 
+/**
+ * Revoke every key of one workload of `app`, the key a rotation kept included: what Control asks when a consumer stops
+ * importing from `app`. A workload with no principal has nothing to revoke.
+ */
+export interface RevokeWorkloadKeysRequest {
+	app: string
+	kind: 'job' | 'webhook' | 'app'
+	name: string
+}
+
+export interface RevokeWorkloadKeysResponse {
+	revoked: number
+}
+
 // ── Membership transport keys (Control's reconcile of applications without an IAM binding) ──
 
 /**
@@ -549,6 +563,7 @@ export interface IamAdminRpcContract {
 	}
 	workloads: {
 		issueKey: RpcProcedure<IssueWorkloadKeyRequest, IssueWorkloadKeyResponse>
+		revokeKeys: RpcProcedure<RevokeWorkloadKeysRequest, RevokeWorkloadKeysResponse>
 	}
 	membershipKeys: {
 		issue: RpcProcedure<IssueMembershipKeyRequest, IssueMembershipKeyResponse>

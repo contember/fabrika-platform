@@ -79,6 +79,7 @@ const INPUTS: Record<string, unknown> = {
 	'apiKeys.rotate': { principalId: 'nobody' },
 	'apiKeys.revoke': { principalId: 'nobody' },
 	'workloads.issueKey': { app: 'nowhere@prod', kind: 'job', name: 'nightly', expiresAt: 4_102_444_800, keep: null },
+	'workloads.revokeKeys': { app: 'nowhere@prod', kind: 'app', name: 'shop' },
 	'membershipKeys.issue': { app: 'nowhere@prod', expiresAt: 4_102_444_800, keep: null },
 	'shareLinks.issue': { app: 'nowhere', grants: [{ action: 'a' }], expiresAt: 1 },
 	'shareLinks.revoke': { id: 'nobody' },
