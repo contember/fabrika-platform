@@ -34,7 +34,7 @@
 // "deploy" means, and the platform keeps the previous version serving whenever the new one fails its
 // readiness gate.
 
-import { readEnvironmentName } from '@fabrika/auth-core'
+import { FABRIKA_SERVICE_TABLE_DIGEST, readEnvironmentName } from '@fabrika/auth-core'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import {
@@ -65,7 +65,7 @@ import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
 import { type IamOAuthConfig, platformIamOAuthConfig } from './mcp'
 import type { PreparedPlatformSource } from './platform-source'
 import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-upload'
-import { platformProxyAppFor, type PlatformProxyComposition, resolvePlatformProxyManifest } from './proxy-manifest'
+import { platformProxyAppFor, type PlatformProxyComposition, platformServiceTableDigest, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
  * The four services this command touches, in the order it RESOLVES and WRITES them.
@@ -284,6 +284,7 @@ const desiredServiceEnv = (
 	manifestJson: string,
 	proxySource: ZeropsNamespaceProxySource,
 	oauthConfig: IamOAuthConfig | undefined,
+	controlTableDigest: string,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const iamOrigin = platformOrigin(placement.scheme, placement.hosts.iam)
 	const operationsOrigin = platformOrigin(placement.scheme, placement.hosts.operations)
@@ -326,6 +327,9 @@ const desiredServiceEnv = (
 				// A bare host: `controlPublicOrigin` accepts either spelling, and this is also what the
 				// same-origin check on both first-party gateways is decided against.
 				['FABRIKA_CONTROL_DOMAIN', placement.hosts.control],
+				// The digest of the console table the proxy above publishes: Control picks its own table, MCP or not,
+				// by it, and refuses to start under another, so the two cannot disagree at runtime.
+				[FABRIKA_SERVICE_TABLE_DIGEST, controlTableDigest],
 				['OPERATIONS_ARTIFACT_ORIGIN', operationsOrigin],
 				// The public IAM origin an APPLICATION project's proxy reaches — there is no private
 				// network between projects (ADR-0006).
@@ -627,7 +631,8 @@ export const deployPreparedPlatform = async (
 	}
 
 	log.step('Write the service environment')
-	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest), proxySource, oauthConfig)
+	const controlTableDigest = platformServiceTableDigest(platformManifest, platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control').id)
+	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest), proxySource, oauthConfig, controlTableDigest)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)

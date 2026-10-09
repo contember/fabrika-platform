@@ -1,23 +1,23 @@
 /**
- * What the CLOUDFLARE proxy Workers bake into their own manifests is the same gate set or service table
- * the local platform manifest fronts each service with.
+ * What the CLOUDFLARE proxy Workers bake into their own manifests is the same service table the local
+ * platform manifest fronts each service with.
  *
- * The local manifest no longer copies those sets — `prepare.ts` calls the installation's own generator,
- * which imports `CONTROL_PROXY_GATES` and `OPERATIONS_PUBLIC_SERVICE` from the packages that own them,
+ * The local manifest no longer copies those tables — `prepare.ts` calls the installation's own generator,
+ * which imports `controlServiceContract` and `OPERATIONS_PUBLIC_SERVICE` from the packages that own them,
  * and that is what removed the drift this file used to exist for. What is left is the other half, and
- * it is not tautological: the gates reach a deployed CLOUDFLARE proxy through
- * `createCloudflareProxyWorker`, which serializes them into a var, and a provider change could drop or
- * reshape them without anything else noticing.
+ * it is not tautological: the table reaches a deployed CLOUDFLARE proxy through
+ * `createCloudflareProxyWorker`, which serializes it into a var, and a provider change could drop or
+ * reshape it without anything else noticing.
  *
  * It lives OUTSIDE `src/` because it must import `fabrika.config.ts`, which pulls in
  * `@fabrika/provider-cloudflare`: `tsconfig.json` includes `src/**` only, so oblaka's raw TypeScript
  * never reaches `bun run typecheck`.
  */
 
-import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
+import { controlServiceContract } from '@fabrika/control/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
-import { type InstallationServiceApp, isGateProxyApp, parseProxyManifestJson, type ProxyApp, serviceProxyTable } from '@fabrika/proxy-core/manifest'
+import { hasEndpointTable, parseProxyManifestJson, type ProxyApp, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { buildControlWorker } from '../../control/fabrika.config'
 import { buildOperationsProxy } from '../../operations/fabrika.config'
@@ -33,22 +33,23 @@ function productionApp(vars: Record<string, unknown> | undefined): ProxyApp {
 	return app
 }
 
-/** The gates or the service table a production Cloudflare proxy Worker bakes into its own manifest. */
+/** The service table a production Cloudflare proxy Worker bakes into its own manifest. */
 function productionAccess(vars: Record<string, unknown> | undefined): unknown {
 	return accessOf(productionApp(vars))
 }
 
-function accessOf(app: ProxyApp | InstallationServiceApp | undefined): unknown {
-	if (app === undefined) return undefined
-	if (isGateProxyApp(app)) return app.gates
+function accessOf(app: ProxyApp | undefined): unknown {
+	if (app === undefined || !hasEndpointTable(app)) return undefined
 	return { installation: 'installation' in app, endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes }
 }
 
 const OPERATIONS_TABLE = serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false })
+// The Cloudflare console has no MCP route, so its proxy publishes the table without the OAuth row.
+const CONTROL_TABLE = serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false })
 
-describe('a deployed Cloudflare proxy Worker carries the declared gates or service table', () => {
-	test('control', () => {
-		expect(productionAccess(buildControlWorker({ env: 'local' }).options.vars)).toEqual(CONTROL_PROXY_GATES)
+describe('a deployed Cloudflare proxy Worker carries the declared service table', () => {
+	test('control, as an installation entry', () => {
+		expect(productionAccess(buildControlWorker({ env: 'local' }).options.vars)).toEqual(CONTROL_TABLE)
 	})
 
 	test('Operations, as an installation entry', () => {
@@ -57,7 +58,7 @@ describe('a deployed Cloudflare proxy Worker carries the declared gates or servi
 
 	test('and the local manifest fronts the same services with them', () => {
 		const apps = new Map(localPlatformProxyManifest().apps.map((app) => [app.id, app]))
-		expect(accessOf(apps.get('vozka'))).toEqual(CONTROL_PROXY_GATES)
+		expect(accessOf(apps.get('vozka'))).toEqual(CONTROL_TABLE)
 		expect(accessOf(apps.get(OPERATIONS_APP_ID))).toEqual(OPERATIONS_TABLE)
 	})
 })

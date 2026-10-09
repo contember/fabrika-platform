@@ -8,6 +8,7 @@ import { githubWebhookSecretLabel } from '../github/connections/secrets'
 import { Vault } from '../vault'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
 import { fakeControlProvider, TEST_PROVIDER_ID } from './helpers/provider'
+import { proxiedRequest } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, operatorToken, testIamEnv, testToken, viewerToken } from './helpers/tokens'
 
@@ -29,7 +30,7 @@ function application(overrides: Partial<Env> = {}, harness: Harness = createHarn
 		...overrides,
 	}
 	return (request: Request) =>
-		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
+		controlApp.fetch(proxiedRequest(request), { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
 			waitUntil() {},
 		})
 }

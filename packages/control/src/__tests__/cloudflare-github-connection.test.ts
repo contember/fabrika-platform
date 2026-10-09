@@ -12,6 +12,7 @@ import { cloudflareControlProvider, cloudflareGitHubSource, type CloudflareSourc
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
+import { proxiedRequest } from './helpers/proxy'
 import { adminToken, testIamEnv } from './helpers/tokens'
 
 // The Cloudflare composition over the D1 schema (SQLite): connect a GitHub App from the console
@@ -175,7 +176,7 @@ describe('Cloudflare vault-backed GitHub connections', () => {
 			createClient: gitHubAppClientFactory(github.fetch),
 		})
 		const provider = cloudflareControlProvider(bindings, env, seams)
-		const fetch = (request: Request) => controlApp.fetch(request, { env, provider, sourceConnection }, { waitUntil() {} })
+		const fetch = (request: Request) => controlApp.fetch(proxiedRequest(request), { env, provider, sourceConnection }, { waitUntil() {} })
 		try {
 			const workflow = (request: Request) => ({
 				env,

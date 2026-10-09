@@ -1,12 +1,11 @@
 // The installation services' gates and `defineApp` routes as they stood before work unit B10, frozen as test data.
 //
-// B10c–e delete the gate exports and B10h deletes `defineApp`; the parity and route-coverage tests keep comparing
-// the service contracts against these copies. While the live versions exist, `frozen.test.ts` and each service's
-// `service-routes.test.ts` prove the copies equal them. Never edit a copy to make a parity test pass.
+// B10c–e deleted the gate exports and B10h deletes `defineApp`; the parity and route-coverage tests keep comparing
+// the service contracts against these copies. Never edit a copy to make a parity test pass.
 
 import type { AppGates } from '@fabrika/auth-core'
 
-/** `CONTROL_PROXY_GATES`, and `controlProxyGates(publicOrigin)`'s leading `oauth` rule for `/mcp`. */
+/** The console's former `CONTROL_PROXY_GATES`, and the leading `oauth` rule for `/mcp` its MCP variant added. */
 export function frozenControlGates(publicOrigin?: string): AppGates {
 	const mcp: AppGates['rules'] = publicOrigin === undefined
 		? []

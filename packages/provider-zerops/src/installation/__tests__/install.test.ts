@@ -6,6 +6,7 @@
 // then refuses every request), which service each SHARED secret reaches (a mismatch is a 401 at 3am),
 // and what never reaches a log line.
 
+import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -434,11 +435,16 @@ describe('the hand-off', () => {
 
 		await fixture.run()
 
-		// The ONLY thing pass 2 has left to write is the manifest it composes — every origin the deploy
-		// derives was written from the same hosts one step earlier.
+		// The ONLY things pass 2 has left to write are the manifest it composes and the console table digest
+		// read from it — every origin the deploy derives was written from the same hosts one step earlier, the
+		// last of them the access token.
 		const afterPassOne = fixture.zerops.calls.slice(fixture.zerops.calls.indexOf('deploy:proxy') + 1)
-		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 1)
-		expect(passTwoWrites.filter((call) => call.startsWith('env:'))).toEqual([`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`])
+		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 3)
+		expect(passTwoWrites.filter((call) => call.startsWith('env:'))).toEqual([
+			'env:control:FABRIKA_ZEROPS_ACCESS_TOKEN',
+			`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`,
+			`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`,
+		])
 
 		expect(fixture.reconciled).toHaveLength(1)
 		expect(fixture.reconciled[0]?.app).toBe('vozka')

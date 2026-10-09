@@ -21,13 +21,11 @@
 // they live in the private service packages and reach a deployed installation as DATA, through the
 // generated artifact, so the published deploy path never depends on a package it cannot resolve.
 
-import type { AppGates, GateRule, InstallationEndpointTable } from '@fabrika/auth-core'
+import { type InstallationEndpointTable, installationTableDigest } from '@fabrika/auth-core'
 import {
-	type GateProxyApp,
+	hasEndpointTable,
 	type InstallationProxyApp,
-	type InstallationServiceApp,
-	type InstallationServiceManifest,
-	isInstallationServiceApp,
+	isApplicationEntry,
 	type OAuthProtectedResource,
 	parseProxyManifest,
 	serviceProxyTable,
@@ -46,7 +44,7 @@ export interface PlatformOAuthScopeGrant {
  * A path an app serves to OAuth clients, protected only on an installation that enables it.
  *
  * The resource URI is the app's public origin plus `path`, so the template holds the path and a deploy
- * binds the origin. Copied from the owning gate module by the generator, like `gates`.
+ * binds the origin. Copied from the owning service module by the generator, like `table`.
  */
 export interface PlatformOAuthResourceTemplate {
 	readonly path: string
@@ -54,7 +52,11 @@ export interface PlatformOAuthResourceTemplate {
 	readonly scopeGrants: readonly PlatformOAuthScopeGrant[]
 }
 
-interface PlatformProxyAppBase {
+/**
+ * One fronted app, in the form that is the same on every installation: protected by its service contract (ADR-0022
+ * "Installation entries"), copied in by the generator and never written by hand.
+ */
+export interface PlatformProxyApp {
 	/** The IAM app id. It is the audience of every token the proxy mints for this app's host. */
 	readonly id: string
 	/** The topology service that answers for it. */
@@ -69,18 +71,16 @@ interface PlatformProxyAppBase {
 	readonly port: number
 	/** Where the proxy dials it over the project's private network. */
 	readonly upstream: string
+	/** The service's rows; with an `oauthResource`, the table served when the composition names an authorization server. */
+	readonly table: InstallationEndpointTable
 	/** Present only on an app that can serve OAuth clients; off unless the composition names an authorization server. */
 	readonly oauthResource?: PlatformOAuthResourceTemplate
+	/**
+	 * Present exactly with `oauthResource`: the service's table when it serves no OAuth client. The service picks the
+	 * same one, by the digest the deploy writes beside it (`platformServiceTableDigest`).
+	 */
+	readonly tableWithoutOAuth?: InstallationEndpointTable
 }
-
-/**
- * One fronted app, in the form that is the same on every installation: protected by the gates of its gate module, or
- * by the service contract that replaces them (ADR-0022 "Installation entries"). Both are copied in by the generator
- * and never written by hand.
- */
-export type PlatformProxyApp =
-	| (PlatformProxyAppBase & { readonly gates: AppGates; readonly table?: never })
-	| (PlatformProxyAppBase & { readonly table: InstallationEndpointTable; readonly gates?: never })
 
 /** Everything about an installation's manifest that does not depend on WHICH installation it is. */
 export interface PlatformProxyManifestTemplate {
@@ -160,24 +160,19 @@ const registeredResource = (
 	scopesSupported: [...template.scopes],
 })
 
-/** The gate rule goes FIRST, so the app's own catch-all rules cannot claim the path before it. */
-const withOAuthGate = (app: GateProxyApp, template: PlatformOAuthResourceTemplate, registered: OAuthProtectedResource): GateProxyApp => {
-	const rule: GateRule = { path: template.path, kind: 'oauth', resource: registered.resource, scopes: [...template.scopes] }
-	return { ...app, gates: { rules: [rule, ...app.gates.rules] }, oauthResources: [registered] }
-}
-
-/** Only an installation that names an authorization server registers the resource; otherwise its rows are dropped. */
-const resolvedServiceApp = (
-	placed: Pick<InstallationProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>,
-	table: InstallationEndpointTable,
-	template: PlatformOAuthResourceTemplate | undefined,
-	composition: PlatformProxyComposition,
-): InstallationProxyApp => {
-	const registered = template === undefined || composition.authorizationServer === undefined
+/** Only an installation that names an authorization server registers the resource and serves its OAuth rows. */
+const resolvedApp = (app: PlatformProxyApp, composition: PlatformProxyComposition): InstallationProxyApp => {
+	const placement = composition.placement[app.service]
+	const hosts = [...placement.hosts]
+	const registered = app.oauthResource === undefined || composition.authorizationServer === undefined
 		? undefined
-		: registeredResource(placed.hosts, template, composition, composition.authorizationServer)
+		: registeredResource(hosts, app.oauthResource, composition, composition.authorizationServer)
+	const table = registered === undefined ? (app.tableWithoutOAuth ?? app.table) : app.table
 	return {
-		...placed,
+		id: app.id,
+		hosts,
+		upstream: placement.upstream ?? app.upstream,
+		scheme: composition.scheme,
 		...serviceProxyTable(table, { oauth: registered !== undefined }),
 		...(registered === undefined ? {} : { oauthResources: [registered] }),
 	}
@@ -192,23 +187,29 @@ const resolvedServiceApp = (
 export const resolvePlatformProxyManifest = (
 	template: PlatformProxyManifestTemplate,
 	composition: PlatformProxyComposition,
-): InstallationServiceManifest => {
-	const apps = template.apps.map((app): InstallationServiceApp => {
-		const placement = composition.placement[app.service]
-		const placed = { id: app.id, hosts: [...placement.hosts], upstream: placement.upstream ?? app.upstream, scheme: composition.scheme }
-		if (app.table !== undefined) {
-			return resolvedServiceApp(placed, app.table, app.oauthResource, composition)
-		}
-		const resolved: GateProxyApp = { ...placed, gates: app.gates }
-		return app.oauthResource === undefined || composition.authorizationServer === undefined
-			? resolved
-			: withOAuthGate(resolved, app.oauthResource, registeredResource(placed.hosts, app.oauthResource, composition, composition.authorizationServer))
-	})
-	const manifest = parseProxyManifest({ apps })
-	// Every platform service is an installation service, by gates or by its table; never an application.
-	const services = manifest?.apps.flatMap((app) => isInstallationServiceApp(app) ? [app] : []) ?? []
+): PlatformProxyManifest => {
+	const manifest = parseProxyManifest({ apps: template.apps.map((app) => resolvedApp(app, composition)) })
+	// Every platform service is an installation entry; never an application, never gates.
+	const services = manifest?.apps.flatMap((app) => hasEndpointTable(app) && !isApplicationEntry(app) ? [app] : []) ?? []
 	if (manifest === null || services.length !== manifest.apps.length) {
 		throw new Error('the resolved platform proxy manifest is not one the proxy would accept')
 	}
 	return { apps: services }
+}
+
+/** The platform proxy's manifest: one installation entry per platform service. */
+export interface PlatformProxyManifest {
+	apps: InstallationProxyApp[]
+}
+
+/**
+ * `FABRIKA_SERVICE_TABLE_DIGEST` for a service: the digest of the table this manifest publishes for it, which the
+ * service compares with its own and refuses to start under another.
+ */
+export const platformServiceTableDigest = (manifest: PlatformProxyManifest, appId: string): string => {
+	const entry = manifest.apps.find((app) => app.id === appId)
+	if (entry === undefined) {
+		throw new Error(`the platform proxy manifest fronts no \`${appId}\``)
+	}
+	return installationTableDigest(entry)
 }

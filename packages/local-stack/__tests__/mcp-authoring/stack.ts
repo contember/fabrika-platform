@@ -2,11 +2,19 @@
 // and the real Control Bun handler with its real workspace source, which reads the GitHub App key from
 // Control's vault. Requests travel between them over an in-memory network keyed by origin. The stand-ins
 // are the client's CIMD document, the GitHub repository (`FakeGitHubRepository`) behind the App client,
-// and the Caddy hop in front of Control (`edge`, which does what `forward_auth` + `copy_headers` do).
+// and the Caddy hop in front of Control (`edge`, which does what `forward_auth` + `copy_headers` do). Control reads
+// its MCP switch from the digest of the table this proxy publishes, as a composition writes it.
 
 import { HttpIamRpc } from '@fabrika/auth'
-import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
-import { CONTROL_MCP_SCOPE, controlMcpResource, controlMcpResourceMetadata, controlProxyGates } from '@fabrika/control/gates'
+import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import {
+	CONTROL_MCP_SCOPE,
+	controlMcpResource,
+	controlMcpResourceMetadata,
+	controlMcpSwitch,
+	controlServiceContract,
+	controlServiceDigest,
+} from '@fabrika/control/service'
 import {
 	APP_QUERY_PARAM,
 	createVerifyService,
@@ -18,7 +26,7 @@ import {
 	HttpIamGateway,
 	OAUTH_METADATA_VERIFY_PATH,
 } from '@fabrika/proxy-core'
-import { parseProxyManifest } from '@fabrika/proxy-core/manifest'
+import { parseProxyManifest, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { spyOn } from 'bun:test'
 import { createHarness as createControlHarness } from '../../../control/src/__tests__/helpers/harness'
 import { allowAllAuth } from '../../../control/src/__tests__/helpers/iam'
@@ -142,7 +150,13 @@ export async function createMcpStack(): Promise<McpStack> {
 		FABRIKA_CONTROL_VAULT_KEY: CONTROL_VAULT_KEY,
 	}
 	const workspaceSource = githubWorkspaceSource(controlEnv, () => Promise.resolve({ openRepository: (input) => repository.open(input) }))
-	const control = createFetchHandler(controlEnv, zeropsProvider, unusedSourceConnection('zerops'), controlMcpRoute(controlEnv, workspaceSource))
+	const mcp = controlMcpSwitch(controlServiceDigest({ mcp: true }))
+	const control = createFetchHandler(
+		controlEnv,
+		zeropsProvider,
+		unusedSourceConnection('zerops'),
+		mcp ? controlMcpRoute(controlEnv, workspaceSource) : null,
+	)
 
 	const manifest = parseProxyManifest({
 		apps: [{
@@ -150,7 +164,7 @@ export async function createMcpStack(): Promise<McpStack> {
 			hosts: [new URL(CONSOLE).hostname],
 			upstream: 'control:3000',
 			scheme: 'https',
-			gates: controlProxyGates(CONSOLE),
+			...serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp }),
 			oauthResources: [{
 				resource: RESOURCE,
 				resourceMetadata: controlMcpResourceMetadata(CONSOLE),
@@ -170,9 +184,11 @@ export async function createMcpStack(): Promise<McpStack> {
 		const decision = await decide(request)
 		if (!decision.ok) return decision
 		const headers = new Headers(request.headers)
-		headers.delete(PROXY_TOKEN_HEADER)
-		const token = decision.headers.get(PROXY_TOKEN_HEADER)
-		if (token !== null) headers.set(PROXY_TOKEN_HEADER, token)
+		for (const name of [PROXY_TOKEN_HEADER, ENDPOINT_HEADER]) {
+			headers.delete(name)
+			const value = decision.headers.get(name)
+			if (value !== null) headers.set(name, value)
+		}
 		return control(new Request(request, { headers }))
 	})
 

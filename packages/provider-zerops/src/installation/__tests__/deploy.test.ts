@@ -4,11 +4,13 @@
 // ORDER is a security property (ADR-0027), the fail-closed behaviour only shows up on a failure path,
 // and idempotence is a claim about the SECOND run.
 
+import { FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
 import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
 	FABRIKA_PROXY_MANIFEST_JSON,
-	type GateProxyApp,
-	isGateProxyApp,
+	hasEndpointTable,
+	type InstallationProxyApp,
+	isApplicationEntry,
 	parseProxyManifestJson,
 	type ProxyManifest,
 } from '@fabrika/proxy-core/manifest'
@@ -22,11 +24,13 @@ import type { McpClient } from '../mcp'
 import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeZerops, fakeZerops, platformServices, SUBDOMAINS } from './fake-zerops'
 
-/** The platform app `id` of a parsed manifest; every platform service is protected by gates. */
-const gateAppOf = (manifest: ProxyManifest | null, id: string): GateProxyApp | undefined => {
+/** The platform app `id` of a parsed manifest; every platform service is an installation entry with its table. */
+const tableAppOf = (manifest: ProxyManifest | null, id: string): InstallationProxyApp | undefined => {
 	const app = manifest?.apps.find((entry) => entry.id === id)
-	return app === undefined || !isGateProxyApp(app) ? undefined : app
+	return app === undefined || !hasEndpointTable(app) || isApplicationEntry(app) ? undefined : app
 }
+
+const oauthRows = (app: InstallationProxyApp | undefined) => app?.endpoints.filter((row) => row.callers.some((caller) => caller === 'oauth')) ?? []
 
 const PROJECT = { projectId: 'proj-1', projectName: 'fabrika-test' }
 
@@ -362,13 +366,13 @@ describe('idempotence', () => {
 })
 
 describe('what it writes', () => {
-	test('the merged manifest keeps the application entry and adopts the platform gates', async () => {
+	test('the merged manifest keeps the application entry and adopts the platform tables', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
 		const manifest = parseProxyManifestJson(manifestOf(fixture.zerops))
 		expect(manifest?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations', 'notes'])
 		// The drift backlog 58 exists for: the live console was one `public` rule.
-		expect(gateAppOf(manifest, 'vozka')?.gates.rules.length).toBeGreaterThan(1)
+		expect(tableAppOf(manifest, 'vozka')?.endpoints.length).toBeGreaterThan(1)
 		expect(manifest?.apps.find((app) => app.id === 'notes')?.upstream).toBe('notesapi:3000')
 	})
 
@@ -459,11 +463,11 @@ describe('MCP authoring', () => {
 	}
 	const MCP_RESOURCE = `https://${CONSOLE_HOST}/mcp`
 
-	test('enabled: the console gates `/mcp` for OAuth bearers and registers the resource IAM issues for', async () => {
+	test('enabled: the console admits OAuth bearers on `/mcp` and registers the resource IAM issues for', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
-		const console_ = gateAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
-		expect(console_?.gates.rules[0]).toEqual({ path: '/mcp', kind: 'oauth', resource: MCP_RESOURCE, scopes: ['authoring'] })
+		const console_ = tableAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
+		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toEqual([['/mcp', ['authoring']]])
 		expect(console_?.oauthResources).toEqual([{
 			resource: MCP_RESOURCE,
 			resourceMetadata: `https://${CONSOLE_HOST}/.well-known/oauth-protected-resource/mcp`,
@@ -502,11 +506,27 @@ describe('MCP authoring', () => {
 		expect(fixture.log.lines.some((line) => line.includes('redirectUris') || line.includes(CLAUDE.redirectUris[0] ?? '-'))).toBe(false)
 	})
 
-	test('off: no OAuth gate, no registered resource, and no IAM OAuth config written', async () => {
+	test('enabled or off: Control gets the digest of the table the proxy publishes, before it deploys', async () => {
+		const digests: string[] = []
+		for (const overrides of [{ mcpClients: [CLAUDE] }, {}]) {
+			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
+			await fixture.run(overrides)
+			const console_ = tableAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
+			if (console_ === undefined) throw new Error('the console has no table')
+			const digest = fixture.zerops.env('control').get(FABRIKA_SERVICE_TABLE_DIGEST)
+			expect(digest).toBe(installationTableDigest(console_))
+			expect(fixture.zerops.calls.indexOf(`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`)).toBeLessThan(fixture.zerops.calls.indexOf('deploy:control'))
+			digests.push(digest ?? '')
+		}
+		expect(new Set(digests).size).toBe(2)
+	})
+
+	test('off: no OAuth row, no registered resource, and no IAM OAuth config written', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
-		const console_ = gateAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
-		expect(console_?.gates.rules.some((rule) => rule.kind === 'oauth')).toBe(false)
+		const console_ = tableAppOf(parseProxyManifestJson(manifestOf(fixture.zerops)), 'vozka')
+		expect(console_).toBeDefined()
+		expect(oauthRows(console_)).toEqual([])
 		expect(console_?.oauthResources).toBeUndefined()
 		expect(fixture.zerops.calls).not.toContain('env:iam:FABRIKA_IAM_OAUTH_CONFIG')
 	})
@@ -571,7 +591,7 @@ describe('MCP authoring', () => {
 		const controlOrigin = new URL(`https://${zerops.env('control').get('FABRIKA_CONTROL_DOMAIN') ?? ''}`).origin
 		const expected = `${controlOrigin}/mcp`
 		expect(expected).toBe('https://console.example.com/mcp')
-		const console_ = gateAppOf(parseProxyManifestJson(zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? ''), 'vozka')
+		const console_ = tableAppOf(parseProxyManifestJson(zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? ''), 'vozka')
 		expect(console_?.oauthResources?.map((entry) => entry.resource)).toEqual([expected])
 		expect(console_?.oauthResources?.[0]?.authorizationServers).toEqual(['https://iam.example.com'])
 		expect(JSON.parse(zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')).toMatchObject({ resources: [{ resource: expected }] })

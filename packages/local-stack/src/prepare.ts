@@ -1,10 +1,24 @@
 import { writeGeneratedEntry } from '@fabrika/app/build'
-import { appEnvironmentId, contractDigest, FABRIKA_CONTRACT_DIGEST, FABRIKA_PROXY_SECRET, proxySecretVariable } from '@fabrika/auth-core'
-import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
+import {
+	appEnvironmentId,
+	contractDigest,
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_PROXY_SECRET,
+	FABRIKA_SERVICE_TABLE_DIGEST,
+	proxySecretVariable,
+} from '@fabrika/auth-core'
+import { PLATFORM_CONSOLE_APP_ID, platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
-import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
+import {
+	type McpClient,
+	parseMcpClientsJson,
+	platformIamOAuthConfig,
+	type PlatformProxyComposition,
+	type PlatformProxyManifest,
+	platformServiceTableDigest,
+} from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import { contractProxyTable, type InstallationServiceManifest, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { NOTES_APP_ID, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -226,7 +240,7 @@ export async function prepareLocalSourceConfiguration(directory: string = STATE_
  * is supplied here: the hostnames, the scheme, and IAM's port.
  *
  * That is the point of the item this closes (backlog 58): the live installation's manifest was
- * hand-written and gated the whole control plane `public` while `CONTROL_PROXY_GATES` said otherwise,
+ * hand-written and gated the whole control plane `public` while the console's gates said otherwise,
  * and neither `local:smoke` nor any test could see it, because the two documents had no common source.
  *
  * One proxy in front of three services is the ZEROPS shape; on Cloudflare each service has its own
@@ -247,7 +261,7 @@ const localComposition = (mcpClients: readonly McpClient[] | undefined): Platfor
 	...(mcpClients === undefined ? {} : { authorizationServer: IAM_ISSUER }),
 })
 
-export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): InstallationServiceManifest =>
+export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): PlatformProxyManifest =>
 	resolvePlatformProxyManifest(platformProxyManifestTemplate(), localComposition(mcpClients))
 
 /**
@@ -344,6 +358,9 @@ export const prepareLocalStack = async (): Promise<void> => {
 	const mcpClients = readLocalMcpClients(process.env)
 	// Rewritten on every prepare, so turning MCP off is unsetting the variable and running `local:up`.
 	await writeEnv(STATE_DIR, 'iam-oauth.env', { FABRIKA_IAM_OAUTH_CONFIG: localIamOAuthConfig(mcpClients) })
+	await writeEnv(STATE_DIR, 'control-table.env', {
+		[FABRIKA_SERVICE_TABLE_DIGEST]: platformServiceTableDigest(localPlatformProxyManifest(mcpClients), PLATFORM_CONSOLE_APP_ID),
+	})
 	await generateProxyConfigs(mcpClients)
 	await prepareNotesApplication()
 	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpClients === undefined ? 'off' : 'on'}`)

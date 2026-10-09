@@ -795,18 +795,28 @@ const proveIamTable = async (): Promise<void> => {
 	if (jwks.status !== 200) throw new Error(`IAM's JWKS answered ${jwks.status} through its table`)
 }
 
-/** A navigation to the RPC URL must be redirected by the proxy before control handles the method. */
-const proveControlIsGated = async (): Promise<void> => {
-	const response = await fetch(`${CONTROL_ORIGIN}/api/rpc`, { headers: { accept: 'application/json' }, redirect: 'manual' })
+/**
+ * The console behind its table: an anonymous navigation to the SPA is bounced to IAM's login, and a method or path no
+ * row serves is refused by the proxy before control is asked.
+ */
+const proveControlTable = async (): Promise<void> => {
+	const shell = `${CONTROL_ORIGIN}/apps`
+	const response = await fetch(shell, { redirect: 'manual' })
 	if (response.status !== 302) {
-		throw new Error(`anonymous control /api/rpc returned ${response.status}, expected a proxy login redirect`)
+		throw new Error(`an anonymous navigation to the console returned ${response.status}, expected a proxy login redirect`)
 	}
 	const location = new URL(response.headers.get('location') ?? '')
 	if (`${location.origin}${location.pathname}` !== `${IAM_ORIGIN}/auth/login`) {
-		throw new Error('anonymous control /api/rpc was not sent to IAM')
+		throw new Error('an anonymous navigation to the console was not sent to IAM')
 	}
-	if (location.searchParams.get('app') !== 'vozka' || location.searchParams.get('redirect') !== `${CONTROL_ORIGIN}/api/rpc`) {
+	if (location.searchParams.get('app') !== 'vozka' || location.searchParams.get('redirect') !== shell) {
 		throw new Error('control login redirect does not name the app and the original URL')
+	}
+	for (const path of ['/api/rpc', '/api/local-smoke-undeclared']) {
+		const refused = await fetch(`${CONTROL_ORIGIN}${path}`, { headers: { accept: 'application/json' }, redirect: 'manual' })
+		if (refused.status !== 403 || (refused.headers.get('content-type') ?? '').startsWith('application/json')) {
+			throw new Error(`control GET ${path} answered ${refused.status}, expected a proxy refusal`)
+		}
 	}
 }
 
@@ -1011,7 +1021,7 @@ const main = async (): Promise<void> => {
 	await requestJson(NOTES_ORIGIN, '/healthz')
 	await proveOperationsPublicBoundary(machineKey)
 	await proveIamTable()
-	await proveControlIsGated()
+	await proveControlTable()
 	await ensureNamespace(machineKey)
 	await proveNamespaceSource(machineKey, fixtures)
 	await ensureNotesApp(machineKey, fixtures)

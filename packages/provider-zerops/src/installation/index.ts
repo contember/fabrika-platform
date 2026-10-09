@@ -26,9 +26,11 @@ export {
 	type PlatformProxyApp,
 	platformProxyAppFor,
 	type PlatformProxyComposition,
+	type PlatformProxyManifest,
 	type PlatformProxyManifestTemplate,
 	type PlatformProxyPlacement,
 	type PlatformProxyService,
+	platformServiceTableDigest,
 	resolvePlatformProxyManifest,
 } from './proxy-manifest'
 

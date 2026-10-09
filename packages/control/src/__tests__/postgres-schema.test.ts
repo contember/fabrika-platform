@@ -34,6 +34,7 @@ import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipRea
 import { interleaving } from './helpers/postgres-interleave'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { fakeControlProvider } from './helpers/provider'
+import { proxiedRequest } from './helpers/proxy'
 import { refusedClaimScenario } from './helpers/refused-claims'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv } from './helpers/tokens'
@@ -1049,7 +1050,8 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 	test('serves liveness, the API and the SPA fallback from one handler', async () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		const handler = createFetchHandler(env(), fakeControlProvider, unusedSourceConnection('harbor'))
+		const served = createFetchHandler(env(), fakeControlProvider, unusedSourceConnection('harbor'))
+		const handler = (request: Request) => served(proxiedRequest(request))
 
 		// The process-level liveness route is claimed before the SPA fallback.
 		expect((await handler(new Request('http://localhost:18291/healthz'))).status).toBe(200)
@@ -1075,7 +1077,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		// Bun's default error page embeds the exception message AND the surrounding source lines in the
 		// response body. The Workers runtime does not, so this is the one place the two entrypoints would
 		// have differed in what they show an attacker. Reproduced with an ASSETS port that throws.
-		const handler = createFetchHandler(
+		const served = createFetchHandler(
 			{
 				...env(),
 				ASSETS: {
@@ -1087,7 +1089,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 			fakeControlProvider,
 			unusedSourceConnection('harbor'),
 		)
-		const response = await handler(new Request('http://localhost:18291/anything'))
+		const response = await served(proxiedRequest(new Request('http://localhost:18291/anything')))
 		expect(response.status).toBe(500)
 		const text = await response.text()
 		expect(text).toBe('internal error')

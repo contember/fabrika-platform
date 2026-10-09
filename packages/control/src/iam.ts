@@ -1,23 +1,20 @@
 /**
- * IAM middleware + runtime ACL helpers for the control plane.
+ * IAM authentication + runtime ACL helpers for the control plane.
  *
- * The application middleware resolves each `/api/*` request's caller ONCE — from the token the proxy
- * injected, verified locally against IAM's JWKS — and stores the resulting `AuthContext` on the request
- * context. The API router only performs action and scope checks against that context. The GitHub
- * webhook remains outside this guard and is HMAC-gated instead.
+ * Each credentialed row of the console's service table resolves its caller ONCE — from the token the
+ * proxy injected, verified locally against IAM's JWKS — and hands the resulting `AuthContext` to its
+ * handler. The API router only performs action and scope checks against that context. The GitHub
+ * webhook is a `protocol` row and is HMAC-gated instead.
  *
  * Nothing here evaluates a gate: since ADR-0022 the proxy is the only enforcement point, and it has
- * already refused (or bounced to login) anything that does not satisfy `CONTROL_PROXY_GATES`
- * (`fabrika.gates.ts`).
+ * already refused (or bounced to login) anything the console's table (`fabrika.service.ts`) does not admit.
  */
 import {
-	type AuthCarrier,
 	type AuthContext,
 	type AuthFailure,
 	createIam as createAppIam,
 	type DomainEvent,
 	type IamRpc,
-	type Middleware,
 	type PrincipalIdentity,
 	type Scope,
 } from '@fabrika/auth'
@@ -76,8 +73,8 @@ export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<strin
 }
 
 /**
- * The application-framework auth front door: resolve the caller through the public IAM SDK (the
- * proxy-injected token, verified locally), then apply the one control-only bootstrap hatch.
+ * The console's auth front door, called by each credentialed row's handler: resolve the caller through the
+ * public IAM SDK (the proxy-injected token, verified locally), then apply the one control-only bootstrap hatch.
  *
  * There is ONE code path, locally included. The SDK used to carry a `DEV` persona roster that stood
  * in for IAM without verifying anything; it is gone. Locally the console is fronted by the real proxy
@@ -94,27 +91,26 @@ export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<strin
  * and which an operator obtains with the provisioning key over IAM's admin surface. See
  * `docs/reference/human-authentication.md`.
  */
-export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Middleware<Ctx> {
+export function controlAuthenticator(env: IamEnv): (request: Request) => Promise<ControlAuthentication> {
 	const iam = createAppIam(env, { appId: VOZKA_APP_ID })
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
 
-	return async (request, ctx, next) => {
-		// As the ROUTER sees it — `matchRoutes` drops empty segments, so a raw `//api/rpc` would reach
-		// the RPC route while `startsWith('/api/')` is false for it (`packages/app/src/router.ts`).
-		const path = `/${new URL(request.url).pathname.split('/').filter((segment) => segment !== '').join('/')}`
-		if (!path.startsWith('/api/') || path === '/api/health') return next()
-
+	return async (request) => {
+		const path = new URL(request.url).pathname
 		const result = await iam.authenticate(request)
 		if (!result.ok) {
-			return authFailureResponse(path, result)
+			return { ok: false, response: authFailureResponse(path, result) }
 		}
 		const principal = result.context.principal
-		ctx.auth = principal !== null && principal.type === 'user' && bootstrapAdmins.has(principal.label)
+		const auth = principal !== null && principal.type === 'user' && bootstrapAdmins.has(principal.label)
 			? new BootstrapAdminAuthContext(result.context)
 			: result.context
-		return next()
+		return { ok: true, auth }
 	}
 }
+
+/** The caller of a credentialed console row, or the flat refusal its handler answers instead. */
+export type ControlAuthentication = { readonly ok: true; readonly auth: AuthContext } | { readonly ok: false; readonly response: Response }
 
 /**
  * Map an unresolved caller to a response. There is no login bounce here by design: behind the proxy an

@@ -6,7 +6,7 @@ import { createIam, type Iam, type IamEnv } from '@fabrika/auth'
  *
  * The Operations HOSTNAME serves only its two self-authenticating `protocol` rows (`OPERATIONS_PUBLIC_SERVICE`
  * in `service.ts`), so its own proxy mints nothing. The operator surface is reached over the private network through control's
- * transport-only gateway, behind `CONTROL_PROXY_GATES`' `/operations/api/*` rules — so the token this
+ * transport-only gateway, behind the console table's `operations-rpc` row — so the token this
  * SDK verifies was minted by the CONSOLE's proxy and carries the console's audience and the caller's
  * permissions in the CONSOLE's app.
  *

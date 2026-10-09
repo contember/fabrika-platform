@@ -16,6 +16,7 @@
 
 import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
+import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
 import {
 	type BackgroundTasks,
 	createBackgroundTasks,
@@ -26,6 +27,8 @@ import {
 } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { z } from 'zod'
+import { controlMcpSwitch } from '../../fabrika.service'
+import type { McpRoute } from '../app'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { gitHubAppClientFactory } from '../github/connections/credentials'
@@ -35,7 +38,7 @@ import { controlPublicOrigin } from '../iam'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
 import { HttpIamAdminGateway } from './iam-admin'
-import { controlMcpRoute, type McpRoute } from './mcp'
+import { controlMcpRoute } from './mcp'
 import { HttpOperationsService } from './operations'
 import { type GitHubSourceSeams, zeropsCommitSource, zeropsControlProvider, zeropsGitHubSource } from './provider'
 
@@ -53,7 +56,7 @@ export interface Runtime {
 	provider: ControlProvider
 	/** GitHub App administration over vault-held keys, consumed by the shared authenticated workflow. */
 	sourceConnection: SourceConnectionPort
-	/** The `/mcp` endpoint (ADR-0049); null when no console public origin is configured. */
+	/** The `/mcp` endpoint (ADR-0049); null when the table the proxy publishes has no `oauth` row for it. */
 	mcp: McpRoute | null
 	config: ProcessConfig
 	/** The control queue (deploys + namespace jobs), as the concrete producer the consumer is built from. */
@@ -95,6 +98,8 @@ export interface RuntimeOverrides {
 }
 
 export function createRuntime(source: Record<string, string | undefined> = process.env, overrides: RuntimeOverrides = {}): Runtime {
+	// Before anything opens: the table the proxy publishes decides whether this console serves MCP.
+	const mcp = controlMcpSwitch(source[FABRIKA_SERVICE_TABLE_DIGEST])
 	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
 	// The console's own public origin is the fact this root states about where it runs; `local` is
 	// refused against it. Control does not branch on the name today, and that is exactly why it must not
@@ -158,7 +163,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 			vault: () => vault(env),
 			createClient: gitHubAppClientFactory(sourceSeams.githubAppFetch),
 		}),
-		mcp: controlMcpRoute(env, githubWorkspaceSource(env, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))),
+		mcp: mcp ? controlMcpRoute(env, githubWorkspaceSource(env, workspaceGitHubClientFactory(sourceSeams.githubAppFetch))) : null,
 		config,
 		queue,
 		shutdown: () => shutdownProcess(tasks, db),

@@ -1,12 +1,11 @@
 // The control plane's service contract (ADR-0022 "Installation entries"): the endpoint table its proxy decides from
-// and its dispatcher will serve. Nothing serves or publishes it yet; until work unit B10e the proxy keeps
-// `CONTROL_PROXY_GATES` and the service keeps `controlApp`.
+// and `controlApp` serves.
 //
-// Like `fabrika.gates.ts`, this module stays free of `@fabrika/provider-cloudflare` and of `src/` beyond the action
-// constants: this package relaxes two strict flags for oblaka, and strict consumers import this file.
+// This module stays free of `@fabrika/provider-cloudflare` and of `src/` beyond the action constants: this package
+// relaxes two strict flags for oblaka, and strict consumers import this file.
 
 import { defineServiceContract } from '@fabrika/app/service'
-import type { BodyAdmission } from '@fabrika/auth-core'
+import { type BodyAdmission, FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
 import { VOZKA_APP_ID } from './src/actions'
 
 /** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for. */
@@ -60,4 +59,29 @@ export function controlServiceContract(options: ControlServiceOptions) {
 		},
 		reservedPrefixes: ['/api', '/iam/admin', '/operations/api', '/webhooks', CONTROL_MCP_PATH],
 	}))
+}
+
+/** `installationTableDigest` of one console table: what a composition writes as `FABRIKA_SERVICE_TABLE_DIGEST`. */
+export function controlServiceDigest(options: ControlServiceOptions): string {
+	return installationTableDigest(controlServiceContract(options))
+}
+
+export class ControlTableError extends Error {
+	override readonly name = 'ControlTableError'
+}
+
+/**
+ * Whether this console serves MCP, read from the digest of the table its proxy publishes: the one switch, so the
+ * service cannot serve one table while its proxy decides from the other. A missing digest or one that names neither
+ * table refuses to start rather than answering 503 at runtime.
+ */
+export function controlMcpSwitch(digest: string | undefined): boolean {
+	if (digest === undefined || digest.trim() === '') {
+		throw new ControlTableError(
+			`${FABRIKA_SERVICE_TABLE_DIGEST} is not set; the composition writes the digest of the table the console's proxy publishes`,
+		)
+	}
+	if (digest === controlServiceDigest({ mcp: true })) return true
+	if (digest === controlServiceDigest({ mcp: false })) return false
+	throw new ControlTableError(`${FABRIKA_SERVICE_TABLE_DIGEST} names no console table this version serves; its proxy publishes another`)
 }

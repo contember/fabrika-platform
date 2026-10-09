@@ -1,17 +1,17 @@
 // The platform proxy's manifest template, pinned against the installation it claims to describe.
 //
 // Generating it removed the second DEFINITION — the local composition calls the same generator now —
-// but that only rules out a copy drifting from the gate modules. It does not rule out the template
+// but that only rules out a copy drifting from the service contracts. It does not rule out the template
 // naming a service the topology never creates, dialing a port no setup publishes, or claiming a
 // listener the proxy never opens. Those are the ways this document can be wrong while every other test
 // in the repository passes, which is exactly how the hand-written live one was wrong for two days.
 
 import type { MintFromKeyResult } from '@fabrika/auth-core'
-import { CONTROL_PROXY_GATES, controlMcpResource, controlMcpResourceMetadata, controlProxyGates } from '@fabrika/control/gates'
+import { controlMcpResource, controlMcpResourceMetadata, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
-import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE, platformServiceTableDigest } from '@fabrika/provider-zerops/installation'
 import {
 	compileTopology,
 	fabrikaZeropsYaml,
@@ -20,7 +20,7 @@ import {
 	PROXY_PUBLIC_PORTS,
 } from '@fabrika/provider-zerops/installation/topology'
 import { createVerifyService, PROXY_TOKEN_HEADER } from '@fabrika/proxy-core'
-import { encodeProxyManifestJson, isApplicationEntry, isGateProxyApp, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { encodeProxyManifestJson, isApplicationEntry, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -88,11 +88,13 @@ describe('the public listeners', () => {
 	})
 })
 
-describe('the gates and service tables come from the modules that own them', () => {
+describe('the service tables come from the modules that own them', () => {
 	const byId = new Map(PLATFORM_PROXY_APPS.map((app) => [app.id, app]))
+	const rows = ({ endpoints, reservedPrefixes }: ReturnType<typeof controlServiceContract>) => ({ endpoints, reservedPrefixes })
 
-	test('the console carries `CONTROL_PROXY_GATES` and Operations its `OPERATIONS_PUBLIC_SERVICE` table', () => {
-		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.gates).toEqual(CONTROL_PROXY_GATES)
+	test('the console carries both of its tables, and Operations its `OPERATIONS_PUBLIC_SERVICE` table', () => {
+		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.table).toEqual(rows(controlServiceContract({ mcp: true })))
+		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.tableWithoutOAuth).toEqual(rows(controlServiceContract({ mcp: false })))
 		expect(byId.get(OPERATIONS_APP_ID)?.table).toEqual({
 			endpoints: OPERATIONS_PUBLIC_SERVICE.endpoints,
 			reservedPrefixes: OPERATIONS_PUBLIC_SERVICE.reservedPrefixes,
@@ -113,8 +115,9 @@ describe('the gates and service tables come from the modules that own them', () 
 		}
 	})
 
-	test('and the console is NOT `public` — the drift this item exists for', () => {
-		expect(byId.get(PLATFORM_CONSOLE_APP_ID)?.gates?.rules.some((rule) => rule.path === '/*' && rule.kind === 'public')).toBe(false)
+	test('and the console is NOT anonymous — the drift this item exists for', () => {
+		const console_ = byId.get(PLATFORM_CONSOLE_APP_ID)?.table.endpoints.find((row) => row.path === '/*')
+		expect(console_?.kind).toBe('service')
 	})
 })
 
@@ -217,18 +220,19 @@ describe('MCP authoring, resolved', () => {
 		},
 	}
 	const consoleOrigin = `https://${subdomainHost(8082)}`
-	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => {
-		const console_ = manifest.apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
-		return console_ !== undefined && isGateProxyApp(console_) ? console_ : undefined
+	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => manifest.apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+	const published = (mcp: boolean) => {
+		const { endpoints, reservedPrefixes } = serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp })
+		return { endpoints, reservedPrefixes }
 	}
 
-	test('enabled, the console carries exactly `controlProxyGates(origin)` and registers `controlMcpResource(origin)`', () => {
+	test('enabled, the console publishes its MCP table and registers `controlMcpResource(origin)`', () => {
 		const manifest = resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
 			...composition,
 			authorizationServer: `https://${subdomainHost(8080)}`,
 		})
 		const console_ = consoleOf(manifest)
-		expect(console_?.gates).toEqual(controlProxyGates(consoleOrigin))
+		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published(true))
 		expect(console_?.oauthResources).toEqual([{
 			resource: controlMcpResource(consoleOrigin),
 			resourceMetadata: controlMcpResourceMetadata(consoleOrigin),
@@ -238,10 +242,17 @@ describe('MCP authoring, resolved', () => {
 		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
 	})
 
-	test('off, the console carries `controlProxyGates()` with no origin and registers nothing', () => {
+	test('off, the console publishes its table without MCP and registers nothing', () => {
 		const console_ = consoleOf(resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition))
-		expect(console_?.gates).toEqual(controlProxyGates())
+		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published(false))
 		expect(console_?.oauthResources).toBeUndefined()
+	})
+
+	test('the digest the deploy writes beside the console names the very table the proxy publishes, on and off', () => {
+		const on = resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...composition, authorizationServer: `https://${subdomainHost(8080)}` })
+		const off = resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition)
+		expect(platformServiceTableDigest(on, PLATFORM_CONSOLE_APP_ID)).toBe(controlServiceDigest({ mcp: true }))
+		expect(platformServiceTableDigest(off, PLATFORM_CONSOLE_APP_ID)).toBe(controlServiceDigest({ mcp: false }))
 	})
 
 	test('only the console serves OAuth clients', () => {
@@ -255,7 +266,7 @@ describe('the committed artifact', () => {
 		expect(readFileSync(resolve(REPO_ROOT, artifact.path), 'utf8')).toBe(artifact.content)
 	})
 
-	test('carries the template a deploy will read, gates included', () => {
+	test('carries the template a deploy will read, tables included', () => {
 		expect(PLATFORM_PROXY_MANIFEST_TEMPLATE).toEqual(platformProxyManifestTemplate())
 	})
 })

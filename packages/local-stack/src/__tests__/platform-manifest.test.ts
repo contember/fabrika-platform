@@ -2,22 +2,21 @@
  * The local composition and a deployed installation must be ONE document with two placements.
  *
  * They used to be two: `prepare.ts` built the local manifest and the live one on `fabrika-test` was
- * hand-written, so `CONTROL_PROXY_GATES` could change and reach only one of them — which is what
+ * hand-written, so the console's gates could change and reach only one of them — which is what
  * happened, and what nothing reported (backlog 58). `prepare.ts` now calls the installation's
  * generator, and this file pins the consequence: everything except the hostnames, the scheme and IAM's
- * port is identical on both sides, so a gate change cannot reach one and miss the other.
+ * port is identical on both sides, so a table change cannot reach one and miss the other.
  */
 
-import { controlMcpResource, controlProxyGates } from '@fabrika/control/gates'
-import { PLATFORM_PROXY_APPS, type PlatformProxyApp, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
-import type { McpClient } from '@fabrika/provider-zerops/installation'
+import { controlMcpResource, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
 import {
-	encodeProxyManifestJson,
-	type InstallationServiceApp,
-	isGateProxyApp,
-	parseProxyManifestJson,
-	serviceProxyTable,
-} from '@fabrika/proxy-core/manifest'
+	PLATFORM_CONSOLE_APP_ID,
+	PLATFORM_PROXY_APPS,
+	type PlatformProxyApp,
+	platformProxyManifestTemplate,
+} from '@fabrika/platform-artifacts/proxy-manifest'
+import { type McpClient, platformServiceTableDigest } from '@fabrika/provider-zerops/installation'
+import { encodeProxyManifestJson, type InstallationProxyApp, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -25,18 +24,17 @@ import { parseOAuthConfig } from '../../../iam/src/oauth-config'
 import { localApps } from '../app-registration'
 import { localIamOAuthConfig, localPlatformProxyManifest, readLocalMcpClients } from '../prepare'
 
-/** What protects an entry: its gates, or its service table's rows and reserved prefixes. */
-const accessOf = (app: InstallationServiceApp) =>
-	isGateProxyApp(app) ? app.gates : { endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes }
+/** What protects an entry: its service table's rows and reserved prefixes. */
+const accessOf = (app: InstallationProxyApp) => ({ endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes })
 
+/** The table a template entry publishes with no authorization server, which is the local default. */
 const templateAccessOf = (app: PlatformProxyApp) => {
-	if (app.table === undefined) return app.gates
-	const { endpoints, reservedPrefixes } = serviceProxyTable(app.table, { oauth: false })
+	const { endpoints, reservedPrefixes } = serviceProxyTable(app.tableWithoutOAuth ?? app.table, { oauth: false })
 	return { endpoints, reservedPrefixes }
 }
 
 describe('the local platform manifest is the installation template, placed locally', () => {
-	test('the same apps in the same order, with the same gates or service tables', () => {
+	test('the same apps in the same order, with the same service tables', () => {
 		const local = localPlatformProxyManifest().apps
 		expect(local.map((app) => app.id)).toEqual(PLATFORM_PROXY_APPS.map((app) => app.id))
 		expect(local.map(accessOf)).toEqual(PLATFORM_PROXY_APPS.map(templateAccessOf))
@@ -88,25 +86,32 @@ describe('MCP authoring in the local composition', () => {
 		if (match?.[1] === undefined) throw new Error('compose.yaml names no FABRIKA_CONTROL_DOMAIN')
 		return match[1]
 	}
-	const consoleOf = (clients?: readonly McpClient[]) => {
-		const console_ = localPlatformProxyManifest(clients).apps.find((app) => app.id === 'vozka')
-		return console_ !== undefined && isGateProxyApp(console_) ? console_ : undefined
-	}
+	const consoleOf = (clients?: readonly McpClient[]) => localPlatformProxyManifest(clients).apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
+	const tableOf = (mcp: boolean) => serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp }).endpoints
 
-	test('is off by default: no OAuth gate, no registered resource, and IAM OAuth disabled', () => {
+	test('is off by default: no OAuth row, no registered resource, and IAM OAuth disabled', () => {
 		expect(readLocalMcpClients({})).toBeUndefined()
-		expect(consoleOf()?.gates).toEqual(controlProxyGates())
+		expect(consoleOf()?.endpoints).toEqual(tableOf(false))
 		expect(consoleOf()?.oauthResources).toBeUndefined()
 		expect(localIamOAuthConfig(undefined)).toBe('')
 	})
 
-	test('turned on, the console is gated for the resource control derives from its own domain', () => {
+	test('turned on, the console publishes its OAuth row for the resource control derives from its own domain', () => {
 		const origin = controlDomain()
-		expect(consoleOf([CLIENT])?.gates).toEqual(controlProxyGates(origin))
+		expect(consoleOf([CLIENT])?.endpoints).toEqual(tableOf(true))
 		expect(consoleOf([CLIENT])?.oauthResources?.map((entry) => entry.resource)).toEqual([controlMcpResource(origin)])
 		expect(consoleOf([CLIENT])?.oauthResources?.[0]?.authorizationServers).toEqual(['http://iam.fabrika.localhost:18080'])
 		const manifest = localPlatformProxyManifest([CLIENT])
 		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
+	})
+
+	test('control reads the switch from the same composition: the digest of the table the proxy publishes', () => {
+		for (const clients of [undefined, [CLIENT]]) {
+			const digest = platformServiceTableDigest(localPlatformProxyManifest(clients), PLATFORM_CONSOLE_APP_ID)
+			expect(digest).toBe(controlServiceDigest({ mcp: clients !== undefined }))
+		}
+		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')
+		expect(compose).toContain('- path: .state/control-table.env')
 	})
 
 	test('turned on, IAM gets a config its own parser accepts, for that same resource', () => {

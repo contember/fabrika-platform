@@ -9,9 +9,13 @@
 
 import { EnvironmentNameError } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { controlServiceDigest } from '../../fabrika.service'
 import { createRuntime } from '../zerops/runtime'
 
-const base = { FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:pw@127.0.0.1:1/none' }
+const base = {
+	FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:pw@127.0.0.1:1/none',
+	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+}
 
 describe('the control plane environment name', () => {
 	test('a console served on a PUBLIC host refuses to boot as `local`', () => {

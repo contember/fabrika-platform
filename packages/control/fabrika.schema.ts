@@ -8,7 +8,7 @@
 //   - operator → `deploy.*` + `operations.*`  (trigger + read any deploy; no registry/secret management)
 //   - admin    → `*`                          (every action, every scope)
 //
-// **This module must stay free of `@fabrika/provider-cloudflare`**, like `fabrika.gates.ts` next to
+// **This module must stay free of `@fabrika/provider-cloudflare`**, like `fabrika.service.ts` next to
 // it: a deploy reconciles this schema, and so does `@fabrika/local-stack`, which registers the console
 // with IAM because nothing deploys fabrika into the local composition (ADR-0023 — the console's return
 // origin has to be registered before a browser can be handed a session on it).

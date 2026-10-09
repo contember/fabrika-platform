@@ -1,7 +1,7 @@
 /**
  * The machine credential the local stack drives the control API with.
  *
- * Since the platform proxy enforces the real `CONTROL_PROXY_GATES`, `/api/*` admits either a logged-in
+ * Since the platform proxy enforces the console's real table, `/api/rpc` admits either a logged-in
  * human or a `px_` service key the proxy can exchange with IAM (`mintFromKey`). `FABRIKA_IAM_PROVISIONING_KEY`
  * is NOT such a key: IAM resolves it in `resolveCaller` for its own `/admin/*` surface and it has no
  * `credentials` row, so the proxy refuses it with `invalid_key` before control ever sees the bearer.

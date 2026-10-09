@@ -1,4 +1,4 @@
-import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { compileEndpointTable, SESSION_COOKIE } from '@fabrika/auth-core'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HttpIamRpc } from '../../../../auth/src/rpc-http'
@@ -9,8 +9,9 @@ import { createHarness as createIamHarness, seedInlineGrant, seedUser } from '..
 import { createIamApp } from '../../../../iam/src/app'
 import type { Env as IamEnv } from '../../../../iam/src/env'
 import type { ControlProvider, ProviderDeployInput } from '../../../../provider-contract/src/index'
-import { Authorizer, compileGates, HttpIamGateway, type ResolvedApp } from '../../../../proxy-core/src/index'
-import { CONTROL_PROXY_GATES } from '../../../fabrika.gates'
+import { Authorizer, HttpIamGateway, type ResolvedApp } from '../../../../proxy-core/src/index'
+import { serviceProxyTable } from '../../../../proxy-core/src/manifest'
+import { controlServiceContract } from '../../../fabrika.service'
 import { controlApp } from '../../app'
 import { runControlJob } from '../../consumer'
 import type { Env as ControlEnv } from '../../env'
@@ -114,10 +115,11 @@ export async function integrationFixture() {
 		}
 		const gateway = new HttpIamGateway({ origin: issuer, key: proxyKey })
 		const authorizer = new Authorizer({ issuer, iam: gateway, cache: null })
+		const table = serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false })
 		const resolved: ResolvedApp = {
-			kind: 'gates',
-			app: { id: 'vozka', hosts: ['localhost'], upstream: 'control', scheme: 'http', gates: CONTROL_PROXY_GATES },
-			gates: compileGates(CONTROL_PROXY_GATES),
+			kind: 'endpoints',
+			app: { id: 'vozka', hosts: ['localhost'], upstream: 'control', scheme: 'http', ...table },
+			table: compileEndpointTable(table),
 		}
 		const controlServer = Bun.serve({
 			port: 0,
@@ -125,6 +127,7 @@ export async function integrationFixture() {
 			async fetch(request) {
 				const headers = new Headers(request.headers)
 				headers.delete('X-Fabrika-Token')
+				headers.delete('X-Fabrika-Endpoint')
 				headers.delete('X-Request-Id')
 				const decision = await authorizer.authorize(resolved, {
 					method: request.method,
@@ -135,6 +138,7 @@ export async function integrationFixture() {
 				})
 				if (decision.outcome !== 'allow') return new Response(null, { status: decision.status })
 				if (decision.token) headers.set('X-Fabrika-Token', decision.token)
+				if (decision.endpoint) headers.set('X-Fabrika-Endpoint', decision.endpoint)
 				return controlApp.fetch(new Request(request, { headers }), {
 					env: controlEnv,
 					provider,
@@ -178,7 +182,7 @@ export async function integrationFixture() {
 				method: 'POST',
 				headers: {
 					'content-type': 'application/json',
-					...(token ? { authorization: `Bearer ${token}` } : { cookie: `${SESSION_COOKIE}=${session}`, origin }),
+					...(token ? { authorization: `Bearer ${token}` } : { cookie: `${SESSION_COOKIE}=${session}`, origin, 'sec-fetch-site': 'same-origin' }),
 				},
 				body: JSON.stringify({ method, input }),
 			})

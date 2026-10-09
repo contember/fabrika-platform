@@ -1,6 +1,8 @@
 // Control's real Zerops composition over the local stack's seams: the shipped migrations, the fixture
 // seed, `createRuntime` and the vault-held App keys, with GitHub answered by the double. Needs a real
 // Postgres, like every other database-backed suite in the repository.
+import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { controlServiceDigest } from '@fabrika/control/service'
 import { Vault } from '@fabrika/control/vault'
 import { createRuntime } from '@fabrika/control/zerops/runtime'
 import { PostgresDatabase } from '@fabrika/platform-node'
@@ -165,6 +167,7 @@ async function resolveNotes(
 		FABRIKA_ZEROPS_PROXY_IAM_URL: 'http://iam.fabrika.localhost:18080',
 		FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
 		ENVIRONMENT: 'stage',
+		[FABRIKA_SERVICE_TABLE_DIGEST]: controlServiceDigest({ mcp: false }),
 	}, {
 		sourceSeams: {
 			...seams,

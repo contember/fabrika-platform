@@ -1,18 +1,9 @@
 import { compileEndpointTable, planEndpoint } from '@fabrika/auth-core'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { PLATFORM_CONSOLE_APP_ID, PLATFORM_IAM_APP_ID } from '@fabrika/platform-artifacts/proxy-manifest'
-import { applicableGates, compileGates } from '@fabrika/proxy-core'
-import { hasEndpointTable, type InstallationServiceApp, isGateProxyApp } from '@fabrika/proxy-core/manifest'
+import { hasEndpointTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { localPlatformProxyManifest } from '../prepare'
-
-/** The first matching rule decides when its credential is present, so this is the effective verdict. */
-const firstGate = (gates: ReturnType<typeof compileGates>, path: string): string | null => applicableGates(gates, path)[0]?.rule.kind ?? null
-
-const gatesOf = (app: InstallationServiceApp | undefined) => {
-	if (app === undefined || !isGateProxyApp(app)) throw new Error('expected an entry protected by gates')
-	return compileGates(app.gates)
-}
 
 describe('local Operations topology', () => {
 	test('the platform proxy admits ingest and the upload, each authenticating itself, and nothing else', () => {
@@ -37,23 +28,26 @@ describe('local Operations topology', () => {
 })
 
 describe('local control topology', () => {
-	test('the console is fronted by a human gate and opens only health and the webhook', () => {
+	test('the console is fronted by its table: health and the webhook open, every other row credentialed', () => {
 		const control = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
-		expect(control).toBeDefined()
-		const gates = gatesOf(control)
-		for (const path of ['/healthz', '/api/health', '/webhooks/github', '/webhooks/github/local-keyed-alpha']) {
-			expect(firstGate(gates, path)).toBe('public')
+		if (control === undefined || !hasEndpointTable(control)) throw new Error('expected the console behind its service table')
+		const table = compileEndpointTable(control)
+		const selected = (method: string, path: string) => {
+			const plan = planEndpoint(table, method, path)
+			return plan.outcome === 'endpoint' ? `${plan.endpoint.kind}:${plan.endpoint.callers.join('+')}` : plan.outcome
 		}
-		// A machine key first, a logged-in human otherwise — and the terminal `/*` rule keeps the fall
-		// through on the human path, so no anonymous request ever reaches these.
+		expect(selected('GET', '/healthz')).toBe('health:')
+		expect(selected('GET', '/api/health')).toBe('health:')
+		expect(selected('POST', '/webhooks/github/local-keyed-alpha')).toBe('protocol:')
+		// A machine key or a logged-in human on the three JSON mounts; humans only for the SPA and every
+		// path nobody declared, so no anonymous request ever reaches them.
 		for (const path of ['/api/rpc', '/iam/admin/rpc', '/operations/api/rpc']) {
-			const kinds = applicableGates(gates, path).map((gate) => gate.rule.kind)
-			expect(kinds[0]).toBe('service')
-			expect(kinds.slice(1).every((kind) => kind === 'human')).toBe(true)
+			expect(selected('POST', path)).toBe('service:human+machine')
 		}
-		// The SPA itself, and every path nobody declared: humans only, never anonymous.
-		expect(applicableGates(gates, '/').map((gate) => gate.rule.kind)).toEqual(['human'])
-		expect(applicableGates(gates, '/assets/console.js').map((gate) => gate.rule.kind)).toEqual(['human'])
+		expect(selected('GET', '/')).toBe('service:human')
+		expect(selected('GET', '/assets/console.js')).toBe('service:human')
+		// MCP is off locally unless clients are named: `/mcp` is a session row the service answers 404.
+		expect(selected('POST', '/mcp')).toBe('service:human')
 	})
 })
 

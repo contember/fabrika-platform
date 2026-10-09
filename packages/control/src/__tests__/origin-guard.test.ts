@@ -8,6 +8,7 @@ import type { Env } from '../env'
 import { controlOriginGuard } from '../origin-guard'
 import { createHarness, type Harness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { proxiedRequest } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { adminToken, testIamEnv, testToken } from './helpers/tokens'
 
@@ -172,7 +173,7 @@ function application(overrides: Partial<Env> = {}, harness: Harness = createHarn
 		...overrides,
 	}
 	return (request: Request) =>
-		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
+		controlApp.fetch(proxiedRequest(request), { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
 			waitUntil() {},
 		})
 }

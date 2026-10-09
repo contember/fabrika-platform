@@ -7,13 +7,14 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { expect, test } from 'bun:test'
 import { runInNewContext } from 'node:vm'
-import { CONTROL_PROXY_GATES } from '../../fabrika.gates'
+import { controlServiceContract } from '../../fabrika.service'
 import { controlApp } from '../app'
 import { builderPublicResponse } from '../builder-bootstrap'
 import type { Env } from '../env'
 import { approvalVerifier } from './helpers/builder-pairing'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { proxiedRequest } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
 import { testIamEnv } from './helpers/tokens'
 
@@ -52,8 +53,9 @@ test('discovery returns only configured safe origins and provider; exact public 
 		expect(response('/.well-known/fabrika-builder', 'GET', { ...configured, FABRIKA_CONTROL_DOMAIN: bad }).status).toBe(503)
 		expect(response('/.well-known/fabrika-builder', 'GET', { ...configured, FABRIKA_IAM_ISSUER: bad }).status).toBe(503)
 	}
-	expect(CONTROL_PROXY_GATES.rules.filter((rule) => rule.kind === 'public' && (rule.path.includes('builder') || rule.path.includes('.well-known'))))
-		.toEqual([{ path: '/.well-known/fabrika-builder', kind: 'public' }, { path: '/builder/connect', kind: 'public' }])
+	expect(
+		controlServiceContract({ mcp: false }).endpoints.filter((row) => row.kind === 'protocol' && row.path.includes('builder')).map((row) => row.path),
+	).toEqual(['/.well-known/fabrika-builder', '/builder/connect'])
 })
 
 test('origin parser rejects credentials, paths and insecure nonlocal URLs', () => {
@@ -179,7 +181,9 @@ test('public bootstrap runs before authentication; protected RPC remains authent
 			...configured,
 		}
 		const fetch = (request: Request) =>
-			controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, { waitUntil() {} })
+			controlApp.fetch(proxiedRequest(request), { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, {
+				waitUntil() {},
+			})
 		expect((await fetch(new Request('https://control.test/builder/connect'))).status).toBe(200)
 		expect((await fetch(new Request('https://control.test/.well-known/fabrika-builder'))).status).toBe(200)
 		expect(

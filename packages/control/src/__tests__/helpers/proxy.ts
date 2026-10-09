@@ -1,10 +1,22 @@
 // The console behind the real Cloudflare proxy Worker handler: the same decision, hop and header strips a deployed
 // `vozka-proxy` runs, in front of whatever upstream the test supplies. The IAM it asks mints the suite's own tokens.
 
-import type { AppGates, ExchangeAuthCodeResult, MintFromKeyResult, MintTokenResult } from '@fabrika/auth-core'
+import {
+	type AppGates,
+	compileEndpointTable,
+	ENDPOINT_HEADER,
+	type ExchangeAuthCodeResult,
+	formatEndpointHeader,
+	type MintFromKeyResult,
+	type MintTokenResult,
+	planEndpoint,
+	rawRequestTarget,
+	requirementDigest,
+} from '@fabrika/auth-core'
 import { silentLogger } from '@fabrika/proxy-core'
 import type { InstallationProxyTable, OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { createCloudflareProxyHandler } from '../../../../provider-cloudflare/src/proxy-worker'
+import { controlServiceContract } from '../../../fabrika.service'
 import { TEST_ISSUER, testIamBinding } from './tokens'
 
 export const CONSOLE_HOST = 'control.test'
@@ -56,4 +68,17 @@ export function consoleBehindProxy(options: ConsoleProxyOptions): (request: Requ
 		FABRIKA_IAM_ISSUER: TEST_ISSUER,
 		APP: { fetch: options.upstream },
 	}, silentLogger)
+}
+
+/**
+ * A request as the console's proxy forwards it, for a test that drives the service directly with its own token:
+ * `X-Fabrika-Endpoint` names the row the table selects, as the proxy's allow does. A request no row selects is
+ * forwarded unchanged, and the service answers it 404 itself.
+ */
+export function proxiedRequest(request: Request, options: { readonly mcp: boolean } = { mcp: false }): Request {
+	const plan = planEndpoint(compileEndpointTable(controlServiceContract(options)), request.method, rawRequestTarget(request.url).pathname)
+	if (plan.outcome !== 'endpoint' || request.headers.has(ENDPOINT_HEADER)) return request
+	const headers = new Headers(request.headers)
+	headers.set(ENDPOINT_HEADER, formatEndpointHeader(plan.endpoint.id, requirementDigest({ ...plan.endpoint, delegation: null })))
+	return new Request(request, { headers })
 }

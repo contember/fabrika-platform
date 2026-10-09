@@ -64,7 +64,8 @@ function base64Url(value: string | Uint8Array): string {
 export async function testToken(input: {
 	label: string
 	actions: readonly string[]
-	type?: 'user' | 'service'
+	/** `link` is a token without a principal type, as a share link's. */
+	type?: 'user' | 'service' | 'job' | 'link'
 	subject?: string
 }): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
@@ -77,7 +78,8 @@ export async function testToken(input: {
 		iat: now,
 		exp: now + 300,
 		perms: input.actions.map((action) => ({ action, scope: null, source: 'grant' })),
-		ptype: type,
+		...(type === 'link' ? {} : { ptype: type }),
+		...(type === 'job' ? { workload: 'nightly' } : {}),
 		label: input.label,
 	}))
 	const signingInput = `${header}.${payload}`

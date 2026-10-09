@@ -2,7 +2,8 @@
 //
 // The sibling of `src/index.ts`, not a fork of it. Both use the same application and jobs:
 //
-//   controlApp    (src/app.ts)      — health, the webhook, `/api/*`, the SPA, and IAM middleware.
+//   createControlApp (src/app.ts)   — the console's service table: health, the webhook, `/api/*`, the
+//                                     gateways, the SPA, and `/mcp` when the published table carries it.
 //   runControlJob (src/consumer.ts) — one queued job — a deploy or a namespace mutation — end to end.
 //                                     On Workers the platform calls `queue()` with a batch; here
 //                                     `PostgresJobConsumer` polls a table and calls the same function.
@@ -11,14 +12,14 @@
 //                                     platform cron drives it (`run.crontab` → `zerops/cron.ts`), which
 //                                     is the same shape as `triggers.crons` driving `scheduled`.
 //
-// The shared application owns route order, including process liveness before the SPA fallback.
+// The shared service owns selection (`planEndpoint` over `fabrika.service.ts`); there is no route order.
 // `/api/health` remains available on both platforms for existing monitors.
 //
 // Run it: `bun src/zerops/server.ts` (see `zerops.yaml` → `run.start`).
 
 import { type BunHandler, createBunHandler } from '@fabrika/app/bun'
 import { PostgresJobConsumer } from '@fabrika/platform-node'
-import { controlApp } from '../app'
+import { createControlApp, type McpRoute } from '../app'
 import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
 import type { SourceConnectionPort } from '../github/connections/port'
@@ -26,7 +27,6 @@ import { closeCatalogProjection, releaseHeldCatalogLeases } from '../operations-
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { locks, operationsReleaseDeps, repositories } from '../services'
-import { isMcpRequest, type McpRoute } from './mcp'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -36,25 +36,16 @@ export function createFetchHandler(
 	sourceConnection: SourceConnectionPort,
 	mcp: McpRoute | null = null,
 ): (request: Request) => Promise<Response> {
-	return withMcp(createControlBunHandler(env, provider, sourceConnection).fetch, mcp)
+	return createControlBunHandler(env, provider, sourceConnection, mcp).fetch
 }
 
-/** `/mcp` goes to the MCP endpoint; every other request reaches `controlApp` unchanged. */
-function withMcp(app: (request: Request) => Promise<Response>, mcp: McpRoute | null): (request: Request) => Promise<Response> {
-	if (mcp === null) return app
-	return async (request) => {
-		if (!isMcpRequest(request)) return app(request)
-		try {
-			return await mcp(request)
-		} catch (cause) {
-			console.error('mcp request failed:', cause instanceof Error ? cause.message : 'unknown error')
-			return new Response('internal error', { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } })
-		}
-	}
-}
-
-function createControlBunHandler(env: Env, provider: Runtime['provider'], sourceConnection: SourceConnectionPort): BunHandler {
-	return createBunHandler(controlApp, { env, provider, sourceConnection }, {
+function createControlBunHandler(
+	env: Env,
+	provider: Runtime['provider'],
+	sourceConnection: SourceConnectionPort,
+	mcp: McpRoute | null,
+): BunHandler {
+	return createBunHandler(createControlApp(mcp), { env, provider, sourceConnection }, {
 		onBackgroundError() {
 			console.error('control background task failed')
 		},
@@ -120,7 +111,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 			+ `failed=${reconciliation.failed} in-progress=${reconciliation.inProgress} waiting=${reconciliation.waiting}`,
 	)
 	consumer.start()
-	const appHandler = createControlBunHandler(runtime.env, runtime.provider, runtime.sourceConnection)
+	const appHandler = createControlBunHandler(runtime.env, runtime.provider, runtime.sourceConnection, runtime.mcp)
 
 	const server = Bun.serve({
 		port: runtime.config.port,
@@ -131,7 +122,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 		// listener speaks HTTP and holds no certificates. Nothing here reads the socket's scheme: the
 		// proxy owns every cookie now, and `src/iam.ts` takes the console's own origin from the configured
 		// public domain (`FABRIKA_CONTROL_DOMAIN`), because behind a terminating balancer the socket lies.
-		fetch: withMcp(appHandler.fetch, runtime.mcp),
+		fetch: appHandler.fetch,
 		// Backstop for anything raised outside the handler. The handler already catches its own throws
 		// (see `createFetchHandler`); without this, Bun's default page would answer with source lines.
 		error(err: unknown): Response {

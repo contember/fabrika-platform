@@ -1,10 +1,13 @@
-// The console during an upgrade (B10 checkpoint C12): a proxy that already publishes Control's service table in front
-// of the service before B10e. The old service ignores `X-Fabrika-Endpoint` and authenticates the injected token, so
-// every request the table admits is served as before.
+// The console during an upgrade (B10 checkpoint C12). The proxy deploys first, so the window is a proxy that publishes
+// the console's table in front of the service before B10e; the commit that recorded it tested that old service, which
+// ignored `X-Fabrika-Endpoint` and served what the table admitted. The reverse — the new service behind a proxy that
+// still carries gates — is the brief window of a paired deploy that lands in the wrong order: every credentialed row
+// answers 503, because no gate names an endpoint, while liveness and the self-authenticating rows still answer.
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { frozenControlGates } from '../../../platform-artifacts/src/__tests__/service-parity/frozen'
 import { controlServiceContract } from '../../fabrika.service'
 import { controlApp } from '../app'
 import type { Env } from '../env'
@@ -16,7 +19,7 @@ import { adminToken, testIamEnv, testToken } from './helpers/tokens'
 
 const machineToken = await testToken({ label: 'machine', actions: ['*'], type: 'service' })
 
-function oldServiceEnv(): Env {
+function serviceEnv(): Env {
 	const harness = createHarness()
 	return {
 		DB: harness.d1,
@@ -38,8 +41,8 @@ const rpc = (headers: Record<string, string>) =>
 		body: JSON.stringify({ method: 'installation', input: null }),
 	})
 
-describe('a new proxy in front of the old service', () => {
-	const env = oldServiceEnv()
+describe('the service behind the proxy that publishes its table', () => {
+	const env = serviceEnv()
 	const fetch = consoleBehindProxy({
 		access: { table: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }) },
 		iam: { session: adminToken, keys: { px_machine: machineToken } },
@@ -60,7 +63,30 @@ describe('a new proxy in front of the old service', () => {
 		expect((await fetch(new Request(`${CONSOLE_ORIGIN}/healthz`))).status).toBe(200)
 	})
 
-	test('a path the old service answered with 404 is now refused at the proxy', async () => {
+	test('a path the service answers with 404 is refused at the proxy', async () => {
 		expect((await fetch(new Request(`${CONSOLE_ORIGIN}/api/unknown`, { headers: { authorization: 'Bearer px_machine' } }))).status).toBe(403)
+	})
+})
+
+describe('the service behind a proxy that still carries the frozen gates', () => {
+	const env = serviceEnv()
+	const fetch = consoleBehindProxy({
+		access: { gates: frozenControlGates() },
+		iam: { session: adminToken, keys: { px_machine: machineToken } },
+		upstream: (request) =>
+			controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, { waitUntil() {} }),
+	})
+
+	test('every credentialed row answers 503: no gate names the endpoint the service checks', async () => {
+		expect((await fetch(rpc({ authorization: 'Bearer px_machine' }))).status).toBe(503)
+		const session = { cookie: `${SESSION_COOKIE}=s`, origin: CONSOLE_ORIGIN, 'sec-fetch-site': 'same-origin' }
+		expect((await fetch(new Request(`${CONSOLE_ORIGIN}/apps/notes`, { headers: session }))).status).toBe(503)
+	})
+
+	test('liveness and the self-authenticating rows still answer', async () => {
+		expect((await fetch(new Request(`${CONSOLE_ORIGIN}/healthz`))).status).toBe(200)
+		expect((await fetch(new Request(`${CONSOLE_ORIGIN}/api/health`))).status).toBe(200)
+		const webhook = await fetch(new Request(`${CONSOLE_ORIGIN}/webhooks/github/unknown-connection`, { method: 'POST', body: '{}' }))
+		expect(webhook.status).not.toBe(503)
 	})
 })

@@ -1,5 +1,6 @@
 import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
+import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
 import type { Env } from '../env'
 import { buildControlRpcDeps } from '../services'
 import { zeropsControlProvider, zeropsGitHubSource, zeropsNamespaceProcessConfig } from '../zerops/provider'
@@ -17,6 +18,7 @@ const namespaceEnvironment = (): Record<string, string | undefined> => ({
 	FABRIKA_ZEROPS_PROXY_SOURCE_JSON: JSON.stringify(PIN),
 	FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
 	FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
+	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
 })
 
 const EXPECTED = {
@@ -127,4 +129,41 @@ describe('the Zerops namespace process configuration', () => {
 			expect(() => zeropsNamespaceProcessConfig(source)).toThrow(`${name} is required by the Zerops provider`)
 		})
 	}
+})
+
+describe('the one MCP switch: the table the proxy publishes', () => {
+	const process = (overrides: Record<string, string | undefined>) => ({
+		...namespaceEnvironment(),
+		FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
+		FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
+		FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',
+		FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: 'secret-key',
+		FABRIKA_IAM_RPC_URL: 'http://iam:3000',
+		FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
+		FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+		ENVIRONMENT: 'stage',
+		...overrides,
+	})
+
+	test('refuses to start without the digest, or with one that names neither console table', () => {
+		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: undefined }))).toThrow(ControlTableError)
+		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: `sha256:${'0'.repeat(64)}` }))).toThrow(ControlTableError)
+	})
+
+	test('a published table with the oauth row serves MCP, and refuses to start without the origin its resource needs', async () => {
+		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true }) }))).toThrow('FABRIKA_CONTROL_DOMAIN')
+		const on = createRuntime(
+			process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true }), FABRIKA_CONTROL_DOMAIN: 'console.example.com' }),
+		)
+		expect(on.mcp).not.toBeNull()
+		await on.shutdown()
+		const off = createRuntime(process({ FABRIKA_CONTROL_DOMAIN: 'console.example.com' }))
+		expect(off.mcp).toBeNull()
+		await off.shutdown()
+	})
+
+	test('the two tables have two digests', () => {
+		expect(controlMcpSwitch(controlServiceDigest({ mcp: true }))).toBe(true)
+		expect(controlMcpSwitch(controlServiceDigest({ mcp: false }))).toBe(false)
+	})
 })

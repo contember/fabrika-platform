@@ -1,5 +1,7 @@
-import { type AuthContext, defineApp, type RequestExecutionContext, type Route, route } from '@fabrika/app'
+import type { AuthContext, FabrikaApp, RequestExecutionContext } from '@fabrika/app'
+import { dispatchRpcRequest, serveService, type ServiceHandler } from '@fabrika/app/service'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import { type ControlEndpointId, controlServiceContract } from '../fabrika.service'
 import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
 import type { Env } from './env'
@@ -8,7 +10,7 @@ import { manifestCallback, manifestHandoff } from './github/connections/manifest
 import type { SourceConnectionPort } from './github/connections/port'
 import { handleWebhook } from './github/triggers/webhook'
 import { error } from './http'
-import { controlAuthMiddleware, controlPublicOrigin } from './iam'
+import { controlAuthenticator, controlPublicOrigin } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
 import { controlOriginGuard } from './origin-guard'
@@ -28,54 +30,68 @@ export interface ControlAppContext {
 	readonly request: Request
 }
 
-/** The routes `controlApp` serves; exported so the B10 route-coverage test reads the live list. */
-export const controlRoutes: Route<ControlAppContext>[] = [
-	route.all('/healthz', () => Response.json({ status: 'ok' })),
-	route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),
-	route.post('/webhooks/github/:connectionId', (ctx, params) => webhook(ctx, params.connectionId)),
-	route.all('/webhooks', () => error(404, 'not found')),
-	route.all('/webhooks/*path', () => error(404, 'not found')),
-	route.get(
-		'/api/source/github/manifest/:connectionId',
-		(ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params.connectionId)),
-	),
-	route.get('/api/source/github/callback', (ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
-	route.all('/iam/admin', (ctx) => iamAdmin(ctx)),
-	route.all('/iam/admin/*path', (ctx) => iamAdmin(ctx)),
-	route.all('/operations/api/rpc', (ctx) => operationsApi(ctx)),
-	route.all('/operations/api', () => error(404, 'not found')),
-	route.all('/operations/api/*path', () => error(404, 'not found')),
-	route.rpc('/api/rpc', controlRpcRouter),
-	route.all('/api', () => error(404, 'not found')),
-	route.all('/api/*path', () => error(404, 'not found')),
-	route.all('/*path', (ctx) => ctx.env.ASSETS.fetch(ctx.request)),
-]
+/** The MCP endpoint (ADR-0049); only the Bun process serves one. */
+export type McpRoute = (request: Request) => Promise<Response>
 
 /**
- * Delivery as a first-party Fabrika application. Provider and runtime ports are supplied by the
- * composition root; request routing and IAM middleware are shared by Workers and Bun.
+ * Delivery as a first-party service: `serveService` over the console's service contract, which its proxy decides
+ * from on both providers. With an MCP route the table carries the `oauth` row for `/mcp`; without one, `/mcp` is a
+ * session-only row that answers 404. Provider and runtime ports are supplied by the composition root.
  */
-export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
-	context: ({ env, provider, sourceConnection }, request, exec) => ({
-		env: withRequestExecution(env, exec),
-		provider,
-		sourceConnection,
-		request,
-	}),
-	middleware: ({ env, provider }) => [
-		(request, _ctx, next) => Promise.resolve(builderPublicResponse(request, env, provider.id) ?? next()),
-		controlAuthMiddleware(env),
-		controlOriginGuard(env),
-	],
-	routes: controlRoutes,
-	onError(cause) {
-		console.error('control request failed:', cause instanceof Error ? cause.message : 'unknown error')
-		return new Response('internal error', {
-			status: 500,
-			headers: { 'content-type': 'text/plain; charset=utf-8' },
+export function createControlApp(mcp: McpRoute | null): FabrikaApp<ControlAppEnv> {
+	type Handle = (ctx: ControlAppContext, params: Readonly<Record<string, string>>) => Response | Promise<Response>
+	const serve = (handle: Handle): ServiceHandler<ControlAppEnv> => ({ request, params, env: { env, provider, sourceConnection }, exec }) =>
+		handle({ env: withRequestExecution(env, exec), provider, sourceConnection, request }, params)
+	/** A credentialed row: the caller from the injected token, then the same-origin admission of a state change. */
+	const authenticated = (handle: Handle): ServiceHandler<ControlAppEnv> =>
+		serve(async (ctx, params) => {
+			const caller = await controlAuthenticator(ctx.env)(ctx.request)
+			if (!caller.ok) return caller.response
+			const authed: ControlAppContext = { ...ctx, auth: caller.auth }
+			return controlOriginGuard<ControlAppContext>(ctx.env)(ctx.request, authed, () => Promise.resolve(handle(authed, params)))
 		})
-	},
-})
+	const notFound = serve(() => error(404, 'not found'))
+	const builder = serve((ctx) => builderPublicResponse(ctx.request, ctx.env, ctx.provider.id) ?? error(404, 'not found'))
+	const handlers: { readonly [Id in ControlEndpointId]: ServiceHandler<ControlAppEnv> } = {
+		'health': () => Response.json({ status: 'ok' }),
+		'api-health': () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' }),
+		'builder-discovery': builder,
+		'builder-connect': builder,
+		'github-webhook': serve((ctx, params) => webhook(ctx, params['connectionId'] ?? '')),
+		'webhooks-root': notFound,
+		'github-manifest': authenticated((ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params['connectionId'] ?? ''))),
+		'github-callback': authenticated((ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
+		'rpc': authenticated((ctx) => dispatchRpcRequest({ router: controlRpcRouter, ctx, request: ctx.request })),
+		'api-root': notFound,
+		'iam-admin-rpc': serve(iamAdmin),
+		'iam-admin-root': notFound,
+		'operations-rpc': serve(operationsApi),
+		'operations-api-root': notFound,
+		'console': serve((ctx) => ctx.env.ASSETS.fetch(ctx.request)),
+		'mcp': mcp === null ? notFound : serve((ctx) => mcpRequest(mcp, ctx.request)),
+	}
+	return serveService(controlServiceContract({ mcp: mcp !== null }), handlers, {
+		onError(cause) {
+			console.error('control request failed:', cause instanceof Error ? cause.message : 'unknown error')
+			return new Response('internal error', {
+				status: 500,
+				headers: { 'content-type': 'text/plain; charset=utf-8' },
+			})
+		},
+	})
+}
+
+/** The console without MCP: what the Cloudflare Worker serves. */
+export const controlApp: FabrikaApp<ControlAppEnv> = createControlApp(null)
+
+async function mcpRequest(mcp: McpRoute, request: Request): Promise<Response> {
+	try {
+		return await mcp(request)
+	} catch (cause) {
+		console.error('mcp request failed:', cause instanceof Error ? cause.message : 'unknown error')
+		return new Response('internal error', { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } })
+	}
+}
 
 function webhook(ctx: ControlAppContext, connectionId: string): Promise<Response> {
 	return handleWebhook(ctx.request, {

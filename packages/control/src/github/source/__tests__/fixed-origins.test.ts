@@ -10,6 +10,7 @@ import {
 } from '@fabrika/provider-zerops'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
+import { controlServiceDigest } from '../../../../fabrika.service'
 import { hasPostgres, postgresUrl, skipReason } from '../../../__tests__/helpers/postgres'
 import { Vault } from '../../../vault'
 import { applyMigrations } from '../../../zerops/migrate'
@@ -45,6 +46,7 @@ const ORIGIN_OVERRIDES = {
 const runtimeEnvironment = (databaseUrl: string, vaultKey?: string): Record<string, string> => ({
 	...ORIGIN_OVERRIDES,
 	FABRIKA_CONTROL_DATABASE_URL: databaseUrl,
+	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
 	...(vaultKey === undefined ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
 	FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',

@@ -1,6 +1,6 @@
 // fabrika's OWN Cloudflare deploy surface. fabrika is just another app the control
 // plane deploys: this single file is the source of truth for fabrika's Cloudflare resource graph, its
-// authz vocabulary, and its deploy pipeline. The public proxy enforces the ordered path gates before
+// authz vocabulary, and its deploy pipeline. The public proxy decides from the console's service table before
 // the application Worker; the application keeps object authorization and a defence-in-depth check.
 // The Cloudflare provider CLI and scripts/bootstrap.ts load THIS to self-deploy.
 //
@@ -23,8 +23,9 @@ import {
 	ServiceReference,
 	Worker,
 } from '@fabrika/provider-cloudflare'
-import { CONTROL_PROXY_GATES } from './fabrika.gates'
+import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
+import { controlServiceContract } from './fabrika.service'
 import { VOZKA_APP_ID } from './src/actions'
 
 /**
@@ -132,7 +133,8 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 		app: buildControlApplicationWorker(ctx),
 		appId: VOZKA_APP_ID,
 		appHost: ctx.domain ?? 'localhost',
-		gates: CONTROL_PROXY_GATES,
+		// A Worker serves no MCP: the console's table without its `oauth` row.
+		installation: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
 		domain: ctx.domain,
 		iamUrl,
 	})

@@ -10,9 +10,10 @@
  */
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
-import { controlMcpResourceMetadata } from '@fabrika/control/gates'
+import { controlMcpResourceMetadata } from '@fabrika/control/service'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
+import { proxiedRequest } from '../../control/src/__tests__/helpers/proxy'
 import { type AuthorizationServer, authorize, callTool, discover, jwtHeader, mcpRequest, rpc, toolJson } from './mcp-authoring/client'
 import { AUTHORING_GRANTS, CONSOLE, createMcpStack, type McpStack, RESOURCE } from './mcp-authoring/stack'
 
@@ -208,7 +209,8 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 		expect(atProxy.status).toBe(401)
 		expect(atProxy.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${METADATA}", error="invalid_token"`)
 
-		const direct = mcpRequest(MCP, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+		// As if the proxy had admitted it: Control's own audience check still refuses the token.
+		const direct = proxiedRequest(mcpRequest(MCP, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }), { mcp: true })
 		direct.headers.set(PROXY_TOKEN_HEADER, minted.token)
 		const atControl = await current.control(direct)
 		expect(atControl.status).toBe(401)

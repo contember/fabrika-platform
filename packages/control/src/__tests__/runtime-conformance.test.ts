@@ -4,6 +4,7 @@ import { controlApp } from '../app'
 import type { Env } from '../env'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { proxiedRequest } from './helpers/proxy'
 import { testIamEnv } from './helpers/tokens'
 
 function env(): Env {
@@ -40,10 +41,20 @@ describe('Delivery runtime conformance', () => {
 		const response = await assertAppRuntimeConformance({
 			app: controlApp,
 			createEnv: () => ({ env: env(), provider: fakeControlProvider }),
-			createRequest: () => new Request('https://control.test/apps/example'),
+			createRequest: () => proxiedRequest(new Request('https://control.test/apps/example')),
 		})
 
 		expect(response.status).toBe(200)
 		expect(response.body).toBe('dashboard')
+	})
+
+	test('refuses a credentialed row without the proxy endpoint identically through every adapter', async () => {
+		const response = await assertAppRuntimeConformance({
+			app: controlApp,
+			createEnv: () => ({ env: env(), provider: fakeControlProvider }),
+			createRequest: () => new Request('https://control.test/apps/example'),
+		})
+
+		expect(response.status).toBe(503)
 	})
 })

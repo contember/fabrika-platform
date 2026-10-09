@@ -4,19 +4,19 @@
 //
 // This is the ONE place the platform's app list is declared. The local composition builds its manifest
 // from it (`packages/local-stack/src/prepare.ts`) and the committed artifact is rendered from it, so a
-// gate change reaches a deployed installation the same way it reaches the local stack — which is the
+// table change reaches a deployed installation the same way it reaches the local stack — which is the
 // whole item: the live document on `fabrika-test` was hand-written and gated the entire control plane
-// `public` for two days while `CONTROL_PROXY_GATES` said otherwise, and nothing reported it.
+// `public` for two days while the console's declaration said otherwise, and nothing reported it.
 //
-// DEV-TIME ONLY: it imports `CONTROL_PROXY_GATES` from the PRIVATE `@fabrika/control`, which is why it
+// DEV-TIME ONLY: it imports the service contracts from the PRIVATE service packages, which is why it
 // lives in this private package. What `@fabrika/provider-zerops/installation` ships instead is its
 // `src/installation/proxy-manifest.ts` (the types and `resolvePlatformProxyManifest`) plus
-// `src/installation/generated/platform-proxy-manifest.ts` (the gates, as data) — a deploy command reads those two and
+// `src/installation/generated/platform-proxy-manifest.ts` (the tables, as data) — a deploy command reads those two and
 // never reaches this file.
 
-import type { BodyAdmission, GateRule, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
-import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, CONTROL_PROXY_GATES } from '@fabrika/control/gates'
+import type { BodyAdmission, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
 import { controlSchema } from '@fabrika/control/schema'
+import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlServiceContract } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
@@ -94,8 +94,9 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 		service: 'control',
 		port: 8082,
 		upstream: 'control:3000',
-		gates: CONTROL_PROXY_GATES,
+		table: serviceTable(controlServiceContract({ mcp: true })),
 		oauthResource: CONTROL_MCP_RESOURCE,
+		tableWithoutOAuth: serviceTable(controlServiceContract({ mcp: false })),
 	},
 	{ id: OPERATIONS_APP_ID, service: 'operations', port: 8083, upstream: 'operations:3000', table: serviceTable(OPERATIONS_PUBLIC_SERVICE) },
 ]
@@ -123,29 +124,22 @@ const HEADER = [
 	'// Regenerate: bun run --filter @fabrika/platform-artifacts gen',
 	'//',
 	'// The installation-independent half of `FABRIKA_PROXY_MANIFEST_JSON`: which apps the platform proxy',
-	'// fronts, at which private upstream, on which public listener, under which gates or service table. The',
-	'// hosts and the browser-facing scheme belong to ONE installation and are supplied at deploy time —',
+	'// fronts, at which private upstream, on which public listener, under which service table. The hosts and',
+	'// the browser-facing scheme belong to ONE installation and are supplied at deploy time —',
 	'// `resolvePlatformProxyManifest` binds them.',
 	'//',
-	"// The gate rules and service tables below are the services' own (`CONTROL_PROXY_GATES`, IAM's and",
-	"// Operations' service contracts) as of the last regeneration, copied on purpose: a PUBLISHED deploy command",
-	'// may not import the private packages that own them. `gen:check` in CI is what makes the copy a fact',
-	'// rather than a hope.',
+	"// The tables below are the services' own service contracts as of the last regeneration, copied on",
+	'// purpose: a PUBLISHED deploy command may not import the private packages that own them. `gen:check` in',
+	'// CI is what makes the copy a fact rather than a hope.',
 	'//',
-	"// The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy gates and registers",
-	'// it only on an installation that enables MCP authoring.',
+	"// The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy publishes the console's",
+	'// `table` and registers the resource only on an installation that enables MCP authoring, and its',
+	'// `tableWithoutOAuth` otherwise.',
 	'',
 ].join('\n')
 
 /** Single-quoted for dprint, with the two characters that could end the literal escaped. */
 const quote = (value: string): string => `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
-
-const renderRule = (rule: GateRule): string => {
-	const credential = rule.kind === 'service' && rule.credential !== undefined
-		? `, credential: { in: ${quote(rule.credential.in)}, name: ${quote(rule.credential.name)} }`
-		: ''
-	return `{ path: ${quote(rule.path)}, kind: ${quote(rule.kind)}${credential} }`
-}
 
 const renderOAuthResource = (resource: PlatformOAuthResourceTemplate): string[] => [
 	'\t\t\toauthResource: {',
@@ -180,23 +174,14 @@ const renderRow = (row: InstallationEndpointRow): string[] => [
 	'\t\t\t\t\t},',
 ]
 
-const renderAccess = (app: PlatformProxyApp): string[] =>
-	app.table === undefined
-		? [
-			'\t\t\tgates: {',
-			'\t\t\t\trules: [',
-			...app.gates.rules.map((rule) => `\t\t\t\t\t${renderRule(rule)},`),
-			'\t\t\t\t],',
-			'\t\t\t},',
-		]
-		: [
-			'\t\t\ttable: {',
-			'\t\t\t\tendpoints: [',
-			...app.table.endpoints.flatMap(renderRow),
-			'\t\t\t\t],',
-			`\t\t\t\treservedPrefixes: ${list(app.table.reservedPrefixes)},`,
-			'\t\t\t},',
-		]
+const renderTable = (key: 'table' | 'tableWithoutOAuth', table: InstallationEndpointTable): string[] => [
+	`\t\t\t${key}: {`,
+	'\t\t\t\tendpoints: [',
+	...table.endpoints.flatMap(renderRow),
+	'\t\t\t\t],',
+	`\t\t\t\treservedPrefixes: ${list(table.reservedPrefixes)},`,
+	'\t\t\t},',
+]
 
 const renderApp = (app: PlatformProxyApp): string =>
 	[
@@ -205,8 +190,9 @@ const renderApp = (app: PlatformProxyApp): string =>
 		`\t\t\tservice: ${quote(app.service)},`,
 		`\t\t\tport: ${app.port},`,
 		`\t\t\tupstream: ${quote(app.upstream)},`,
-		...renderAccess(app),
+		...renderTable('table', app.table),
 		...(app.oauthResource === undefined ? [] : renderOAuthResource(app.oauthResource)),
+		...(app.tableWithoutOAuth === undefined ? [] : renderTable('tableWithoutOAuth', app.tableWithoutOAuth)),
 		'\t\t},',
 	].join('\n')
 

@@ -1,20 +1,13 @@
 import { type AuthContext, type IamRpc, PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
-import { controlAuthMiddleware, parseBootstrapAdmins } from '../iam'
+import { controlAuthenticator, parseBootstrapAdmins } from '../iam'
 
-interface MiddlewareContext {
-	auth?: AuthContext | null
-}
-
-async function runMiddleware(env: Parameters<typeof controlAuthMiddleware<MiddlewareContext>>[0], request: Request) {
-	const ctx: MiddlewareContext = {}
-	let nextCalled = false
-	const response = await controlAuthMiddleware<MiddlewareContext>(env)(request, ctx, () => {
-		nextCalled = true
-		return Promise.resolve(new Response('ok'))
-	})
-	return { auth: ctx.auth, nextCalled, response }
+/** What a credentialed row's handler gets: the caller, or the response it answers instead of running. */
+async function runMiddleware(env: Parameters<typeof controlAuthenticator>[0], request: Request) {
+	const caller = await controlAuthenticator(env)(request)
+	const auth: AuthContext | undefined = caller.ok ? caller.auth : undefined
+	return { auth, nextCalled: caller.ok, response: caller.ok ? new Response('ok') : caller.response }
 }
 
 const ISSUER = 'https://propustka.test'
@@ -101,7 +94,7 @@ describe('parseBootstrapAdmins', () => {
 /** The one env shape there is: the IAM binding plus the issuer its tokens are verified against. */
 const ENV = { ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_ISSUER: ISSUER } as const
 
-describe('controlAuthMiddleware bootstrap semantics', () => {
+describe('controlAuthenticator bootstrap semantics', () => {
 	test('the provisioning key buys nothing here — machine access is an IAM-issued service key', async () => {
 		// The hatch is deleted, not disabled. Behind the proxy it was already dead: `/api/*` is gated
 		// `service`, the proxy resolves a `px_` bearer by asking IAM to mint from it, and the provisioning
