@@ -35,6 +35,10 @@ export interface AppEnvRow {
 	generation: number
 	/** 1 when a widening waits for a human's approval here (ADR-0050), else 0. */
 	protected: number
+	/** Advanced by every change of `protected`; a publication names the revision it classified under. */
+	protection_revision: number
+	/** 1 once a snapshot of this environment had a contract, 0 once one without was published, NULL before any. */
+	contract_app: number | null
 	created_at: number
 }
 

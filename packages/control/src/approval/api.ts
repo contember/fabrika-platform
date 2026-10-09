@@ -1,6 +1,5 @@
 // The approval surface (ADR-0050 §4–§5): parked runs behind `access.approve`, completed only by a human user
-// principal from the console, and the `protected` flag changed by the same rule. The user-principal and action
-// checks are authorization; the same-origin check is admission (docs/reference/overview.md).
+// principal from the console (`./human`), and the `protected` flag changed by the same rule.
 
 import type { AuthContext } from '@fabrika/auth'
 import type { AppEnvDto, ApprovalDto, CompleteApprovalRequest, ListResponse, SetEnvironmentProtectionRequest } from '@fabrika/control-contract'
@@ -11,19 +10,15 @@ import { toAppEnvDto } from '../api/registry/registration'
 import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
-import { sameOrigin } from '../origin-guard'
+import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
 
-export interface ApprovalUseCaseContext {
+export interface ApprovalUseCaseContext extends ConsoleAdmission {
 	readonly repositories: ControlRepositories
 	readonly auth: AuthContext
 	readonly queue: DeployQueue
 	readonly lock: DeployLocks
 	readonly leaseClock?: LeaseClock
-	/** The request itself: an approval is admitted only from the console's own origin. */
-	readonly request: Request
-	/** The console's configured public origin (`controlPublicOrigin`); absent refuses every approval. */
-	readonly publicOrigin: string | undefined
 	readonly now?: () => number
 }
 
@@ -44,7 +39,7 @@ export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: strin
  * classified again since refuses it. An approved run is queued again and classified once more before it publishes.
  */
 export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: CompleteApprovalRequest): Promise<ApprovalDto> {
-	const approver = requireHumanApprover(c)
+	const approver = requireHumanApprover(c.auth, c)
 	const run = await requireClassifiedRun(c, input.runId)
 	if (run.status !== 'awaiting_approval' || run.classification_json === null) fail(409, 'the run is not waiting for approval')
 	const classification = parseClassification(run.classification_json)
@@ -87,7 +82,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 
 /** Set an environment's `protected` flag: the same human rule as approving, and audited (ADR-0050 §4). */
 export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
-	requireHumanApprover(c)
+	requireHumanApprover(c.auth, c)
 	if (!canAtCoordinates(c.auth, ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
 	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
 	if (before === null) fail(404, 'app env not found')
@@ -100,21 +95,6 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 		metadata: { appId: input.appId, env: input.env, from: before.protected === 1, to: input.protected },
 	})
 	return toAppEnvDto(row)
-}
-
-/**
- * The caller is a person in the console: a user principal on a session, not a key (`Authorization`), an OAuth (MCP)
- * token or a share link, on a request from the console's own origin. A service principal, the builder key and any
- * agent credential are refused whatever they carry (ADR-0050 §5).
- */
-function requireHumanApprover(c: ApprovalUseCaseContext): { readonly id: string; readonly label: string } {
-	const principal = c.auth.principal
-	if (principal === null || principal.type !== 'user' || c.auth.oauth !== undefined || c.auth.link !== undefined) {
-		fail(403, 'only a person signed in to the console can approve an access change')
-	}
-	if (c.request.headers.get('Authorization') !== null) fail(403, 'an access change is approved in the console, not with a key')
-	if (!sameOrigin(c.request, c.publicOrigin)) fail(403, 'an access change is approved from the console itself')
-	return { id: principal.id, label: principal.label }
 }
 
 function mayApprove(auth: AuthContext, run: RunRow): boolean {

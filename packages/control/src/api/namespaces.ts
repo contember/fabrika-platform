@@ -382,7 +382,7 @@ async function namespaceMembers(
 			...(row.domain === null ? {} : { domain: row.domain }),
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			...(proxySecret === undefined ? {} : { proxySecret }),
-			...(access === undefined ? {} : { access }),
+			...access,
 		})
 	}
 	return members

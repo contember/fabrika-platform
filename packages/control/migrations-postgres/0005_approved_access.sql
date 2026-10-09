@@ -4,6 +4,22 @@ ALTER TABLE app_envs ADD COLUMN published_run_id TEXT;
 ALTER TABLE app_envs ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE app_envs ADD COLUMN protected INTEGER NOT NULL DEFAULT 0 CHECK (protected IN (0, 1));
 UPDATE app_envs SET protected = 1 WHERE env = 'prod';
+-- Bumped by every change of `protected` together with `generation`, so a run that classified before the change
+-- loses its publication and classifies again.
+ALTER TABLE app_envs ADD COLUMN protection_revision INTEGER NOT NULL DEFAULT 0;
+-- Whether the environment's application is a contract application, recorded from the snapshots Control read:
+-- 1 once a snapshot has a contract, 0 once a snapshot without one is published, NULL before any. Only 0 lets the
+-- provider apply an artifact's gates and IAM schema (until B10).
+ALTER TABLE app_envs ADD COLUMN contract_app INTEGER CHECK (contract_app IN (0, 1));
+
+-- The `protected` flag outlives its environment: deleting `<app>/<env>` and creating it again keeps the human's
+-- choice. No foreign key, so deleting the environment or the application leaves the row.
+CREATE TABLE app_env_protection (
+	app_id    TEXT NOT NULL,
+	env       TEXT NOT NULL,
+	protected INTEGER NOT NULL CHECK (protected IN (0, 1)),
+	PRIMARY KEY (app_id, env)
+);
 
 -- A run holds its snapshot, its classification, its approval and its actor, and parks in `awaiting_approval`.
 ALTER TABLE runs DROP CONSTRAINT runs_status_check;

@@ -355,6 +355,7 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			signal: ctx.request.signal,
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+			admission: { request: ctx.request, publicOrigin: controlPublicOrigin(ctx.env) },
 		}
 	}
 

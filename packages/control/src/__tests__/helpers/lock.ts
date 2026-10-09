@@ -43,8 +43,10 @@ export function fixtureRuns(runs: RunRepository, locks: DeployLocks, now: () => 
 			owned(id, (fence) => runs.markRunFinished(id, status, exitCode, fence)),
 		finishCancellation: (id: string, status: 'succeeded' | 'failed') => owned(id, (fence) => runs.markRunCancellationFinished(id, status, fence)),
 		park: (id: string, classificationJson: string) => owned(id, (fence) => runs.parkRunForApproval(id, classificationJson, fence)),
-		snapshot: (id: string, snapshotJson: string) => owned(id, (fence) => runs.recordRunSnapshot(id, snapshotJson, fence)),
-		publish: (id: string, generation: number) => owned(id, (fence) => runs.publishRunSnapshot(id, generation, fence)),
+		snapshot: (id: string, snapshotJson: string, hasContract = false) =>
+			owned(id, (fence) => runs.recordRunSnapshot(id, snapshotJson, hasContract, fence)),
+		publish: (id: string, expected: Parameters<RunRepository['publishRunSnapshot']>[1]) =>
+			owned(id, (fence) => runs.publishRunSnapshot(id, expected, fence)),
 		approve: (id: string, classificationJson: string, approvalJson: string) =>
 			owned(id, (fence) => runs.approveParkedRun(id, classificationJson, approvalJson, fence)),
 		reject: (id: string, classificationJson: string) => owned(id, (fence) => runs.rejectParkedRun(id, classificationJson, fence)),

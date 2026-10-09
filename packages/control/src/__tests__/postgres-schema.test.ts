@@ -526,7 +526,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
 		expect((await db.registry.getAppEnv('acme', 'prod'))?.protected).toBe(1)
 		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(0)
-		expect((await db.registry.setAppEnvProtected('acme', 'stage', true))?.protected).toBe(1)
+		expect(await db.registry.setAppEnvProtected('acme', 'stage', true)).toMatchObject({ protected: 1, protection_revision: 1, generation: 1 })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
+		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(1)
+		// The flag outlives the row: a recreated environment starts with it.
+		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(true)
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
 		expect((await db.registry.getAppEnv('acme', 'stage'))?.protected).toBe(1)
 
@@ -536,11 +540,13 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		const second = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:ada' })
 		expect(first.actor).toBe('user:ada')
 		await owned.start(first.id, 'logs')
-		expect(await owned.publish(first.id, 0)).toBe(false)
+		const unpublished = { generation: 0, protectionRevision: 0, hasContract: false }
+		expect(await owned.publish(first.id, unpublished)).toBe(false)
 		await owned.snapshot(first.id, snapshot)
-		expect(await owned.publish(first.id, 0)).toBe(true)
-		expect(await owned.publish(first.id, 0)).toBe(false)
-		expect(await db.registry.getAppEnv('acme', 'prod')).toMatchObject({ published_run_id: first.id, generation: 1 })
+		expect(await owned.publish(first.id, { ...unpublished, protectionRevision: 1 })).toBe(false)
+		expect(await owned.publish(first.id, unpublished)).toBe(true)
+		expect(await owned.publish(first.id, unpublished)).toBe(false)
+		expect(await db.registry.getAppEnv('acme', 'prod')).toMatchObject({ published_run_id: first.id, generation: 1, contract_app: 0 })
 		await owned.finish(first.id, 'succeeded', 0)
 
 		await owned.start(second.id, 'logs')

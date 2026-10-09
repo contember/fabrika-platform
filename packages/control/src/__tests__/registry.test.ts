@@ -182,9 +182,9 @@ describe('onboarding + registry CRUD', () => {
 
 		expect((await rpcResult(rpcRequest('apps.create', { id: 'app-a', repoUrl: 'https://github.com/acme/app-a' }), deps)).status).toBe(200)
 		expect((await rpcResult(rpcRequest('apps.update', { appId: 'app-a', app: { defaultBranch: 'next' } }), deps)).status).toBe(200)
-		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app-a', env: 'prod', environment: registrationEnvelopes() }), deps)).status)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app-a', env: 'stage', environment: registrationEnvelopes() }), deps)).status)
 			.toBe(200)
-		expect((await rpcResult(rpcRequest('apps.environments.delete', { appId: 'app-a', env: 'prod' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.delete', { appId: 'app-a', env: 'stage' }), deps)).status).toBe(200)
 		expect((await rpcResult(rpcRequest('apps.delete', { appId: 'app-a' }), deps)).status).toBe(200)
 		expect(
 			(await rpcResult(
@@ -504,8 +504,8 @@ describe('onboarding + registry CRUD', () => {
 		const putEnv = await rpcResult(
 			rpcRequest('apps.environments.put', {
 				appId: 'app',
-				env: 'prod',
-				environment: { ...registrationEnvelopes(), triggerRef: 'refs/heads/deploy/prod' },
+				env: 'stage',
+				environment: { ...registrationEnvelopes(), triggerRef: 'refs/heads/deploy/stage' },
 			}),
 			deps,
 		)
@@ -530,7 +530,7 @@ describe('onboarding + registry CRUD', () => {
 		// delete app cascades its env
 		const delApp = await rpcResult(rpcRequest('apps.delete', { appId: 'app' }), deps)
 		expect(delApp.status).toBe(200)
-		expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
+		expect(await deps.repositories.registry.getAppEnv('app', 'stage')).toBeNull()
 	})
 
 	test('app_vars CRUD round-trips (plaintext value, readable — unlike secrets)', async () => {
@@ -873,6 +873,12 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 	})
 })
 
+const CONSOLE_ORIGIN = 'https://control.example.test'
+
+function consoleRequest(headers: Record<string, string> = {}): Request {
+	return new Request(`${CONSOLE_ORIGIN}/api/rpc`, { method: 'POST', headers: { Origin: CONSOLE_ORIGIN, 'Sec-Fetch-Site': 'same-origin', ...headers } })
+}
+
 describe('the namespace proxy follows the registry', () => {
 	interface ProxyRecording {
 		synced: string[]
@@ -891,12 +897,14 @@ describe('the namespace proxy follows the registry', () => {
 		},
 	}
 
+	// A person in the console: deleting the protected `prod` environment takes one.
 	function context(deps: ControlRpcDeps, recording: ProxyRecording): RegistryUseCaseContext {
 		return {
 			repositories: deps.repositories,
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
+			admission: { request: consoleRequest(), publicOrigin: CONSOLE_ORIGIN },
 			namespaceProxyChanged: (namespaceId) => {
 				recording.synced.push(namespaceId)
 				return recording.fail === namespaceId ? Promise.reject(new Error('platform said no')) : Promise.resolve()

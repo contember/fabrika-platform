@@ -6,7 +6,6 @@ import type { BlobStore, DeployLocks, JobQueue } from '@fabrika/platform'
 import {
 	type ControlProvider,
 	type ProviderApp,
-	type ProviderApprovedAccess,
 	type ProviderDeployInput,
 	type ProviderDeploymentNamespace,
 	type ProviderDeployOutcome,
@@ -20,7 +19,7 @@ import {
 import { republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { publishRunSnapshot } from './approval/publish'
-import { approvedProviderAccess } from './approval/snapshot'
+import { approvedProviderAccess, type ProviderAccessFields } from './approval/snapshot'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -196,7 +195,7 @@ const providerNamespace = (row: DeploymentNamespaceRow): ProviderDeploymentNames
 const storedProviderEnvironment = (
 	row: AppEnvRow,
 	namespace: ProviderDeploymentNamespace | undefined,
-	access: ProviderApprovedAccess | undefined,
+	access: ProviderAccessFields,
 ): ProviderEnvironment => ({
 	appId: row.app_id,
 	env: row.env,
@@ -205,7 +204,7 @@ const storedProviderEnvironment = (
 	...(namespace === undefined ? {} : { namespace }),
 	target: parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
 	artifact: parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
-	...(access === undefined ? {} : { access }),
+	...access,
 })
 
 /**
@@ -514,6 +513,7 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			}, {
 				run: startedRun,
 				app,
+				root: deps.provider.applicationRoot === undefined ? '' : deps.provider.applicationRoot(registration.app.source),
 				commitSha,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
 				log: (line) => runLogs.log(line),
@@ -667,15 +667,15 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 }
 
 /** The environment's approved access as the provider reads it, read again after this run's publication. */
-async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<ProviderApprovedAccess | undefined> {
+async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<ProviderAccessFields> {
 	const row = await repositories.registry.getAppEnv(appEnv.app_id, appEnv.env)
 	if (row === null) throw new Error(`app environment ${appEnv.app_id}/${appEnv.env} disappeared during the deploy`)
 	return approvedProviderAccess(repositories, row)
 }
 
-function withAccess(environment: ProviderEnvironment, access: ProviderApprovedAccess | undefined): ProviderEnvironment {
-	const { access: _previous, ...rest } = environment
-	return access === undefined ? rest : { ...rest, access }
+function withAccess(environment: ProviderEnvironment, access: ProviderAccessFields): ProviderEnvironment {
+	const { access: _previous, artifactAccess: _previousArtifact, ...rest } = environment
+	return { ...rest, ...access }
 }
 
 async function settleCancelledInvocation(

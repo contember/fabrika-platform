@@ -1,5 +1,6 @@
 import type { AppDto, AppOptionalFields, CreateAppRequest, ListResponse, OkResponse, UpdateAppRequest } from '@fabrika/control-contract'
-import { type AppRow, type NamespaceResourceClaimRow } from '../../db'
+import { requireHumanForProtectedDelete } from '../../approval/human'
+import { type AppEnvRow, type AppRow, type NamespaceResourceClaimRow } from '../../db'
 import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-event'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
@@ -50,8 +51,10 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 
 export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): Promise<OkResponse> {
 	assertNoHeldResourceClaims(`app ${id}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(id))
+	const envs = await c.repositories.registry.listAppEnvs(id)
+	requireHumanForProtectedDelete(c.auth, c.admission, envs)
 	// Read the routed namespaces BEFORE the delete: afterwards the rows that name them are gone.
-	const namespaceIds = await routedNamespaceIds(c, id)
+	const namespaceIds = routedNamespaceIds(envs)
 	if (!(await c.repositories.registry.deleteApp(id))) fail(404, 'app not found')
 	await c.auth.audit({ action: 'app.delete', resourceType: 'app', resourceId: id })
 	notifyCatalogChanged(c)
@@ -59,10 +62,10 @@ export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): P
 	return { ok: true }
 }
 
-/** The deployment namespaces whose proxy manifest lists this app (all of its environments). */
-async function routedNamespaceIds(c: RegistryUseCaseContext, appId: string): Promise<string[]> {
+/** The deployment namespaces whose proxy manifest lists one of these environments. */
+function routedNamespaceIds(envs: readonly AppEnvRow[]): string[] {
 	const ids: string[] = []
-	for (const row of await c.repositories.registry.listAppEnvs(appId)) {
+	for (const row of envs) {
 		if (row.namespace_id !== null) ids.push(row.namespace_id)
 	}
 	return ids

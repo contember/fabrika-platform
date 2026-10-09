@@ -630,7 +630,8 @@ export class ControlRegistryRepository {
 					app_id, env, domain, public_origin, trigger_ref, namespace_id, provider,
 					provider_target_json, provider_artifact_json, authoring, protected
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0),
+					COALESCE((SELECT protected FROM app_env_protection WHERE app_id = ? AND env = ?), ?))
 				ON CONFLICT (app_id, env) DO UPDATE SET
 					domain = excluded.domain,
 					public_origin = excluded.public_origin,
@@ -652,7 +653,10 @@ export class ControlRegistryRepository {
 				input.providerTargetJson,
 				input.providerArtifactJson,
 				authoringFlag(input.authoring),
-				// Only a new row takes the default (ADR-0050); a stored flag changes only through `setAppEnvProtected`.
+				// Only a new row takes a value: the flag a deleted environment of these coordinates left, else the
+				// default (ADR-0050). A stored flag changes only through `setAppEnvProtected`.
+				input.appId,
+				input.env,
 				input.env === 'prod' ? 1 : 0,
 				authoringFlag(input.authoring),
 			)
@@ -696,12 +700,25 @@ export class ControlRegistryRepository {
 		}
 	}
 
-	/** Change an environment's `protected` flag (ADR-0050); the caller has authorized a human with `access.approve`. */
+	/**
+	 * Change an environment's `protected` flag (ADR-0050); the caller has authorized a human with `access.approve`. The
+	 * change advances `generation`, so a run that classified under the old flag loses its publication, and the flag is
+	 * kept for these coordinates beyond the environment's deletion.
+	 */
 	async setAppEnvProtected(appId: string, env: string, value: boolean): Promise<AppEnvRow | null> {
-		return this.d1
-			.prepare('UPDATE app_envs SET protected = ? WHERE app_id = ? AND env = ? RETURNING *')
-			.bind(value ? 1 : 0, appId, env)
-			.first<AppEnvRow>()
+		const flag = value ? 1 : 0
+		const results = await this.d1.batch<AppEnvRow>([
+			this.d1
+				.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1
+					WHERE app_id = ? AND env = ? RETURNING *`)
+				.bind(flag, appId, env),
+			this.d1
+				.prepare(`INSERT INTO app_env_protection (app_id, env, protected)
+					SELECT app_id, env, protected FROM app_envs WHERE app_id = ? AND env = ?
+					ON CONFLICT (app_id, env) DO UPDATE SET protected = excluded.protected`)
+				.bind(appId, env),
+		])
+		return results[0]?.results[0] ?? null
 	}
 
 	async deleteAppEnv(appId: string, env: string): Promise<boolean> {

@@ -62,7 +62,9 @@ export interface PublicationInvocation {
 
 export interface PublicationInput {
 	readonly run: RunRow
-	readonly app: { readonly id: string; readonly repo_url: string; readonly worker_dir: string | null }
+	readonly app: { readonly id: string; readonly repo_url: string }
+	/** The repository-relative application root the provider executes from (`ControlProvider.applicationRoot`); null is invalid. */
+	readonly root: string | null
 	readonly commitSha: string
 	readonly sourceBinding?: { readonly connectionId: string; readonly installationId: number }
 	log(line: string): void
@@ -108,11 +110,12 @@ export async function publishRunSnapshot(
 			return { kind: 'parked', classification }
 		}
 		await invocation.write((fence) => runs.recordRunClassification(run.id, serialized, fence))
-		if (await runs.publishRunSnapshot(run.id, active.generation, invocation.fence())) {
+		const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision, hasContract: candidate.contract !== null }
+		if (await runs.publishRunSnapshot(run.id, expected, invocation.fence())) {
 			input.log(`access: published as generation ${active.generation + 1} of \`${appEnv.env}\``)
 			return { kind: 'published', classification }
 		}
-		input.log('access: another publication landed first; classifying again')
+		input.log('access: another publication or a protection change landed first; classifying again')
 	}
 	throw new Error(`run ${input.run.id} lost the publication of its snapshot ${MAX_PUBLICATION_ATTEMPTS} times`)
 }
@@ -124,13 +127,17 @@ async function readCandidate(
 ): Promise<AccessSnapshot> {
 	let snapshot: AccessSnapshot
 	try {
+		const root = input.root
+		if (root === null) {
+			throw new SnapshotRefused(['the application root (`workerDir`) is not a relative directory inside the repository; fix it in the registry'])
+		}
 		const commit = await deps.commits.open({
 			repoUrl: input.app.repo_url,
 			commitSha: input.commitSha,
 			...(input.sourceBinding === undefined ? {} : { sourceBinding: input.sourceBinding }),
 			signal: invocation.signal,
 		})
-		snapshot = await readAccessSnapshot(commit, input.app.worker_dir ?? '', input.app.id)
+		snapshot = await readAccessSnapshot(commit, root, input.app.id)
 	} catch (error) {
 		invocation.signal.throwIfAborted()
 		// The build log is the only feedback an agent over MCP gets (ADR-0049): one line per refusal.
@@ -138,7 +145,9 @@ async function readCandidate(
 		if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error
 	}
-	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
+	await invocation.write((fence) =>
+		deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), snapshot.contract !== null, fence)
+	)
 	return snapshot
 }
 

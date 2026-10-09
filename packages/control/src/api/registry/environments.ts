@@ -1,5 +1,6 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest } from '@fabrika/control-contract'
 import type { ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
+import { requireHumanForProtectedDelete } from '../../approval/human'
 import { type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
@@ -117,7 +118,9 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 
 export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string): Promise<OkResponse> {
 	assertNoHeldResourceClaims(`app env ${appId}/${env}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(appId, env))
-	const routed = (await c.repositories.registry.getAppEnv(appId, env))?.namespace_id ?? null
+	const existing = await c.repositories.registry.getAppEnv(appId, env)
+	requireHumanForProtectedDelete(c.auth, c.admission, existing === null ? [] : [existing])
+	const routed = existing?.namespace_id ?? null
 	if (!(await c.repositories.registry.deleteAppEnv(appId, env))) fail(404, 'app env not found')
 	await c.auth.audit({ action: 'app.env.delete', resourceType: 'app_env', resourceId: `${appId}/${env}` })
 	notifyCatalogChanged(c)

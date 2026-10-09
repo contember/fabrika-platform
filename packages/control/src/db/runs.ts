@@ -1,4 +1,4 @@
-import type { SqlDatabase } from '@fabrika/platform'
+import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import type { LeaseFence } from '../lease'
 import { firstRow } from './returning'
@@ -85,7 +85,14 @@ export class RunRepository {
 	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
 	/** Every lifecycle write is holder-fenced on the run's `<app>:<env>` lease. */
-	private async mutateRun(id: string, sql: string, values: (string | number | null)[], fence: LeaseFence): Promise<boolean> {
+	/** `after` runs in the same batch, so it sees the run's update and the still-locked lease row. */
+	private async mutateRun(
+		id: string,
+		sql: string,
+		values: (string | number | null)[],
+		fence: LeaseFence,
+		after: readonly SqlStatement[] = [],
+	): Promise<boolean> {
 		// The lease row must stay locked through the mutation: an EXISTS alone races takeover on Postgres.
 		const results = await this.d1.batch<{ id: string }>([
 			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
@@ -95,6 +102,7 @@ export class RunRepository {
 				AND EXISTS (SELECT 1 FROM deploy_locks
 					WHERE lock_key = runs.app_id || ':' || runs.env AND holder = ? AND expires_at > ?)
 				RETURNING id`).bind(...values, fence.holder, fence.nowMs),
+			...after,
 		])
 		return (results[1]?.results.length ?? 0) > 0
 	}
@@ -224,14 +232,24 @@ export class RunRepository {
 		)
 	}
 
-	/** Record the access snapshot read at the run's pinned commit. */
-	async recordRunSnapshot(id: string, snapshotJson: string, fence: LeaseFence): Promise<boolean> {
+	/**
+	 * Record the access snapshot read at the run's pinned commit. A snapshot with a contract marks the environment a
+	 * contract application at once, before anything is published, so no artifact access applies to it meanwhile.
+	 */
+	async recordRunSnapshot(id: string, snapshotJson: string, hasContract: boolean, fence: LeaseFence): Promise<boolean> {
+		const markContractApp = this.d1.prepare(`UPDATE app_envs SET contract_app = 1
+			WHERE ? = 1 AND EXISTS (SELECT 1 FROM runs
+				WHERE runs.id = ? AND runs.app_id = app_envs.app_id AND runs.env = app_envs.env AND runs.snapshot_json = ?
+					AND EXISTS (SELECT 1 FROM deploy_locks
+						WHERE lock_key = runs.app_id || ':' || runs.env AND holder = ? AND expires_at > ?))`)
+			.bind(hasContract ? 1 : 0, id, snapshotJson, fence.holder, fence.nowMs)
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET snapshot_json = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
 			[snapshotJson, id],
 			fence,
+			[markContractApp],
 		)
 	}
 
@@ -292,22 +310,27 @@ export class RunRepository {
 	}
 
 	/**
-	 * Publish the run's snapshot as its environment's active access (ADR-0050): a compare-and-swap on the generation
-	 * the run classified against, fenced on the run's lease. False when another publication won.
+	 * Publish the run's snapshot as its environment's active access (ADR-0050): a compare-and-swap on the generation and
+	 * the protection revision the run classified against, fenced on the run's lease. False when another publication or
+	 * a protection change won. `contract_app` follows the published snapshot.
 	 */
-	async publishRunSnapshot(id: string, expectedGeneration: number, fence: LeaseFence): Promise<boolean> {
+	async publishRunSnapshot(
+		id: string,
+		expected: { readonly generation: number; readonly protectionRevision: number; readonly hasContract: boolean },
+		fence: LeaseFence,
+	): Promise<boolean> {
 		const results = await this.d1.batch<{ app_id: string }>([
 			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
 				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
 					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
-			this.d1.prepare(`UPDATE app_envs SET published_run_id = ?, generation = generation + 1
-				WHERE generation = ?
+			this.d1.prepare(`UPDATE app_envs SET published_run_id = ?, generation = generation + 1, contract_app = ?
+				WHERE generation = ? AND protection_revision = ?
 					AND EXISTS (SELECT 1 FROM runs
 						WHERE runs.id = ? AND runs.app_id = app_envs.app_id AND runs.env = app_envs.env
 							AND runs.status = 'running' AND runs.cancel_requested_at IS NULL AND runs.snapshot_json IS NOT NULL)
 					AND EXISTS (SELECT 1 FROM deploy_locks
 						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
-				RETURNING app_id`).bind(id, expectedGeneration, id, fence.holder, fence.nowMs),
+				RETURNING app_id`).bind(id, expected.hasContract ? 1 : 0, expected.generation, expected.protectionRevision, id, fence.holder, fence.nowMs),
 		])
 		return (results[1]?.results.length ?? 0) > 0
 	}

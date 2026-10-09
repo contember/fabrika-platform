@@ -89,10 +89,21 @@ export async function approvedSnapshot(
 	return { runId, generation: appEnv.generation, snapshot: parseSnapshot(run.snapshot_json) }
 }
 
-/** `approvedSnapshot` as the provider reads it. */
+/** What a provider may publish for an environment: its approved contract, or the artifact's access of a non-contract app. */
+export interface ProviderAccessFields {
+	readonly access?: ProviderApprovedAccess
+	readonly artifactAccess?: true
+}
+
+/**
+ * `approvedSnapshot` as the provider reads it. Only the registry's `contract_app = 0` lets the artifact decide, for an
+ * application whose published snapshot has no contract (until B10); never the artifact's own claim.
+ */
 export async function approvedProviderAccess(
 	repositories: Pick<ControlRepositories, 'runs'>,
-	appEnv: Pick<AppEnvRow, 'app_id' | 'env' | 'published_run_id' | 'generation'>,
-): Promise<ProviderApprovedAccess | undefined> {
-	return approvedAccess((await approvedSnapshot(repositories, appEnv)).snapshot)
+	appEnv: Pick<AppEnvRow, 'app_id' | 'env' | 'published_run_id' | 'generation' | 'contract_app'>,
+): Promise<ProviderAccessFields> {
+	const access = approvedAccess((await approvedSnapshot(repositories, appEnv)).snapshot)
+	if (access !== undefined) return { access }
+	return appEnv.contract_app === 0 ? { artifactAccess: true } : {}
 }

@@ -7,10 +7,14 @@ import { contractDigest, permits, type Scope } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
+import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider, ProviderDeployInput, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { republishNamespace } from '../api/namespaces'
+import { deleteAppUseCase } from '../api/registry/apps'
+import type { RegistryUseCaseContext } from '../api/registry/context'
+import { deleteAppEnvUseCase } from '../api/registry/environments'
 import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentProtectionUseCase } from '../approval/api'
 import { parseClassification } from '../approval/publish'
 import type { ControlRepositories, RunRow } from '../db'
@@ -45,6 +49,7 @@ function provider(w: World): ControlProvider {
 	return {
 		id: 'harbor',
 		normalizeRegistration: (input) => input,
+		applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 		resolveSource: () => Promise.resolve({ commitSha: COMMIT }),
 		deploy: (input) => {
 			w.deploys.push(input)
@@ -84,8 +89,8 @@ function deps(w: World): RunDeps {
 	}
 }
 
-async function seed(w: World): Promise<void> {
-	await w.db.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
+async function seed(w: World, workerDir?: string): Promise<void> {
+	await w.db.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes', ...(workerDir === undefined ? {} : { workerDir }) })
 	for (const env of ['prod', 'stage']) {
 		await w.db.registry.createDeploymentNamespaceWithResourceClaims({
 			id: `apps-${env}`,
@@ -215,9 +220,49 @@ describe('approved access through the run lifecycle', () => {
 
 		const prod = await w.db.registry.getAppEnv('notes', 'prod')
 		if (prod === null) throw new Error('no prod')
-		expect((await providerEnvironment(w.db, prod)).access).toBeUndefined()
+		// The registry knows a snapshot brought a contract, so the upload's own gates do not apply either.
+		expect(prod).toMatchObject({ published_run_id: null, contract_app: 1 })
+		const environment = await providerEnvironment(w.db, prod)
+		expect([environment.access, environment.artifactAccess]).toEqual([undefined, undefined])
 		await republishNamespace({ ...deps(w), queue: { send: () => Promise.resolve() } }, 'apps-prod', { wait: 'started' })
-		expect(w.republished.at(-1)?.members.map((member) => member.access)).toEqual([undefined])
+		expect(w.republished.at(-1)?.members.map((member) => [member.access, member.artifactAccess])).toEqual([[undefined, undefined]])
+		expect(w.deploys).toEqual([])
+	})
+
+	test('an application Control knows has no contract keeps its artifact access, until a snapshot brings one', async () => {
+		const w = world()
+		await seed(w)
+		w.contract = null
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		expect(w.deploys.map((input) => [input.environment.access, input.environment.artifactAccess])).toEqual([[undefined, true]])
+		expect(await w.db.registry.getAppEnv('notes', 'prod')).toMatchObject({ contract_app: 0, generation: 1 })
+
+		w.contract = BASE
+		expect((await deploy(w, 'prod')).status).toBe('awaiting_approval')
+		const prod = await w.db.registry.getAppEnv('notes', 'prod')
+		if (prod === null) throw new Error('no prod')
+		expect(prod.contract_app).toBe(1)
+		await republishNamespace({ ...deps(w), queue: { send: () => Promise.resolve() } }, 'apps-prod', { wait: 'started' })
+		expect(w.republished.at(-1)?.members.map((member) => [member.access, member.artifactAccess])).toEqual([[undefined, undefined]])
+	})
+
+	test('the application root is read as the provider executes it: `.` and `./` are the repository root', async () => {
+		for (const workerDir of ['.', './']) {
+			const w = world()
+			await seed(w, workerDir)
+			const parked = await deploy(w, 'prod')
+			expect(parked.status).toBe('awaiting_approval')
+			expect(parseClassification((await run(w, parked.runId)).classification_json ?? '').outcome).toBe('widening')
+		}
+	})
+
+	test('an application root that leaves the repository fails the run and publishes nothing', async () => {
+		const w = world()
+		await seed(w, 'a/../b')
+		const refused = await deploy(w, 'stage')
+		expect(refused.status).toBe('failed')
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('the application root (`workerDir`) is not a relative directory')
+		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 0 })
 		expect(w.deploys).toEqual([])
 	})
 
@@ -293,7 +338,7 @@ describe('approved access through the run lifecycle', () => {
 		const runs = w.db.runs
 		const publish = runs.publishRunSnapshot.bind(runs)
 		let raced = false
-		runs.publishRunSnapshot = (id, generation, fence) => {
+		runs.publishRunSnapshot = (id, expected, fence) => {
 			if (!raced) {
 				raced = true
 				w.sqlite.query('UPDATE app_envs SET published_run_id = ?, generation = generation + 1 WHERE app_id = ? AND env = ?').run(
@@ -302,14 +347,14 @@ describe('approved access through the run lifecycle', () => {
 					'stage',
 				)
 			}
-			return publish(id, generation, fence)
+			return publish(id, expected, fence)
 		}
 
 		w.contract = WITH_EXPORT
 		const loser = await deploy(w, 'stage')
 		expect(loser.status).toBe('succeeded')
 		expect(await published(w, 'stage')).toEqual({ runId: loser.runId, generation: 3 })
-		expect(w.logs.get(`runs/${loser.runId}/logs.ndjson`)).toContain('another publication landed first; classifying again')
+		expect(w.logs.get(`runs/${loser.runId}/logs.ndjson`)).toContain('another publication or a protection change landed first; classifying again')
 		expect(parseClassification((await run(w, loser.runId)).classification_json ?? '').baselineRunId).toBe(winner.runId)
 	})
 
@@ -362,5 +407,93 @@ describe('approved access through the run lifecycle', () => {
 		expect(dto.protected).toBe(true)
 		expect(caller.audited).toEqual(['access.protect'])
 		expect((await deploy(w, 'stage')).status).toBe('awaiting_approval')
+	})
+
+	test('protection enabled while a run publishes makes the publication lose and the run wait', async () => {
+		const w = world()
+		await seed(w)
+		const runs = w.db.runs
+		const publish = runs.publishRunSnapshot.bind(runs)
+		let protectedFirst = false
+		runs.publishRunSnapshot = async (id, expected, fence) => {
+			if (!protectedFirst) {
+				protectedFirst = true
+				await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'stage', protected: true })
+			}
+			return publish(id, expected, fence)
+		}
+
+		const raced = await deploy(w, 'stage')
+		expect(raced.status).toBe('awaiting_approval')
+		const row = await run(w, raced.runId)
+		expect(row.approval_json).toBeNull()
+		expect(parseClassification(row.classification_json ?? '')).toMatchObject({ outcome: 'widening', protected: true })
+		expect(w.logs.get(`runs/${raced.runId}/logs.ndjson`)).toContain('another publication or a protection change landed first; classifying again')
+		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 1 })
+		expect(w.deploys).toEqual([])
+	})
+})
+
+describe('protection survives the registry', () => {
+	function registry(w: World, caller: AuthContext, request = consoleRequest()): RegistryUseCaseContext {
+		return {
+			repositories: w.db,
+			provider: provider(w),
+			auth: caller,
+			signal: new AbortController().signal,
+			admission: { request, publicOrigin: ORIGIN },
+		}
+	}
+
+	const recreate = (w: World, env: string) =>
+		w.db.registry.upsertAppEnv({
+			appId: 'notes',
+			env,
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+			providerArtifactJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
+		})
+
+	const protectionOf = async (w: World, env: string): Promise<number | undefined> => (await w.db.registry.getAppEnv('notes', env))?.protected
+
+	test('deleting and recreating an environment keeps the protection a human set, and `prod` starts protected', async () => {
+		const w = world()
+		await seed(w)
+		const human = auth({ permissions: [{ action: '*', scope: null }] })
+		await setEnvironmentProtectionUseCase(approvals(w, human), { appId: 'notes', env: 'stage', protected: true })
+		await setEnvironmentProtectionUseCase(approvals(w, human), { appId: 'notes', env: 'prod', protected: false })
+
+		for (const env of ['stage', 'prod']) {
+			expect(await deleteAppEnvUseCase(registry(w, human), 'notes', env)).toEqual({ ok: true })
+			await recreate(w, env)
+		}
+		expect([await protectionOf(w, 'stage'), await protectionOf(w, 'prod')]).toEqual([1, 0])
+
+		expect(await deleteAppUseCase(registry(w, human), 'notes')).toEqual({ ok: true })
+		await w.db.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
+		for (const env of ['stage', 'prod', 'preview']) await recreate(w, env)
+		expect([await protectionOf(w, 'stage'), await protectionOf(w, 'prod'), await protectionOf(w, 'preview')]).toEqual([1, 0, 0])
+		const fresh = world()
+		await seed(fresh)
+		expect(await protectionOf(fresh, 'prod')).toBe(1)
+	})
+
+	test('deleting a protected environment or its app takes a person in the console with access.approve', async () => {
+		const w = world()
+		await seed(w)
+		const service = auth({ type: 'service', permissions: [{ action: 'app.manage', scope: null }] })
+		const operator = auth({ permissions: [{ action: 'app.manage', scope: null }] })
+
+		expect(await status(deleteAppEnvUseCase(registry(w, service), 'notes', 'prod'))).toBe(403)
+		expect(await status(deleteAppEnvUseCase(registry(w, operator), 'notes', 'prod'))).toBe(403)
+		expect(await status(deleteAppEnvUseCase(registry(w, auth(), consoleRequest({ Authorization: 'Bearer px_key' })), 'notes', 'prod'))).toBe(403)
+		expect(await status(deleteAppEnvUseCase({ ...registry(w, auth()), admission: undefined }, 'notes', 'prod'))).toBe(403)
+		expect(await status(deleteAppUseCase(registry(w, service), 'notes'))).toBe(403)
+		expect(await protectionOf(w, 'prod')).toBe(1)
+
+		// An unprotected environment needs only the caller's own action.
+		expect(await deleteAppEnvUseCase(registry(w, service), 'notes', 'stage')).toEqual({ ok: true })
+		expect(await deleteAppUseCase(registry(w, auth()), 'notes')).toEqual({ ok: true })
 	})
 })

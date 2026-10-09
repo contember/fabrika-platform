@@ -1,5 +1,6 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import type { ConsoleAdmission } from '../../approval/human'
 import { type ControlRepositories } from '../../db'
 import { type NamespaceProxyChanged } from '../namespaces'
 
@@ -10,6 +11,8 @@ export interface RegistryUseCaseContext {
 	readonly signal: AbortSignal
 	readonly catalogChanged?: () => void
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
+	/** How the call arrived; deleting a protected environment needs a human in the console. Absent refuses it. */
+	readonly admission?: ConsoleAdmission
 }
 
 export function notifyCatalogChanged(c: RegistryUseCaseContext): void {
