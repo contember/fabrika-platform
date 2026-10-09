@@ -24,7 +24,7 @@ bun add --global @fabrika/cli
 fabrika builder init
 ```
 
-Initialization installs the Fabrika skill for Claude Code and Codex, starts the local daemon, and opens the dashboard. The coding agent then drives the phase loop.
+Initialization installs the Fabrika skill and the `fabrika-app` application rules (from `@fabrika/app`) for Claude Code and Codex, starts the local daemon, and opens the dashboard. The coding agent then drives the phase loop.
 
 ```text
 fabrika builder next
@@ -70,6 +70,7 @@ Connected initialization uses `zerops-app` for a new project. A person approves 
   issues/
 .claude/
 .agents/skills/fabrika/
+.agents/skills/fabrika-app/
 .codex/agents/
 tests/browser/*.test.ts
 ```

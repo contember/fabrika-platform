@@ -18,6 +18,8 @@ hints. Do not coordinate other issues and do not spawn more agents.
 1. Read the complete issue body, its dependency outputs, relevant
    `tests/browser/*.test.ts`, `.fabrika/architecture/tech.md`, and the absolute
    stack/decision sources supplied by the parent.
+   When the app has a `fabrika.contract.ts`, apply the `fabrika-app` skill and
+   follow its rules.
 2. Implement the smallest complete vertical slice required by `goal` and
    `satisfies`: route, data operation, UI, migration, and seed where applicable.
 3. Start the app using the selected stack's current run recipe. Apply the

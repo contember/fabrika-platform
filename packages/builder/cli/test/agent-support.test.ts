@@ -1,3 +1,4 @@
+import { APP_AGENT_SKILL_NAME, readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'crypto'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
@@ -57,6 +58,15 @@ describe('dual-host installation', () => {
 		const manifest = record(JSON.parse(readFileSync(join(fixture.root, manifestRelativePath(fixture.root)), 'utf-8')))
 		expect(manifest['version']).toBe(1)
 		expect(Object.keys(record(manifest['files'])).length).toBe(result.written.length)
+	})
+
+	test('installs the application rules of @fabrika/app verbatim as a skill for each host', () => {
+		fixture = makeFixture()
+		injectAgentSupport(fixture.root)
+		const source = readAppAgentSkill().text
+		for (const skillsDir of ['.claude/skills', '.agents/skills']) {
+			expect(readFileSync(join(fixture.root, skillsDir, APP_AGENT_SKILL_NAME, 'SKILL.md'), 'utf-8')).toBe(source)
+		}
 	})
 
 	test('is idempotent and preserves a user-edited generated file', () => {

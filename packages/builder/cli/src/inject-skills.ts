@@ -1,3 +1,4 @@
+import { APP_AGENT_SKILL_NAME, readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname, join, relative, resolve } from 'path'
@@ -104,17 +105,18 @@ function renderDesiredFiles(sourceDir: string, hosts: AgentHost[]): DesiredFile[
 	const skill = readFileSync(join(sourceDir, 'SKILL.md'), 'utf-8')
 	const agents = readAgentSources(join(sourceDir, 'agents'))
 	const resources = readSkillResources(sourceDir)
+	const appSkill = readAppAgentSkill()
 	const files: DesiredFile[] = []
 
 	for (const host of hosts) {
-		const skillRoot = host === 'claude'
-			? join('.claude', 'skills', 'fabrika')
-			: join('.agents', 'skills', 'fabrika')
+		const skillsDir = host === 'claude' ? join('.claude', 'skills') : join('.agents', 'skills')
+		const skillRoot = join(skillsDir, 'fabrika')
 		files.push({
 			relativePath: join(skillRoot, 'SKILL.md'),
 			content: host === 'claude' ? renderClaudeSkill(skill) : skill,
 			host,
 		})
+		files.push({ relativePath: join(skillsDir, APP_AGENT_SKILL_NAME, 'SKILL.md'), content: appSkill.text, host })
 		for (const resource of resources) {
 			if (host === 'claude' && resource.relativePath === join('agents', 'openai.yaml')) continue
 			files.push({
