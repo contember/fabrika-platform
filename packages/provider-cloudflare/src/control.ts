@@ -6,6 +6,7 @@ import {
 	type ArtifactAccess,
 	artifactAccessDigest,
 	canonicalArtifactAccess,
+	isWorkloadKeyVariable,
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
 import type {
@@ -294,6 +295,11 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const approvedAccess = runnerApprovedAccess(input.environment)
 	if (!input.dryRun && approvedAccess === undefined) {
 		throw new Error('Cloudflare deploy requires the access Control approved for this environment')
+	}
+	// A job and a webhook need `@fabrika/db` on Postgres, which a Worker has not; their keys would only sit in a config.
+	const workloadKey = Object.keys(input.managedEnvironment).find(isWorkloadKeyVariable)
+	if (workloadKey !== undefined) {
+		throw new Error(`cloudflare: the contract declares a job or a webhook (${workloadKey}); they run on Zerops only`)
 	}
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const listInstallationApps = options.installationApps

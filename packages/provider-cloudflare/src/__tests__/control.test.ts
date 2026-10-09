@@ -556,6 +556,26 @@ describe('Cloudflare control provider', () => {
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
+	test('refuses a job or a webhook key before any runner call: a Worker runs neither', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		await expect(provider.deploy({ ...input, managedEnvironment: { ...input.managedEnvironment, FABRIKA_JOB_NIGHTLY_KEY: 'px_private' } })).rejects
+			.toThrow('they run on Zerops only')
+		expect(jobs).toEqual([])
+	})
+
 	test("sends every Cloudflare deployment of Control's registry with the job", async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({

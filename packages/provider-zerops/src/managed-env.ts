@@ -1,4 +1,10 @@
-import { type FrameworkVariableName, frameworkVariableReference, isFrameworkVariableName } from '@fabrika/auth-core'
+import {
+	FRAMEWORK_VARIABLE_PREFIXES,
+	type FrameworkVariableName,
+	frameworkVariableReference,
+	isFrameworkVariableName,
+	isWorkloadKeyVariable,
+} from '@fabrika/auth-core'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { renderYaml } from './compile'
@@ -56,6 +62,35 @@ export function parseManagedValues(value: unknown): ManagedValues {
 	const result = managedValuesSchema.safeParse(value)
 	if (!result.success) throw new Error('zerops: managed environment must name exactly the eight managed keys')
 	return result.data
+}
+
+/** What Control hands a deploy: the eight managed keys, and the key of each job and webhook of the approved contract. */
+export interface ManagedEnvironment {
+	readonly values: ManagedValues
+	/** `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key. */
+	readonly workloadKeys: Readonly<Record<string, string>>
+}
+
+const workloadKeySchema = z.string().startsWith('px_').min(4)
+
+export function parseManagedEnvironment(value: Readonly<Record<string, string | null>>): ManagedEnvironment {
+	const managed: Record<string, string | null> = {}
+	const workloadKeys: Record<string, string> = {}
+	for (const [name, entry] of Object.entries(value)) {
+		if (!isWorkloadKeyVariable(name)) {
+			managed[name] = entry
+			continue
+		}
+		const key = workloadKeySchema.safeParse(entry)
+		if (!key.success) throw new Error(`zerops: ${name} must be a px_ key`)
+		workloadKeys[name] = key.data
+	}
+	return { values: parseManagedValues(managed), workloadKeys }
+}
+
+/** A service variable only the platform writes per workload: a stale one is removed with its workload. */
+export function isFrameworkFamilyVariable(name: string): boolean {
+	return FRAMEWORK_VARIABLE_PREFIXES.some((prefix) => name.startsWith(prefix))
 }
 
 const refuse = (): never => {

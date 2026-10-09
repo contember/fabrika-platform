@@ -480,6 +480,41 @@ describe('Zerops provider', () => {
 		expect(JSON.stringify([recorded.externalStates, recorded.checkpoints])).not.toContain('private-')
 	})
 
+	test('writes each workload key as a service variable and removes the key of a workload that is gone', async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv: [
+					{ id: 'env-nightly', key: 'FABRIKA_JOB_NIGHTLY_KEY', content: 'px_private-old-nightly', type: 'USER', sensitive: true },
+					{ id: 'env-github', key: 'FABRIKA_WEBHOOK_GITHUB_KEY', content: 'px_private-github', type: 'USER', sensitive: true },
+					{ id: 'env-weekly', key: 'FABRIKA_JOB_WEEKLY_KEY', content: 'px_private-weekly', type: 'USER', sensitive: true },
+				],
+			})
+		)
+		await execute({
+			...deployRun(recorded),
+			managedEnvironment: {
+				...NO_MANAGED_VALUES,
+				FABRIKA_RELEASE: RELEASE,
+				FABRIKA_JOB_NIGHTLY_KEY: 'px_private-new-nightly',
+				FABRIKA_WEBHOOK_GITHUB_KEY: 'px_private-github',
+			},
+		}, provider)
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_JOB_NIGHTLY_KEY', value: 'px_private-new-nightly' })
+		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_WEBHOOK_GITHUB_KEY')
+		expect(recorded.envDeletes).toEqual(['env-weekly'])
+		const log = recorded.logs.join('\n')
+		expect(log).toContain('FABRIKA_JOB_WEEKLY_KEY: removed')
+		expect(log).not.toContain('private-')
+		expect(recorded.builds[0]?.zeropsYaml ?? '').not.toContain('FABRIKA_JOB_')
+	})
+
+	test('refuses a workload key that is not a px_ key, before any platform call', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
+		const run = { ...deployRun(recorded), managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_JOB_NIGHTLY_KEY: 'plain' } }
+		await expect(provider(run)).rejects.toThrow('FABRIKA_JOB_NIGHTLY_KEY must be a px_ key')
+		expect(recorded.timeline).toEqual([])
+	})
+
 	test('refuses a contract application without its proxy secret, before any platform call', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		const config: ZeropsAppConfig = {
