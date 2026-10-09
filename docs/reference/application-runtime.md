@@ -695,6 +695,19 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   script never passes, prints the output locally. A failure leaves nothing to answer the
   readiness check.
 
+## The agent skill
+
+`@fabrika/app`'s `skill/SKILL.md` (the skill `fabrika-app`) is the one text that tells a coding agent how to write a
+contract application: the contract first, tables and policies, migrations and codegen, the generated tests, what the
+checker refuses, and what is not built yet. Three places carry it, all read through `@fabrika/app/agent-skill`:
+
+- `fabrika builder init` installs the file verbatim as `.claude/skills/fabrika-app/` and `.agents/skills/fabrika-app/`;
+- Control's MCP server sends its body after the workspace flow as the server `instructions`;
+- the template's `AGENTS.md` is `renderAgentsFile`: the body under a generated-file marker. The template does not
+  carry it yet.
+
+Change the rules in that file only, and keep it to what is built.
+
 ## What the platform writes into an application
 
 A deploy writes a small, fixed set of names into the deployed application's environment on every
