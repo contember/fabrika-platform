@@ -395,10 +395,11 @@ src/
   locator and the framework tables included, because every session asks the runtime. `buildArtifact`
   refuses an export procedure whose action a table writes with or that manages a dimension's members. An export's context carries its
   capability only: no `ctx.connect`, no membership or file API.
-- **An export's callers are its consumers' `app:<id>` and, until B9b, `machine`**
-  (`EXPORT_EDGE_KEY_CALLER`): an operator provisions one service principal with a `px_` key per edge,
-  holding the export's actions. B9b replaces it with Control-reconciled `app:<id>` credentials; then drop
-  `machine` there and nowhere else. `<export>.v<n>` (no procedure) serves the export's description, the
+- **An export's callers are its consumers' `app:<id>`, and only an export row has one.** `RpcCaller` has no
+  `app:<id>`, and `buildArtifact`, the reader and `parseContractArtifact` refuse one on any other row.
+  `schemaFromContract` declares each consumer as an `app` workload holding the actions of the export rows it may
+  call: what the key Control issues for that consumer resolves to at IAM. `presentedBy` gives an `app` token an
+  `AppPrincipal`. `<export>.v<n>` (no procedure) serves the export's description, the
   schemas and digest a consumer vendors, to the same callers and with the same requirement as its
   procedures: v1 exports declare one action in one dimension for every procedure, and `buildArtifact`
   refuses one that does not. Never give the description a weaker requirement.
@@ -410,7 +411,8 @@ src/
   of each import; `boot` refuses one whose app, export or version differ, whose digest is not the
   import's, whose schemas no longer describe to its own digest (edited), or that lacks an imported
   procedure, and an import without `FABRIKA_CONNECT_<IMPORT>_URL` (an http(s) origin, no credentials)
-  and `_KEY` (a `px_` key). Both are `FABRIKA_*`, so the application never reads them. A connector validates
+  and `_KEY` (a `px_` key). Both are `FABRIKA_*`, so the application never reads them; Control writes them
+  (`connectVariables` in `@fabrika/auth-core` names them). A connector validates
   against zod schemas the framework builds from the checked, deep-frozen description (`schemaFromShape`),
   never against the snapshot's own schema objects, which application code could replace after `boot`.
 - **A connector call never throws for the owner's answer.** It validates the input against the
@@ -424,10 +426,13 @@ src/
   The deadline aborts the fetch and cancels the body reader (`readBoundedBytes`). The import's
   `timeoutMs` (3 s by default, at most 10 s, `CONNECT_LIMITS`) bounds the call and its two retries on
   `unavailable` and `timeout`; the remaining time is shared by the attempts left.
-- **On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding carries the call** (the Worker adapter
-  keeps it from `deps`); the request URL names the owner's host, which its proxy Worker selects the
-  application by. `connect-binding.test.ts` pins in Lopata that a binding routes by the binding. Without
-  a binding the call uses `fetch`.
+- **On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding carries the call** (the deployer generates
+  it; the Worker adapter keeps it from `deps`); the request URL names the owner's host, which its proxy Worker
+  selects the application by. `connect-binding.test.ts` pins in Lopata that a binding routes by the binding,
+  and that the consumer's app key reaches the owner through it. Without a binding the call uses `fetch`.
+- **`incompatibleChanges` (`contract/connect.ts`) is the rule Control applies to an owner deploy.** Over the
+  procedures a consumer imports, a removed procedure, less accepted input, any output change and a changed
+  audience break the edge; an output may not gain a field, because `schemaFromShape` builds strict objects.
 - The header policy and the file treatment are ADR-0022's, defined once in
   `@fabrika/proxy-core/headers`; `headers.ts` and `files/treatment.ts` only apply them, and the
   proxy applies the same definition. Never restate a header value here.
@@ -491,7 +496,8 @@ src/
 - The kit stands in for Control and IAM for workloads too: each job and webhook gets a random `px_` key, and the
   kit's token exchange signs its declared actions for it, with the kit's own key.
 - `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
-  it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision.
+  it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision. The owner kit's
+  `testCaller(grants, { kind: 'app', app })` is the consumer's key: an `app` token naming the consumer.
 - Its tokens are signed with a generated key and verified by the application's own
   verifier, so a test cannot reach a handler the production pipeline would refuse.
 - **The kit answers only its own origin.** `kit.fetch` refuses another host, and

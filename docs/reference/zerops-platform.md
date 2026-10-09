@@ -505,7 +505,7 @@ learn what it is called.
 
 #### UNVERIFIED: the balancer forwards `Authorization` unchanged
 
-A connector's consumer calls the owner's public proxy over HTTPS with `Authorization: Bearer <edge key>`
+A connector's consumer calls the owner's public proxy over HTTPS with `Authorization: Bearer <connector key>`
 (`docs/ideas/declarative-app-connectors.md`). That works only if the project L7 balancer passes the header
 through unchanged, from outside the project as from another namespace. Not measured yet. It is the row
 `unverified-balancer-forwards-authorization` of the platform-facts table (`live: 'build'`): it deploys an

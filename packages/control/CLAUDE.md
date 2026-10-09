@@ -231,6 +231,18 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `app_env_membership_keys`. It hands `FABRIKA_IAM_RPC_URL` (`FABRIKA_IAM_ISSUER`) and `FABRIKA_IAM_RPC_KEY`, both
   null otherwise, and redacts the key. In the application that variable is this key, never the installation's RPC
   key. Without need the record and vault row go; IAM deletes the key with the reconcile. The key adds no authority.
+- **A consumer's connector keys come from the APPROVED contract too, and an edge Control would break is refused**
+  (`src/connectors.ts`, ADR-0022 "Principal kinds"). The same reconcile issues one `app` key per owner application
+  the contract imports from, at `<owner>@<env>` naming the consumer, recorded as kind `app` named by the owner
+  (`declaredConnectors`), and hands it under each import's `FABRIKA_CONNECT_<IMPORT>_KEY`; `connectorAddresses`
+  adds the owner environment's `https://<domain>` as `_URL` and fails a deploy whose owner has none. Publication
+  (`assertConnectorEdges` in `src/approval/publish.ts`) runs before classification and fails the run, approved or
+  not, when a consumer's import is not exactly the owner's approved export of the same environment
+  (`consumerEdgeProblems`), or when an owner's candidate breaks an approved consumer's import
+  (`ownerEdgeProblems`, the rule in `incompatibleChanges`). The two sides publish independently, so two
+  concurrent publications can each pass against the other's previous snapshot; the next deploy of either sees
+  the break. `connectors.describe` answers the approved export to its consumer for `fabrika connect`, behind
+  `deploy.read` on the consumer, and the same 404 for anything else.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a

@@ -472,7 +472,7 @@ exports: {
 // the owner's handlers
 handlers: () => ({ exports: { products: { get: ({ input }) => products.get(input.sku) } } }),
 
-// the consumer: `fabrika connect add catalog/products@1 --origin=https://catalog.example.com`
+// the consumer: `fabrika connect add catalog/products@1 --consumer=shop --env=prod`
 // writes fabrika/connect/catalog.products.v1.ts with catalogProductsV1 and its digest
 imports: {
 	catalog: { app: 'catalog', export: 'products', version: 1, digest: catalogProductsV1Digest,
@@ -492,10 +492,9 @@ The owner side:
   description — its schemas and `exportDigest` — is `POST /__fabrika/connect/<export>.v<version>`. The
   description has the callers and the requirement of the procedures it describes; in v1 every procedure of
   an export declares the same action in the same dimension.
-- Their callers are the consumers' `app:<id>` and `machine`. Until Control reconciles connector
-  credentials, an operator provisions one service principal per edge, with a `px_` key bound to the
-  consumer's environment and holding the export's actions at the owner; that key is a `machine` caller.
-  It also passes any other owner endpoint `machine` may call with those actions.
+- Their callers are the consumers' `app:<id>` and nothing else; no other endpoint may name `app:<id>`.
+  The owner's schema declares each consumer as an `app` workload holding the actions of the export rows it
+  may call, so the consumer's key at the owner carries exactly those, app-wide (ADR-0022 "Principal kinds").
 - An export handler runs read-only. The data layer refuses every write and lock in its request, whatever
   capability it carries, and reads in `READ ONLY` transactions — the access check's own reads included. An export may not declare an action a
   table writes with, nor one that manages members. Its context has no `ctx.connect` and no membership or file API.
@@ -504,9 +503,9 @@ The consumer side:
 
 - `boot` checks each import against its vendored snapshot: same app, export and version, the import's
   digest, and schemas that still describe to that digest. It reads the owner's origin from
-  `FABRIKA_CONNECT_<IMPORT>_URL` and the edge key from `FABRIKA_CONNECT_<IMPORT>_KEY` (`catalog` →
+  `FABRIKA_CONNECT_<IMPORT>_URL` and the key from `FABRIKA_CONNECT_<IMPORT>_KEY` (`catalog` →
   `CATALOG`, `productCatalog` → `PRODUCT_CATALOG`). Both are framework variables, so no application
-  module reads them; in part A an operator sets them, for example as secrets the app declares.
+  module reads them, and nobody sets them: Control writes them when it deploys the consumer.
 - `ctx.connect.<import>.<procedure>` exists only in the handlers `usedBy` names, and only for the
   request that received it: a method kept and called later, from another request or from an export
   handler is `denied` and sends nothing. A call validates its
@@ -520,10 +519,25 @@ The consumer side:
   `contract_violation`, logged once with a fixed code and the schema's own path, so a drifted owner is
   caught on the first call. A redirect is `unavailable` and never followed; the deadline also cancels
   a body still being read.
-- On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding to the owner's proxy Worker carries the call,
-  its URL naming the owner's host; a binding routes by the binding, not by the URL. Elsewhere the call
+- On Cloudflare the deployer binds `FABRIKA_CONNECT_<IMPORT>` to the owner's proxy Worker, which carries the
+  call, its URL naming the owner's host; a binding routes by the binding, not by the URL. Elsewhere the call
   goes to the owner's public origin with `fetch`. Whether the Zerops balancer forwards `Authorization`
   unchanged is not verified yet ([zerops-platform.md](zerops-platform.md)).
+
+Control joins the two sides (ADR-0022 "Principal kinds"):
+
+- An edge is a consumer environment's import of an owner's export in the environment of the same name,
+  computed from both approved snapshots. `fabrika connect add` and `pull` read the description from Control
+  (`connectors.describe`), which answers the owner's approved export to its consumer only.
+- A consumer deploy issues one key per owner it imports from, at `<owner>@<env>` naming the consumer, kept and
+  rotated like a job key, and writes it under each import of that owner with the owner environment's
+  `https://<domain>`. An owner environment without a domain fails the deploy.
+- A publication that breaks an edge fails, approved or not. A consumer import must name the owner's approved
+  export exactly, digest included (`run fabrika connect pull`). An owner deploy may not remove an export version
+  an approved consumer imports, stop naming that consumer, remove an imported procedure, accept less input,
+  change an output or change the audience; a breaking change is a new version served beside the old one. A new
+  procedure and a new optional input field are compatible; an output may not gain a field, because the consumer
+  parses every answer strictly.
 
 ## Runtime boundary
 
@@ -633,9 +647,10 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   headers before the decision, and the `__Host-px_*` cookies before the application.
   It carries the proxy's token, signed by the kit the way IAM signs, and the real
   verifier and dispatcher answer it.
-- `options.connect` wires each import: the owner's origin, the edge key, and the `fetch`
+- `options.connect` wires each import: the owner's origin, the key, and the `fetch`
   that reaches the owner — usually another kit's `fetch`, so a connector call meets the
-  owner's own proxy decision.
+  owner's own proxy decision. The owner kit issues the consumer's key with
+  `testCaller(grants, { kind: 'app', app: '<consumer>' })`, an `app` token as IAM signs it.
 
 ### The generated tests
 

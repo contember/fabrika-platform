@@ -258,9 +258,22 @@ every other key of the workload but the new one, so the running version keeps it
 replacement. A workload principal resolves no grant and can be given none.
 The application exchanges its own job or webhook key at `POST /auth/workload/token` on IAM's public
 origin, which signs only for a workload key of the named application: it checks the key's format and the per-client
-bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503. Work unit B9a built this for jobs
-and webhooks. Connector keys of kind `app`, their edges and compatibility checks are B9b; until then an
-export also admits `machine` for an operator-provisioned edge key.
+bucket before any lookup, answers every other key the same `invalid_key`, and answers a storage failure 503.
+
+A connector key is an `app` workload of the **owner**: the owner's schema declares each consumer of its exports,
+named by the consumer's id, with the actions of the export rows it may call. An export row admits its consumers'
+`app:<id>` and nothing else, and no other row may name `app:<id>`. Control computes the edges from both approved
+snapshots: `(shop, prod) → (catalog, prod, products@1)` joins a consumer's import and the owner's export in the
+environment of the same name. For each owner a consumer environment imports from, Control issues one key at
+`<owner>@<env>` naming the consumer, with the same `keep` rule, and writes it as each import's
+`FABRIKA_CONNECT_<IMPORT>_KEY`, with the owner environment's `https://<domain>` as `_URL`. The consumer presents the key
+to the owner's proxy, which exchanges it like any `px_` key. On Cloudflare the deployer also binds
+`FABRIKA_CONNECT_<IMPORT>` to the owner's proxy Worker; it is the only binding to another application's Worker.
+A publication that breaks an edge fails, approved or not: a consumer import must be exactly the owner's approved
+export (its digest), and an owner deploy may not remove an export version an approved consumer imports, stop naming
+that consumer, remove an imported procedure, accept less input, change an output or change the audience. A new
+procedure, a new optional input field and a new version are compatible; an output may not gain a field, because a
+consumer parses every answer strictly.
 
 **Installation entries.** An endpoint table that protects one of the installation's own services is a
 manifest entry `{ id, hosts, upstream, scheme, installation: true, endpoints, reservedPrefixes,

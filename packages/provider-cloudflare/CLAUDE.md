@@ -134,7 +134,11 @@ this one import.
   `CloudflareDeployRun.installationApps`). A remote name belongs to the deployment with the longest
   `${env}-${app}` prefix (exact, or followed by `-`); one that belongs to another application is refused on
   every name the generated configs and the applied resources carry. It is a naming rule, not an ownership
-  record (backlog 86).
+  record (backlog 86). The one exception is the deployer's own: each import of the served contract gets a
+  `FABRIKA_CONNECT_<IMPORT>` service binding to the owner's proxy Worker (`<env>-<owner>-proxy`), and
+  `DeploymentBounds.connectors` admits exactly that binding, by name and remote, on the application Worker. An
+  authored binding under a framework name is refused like an authored variable. Control writes the import's
+  `_KEY` and `_URL` as managed variables; a job's or a webhook's key is still refused (they run on Zerops only).
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.

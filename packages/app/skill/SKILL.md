@@ -95,9 +95,11 @@ refuses the shortcuts around both. Keep all three intact.
   `setInterval`, self-scheduled timers or loops. A failed attempt is retried, so make each write idempotent. The
   platform gives each job and webhook its own key; never read, set or copy `FABRIKA_JOB_*` or `FABRIKA_WEBHOOK_*`.
 - **Connectors:** to use another application's data, import its export. If the export does not exist, ask the
-  owner application's maintainer. Run `fabrika connect add <app>/<export>@<version> --origin=<owner origin>`, then
-  add `imports` to the contract and `connect` to `implement`. `ctx.connect.<import>.<procedure>()` answers an
-  outcome; handle every outcome besides `ok`. Exports are read-only. Never import per-user data.
+  owner application's maintainer. Run `fabrika connect add <app>/<export>@<version> --consumer=<this app> --env=<env>`,
+  then add `imports` to the contract and `connect` to `implement`. `ctx.connect.<import>.<procedure>()` answers an
+  outcome; handle every outcome besides `ok`. Exports are read-only. Never import per-user data. The platform writes
+  each import's `FABRIKA_CONNECT_*`; never read, set or copy them. A deploy fails when the snapshot is not what the
+  owner serves (run `fabrika connect pull`); as an owner, change an export only by adding to it, or by a new version.
 - **Members:** a dimension with `members: { manage, list }` gives `ctx.members` to an endpoint whose action is that
   `manage` action. A dimension with a `creator` role can be the target of `creates`.
 - **Share links:** `c.link(prefix, { spa, dimension, grants, issuedBy, maxDays, procedures })`. An endpoint whose
@@ -144,8 +146,6 @@ missing endpoint fixtures; test kits imported outside test files; replaced `@fab
 - The data layer runs on Bun with Postgres only, so on Cloudflare a contract application has no `@fabrika/db`:
   files, forms, webhooks and jobs do not boot there. The Cloudflare build does not run `fabrika-check` yet; run it
   yourself.
-- On Cloudflare the platform does not generate a connector's `FABRIKA_CONNECT_<IMPORT>` service binding yet. On
-  both providers an operator sets `FABRIKA_CONNECT_<IMPORT>_URL` and `_KEY`.
 - Not supported: a job scoped to a dimension, a file collection with `link: true`, a webhook bound to `app`, a store
   for `reference` tables, reading a form's inbox, and a generated test for `move`.
 - An MCP workspace has no shell, so `fabrika db codegen` and `fabrika db test-scaffold` cannot run there, and a

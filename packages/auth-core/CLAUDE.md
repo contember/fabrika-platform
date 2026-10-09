@@ -57,8 +57,9 @@ bun test               # app-environment · canonical-path · contract-canonical
   unknown kind. `callerOf` maps `app` to `app:<workload>` and the other two to no caller; `callerAdmittedAt` admits
   `app:<id>` only under `CONNECT_PREFIX`. `PrincipalType` stays `user | service` (what IAM stores);
   `TokenPrincipalType` adds the workload kinds, so a consumer that builds a principal from a token must decide what a
-  workload token is. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job and webhook key families
-  (`workloadKeyVariable`, `isWorkloadKeyVariable`); the connector family joins when Control writes it (B9b).
+  workload token is. `FRAMEWORK_VARIABLE_PREFIXES` reserves the job, webhook and connector families
+  (`workloadKeyVariable`, `isWorkloadKeyVariable`; `connectVariables`, `isConnectKeyVariable`, `isConnectUrlVariable`).
+  `RpcCaller` is `human | machine`: an `app:<id>` reaches only an export row, a `link` only its own link mount.
 - **A share-link token has no `ptype` and carries `link: { mount, chain }`.** `principalKind` reads the
   kind ADR-0022 rule 3 checks (`user`, `service`, `link`); a plain anonymous token has none, so no
   contract mount admits it. `parseAccessClaims` rejects a link claim next to a `ptype` or OAuth claims.
