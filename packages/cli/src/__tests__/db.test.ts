@@ -163,6 +163,28 @@ describe('fabrika db test-scaffold', () => {
 		expect(existsSync(join(root, POLICY, 'own.test.ts'))).toBe(true)
 	})
 
+	test('an input the scaffold cannot sample needs a fixture; with one, the fixture is the case input', async () => {
+		const root = isolationApp()
+		const contract = join(root, 'fabrika.contract.ts')
+		writeFileSync(
+			contract,
+			readFileSync(contract, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
+		)
+		expect(await failure(run(root, 'test-scaffold'))).toContain(
+			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture api.notes.rename: the scaffold cannot write an input its schema admits',
+		)
+		expect(withoutAllowed(await findingsOf(root))).toContain(
+			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture api.notes.rename: the scaffold cannot write an input its schema admits, so its endpoint access cases need one here',
+		)
+		writeFileSync(
+			join(root, 'src', '__tests__', 'endpoint-access.fixtures.ts'),
+			"export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'T-1' } }\n",
+		)
+		await run(root, 'test-scaffold')
+		expect(readFileSync(join(root, ENDPOINTS), 'utf8')).toContain("kit.denied('api.notes.rename', { expectVersion: 1, id: '', title: 'T-1' })")
+		expect(await findingsOf(root)).toEqual([])
+	})
+
 	test('refuses policies the reader refuses, and takes no argument', async () => {
 		const root = isolationApp()
 		const tables = join(root, 'src', 'db', 'tables.ts')
@@ -353,6 +375,29 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			const verbose = await failure(testIsolation(['--verbose']))
 			expect(verbose).toContain('db test-isolation:')
 		})
+	})
+
+	test('a fixture the endpoint schema refuses fails its cases', async () => {
+		const files = ['fabrika.contract.ts', ENDPOINTS, 'src/__tests__/endpoint-access.fixtures.ts'].map((path) => join(ISOLATION_APP, path))
+		const originals = files.map((path) => (existsSync(path) ? readFileSync(path, 'utf8') : null))
+		try {
+			const contract = files[0] ?? ''
+			writeFileSync(
+				contract,
+				readFileSync(contract, 'utf8').replace('title: z.string().min(1), expectVersion', 'title: z.string().regex(/^T-[0-9]+$/), expectVersion'),
+			)
+			writeFileSync(files[2] ?? '', "export const fixtures = { 'api.notes.rename': { expectVersion: 1, id: '', title: 'not a T number' } }\n")
+			await run(ISOLATION_APP, 'test-scaffold')
+			const failed = await failure(testIsolation())
+			expect(failed).toContain('db test-isolation: 56 of 58 generated cases passed')
+			expect(failed).toContain(`${ENDPOINTS}: api.notes.rename: the note of another scope is 404 (failed)`)
+		} finally {
+			files.forEach((path, index) => {
+				const original = originals[index]
+				if (original === null || original === undefined) rmSync(path, { force: true })
+				else writeFileSync(path, original)
+			})
+		}
 	})
 
 	test('--verbose prints the test output locally', async () => {

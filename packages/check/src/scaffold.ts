@@ -4,12 +4,14 @@
 // regenerates both to find a missing, edited, stale or orphaned file. Browser-safe: no file API.
 
 import type { ContractArtifact, EndpointRow, TablePolicyArtifact } from '@fabrika/auth-core'
-import { readContractSource, readTablesSource } from './contract'
-import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR, TABLES_FILE } from './layout'
+import { ContractSourceError, readContractSource, readTablesSource } from './contract'
+import { type EndpointFixtures, isSampleObject, readEndpointFixtures } from './endpoint-fixtures'
+import type { Finding } from './finding'
+import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR, TABLES_FILE } from './layout'
 
-export { ENDPOINT_ACCESS_TEST, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
+export { ENDPOINT_ACCESS_TEST, ENDPOINT_FIXTURES_FILE, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
 import { generatedTestHeader } from './rules/tests'
-import { renderSample, sample } from './scaffold-sample'
+import { renderSample, type Sample, sample } from './scaffold-sample'
 
 export const policyTestPath = (table: string): string => `${POLICY_TESTS_DIR}${table}${POLICY_TEST_SUFFIX}`
 
@@ -128,17 +130,26 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 }
 
 /** One endpoint's cases: an object or a value of another scope is refused, and no answer holds another scope's rows. */
-const endpointCases = (row: EndpointRow): { readonly cases: readonly Case[]; readonly skipped: string | null } => {
-	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind !== 'action') {
-		return { cases: [], skipped: null }
-	}
-	if (!row.callers.some((caller) => caller === 'human' || caller === 'machine')) return { cases: [], skipped: null }
-	const { access } = row.requirement
-	if (access.form !== 'on' && access.form !== 'in' && access.form !== 'over') return { cases: [], skipped: null }
+/** Whether an endpoint gets endpoint access cases: a procedure with an `on`, `in` or `over` access form, for a person or a machine. */
+const isAccessTested = (row: EndpointRow): boolean => {
+	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind !== 'action') return false
+	const { form } = row.requirement.access
+	return row.callers.some((caller) => caller === 'human' || caller === 'machine') && (form === 'on' || form === 'in' || form === 'over')
+}
+
+/** The input an endpoint's cases send: the author's fixture, else a sample of its schema; `undefined` when neither exists. */
+const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<string, Sample>> | undefined => {
+	const fixture = fixtures[row.id]
+	if (fixture !== undefined) return fixture
 	const input = row.input === null ? {} : sample(row.input)
-	if (input === undefined || input === null || typeof input !== 'object' || Array.isArray(input)) {
-		return { cases: [], skipped: `${row.id}: no case, because the scaffold cannot write an input its schema admits` }
-	}
+	return input !== undefined && isSampleObject(input) ? input : undefined
+}
+
+const endpointCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly Case[] => {
+	if (!isAccessTested(row) || row.requirement === null || row.requirement.kind !== 'action') return []
+	const { access } = row.requirement
+	const input = inputOf(row, fixtures)
+	if (input === undefined) return []
 	const literal = renderSample(input)
 	const id = quote(row.id)
 	const cases: Case[] = []
@@ -160,21 +171,23 @@ const endpointCases = (row: EndpointRow): { readonly cases: readonly Case[]; rea
 			),
 		)
 	}
-	return { cases, skipped: null }
+	return cases
 }
 
 /** The endpoint access test of the application, or `undefined` when no endpoint has an access form to test. */
-const endpointTestBody = (artifact: ContractArtifact): { readonly body: string; readonly cases: readonly string[] } | undefined => {
-	const rows = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).map(endpointCases)
-	const cases = rows.flatMap((row) => row.cases)
-	const skipped = rows.flatMap((row) => (row.skipped === null ? [] : [`// ${row.skipped}`]))
+const endpointTestBody = (
+	artifact: ContractArtifact,
+	fixtures: EndpointFixtures,
+): { readonly body: string; readonly cases: readonly string[] } | undefined => {
+	const cases = [...artifact.endpoints].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).flatMap((row) =>
+		endpointCases(row, fixtures)
+	)
 	if (cases.length === 0) return undefined
 	const body = [
 		'// The endpoint access tests of this application, written by fabrika db test-scaffold from fabrika.contract.ts and',
 		'// src/db/tables.ts. They run src/app.ts itself: callers of two scopes that share no value ask every endpoint with an',
 		'// access form. A handler bug that needs other data or another order is beyond them. Do not edit: @fabrika/check',
 		'// compares this file with what the scaffold writes; rerun it after a contract or policy change.',
-		...skipped,
 		'',
 		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",
 		"import { testDatabase } from '@fabrika/db/testing'",
@@ -204,20 +217,62 @@ const generated = async ({ body, cases }: { readonly body: string; readonly case
  * Every test the scaffold writes for these policies and, when the application has a contract, its artifact; by path.
  * Endpoint access tests exist only for an application on `@fabrika/db`, which has policies to seed rows from.
  */
-export const generatedTests = async (policies: Policies, artifact: ContractArtifact | null): Promise<ReadonlyMap<string, GeneratedTest>> => {
+export const generatedTests = async (
+	policies: Policies,
+	artifact: ContractArtifact | null,
+	fixtures: EndpointFixtures = {},
+): Promise<ReadonlyMap<string, GeneratedTest>> => {
 	const files = new Map<string, GeneratedTest>()
 	for (const table of Object.keys(policies).sort()) {
 		const test = policyTestBody(policies, table)
 		if (test !== undefined) files.set(policyTestPath(table), await generated(test))
 	}
-	const endpoints = artifact === null || files.size === 0 ? undefined : endpointTestBody(artifact)
+	const endpoints = artifact === null || files.size === 0 ? undefined : endpointTestBody(artifact, fixtures)
 	if (endpoints !== undefined) files.set(ENDPOINT_ACCESS_TEST, await generated(endpoints))
 	return files
 }
 
+export interface ScaffoldInputs {
+	readonly policies: Policies
+	readonly artifact: ContractArtifact | null
+	readonly fixtures: EndpointFixtures
+}
+
 /** What the scaffold reads from an application's files; throws `ContractSourceError` or `ContractError` as the reader does. */
-export const scaffoldInputs = (files: ReadonlyMap<string, string>): { readonly policies: Policies; readonly artifact: ContractArtifact | null } => {
+export const scaffoldInputs = (files: ReadonlyMap<string, string>): ScaffoldInputs => {
 	const policies = readTablesSource(files)
+	const fixtures = readEndpointFixtures(files)
+	if (!fixtures.ok) throw new ContractSourceError(fixtures.findings)
 	// Endpoint tests seed rows from the policies, so without src/db/tables.ts there is nothing to compile them against.
-	return { policies, artifact: files.has(CONTRACT_FILE) && files.has(TABLES_FILE) ? readContractSource(files, policies) : null }
+	const artifact = files.has(CONTRACT_FILE) && files.has(TABLES_FILE) ? readContractSource(files, policies) : null
+	return { policies, artifact, fixtures: fixtures.fixtures }
+}
+
+/**
+ * What stops the endpoint access tests from covering every endpoint: one whose input the scaffold cannot sample and
+ * the author gave no fixture, and a fixture of no tested endpoint. Each is an `endpoint-fixture` finding.
+ */
+export const missingEndpointFixtures = ({ policies, artifact, fixtures }: ScaffoldInputs): readonly Finding[] => {
+	if (artifact === null || Object.keys(policies).length === 0) return []
+	const at = (message: string, allowed: string): Finding => ({
+		file: ENDPOINT_FIXTURES_FILE,
+		line: 1,
+		column: 1,
+		rule: 'endpoint-fixture',
+		message,
+		allowed,
+	})
+	const tested = artifact.endpoints.filter(isAccessTested)
+	const findings = tested.filter((row) => inputOf(row, fixtures) === undefined).map((row) =>
+		at(
+			`${row.id}: the scaffold cannot write an input its schema admits, so its endpoint access cases need one here`,
+			`export const fixtures = { '${row.id}': { … } }, an input the endpoint's schema admits`,
+		)
+	)
+	for (const id of Object.keys(fixtures).sort()) {
+		if (!tested.some((row) => row.id === id)) {
+			findings.push(at(`${id} is no endpoint with an on, in or over access form`, 'a fixture of a tested endpoint, or none'))
+		}
+	}
+	return findings
 }

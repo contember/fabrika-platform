@@ -1,4 +1,13 @@
-import { GENERATED_TEST_HEADER, type GeneratedTest, generatedTests, readApplicationTree, scaffoldInputs } from '@fabrika/check'
+import {
+	type Finding,
+	formatFinding,
+	GENERATED_TEST_HEADER,
+	type GeneratedTest,
+	generatedTests,
+	missingEndpointFixtures,
+	readApplicationTree,
+	scaffoldInputs,
+} from '@fabrika/check'
 import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import {
@@ -142,15 +151,17 @@ const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 
 const expectedTests = async (
 	cwd: string,
-): Promise<{ readonly files: ReadonlyMap<string, string>; readonly tests: ReadonlyMap<string, GeneratedTest> }> => {
+): Promise<
+	{ readonly files: ReadonlyMap<string, string>; readonly tests: ReadonlyMap<string, GeneratedTest>; readonly missing: readonly Finding[] }
+> => {
 	const { files } = await readApplicationTree(cwd)
-	const { policies, artifact } = scaffoldInputs(files)
-	return { files, tests: await generatedTests(policies, artifact) }
+	const inputs = scaffoldInputs(files)
+	return { files, tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures), missing: missingEndpointFixtures(inputs) }
 }
 
 const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	refuseArguments('test-scaffold', argv)
-	const { files, tests } = await expectedTests(deps.cwd)
+	const { files, tests, missing } = await expectedTests(deps.cwd)
 	for (const [path, text] of files) {
 		if (text.startsWith(GENERATED_TEST_HEADER) && !tests.has(path)) {
 			await rm(join(deps.cwd, path))
@@ -161,6 +172,9 @@ const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies
 		await mkdir(dirname(join(deps.cwd, path)), { recursive: true })
 		await writeFile(join(deps.cwd, path), text)
 		deps.write(`${path}\n`)
+	}
+	if (missing.length > 0) {
+		throw new Error(`db test-scaffold: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)
 	}
 }
 
@@ -188,7 +202,8 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 	const verbose = argv.includes('--verbose')
 	refuseArguments('test-isolation', argv.filter((arg) => arg !== '--verbose'))
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
-	const { files, tests } = await expectedTests(deps.cwd)
+	const { files, tests, missing } = await expectedTests(deps.cwd)
+	if (missing.length > 0) throw new Error(`db test-isolation: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)
 	for (const [path, { text }] of tests) {
 		if (files.get(path) !== text) throw new Error(`db test-isolation: ${path} is not the test fabrika db test-scaffold writes; run it`)
 	}
@@ -221,7 +236,11 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 			for (const name of cases) {
 				total++
 				const reportedCase = reported.find((item) => item.file === path && item.name === name)
-				const outcome = reportedCase === undefined ? 'not run' : reportedCase.assertions === 0 ? 'no assertion' : reportedCase.outcome
+				const outcome = reportedCase === undefined
+					? 'not run'
+					: reportedCase.outcome === 'passed' && reportedCase.assertions === 0
+					? 'no assertion'
+					: reportedCase.outcome
 				if (outcome !== 'passed') failed.push(`${path}: ${name} (${outcome})`)
 			}
 		}

@@ -2,7 +2,7 @@ import { ContractError } from '@fabrika/app/contract'
 import { ContractSourceError } from '../contract'
 import type { Finding } from '../finding'
 import { CONTRACT_FILE } from '../layout'
-import { type GeneratedTest, generatedTests, scaffoldInputs } from '../scaffold'
+import { type GeneratedTest, generatedTests, missingEndpointFixtures, scaffoldInputs } from '../scaffold'
 import { GENERATED_TEST_HEADER, generatedTestHeader } from './tests'
 
 const RESCAFFOLD = 'the files fabrika db test-scaffold writes for the current contract and src/db/tables.ts; run it and commit the result'
@@ -20,11 +20,12 @@ const failsItsHash = async (text: string): Promise<boolean> => {
 export const expectedGeneratedTests = async (
 	files: ReadonlyMap<string, string>,
 ): Promise<
-	{ readonly ok: true; readonly tests: ReadonlyMap<string, GeneratedTest> } | { readonly ok: false; readonly findings: readonly Finding[] }
+	| { readonly ok: true; readonly tests: ReadonlyMap<string, GeneratedTest>; readonly missing: readonly Finding[] }
+	| { readonly ok: false; readonly findings: readonly Finding[] }
 > => {
 	try {
-		const { policies, artifact } = scaffoldInputs(files)
-		return { ok: true, tests: await generatedTests(policies, artifact) }
+		const inputs = scaffoldInputs(files)
+		return { ok: true, tests: await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures), missing: missingEndpointFixtures(inputs) }
 	} catch (error) {
 		if (error instanceof ContractSourceError) return { ok: false, findings: error.findings }
 		if (error instanceof ContractError) {
@@ -54,7 +55,7 @@ export const checkGeneratedTests = async (files: ReadonlyMap<string, string>, re
 	if (!readable) return []
 	const expected = await expectedGeneratedTests(files)
 	if (!expected.ok) return [...expected.findings]
-	const findings: Finding[] = []
+	const findings: Finding[] = [...expected.missing]
 	for (const [path, { text }] of expected.tests) {
 		const present = files.get(path)
 		if (present === undefined) findings.push(at(path, 'this generated test is missing'))

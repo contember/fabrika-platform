@@ -96,6 +96,14 @@ describe.skipIf(postgres === null)('the endpoint access kit', () => {
 		expect(outcome.leaked[0]).toMatch(/^m[0-9a-f]{16}$/)
 	})
 
+	test('a case whose input the endpoint schema refuses fails, rather than passing on a 400', async () => {
+		if (postgres === null) return
+		const kit = endpointAccessKit(notesApp('none'), tables, postgres)
+		await expect(kit.denied('api.notes.get', { id: 'not-a-uuid', extra: true })).rejects.toThrow(
+			"api.notes.get: the case's input does not match the endpoint's input schema",
+		)
+	})
+
 	test('an endpoint without an action, or with another access form, is refused by name', async () => {
 		if (postgres === null) return
 		const kit = endpointAccessKit(notesApp('none'), tables, postgres)

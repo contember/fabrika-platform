@@ -12,6 +12,8 @@ export const POLICY_TESTS_DIR = 'src/db/__tests__/'
 export const POLICY_TEST_SUFFIX = '.policy-isolation.test.ts'
 /** The generated endpoint access tests; they import `src/app.ts`, whose default export they boot. */
 export const ENDPOINT_ACCESS_TEST = 'src/__tests__/endpoint-access.test.ts'
+/** The inputs the author gives the endpoint access tests where the scaffold cannot sample one; read, never run. */
+export const ENDPOINT_FIXTURES_FILE = 'src/__tests__/endpoint-access.fixtures.ts'
 export const ZEROPS_FILES = ['zerops.yaml', 'zerops.yml'] as const
 
 const SOURCE_EXTENSION = /\.(?:[mc]?[jt]s|[jt]sx)$/

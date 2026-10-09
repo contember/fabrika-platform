@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { RuleId } from '../finding'
 import { RULE_IDS } from '../finding'
 import { generatedTestHeader } from '../rules/tests'
+import { generatedTests, scaffoldInputs } from '../scaffold'
 import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, CLEAN_GENERATED_TESTS, CLEAN_SCHEMAS, CLEAN_TABLES, locations } from './helpers'
 
 interface RuleCase {
@@ -428,6 +429,12 @@ const cases: readonly RuleCase[] = [
 		good: { ...CLEAN_APPLICATION, 'zerops.yaml': ZEROPS_YAML },
 	},
 	{
+		rule: 'endpoint-fixture',
+		bad: { ...CLEAN_APPLICATION, 'src/__tests__/endpoint-access.fixtures.ts': "export const fixtures = { 'api.gone': { id: 'x' } }\n" },
+		expected: ['src/__tests__/endpoint-access.fixtures.ts:1:1'],
+		good: CLEAN_APPLICATION,
+	},
+	{
 		rule: 'mock-module',
 		bad: {
 			'src/app.ts': [
@@ -567,6 +574,32 @@ describe('generated tests', () => {
 		const orphan = 'src/db/__tests__/countries.policy-isolation.test.ts'
 		expect(await findingsOf({ ...CLEAN_APPLICATION, [orphan]: generated })).toEqual([
 			`${orphan}:1:1 generated-test-hash a generated test the scaffold no longer writes`,
+		])
+	})
+
+	test('an endpoint input the scaffold cannot sample needs a fixture, and the fixture becomes the case', async () => {
+		const contract = CLEAN_CONTRACT.replace('input: z.strictObject({ id: z.uuid() })', 'input: z.strictObject({ id: z.string().regex(/^n-[0-9]+$/) })')
+		expect(contract).not.toBe(CLEAN_CONTRACT)
+		const sources = { ...CLEAN_APPLICATION, 'fabrika.contract.ts': contract }
+		const generatedFor = async (files: Readonly<Record<string, string>>): Promise<Record<string, string>> => {
+			const inputs = scaffoldInputs(new Map(Object.entries(files)))
+			return Object.fromEntries([...(await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures))].map(([file, test]) => [file, test.text]))
+		}
+		const without = { ...sources, ...(await generatedFor(sources)) }
+		expect(await findingsOf(without)).toEqual([
+			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture api.get: the scaffold cannot write an input its schema admits, so its endpoint access cases need one here',
+		])
+		const fixture = "export const fixtures = { 'api.get': { id: 'n-1' } }\n"
+		const given = { ...sources, 'src/__tests__/endpoint-access.fixtures.ts': fixture }
+		const withFixture: Record<string, string> = { ...given, ...(await generatedFor(given)) }
+		expect(withFixture[endpoints]).toContain("expect(await kit.denied('api.get', { id: 'n-1' })).toEqual({ status: 404 })")
+		expect(await findingsOf(withFixture)).toEqual([])
+		const computed = {
+			...withFixture,
+			'src/__tests__/endpoint-access.fixtures.ts': "const id = 'n-1'\nexport const fixtures = { 'api.get': { id } }\n",
+		}
+		expect((await findingsOf(computed)).map((line) => line.split(' ').slice(0, 2).join(' '))).toEqual([
+			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture',
 		])
 	})
 

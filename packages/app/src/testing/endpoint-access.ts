@@ -142,7 +142,12 @@ export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract
 		}
 		const { fetch } = callerFor(row, grants)
 		const response = await fetch(row.path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-		return { status: response.status, text: await response.text() }
+		const text = await response.text()
+		// Input is parsed before the access form runs: a refused input would hide what the case is about.
+		if (response.status === 400) {
+			throw new Error(`${row.id}: the case's input does not match the endpoint's input schema; correct its fixture (${text})`)
+		}
+		return { status: response.status, text }
 	}
 
 	/** Two scopes of `dimension`: rows of the table that owns it when one does, otherwise two fresh scope values. */
