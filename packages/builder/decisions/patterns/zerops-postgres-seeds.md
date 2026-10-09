@@ -11,16 +11,26 @@ status: stable
 sources:
   - where: "packages/builder/decisions/technologies/opice.md in fabrika-platform"
     read: "Scenario seeds metadata and its filename contract."
-  - where: "examples/zerops-app/src/migrate.ts + src/notes.ts in fabrika-platform"
-    read: "PostgreSQL access through Bun SQL and repeatable migration behavior."
+  - where: "examples/zerops-app/db/migrations/ + src/db/tables.ts in fabrika-platform"
+    read: "The application schema, its scope columns, and the table policies a seeded row must satisfy."
+  - where: "packages/cli/CLAUDE.md (the `db` area) in fabrika-platform"
+    read: "`fabrika db migrate` and its environment: `FABRIKA_APP_ID`, `FABRIKA_APP_DATABASE_URL`, schema `app_<id>`."
 ---
 
 # Named PostgreSQL fixtures
 
 Apply this to the preset's local PostgreSQL database. An opice scenario naming
-`seeds: ['example']` requires `seeds/example.sql`. Run migrations first, then apply
-the named SQL files through the application's PostgreSQL driver or `psql` before
-the scenario. Document that local seed command in the scaffold.
+`seeds: ['example']` requires `seeds/example.sql`. Run `fabrika db migrate` first,
+then apply the named SQL files with `psql` against the application's schema
+`app_<id>` (`SET search_path`) before the scenario. Document that local seed
+command in the scaffold. Seeds are a local test tool, not application code: the
+application reaches rows only through its scoped stores, and the checker refuses
+raw SQL and database drivers in it.
+
+A seeded row must look like one the data layer wrote: it carries its whole
+containment chain (every scope column of its table policy) and its `createdBy` and
+`version` columns where the policy names them, so the access forms find it in the
+scope the scenario's principal is granted.
 
 Use stable fixture IDs and PostgreSQL `INSERT ... ON CONFLICT` semantics so
 repeated application is safe. Tests that mutate fixtures must restore their

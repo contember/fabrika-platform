@@ -13,6 +13,8 @@ sources:
     read: "Current Control deployment contract and provider lifecycle; do not infer builder command syntax."
   - where: "examples/zerops-app/README.md + fabrika.config.ts + zerops.yaml in fabrika-platform"
     read: "Application-owned source artifacts versus platform-owned deployment and secrets."
+  - where: "docs/decisions/0050-approved-access.md in fabrika-platform"
+    read: "The access snapshot Control reads from each commit, and which changes wait for a person's approval."
 ---
 
 # Deploy through installed Control
@@ -35,6 +37,12 @@ prerequisites are a handoff to that administrator.
 - Control and the Zerops provider supply credentials server-side, deliver source
   and trigger Zerops' build/deploy pipeline. The local coding agent does not need
   a Zerops account token or an installation provisioning credential.
+- Control reads the contract, `src/db/tables.ts` and the migration list from the
+  deployed commit and publishes only that approved snapshot to the proxy and IAM.
+  A widening (a new endpoint, caller, role grant, table policy change or migration)
+  on a protected environment (`prod` by default) parks the run in
+  `awaiting_approval` until a person approves it in the console. The agent cannot
+  approve; it reports the parked run and what the change lets someone do.
 - Follow the Control run to its terminal result and verify its requested revision
   and public proxy URL. A successful build, a trigger response or a local emulator
   result alone is not proof of a successful production release.

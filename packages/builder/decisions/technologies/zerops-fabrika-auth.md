@@ -1,53 +1,68 @@
 ---
 id: zerops-fabrika-auth
 kind: technology
-title: Fabrika IAM with proxy-only enforcement on Zerops
+title: Fabrika IAM with contract enforcement at the proxy on Zerops
 slot: authz
 provides: [authentication, authorization, proxy-enforcement]
 requires: [zerops-platform]
 recommends: []
 conflicts: [propustka, cloudflare-access, auth-password-kv]
-npm: ["@fabrika/auth@^0.0.4", "@fabrika/auth-core@^0.0.4"]
+npm: ["@fabrika/app@^0.0.4", "@fabrika/db@^0.0.4", "zod@^3.25.76"]
 status: wip
 sources:
-  - where: "packages/auth/CLAUDE.md + src/index.ts + src/iam.ts in fabrika-platform"
-    read: "Verify-only SDK, real IAM requirements, negative versus unavailable results."
-  - where: "examples/zerops-app/fabrika.gates.ts + fabrika.schema.ts + src/authz.ts in fabrika-platform"
-    read: "Proxy gate declarations, app vocabulary and the example's direct JWKS verification."
+  - where: "packages/app/skill/SKILL.md in fabrika-platform (the `fabrika-app` skill)"
+    read: "The application rules: contract first, access forms, table policies, what the checker refuses, what is not built."
+  - where: "examples/zerops-app/fabrika.contract.ts + src/db/tables.ts + src/app.ts in fabrika-platform"
+    read: "A worked contract: the vocabulary, the `/api` mount, the access forms and the handlers behind them."
+  - where: "docs/reference/application-runtime.md (Contracts, Serving a contract) in fabrika-platform"
+    read: "What the proxy and `boot` check per request, in order, and what `boot` refuses to start with."
   - where: "docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md + 0023-one-session-per-host.md in fabrika-platform"
-    read: "Single gate evaluator, per-host session handoff and application-owned object authorization."
+    read: "One evaluator at the proxy, the endpoint table, per-host session handoff."
 ---
 
-# Fabrika IAM with proxy-only enforcement
+# Fabrika IAM with contract enforcement at the proxy
 
-Declare the application's `AppSchema` vocabulary and ordered `AppGates` in source.
-Attach the gates to `target.proxy` in `fabrika.config.ts`. Control reconciles the
-schema and registers deployment return origins; the application does not assert
-its own trusted return origins through its schema.
+The application declares its whole access surface in `fabrika.contract.ts`:
+`defineContract(vocabulary, (c) => surface)` from `@fabrika/app/contract`. The
+vocabulary is its dimensions (e.g. `workspace` → `note`), exact action names and
+roles that list actions (no `*`). Every endpoint is a procedure under a mount
+(`c.rpc('/api', { callers: ['human', 'machine'] }, …)`) with an access form, plus
+`c.health('/healthz')`, which Zerops requires. There are no other routes,
+middleware, `authenticate` or custom server.
 
-The proxy alone evaluates gates, handles login and the reserved
-`/__fabrika/auth/callback` route, and injects `X-Fabrika-Token`. App services remain
-private. Never implement another gate evaluator in the app, frontend or Caddy
-route configuration.
+`fabrika.config.ts` compiles it with `compileContract(contract, tables)` and hands
+the provider the artifact (`target.contract`), the endpoint table
+(`target.proxy: { upstream, ...contractProxyTable(artifact) }`) and the IAM
+schema (`schema: schemaFromContract(artifact)`). A contract application has no
+gates; the provider refuses one whose proxy carries gates. Control reads the
+contract from the deployed commit, and a widening on a protected environment
+(`prod` by default) waits for a person to approve it in the console.
 
-The application verifies the injected token's signature, issuer, audience and
-expiry against IAM's JWKS. Prefer the `@fabrika/auth` SDK's `createIam` and
-`authenticate` contract where its IAM binding is available; read the installed
-types when composing the HTTP transport. The public notes example demonstrates
-direct JWKS verification with `@fabrika/auth-core` claim parsing. Neither path
-trusts an unverified header or gives the app a session-to-token exchange.
+The proxy alone selects the endpoint, handles login and the reserved
+`/__fabrika/auth/callback` route, checks the caller kind and the requirement, and
+injects `X-Fabrika-Token` and `X-Fabrika-Endpoint`. App services stay private.
+Never implement another gate evaluator in the app, the frontend or a Caddy route.
 
-Keep per-object authorization in feature handlers using the verified context and
-validated object scope (`can`, `requirePermission`, or the example's `Caller`).
-Public-gated routes use an anonymous context with no permissions. Preserve SDK
-failure semantics: a decided invalid credential differs from IAM unavailability,
-which refuses with 503 rather than pretending the credential was checked.
+The framework, not application code, verifies the injected token (signature,
+issuer, audience `<app>@<env>`, expiry), checks the proxy secret and the endpoint
+header, then the caller kind, the requirement, admission and the strict input.
+Per-object authorization is the access form: `on` (one object, 404 when missing
+or not the caller's), `over` (a list, `ctx.within`), `in` (creation inside a
+scope, 403 when not held). Handlers reach rows only through the stores of
+`src/db/tables.ts` with the `Ref` or `Within` they are handed; they never take an
+owner, user or tenant id from the input and never read `process.env`.
+
+Not built on Zerops yet: the IAM membership transport, so an endpoint with
+`creates`, `ctx.members` or `ctx.links` does not boot there.
 
 ## Local authentication is the same model
 
 Run real IAM and the proxy locally. IAM's own `LOCAL_DEV_LOGIN` mechanism can
 create a real local session; it is not an application dev flag. Restricted-role
 tests need real IAM principals and grants, not the bootstrap admin for every
-scenario. Never synthesize a caller, mint tokens in the app, add `FakeIamClient`,
-or disable gates to make local previews work. Credentials and raw request headers
-must not enter logs or committed fixtures.
+scenario. In unit tests, use `testKit` of `@fabrika/app/testing`, which runs the
+production proxy decision and `boot` with a stand-in IAM; never synthesize a
+caller in application code. When a request answers 401 or 403, report the missing
+action or role; never loosen the contract, a role or a table policy to make it
+pass. Credentials and raw request headers must not enter logs or committed
+fixtures.

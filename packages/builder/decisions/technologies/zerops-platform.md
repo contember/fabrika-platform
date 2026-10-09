@@ -7,11 +7,13 @@ provides: [platform, private-services, managed-deploy]
 requires: [bun, postgres]
 recommends: []
 conflicts: [cloudflare]
-npm: ["@fabrika/provider-zerops@^0.0.4", "@fabrika/app@^0.0.4"]
+npm: ["@fabrika/provider-zerops@^0.0.4", "@fabrika/app@^0.0.4", "@fabrika/cli@^0.0.4"]
 status: wip
 sources:
   - where: "examples/zerops-app/fabrika.config.ts + zerops.yaml in fabrika-platform"
-    read: "Current defineApp shape, private runtime, database references and repository-root build descriptor."
+    read: "Current defineApp shape with `target.contract`, the private runtime and the locked repository-root descriptor."
+  - where: "packages/provider-zerops/src/execution.ts + CLAUDE.md in fabrika-platform"
+    read: "The generated build, start script, readiness check and crontab of a contract application."
   - where: "packages/provider-zerops/src/types.ts + src/index.ts in fabrika-platform"
     read: "Provider-owned authoring contract and exports; verify installed versions before use."
   - where: "docs/reference/zerops-platform.md in fabrika-platform"
@@ -25,40 +27,57 @@ Use this for applications deployed by an existing Fabrika installation. Import
 `@fabrika/provider-zerops`. Keep `fabrika.config.ts` as the app's deploy source of
 truth: stable `id`, `schema`, `pipeline` and `target` with `platform: 'zerops'`.
 
-## Application contract
+## Deploy configuration
 
 - Declare services through `target.services(ctx)`. Select the runtime explicitly
   with `target.deployService` when declaring multiple services. Set
   `target.zeropsSetup` to the matching setup in repository-root `zerops.yaml`.
-- Declare `target.proxy: { upstream, gates }` with the private runtime address.
-  Set runtime `enableSubdomainAccess: false`; only the namespace proxy has public
-  routing. A custom domain belongs on the proxy, never the app service.
+- A contract application hands `target.contract` (the compiled
+  `fabrika.contract.ts`) and `target.proxy: { upstream, ...contractProxyTable(artifact) }`
+  with the private runtime address (port 3000). Set runtime
+  `enableSubdomainAccess: false`; only the namespace proxy has public routing. A
+  custom domain belongs on the proxy, never the app service.
 - Leave project placement to Control's environment/namespace registry. Keep
   provider tokens and concrete project coordinates out of application source.
-- Use the public example's Bun adapter (`@fabrika/app/bun`) for the long-running
-  Fetch application. Serve built SPA assets from the private application; preserve
-  API errors instead of falling through to `index.html`.
-- Commit `zerops.yaml` and the Bun lockfile at the app repository root. Zerops
-  performs its build; the descriptor declares build/deploy files, start command,
-  ports and probes. Probe durations are Go duration strings bounded to 10s–1h.
-- Run repeatable, concurrency-safe PostgreSQL migrations in `run.initCommands`,
-  which runs on every container start. A readiness check gates deployment;
-  `run.healthCheck` is the separate runtime liveness mechanism.
+- The platform owns the setup of a contract application (ADR-0043). The authored
+  `zerops.yaml` keeps only `setup`, `build.base`, `build.os` and the SPA's
+  `build.buildCommands`; every other key is refused. The platform generates the
+  rest: a frozen install, the application's `bun test`, a reinstall, the
+  generated entrypoint, `fabrika-check`, `tsc`, the deploy gate on the contract's
+  health path, and the `run` section. Its start script runs `fabrika db migrate`,
+  `fabrika db codegen --verify` and `fabrika db test-isolation`, then
+  `fabrika/entry.generated.ts`; each `c.cron` job becomes a crontab entry
+  `fabrika job run <name>`. The build has no database, so the database tests skip
+  there and run at container start.
+- Commit the Bun lockfile at the app repository root, and commit what
+  `fabrika db codegen` and `fabrika db test-scaffold` write. Never edit a
+  generated file (`fabrika/entry.generated.ts`, `src/db/schema.generated.ts`, the
+  generated tests) by hand; regenerate it with its command.
 
 ## Data and configuration
 
 The default public config declares an app-owned PostgreSQL service. A cheap
 namespace can instead supply the typed shared PostgreSQL binding: consult
-`examples/zerops-app/fabrika.cheap.config.ts` and its matching descriptor before
-selecting that variant. Preserve the administrator's namespace assignment.
+`examples/zerops-app/fabrika.cheap.config.ts` before selecting that variant.
+Preserve the administrator's namespace assignment. A contract application has
+one PostgreSQL database: the platform writes `FABRIKA_APP_DATABASE_URL` (the TLS
+reference with the database name and `sslmode=require`) and `FABRIKA_APP_ID`, and
+the application's tables live in the schema `app_<id>`. The application names no
+connection string; `@fabrika/app/bun` opens the data layer for it.
 
-Use the provider's PostgreSQL TLS reference including the database name and
-`sslmode=require`; do not infer a connection string from a hostname. Service names
-must satisfy `^[a-z0-9]{1,25}$` and references may address only owned services and
-declared namespace resources.
+Service names must satisfy `^[a-z0-9]{1,25}$` and references may address only
+owned services and declared namespace resources.
 
 The provider owns isolation fields. Secret values live at service level in Zerops,
 not in config, YAML or project-level environment variables. `pipeline.secrets`
 names requirements; it does not add a deploy-time secret synchronization step.
-Control supplies reserved managed variables such as `FABRIKA_IAM_ISSUER`,
-`FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`; do not redeclare them.
+Control supplies the reserved `FABRIKA_*` variables (`FABRIKA_IAM_ISSUER`,
+`FABRIKA_IAM_APP_ID`, `FABRIKA_OPERATIONS_DSN`, `FABRIKA_RELEASE`,
+`FABRIKA_CONTRACT_DIGEST`, `FABRIKA_PROXY_SECRET`, …); do not redeclare them. The
+framework takes every `FABRIKA_*` name out of the process before the application
+loads; handlers get their own variables through `deps`.
+
+Not built yet: the provider does not write the object storage
+(`FABRIKA_APP_STORAGE_*`) or the IAM membership transport into an application, so a
+`c.files` collection, and an endpoint with `creates`, `ctx.members` or
+`ctx.links`, does not boot on Zerops yet.
