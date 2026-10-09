@@ -5,6 +5,7 @@ import {
 	type EndpointDelegation,
 	endpointDelegation,
 	endpointDigest,
+	exportDigest,
 	formatEndpointHeader,
 	isDigest,
 	parseEndpointHeader,
@@ -116,4 +117,34 @@ describe('the endpoint header', () => {
 			expect(parseEndpointHeader(value)).toBeNull()
 		},
 	)
+})
+
+describe('exportDigest', () => {
+	const sku = { type: 'enum', values: ['a', 'b'] } as const
+	const description = {
+		app: 'catalog',
+		export: 'products',
+		version: 1,
+		audience: 'any consumer user',
+		procedures: { get: { input: { type: 'object', fields: { sku } }, output: { type: 'boolean' } } },
+	} as const
+
+	test('is a digest, and key and enum order do not change it', () => {
+		const reordered = {
+			procedures: { get: { output: { type: 'boolean' }, input: { fields: { sku: { values: ['b', 'a'], type: 'enum' } }, type: 'object' } } },
+			audience: 'any consumer user',
+			version: 1,
+			export: 'products',
+			app: 'catalog',
+		} as const
+		expect(isDigest(exportDigest(description))).toBe(true)
+		expect(exportDigest(reordered)).toBe(exportDigest(description))
+	})
+
+	test('a changed schema, version or audience changes it', () => {
+		const digest = exportDigest(description)
+		expect(exportDigest({ ...description, version: 2 })).not.toBe(digest)
+		expect(exportDigest({ ...description, audience: 'someone else' })).not.toBe(digest)
+		expect(exportDigest({ ...description, procedures: { get: { input: null, output: { type: 'boolean' } } } })).not.toBe(digest)
+	})
 })
