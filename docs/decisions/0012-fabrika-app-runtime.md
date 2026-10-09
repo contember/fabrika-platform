@@ -182,7 +182,7 @@ Other ADRs make the contract binding outside the application process:
   reach the proxy as installation entries
   ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)).
 
-None of these is built yet; until they are, the framework is the only check.
+All four are built, so the contract binds outside the application process too.
 
 ## Consequences
 
@@ -202,8 +202,9 @@ None of these is built yet; until they are, the framework is the only check.
 - `@fabrika/auth-core` gains the contract model, `planEndpoint` and the requirement check. The proxy
   and the framework select with the same `planEndpoint`, and the per-endpoint digest proves they
   applied the same rules.
-- Until platform enforcement exists, a loosened contract or role is visible only in review. The
-  framework is a strong default, not a boundary against an agent that edits any file.
+- A loosened contract or role does not reach a protected environment unseen: Control reads it from source, and the
+  widening waits for a human (ADR-0050). On an unprotected environment it applies at once, so there the framework
+  and the review are the only checks.
 
 ## Alternatives considered
 
