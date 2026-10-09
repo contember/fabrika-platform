@@ -104,8 +104,8 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		},
 	})
 	notifyCatalogChanged(c)
-	// The manifest carries the host, the namespace, and the artifact's own `upstream` + `gates` — and this
-	// call rewrites all three. A MOVE touches both proxies: the one losing the host and the one gaining it.
+	// The manifest carries the host, the namespace, and the artifact's `upstream` — and this call rewrites all
+	// three. A MOVE touches both proxies: the one losing the host and the one gaining it.
 	if (
 		(existing?.domain ?? null) !== row.domain
 		|| (existing?.namespace_id ?? null) !== row.namespace_id

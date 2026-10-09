@@ -193,19 +193,20 @@ project-level isolation value, so reconcile cannot observe it; the service-level
 setting is reimported as the enforceable control.
 
 Only the namespace proxy is public. Application services remain private. The
-proxy manifest contains all public apps assigned to that namespace, keyed by
-their configured domains and private upstreams, each with its ordered gates or,
-for a contract application, its endpoint table (`contractProxyTable`).
-Before an app deploy, the control plane:
+proxy manifest contains every public app assigned to that namespace whose
+contract Control approved (ADR-0050), keyed by its configured domain and private
+upstream, with the endpoint table of that approved contract
+(`contractProxyTable`). A member without approved access gets no route, and its
+artifact is not read. Before an app deploy, the control plane:
 
 1. verifies namespace coordinates and claims;
-2. compiles the proxy manifest from every assigned app;
+2. compiles the proxy manifest from every assigned app with approved access;
 3. writes it to the proxy service-level
    `FABRIKA_PROXY_MANIFEST_JSON` variable, and writes each contract application's
    proxy secret under `proxySecretVariable('<app>@<env>')`;
 4. rolls the proxy and waits for its app version;
-5. applies and deploys the application import, with the same secret as a
-   contract application's `FABRIKA_PROXY_SECRET`; any other application holds none.
+5. applies and deploys the application import, with the same secret as its
+   `FABRIKA_PROXY_SECRET`.
 
 The proxy secret authenticates the hop from the proxy to the application, because
 every service of a namespace shares one private network (ADR-0022 rule 5). Control
