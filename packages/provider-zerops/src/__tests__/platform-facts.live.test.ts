@@ -25,11 +25,12 @@ import {
 	type FactScript,
 	factsFor,
 	type FactTransport,
+	type PlatformFact,
 	PlatformFactError,
 	resolvePath,
 	runFact,
 } from './platform-facts'
-import { probeArchive, probeDescriptor, type ProbeFailure } from './platform-facts-archive'
+import { ECHO_FILES, probeArchive, probeDescriptor, type ProbeFailure } from './platform-facts-archive'
 
 const PREFIX = 'FABRIKA_LIVE_ZEROPS_'
 const TOKEN_VAR = `${PREFIX}TOKEN`
@@ -120,40 +121,99 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
  */
 const unpackerProbe =
 	(options: { directoryEntries: boolean; expected: string; failure?: ProbeFailure }): FactScript => async ({ transport, context, fact }) => {
-		const serviceId = required(context, 'serviceId')
 		const hostname = required(context, 'hostname')
-		const reserved = await callApi(transport, 'POST', `/service-stack/${serviceId}/app-version`, {
+		const settled = await deployProbe(transport, context, fact, {
 			name: `${hostname}-${options.directoryEntries ? 'dirs' : 'flat'}`,
+			archive: probeArchive({ directoryEntries: options.directoryEntries }),
+			failure: options.failure,
 		})
-		if (reserved.status < 200 || reserved.status >= 300) {
-			throw new PlatformFactError(fact.id, fact.section, `reserving an app version answered ${reserved.status}`)
-		}
-		const appVersionId = text(first(reserved.body, 'id'))
-		const uploadUrl = text(first(reserved.body, 'uploadUrl'))
-		if (appVersionId === undefined || uploadUrl === undefined) {
-			throw new PlatformFactError(fact.id, fact.section, 'the app-version reservation carried no id or no upload URL')
-		}
-		const uploaded = await transport.fetch(uploadUrl, {
-			method: 'PUT',
-			body: probeArchive({ directoryEntries: options.directoryEntries }),
-			signal: transport.signal,
-		})
-		if (!uploaded.ok) {
-			// Never the URL and never the body: both can carry the presigned credential.
-			throw new PlatformFactError(fact.id, fact.section, `uploading the probe archive answered ${uploaded.status}`)
-		}
-		const started = await callApi(transport, 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
-			zeropsYaml: probeDescriptor(hostname, options.failure),
-			zeropsYamlSetup: hostname,
-		})
-		if (started.status < 200 || started.status >= 300) {
-			throw new PlatformFactError(fact.id, fact.section, `build-and-deploy answered ${started.status}`)
-		}
-		const settled = await pollAppVersion(transport, appVersionId)
 		if (settled !== options.expected) {
 			throw new PlatformFactError(fact.id, fact.section, `the app version settled on ${settled}, expected ${options.expected}`)
 		}
 	}
+
+/** Reserve an upload-backed version on the throwaway service, upload `archive`, build it, and answer the status it settles on. */
+const deployProbe = async (
+	transport: FactTransport,
+	context: FactContext,
+	fact: PlatformFact,
+	probe: { name: string; archive: ArrayBuffer; failure?: ProbeFailure },
+): Promise<string> => {
+	const serviceId = required(context, 'serviceId')
+	const hostname = required(context, 'hostname')
+	const reserved = await callApi(transport, 'POST', `/service-stack/${serviceId}/app-version`, { name: probe.name })
+	if (reserved.status < 200 || reserved.status >= 300) {
+		throw new PlatformFactError(fact.id, fact.section, `reserving an app version answered ${reserved.status}`)
+	}
+	const appVersionId = text(first(reserved.body, 'id'))
+	const uploadUrl = text(first(reserved.body, 'uploadUrl'))
+	if (appVersionId === undefined || uploadUrl === undefined) {
+		throw new PlatformFactError(fact.id, fact.section, 'the app-version reservation carried no id or no upload URL')
+	}
+	const uploaded = await transport.fetch(uploadUrl, { method: 'PUT', body: probe.archive, signal: transport.signal })
+	if (!uploaded.ok) {
+		// Never the URL and never the body: both can carry the presigned credential.
+		throw new PlatformFactError(fact.id, fact.section, `uploading the probe archive answered ${uploaded.status}`)
+	}
+	const started = await callApi(transport, 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
+		zeropsYaml: probeDescriptor(hostname, probe.failure),
+		zeropsYamlSetup: hostname,
+	})
+	if (started.status < 200 || started.status >= 300) {
+		throw new PlatformFactError(fact.id, fact.section, `build-and-deploy answered ${started.status}`)
+	}
+	return await pollAppVersion(transport, appVersionId)
+}
+
+/** ~2 minutes for a fresh subdomain to answer: measured at ~3 s, so this only absorbs a slow balancer. */
+const SUBDOMAIN_POLL_ATTEMPTS = 24
+
+/**
+ * Deploy an echo server, publish it on its subdomain (only if it is not published yet: a second enable fails its
+ * process), and send one request with an `Authorization` header from outside the project. The fact holds when the
+ * echo is that header, byte for byte. The value is a random marker, never a credential.
+ */
+const authorizationForwarded: FactScript = async ({ transport, context, fact }) => {
+	const serviceId = required(context, 'serviceId')
+	const hostname = required(context, 'hostname')
+	const settled = await deployProbe(transport, context, fact, {
+		name: `${hostname}-echo`,
+		archive: probeArchive({ directoryEntries: true, files: ECHO_FILES }),
+	})
+	if (settled !== 'ACTIVE') {
+		throw new PlatformFactError(fact.id, fact.section, `the echo server settled on ${settled}, expected ACTIVE`)
+	}
+	const service = await callApi(transport, 'GET', `/service-stack/${serviceId}`)
+	if (first(service.body, 'subdomainAccess') !== true) {
+		const enabled = await callApi(transport, 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`)
+		if (enabled.status !== 200) {
+			throw new PlatformFactError(fact.id, fact.section, `enabling the subdomain answered ${enabled.status}`)
+		}
+		const processId = text(first(enabled.body, 'id'))
+		if (processId !== undefined) {
+			await awaitProcessTerminal(transport, processId)
+		}
+	}
+	const env = await callApi(transport, 'GET', `/service-stack/${serviceId}/env`)
+	const names = text(first(env.body, 'items[key=zeropsSubdomain].content'))?.split('\n') ?? []
+	const subdomain = names.find((name) => name.includes('-3000.')) ?? names[0]
+	if (subdomain === undefined) {
+		throw new PlatformFactError(fact.id, fact.section, 'the deployed service has no zeropsSubdomain')
+	}
+	const sent = `Bearer fabrika-fact-${crypto.randomUUID()}`
+	for (let attempt = 0; attempt < SUBDOMAIN_POLL_ATTEMPTS; attempt++) {
+		const answered = await transport.fetch(subdomain, { headers: { Authorization: sent }, signal: transport.signal }).catch(() => null)
+		if (answered?.status === 200) {
+			const echoed = await answered.text()
+			if (echoed !== sent) {
+				throw new PlatformFactError(fact.id, fact.section, `the balancer changed Authorization: the echo is ${JSON.stringify(echoed)}`)
+			}
+			return
+		}
+		await transport.sleep(VERSION_POLL_INTERVAL_MS)
+	}
+	throw new PlatformFactError(fact.id, fact.section, 'the subdomain never answered 200')
+}
 
 const pollAppVersion = async (transport: FactTransport, appVersionId: string): Promise<string> => {
 	for (let attempt = 0;; attempt += 1) {
@@ -187,6 +247,7 @@ const scripts: Record<string, FactScript> = {
 	'unpacker-directory-entries': unpackerProbe({ directoryEntries: true, expected: 'ACTIVE' }),
 	'failing-exec-readiness': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { execReadiness: true } }),
 	'failing-init-command': unpackerProbe({ directoryEntries: true, expected: 'DEPLOY_FAILED', failure: { initCommand: true } }),
+	'authorization-forwarded': authorizationForwarded,
 }
 
 describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerops account', () => {

@@ -503,6 +503,20 @@ live:
 Read the service's `subdomainAccess` to know whether a subdomain is live, and `zeropsSubdomain` only to
 learn what it is called.
 
+#### UNVERIFIED: the balancer forwards `Authorization` unchanged
+
+A connector's consumer calls the owner's public proxy over HTTPS with `Authorization: Bearer <edge key>`
+(`docs/ideas/declarative-app-connectors.md`). That works only if the project L7 balancer passes the header
+through unchanged, from outside the project as from another namespace. Not measured yet. It is the row
+`unverified-balancer-forwards-authorization` of the platform-facts table (`live: 'build'`): it deploys an
+echo server on the throwaway service, enables its subdomain, and expects the body to be exactly the header
+it sent. It runs when `FABRIKA_LIVE_ZEROPS_SLOW=1` is set beside a live account; until it has, treat the
+behaviour as unknown.
+
+| Behaviour                                                         | Expected if true                         | Row                                          |
+| ----------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| A request to the subdomain with `Authorization: Bearer <a value>` | **200**, the echo is that value verbatim | `unverified-balancer-forwards-authorization` |
+
 ### Verified live (2026-08-08, account `prg1`, throwaway project `fabrika-wu1-probe`) — a proxy before it fronts anything
 
 Measured to settle whether a Zerops installation can be brought up from an empty project. One `alpine@3.21`

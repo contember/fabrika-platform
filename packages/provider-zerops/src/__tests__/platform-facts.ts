@@ -137,6 +137,7 @@ const SECTION_USER_DATA_PROCESS = 'Verified live (2026-08-19) — a user-data wr
 const SECTION_POSTGRES_TLS = 'Verified live (2026-08-19) — PostgreSQL TLS is per service type — docs/reference/zerops-platform.md:837'
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
+const SECTION_UNVERIFIED_AUTHORIZATION = 'UNVERIFIED: the balancer forwards `Authorization` unchanged — docs/reference/zerops-platform.md:506'
 const SECTION_UNVERIFIED_ACTIVATION =
 	'UNVERIFIED: what stops an activation besides an httpGet readiness check — docs/reference/zerops-platform.md:407'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
@@ -733,6 +734,18 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		live: 'build',
 		emulator: false,
 		emulatorNote: 'the double runs no build and no init command',
+	},
+
+	// ── UNVERIFIED: what a connector's call over the public balancer relies on ─────
+	{
+		id: 'unverified-balancer-forwards-authorization',
+		section: SECTION_UNVERIFIED_AUTHORIZATION,
+		request: { method: 'PUT', path: '/service-stack/{serviceId}/enable-subdomain-access' },
+		expect: { status: 200 },
+		script: 'authorization-forwarded',
+		live: 'build',
+		emulator: false,
+		emulatorNote: 'the double runs no build and serves no public subdomain',
 	},
 
 	// ── deleting, and what an absent id answers ──────────────────────────────────

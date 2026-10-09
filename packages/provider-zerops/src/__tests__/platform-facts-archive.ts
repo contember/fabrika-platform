@@ -24,6 +24,12 @@ export const PROBE_FILES: readonly ArchiveFile[] = [
 	{ path: 'src/lib/greet.ts', contents: "export const greet = (): string => 'ok'\n" },
 ]
 
+/** A Bun application answering every request with its `Authorization` header, for the balancer probe. */
+export const ECHO_FILES: readonly ArchiveFile[] = [
+	{ path: 'package.json', contents: `${JSON.stringify({ name: 'fabrika-authorization-probe', private: true, type: 'module' }, null, 2)}\n` },
+	{ path: 'src/index.ts', contents: "Bun.serve({ port: 3000, fetch: (request) => new Response(request.headers.get('authorization') ?? '') })\n" },
+]
+
 /** What a probe's descriptor makes fail on purpose, for the rows that ask whether a failure stops activation. */
 export interface ProbeFailure {
 	/** A `deploy.readinessCheck` whose `exec` command always fails. */
@@ -113,15 +119,16 @@ const parentDirectories = (files: readonly ArchiveFile[]): string[] => {
  * archive that failed its build at unpacking. With `true` each parent directory is named once, mode `0755`,
  * mtime `0`, before the first file beneath it.
  */
-export const probeArchive = (options: { directoryEntries: boolean }): ArrayBuffer => {
+export const probeArchive = (options: { directoryEntries: boolean; files?: readonly ArchiveFile[] }): ArrayBuffer => {
+	const files = options.files ?? PROBE_FILES
 	const blocks: Uint8Array[] = []
 	const encoder = new TextEncoder()
 	if (options.directoryEntries) {
-		for (const directory of parentDirectories(PROBE_FILES)) {
+		for (const directory of parentDirectories(files)) {
 			blocks.push(header(`${directory}/`, 0o755, 0, '5'))
 		}
 	}
-	for (const file of PROBE_FILES) {
+	for (const file of files) {
 		const contents = encoder.encode(file.contents)
 		blocks.push(header(file.path, 0o644, contents.byteLength, '0'))
 		blocks.push(contents)
