@@ -178,7 +178,8 @@ describe("a consuming application's connector key", () => {
 		expect((await reconcile(h, schema([{ kind: 'app', name: 'shop', actions: ['notes.read'] }]))).status).toBe(200)
 		const connector = await issued(h, { kind: 'app', name: 'shop' })
 		const response = await call(h, WORKLOAD_TOKEN_PATH, { method: 'POST', bearer: connector.key, body: { app: APP } })
-		expect(await response.json()).toEqual({ ok: false, reason: 'invalid_key' })
+		const body: unknown = await response.json()
+		expect(body).toEqual({ ok: false, reason: 'invalid_key' })
 	})
 
 	test('is named by an application id, and loses its actions once no export names the consumer', async () => {
