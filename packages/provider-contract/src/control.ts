@@ -323,6 +323,11 @@ export interface ProviderNamespaceMember {
 	 * Control generates it once and keeps it in its vault; absent when Control has no vault.
 	 */
 	readonly proxySecret?: string
+	/**
+	 * The origin of this environment's active Operations ingest DSN, never the DSN itself: a contract application's
+	 * proxy admits it in `connect-src`, as the framework does. Absent while the environment has no active ingest.
+	 */
+	readonly operationsOrigin?: string
 	/** See `ProviderEnvironment.access`: the proxy table of a contract application comes only from here. */
 	readonly access?: ProviderApprovedAccess
 	/** See `ProviderEnvironment.artifactAccess`: only then, and only at that digest, do the artifact's gates route the member. */

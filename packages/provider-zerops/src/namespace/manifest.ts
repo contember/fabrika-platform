@@ -1,5 +1,6 @@
 import { appEnvironmentId } from '@fabrika/auth-core'
 import { decodeEnvelope, type ProviderNamespaceMember } from '@fabrika/provider-contract'
+import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { artifactAccessApproved, assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
 
@@ -30,7 +31,18 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 		// gates when they are the artifact access Control approved. Otherwise it is not routed.
 		const access = member.access
 		if (access !== undefined) {
-			apps.push({ id, hosts: [host], upstream: proxy.upstream, scheme, ...contractProxyTable(access.contract) })
+			const operationsOrigin = member.operationsOrigin
+			if (operationsOrigin !== undefined && !isPolicyOrigin(operationsOrigin, ['https:', 'http:'])) {
+				throw new Error(`Zerops proxy target ${member.appId}/${member.env} has an Operations ingest origin that is not an http(s) origin`)
+			}
+			apps.push({
+				id,
+				hosts: [host],
+				upstream: proxy.upstream,
+				scheme,
+				...contractProxyTable(access.contract),
+				...(operationsOrigin === undefined ? {} : { operationsOrigin }),
+			})
 		} else if (artifactAccessApproved(manifest, member) && 'gates' in proxy) {
 			apps.push({ id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates, scheme })
 		}

@@ -375,6 +375,7 @@ async function namespaceMembers(
 	const members: ProviderNamespaceMember[] = []
 	for (const row of await deps.repositories.registry.listAppEnvsByNamespace(namespaceId)) {
 		const proxySecret = await deps.proxySecrets?.forAppEnv(row.app_id, row.env)
+		const operationsOrigin = ingestOrigin(await deps.repositories.operationsCatalog.getActiveIngestConfig(row.app_id, row.env))
 		const access = approvedProviderAccess(row)
 		members.push({
 			appId: row.app_id,
@@ -382,10 +383,21 @@ async function namespaceMembers(
 			...(row.domain === null ? {} : { domain: row.domain }),
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			...(proxySecret === undefined ? {} : { proxySecret }),
+			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 			...access,
 		})
 	}
 	return members
+}
+
+/** The origin of the DSN the application environment is handed; the DSN carries the ingest key, so only the origin leaves. */
+function ingestOrigin(ingest: { readonly dsn: string | null } | null): string | undefined {
+	if (ingest?.dsn === null || ingest?.dsn === undefined) return undefined
+	try {
+		return new URL(ingest.dsn).origin
+	} catch {
+		return undefined
+	}
 }
 
 /**

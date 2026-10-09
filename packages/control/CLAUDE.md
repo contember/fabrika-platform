@@ -200,6 +200,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   deletes its own vault row and answers the recorded one. Every follow goes through
   `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out and the provider
   refuses a contract application. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
+- **A namespace member carries `operationsOrigin`, the origin of its active ingest DSN** (`namespaceMembers` in
+  `src/api/namespaces.ts`), so a Zerops proxy's header policy admits the same Operations origin the framework
+  does. The DSN carries the ingest key; only its origin leaves Control this way.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a

@@ -837,6 +837,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		deploys: string[]
 		/** The proxy secret each republish handed each member, and the one each deploy handed its application. */
 		memberSecrets: (string | undefined)[][]
+		memberOrigins: (string | undefined)[][]
 		deploySecrets: (string | null | undefined)[]
 		/** Held open inside source resolution, while the deploy holds the namespace lease but has not republished. */
 		resolving: Promise<void> | null
@@ -862,6 +863,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 				async republish(input) {
 					record.calls.push({ wait: input.wait, members: input.members.map((member) => `${member.appId}/${member.env}@${member.domain ?? '-'}`) })
 					record.memberSecrets.push(input.members.map((member) => member.proxySecret))
+					record.memberOrigins.push(input.members.map((member) => member.operationsOrigin))
 					record.entered()
 					const checkpoint = withTarget(input.namespace, target('rebuilding'))
 					await input.events.checkpoint(checkpoint)
@@ -883,6 +885,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			settledWhenStarted: false,
 			deploys: [],
 			memberSecrets: [],
+			memberOrigins: [],
 			deploySecrets: [],
 			resolving: null,
 		}
@@ -932,6 +935,21 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		])
 		expect(await state(harness)).toBe('ready')
 		expect(harness.sent).toEqual([])
+	})
+
+	test("a member carries the origin of its active Operations ingest DSN, never the DSN's key", async () => {
+		const record = republishing()
+		const harness = makeDeps(republishingProvider(record))
+		await seed(harness, ['alpha', 'beta'])
+		await harnessDatabase(harness.deps.repositories)
+			.prepare(`INSERT INTO operations_ingest_configs
+				(app_id, env, service_key, credential_id, public_key, ingest_project_id, dsn, activated_revision, created_at, updated_at)
+				VALUES (?, 'prod', 'default', 'credential-1', 'public-key', '1', ?, 1, 0, 0)`)
+			.bind('alpha', 'https://public-key@operations.example.test/1')
+			.run()
+		await republishNamespace(republishDeps(harness), 'apps-prod', { wait: 'active' })
+		// beta has no active ingest, so no origin.
+		expect(record.memberOrigins).toEqual([['https://operations.example.test', undefined]])
 	})
 
 	test('a started rebuild stays provisioning and is settled by a reconcile job, even across a lost enqueue', async () => {

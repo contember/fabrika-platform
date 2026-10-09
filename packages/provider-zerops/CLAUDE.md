@@ -167,6 +167,9 @@ bun test
   covers their digest. The deployer refuses a non-dry-run contract deploy whose managed
   `FABRIKA_PROXY_SECRET` is null, and writes none to any other application: only a contract application
   checks it, so another would merely hold a credential its own code can print. Never log either value.
+- **A contract member's manifest entry carries `operationsOrigin`** when Control handed the member one (the origin
+  of its active ingest DSN, never the DSN): the proxy's header policy admits it in `connect-src`, as the framework
+  does (ADR-0022 "Response headers"). `compileNamespaceProxyManifest` refuses one that is not an exact http(s) origin.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

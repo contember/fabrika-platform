@@ -77,6 +77,29 @@ describe('namespace proxy manifest', () => {
 		expect(parseProxyManifest(manifest)).toEqual(manifest)
 	})
 
+	test("a contract application's entry carries the Operations ingest origin Control handed its member", () => {
+		const notes = member('notes', 'notes.example.com', { contract: true, access: approved(notesArtifact) })
+		const manifest = compileNamespaceProxyManifest('apps-prod', [{ ...notes, operationsOrigin: 'https://operations.example.com' }])
+		expect(manifest.apps[0]).toEqual({
+			id: 'notes@prod',
+			hosts: ['notes.example.com'],
+			upstream: 'notes:3000',
+			scheme: 'https',
+			...TABLE,
+			operationsOrigin: 'https://operations.example.com',
+		})
+		expect(parseProxyManifest(manifest)).toEqual(manifest)
+		// A gate member gets no policy, so no origin either.
+		const gate = compileNamespaceProxyManifest('apps-prod', [{
+			...member('beta', 'beta.example.com'),
+			operationsOrigin: 'https://operations.example.com',
+		}])
+		expect(gate.apps[0]).not.toHaveProperty('operationsOrigin')
+		expect(() => compileNamespaceProxyManifest('apps-prod', [{ ...notes, operationsOrigin: 'https://key@operations.example.com' }])).toThrow(
+			'has an Operations ingest origin that is not an http(s) origin',
+		)
+	})
+
 	test('the table comes from the approved contract, never the artifact; a contract without approval is not routed', () => {
 		const narrowed: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
 		const routed = compileNamespaceProxyManifest('apps-prod', [member('notes', 'notes.example.com', { contract: true, access: approved(narrowed) })])
