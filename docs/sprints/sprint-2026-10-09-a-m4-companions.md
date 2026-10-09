@@ -46,3 +46,7 @@ A14 ∥ A15 ∥ A16 → A17; F1–F4 after their parents land.
 
 - 2026-10-09: A14 landed after one fix round: every file operation carries the capability's whole chain; download
   error answers keep the file treatment; the pending row is the cleanup intent the sweep retries.
+- 2026-10-09: A15 landed after one fix round: lease times use the database clock; a write re-checks the attempt's
+  deadline before `COMMIT` and in-flight statements are cancelled; failures are fixed codes; the serving process
+  reports overdue jobs once per period. Successful runs → backlog 96.
+- 2026-10-09: F2 landed: `@fabrika/db` binds a `Date` as ISO 8601 UTC text in its compiler; an invalid Date is refused.

@@ -9,6 +9,7 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [A-M2 — data (2026-10-09)](sprint-2026-10-08-a-m2-data.md)
 - [A-M3 — multi-tenant (2026-10-09)](sprint-2026-10-08-a-m3-multi-tenant.md)
 - [A-M1 — framework core (2026-10-09)](sprint-2026-10-08-a-m1-framework-core.md)
 - [M0 — current holes (2026-10-08)](sprint-2026-10-08-m0-current-holes.md)
