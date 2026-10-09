@@ -30,10 +30,11 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 export type FrameworkVariableName = (typeof FRAMEWORK_VARIABLE_NAMES)[number]
 
 /**
- * The name families only the platform writes: one variable per job, webhook or import, named after it
- * (`workloadKeyVariable`, the connector's `FABRIKA_CONNECT_<IMPORT>_*`). Every name under one is framework-only.
+ * The name families only the platform writes: one variable per job or webhook, named after it (`workloadKeyVariable`).
+ * Every name under one is framework-only. A connector's `FABRIKA_CONNECT_<IMPORT>_*` joins once Control writes it; an
+ * operator still provisions those today.
  */
-export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_', 'FABRIKA_CONNECT_'] as const
+export const FRAMEWORK_VARIABLE_PREFIXES = ['FABRIKA_JOB_', 'FABRIKA_WEBHOOK_'] as const
 
 const FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set(FRAMEWORK_VARIABLE_NAMES)
 
@@ -45,6 +46,13 @@ export function isFrameworkVariableName(name: string): boolean {
 /** A contract name as one segment of a variable name: `nightlyDigest` → `NIGHTLY_DIGEST`. */
 export function variableSegment(name: string): string {
 	return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()
+}
+
+const WORKLOAD_KEY_VARIABLE = /^FABRIKA_(?:JOB|WEBHOOK)_[A-Z0-9][A-Z0-9_]*_KEY$/
+
+/** Whether `name` is the variable of a job's or a webhook's credential, as `workloadKeyVariable` names one. */
+export function isWorkloadKeyVariable(name: string): boolean {
+	return WORKLOAD_KEY_VARIABLE.test(name)
 }
 
 /** The variable a job's or a webhook's credential travels under: `FABRIKA_JOB_NIGHTLY_DIGEST_KEY`. */

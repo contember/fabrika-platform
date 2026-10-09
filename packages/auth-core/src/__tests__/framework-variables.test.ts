@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { FABRIKA_IAM_APP_ID } from '../app-environment'
 import { FABRIKA_IAM_ISSUER } from '../environment'
-import { FRAMEWORK_VARIABLE_NAMES, frameworkVariableReference, isFrameworkVariableName, workloadKeyVariable } from '../framework-variables'
+import {
+	FRAMEWORK_VARIABLE_NAMES,
+	frameworkVariableReference,
+	isFrameworkVariableName,
+	isWorkloadKeyVariable,
+	workloadKeyVariable,
+} from '../framework-variables'
 
 describe('framework-only variable names', () => {
 	test('include the names auth-core itself defines', () => {
@@ -20,11 +26,11 @@ describe('framework-only variable names', () => {
 		}
 	})
 
-	test('reserve every name of a workload or connector family', () => {
-		for (const name of ['FABRIKA_JOB_NIGHTLY_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', 'FABRIKA_CONNECT_CATALOG_KEY', 'FABRIKA_CONNECT_CATALOG_URL']) {
+	test('reserve every name of a workload family', () => {
+		for (const name of ['FABRIKA_JOB_NIGHTLY_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY', 'FABRIKA_JOB_ANYTHING']) {
 			expect(isFrameworkVariableName(name)).toBe(true)
 		}
-		for (const name of ['FABRIKA_JOB_', 'FABRIKA_JOBS', 'FABRIKA_CONNECT']) {
+		for (const name of ['FABRIKA_JOB_', 'FABRIKA_JOBS', 'FABRIKA_CONNECT_CATALOG_KEY']) {
 			expect(isFrameworkVariableName(name)).toBe(false)
 		}
 		expect(frameworkVariableReference('${RUNTIME_FABRIKA_JOB_NIGHTLY_KEY}')).not.toBeNull()
@@ -33,6 +39,10 @@ describe('framework-only variable names', () => {
 	test('name a workload key after its kind and its name', () => {
 		expect(workloadKeyVariable('job', 'nightlyDigest')).toBe('FABRIKA_JOB_NIGHTLY_DIGEST_KEY')
 		expect(workloadKeyVariable('webhook', 'github')).toBe('FABRIKA_WEBHOOK_GITHUB_KEY')
+		expect(isWorkloadKeyVariable(workloadKeyVariable('job', 'nightlyDigest'))).toBe(true)
+		for (const name of ['FABRIKA_JOB__KEY', 'FABRIKA_CONNECT_CATALOG_KEY', 'FABRIKA_JOB_NIGHTLY', 'FABRIKA_PROXY_SECRET']) {
+			expect(isWorkloadKeyVariable(name)).toBe(false)
+		}
 	})
 
 	test('list each name once', () => {
