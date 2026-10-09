@@ -457,7 +457,8 @@ type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 export interface IssueWorkloadKeyRequest {
 	/** The IAM application id `<app>@<env>`. */
 	app: string
-	kind: 'job' | 'webhook'
+	/** `app` is the connector of the application named `name`, which consumes an export of `app`. */
+	kind: 'job' | 'webhook' | 'app'
 	name: string
 	/** Absolute expiry (unix seconds), after now and at most 30 days ahead. */
 	expiresAt: number

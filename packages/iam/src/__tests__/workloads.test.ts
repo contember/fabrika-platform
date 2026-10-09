@@ -70,7 +70,7 @@ interface Issued {
 }
 
 interface IssueInput {
-	kind: 'job' | 'webhook'
+	kind: 'job' | 'webhook' | 'app'
 	name: string
 	expiresAt?: number
 	app?: string
@@ -157,6 +157,37 @@ describe('a workload key', () => {
 		expect(await resolveCaller(services, { ...TEST_SIGNING_ENV, FABRIKA_IAM_PROVISIONING_KEY: '' }, { app: APP, credential: job.key, requestId: 'r' }))
 			.toEqual({ ok: false, reason: 'invalid_token' })
 		expect((await call(h, '/admin/rpc', { method: 'POST', bearer: job.key, body: { method: 'me', input: undefined } })).status).toBe(401)
+	})
+})
+
+describe("a consuming application's connector key", () => {
+	test('mints an app token at the owner naming the consumer, with the actions of the exports it consumes', async () => {
+		const h = createHarness()
+		expect((await reconcile(h, schema([{ kind: 'app', name: 'shop-front', actions: ['notes.read'] }]))).status).toBe(200)
+		const connector = await issued(h, { kind: 'app', name: 'shop-front' })
+		const claims = await minted(h, connector.key)
+		if (typeof claims === 'string') throw new Error(claims)
+		expect(claims.ptype).toBe('app')
+		expect(claims.workload).toBe('shop-front')
+		expect(actionsOf(claims)).toEqual(['notes.read@global'])
+		expect(await minted(h, connector.key, 'notes@stage')).toBe('invalid_key')
+	})
+
+	test('is not a job key: the workload token route refuses it', async () => {
+		const h = createHarness()
+		expect((await reconcile(h, schema([{ kind: 'app', name: 'shop', actions: ['notes.read'] }]))).status).toBe(200)
+		const connector = await issued(h, { kind: 'app', name: 'shop' })
+		const response = await call(h, WORKLOAD_TOKEN_PATH, { method: 'POST', bearer: connector.key, body: { app: APP } })
+		expect(await response.json()).toEqual({ ok: false, reason: 'invalid_key' })
+	})
+
+	test('is named by an application id, and loses its actions once no export names the consumer', async () => {
+		const h = createHarness()
+		expect((await issueKey(h, { kind: 'app', name: 'Shop_Front' })).status).toBe(400)
+		expect((await reconcile(h, schema([{ kind: 'app', name: 'shop', actions: ['notes.read'] }]))).status).toBe(200)
+		const connector = await issued(h, { kind: 'app', name: 'shop' })
+		expect((await reconcile(h, schema([]))).status).toBe(200)
+		expect(await minted(h, connector.key)).toBe('invalid_key')
 	})
 })
 

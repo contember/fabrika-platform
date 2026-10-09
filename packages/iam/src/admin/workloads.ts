@@ -8,16 +8,24 @@ import { adminAudit, type AdminContext, fail } from './context'
 
 /** A job or a webhook name of a contract, as `buildArtifact` admits it. */
 const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
+/** An `app` workload is the consuming application of an export, named by its id. */
+const APP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 /**
- * Issue a fresh key for one workload (ADR-0022 "Principal kinds"). The principal is created on first use; what the key
+ * Issue a fresh key for one workload (ADR-0022 "Principal kinds"): a job, a webhook, or the connector of an application
+ * that consumes this application's exports. The principal is created on first use; what the key
  * may do is the app's reconciled declaration of the workload, never part of this request. The key the caller recorded
  * as active (`keep`) stays valid, so the version still running keeps working until the caller has recorded the new one;
  * every other key of the workload is an orphan of an attempt whose record failed, and is revoked.
  */
 export async function issueWorkloadKeyUseCase(c: AdminContext, input: IssueWorkloadKeyRequest): Promise<IssueWorkloadKeyResponse> {
-	if (!WORKLOAD_NAME.test(input.name)) {
-		return fail(400, 'a workload name is a contract name (a letter, then letters, digits or _, at most 64)')
+	if (input.kind === 'app' ? !APP_ID.test(input.name) : !WORKLOAD_NAME.test(input.name)) {
+		return fail(
+			400,
+			input.kind === 'app'
+				? 'an app workload is named by the consuming application id'
+				: 'a workload name is a contract name (a letter, then letters, digits or _, at most 64)',
+		)
 	}
 	const expiryProblem = keyExpiryProblem(input.expiresAt, unixNow())
 	if (expiryProblem !== null) {
