@@ -603,15 +603,31 @@ describe('generated tests', () => {
 		])
 	})
 
-	test("a file collection's endpoints get no endpoint access case: they are the framework's, and no file row is seeded", async () => {
-		const files =
-			"\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.write', maxBytes: 1024, types: ['text/plain'] }) },\n"
-		const contract = CLEAN_CONTRACT.replace("\thealth: c.health('/healthz'),\n", `${files}\thealth: c.health('/healthz'),\n`)
-		expect(contract).not.toBe(CLEAN_CONTRACT)
-		const inputs = scaffoldInputs(new Map(Object.entries({ ...CLEAN_APPLICATION, 'fabrika.contract.ts': contract })))
-		expect(inputs.artifact?.endpoints.some((row) => row.id === 'files.attachments.remove')).toBe(true)
-		const tests = await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)
-		expect(tests.get(endpoints)?.text).toBe(CLEAN_GENERATED_TESTS.get(endpoints))
+	test('a file collection gets cross-scope cases, and a removal weakened to the read action makes the committed test stale', async () => {
+		const collection = (remove: string) =>
+			`\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: '${remove}', maxBytes: 1024, types: ['text/plain'] }) },\n`
+		const withFiles = (remove: string) =>
+			CLEAN_CONTRACT.replace("\thealth: c.health('/healthz'),\n", `${collection(remove)}\thealth: c.health('/healthz'),\n`)
+		const generatedFor = async (files: Readonly<Record<string, string>>): Promise<Record<string, string>> => {
+			const inputs = scaffoldInputs(new Map(Object.entries(files)))
+			return Object.fromEntries([...(await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures))].map(([file, test]) => [file, test.text]))
+		}
+		const sources = { ...CLEAN_APPLICATION, 'fabrika.contract.ts': withFiles('notes.write') }
+		const application: Record<string, string> = { ...sources, ...(await generatedFor(sources)) }
+		const endpointTest = application[endpoints] ?? ''
+		for (
+			const line of [
+				"expect(await kit.denied('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 404 })",
+				"expect(await kit.leaked('files.attachments.remove', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 200, leaked: [] })",
+				"expect(await kit.file('attachments', 'upload', 'other')).toEqual({ status: 404 })",
+				"expect(await kit.file('attachments', 'download', 'other')).toEqual({ status: 404 })",
+				"expect(await kit.file('attachments', 'remove', 'reader')).toEqual({ status: 403 })",
+			]
+		) expect(endpointTest).toContain(line)
+		expect(await findingsOf(application)).toEqual([])
+		expect(await findingsOf({ ...application, 'fabrika.contract.ts': withFiles('notes.read') })).toEqual([
+			`${endpoints}:1:1 generated-test-hash this file is not the generated test the scaffold writes here`,
+		])
 	})
 
 	test('policies the reader refuses are reported, so they cannot silence the check', async () => {

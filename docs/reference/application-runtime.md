@@ -664,14 +664,16 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
   export) through `testKit`, on the application's own data layer, once: that layer
-  binds once per process, and it gets in-memory object storage for a file collection. A
-  file collection's endpoints get no case: they are framework code, and no file row is
-  seeded. For every other procedure with an `on` or `in` access form, a
+  binds once per process. For every procedure with an `on` or `in` access form, a
   caller holding the action in one scope names the other scope's object or value and
   gets 404 (`on`) or 403 (`in`). For every `on` and `over` procedure, a caller of the
   other scope asks first, then a caller of one scope asks for its own; the second answer
   must be a 200 that holds no key, scope value or text marker of the other scope's rows.
-  `deps` runs with an empty environment.
+  `deps` runs with an empty environment. A file collection's endpoints get the same cases
+  over a file the kit uploads in each scope (`kit.file`, objects in memory): upload,
+  download and remove of an own file pass, of the other scope's are 404, and a caller
+  holding only the collection's `read` action is 403 for upload and remove. Those case
+  names carry the actions, so a changed action makes the committed test stale.
 - **Inputs.** A case sends a fixed literal written into the test: a sample of the input
   schema, or, where the scaffold cannot sample one (a `regex`), the author's literal from
   `src/__tests__/endpoint-access.fixtures.ts` (`export const fixtures = { '<endpoint id>':

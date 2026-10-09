@@ -480,7 +480,7 @@ src/
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
   application. `endpointAccessKit` boots the application's own implementation through
   `testKit`, once, because the application's layer binds once per process, with in-memory object
-  storage so a file collection boots (no case reads an object). A subpath of its
+  storage: `kit.file` seeds one file per scope through the real upload endpoint. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
   kit does not. Its API is what `fabrika db test-scaffold` writes against: a change
   regenerates `packages/cli`'s fixture tests.
