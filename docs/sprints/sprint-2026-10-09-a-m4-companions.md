@@ -50,3 +50,9 @@ A14 ∥ A15 ∥ A16 → A17; F1–F4 after their parents land.
   deadline before `COMMIT` and in-flight statements are cancelled; failures are fixed codes; the serving process
   reports overdue jobs once per period. Successful runs → backlog 96.
 - 2026-10-09: F2 landed: `@fabrika/db` binds a `Date` as ISO 8601 UTC text in its compiler; an invalid Date is refused.
+- 2026-10-09: A16 landed after one fix round: `ctx.connect` is bound to the live request; the description requires
+  the export's own action; answers are bounded, unredirected, JSON-only and validated against a frozen snapshot;
+  diagnostics never carry response text.
+- 2026-10-09: A17a landed: one skill source (`packages/app/skill/SKILL.md`) for the builder, the MCP server
+  (`get_app_rules`, instructions under 2 KB) and the template's `AGENTS.md`.
+- 2026-10-09: F1 landed: `FABRIKA_APP_STORAGE_*` are run-section references to the app's one object-storage service.
