@@ -77,7 +77,10 @@ Control supplies the reserved `FABRIKA_*` variables (`FABRIKA_IAM_ISSUER`,
 framework takes every `FABRIKA_*` name out of the process before the application
 loads; handlers get their own variables through `deps`.
 
-Not built yet: the provider does not write the object storage
-(`FABRIKA_APP_STORAGE_*`) or the IAM membership transport into an application, so a
-`c.files` collection, and an endpoint with `creates`, `ctx.members` or
-`ctx.links`, does not boot on Zerops yet.
+A `c.files` collection needs one `object-storage` service in `fabrika.config.ts`;
+the provider writes `FABRIKA_APP_STORAGE_*` from it as references Zerops resolves,
+and refuses a second bucket.
+
+Not built yet: the provider does not write the IAM membership transport
+(`FABRIKA_IAM_RPC_URL`, `FABRIKA_IAM_RPC_KEY`) into an application, so an endpoint
+with `creates`, `ctx.members` or `ctx.links` does not boot on Zerops yet.
