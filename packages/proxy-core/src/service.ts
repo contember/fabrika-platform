@@ -119,11 +119,11 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				return new Response('ok', { status: 200, headers: { 'cache-control': 'no-store' } })
 			}
 			if (url.pathname !== DEFAULT_VERIFY_PATH && url.pathname !== OAUTH_METADATA_VERIFY_PATH) {
-				return textResponse(404, 'not found')
+				return withPolicy(textResponse(404, 'not found'), BASE_HEADER_POLICY)
 			}
 			if (request.method !== 'GET' && request.method !== 'HEAD') {
 				// `forward_auth` always rewrites to GET; anything else did not come from our config.
-				return textResponse(405, 'method not allowed')
+				return withPolicy(textResponse(405, 'method not allowed'), BASE_HEADER_POLICY)
 			}
 
 			const read = readForwardedRequest(request, requestId)
@@ -141,7 +141,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 
 			if (url.pathname === OAUTH_METADATA_VERIFY_PATH) {
 				const metadata = findOAuthMetadata(resolved.app, forwarded.url)
-				return metadata === null ? textResponse(404, 'not found') : oauthMetadataResponse(metadata, forwarded.method)
+				return metadata === null
+					? withPolicy(textResponse(404, 'not found'), policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
+					: oauthMetadataResponse(metadata, forwarded.method)
 			}
 
 			// The handoff callback is checked BEFORE the gates: it is how a browser becomes able to

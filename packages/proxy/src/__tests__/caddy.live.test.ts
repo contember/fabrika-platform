@@ -31,18 +31,53 @@ const DOWNLOAD = endpointRow({
 })
 const DOWNLOAD_ENDPOINT = `${DOWNLOAD.id}@${DOWNLOAD.digest}`
 
-/** What the application answers per path: a weaker policy than the proxy's, and downloads of every disposition. */
-const APP_ANSWERS: Record<string, Record<string, string>> = {
+/** Headers that would send reports to an origin the policy never approved; the app sends them, the proxy drops them. */
+const REPORTING: [string, string][] = [
+	['Content-Security-Policy-Report-Only', "default-src 'none'; report-uri https://collector.example/csp"],
+	['Report-To', '{"group":"x","max_age":60,"endpoints":[{"url":"https://collector.example/r"}]}'],
+	['Reporting-Endpoints', 'x="https://collector.example/r"'],
+	['NEL', '{"report_to":"x","max_age":60}'],
+]
+const EARLY_HINTS =
+	'HTTP/1.1 103 Early Hints\r\nLink: <https://cdn.example/x.js>; rel=preload; as=script\r\nContent-Security-Policy: default-src *\r\n\r\n'
+
+/**
+ * What the application answers per path, as raw fields so a field can repeat: a weaker policy than the proxy's,
+ * reporting headers, an early hint, and downloads of every disposition.
+ */
+const APP_ANSWERS: Record<string, { readonly fields: [string, string][]; readonly informational?: string }> = {
 	'/api/me': {
-		'Content-Security-Policy': "default-src * 'unsafe-inline' 'unsafe-eval'",
-		'Cache-Control': 'public, max-age=3600',
-		'Permissions-Policy': 'camera=*',
-		'X-App': 'kept',
+		fields: [
+			['Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'"],
+			['Cache-Control', 'public, max-age=3600'],
+			['Permissions-Policy', 'camera=*'],
+			['X-App', 'kept'],
+			...REPORTING,
+		],
 	},
-	'/api/files.avatar/page': { 'Content-Type': 'text/html', 'Content-Disposition': "inline; filename*=UTF-8''page.html" },
-	'/api/files.avatar/drawing': { 'Content-Type': 'image/svg+xml', 'Content-Disposition': 'inline' },
-	'/api/files.avatar/photo': { 'Content-Type': 'image/png', 'Content-Disposition': "attachment; filename*=UTF-8''photo.png" },
-	'/api/files.avatar/blob': { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=3600' },
+	'/api/early': { fields: [['Content-Type', 'text/html']], informational: EARLY_HINTS },
+	'/api/files.avatar/page': { fields: [['Content-Type', 'text/html'], ['Content-Disposition', "inline; filename*=UTF-8''page.html"], ...REPORTING] },
+	'/api/files.avatar/drawing': { fields: [['Content-Type', 'image/svg+xml'], ['Content-Disposition', 'inline']] },
+	'/api/files.avatar/photo': { fields: [['Content-Type', 'image/png'], ['Content-Disposition', "attachment; filename*=UTF-8''photo.png"]] },
+	'/api/files.avatar/blob': { fields: [['Content-Type', 'application/octet-stream'], ['Cache-Control', 'public, max-age=3600']] },
+	'/api/files.avatar/mixed': { fields: [['Content-Type', 'image/png'], ['Content-Type', 'text/html'], ['Content-Disposition', 'inline']] },
+	'/api/files.avatar/early': { fields: [['Content-Type', 'image/png']], informational: EARLY_HINTS },
+}
+
+function rawAnswer(path: string): string {
+	const answer = APP_ANSWERS[path] ?? { fields: [] }
+	const fields = [...answer.fields, ['Content-Length', '2'], ['Connection', 'close']].map(([name, value]) => `${name}: ${value}\r\n`)
+	return `${answer.informational ?? ''}HTTP/1.1 200 OK\r\n${fields.join('')}\r\nok`
+}
+
+function headerBlock(block: string): { status: number; headers: Headers } {
+	const [statusLine = '', ...lines] = block.split('\r\n')
+	const headers = new Headers()
+	for (const line of lines) {
+		const separator = line.indexOf(':')
+		headers.append(line.slice(0, separator), line.slice(separator + 1).trim())
+	}
+	return { status: Number(statusLine.split(' ')[1]), headers }
 }
 
 function freePort(): number {
@@ -53,7 +88,11 @@ function freePort(): number {
 }
 
 /** One HTTP/1.1 request on a raw socket, so no client library rewrites `Connection`. */
-async function rawRequest(port: number, headers: Record<string, string>, path = '/api/me'): Promise<{ status: number; headers: Headers }> {
+async function rawRequest(
+	port: number,
+	headers: Record<string, string>,
+	path = '/api/me',
+): Promise<{ status: number; headers: Headers; informational: { status: number; headers: Headers }[]; contentTypes: string[] }> {
 	const lines = [`GET ${path} HTTP/1.1`, 'Host: 127.0.0.1', ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`), '', '']
 	let response = ''
 	await new Promise<void>((resolve, reject) => {
@@ -76,13 +115,17 @@ async function rawRequest(port: number, headers: Record<string, string>, path = 
 			},
 		}).catch(reject)
 	})
-	const [statusLine = '', ...headerLines] = (response.split('\r\n\r\n')[0] ?? '').split('\r\n')
-	const answered = new Headers()
-	for (const line of headerLines) {
-		const separator = line.indexOf(':')
-		answered.append(line.slice(0, separator), line.slice(separator + 1).trim())
+	const informational: { status: number; headers: Headers }[] = []
+	for (const block of response.split('\r\n\r\n')) {
+		const answer = headerBlock(block)
+		if (answer.status >= 200) {
+			// `Headers` joins a repeated field, so the raw lines say how many `Content-Type` fields arrived.
+			const contentTypes = block.split('\r\n').filter((line) => line.toLowerCase().startsWith('content-type:'))
+			return { ...answer, informational, contentTypes }
+		}
+		informational.push(answer)
 	}
-	return { status: Number(statusLine.split(' ')[1]), headers: answered }
+	throw new Error('no final answer')
 }
 
 describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
@@ -100,12 +143,21 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 			})
 		},
 	})
-	const app = Bun.serve({
+	// A raw socket, because an HTTP library would neither send a 1xx nor repeat a field.
+	const app = Bun.listen<{ received: string }>({
 		hostname: '127.0.0.1',
 		port: 0,
-		fetch(request) {
-			seenByApp.push(request.headers)
-			return new Response('ok', { headers: APP_ANSWERS[new URL(request.url).pathname] ?? {} })
+		socket: {
+			open(socket) {
+				socket.data = { received: '' }
+			},
+			data(socket, chunk) {
+				socket.data.received += new TextDecoder().decode(chunk)
+				if (!socket.data.received.includes('\r\n\r\n')) return
+				const [requestLine = '', ...lines] = (socket.data.received.split('\r\n\r\n')[0] ?? '').split('\r\n')
+				seenByApp.push(headerBlock(['HTTP/1.1 0', ...lines].join('\r\n')).headers)
+				socket.end(rawAnswer(requestLine.split(' ')[1] ?? '/'))
+			},
 		},
 	})
 	const port = freePort()
@@ -150,7 +202,7 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 	afterAll(() => {
 		caddy?.kill()
 		void auth.stop(true)
-		void app.stop(true)
+		app.stop(true)
 		rmSync(dir, { recursive: true, force: true })
 	})
 
@@ -227,5 +279,34 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 			expect(answer.headers.get('Permissions-Policy')).toBeNull()
 		}
 		expect(seenByApp.splice(0).map((headers) => headers.get('X-Fabrika-Proxy-Secret'))).toEqual([SECRET, SECRET, SECRET, SECRET])
+	})
+
+	test('the reporting headers an application sends never reach the client, on an answer or a download', async () => {
+		for (const path of ['/api/me', '/api/files.avatar/page']) {
+			const answer = await rawRequest(port, { Connection: 'close' }, path)
+			expect(answer.status).toBe(200)
+			for (const [name] of REPORTING) {
+				expect(answer.headers.get(name)).toBeNull()
+			}
+		}
+	})
+
+	test('two Content-Type fields, one of them an inert image, are one ambiguous value and an attachment', async () => {
+		const answer = await rawRequest(port, { Connection: 'close' }, '/api/files.avatar/mixed')
+		expect(answer.status).toBe(200)
+		expect(answer.contentTypes).toEqual(['Content-Type: image/png,text/html'])
+		expect(answer.headers.get('Content-Disposition')).toBe('attachment')
+		expect(answer.headers.get('Content-Security-Policy')).toBe("sandbox; default-src 'none'")
+	})
+
+	test("an application's 103 Early Hints leaves with no header, so neither its preload nor its policy arrives", async () => {
+		for (const path of ['/api/early', '/api/files.avatar/early']) {
+			const answer = await rawRequest(port, { Connection: 'close' }, path)
+			expect(answer.informational.map((hint) => [hint.status, [...hint.headers.keys()]])).toEqual([[103, []]])
+			expect(answer.status).toBe(200)
+			expect(answer.headers.get('Link')).toBeNull()
+		}
+		const page = await rawRequest(port, { Connection: 'close' }, '/api/early')
+		expect(page.headers.get('Content-Security-Policy')).toBe(headerPolicy(contract.csp, 'https://operations.example.com')[0]?.[1] ?? '')
 	})
 })

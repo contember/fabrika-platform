@@ -102,4 +102,22 @@ describe('an answer that belongs to no contract application', () => {
 		expect(nonCanonical.status).toBe(400)
 		expectHeaders(nonCanonical, BASE_HEADER_POLICY)
 	})
+
+	test('a request to no service path or with another method than GET is refused with the base policy', async () => {
+		const verify = verifyWith(new FakeIam())
+		const unknown = await verify(new Request('https://proxy.internal/elsewhere'))
+		expect(unknown.status).toBe(404)
+		expectHeaders(unknown, BASE_HEADER_POLICY)
+		const posted = await verify(new Request('https://proxy.internal/verify', { method: 'POST' }))
+		expect(posted.status).toBe(405)
+		expectHeaders(posted, BASE_HEADER_POLICY)
+	})
+})
+
+describe('the OAuth metadata path', () => {
+	test("a contract application has no metadata: the refusal carries the application's policy", async () => {
+		const response = await verifyWith(new FakeIam())(verifyRequest({ endpoint: '/oauth-metadata', path: '/.well-known/oauth-protected-resource' }))
+		expect(response.status).toBe(404)
+		expectHeaders(response, POLICY)
+	})
 })

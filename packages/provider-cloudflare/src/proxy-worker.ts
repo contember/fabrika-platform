@@ -154,8 +154,14 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3).
 		if (isContractProxyApp(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
 
-		const answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
 		const treatment = answerHeaders.get(app.id)
+		let answer: Response
+		try {
+			answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
+		} catch {
+			// Nothing of the error is answered or logged: it can carry the upstream request, a token header included.
+			answer = new Response('bad gateway', { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } })
+		}
 		return treatment === undefined ? answer : withResponseHeaders(answer, treatment(verification.headers.get(ENDPOINT_HEADER)))
 	}
 }

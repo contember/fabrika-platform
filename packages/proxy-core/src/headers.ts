@@ -127,12 +127,22 @@ export const FILE_TREATMENT: HeaderPolicy = Object.freeze([
 	['Cache-Control', 'private, no-store'],
 ])
 
+/**
+ * Headers an application may not send at all: each names a reporting endpoint the policy never approved, and a
+ * report-only CSP reports there whatever the enforced one says (`document-uri`, `blocked-uri`).
+ */
+export const REMOVED_RESPONSE_HEADERS: readonly string[] = ['Content-Security-Policy-Report-Only', 'Report-To', 'Reporting-Endpoints', 'NEL']
+
+/** `null` and anything but one allowlisted value is an attachment; `Headers` joins repeated fields with `, `, so two never match. */
 export function fileDisposition(contentType: string | null): 'inline' | 'attachment' {
 	return contentType !== null && INLINE_FILE_TYPES.includes(contentType) ? 'inline' : 'attachment'
 }
 
-/** Whatever the handler or an asset server set for these names is replaced. */
+/** Whatever the handler or an asset server set for these names is replaced, and the removed headers are dropped. */
 export function applyHeaderPolicy(headers: Headers, policy: HeaderPolicy): void {
+	for (const name of REMOVED_RESPONSE_HEADERS) {
+		headers.delete(name)
+	}
 	for (const [name, value] of policy) {
 		headers.set(name, value)
 	}

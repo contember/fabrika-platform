@@ -265,7 +265,8 @@ Errors share one envelope, `{ error: { type, message, issues? } }`: 400, 401, 40
 404, 409, 500 and 503. Every 5xx and every refused capability answers a fixed message
 with no metadata; the server log gets one short line without the error object.
 Every response carries the header policy of ADR-0022, and the proxy sets it again on the way out,
-replacing whatever the application sent (`@fabrika/proxy-core/headers` is the one definition).
+replacing whatever the application sent (`@fabrika/proxy-core/headers` is the one definition). Both drop a
+report-only CSP, `Report-To`, `Reporting-Endpoints` and `NEL`; the proxy strips every header of a `1xx`.
 
 ### File collections
 

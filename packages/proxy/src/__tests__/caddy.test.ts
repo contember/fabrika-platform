@@ -26,6 +26,7 @@ import {
 	buildCaddyConfig,
 	type CaddyBuildOptions,
 	CaddyConfigError,
+	type CaddyHeadersHandler,
 	type CaddyReverseProxyHandler,
 	type CaddyRoute,
 	type CaddySubrouteHandler,
@@ -69,6 +70,18 @@ function subrouteOf(route: CaddyRoute): CaddySubrouteHandler {
 function policyValues(policy: HeaderPolicy): Record<string, string[]> {
 	return Object.fromEntries(policy.map(([name, value]) => [name, [value]]))
 }
+
+/** The app upstream of a step-3 route: its last handler, after any deferred response handlers that wrap it. */
+function upstreamOf(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
+	const handler = route?.handle.at(-1)
+	if (handler === undefined || handler.handler !== 'reverse_proxy') {
+		throw new Error('expected a reverse_proxy')
+	}
+	return handler
+}
+
+const INFORMATIONAL: CaddyHeadersHandler = { handler: 'headers', response: { require: { status_code: [1] }, delete: ['*'] } }
+const REMOVED = ['Content-Security-Policy-Report-Only', 'Report-To', 'Reporting-Endpoints', 'NEL']
 
 function proxyHandler(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
 	const handler = route?.handle[0]
@@ -459,7 +472,7 @@ describe('a contract app — the endpoint table', () => {
 	})
 
 	test('the upstream hop carries the proxy secret, read from the variable of this app environment', () => {
-		const upstream = proxyHandler(steps[2])
+		const upstream = upstreamOf(steps[2])
 		expect(upstream.headers?.request?.set).toEqual({ [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable('notes@prod')}}`] })
 		// Never a value the auth service answers with, and never copied from the client.
 		expect(JSON.stringify(auth)).not.toContain(PROXY_SECRET_HEADER)
@@ -618,10 +631,13 @@ describe('a contract app — the response headers', () => {
 	}
 
 	test('every answer of the app is given the policy with set, so a weaker header the app sent is replaced', () => {
-		const upstream = proxyHandler(defaultRoute)
+		const upstream = upstreamOf(defaultRoute)
 		expect(defaultRoute?.match).toBeUndefined()
 		expect(upstream.upstreams).toEqual([{ dial: 'notes:3000' }])
-		expect(upstream.headers?.response).toEqual({ set: policyValues(policy) })
+		// The reporting headers go too: a report-only CSP reports to its own endpoint whatever the enforced one says.
+		expect(upstream.headers?.response).toEqual({ set: policyValues(policy), delete: REMOVED })
+		// A 1xx answer is forwarded before those operations run, so a deferred handler clears it.
+		expect(defaultRoute?.handle[0]).toEqual(INFORMATIONAL)
 		const csp = upstream.headers?.response?.set?.['Content-Security-Policy']?.[0] ?? ''
 		expect(csp).toContain("connect-src 'self' https://operations.example.com https://api.maps.example;")
 		expect(csp).toContain("img-src 'self' data: blob: https://tiles.maps.example;")
@@ -636,7 +652,8 @@ describe('a contract app — the response headers', () => {
 	test('a download endpoint, named by the endpoint the decision asserted, gets the file treatment instead', () => {
 		expect(downloadRoute?.match).toEqual([{ header: { [ENDPOINT_HEADER]: ['files.avatar.download@*'] } }])
 		expect(downloadRoute?.terminal).toBe(true)
-		const [inlineImages, absent, upstream] = downloadRoute?.handle ?? []
+		const [informational, inlineImages, absent, oneType, upstream] = downloadRoute?.handle ?? []
+		expect(informational).toEqual(INFORMATIONAL)
 		expect(inlineImages).toEqual({
 			handler: 'headers',
 			response: {
@@ -648,25 +665,35 @@ describe('a contract app — the response headers', () => {
 			handler: 'headers',
 			response: { require: { headers: { 'Content-Disposition': null } }, set: { 'Content-Disposition': ['attachment'] } },
 		})
+		// Repeated Content-Type fields become one joined value, which no allowlisted type equals.
+		expect(oneType).toEqual({
+			handler: 'headers',
+			response: { require: { headers: { 'Content-Type': [] } }, set: { 'Content-Type': ['{http.response.header.Content-Type}'] } },
+		})
 		if (upstream?.handler !== 'reverse_proxy') throw new Error('expected the upstream')
 		expect(upstream.headers?.response).toEqual({
 			set: policyValues(FILE_TREATMENT),
+			delete: REMOVED,
 			replace: { 'Content-Disposition': [{ search_regexp: '^[^;]*', replace: 'attachment' }] },
 		})
 		// The file route is the same upstream hop: the secret and the cookie strip are not lost on it.
-		expect(upstream.headers?.request).toEqual(proxyHandler(defaultRoute).headers?.request)
+		expect(upstream.headers?.request).toEqual(upstreamOf(defaultRoute).headers?.request)
 	})
 
 	test('an app without a download endpoint has no file route', () => {
 		const plain = buildCaddyConfig({ apps: [{ ...contract, endpoints: [] }] }, OPTIONS).apps.http.servers['proxy']?.routes ?? []
 		const steps = rawSubrouteOf(defined(plain[0])).routes
 		expect(JSON.stringify(steps)).not.toContain('Content-Disposition')
-		expect(proxyHandler(steps.at(-1)).headers?.response).toEqual({ set: policyValues(headerPolicy(contract.csp, 'https://operations.example.com')) })
+		expect(upstreamOf(steps.at(-1)).headers?.response).toEqual({
+			set: policyValues(headerPolicy(contract.csp, 'https://operations.example.com')),
+			delete: REMOVED,
+		})
 	})
 
 	test("a gate app's answers are passed through: the policy is a contract application's", () => {
 		const steps = rawSubrouteOf(defined(gateRoute)).routes
 		expect(proxyHandler(steps.at(-1)).headers?.response).toBeUndefined()
+		expect(JSON.stringify(steps)).not.toContain('status_code":[1]')
 		expect(steps[0]?.handle[0]).toEqual({
 			handler: 'static_response',
 			status_code: 400,

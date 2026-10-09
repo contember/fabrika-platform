@@ -123,6 +123,15 @@ a forward refused before an app is selected) carries the policy without named or
 service's own answers pass through unchanged. Per-endpoint profiles and caching of static assets are
 not part of v1.
 
+The proxy also **deletes** four headers an application may not send at all, on every answer and every
+download: `Content-Security-Policy-Report-Only`, `Report-To`, `Reporting-Endpoints` and `NEL`. Each names
+a reporting endpoint the policy never approved, and a report-only CSP reports the document and blocked
+URLs there whatever the enforced CSP says. A `1xx` answer of the application (`103 Early Hints`) leaves
+the proxy with no header at all: Caddy forwards it before its response operations run, so a deferred
+handler around the upstream clears it, and an application cannot preload a script or send a policy
+through it. The Cloudflare runtime does not hand a Worker a `1xx` answer. When the application binding
+fails, the Worker answers a fixed `502` with the same treatment, never the error.
+
 The policy:
 
 - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
@@ -156,7 +165,8 @@ decision selected, never by a path of its own:
 - `Content-Disposition: attachment` for every type except the inert images `image/png`, `image/jpeg`,
   `image/gif` and `image/webp`, which are served `inline`. SVG and HTML are always attachments. The
   proxy sets the disposition type from the answer's exact `Content-Type` and keeps its parameters
-  (the file name).
+  (the file name). `inline` needs exactly one `Content-Type` value from that list: repeated fields are
+  joined into one value first, which no listed type equals, so any duplicate is an attachment.
 - `Content-Type` from the recorded, sniffed type, never from the upload request.
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.

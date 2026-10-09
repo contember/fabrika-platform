@@ -91,8 +91,13 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   copied, so the app's own value is replaced, never doubled. A download endpoint is selected by the
   `X-Fabrika-Endpoint` the decision asserted (`header` matcher on `<id>@*`) and gets the file treatment:
   the disposition type is forced to `attachment` keeping its parameters, two deferred `headers` handlers
-  around the upstream add an absent one and turn it back to `inline` for an exact inert image type. A
-  deferred handler earlier in the chain runs LATER, so their order is code; `caddy.live.test.ts` proves it.
+  around the upstream add an absent one and turn it back to `inline` for an exact inert image type. Before
+  that check a third joins repeated `Content-Type` fields through `{http.response.header.Content-Type}`:
+  Caddy's header matcher accepts a field when ANY value matches, so `image/png` + `text/html` would be
+  inline. Both routes delete `REMOVED_RESPONSE_HEADERS` (report-only CSP and the reporting headers), and
+  a deferred `status_code: [1]` handler clears every header of a 1xx, which `reverse_proxy` forwards
+  before its own operations (`Got1xxResponse`). A deferred handler earlier in the chain runs LATER, so
+  their order is code; `caddy.live.test.ts` proves each against a raw upstream.
   The `Connection` refusal and the unmatched-host 404 carry the policy as `static_response` headers; the
   auth service's denials carry the one `@fabrika/proxy-core` set. A gate app's answers are untouched.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are

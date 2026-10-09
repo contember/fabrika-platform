@@ -56,7 +56,14 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, INLINE_FILE_TYPES } from '@fabrika/proxy-core/headers'
+import {
+	appHeaderPolicy,
+	BASE_HEADER_POLICY,
+	FILE_TREATMENT,
+	type HeaderPolicy,
+	INLINE_FILE_TYPES,
+	REMOVED_RESPONSE_HEADERS,
+} from '@fabrika/proxy-core/headers'
 import { type ContractProxyApp, isContractProxyApp, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
@@ -87,7 +94,8 @@ export interface CaddyHeaderReplacement {
 /** `RespHeaderOps`: with `require` the operations wait until the response is written and run only when it matches. */
 export interface CaddyResponseHeaderOps extends CaddyHeaderOps {
 	/** A `null` header value matches only when that header is absent (`matchHeaders`, v2.10.2). */
-	require?: { headers?: Record<string, string[] | null> }
+	/** A one-digit `status_code` matches its class: `1` is every informational answer. */
+	require?: { status_code?: number[]; headers?: Record<string, string[] | null> }
 }
 
 export interface CaddyHeadersHandler {
@@ -423,10 +431,18 @@ function headerValues(policy: HeaderPolicy): Record<string, string[]> {
 const DISPOSITION_TYPE = '^[^;]*'
 
 /**
+ * A 1xx answer, such as `103 Early Hints`, leaves with no header at all. `reverse_proxy` forwards it before its own
+ * response operations run (`Got1xxResponse`, v2.10.2), so only a deferred handler around the upstream reaches it.
+ */
+const INFORMATIONAL_WITHOUT_HEADERS: CaddyHeadersHandler = { handler: 'headers', response: { require: { status_code: [1] }, delete: ['*'] } }
+
+/**
  * Step 3 of a contract app. A download endpoint is recognised by the `X-Fabrika-Endpoint` the decision asserted
  * (step 1 deleted the client's), so no path is matched here. Its answer gets the file treatment: the upstream's
  * disposition type becomes `attachment` with its parameters kept, an absent one is added, and only an inert image
- * `Content-Type` turns it back to `inline`. The two deferred handlers wrap the upstream, so the later one runs first.
+ * `Content-Type` turns it back to `inline`. Repeated `Content-Type` fields are first joined into one value, which no
+ * allowlisted type equals, because Caddy's matcher accepts a field when ANY of its values matches. The deferred
+ * handlers wrap the upstream, so the later one in the list runs first.
  */
 function contractUpstream(
 	app: ContractProxyApp,
@@ -438,6 +454,7 @@ function contractUpstream(
 		match: [{ header: { [ENDPOINT_HEADER]: downloads } }],
 		terminal: true,
 		handle: [
+			INFORMATIONAL_WITHOUT_HEADERS,
 			{
 				handler: 'headers',
 				response: {
@@ -446,13 +463,21 @@ function contractUpstream(
 				},
 			},
 			{ handler: 'headers', response: { require: { headers: { 'Content-Disposition': null } }, set: { 'Content-Disposition': ['attachment'] } } },
+			{
+				handler: 'headers',
+				response: { require: { headers: { 'Content-Type': [] } }, set: { 'Content-Type': ['{http.response.header.Content-Type}'] } },
+			},
 			upstream({
 				set: headerValues(FILE_TREATMENT),
+				delete: [...REMOVED_RESPONSE_HEADERS],
 				replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'attachment' }] },
 			}),
 		],
 	}
-	return [...(downloads.length === 0 ? [] : [download]), { handle: [upstream({ set: headerValues(policy) })] }]
+	const answer: CaddyRoute = {
+		handle: [INFORMATIONAL_WITHOUT_HEADERS, upstream({ set: headerValues(policy), delete: [...REMOVED_RESPONSE_HEADERS] })],
+	}
+	return [...(downloads.length === 0 ? [] : [download]), answer]
 }
 
 /**

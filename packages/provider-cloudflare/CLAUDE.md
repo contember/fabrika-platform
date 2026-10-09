@@ -116,7 +116,8 @@ this one import.
     application Worker. An IAM schema whose `contract: true` disagrees with the contract is refused, and so are
     `gates` beside a contract. The manifest entry carries the contract's CSP origins and the origin of the run's
     `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
-    the application's answer, or applies the file treatment for a download endpoint (ADR-0022);
+    the application's answer, or applies the file treatment for a download endpoint, deletes the reporting
+    headers, and answers a throwing `APP` binding with a fixed 502 under the same treatment (ADR-0022);
   - otherwise the config's `gates`, parsed with `proxyAppGatesSchema`;
   - neither: no proxy, and the application Worker is reachable by nothing.
     `createCloudflareProxyWorker` takes `endpoints` or `gates`, never both. Its `IAM` binding is also the

@@ -37,9 +37,10 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
 - **`@fabrika/proxy-core/headers` is the one definition of the response header policy and the file
   treatment** (ADR-0022), imported by the framework, Caddy's config and the Cloudflare Worker. It imports
   nothing at runtime, so the browser-safe `@fabrika/app/contract` can use `isPolicyOrigin`. Every answer
-  `createVerifyService` writes for a request carries it — the contract app's policy, the file treatment
-  when the request selects a `download` endpoint, the base policy otherwise; the allow (a 204 to Caddy)
-  carries none. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
+  `createVerifyService` writes for a request carries it — the contract app's policy (its metadata 404
+  included), the file treatment when the request selects a `download` endpoint, the base policy otherwise
+  (a 404 or 405 on the service itself included); the allow (a 204 to Caddy) and the liveness probe carry
+  none. `applyHeaderPolicy` also deletes `REMOVED_RESPONSE_HEADERS`; the Caddy config uses the same list. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
   accepts `*` in a host, so `isPolicyOrigin` checks the host itself), at most `MAX_CSP_ORIGINS` (16) per
   directive — the same bound the contract build applies.
 - **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname

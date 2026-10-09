@@ -541,6 +541,63 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		}
 	})
 
+	test('an application binding that throws is a fixed 502 with the treatment of the endpoint the decision selected', async () => {
+		const failing = (iam: FakeIam): CloudflareProxyEnv => ({
+			...contractEnvironment(iam, []),
+			APP: { fetch: () => Promise.reject(new Error('upstream exploded with secret-detail')) },
+		})
+		const handler = createCloudflareProxyHandler(failing(await keyIam()))
+		const answer = await handler(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'POST',
+				body: '{}',
+				headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' },
+			}),
+		)
+		expect(answer.status).toBe(502)
+		expect(await answer.text()).toBe('bad gateway')
+		for (const [name, value] of POLICY) {
+			expect(answer.headers.get(name)).toBe(value)
+		}
+		const download = await handler(new Request(`https://${HOST}/api/files.avatar/photo`, { headers: { Authorization: 'Bearer px_key' } }))
+		expect(download.status).toBe(502)
+		expect(await download.text()).not.toContain('secret-detail')
+		for (const [name, value] of FILE_TREATMENT) {
+			expect(download.headers.get(name)).toBe(value)
+		}
+		expect(download.headers.get('Content-Disposition')).toBe('attachment')
+	})
+
+	test('the reporting headers an application sends are dropped, on an answer and a download', async () => {
+		const reporting = {
+			'Content-Security-Policy-Report-Only': "default-src 'none'; report-uri https://collector.example/csp",
+			'Report-To': '{"group":"x","max_age":60,"endpoints":[{"url":"https://collector.example/r"}]}',
+			'Reporting-Endpoints': 'x="https://collector.example/r"',
+			NEL: '{"report_to":"x","max_age":60}',
+		}
+		const env: CloudflareProxyEnv = {
+			...contractEnvironment(await keyIam(), []),
+			APP: { fetch: () => Promise.resolve(new Response('ok', { headers: reporting })) },
+		}
+		const handler = createCloudflareProxyHandler(env)
+		const answers = [
+			await handler(
+				new Request(`https://${HOST}/api/me`, {
+					method: 'POST',
+					body: '{}',
+					headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' },
+				}),
+			),
+			await handler(new Request(`https://${HOST}/api/files.avatar/photo`, { headers: { Authorization: 'Bearer px_key' } })),
+		]
+		for (const answer of answers) {
+			expect(answer.status).toBe(200)
+			for (const name of Object.keys(reporting)) {
+				expect(answer.headers.get(name)).toBeNull()
+			}
+		}
+	})
+
 	test("the decision's own denial carries the application's policy", async () => {
 		const response = await createCloudflareProxyHandler(contractEnvironment(new FakeIam(), []))(new Request(`https://${HOST}/api/unknown`))
 		expect(response.status).toBe(403)
