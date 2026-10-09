@@ -200,7 +200,8 @@ What [platform enforcement](platform-enforcement.md) adds:
 
 ## Open questions
 
-- Does a Cloudflare service-binding `fetch` to the owner's proxy Worker route correctly when its URL carries the
-  owner's host?
-- Does the Zerops balancer forward `Authorization` unchanged across namespaces?
-- Quotas or rate limits per edge.
+- Settled: a Cloudflare service-binding `fetch` routes by the binding and hands the owner's proxy Worker the URL
+  unchanged, the owner's host included (pinned in Lopata by `packages/app`'s `connect-binding.test.ts`).
+- Not verified yet: whether the Zerops balancer forwards `Authorization` unchanged. The platform-facts row
+  `unverified-balancer-forwards-authorization` probes it ([zerops-platform.md](../reference/zerops-platform.md)).
+- Out of scope for v1: quotas or rate limits per edge. Every call is bounded by its deadline and two retries.

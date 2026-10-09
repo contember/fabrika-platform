@@ -28,6 +28,8 @@ bun test src/__tests__/files.test.ts            # c.files (needs FABRIKA_TEST_PO
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, forms, webhooks (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/jobs.test.ts             # the job runner: leases, fenced writes, retries (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
+bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
+bun test src/__tests__/export-read-only.test.ts # an export handler cannot write (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 ## Structure
@@ -65,6 +67,8 @@ src/
     defaults.ts       the defaults and generated paths, in one place
     artifact-schema.ts  parseContractArtifact, the zod parser of the artifact
     platform.ts       schemaFromContract: the IAM vocabulary a deploy reconciles
+    connect.ts        exportDescription, ConnectSnapshot, describeSnapshot, parseExportDescription
+    snapshot-source.ts  snapshotSource: the vendored snapshot module fabrika connect writes
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
@@ -79,6 +83,7 @@ src/
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
     environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
+    connect.ts        Connector (ctx.connect's calls), wireImports, connectVariables
   files/              c.files: served by implement, never imported by an application
     collections.ts    the upload, download and remove endpoints, the file locator, the sweep
     sniff.ts          the declared type checked against the first bytes
@@ -177,7 +182,8 @@ src/
 - Generated endpoints: a procedure is `POST <prefix>/<dotted.path>`; a link mount
   serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`; file collections serve under `/api/files.<name>…`;
-  exports under `/__fabrika/connect/<export>.v<version>.<procedure>`; a webhook
+  exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
+  description at `/__fabrika/connect/<export>.v<version>`; a webhook
   appends `/:bindingId`. No authored path may lie under `/__fabrika`.
 - **A contract application has no gates.** The proxy reads its endpoint table,
   `contractProxyTable(artifact)` from `@fabrika/proxy-core/manifest`, and both
@@ -281,7 +287,7 @@ src/
   with no metadata, because a message may quote a connection string. The server log
   gets one line: a framework-authored message (`ServerFault`,
   `CapabilityRefusedError`) or only the error's name, never the error object.
-- **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`, exports, imports,
+- **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`,
   a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a
   form field that is not a column of its inbox, a job that cannot run (see Jobs), an endpoint that asks IAM with no
@@ -346,6 +352,33 @@ src/
   parser spike's 05–10), compiled by `implement-types.test.ts` like the contract
   mistakes. `implement-scale.test.ts` keeps 200 handlers under the same budget as
   `contract-scale.test.ts`; both generate their source in `scale-fixture.ts`.
+- **An export is served read-only.** Its procedures are handlers under `handlers.exports.<export>`,
+  each run in a `RequestFrame` with `readOnly`; `boot` binds the data layer with `requestIsReadOnly`, so
+  `@fabrika/db` refuses every write and lock in that request and reads `READ ONLY`. `buildArtifact`
+  refuses an export procedure whose action a table writes with. An export's context carries its
+  capability only: no `ctx.connect`, no membership or file API.
+- **An export's callers are its consumers' `app:<id>` and, until B9, `machine`**
+  (`EXPORT_EDGE_KEY_CALLER`): an operator provisions one service principal with a `px_` key per edge,
+  holding the export's actions. B9 replaces it with Control-reconciled `app:<id>` credentials; then drop
+  `machine` there and nowhere else. `<export>.v<n>` (no procedure) serves the export's description, the
+  schemas and digest a consumer vendors, to the same callers with a `member` requirement.
+- **`ctx.connect` exists only in the handlers an import's `usedBy` names**, both in the types
+  (`ConnectContext`) and at runtime (`wireImports`). `implement({ connect })` takes the vendored snapshot
+  of each import; `boot` refuses one whose app, export or version differ, whose digest is not the
+  import's, whose schemas no longer describe to its own digest (edited), or that lacks an imported
+  procedure, and an import without `FABRIKA_CONNECT_<IMPORT>_URL` (an http(s) origin, no credentials)
+  and `_KEY` (a `px_` key). Both are `FABRIKA_*`, so the application never reads them.
+- **A connector call never throws for the owner's answer.** It validates the input against the
+  snapshot (`invalid_input`, nothing sent), posts to `<origin>/__fabrika/connect/<export>.v<n>.<path>`
+  with the edge key as the bearer, and answers `ok`, `denied` (401/403/404), `invalid_input` (400),
+  `unavailable` (408, 429, 5xx, network), `timeout` or `contract_violation` (an answer the vendored
+  output schema refuses, or a status no export answers; logged once, without the key). The import's
+  `timeoutMs` (3 s by default, at most 10 s, `CONNECT_LIMITS`) bounds the call and its two retries on
+  `unavailable` and `timeout`; the remaining time is shared by the attempts left.
+- **On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding carries the call** (the Worker adapter
+  keeps it from `deps`); the request URL names the owner's host, which its proxy Worker selects the
+  application by. `connect-binding.test.ts` pins in Lopata that a binding routes by the binding. Without
+  a binding the call uses `fetch`.
 - The header policy (`headers.ts`) is ADR-0022's; B4 sets the same policy at the
   proxy and decides the final `Permissions-Policy`. Keep the two equal.
 
@@ -403,6 +436,8 @@ src/
   creates scopes, manages members or issues links does not boot in the kit.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
+- `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
+  it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision.
 - Its tokens are signed with a generated key and verified by the application's own
   verifier, so a test cannot reach a handler the production pipeline would refuse.
 - **The kit answers only its own origin.** `kit.fetch` refuses another host, and

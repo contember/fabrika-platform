@@ -18,7 +18,7 @@ bun test               # app-environment · canonical-path · contract-canonical
 | `canonical-path.ts`      | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
 | `contract.ts`            | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
 | `contract-canonical.ts`  | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
-| `endpoint-digest.ts`     | `requirementDigest`, `contractDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                          |
+| `endpoint-digest.ts`     | `requirementDigest`, `contractDigest`, `exportDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.          |
 | `endpoints.ts`           | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                                            |
 | `gates.ts`               | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
 | `path-segment.ts`        | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |

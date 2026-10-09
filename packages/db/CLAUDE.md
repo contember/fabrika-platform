@@ -128,6 +128,11 @@ and the target `Ref`, so no handler can call it.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);
   `tables.test.ts` compares them. Change both together.
 
+- **A read-only request writes nothing.** `DataLayerRuntime.readOnly` (the framework's
+  `requestIsReadOnly`, true in an export's request) makes `session()` read-only: `Session.run` refuses
+  any root but a select, and any lock, before compiling, whatever capability the operation carries,
+  and runs each statement in a `READ ONLY` transaction (`transaction()` opens one too). Never route a
+  statement past `Session.run`, or this stops holding.
 - **Every select, update and delete carries its scope predicate as the top-level right conjunct of
   WHERE, by identity.** The caller's conditions sit in a `ParensNode` on the left. The guard checks this
   shape (`checkRoot`); without the parenthesis, `true or 1=1` followed by the scope would match every

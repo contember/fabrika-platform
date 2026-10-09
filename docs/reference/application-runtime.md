@@ -194,8 +194,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
 (ADR-0022 rule 5), when the contract
 declares something this version cannot serve yet (a file collection with `link: true`,
-exports, imports, a webhook bound to the whole application), when a job cannot run (see
-Jobs), when a file collection
+a webhook bound to the whole application), when a job cannot run (see Jobs), when an
+import has no matching snapshot or no owner, when a file collection
 cannot be served (below), when an `on` dimension or a link mount's dimension has no
 table, when an access form reaches a dimension that lies in a container no table can
 locate it in, when a form or a webhook has no `scoped(tables)` layer (a form's input
@@ -433,6 +433,68 @@ cron expression, and a missing or undeclared job handler. With platform enforcem
 job runs with its own workload credential of principal kind `job`, which no mount
 accepts (ADR-0022); until then the in-process mint is the whole of its authority.
 
+## Connectors
+
+An application reads another's data through a connector
+([declarative application connectors](../ideas/declarative-app-connectors.md)): the owner exports queries,
+the consumer imports them. v1 is read-only.
+
+```ts
+// the owner's contract
+exports: {
+	products: c.export({ version: 1, consumers: ['shop'], audience: 'any consumer user', procedures: {
+		get: c.query({ input: BySku, output: z.nullable(Product), access: { action: 'catalog.product.read', over: 'catalog' } }),
+	} }),
+},
+// the owner's handlers
+handlers: () => ({ exports: { products: { get: ({ input }) => products.get(input.sku) } } }),
+
+// the consumer: `fabrika connect add catalog/products@1 --origin=https://catalog.example.com`
+// writes fabrika/connect/catalog.products.v1.ts with catalogProductsV1 and its digest
+imports: {
+	catalog: { app: 'catalog', export: 'products', version: 1, digest: catalogProductsV1Digest,
+		procedures: ['get'], usedBy: ['api.products.show'], timeoutMs: 3000 },
+},
+// the consumer's implement()
+connect: { catalog: catalogProductsV1 },
+show: async ({ input, ctx }) => {
+	const product = await ctx.connect.catalog.get({ sku: input.sku })
+	return product.outcome === 'ok' ? { name: product.value?.name ?? null } : { name: null }
+},
+```
+
+The owner side:
+
+- Each procedure is `POST /__fabrika/connect/<export>.v<version>.<procedure>`, and the export's
+  description — its schemas and `exportDigest` — is `POST /__fabrika/connect/<export>.v<version>`.
+- Their callers are the consumers' `app:<id>` and `machine`. Until Control reconciles connector
+  credentials, an operator provisions one service principal per edge, with a `px_` key bound to the
+  consumer's environment and holding the export's actions at the owner; that key is a `machine` caller.
+  It also passes any other owner endpoint `machine` may call with those actions.
+- An export handler runs read-only. The data layer refuses every write and lock in its request, whatever
+  capability it carries, and reads in `READ ONLY` transactions. An export may not declare an action a
+  table writes with. Its context has no `ctx.connect` and no membership or file API.
+
+The consumer side:
+
+- `boot` checks each import against its vendored snapshot: same app, export and version, the import's
+  digest, and schemas that still describe to that digest. It reads the owner's origin from
+  `FABRIKA_CONNECT_<IMPORT>_URL` and the edge key from `FABRIKA_CONNECT_<IMPORT>_KEY` (`catalog` →
+  `CATALOG`, `productCatalog` → `PRODUCT_CATALOG`). Both are framework variables, so no application
+  module reads them; in part A an operator sets them, for example as secrets the app declares.
+- `ctx.connect.<import>.<procedure>` exists only in the handlers `usedBy` names. A call validates its
+  input against the snapshot and resolves to `ok`, `denied`, `invalid_input`, `unavailable`, `timeout`
+  or `contract_violation`; it never throws for the owner's answer, and `unavailable` is never reported
+  as `denied`.
+- A deadline bounds every call and its retries: the import's `timeoutMs`, 3 s by default and at most
+  10 s. A call is retried at most twice on `unavailable` or `timeout`, inside the deadline.
+- The answer is validated against the vendored output schema. An answer that breaks it is
+  `contract_violation`, logged once, so a drifted owner is caught on the first call.
+- On Cloudflare a `FABRIKA_CONNECT_<IMPORT>` service binding to the owner's proxy Worker carries the call,
+  its URL naming the owner's host; a binding routes by the binding, not by the URL. Elsewhere the call
+  goes to the owner's public origin with `fetch`. Whether the Zerops balancer forwards `Authorization`
+  unchanged is not verified yet ([zerops-platform.md](zerops-platform.md)).
+
 ## Runtime boundary
 
 Routing, middleware, RPC, validation, and the client use Web Fetch API types.
@@ -538,6 +600,9 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   headers before the decision, and the `__Host-px_*` cookies before the application.
   It carries the proxy's token, signed by the kit the way IAM signs, and the real
   verifier and dispatcher answer it.
+- `options.connect` wires each import: the owner's origin, the edge key, and the `fetch`
+  that reaches the owner — usually another kit's `fetch`, so a connector call meets the
+  owner's own proxy decision.
 
 ### The generated tests
 
