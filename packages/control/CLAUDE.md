@@ -235,7 +235,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   (`src/connectors.ts`, ADR-0022 "Principal kinds"). The same reconcile issues one `app` key per owner application
   the contract imports from, at `<owner>@<env>` naming the consumer, recorded as kind `app` named by the owner
   (`declaredConnectors`), and hands it under each import's `FABRIKA_CONNECT_<IMPORT>_KEY`; `connectorAddresses`
-  adds the owner environment's `https://<domain>` as `_URL` and fails a deploy whose owner has none. Publication
+  adds the owner environment's `https://<domain>` as `_URL` and fails a deploy whose owner has none. When the last
+  import of an owner goes, IAM's `workloads.revokeKeys` revokes every key of the pair (the owner still declares the
+  consumer, so its schema reconcile would not) before the record and vault row are deleted; a failed revocation
+  fails the deploy and keeps the record. A consumer import of a procedure the owner's export lacks is refused. Publication
   (`assertConnectorEdges` in `src/approval/publish.ts`) runs before classification and fails the run, approved or
   not, when a consumer's import is not exactly the owner's approved export of the same environment
   (`consumerEdgeProblems`), or when an owner's candidate breaks an approved consumer's import

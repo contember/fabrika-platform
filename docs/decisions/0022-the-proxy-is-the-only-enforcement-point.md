@@ -266,11 +266,13 @@ named by the consumer's id, with the actions of the export rows it may call. An 
 snapshots: `(shop, prod) → (catalog, prod, products@1)` joins a consumer's import and the owner's export in the
 environment of the same name. For each owner a consumer environment imports from, Control issues one key at
 `<owner>@<env>` naming the consumer, with the same `keep` rule, and writes it as each import's
-`FABRIKA_CONNECT_<IMPORT>_KEY`, with the owner environment's `https://<domain>` as `_URL`. The consumer presents the key
+`FABRIKA_CONNECT_<IMPORT>_KEY`, with the owner environment's `https://<domain>` as `_URL`. When the consumer drops
+its last import of an owner, Control revokes every key of the pair at IAM before it forgets the record. An export
+procedure names its action; `member` would leave the consumer's key nothing to hold. The consumer presents the key
 to the owner's proxy, which exchanges it like any `px_` key. On Cloudflare the deployer also binds
 `FABRIKA_CONNECT_<IMPORT>` to the owner's proxy Worker; it is the only binding to another application's Worker.
 A publication that breaks an edge fails, approved or not: a consumer import must be exactly the owner's approved
-export (its digest), and an owner deploy may not remove an export version an approved consumer imports, stop naming
+export (its digest) and name only procedures it has, and an owner deploy may not remove an export version an approved consumer imports, stop naming
 that consumer, remove an imported procedure, accept less input, change an output or change the audience. A new
 procedure, a new optional input field and a new version are compatible; an output may not gain a field, because a
 consumer parses every answer strictly.
