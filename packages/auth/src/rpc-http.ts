@@ -141,7 +141,10 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 export interface HttpIamRpcOptions {
 	/** The IAM service origin, e.g. `http://iam:3000` on a private network (trailing slash tolerated). */
 	origin: string
-	/** The shared secret gating `/rpc/*` (`FABRIKA_IAM_RPC_KEY` on the IAM side). NEVER logged. */
+	/**
+	 * The bearer: the installation's shared secret gating `/rpc/*` for `HttpIamRpc`, or an application's own
+	 * membership transport key for `HttpIamMembership` (`FABRIKA_IAM_RPC_KEY` in each). NEVER logged.
+	 */
 	key: string
 	/** Per-call timeout in milliseconds. */
 	timeoutMs?: number
@@ -184,16 +187,10 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 		if (!result) throw new IamTransportError('listOwnDeviceAuthorizations')
 		return result
 	}
-	private readonly origin: string
-	private readonly key: string
-	private readonly timeoutMs: number
-	private readonly fetchImpl: FetchLike
+	private readonly endpoint: TransportEndpoint
 
 	constructor(options: HttpIamRpcOptions) {
-		this.origin = options.origin.replace(/\/+$/, '')
-		this.key = options.key
-		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-		this.fetchImpl = options.fetch ?? globalThis.fetch
+		this.endpoint = transportEndpoint(options, '/rpc/')
 	}
 
 	async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
@@ -304,39 +301,66 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 		await this.send('audit', event)
 	}
 
-	/** POST one method and return its decoded JSON body. Throws `IamTransportError` on any transport fault. */
-	private async call(method: string, input: unknown): Promise<unknown> {
-		const response = await this.send(method, input)
-		const body: unknown = await response.json().catch(() => MALFORMED)
-		if (body === MALFORMED) {
-			throw new IamTransportError(method)
-		}
-		return body
+	private call(method: string, input: unknown): Promise<unknown> {
+		return callJson(this.endpoint, method, input)
 	}
 
-	private async send(method: string, input: unknown): Promise<Response> {
-		let response: Response
-		try {
-			response = await this.fetchImpl(`${this.origin}/rpc/${method}`, {
-				method: 'POST',
-				headers: {
-					'content-type': 'application/json',
-					accept: 'application/json',
-					authorization: `Bearer ${this.key}`,
-				},
-				body: JSON.stringify(input),
-				signal: AbortSignal.timeout(this.timeoutMs),
-			})
-		} catch {
-			// Swallow the cause deliberately: a fetch error stringifies the request URL and, on some
-			// runtimes, request detail. Only the method name is ever surfaced.
-			throw new IamTransportError(method)
-		}
-		if (!response.ok) {
-			throw new IamTransportError(method)
-		}
-		return response
+	private send(method: string, input: unknown): Promise<Response> {
+		return post(this.endpoint, method, input)
 	}
+}
+
+/** Where one transport POSTs: `{origin}{prefix}<method>` with the key as the bearer. */
+interface TransportEndpoint {
+	readonly origin: string
+	readonly prefix: string
+	readonly key: string
+	readonly timeoutMs: number
+	readonly fetch: FetchLike
+}
+
+function transportEndpoint(options: HttpIamRpcOptions, prefix: string): TransportEndpoint {
+	return {
+		origin: options.origin.replace(/\/+$/, ''),
+		prefix,
+		key: options.key,
+		timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+		fetch: options.fetch ?? globalThis.fetch,
+	}
+}
+
+/** POST one method and return its decoded JSON body. Throws `IamTransportError` on any transport fault. */
+async function callJson(endpoint: TransportEndpoint, method: string, input: unknown): Promise<unknown> {
+	const response = await post(endpoint, method, input)
+	const body: unknown = await response.json().catch(() => MALFORMED)
+	if (body === MALFORMED) {
+		throw new IamTransportError(method)
+	}
+	return body
+}
+
+async function post(endpoint: TransportEndpoint, method: string, input: unknown): Promise<Response> {
+	let response: Response
+	try {
+		response = await endpoint.fetch(`${endpoint.origin}${endpoint.prefix}${method}`, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				accept: 'application/json',
+				authorization: `Bearer ${endpoint.key}`,
+			},
+			body: JSON.stringify(input),
+			signal: AbortSignal.timeout(endpoint.timeoutMs),
+		})
+	} catch {
+		// Swallow the cause deliberately: a fetch error stringifies the request URL and, on some
+		// runtimes, request detail. Only the method name is ever surfaced.
+		throw new IamTransportError(method)
+	}
+	if (!response.ok) {
+		throw new IamTransportError(method)
+	}
+	return response
 }
 
 /** The membership operations, by name, as a transport carries them. */
@@ -387,6 +411,18 @@ export class DecodedIamMembership implements IamMembershipRpc {
 	async revokeLink(input: RevokeLinkInput): Promise<RevokeLinkResult> {
 		const body = await this.#call('revokeLink', input)
 		return readMembershipFailure(body) ?? decode(revokedSuccessSchema, body, 'revokeLink')
+	}
+}
+
+/**
+ * `IamMembershipRpc` over IAM's membership transport, `POST {origin}/membership/<method>` (`@fabrika/iam`'s
+ * `src/membership-http.ts`): what an application without an IAM binding calls, with its own membership transport key.
+ * IAM serves no `requestDelegation` there, because only the proxy obtains a grant; calling it is `IamTransportError`.
+ */
+export class HttpIamMembership extends DecodedIamMembership {
+	constructor(options: HttpIamRpcOptions) {
+		const endpoint = transportEndpoint(options, '/membership/')
+		super((method, input) => callJson(endpoint, method, input))
 	}
 }
 

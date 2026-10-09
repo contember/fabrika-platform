@@ -21,7 +21,7 @@ export type { AuthCarrier, Middleware } from './middleware'
 // The HTTP transport for the SAME `IamRpc` contract, for a runtime with no Cloudflare service binding
 // (a long-running Bun/Node process). Drops into anywhere a binding goes — `createIam`, `IamClient`,
 // `env.IAM` — because the contract is unchanged and only the transport differs.
-export { DecodedIamMembership, HttpIamRpc, IamTransportError } from './rpc-http'
+export { DecodedIamMembership, HttpIamMembership, HttpIamRpc, IamTransportError } from './rpc-http'
 export type { IamMembershipMethod } from './rpc-http'
 // The membership operations an application requests on its caller's behalf (scopes, members, share links).
 export { createIamMembership, IamMembership } from './membership'

@@ -73,6 +73,10 @@ the service that owns identity.
 - **A DECIDED NEGATIVE IS A 200 on the wire.** Over the HTTP transport (`HttpIamRpc`),
   `{ ok: false, reason }` means "IAM answered: no"; a non-200 means "IAM could not be consulted". Only
   the second throws (`IamTransportError`).
+- **`HttpIamMembership` is the membership transport of an application without an IAM binding.** It POSTs to
+  `/membership/<method>` with the application environment's own key (`FABRIKA_IAM_RPC_KEY` in the application), which
+  only pins the application id at IAM; it shares `HttpIamRpc`'s wire rules and decodes through `DecodedIamMembership`.
+  IAM serves no `requestDelegation` there.
 - **`HttpIamRpc` is a transport, not a second IAM.** It holds no policy. `@fabrika/iam`'s
   `src/rpc-http.ts` is the wire contract; everything downstream of `IamRpc` is byte-for-byte the same
   code on both transports.
