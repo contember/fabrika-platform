@@ -336,7 +336,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			input.signal.throwIfAborted()
 			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })
 			const handed = parseManagedEnvironment(input.managedEnvironment)
-			const managedEnvironment = { ...handed.values, ...handed.workloadKeys }
+			const managedEnvironment = { ...handed.values, ...handed.familyVariables }
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
 			const placement = resolvedEnvironment(input.environment, { requireReady: true })

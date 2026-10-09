@@ -5,6 +5,8 @@ import {
 	connectVariables,
 	FRAMEWORK_VARIABLE_NAMES,
 	frameworkVariableReference,
+	isConnectKeyVariable,
+	isConnectUrlVariable,
 	isFrameworkVariableName,
 	isWorkloadKeyVariable,
 	workloadKeyVariable,
@@ -56,6 +58,14 @@ describe('framework-only variable names', () => {
 			expect(isFrameworkVariableName(name)).toBe(true)
 			expect(isWorkloadKeyVariable(name)).toBe(false)
 		}
+		const { url, key, binding } = connectVariables('catalog')
+		expect([isConnectKeyVariable(key), isConnectUrlVariable(url)]).toEqual([true, true])
+		expect([isConnectKeyVariable(url), isConnectUrlVariable(key), isConnectKeyVariable(binding), isConnectUrlVariable(binding)]).toEqual([
+			false,
+			false,
+			false,
+			false,
+		])
 	})
 
 	test('list each name once', () => {

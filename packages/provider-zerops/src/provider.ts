@@ -290,7 +290,7 @@ interface StepEnv {
 	attempt: Attempt
 	managedValues: ManagedValues
 	/** The key of each job and webhook of the approved contract, by its variable (ADR-0022 "Principal kinds"). */
-	workloadKeys: Readonly<Record<string, string>>
+	familyVariables: Readonly<Record<string, string>>
 	/** `await-version` gives up at this instant. */
 	deadlineMs: number
 }
@@ -504,15 +504,15 @@ const verifyExposure = async (env: StepEnv): Promise<void> => {
 
 /** Write the nine service-level managed keys; `FABRIKA_RELEASE` is never a service variable (ADR-0044). */
 const writeServiceEnv = async (env: StepEnv): Promise<void> => {
-	const { zerops, log, signal, managedValues, workloadKeys } = env
+	const { zerops, log, signal, managedValues, familyVariables } = env
 	const serviceId = env.run.target.serviceId
 	if (env.dryRun) {
-		const written = [...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null), ...Object.keys(workloadKeys)]
+		const written = [...SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] !== null), ...Object.keys(familyVariables)]
 		const removed = SERVICE_MANAGED_KEYS.filter((key) => managedValues[key] === null)
 		log(`  [dry-run] would write service variables on ${serviceId}: ${written.join(', ') || '(none)'}`)
 		log(`  [dry-run] would remove service variables on ${serviceId} if present: ${[...removed, RELEASE_KEY].join(', ')}`)
-		if (Object.keys(workloadKeys).length > 0) {
-			log(`  [dry-run] would remove every other job and webhook key on ${serviceId}`)
+		if (Object.keys(familyVariables).length > 0) {
+			log(`  [dry-run] would remove every other job, webhook and connector variable on ${serviceId}`)
 		}
 		return
 	}
@@ -545,7 +545,7 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		log(`  ${STORAGE_PROVENANCE_KEY}: removed`)
 	}
 	// A workload key is written like a managed key; one whose workload is gone is removed, so no stale key stays readable.
-	for (const [key, value] of Object.entries(workloadKeys)) {
+	for (const [key, value] of Object.entries(familyVariables)) {
 		const existing = records.find((record) => record.key === key)
 		assertRunning(signal)
 		if (existing?.content !== value) {
@@ -556,7 +556,7 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 		}
 	}
 	for (const record of records) {
-		if (isFrameworkFamilyVariable(record.key) && !Object.hasOwn(workloadKeys, record.key)) {
+		if (isFrameworkFamilyVariable(record.key) && !Object.hasOwn(familyVariables, record.key)) {
 			assertRunning(signal)
 			await zerops.api.deleteServiceEnv({ envId: record.id, signal })
 			log(`  ${record.key}: removed`)
@@ -778,7 +778,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
 	// The proxy serves an endpoint table exactly when Control approved a contract, whatever the artifact says.
 	const contractProxy = run.access !== undefined
-	const { values: handed, workloadKeys } = parseManagedEnvironment(run.managedEnvironment)
+	const { values: handed, familyVariables } = parseManagedEnvironment(run.managedEnvironment)
 	// Only a contract application checks the secret; any other would merely hold a credential its own code can print.
 	const managedValues: ManagedValues = contractProxy ? handed : { ...handed, FABRIKA_PROXY_SECRET: null }
 	if (!run.dryRun && contractProxy && managedValues.FABRIKA_PROXY_SECRET === null) {
@@ -799,7 +799,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		dryRun: run.dryRun,
 		attempt: { triggered: false },
 		managedValues,
-		workloadKeys,
+		familyVariables,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,
 	}
 	const steps = buildZeropsPlan(run.artifact, run.target)

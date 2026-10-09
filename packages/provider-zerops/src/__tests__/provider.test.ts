@@ -523,6 +523,42 @@ describe('Zerops provider', () => {
 		expect(recorded.timeline).toEqual([])
 	})
 
+	test("writes each connector import's key and owner origin, and removes the variables of an import that is gone", async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv: [
+					{ id: 'env-crm-key', key: 'FABRIKA_CONNECT_CRM_KEY', content: 'px_private-crm', type: 'USER', sensitive: true },
+					{ id: 'env-crm-url', key: 'FABRIKA_CONNECT_CRM_URL', content: 'https://crm.example.com', type: 'USER', sensitive: true },
+				],
+			})
+		)
+		await execute({
+			...deployRun(recorded),
+			managedEnvironment: {
+				...NO_MANAGED_VALUES,
+				FABRIKA_RELEASE: RELEASE,
+				FABRIKA_CONNECT_CATALOG_KEY: 'px_private-catalog',
+				FABRIKA_CONNECT_CATALOG_URL: 'https://catalog.example.com',
+			},
+		}, provider)
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_KEY', value: 'px_private-catalog' })
+		expect(recorded.envWrites).toContainEqual({ key: 'FABRIKA_CONNECT_CATALOG_URL', value: 'https://catalog.example.com' })
+		expect(recorded.envDeletes.sort()).toEqual(['env-crm-key', 'env-crm-url'])
+		expect(recorded.logs.join('\n')).not.toContain('private-')
+	})
+
+	test('refuses a connector origin that is not an https origin, and a family name no deploy writes', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
+		const handed = (extra: Record<string, string>) => ({ ...deployRun(recorded), managedEnvironment: { ...NO_MANAGED_VALUES, ...extra } })
+		await expect(provider(handed({ FABRIKA_CONNECT_CATALOG_URL: 'http://catalog.example.com' }))).rejects.toThrow(
+			'FABRIKA_CONNECT_CATALOG_URL must be an https origin',
+		)
+		await expect(provider(handed({ FABRIKA_CONNECT_CATALOG: 'catalog-proxy' }))).rejects.toThrow(
+			'FABRIKA_CONNECT_CATALOG is not a variable a deploy writes',
+		)
+		expect(recorded.timeline).toEqual([])
+	})
+
 	test('refuses a contract application without its proxy secret, before any platform call', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		const config: ZeropsAppConfig = {

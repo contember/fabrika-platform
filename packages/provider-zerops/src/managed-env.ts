@@ -2,6 +2,8 @@ import {
 	FRAMEWORK_VARIABLE_PREFIXES,
 	type FrameworkVariableName,
 	frameworkVariableReference,
+	isConnectKeyVariable,
+	isConnectUrlVariable,
 	isFrameworkVariableName,
 	isWorkloadKeyVariable,
 } from '@fabrika/auth-core'
@@ -73,31 +75,47 @@ export function parseManagedValues(value: unknown): ManagedValues {
 	return result.data
 }
 
-/** What Control hands a deploy: the ten managed keys, and the key of each job and webhook of the approved contract. */
+/**
+ * What Control hands a deploy: the ten managed keys, the key of each job and webhook of the approved contract, and the
+ * key and owner origin of each connector import.
+ */
 export interface ManagedEnvironment {
 	readonly values: ManagedValues
-	/** `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key. */
-	readonly workloadKeys: Readonly<Record<string, string>>
+	/** `FABRIKA_<KIND>_<NAME>_KEY` → the workload's `px_` key, and `FABRIKA_CONNECT_<IMPORT>_KEY` / `_URL`. */
+	readonly familyVariables: Readonly<Record<string, string>>
 }
 
-const workloadKeySchema = z.string().startsWith('px_').min(4)
+const keySchema = z.string().startsWith('px_').min(4)
+const originSchema = z.string().refine((value) => {
+	try {
+		return new URL(value).origin === value && value.startsWith('https://')
+	} catch {
+		return false
+	}
+})
 
 export function parseManagedEnvironment(value: Readonly<Record<string, string | null>>): ManagedEnvironment {
 	const managed: Record<string, string | null> = {}
-	const workloadKeys: Record<string, string> = {}
+	const familyVariables: Record<string, string> = {}
 	for (const [name, entry] of Object.entries(value)) {
-		if (!isWorkloadKeyVariable(name)) {
+		if (!isFrameworkFamilyVariable(name)) {
 			managed[name] = entry
 			continue
 		}
-		const key = workloadKeySchema.safeParse(entry)
-		if (!key.success) throw new Error(`zerops: ${name} must be a px_ key`)
-		workloadKeys[name] = key.data
+		const origin = isConnectUrlVariable(name)
+		if (!origin && !isWorkloadKeyVariable(name) && !isConnectKeyVariable(name)) {
+			throw new Error(`zerops: ${name} is not a variable a deploy writes`)
+		}
+		const parsed = (origin ? originSchema : keySchema).safeParse(entry)
+		if (!parsed.success) {
+			throw new Error(`zerops: ${name} must be ${origin ? 'an https origin' : 'a px_ key'}`)
+		}
+		familyVariables[name] = parsed.data
 	}
-	return { values: parseManagedValues(managed), workloadKeys }
+	return { values: parseManagedValues(managed), familyVariables }
 }
 
-/** A service variable only the platform writes per workload: a stale one is removed with its workload. */
+/** A service variable only the platform writes per workload or import: a stale one is removed with it. */
 export function isFrameworkFamilyVariable(name: string): boolean {
 	return FRAMEWORK_VARIABLE_PREFIXES.some((prefix) => name.startsWith(prefix))
 }

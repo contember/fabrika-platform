@@ -77,6 +77,19 @@ export function connectVariables(importName: string): ConnectVariables {
 	return { url: `${binding}_URL`, key: `${binding}_KEY`, binding }
 }
 
+const CONNECT_KEY_VARIABLE = /^FABRIKA_CONNECT_[A-Z0-9][A-Z0-9_]*_KEY$/
+const CONNECT_URL_VARIABLE = /^FABRIKA_CONNECT_[A-Z0-9][A-Z0-9_]*_URL$/
+
+/** Whether `name` carries a connector import's key, as `connectVariables` names it. */
+export function isConnectKeyVariable(name: string): boolean {
+	return CONNECT_KEY_VARIABLE.test(name)
+}
+
+/** Whether `name` carries a connector import's owner origin, as `connectVariables` names it. */
+export function isConnectUrlVariable(name: string): boolean {
+	return CONNECT_URL_VARIABLE.test(name)
+}
+
 /** A Zerops reference: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}` or `${RUNTIME_<host>_NAME}`. */
 const REFERENCE = /\$\{([^}]*)\}?/g
 const RUNTIME_PREFIX = /^RUNTIME_/
