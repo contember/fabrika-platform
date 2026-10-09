@@ -7,6 +7,7 @@ import type { AccessForm, Caller, EndpointMethod, SchemaShape } from '@fabrika/a
 import type { Tables } from '@fabrika/db'
 import { tablePolicies } from '@fabrika/db/tables'
 import type { IsolationWorlds, TestDatabase } from '@fabrika/db/testing'
+import { MemoryFileObjects } from '@fabrika/platform/testing'
 import type { RpcFetch } from '../client/transport'
 import type { AnyContract } from '../contract/define'
 import type { ContractImplementation } from '../implement/implement'
@@ -80,7 +81,8 @@ function worldValues(worlds: IsolationWorlds, world: 'own' | 'other'): string[] 
  * application's layer is bound here and nowhere else in the process.
  */
 export function endpointAccessKit<DB, P>(app: ContractImplementation<AnyContract>, tables: Tables<DB, P>, postgres: TestDatabase): EndpointAccessKit {
-	const kit = testKit(app, { database: postgres.database })
+	// A file collection does not boot without object storage; no case reads an object, so memory serves.
+	const kit = testKit(app, { database: postgres.database, files: new MemoryFileObjects() })
 	const policies = tablePolicies(tables)
 	const tableNames = Object.keys(policies).sort()
 

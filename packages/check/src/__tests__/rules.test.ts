@@ -603,6 +603,17 @@ describe('generated tests', () => {
 		])
 	})
 
+	test("a file collection's endpoints get no endpoint access case: they are the framework's, and no file row is seeded", async () => {
+		const files =
+			"\tfiles: { attachments: c.files({ owner: 'notes', read: 'notes.read', write: 'notes.write', delete: 'notes.write', maxBytes: 1024, types: ['text/plain'] }) },\n"
+		const contract = CLEAN_CONTRACT.replace("\thealth: c.health('/healthz'),\n", `${files}\thealth: c.health('/healthz'),\n`)
+		expect(contract).not.toBe(CLEAN_CONTRACT)
+		const inputs = scaffoldInputs(new Map(Object.entries({ ...CLEAN_APPLICATION, 'fabrika.contract.ts': contract })))
+		expect(inputs.artifact?.endpoints.some((row) => row.id === 'files.attachments.remove')).toBe(true)
+		const tests = await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)
+		expect(tests.get(endpoints)?.text).toBe(CLEAN_GENERATED_TESTS.get(endpoints))
+	})
+
 	test('policies the reader refuses are reported, so they cannot silence the check', async () => {
 		const refused = CLEAN_TABLES.replace("insert: ['title']", "insert: ['title', 'missing']")
 		const findings = await check({ ...CLEAN_APPLICATION, 'src/db/tables.ts': refused })

@@ -129,9 +129,12 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 	return { body, cases: [...isolation, ...hidden].map((item) => item.name) }
 }
 
-/** One endpoint's cases: an object or a value of another scope is refused, and no answer holds another scope's rows. */
-/** Whether an endpoint gets endpoint access cases: a procedure with an `on`, `in` or `over` access form, for a person or a machine. */
+/**
+ * Whether an endpoint gets endpoint access cases: a procedure with an `on`, `in` or `over` access form, for a person or
+ * a machine. A file collection's endpoints are the framework's, not the author's, and its rows are never seeded.
+ */
 const isAccessTested = (row: EndpointRow): boolean => {
+	if (row.source.kind === 'files') return false
 	if ((row.kind !== 'query' && row.kind !== 'mutation') || row.requirement === null || row.requirement.kind !== 'action') return false
 	const { form } = row.requirement.access
 	return row.callers.some((caller) => caller === 'human' || caller === 'machine') && (form === 'on' || form === 'in' || form === 'over')
@@ -145,6 +148,7 @@ const inputOf = (row: EndpointRow, fixtures: EndpointFixtures): Readonly<Record<
 	return input !== undefined && isSampleObject(input) ? input : undefined
 }
 
+/** One endpoint's cases: an object or a value of another scope is refused, and no answer holds another scope's rows. */
 const endpointCases = (row: EndpointRow, fixtures: EndpointFixtures): readonly Case[] => {
 	if (!isAccessTested(row) || row.requirement === null || row.requirement.kind !== 'action') return []
 	const { access } = row.requirement
