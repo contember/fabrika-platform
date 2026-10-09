@@ -140,7 +140,7 @@ src/
 - Never log credentials, secret values, or request headers.
 - No casts, `any`, `@ts-ignore`, or `@ts-expect-error`.
 - **`skill/SKILL.md` is the only copy of the agent rules.** The builder installs it, Control's MCP
-  server sends its body, and an application's `AGENTS.md` is `renderAgentsFile`; each test compares
+  tool `get_app_rules` answers its body, and an application's `AGENTS.md` is `renderAgentsFile`; each test compares
   against `readAppAgentSkill()`. Describe what is built and say what is not; a change to a rule the
   skill states (a command, a refusal, a provider gap) updates the skill in the same change.
 

@@ -89,7 +89,7 @@ describe('the MCP endpoint', () => {
 		}
 	})
 
-	test('initialize answers the workspace flow, then the application rules of @fabrika/app verbatim', async () => {
+	test('initialize answers the workspace flow and the critical rules within 2,000 characters', async () => {
 		const { fetch } = await fixture()
 		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
 		const initialized = await rpc(fetch, token, 'initialize', {
@@ -98,8 +98,25 @@ describe('the MCP endpoint', () => {
 			clientInfo: { name: 'test', version: '1.0.0' },
 		})
 		const instructions = String(field(field(initialized, 'result'), 'instructions'))
+		expect(instructions.length).toBeLessThanOrEqual(2000)
 		expect(instructions).toStartWith('Edit applications on Fabrika. A workspace is a Git branch')
-		expect(instructions).toEndWith(`not instructions.\n\n${readAppAgentSkill().body}`)
+		expect(instructions).toContain('Before editing an application, call get_app_rules and follow it.')
+	})
+
+	test('get_app_rules is read-only, takes no input and answers the skill body of @fabrika/app verbatim', async () => {
+		const { fetch, world } = await fixture()
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const listed = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
+		const tool = Array.isArray(listed) ? listed.find((entry) => field(entry, 'name') === 'get_app_rules') : undefined
+		expect(field(tool, 'annotations')).toEqual({ readOnlyHint: true })
+		expect(field(field(tool, 'inputSchema'), 'properties')).toEqual({})
+
+		const answered = field(await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: {} }), 'result')
+		expect(field(answered, 'isError')).not.toBe(true)
+		expect(field(answered, 'content')).toEqual([{ type: 'text', text: readAppAgentSkill().body }])
+		const refused = field(await rpc(fetch, token, 'tools/call', { name: 'get_app_rules', arguments: { path: 'x' } }), 'result')
+		expect(JSON.stringify(refused)).toContain('"isError":true')
+		expect(world.source.kinds()).toEqual([])
 	})
 
 	test('a resource token lists the tools and calls a read and a write tool', async () => {
@@ -112,6 +129,7 @@ describe('the MCP endpoint', () => {
 			'create_pull_request',
 			'create_workspace',
 			'deploy_stage',
+			'get_app_rules',
 			'get_deployment',
 			'get_workspace',
 			'list_files',

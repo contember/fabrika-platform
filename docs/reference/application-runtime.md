@@ -702,7 +702,7 @@ contract application: the contract first, tables and policies, migrations and co
 checker refuses, and what is not built yet. Three places carry it, all read through `@fabrika/app/agent-skill`:
 
 - `fabrika builder init` installs the file verbatim as `.claude/skills/fabrika-app/` and `.agents/skills/fabrika-app/`;
-- Control's MCP server sends its body after the workspace flow as the server `instructions`;
+- Control's MCP server answers its body from the read-only tool `get_app_rules`, which its `instructions` name;
 - the template's `AGENTS.md` is `renderAgentsFile`: the body under a generated-file marker. The template does not
   carry it yet.
 
