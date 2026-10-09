@@ -19,7 +19,7 @@ import {
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
 import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, type HeaderPolicy, withResponseHeaders } from '@fabrika/proxy-core/headers'
-import { type ContractProxyApp, isContractProxyApp, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { type ContractProxyApp, isApplicationEntry, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Cloudflare's managed client address — this composition's answer to "who is the client".
@@ -108,7 +108,7 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: VerifyService): ProxyFetch {
 	const answerHeaders = new Map<string, AnswerHeaders>()
 	for (const app of manifest.apps) {
-		if (isContractProxyApp(app)) answerHeaders.set(app.id, contractAnswerHeaders(app))
+		if (isApplicationEntry(app)) answerHeaders.set(app.id, contractAnswerHeaders(app))
 	}
 	return async (request) => {
 		const url = new URL(request.url)
@@ -152,7 +152,7 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 			if (value !== null && value !== '') upstreamHeaders.set(header, value)
 		}
 		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3).
-		if (isContractProxyApp(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
+		if (isApplicationEntry(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
 
 		const treatment = answerHeaders.get(app.id)
 		let answer: Response
@@ -204,7 +204,7 @@ function findApp(manifest: ProxyManifest, url: URL): ProxyApp | null {
  * answered by the metadata endpoint, which compares exactly and 404s a mismatch, and never reaches the gates.
  */
 function isOAuthMetadataPath(app: ProxyApp, url: URL): boolean {
-	if (isContractProxyApp(app)) return false
+	if (isApplicationEntry(app)) return false
 	const path = url.pathname.toLowerCase()
 	return app.oauthResources?.some((resource) => new URL(resource.resourceMetadata).pathname.toLowerCase() === path) ?? false
 }

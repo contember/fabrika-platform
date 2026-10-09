@@ -1,4 +1,5 @@
-import { APP_CALLER_PREFIX, type Caller, CONNECT_PREFIX, type EndpointRequirement } from './contract'
+import { APP_CALLER_PREFIX, CONNECT_PREFIX, type EndpointRequirement } from './contract'
+import { type AuthenticatedRequirement, OAUTH_CALLER, type TokenCaller } from './installation-endpoint'
 import { permits } from './permissions'
 import type { AccessTokenClaims } from './token'
 import type { PermissionEntry } from './types'
@@ -6,9 +7,13 @@ import type { PermissionEntry } from './types'
 /**
  * Whether a token's permissions meet an endpoint's requirement. This is authorization, not a gate: it reads only the
  * token. `member` is any permission of this application; an action is that action in some scope, global included.
- * The access form narrows it to one scope afterwards, against the application's own data.
+ * The access form narrows it to one scope afterwards, against the application's own data. `authenticated`, which
+ * only an installation row carries, needs no permission.
  */
-export function satisfies(requirement: EndpointRequirement, perms: readonly PermissionEntry[]): boolean {
+export function satisfies(requirement: EndpointRequirement | AuthenticatedRequirement, perms: readonly PermissionEntry[]): boolean {
+	if (requirement.kind === 'authenticated') {
+		return true
+	}
 	if (requirement.kind === 'member') {
 		return perms.length > 0
 	}
@@ -16,13 +21,14 @@ export function satisfies(requirement: EndpointRequirement, perms: readonly Perm
 }
 
 /**
- * The caller kind a verified application token presents: a `user` principal is `human`, a `service` principal is
- * `machine`, a connector key of application `<id>` is `app:<id>`, and a token bound to no principal is a share link.
- * A job or webhook token and an OAuth resource token are no caller: `null` is refused by every endpoint.
+ * The caller kind a verified token presents: a `user` principal is `human`, a `service` principal is `machine`, a
+ * connector key of application `<id>` is `app:<id>`, and a token bound to no principal is a share link. An OAuth
+ * resource token is `oauth`, which only an installation row admits. A job or webhook token is no caller: `null` is
+ * refused by every endpoint.
  */
-export function callerOf(claims: AccessTokenClaims): Caller | null {
+export function callerOf(claims: AccessTokenClaims): TokenCaller | null {
 	if (claims.oauth !== undefined) {
-		return null
+		return OAUTH_CALLER
 	}
 	switch (claims.ptype) {
 		case 'user':
@@ -43,6 +49,6 @@ export function callerOf(claims: AccessTokenClaims): Caller | null {
  * Whether a caller may be admitted at an endpoint path. A connector caller `app:<id>` reaches only an export's paths
  * (ADR-0022 "Principal kinds"); every other caller is not limited by the path.
  */
-export function callerAdmittedAt(caller: Caller, path: string): boolean {
+export function callerAdmittedAt(caller: TokenCaller, path: string): boolean {
 	return !caller.startsWith(APP_CALLER_PREFIX) || path.startsWith(`${CONNECT_PREFIX}/`)
 }

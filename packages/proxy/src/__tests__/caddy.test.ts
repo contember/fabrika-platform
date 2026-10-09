@@ -19,9 +19,9 @@ import {
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
 import { BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
-import type { ContractProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
+import type { ContractProxyApp, InstallationProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
-import { endpointRow } from '../../../proxy-core/src/__tests__/helpers'
+import { endpointRow, installationRow } from '../../../proxy-core/src/__tests__/helpers'
 import {
 	buildCaddyConfig,
 	type CaddyBuildOptions,
@@ -700,5 +700,63 @@ describe('a contract app — the response headers', () => {
 			headers: policyValues(BASE_HEADER_POLICY),
 			body: 'bad request',
 		})
+	})
+})
+
+describe('an installation entry — the hop of an installation service', () => {
+	const resource = {
+		resource: 'https://console.example.com/mcp',
+		resourceMetadata: 'https://console.example.com/.well-known/oauth-protected-resource/mcp',
+		authorizationServers: ['https://iam.example.com'],
+		scopesSupported: ['authoring'],
+	}
+	const entry: InstallationProxyApp = {
+		id: 'vozka',
+		hosts: ['console.example.com'],
+		upstream: 'control:3000',
+		scheme: 'https',
+		installation: true,
+		endpoints: [
+			installationRow({ id: 'admin', kind: 'protocol', method: '*', path: '/admin/*', callers: [], requirement: null, admission: null, oauth: null }),
+		],
+		reservedPrefixes: [],
+		oauthResources: [resource],
+	}
+	const route = buildCaddyConfig({ apps: [entry] }, OPTIONS).apps.http.servers['proxy']?.routes[0]
+	if (route === undefined) throw new Error('expected an app route')
+	const raw = rawSubrouteOf(route).routes
+	const steps = subrouteOf(route).routes
+	const placeholder = (header: string) => `{http.reverse_proxy.header.${header}}`
+
+	test('keeps the Authorization header on every allow: the service reads its own credential on a protocol row', () => {
+		const auth = proxyHandler(steps[2])
+		expect(auth.rewrite?.uri).toBe('/verify?app=vozka')
+		expect(JSON.stringify(auth.handle_response)).not.toContain('Authorization')
+	})
+
+	test('copies the endpoint the decision selected, from a 2xx only and only when set', () => {
+		expect(proxyHandler(steps[2]).handle_response?.[0]?.routes).toContainEqual({
+			match: [{ not: [{ vars: { [placeholder(ENDPOINT_HEADER)]: [''] } }] }],
+			handle: [{ handler: 'headers', request: { set: { [ENDPOINT_HEADER]: [placeholder(ENDPOINT_HEADER)] } } }],
+		})
+		const first = steps[0]?.handle[0]
+		if (first?.handler !== 'headers') throw new Error('expected a headers handler')
+		expect(first.request?.delete).toContain(ENDPOINT_HEADER)
+	})
+
+	test('sets no proxy secret and no response policy; its own refusal carries the base policy', () => {
+		const upstream = upstreamOf(steps.at(-1))
+		expect(upstream.upstreams).toEqual([{ dial: 'control:3000' }])
+		expect(upstream.headers?.response).toBeUndefined()
+		expect(upstream.headers?.request?.set).toBeUndefined()
+		expect(JSON.stringify(steps.slice(1))).not.toContain(PROXY_SECRET_HEADER)
+		expect(JSON.stringify(raw)).not.toContain('status_code":[1]')
+		expect(raw[0]?.handle[0]).toEqual({ handler: 'static_response', status_code: 400, headers: policyValues(BASE_HEADER_POLICY), body: 'bad request' })
+	})
+
+	test('answers its RFC 9728 metadata path at the auth service before forward_auth', () => {
+		expect(steps[1]?.match).toEqual([{ path: ['/.well-known/oauth-protected-resource/mcp'] }])
+		expect(proxyHandler(steps[1]).rewrite).toEqual({ method: 'GET', uri: '/oauth-metadata?app=vozka' })
+		expect(proxyHandler(steps[1]).handle_response).toBeUndefined()
 	})
 })

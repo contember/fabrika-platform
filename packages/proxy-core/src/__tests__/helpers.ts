@@ -12,6 +12,7 @@ import {
 	buildResourceAccessClaims,
 	type EndpointRequirement,
 	type ExchangeAuthCodeResult,
+	type InstallationEndpointRow,
 	type Jwks,
 	type MintFromKeyResult,
 	type MintTokenResult,
@@ -32,7 +33,15 @@ import {
 import { NO_CSP_ORIGINS } from '../headers'
 import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
-import type { ContractProxyApp, GateProxyApp, OAuthProtectedResource, ProxyEndpointRow, ProxyManifest } from '../manifest'
+import type {
+	ContractProxyApp,
+	GateProxyApp,
+	InstallationProxyApp,
+	InstallationProxyEndpointRow,
+	OAuthProtectedResource,
+	ProxyEndpointRow,
+	ProxyManifest,
+} from '../manifest'
 
 export const ISSUER = 'https://iam.test'
 export const APP = 'example-app'
@@ -260,6 +269,21 @@ export function contractAppWith(
 		csp: NO_CSP_ORIGINS,
 		...overrides,
 	}
+}
+
+/** An installation manifest row with its true digest. */
+export function installationRow(fields: InstallationEndpointRow): InstallationProxyEndpointRow {
+	const rules = { ...fields, delegation: null }
+	return { ...rules, digest: requirementDigest(rules) }
+}
+
+/** An installation entry: only platform composition writes the marker. */
+export function installationAppWith(
+	endpoints: InstallationProxyEndpointRow[],
+	reservedPrefixes: string[] = [],
+	overrides: Partial<InstallationProxyApp> = {},
+): InstallationProxyApp {
+	return { id: APP, hosts: [HOST], upstream: 'app:3000', scheme: 'https', installation: true, endpoints, reservedPrefixes, ...overrides }
 }
 
 export interface VerifyRequestOptions {

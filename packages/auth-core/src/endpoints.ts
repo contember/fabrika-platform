@@ -3,6 +3,7 @@
 
 import { isCanonicalPath } from './canonical-path'
 import type { EndpointRow } from './contract'
+import { ANY_METHOD, type InstallationEndpointMethod } from './installation-endpoint'
 import { parameterName } from './path-segment'
 
 type Segment = { readonly kind: 'literal'; readonly value: string } | { readonly kind: 'param'; readonly name: string } | {
@@ -11,8 +12,15 @@ type Segment = { readonly kind: 'literal'; readonly value: string } | { readonly
 
 type PatternResult = { readonly ok: true; readonly segments: readonly Segment[] } | { readonly ok: false; readonly problem: string }
 
-/** What selection reads of a row. The proxy's manifest rows carry these and the rules, not the schemas. */
-export type EndpointPattern = Pick<EndpointRow, 'id' | 'method' | 'path'>
+/**
+ * What selection reads of a row. The proxy's manifest rows carry these and the rules, not the schemas. Only an
+ * installation row may have the method `*`.
+ */
+export interface EndpointPattern {
+	readonly id: string
+	readonly method: InstallationEndpointMethod
+	readonly path: string
+}
 
 /** A table of any rows that carry an endpoint pattern; `EndpointTable` is the artifact's. */
 export interface EndpointPatternTable<Row extends EndpointPattern> {
@@ -65,7 +73,8 @@ export class EndpointTableError extends Error {
 
 /**
  * Refuse a table in which a request could select an endpoint by accident: an invalid path or reserved prefix, a
- * duplicate id, or two endpoints of one method whose paths have the same shape, which no specificity orders.
+ * duplicate id, or two endpoints of one method whose paths have the same shape, which no specificity orders. The
+ * method `*` is every method, so it shares a shape with no other endpoint.
  */
 export function assertNoAmbiguity<Row extends EndpointPattern>(table: EndpointPatternTable<Row>): void {
 	analyse(table)
@@ -88,7 +97,7 @@ function analyse<Row extends EndpointPattern>(table: EndpointPatternTable<Row>):
 	const problems: string[] = []
 	const endpoints: CompiledEndpoint<Row>[] = []
 	const ids = new Set<string>()
-	const shapes = new Map<string, string>()
+	const shapes = new Map<string, EndpointPattern[]>()
 	for (const row of table.endpoints) {
 		if (ids.has(row.id)) {
 			problems.push(`endpoint id '${row.id}' is declared twice`)
@@ -99,12 +108,13 @@ function analyse<Row extends EndpointPattern>(table: EndpointPatternTable<Row>):
 			problems.push(`endpoint '${row.id}' has path '${row.path}': ${pattern.problem}`)
 			continue
 		}
-		const shape = `${row.method} ${JSON.stringify(pattern.segments.map(shapeOf))}`
-		const previous = shapes.get(shape)
+		const shape = JSON.stringify(pattern.segments.map(shapeOf))
+		const sameShape = shapes.get(shape) ?? []
+		const previous = sameShape.find((other) => methodsOverlap(other.method, row.method))
 		if (previous !== undefined) {
-			problems.push(`'${row.id}' and '${previous}' both serve ${row.method} ${row.path}`)
+			problems.push(`'${row.id}' and '${previous.id}' both serve ${row.method} ${row.path}`)
 		}
-		shapes.set(shape, row.id)
+		shapes.set(shape, [...sameShape, row])
 		endpoints.push({ row, segments: pattern.segments })
 	}
 	const prefixes = new Set<string>()
@@ -136,7 +146,7 @@ function select<Row extends EndpointPattern>(
 	let best: { readonly endpoint: CompiledEndpoint<Row>; readonly params: Record<string, string> } | null = null
 	let tied = false
 	for (const endpoint of endpoints) {
-		if (endpoint.row.method !== method || (reserved !== null && !isUnder(endpoint.row.path, reserved))) {
+		if (!servesMethod(endpoint.row.method, method) || (reserved !== null && !isUnder(endpoint.row.path, reserved))) {
 			continue
 		}
 		const params = matchSegments(endpoint.segments, path)
@@ -156,6 +166,15 @@ function select<Row extends EndpointPattern>(
 		return { outcome: 'no-endpoint' }
 	}
 	return { outcome: 'endpoint', endpoint: best.endpoint.row, params: best.params }
+}
+
+function methodsOverlap(declared: string, other: string): boolean {
+	return declared === other || declared === ANY_METHOD || other === ANY_METHOD
+}
+
+/** A request's method is never a pattern: a request sent with the method `*` selects only a `*` endpoint. */
+function servesMethod(declared: string, requested: string): boolean {
+	return declared === ANY_METHOD || declared === requested
 }
 
 /** Split literally: a trailing `/` stays an empty last segment, so `/a/` and `/a` are different paths. */

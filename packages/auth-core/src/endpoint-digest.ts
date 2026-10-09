@@ -3,6 +3,7 @@
 
 import type { ContractArtifact, EndpointRow, ExportDescription } from './contract'
 import { canonicalAdmission, canonicalArtifactJson, canonicalJson, canonicalShape } from './contract-canonical'
+import type { InstallationEndpointRow } from './installation-endpoint'
 import { sha256Hex } from './sha256'
 
 /** The variable that carries the digest of the contract a deploy was approved with; the application compares its own. */
@@ -15,10 +16,17 @@ export const FABRIKA_CONTRACT_DIGEST = 'FABRIKA_CONTRACT_DIGEST'
  */
 export type EndpointDelegation = 'members' | 'creates'
 
-/** The fields of an endpoint row the proxy applies, with its delegation. Its digest covers exactly these. */
-export type EndpointRules = Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'> & {
-	readonly delegation: EndpointDelegation | null
-}
+/**
+ * The fields of an endpoint row the proxy applies, with its delegation. Its digest covers exactly these. An
+ * installation row adds its OAuth scopes; an application row has no `oauth` field.
+ */
+export type EndpointRules =
+	| (Pick<EndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission'> & {
+		readonly delegation: EndpointDelegation | null
+	})
+	| (Pick<InstallationEndpointRow, 'kind' | 'method' | 'path' | 'callers' | 'requirement' | 'admission' | 'oauth'> & {
+		readonly delegation: null
+	})
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
 
@@ -47,13 +55,13 @@ export function endpointDigest(artifact: Pick<ContractArtifact, 'dimensions'>, r
 
 /**
  * The digest of what the proxy applies to an endpoint: its kind, method, path, callers, requirement, admission and
- * delegation.
- * Caller and content-type order carry no meaning, so they do not change it; input and output schemas are not part of
- * it, because the proxy does not apply them.
+ * delegation, and an installation row's OAuth scopes.
+ * Caller, content-type and scope order carry no meaning, so they do not change it; input and output schemas are not
+ * part of it, because the proxy does not apply them.
  */
 export function requirementDigest(rules: EndpointRules): string {
-	const callers: string[] = [...rules.callers].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-	return digestOf(canonicalJson({
+	const callers = sortedCodeUnits(rules.callers)
+	const applied = {
 		kind: rules.kind,
 		method: rules.method,
 		path: rules.path,
@@ -61,7 +69,14 @@ export function requirementDigest(rules: EndpointRules): string {
 		requirement: rules.requirement,
 		admission: rules.admission === null ? null : canonicalAdmission(rules.admission),
 		delegation: rules.delegation,
-	}))
+	}
+	// Only a row that admits `oauth` adds the key, so every application row keeps its digest byte for byte.
+	const oauth = 'oauth' in rules ? rules.oauth : null
+	return digestOf(canonicalJson(oauth === null ? applied : { ...applied, oauth: { scopes: sortedCodeUnits(oauth.scopes) } }))
+}
+
+function sortedCodeUnits(values: readonly string[]): string[] {
+	return [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
 /** The digest of the whole artifact, over its one canonical serialization. */

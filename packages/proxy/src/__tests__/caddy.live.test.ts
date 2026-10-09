@@ -5,12 +5,12 @@
 
 import { proxySecretVariable } from '@fabrika/auth-core'
 import { FILE_TREATMENT, headerPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
-import type { ContractProxyApp } from '@fabrika/proxy-core/manifest'
+import type { ContractProxyApp, InstallationProxyApp } from '@fabrika/proxy-core/manifest'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { endpointRow } from '../../../proxy-core/src/__tests__/helpers'
+import { endpointRow, installationRow } from '../../../proxy-core/src/__tests__/helpers'
 import { buildCaddyConfig } from '../caddy'
 
 const CADDY = process.env['FABRIKA_TEST_CADDY_BIN'] ?? ''
@@ -92,8 +92,9 @@ async function rawRequest(
 	port: number,
 	headers: Record<string, string>,
 	path = '/api/me',
+	host = '127.0.0.1',
 ): Promise<{ status: number; headers: Headers; informational: { status: number; headers: Headers }[]; contentTypes: string[] }> {
-	const lines = [`GET ${path} HTTP/1.1`, 'Host: 127.0.0.1', ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`), '', '']
+	const lines = [`GET ${path} HTTP/1.1`, `Host: ${host}`, ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`), '', '']
 	let response = ''
 	await new Promise<void>((resolve, reject) => {
 		Bun.connect({
@@ -308,5 +309,118 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		}
 		const page = await rawRequest(port, { Connection: 'close' }, '/api/early')
 		expect(page.headers.get('Content-Security-Policy')).toBe(headerPolicy(contract.csp, 'https://operations.example.com')[0]?.[1] ?? '')
+	})
+})
+
+describe.skipIf(CADDY === '')('an installation entry beside an application in a running Caddy', () => {
+	const PROTOCOL = installationRow({
+		id: 'admin',
+		kind: 'protocol',
+		method: '*',
+		path: '/admin/*',
+		callers: [],
+		requirement: null,
+		admission: null,
+		oauth: null,
+	})
+	const PROTOCOL_ENDPOINT = `${PROTOCOL.id}@${PROTOCOL.digest}`
+	const SERVICE_CSP = "default-src 'self'; form-action https://return.example"
+	const seenByApp: { host: string | null; headers: Headers }[] = []
+	// Both decisions are anonymous allows: an endpoint, no token.
+	const auth = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		fetch(request) {
+			const installation = request.headers.get('X-Forwarded-Host')?.startsWith('iam.') === true
+			return new Response(null, {
+				status: 200,
+				headers: { 'X-Request-Id': 'proxy-request', 'X-Fabrika-Endpoint': installation ? PROTOCOL_ENDPOINT : ENDPOINT },
+			})
+		},
+	})
+	const upstream = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		fetch(request) {
+			seenByApp.push({ host: request.headers.get('Host'), headers: request.headers })
+			return new Response('ok', { headers: { 'Content-Security-Policy': SERVICE_CSP, 'Connection': 'close' } })
+		},
+	})
+	const port = freePort()
+	const entry: InstallationProxyApp = {
+		id: 'propustka',
+		hosts: ['iam.example.com'],
+		upstream: `127.0.0.1:${upstream.port}`,
+		scheme: 'https',
+		installation: true,
+		endpoints: [PROTOCOL],
+		reservedPrefixes: [],
+	}
+	const application: ContractProxyApp = {
+		id: 'notes@prod',
+		hosts: ['notes.example.com'],
+		upstream: `127.0.0.1:${upstream.port}`,
+		scheme: 'https',
+		endpoints: [],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
+	}
+	const dir = mkdtempSync(join(tmpdir(), 'fabrika-caddy-'))
+	let caddy: ReturnType<typeof Bun.spawn> | undefined
+
+	beforeAll(async () => {
+		const config = buildCaddyConfig({ apps: [entry, application] }, {
+			authUpstream: `127.0.0.1:${auth.port}`,
+			listen: [`127.0.0.1:${port}`],
+			healthListen: [`127.0.0.1:${freePort()}`],
+		})
+		writeFileSync(join(dir, 'caddy.json'), JSON.stringify(config))
+		caddy = Bun.spawn([CADDY, 'run', '--config', join(dir, 'caddy.json')], {
+			env: { ...process.env, HOME: dir, XDG_DATA_HOME: dir, XDG_CONFIG_HOME: dir, [proxySecretVariable('notes@prod')]: SECRET },
+			stdout: 'ignore',
+			stderr: 'pipe',
+		})
+		for (let attempt = 0; attempt < 100; attempt++) {
+			try {
+				await rawRequest(port, { Connection: 'close' }, '/admin/x', 'iam.example.com')
+				break
+			} catch {
+				await Bun.sleep(50)
+			}
+		}
+		seenByApp.length = 0
+	}, 15_000)
+
+	afterAll(() => {
+		caddy?.kill()
+		void auth.stop(true)
+		void upstream.stop(true)
+		rmSync(dir, { recursive: true, force: true })
+	})
+
+	test('a protocol row reaches the service with its Authorization, the endpoint and no proxy secret', async () => {
+		const answer = await rawRequest(port, { Connection: 'close', Authorization: 'Bearer px_provisioning' }, '/admin/apps', 'iam.example.com')
+		expect(answer.status).toBe(200)
+		const [seen] = seenByApp.splice(0)
+		expect(seen?.headers.get('Authorization')).toBe('Bearer px_provisioning')
+		expect(seen?.headers.get('X-Fabrika-Endpoint')).toBe(PROTOCOL_ENDPOINT)
+		expect(seen?.headers.get('X-Fabrika-Token')).toBeNull()
+		expect(seen?.headers.get('X-Fabrika-Proxy-Secret')).toBeNull()
+	})
+
+	test("the service's own policy passes through untouched", async () => {
+		const answer = await rawRequest(port, { Connection: 'close' }, '/admin/apps', 'iam.example.com')
+		seenByApp.splice(0)
+		expect(answer.headers.get('Content-Security-Policy')).toBe(SERVICE_CSP)
+	})
+
+	test("an application's anonymous endpoint loses the Authorization the proxy did not read, and gets the secret", async () => {
+		const answer = await rawRequest(port, { Connection: 'close', Authorization: 'Bearer px_key' }, '/healthz', 'notes.example.com')
+		expect(answer.status).toBe(200)
+		const [seen] = seenByApp.splice(0)
+		expect(seen?.headers.get('Authorization')).toBeNull()
+		expect(seen?.headers.get('X-Fabrika-Proxy-Secret')).toBe(SECRET)
+		expect(answer.headers.get('Content-Security-Policy')).not.toBe(SERVICE_CSP)
 	})
 })

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { EndpointRow, EndpointTable } from '../contract'
-import { assertNoAmbiguity, compileEndpointTable, EndpointTableError, planEndpoint } from '../endpoints'
+import { assertNoAmbiguity, compileEndpointTable, type EndpointPattern, EndpointTableError, planEndpoint } from '../endpoints'
 import { notesArtifact } from './fixtures/notes-artifact'
 
 const row = (id: string, method: 'GET' | 'POST', path: string): EndpointRow => ({
@@ -166,6 +166,55 @@ describe('reserved prefixes', () => {
 		const shadow = compileEndpointTable(table([row('param', 'POST', '/:mount/notes.list')], ['/api']))
 		expect(plan('POST', '/api/notes.list', shadow)).toBe('no-endpoint')
 		expect(plan('POST', '/other/notes.list', shadow)).toBe('param')
+	})
+})
+
+describe('the method * of an installation row', () => {
+	const any = (id: string, path: string): EndpointPattern => ({ id, method: '*', path })
+	const pattern = (id: string, method: 'GET' | 'POST', path: string): EndpointPattern => ({ id, method, path })
+	const installation = compileEndpointTable({
+		endpoints: [any('mcp', '/mcp'), pattern('spa', 'GET', '/*'), pattern('rpc', 'POST', '/api/rpc')],
+		reservedPrefixes: ['/api'],
+	})
+	const select = (method: string, path: string): string => {
+		const result = planEndpoint(installation, method, path)
+		return result.outcome === 'endpoint' ? result.endpoint.id : result.outcome
+	}
+
+	test('serves every method of its path, and specificity still orders it against other paths', () => {
+		for (const method of ['GET', 'POST', 'DELETE', 'PUT', 'HEAD', 'OPTIONS']) {
+			expect(select(method, '/mcp')).toBe('mcp')
+		}
+		expect(select('GET', '/console')).toBe('spa')
+		expect(select('POST', '/api/rpc')).toBe('rpc')
+	})
+
+	test('a request method is never a pattern: `*` selects only a `*` endpoint', () => {
+		expect(select('*', '/console')).toBe('no-endpoint')
+		expect(select('*', '/api/rpc')).toBe('no-endpoint')
+		expect(select('*', '/mcp')).toBe('mcp')
+	})
+
+	test('does not widen a method-specific endpoint or cross a reserved prefix', () => {
+		expect(select('DELETE', '/console')).toBe('no-endpoint')
+		expect(select('GET', '/api/rpc')).toBe('no-endpoint')
+		expect(select('DELETE', '/mcp/x')).toBe('no-endpoint')
+	})
+
+	test('overlaps every method of the same shape in the ambiguity check', () => {
+		const problems = (endpoints: EndpointPattern[]): readonly string[] => {
+			try {
+				assertNoAmbiguity({ endpoints, reservedPrefixes: [] })
+			} catch (error) {
+				if (error instanceof EndpointTableError) return error.problems
+				throw error
+			}
+			return []
+		}
+		expect(problems([pattern('get', 'GET', '/x/:id'), any('any', '/x/:other')])).toEqual(["'any' and 'get' both serve * /x/:other"])
+		expect(problems([any('any', '/x'), pattern('post', 'POST', '/x')])).toEqual(["'post' and 'any' both serve POST /x"])
+		expect(problems([any('a', '/x/*'), any('b', '/x/*')])).toEqual(["'b' and 'a' both serve * /x/*"])
+		expect(problems([any('a', '/x'), pattern('b', 'GET', '/x/*'), pattern('c', 'POST', '/x/:id')])).toEqual([])
 	})
 })
 

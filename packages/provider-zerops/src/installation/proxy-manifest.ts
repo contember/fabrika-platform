@@ -25,7 +25,7 @@ import type { AppGates, GateRule } from '@fabrika/auth-core'
 import {
 	type GateProxyApp,
 	type GateProxyManifest,
-	isContractProxyApp,
+	isGateProxyApp,
 	type OAuthProtectedResource,
 	parseProxyManifest,
 } from '@fabrika/proxy-core/manifest'
@@ -183,7 +183,7 @@ export const resolvePlatformProxyManifest = (
 	})
 	const manifest = parseProxyManifest({ apps })
 	// Every platform service is protected by gates, so the parsed manifest holds gate apps only.
-	const gateApps = manifest?.apps.flatMap((app) => isContractProxyApp(app) ? [] : [app]) ?? []
+	const gateApps = manifest?.apps.flatMap((app) => isGateProxyApp(app) ? [app] : []) ?? []
 	if (manifest === null || gateApps.length !== manifest.apps.length) {
 		throw new Error('the resolved platform proxy manifest is not one the proxy would accept')
 	}

@@ -70,8 +70,9 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
 - **The endpoint and the delegation grant are proxy-asserted like the token.** Step 1 deletes a
   client's `X-Fabrika-Endpoint` and `X-Fabrika-Delegation`; the 2xx branch copies them back from the
   auth response. For a contract app, an allow without a token (an anonymous endpoint) also deletes
-  `Authorization`, so a key the proxy did not read never reaches the app. A gate app keeps it: IAM's
-  `/admin/*` reads its own bearer.
+  `Authorization`, so a key the proxy did not read never reaches the app. An installation service — a
+  gate app or an installation entry (`isApplicationEntry` false) — keeps it: IAM's `/admin/*` reads its
+  own bearer, and a `protocol` row is one the service authenticates itself.
 - **Caddy's header order is code, not JSON, so the chain is proven in a running Caddy** (`caddy.live.test.ts`).
   Within one `HeaderOps` a named delete runs AFTER the set, so the strip and the client-address set are two
   handlers. `reverse_proxy` deletes every header `Connection` names after the asserted headers are set, so a
@@ -80,8 +81,8 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
 - **A contract app's upstream hop carries its proxy secret on Zerops** (ADR-0022 rule 5): step 3 sets
   `X-Fabrika-Proxy-Secret` from `{env.<proxySecretVariable(app.id)>}`, so the secret is in no generated
   file. An unset variable sends an empty secret, which the application refuses; the auth service only
-  warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. A gate app gets
-  no secret, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
+  warns at boot (`appsWithoutProxySecret`), because one proxy fronts a whole namespace. An installation
+  service gets no secret, and the Cloudflare Worker sets none: its service binding is the authenticated hop.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
@@ -99,7 +100,8 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   before its own operations (`Got1xxResponse`). A deferred handler earlier in the chain runs LATER, so
   their order is code; `caddy.live.test.ts` proves each against a raw upstream.
   The `Connection` refusal and the unmatched-host 404 carry the policy as `static_response` headers; the
-  auth service's denials carry the one `@fabrika/proxy-core` set. A gate app's answers are untouched.
+  auth service's denials carry the one `@fabrika/proxy-core` set. An installation service's answers are
+  untouched: IAM and Control set their own per-response CSPs.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
   different denials. Both deny; only the second is an incident — including on the human path, where a
   503 must NOT degrade into a bounce to login (that is a login loop hiding an outage). A cache entry

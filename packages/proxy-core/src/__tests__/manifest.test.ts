@@ -4,26 +4,36 @@
  * nobody wrote.
  */
 
-import { type ContractArtifact, contractDigest, type EndpointRow, isDigest } from '@fabrika/auth-core'
+import {
+	type ContractArtifact,
+	contractDigest,
+	type EndpointRow,
+	type InstallationAnonymousEndpoint,
+	type InstallationCredentialedEndpoint,
+	type InstallationEndpointRow,
+	isDigest,
+	requirementDigest,
+} from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { MAX_CSP_ORIGINS } from '../headers'
 import {
 	contractProxyTable,
 	encodeProxyManifestJson,
-	isContractProxyApp,
+	isApplicationEntry,
+	isGateProxyApp,
 	isProxyHost,
 	parseProxyManifest,
 	parseProxyManifestJson,
 	type ProxyManifest,
 } from '../manifest'
 import { createVerifyService } from '../service'
-import { FakeIam, ISSUER, verifyRequest } from './helpers'
+import { contractAppWith, FakeIam, HOST, installationAppWith, installationRow, ISSUER, OAUTH_RESOURCE, verifyRequest } from './helpers'
 
 /** The gate rules of the first app; a contract app or no app has none. */
 const rulesOf = (manifest: ProxyManifest | null) => {
 	const app = manifest?.apps[0]
-	return app === undefined || isContractProxyApp(app) ? undefined : app.gates.rules
+	return app === undefined || !isGateProxyApp(app) ? undefined : app.gates.rules
 }
 
 const withHost = (host: string) => ({ apps: [{ id: 'a', hosts: [host], upstream: 'a:1', gates: { rules: [] } }] })
@@ -274,7 +284,7 @@ describe('contract apps — the endpoint table', () => {
 	test('a table the producer emitted parses unchanged', () => {
 		const parsed = parseProxyManifest({ apps: [app] })
 		const parsedApp = parsed?.apps[0]
-		expect(parsedApp !== undefined && isContractProxyApp(parsedApp)).toBe(true)
+		expect(parsedApp !== undefined && isApplicationEntry(parsedApp)).toBe(true)
 		expect(parsed).toEqual({ apps: [{ ...app, scheme: 'https' }] })
 	})
 
@@ -318,5 +328,113 @@ describe('contract apps — the endpoint table', () => {
 
 	test('refuses an endpoint table beside gates on a gate app', () => {
 		expect(parseProxyManifest({ apps: [{ ...VALID.apps[0], endpoints: [] }] })).toBeNull()
+	})
+})
+
+describe('installation entries — the forms no application may declare', () => {
+	const mcpRules: InstallationCredentialedEndpoint = {
+		id: 'mcp',
+		kind: 'service',
+		method: '*',
+		path: '/mcp',
+		callers: ['oauth'],
+		requirement: { kind: 'authenticated' },
+		admission: null,
+		oauth: { scopes: ['mcp:read'] },
+	}
+	const adminRules: InstallationAnonymousEndpoint = {
+		id: 'admin',
+		kind: 'protocol',
+		method: '*',
+		path: '/admin/*',
+		callers: [],
+		requirement: null,
+		admission: null,
+		oauth: null,
+	}
+	const mcp = installationRow(mcpRules)
+	const admin = installationRow(adminRules)
+	const entry = installationAppWith([mcp, admin], [], { oauthResources: [OAUTH_RESOURCE] })
+	const application = contractAppWith([], [], { id: 'notes@prod' })
+	const parses = (app: unknown): boolean => parseProxyManifest({ apps: [app] }) !== null
+
+	test('an installation entry parses unchanged, and only it is an installation service', () => {
+		const parsed = parseProxyManifest({ apps: [entry] })
+		expect(parsed).toEqual({ apps: [entry] })
+		const parsedEntry = parsed?.apps[0]
+		expect(parsedEntry !== undefined && (isApplicationEntry(parsedEntry) || isGateProxyApp(parsedEntry))).toBe(false)
+	})
+
+	// Rows with true digests and no `oauth` field, so each is refused for its form and not for a stray field.
+	const anonymous = { id: 'x', path: '/x', callers: [], requirement: null, admission: null, delegation: null, oauth: null } as const
+	const service = { id: 'x', path: '/x', admission: null, delegation: null, requirement: { kind: 'authenticated' } } as const
+	const withoutScopes = (rules: InstallationEndpointRow) => {
+		const { oauth: _oauth, ...row } = rules
+		return { ...row, delegation: null, digest: requirementDigest({ ...rules, oauth: null, delegation: null }) }
+	}
+
+	test.each<[string, unknown]>([
+		['the kind protocol', withoutScopes({ ...anonymous, kind: 'protocol', method: 'GET' })],
+		['the method *', withoutScopes({ ...anonymous, kind: 'health', method: '*' })],
+		[
+			'the kind service with the requirement authenticated',
+			withoutScopes({ ...service, kind: 'service', method: 'POST', callers: ['human'], oauth: null }),
+		],
+		['the caller oauth', { ...withoutScopes({ ...service, kind: 'service', method: 'POST', callers: ['oauth'], oauth: null }), kind: 'query' }],
+	])('an application entry refuses %s', (_name, row) => {
+		expect(parses({ ...application, endpoints: [row] })).toBe(false)
+	})
+
+	test('the same entry with an application row parses', () => {
+		const health = { ...anonymous, kind: 'health', method: 'GET' } as const
+		expect(parses({ ...application, endpoints: [withoutScopes(health)] })).toBe(true)
+	})
+
+	test('an application entry marked installation is refused, never read as either form', () => {
+		expect(parses({ ...application, installation: true })).toBe(false)
+		expect(parses({ ...entry, gates: { rules: [] } })).toBe(false)
+		expect(parses({ id: 'iam', hosts: ['iam.example.com'], upstream: 'iam:3000', gates: { rules: [] }, installation: true })).toBe(false)
+	})
+
+	test('an installation entry refuses an application environment id and what only an application carries', () => {
+		expect(parses({ ...entry, id: 'notes@prod' })).toBe(false)
+		expect(parses({ ...entry, snapshot: application.snapshot })).toBe(false)
+		expect(parses({ ...entry, csp: application.csp })).toBe(false)
+		expect(parses({ ...entry, operationsOrigin: 'https://errors.example.com' })).toBe(false)
+	})
+
+	test('an installation entry refuses an application kind', () => {
+		const query = { ...admin, kind: 'query' }
+		expect(parses({ ...entry, endpoints: [query] })).toBe(false)
+	})
+
+	test('an oauth row needs a registered resource on its path, and only scopes the resource supports', () => {
+		expect(parses({ ...entry, oauthResources: undefined })).toBe(false)
+		expect(parses({ ...entry, endpoints: [installationRow({ ...mcpRules, path: '/mcp/*' })] })).toBe(false)
+		expect(parses({ ...entry, endpoints: [installationRow({ ...mcpRules, oauth: { scopes: ['admin'] } })] })).toBe(false)
+		const alt = 'alt.example.com'
+		const altResource = (path: string) => ({
+			...OAUTH_RESOURCE,
+			resource: `https://${alt}${path}`,
+			resourceMetadata: `https://${alt}/.well-known/oauth-protected-resource${path}`,
+		})
+		const twoHosts = { ...entry, hosts: [HOST, alt] }
+		expect(parses({ ...twoHosts, oauthResources: [OAUTH_RESOURCE, altResource('/other')] })).toBe(true)
+		expect(parses({ ...twoHosts, oauthResources: [OAUTH_RESOURCE, altResource('/mcp')] })).toBe(false)
+	})
+
+	test('oauth scopes belong exactly to a row that admits oauth', () => {
+		expect(parses({ ...entry, endpoints: [installationRow({ ...mcpRules, oauth: null })] })).toBe(false)
+		expect(parses({ ...entry, endpoints: [installationRow({ ...mcpRules, callers: ['machine'] })] })).toBe(false)
+	})
+
+	test('a row whose digest does not describe its rules, its scopes included, is refused', () => {
+		expect(parses({ ...entry, endpoints: [{ ...mcp, oauth: { scopes: ['mcp:write'] } }] })).toBe(false)
+		expect(parses({ ...entry, endpoints: [{ ...admin, method: 'GET' }] })).toBe(false)
+	})
+
+	test('a * row and a row of another method on one path shape are ambiguous', () => {
+		const get = installationRow({ ...adminRules, id: 'admin.get', method: 'GET' })
+		expect(parses({ ...entry, endpoints: [mcp, admin, get] })).toBe(false)
 	})
 })

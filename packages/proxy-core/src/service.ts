@@ -51,7 +51,14 @@ import { type HandoffAttempt, handoffCookieName } from './handoff'
 import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, BASE_HEADER_POLICY, type HeaderPolicy } from './headers'
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
-import { formatOAuthBearerChallenge, isContractProxyApp, type ProxyApp, type ProxyManifest } from './manifest'
+import {
+	formatOAuthBearerChallenge,
+	hasEndpointTable,
+	isApplicationEntry,
+	type ManifestEndpointRow,
+	type ProxyApp,
+	type ProxyManifest,
+} from './manifest'
 import { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
 
 export interface VerifyServiceConfig {
@@ -89,7 +96,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	for (const app of config.manifest.apps) {
 		const resolved = resolveApp(app)
 		byId.set(app.id, resolved)
-		policies.set(app.id, isContractProxyApp(app) ? appHeaderPolicy(app) : BASE_HEADER_POLICY)
+		policies.set(app.id, isApplicationEntry(app) ? appHeaderPolicy(app) : BASE_HEADER_POLICY)
 		for (const host of app.hosts) {
 			// Normalized exactly as a forwarded host is, so the two sides cannot disagree about a port.
 			byHost.set(normalizeHost(host), resolved)
@@ -431,8 +438,8 @@ function selectApp(verifyUrl: URL, host: string, byId: Map<string, ResolvedApp>,
 
 /** The compiled form an app is protected by. The manifest parser already refused an ambiguous table. */
 function resolveApp(app: ProxyApp): ResolvedApp {
-	return isContractProxyApp(app)
-		? { kind: 'endpoints', app, table: compileEndpointTable(app) }
+	return hasEndpointTable(app)
+		? { kind: 'endpoints', app, table: compileEndpointTable<ManifestEndpointRow>(app) }
 		: { kind: 'gates', app, gates: compileGates(app.gates) }
 }
 

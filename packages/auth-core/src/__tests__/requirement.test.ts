@@ -54,8 +54,15 @@ describe('callerOf', () => {
 		expect(callerOf({ ...base, ptype: 'app' })).toBeNull()
 	})
 
-	test('an OAuth resource token is no caller', () => {
-		expect(callerOf({ ...base, ptype: 'user', oauth: { app: 'notes@prod', clientId: 'c', scopes: [], grantId: 'g', tokenId: 't' } })).toBeNull()
+	test('an OAuth resource token is the caller oauth, which no application endpoint lists', () => {
+		expect(callerOf({ ...base, ptype: 'user', oauth: { app: 'control', clientId: 'c', scopes: [], grantId: 'g', tokenId: 't' } })).toBe('oauth')
+	})
+})
+
+describe('the authenticated requirement of an installation row', () => {
+	test('needs no permission: the caller kind check is the whole requirement', () => {
+		expect(satisfies({ kind: 'authenticated' }, [])).toBe(true)
+		expect(satisfies({ kind: 'authenticated' }, [grant('notes.read')])).toBe(true)
 	})
 })
 

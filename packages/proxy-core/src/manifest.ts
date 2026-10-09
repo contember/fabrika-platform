@@ -12,6 +12,7 @@ import {
 	type EndpointRow,
 	EndpointTableError,
 	type GateRule,
+	type InstallationEndpointRow,
 	isDigest,
 	isOAuthResourceUri,
 	parseAppEnvironmentId,
@@ -57,14 +58,44 @@ export interface ContractProxyApp extends ProxyAppBase {
 	operationsOrigin?: string
 }
 
+/**
+ * An installation service protected by an endpoint table (ADR-0022 "Installation entries"). Only trusted platform
+ * composition writes `installation: true`; its rows may use the forms no application may declare, and its hop keeps
+ * `Authorization`, sets no proxy secret and leaves the service's answers untouched.
+ */
+export interface InstallationProxyApp extends ProxyAppBase {
+	installation: true
+	/** Array order carries no meaning; `planEndpoint` selects the most specific row. */
+	endpoints: InstallationProxyEndpointRow[]
+	reservedPrefixes: string[]
+	/** The resources a row that admits `oauth` is bound to, by the resource URI's path. */
+	oauthResources?: OAuthProtectedResource[]
+}
+
 /** What a producer adds to a contract app's placement: the output of `contractProxyTable`. */
 export type ContractProxyTable = Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot' | 'csp'>
 
-/** The manifest says which form an app is protected by: `endpoints` instead of `gates`. */
-export type ProxyApp = GateProxyApp | ContractProxyApp
+/**
+ * The manifest says which form an app is protected by: `gates`, an application's endpoint table, or an installation
+ * entry's endpoint table.
+ */
+export type ProxyApp = GateProxyApp | ContractProxyApp | InstallationProxyApp
 
-export function isContractProxyApp(app: ProxyApp): app is ContractProxyApp {
+/**
+ * Whether an entry is an application: its hop carries the proxy secret, its answers get the header policy, and an
+ * anonymous endpoint's request loses `Authorization`. Every other entry is an installation service.
+ */
+export function isApplicationEntry(app: ProxyApp): app is ContractProxyApp {
+	return 'endpoints' in app && !('installation' in app)
+}
+
+/** Whether an entry is protected by an endpoint table, an application's or an installation service's. */
+export function hasEndpointTable(app: ProxyApp): app is ContractProxyApp | InstallationProxyApp {
 	return 'endpoints' in app
+}
+
+export function isGateProxyApp(app: ProxyApp): app is GateProxyApp {
+	return 'gates' in app
 }
 
 interface ProxyEndpointExtras {
@@ -80,6 +111,12 @@ export type ProxyEndpointRow =
 		digest: string
 		delegation: null
 	})
+
+/** An installation row as the proxy applies it: the row with its digest and no delegation. */
+export type InstallationProxyEndpointRow = InstallationEndpointRow & { digest: string; delegation: null }
+
+/** Any row an endpoint table of the manifest holds. */
+export type ManifestEndpointRow = ProxyEndpointRow | InstallationProxyEndpointRow
 
 export interface ProxyManifest {
 	apps: ProxyApp[]
@@ -140,7 +177,20 @@ export const gateProxyAppSchema = z.object({
 	scheme: proxyAppScheme,
 	oauthResources: z.array(oauthProtectedResourceSchema).min(1).optional(),
 	endpoints: z.undefined(),
-}).transform(({ endpoints: _endpoints, ...app }) => app).superRefine((app, ctx) => {
+	installation: z.undefined(),
+}).transform(({ endpoints: _endpoints, installation: _installation, ...app }) => app).superRefine((app, ctx) => {
+	checkOAuthResources(app, ctx)
+	for (const rule of app.gates.rules) {
+		if (rule.kind !== 'oauth') continue
+		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
+		if (resource === undefined || !rule.scopes.every((scope) => resource.scopesSupported.includes(scope))) {
+			ctx.addIssue({ code: 'custom', message: 'unregistered OAuth gate' })
+		}
+	}
+}) satisfies z.ZodType<GateProxyApp, z.ZodTypeDef, unknown>
+
+/** Each resource once, on one of the entry's own hosts and its scheme. */
+function checkOAuthResources(app: Pick<GateProxyApp, 'hosts' | 'scheme' | 'oauthResources'>, ctx: z.RefinementCtx): void {
 	const resources = new Set<string>()
 	const metadata = new Set<string>()
 	for (const resource of app.oauthResources ?? []) {
@@ -154,14 +204,7 @@ export const gateProxyAppSchema = z.object({
 		resources.add(resource.resource)
 		metadata.add(resource.resourceMetadata)
 	}
-	for (const rule of app.gates.rules) {
-		if (rule.kind !== 'oauth') continue
-		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
-		if (resource === undefined || !rule.scopes.every((scope) => resource.scopesSupported.includes(scope))) {
-			ctx.addIssue({ code: 'custom', message: 'unregistered OAuth gate' })
-		}
-	}
-}) satisfies z.ZodType<GateProxyApp, z.ZodTypeDef, unknown>
+}
 
 const nameSchema = z.string().min(1)
 const callerSchema = z.custom<Caller>((value) =>
@@ -228,16 +271,97 @@ export const contractProxyAppSchema = z.object({
 	operationsOrigin: z.string().refine((value) => isPolicyOrigin(value, ['https:', 'http:'])).optional(),
 	gates: z.undefined(),
 	oauthResources: z.undefined(),
-}).transform(({ gates: _gates, oauthResources: _oauthResources, ...app }) => app).superRefine((app, ctx) => {
+	installation: z.undefined(),
+}).transform(({ gates: _gates, oauthResources: _oauthResources, installation: _installation, ...app }) => app).superRefine((app, ctx) => {
+	checkEndpointTable(app, ctx)
+}) satisfies z.ZodType<ContractProxyApp, z.ZodTypeDef, unknown>
+
+function checkEndpointTable(app: Pick<ContractProxyApp | InstallationProxyApp, 'endpoints' | 'reservedPrefixes'>, ctx: z.RefinementCtx): void {
 	try {
-		compileEndpointTable(app)
+		compileEndpointTable<ManifestEndpointRow>(app)
 	} catch (error) {
 		if (!(error instanceof EndpointTableError)) throw error
 		ctx.addIssue({ code: 'custom', message: 'ambiguous or invalid endpoint table' })
 	}
-}) satisfies z.ZodType<ContractProxyApp, z.ZodTypeDef, unknown>
+}
 
-export const proxyAppSchema = z.union([gateProxyAppSchema, contractProxyAppSchema]) satisfies z.ZodType<ProxyApp, z.ZodTypeDef, unknown>
+const installationRuleFields = {
+	id: nameSchema,
+	method: z.enum(['GET', 'POST', '*']),
+	path: z.string().startsWith('/'),
+	admission: admissionSchema.nullable(),
+	delegation: z.null(),
+	digest: z.string().refine(isDigest),
+}
+/** One row of an installation entry: the installation forms, and no application form but `health`. */
+export const installationProxyEndpointRowSchema = z.union([
+	z.object({
+		...installationRuleFields,
+		kind: z.literal('service'),
+		callers: z.array(z.enum(['human', 'machine', 'oauth'])).nonempty(),
+		requirement: z.object({ kind: z.literal('authenticated') }).strict(),
+		oauth: z.object({ scopes: oauthScopesSchema }).strict().nullable(),
+	}).strict().refine((row) => row.callers.includes('oauth') === (row.oauth !== null), 'oauth scopes belong to a row that admits oauth'),
+	z.object({
+		...installationRuleFields,
+		kind: z.enum(['protocol', 'health']),
+		callers: z.tuple([]),
+		requirement: z.null(),
+		oauth: z.null(),
+	}).strict(),
+]).refine((row) => row.digest === requirementDigest(row), 'endpoint digest does not match its rules') satisfies z.ZodType<
+	InstallationProxyEndpointRow,
+	z.ZodTypeDef,
+	unknown
+>
+
+/** The registered resource a row that admits `oauth` is bound to: the one whose URI path is the row's path. */
+export function oauthResourceOfRow(
+	app: Pick<InstallationProxyApp, 'oauthResources'>,
+	row: Pick<InstallationProxyEndpointRow, 'path'>,
+): OAuthProtectedResource | null {
+	return app.oauthResources?.find((resource) => new URL(resource.resource).pathname === row.path) ?? null
+}
+
+/**
+ * An installation entry. Only platform composition writes the marker; the parser refuses one whose id holds `@`,
+ * that carries what only an application has, or whose `oauth` row is bound to no registered resource.
+ */
+export const installationProxyAppSchema = z.object({
+	...proxyAppFields,
+	scheme: proxyAppScheme,
+	installation: z.literal(true),
+	endpoints: z.array(installationProxyEndpointRowSchema),
+	reservedPrefixes: z.array(z.string()),
+	oauthResources: z.array(oauthProtectedResourceSchema).min(1).optional(),
+	gates: z.undefined(),
+	snapshot: z.undefined(),
+	csp: z.undefined(),
+	operationsOrigin: z.undefined(),
+}).transform(({ gates: _gates, snapshot: _snapshot, csp: _csp, operationsOrigin: _operationsOrigin, ...app }) => app).superRefine((app, ctx) => {
+	if (app.id.includes(APP_ENVIRONMENT_SEPARATOR)) {
+		ctx.addIssue({ code: 'custom', message: 'an installation entry is no application environment' })
+	}
+	checkOAuthResources(app, ctx)
+	const paths = (app.oauthResources ?? []).map((resource) => new URL(resource.resource).pathname)
+	if (new Set(paths).size !== paths.length) {
+		ctx.addIssue({ code: 'custom', message: 'two OAuth resources on one path' })
+	}
+	for (const row of app.endpoints) {
+		if (row.oauth === null) continue
+		const resource = oauthResourceOfRow(app, row)
+		if (resource === null || !row.oauth.scopes.every((scope) => resource.scopesSupported.includes(scope))) {
+			ctx.addIssue({ code: 'custom', message: 'unregistered OAuth row' })
+		}
+	}
+	checkEndpointTable(app, ctx)
+}) satisfies z.ZodType<InstallationProxyApp, z.ZodTypeDef, unknown>
+
+export const proxyAppSchema = z.union([gateProxyAppSchema, contractProxyAppSchema, installationProxyAppSchema]) satisfies z.ZodType<
+	ProxyApp,
+	z.ZodTypeDef,
+	unknown
+>
 
 /**
  * The manifest form of a compiled contract: every endpoint's rules with their digest and delegation, the reserved

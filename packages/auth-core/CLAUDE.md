@@ -12,27 +12,28 @@ bun run typecheck
 bun test               # app-environment · canonical-path · contract-canonical · endpoint-digest · endpoints · gates · permissions · requirement · sha256 · token
 ```
 
-| Module                   | What it owns                                                                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `app-environment.ts`     | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` — and `FABRIKA_IAM_APP_ID`, the name it travels under. |
-| `canonical-path.ts`      | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
-| `contract.ts`            | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
-| `contract-canonical.ts`  | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
-| `endpoint-digest.ts`     | `requirementDigest`, `contractDigest`, `exportDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.          |
-| `endpoints.ts`           | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                                            |
-| `gates.ts`               | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
-| `path-segment.ts`        | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
-| `permissions.ts`         | `matchAction` and `permits` — the authorization decision itself.                                                               |
-| `requirement.ts`         | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.           |
-| `sha256.ts`              | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                            |
-| `token.ts`               | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                           |
-| `rpc.ts`                 | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
-| `membership.ts`          | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
-| `types.ts`               | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
-| `wire.ts`                | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.       |
-| `environment.ts`         | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
-| `framework-variables.ts` | `FRAMEWORK_VARIABLE_NAMES` — the names only the platform writes — and `frameworkVariableReference`, a Zerops reference to one. |
-| `json.ts`                | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                  |
+| Module                     | What it owns                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `app-environment.ts`       | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` — and `FABRIKA_IAM_APP_ID`, the name it travels under. |
+| `canonical-path.ts`        | `isCanonicalPath` — the one rule every hop refuses a path by — and the raw request target readers.                             |
+| `contract.ts`              | `ContractArtifact` — the compiled contract, types only — and its `EndpointTable` / `EndpointRow`.                              |
+| `contract-canonical.ts`    | `canonicalizeArtifact` and `canonicalArtifactJson` — the one canonical form and its digest bytes.                              |
+| `endpoint-digest.ts`       | `requirementDigest`, `contractDigest`, `exportDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.          |
+| `endpoints.ts`             | The contract matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint`.                                            |
+| `gates.ts`                 | The canonical gate path matcher — `compileGates` / `applicableGates`.                                                          |
+| `installation-endpoint.ts` | The forms only an installation entry may use: `protocol`/`service`, method `*`, caller `oauth`, requirement `authenticated`.   |
+| `path-segment.ts`          | `parameterName` — the one `:name` segment rule the gate glob and endpoint tables share.                                        |
+| `permissions.ts`           | `matchAction` and `permits` — the authorization decision itself.                                                               |
+| `requirement.ts`           | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.           |
+| `sha256.ts`                | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                            |
+| `token.ts`                 | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                           |
+| `rpc.ts`                   | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                                                             |
+| `membership.ts`            | `IamMembershipRpc` — delegation grants, scope creation, membership and share links — and its input/result types.               |
+| `types.ts`                 | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.                                                 |
+| `wire.ts`                  | The proxy→app header names, `FABRIKA_HOP_HEADERS` (every one, all stripped), the proxy secret and `proxySecretVariable`.       |
+| `environment.ts`           | The `ENVIRONMENT` name rule, and `FABRIKA_IAM_ISSUER` — the one name an issuer travels under.                                  |
+| `framework-variables.ts`   | `FRAMEWORK_VARIABLE_NAMES` — the names only the platform writes — and `frameworkVariableReference`, a Zerops reference to one. |
+| `json.ts`                  | Structural readers for untrusted JSON, so claims narrow without an `as` cast.                                                  |
 
 ## Invariants
 
@@ -126,6 +127,12 @@ bun test               # app-environment · canonical-path · contract-canonical
   never meets a tie. Compile once where the table is loaded; never bypass it. It is generic over the row:
   selection reads only `id`, `method` and `path`, so the proxy compiles its manifest rows, which carry the rules
   but no schemas, with the same code.
+- **The installation-only forms never reach an application's types.** `installation-endpoint.ts` holds
+  them apart from `contract.ts`: `Caller`, `EndpointMethod`, `EndpointKind` and `EndpointRequirement` stay
+  the application's closed sets, and the widened unions (`TokenCaller`, `InstallationEndpointMethod`) are
+  read only by the matcher, the digest and `callerOf`. `callerOf` maps an OAuth resource token to
+  `oauth`, which no application row lists. The method `*` serves every request method, but a request's
+  method is never a pattern: a request sent as `*` selects only a `*` row.
 - **The requirement check is authorization.** `satisfies(requirement, perms)` — `member` is any
   permission of the application; an action form is that action in some scope, including global,
   through `permits` over each entry's own scope. It never becomes a gate and never replaces one.
@@ -133,7 +140,9 @@ bun test               # app-environment · canonical-path · contract-canonical
   flat scope.
 - **An endpoint digest covers exactly what the proxy applies.** `requirementDigest` hashes the canonical JSON of
   the row's kind, method, path, callers, requirement, admission and delegation; callers and content types are
-  sorted, and the id, source and schemas are not part of it. The delegation is derived from the artifact by
+  sorted, and the id, source and schemas are not part of it. An installation row's OAuth scopes join it, sorted,
+  only when the row carries them, so every application row's digest is unchanged byte for byte
+  (`endpoint-digest.test.ts` records them). The delegation is derived from the artifact by
   `endpointDelegation` alone — the proxy table, the IAM schema's `delegations` and `endpointDigest` all call it. The proxy sends `<id>@<digest>` and the application recomputes it, so a
   new rule the proxy enforces must join the digest in the same change, or the two can disagree unnoticed.
   `contractDigest` is the digest of `canonicalArtifactJson`. Both are synchronous on purpose (`sha256.ts`): the

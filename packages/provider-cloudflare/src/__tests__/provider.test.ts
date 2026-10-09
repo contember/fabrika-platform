@@ -6,7 +6,7 @@ import {
 	contractDigest,
 	type GateRule,
 } from '@fabrika/auth-core'
-import { contractProxyTable, isContractProxyApp, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
@@ -1060,7 +1060,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { contract: notesArtifact, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
 		const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
 		const [app] = parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps ?? []
-		expect(app !== undefined && isContractProxyApp(app) ? app.operationsOrigin : null).toBe('https://errors.test')
+		expect(app !== undefined && isApplicationEntry(app) ? app.operationsOrigin : null).toBe('https://errors.test')
 		expect(typeof manifest === 'string' ? manifest : '').not.toContain('operations-public-key')
 		await expect(
 			deploy(rec, config({ schema: CONTRACT_SCHEMA }), {

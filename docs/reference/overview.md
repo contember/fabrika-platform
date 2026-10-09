@@ -340,7 +340,13 @@ enforcement:
   thing that runs it. A contract application is protected by its endpoint table: the
   proxy selects one endpoint with `planEndpoint` and checks its caller kind, its
   requirement and admission there, with no fall-through to another endpoint, then
-  names the endpoint and the digest of those rules in `X-Fabrika-Endpoint`.
+  names the endpoint and the digest of those rules in `X-Fabrika-Endpoint`. An
+  installation entry is an endpoint table that platform composition marks
+  `installation: true`; it may use five forms no application may declare (`protocol`
+  and `service` rows, the method `*`, the caller `oauth`, the requirement
+  `authenticated`), and its hop keeps `Authorization`, sets no proxy secret and leaves
+  the service's answers untouched. No producer emits one yet: the services move to
+  them in work unit B10.
 - **Authorization** — the action-and-scope check a service makes against an
   application-owned object coordinate. A path gate cannot make it, because the
   coordinate is known only once request data is validated. Every

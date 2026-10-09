@@ -10,6 +10,8 @@
  * A contract application is protected by its endpoint table instead, in one pass over ONE selected endpoint:
  * `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session when `human` may call →
  * the requirement (`satisfies`) → admission → the delegation grant. There is no fall-through to another endpoint.
+ * An installation entry's table is decided by the same pass; on a row that admits `oauth`, a bearer that is not a
+ * `px_` key is an OAuth resource token, verified locally like an `oauth` gate's.
  *
  * A human miss becomes a bounce to IAM's `/auth/login`, in whichever shape the caller can act on: a
  * 302 for a document navigation, a 401 carrying the same URL in a JSON body for everything else (see
@@ -35,13 +37,23 @@ import {
 	satisfies,
 	SESSION_COOKIE,
 	TOKEN_REFRESH_SKEW_SECONDS,
+	type TokenCaller,
 } from '@fabrika/auth-core'
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
 import { applicableGates, type CompiledGate, readBearer, readCookie, readServiceCredential } from './gates'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
-import type { ContractProxyApp, GateProxyApp, OAuthBearerChallenge, ProxyApp, ProxyEndpointRow } from './manifest'
+import {
+	type ContractProxyApp,
+	type GateProxyApp,
+	type InstallationProxyApp,
+	type ManifestEndpointRow,
+	type OAuthBearerChallenge,
+	type OAuthProtectedResource,
+	oauthResourceOfRow,
+	type ProxyApp,
+} from './manifest'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
@@ -52,9 +64,9 @@ export type DenyReason =
 	| 'no_credential'
 	/** A service credential was presented and is not a valid `px_` key. */
 	| 'invalid_key'
-	/** An `oauth` rule's bearer is malformed, unverifiable, or minted for another resource or app. */
+	/** An `oauth` rule's or row's bearer is malformed, unverifiable, or minted for another resource or app. */
 	| 'invalid_token'
-	/** An `oauth` rule's bearer verified but lacks a required scope. */
+	/** An `oauth` rule's or row's bearer verified but lacks a required scope. */
 	| 'insufficient_scope'
 	| 'no_session'
 	| 'invalid_session'
@@ -107,7 +119,7 @@ export type Decision =
 		status: 400 | 401 | 403 | 503
 		reason: DenyReason
 		clearHandoffState?: string
-		/** Set on an `oauth` rule's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */
+		/** Set on an `oauth` rule's or row's 401/403: rendered as the RFC 6750 `WWW-Authenticate` challenge. */
 		challenge?: OAuthBearerChallenge
 	}
 	/**
@@ -139,7 +151,7 @@ export interface ForwardedRequest {
 /** An app plus its precompiled gates or endpoint table, built once at startup. */
 export type ResolvedApp =
 	| { kind: 'gates'; app: GateProxyApp; gates: CompiledGate[] }
-	| { kind: 'endpoints'; app: ContractProxyApp; table: CompiledEndpointTable<ProxyEndpointRow> }
+	| { kind: 'endpoints'; app: ContractProxyApp | InstallationProxyApp; table: CompiledEndpointTable<ManifestEndpointRow> }
 
 export interface AuthorizerOptions {
 	iam: IamGateway
@@ -173,6 +185,15 @@ type Denial = Extract<Decision, { outcome: 'deny' }>
 
 /** A `px_` key exchanged and verified, or the denial that ends the request. */
 type KeyAttempt = { ok: true; token: string; claims: AccessTokenClaims } | { ok: false; denial: Denial }
+
+/** An OAuth resource token verified for a resource and its scopes, or the challenge that ends the request. */
+type OAuthAttempt = { ok: true; token: string; claims: AccessTokenClaims } | { ok: false; denial: Denial }
+
+/** The resource a row that admits `oauth` is bound to, and the scopes the row requires. */
+interface OAuthBinding {
+	readonly resource: OAuthProtectedResource
+	readonly scopes: readonly string[]
+}
 
 /** Who is behind a request to a credentialed endpoint, or the decision that ends it (a denial or the login bounce). */
 type EndpointCaller =
@@ -273,16 +294,16 @@ export class Authorizer {
 	}
 
 	/**
-	 * An `oauth`-rule bearer: an RFC 9068 access token minted by IAM for this rule's resource of this
-	 * app, carrying every scope the rule names. Verified locally — no IAM call, no cache. A refusal is a
-	 * bearer challenge pointing at the resource metadata, never a login bounce.
-	 */
-	/**
 	 * One pass over the endpoint `planEndpoint` selects (ADR-0022 rule 3). An anonymous kind reads no credential and
 	 * mints no token. A credentialed one takes a `px_` key when one is presented — terminal, whatever its verdict —
-	 * and the session only when `human` may call; then the requirement, then admission.
+	 * an OAuth resource token on a row that admits `oauth`, and the session only when `human` may call; then the
+	 * requirement, then admission.
 	 */
-	private async decideEndpoint(app: ContractProxyApp, table: CompiledEndpointTable<ProxyEndpointRow>, request: ForwardedRequest): Promise<Decision> {
+	private async decideEndpoint(
+		app: ContractProxyApp | InstallationProxyApp,
+		table: CompiledEndpointTable<ManifestEndpointRow>,
+		request: ForwardedRequest,
+	): Promise<Decision> {
 		const plan = planEndpoint(table, request.method, request.rawPath)
 		if (plan.outcome === 'non-canonical') {
 			return { outcome: 'deny', status: 400, reason: 'non_canonical_path' }
@@ -295,12 +316,13 @@ export class Authorizer {
 		if (row.requirement === null) {
 			return admitBody(row, request.headers) ?? { outcome: 'allow', gate: 'endpoint', token: null, subject: null, endpoint, delegation: null }
 		}
-		const caller = await this.endpointCaller(app, row.callers.includes('human'), request)
+		const callers: readonly TokenCaller[] = row.callers
+		const caller = await this.endpointCaller(app, row, callers, request)
 		if (!caller.ok) {
 			return caller.decision
 		}
 		const kind = callerOf(caller.claims)
-		if (kind === null || !row.callers.includes(kind) || !callerAdmittedAt(kind, row.path)) {
+		if (kind === null || !callers.includes(kind) || !callerAdmittedAt(kind, row.path)) {
 			return { outcome: 'deny', status: 403, reason: 'caller_kind' }
 		}
 		if (!satisfies(row.requirement, caller.claims.perms)) {
@@ -327,17 +349,35 @@ export class Authorizer {
 		}
 	}
 
-	/** A `px_` key wherever the request carries an `Authorization` header; otherwise the session, if `human` may call. */
-	private async endpointCaller(app: ContractProxyApp, humanMayCall: boolean, request: ForwardedRequest): Promise<EndpointCaller> {
+	/**
+	 * A `px_` key wherever the request carries an `Authorization` header, and on a row that admits `oauth` any other
+	 * credential there as an OAuth resource token; otherwise the session, if `human` may call.
+	 */
+	private async endpointCaller(
+		app: ContractProxyApp | InstallationProxyApp,
+		row: ManifestEndpointRow,
+		callers: readonly TokenCaller[],
+		request: ForwardedRequest,
+	): Promise<EndpointCaller> {
+		const oauth = oauthBindingOf(app, row)
+		if (oauth === 'unregistered') {
+			// The manifest parser refuses an `oauth` row without its resource; reaching this is a composition bug.
+			return { ok: false, decision: { outcome: 'deny', status: 403, reason: 'internal_error' } }
+		}
 		const authorization = request.headers.get('Authorization')
 		if (authorization !== null && authorization.trim() !== '') {
 			const bearer = readBearer(authorization)
+			if (oauth !== null && (bearer === null || !bearer.startsWith(API_KEY_PREFIX))) {
+				const verified = await this.verifyOAuthBearer(app, oauth, bearer)
+				return verified.ok ? { ok: true, token: verified.token, claims: verified.claims, session: false } : { ok: false, decision: verified.denial }
+			}
 			const key = bearer === null ? { ok: false, denial: invalidKey() } satisfies KeyAttempt : await this.exchangeKey(app, bearer, request.requestId)
 			return key.ok ? { ok: true, token: key.token, claims: key.claims, session: false } : { ok: false, decision: key.denial }
 		}
-		if (!humanMayCall) {
+		if (!callers.includes('human')) {
 			// No session reaches an endpoint a person may not call, so there is nothing to sign in to.
-			return { ok: false, decision: { outcome: 'deny', status: 401, reason: 'no_credential' } }
+			const denial: Denial = { outcome: 'deny', status: 401, reason: 'no_credential' }
+			return { ok: false, decision: oauth === null ? denial : { ...denial, challenge: { resource_metadata: oauth.resource.resourceMetadata } } }
 		}
 		const session = await this.authorizeSession(app, request)
 		if (session.ok) {
@@ -354,7 +394,7 @@ export class Authorizer {
 
 	/** A fresh grant for every request, never cached: IAM spends it once, for this request id. */
 	private async obtainDelegation(
-		app: ContractProxyApp,
+		app: ContractProxyApp | InstallationProxyApp,
 		endpoint: string,
 		token: string,
 		requestId: string,
@@ -369,33 +409,48 @@ export class Authorizer {
 			: { ok: false, denial: { outcome: 'deny', status: 403, reason: 'delegation_refused' } }
 	}
 
+	/**
+	 * An `oauth`-rule bearer: an RFC 9068 access token minted by IAM for this rule's resource of this
+	 * app, carrying every scope the rule names. A refusal is a bearer challenge pointing at the resource
+	 * metadata, never a login bounce.
+	 */
 	private async authorizeOAuth(app: GateProxyApp, rule: Extract<GateRule, { kind: 'oauth' }>, request: ForwardedRequest): Promise<Decision> {
 		const resource = app.oauthResources?.find((entry) => entry.resource === rule.resource)
 		if (resource === undefined) {
 			// The manifest parser refuses an unregistered oauth rule; reaching this is a composition bug.
 			return { outcome: 'deny', status: 403, reason: 'internal_error' }
 		}
-		const challenge: OAuthBearerChallenge = { resource_metadata: resource.resourceMetadata }
-		// RFC 6750 §3.1: a request without a bearer (none, or another scheme) gets a challenge with no error code.
-		const bearer = readBearer(request.headers.get('Authorization'))
+		const verified = await this.verifyOAuthBearer(app, { resource, scopes: rule.scopes }, readBearer(request.headers.get('Authorization')))
+		return verified.ok
+			? { outcome: 'allow', gate: 'oauth', token: verified.token, subject: verified.claims.sub, endpoint: null, delegation: null }
+			: verified.denial
+	}
+
+	/**
+	 * An OAuth resource token for one registered resource of this app, carrying every scope required. Verified
+	 * locally — no IAM call, no cache. RFC 6750 §3.1: a request without a bearer (none, or another scheme) gets a
+	 * challenge with no error code.
+	 */
+	private async verifyOAuthBearer(app: ProxyApp, binding: OAuthBinding, bearer: string | null): Promise<OAuthAttempt> {
+		const challenge: OAuthBearerChallenge = { resource_metadata: binding.resource.resourceMetadata }
 		if (bearer === null) {
-			return { outcome: 'deny', status: 401, reason: 'no_credential', challenge }
+			return { ok: false, denial: { outcome: 'deny', status: 401, reason: 'no_credential', challenge } }
 		}
-		const invalid: Decision = { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } }
-		const verified = await this.verifier.verify(bearer, { kind: 'resource', app: app.id, resource: resource.resource })
+		const verified = await this.verifier.verify(bearer, { kind: 'resource', app: app.id, resource: binding.resource.resource })
 		if (!verified.ok) {
-			return verified.reason === 'unavailable' ? { outcome: 'deny', status: 503, reason: 'iam_unavailable' } : invalid
+			return verified.reason === 'unavailable'
+				? { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
+				: { ok: false, denial: { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } } }
 		}
 		const granted = verified.claims.oauth?.scopes ?? []
-		if (!rule.scopes.every((scope) => granted.includes(scope))) {
+		if (!binding.scopes.every((scope) => granted.includes(scope))) {
+			const scope = binding.scopes.join(' ')
 			return {
-				outcome: 'deny',
-				status: 403,
-				reason: 'insufficient_scope',
-				challenge: { ...challenge, error: 'insufficient_scope', scope: rule.scopes.join(' ') },
+				ok: false,
+				denial: { outcome: 'deny', status: 403, reason: 'insufficient_scope', challenge: { ...challenge, error: 'insufficient_scope', scope } },
 			}
 		}
-		return { outcome: 'allow', gate: 'oauth', token: bearer, subject: verified.claims.sub, endpoint: null, delegation: null }
+		return { ok: true, token: bearer, claims: verified.claims }
 	}
 
 	/**
@@ -606,8 +661,21 @@ function invalidKey(): Denial {
 	return { outcome: 'deny', status: 401, reason: 'invalid_key' }
 }
 
+/**
+ * The resource and scopes of a row that admits `oauth`, `null` for any other row, and `unregistered` when the entry
+ * has no resource on the row's path.
+ */
+function oauthBindingOf(app: ContractProxyApp | InstallationProxyApp, row: ManifestEndpointRow): OAuthBinding | null | 'unregistered' {
+	const required = 'oauth' in row ? row.oauth : null
+	if (required === null) {
+		return null
+	}
+	const resource = 'installation' in app ? oauthResourceOfRow(app, row) : null
+	return resource === null ? 'unregistered' : { resource, scopes: required.scopes }
+}
+
 /** An endpoint that admits a body admits only its declared media types (ADR-0022 rule 3, admission). */
-function admitBody(row: ProxyEndpointRow, headers: Headers): Denial | null {
+function admitBody(row: ManifestEndpointRow, headers: Headers): Denial | null {
 	if (row.admission === null) {
 		return null
 	}

@@ -18,7 +18,7 @@ session handoff. They are properties of the decision, so they apply here; that f
 ## Commands (this package)
 
 ```bash
-bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint tables) are the truth tables — keep them exhaustive
+bun test   # deny-matrix (gates), endpoint-matrix (application tables) and installation-matrix (installation entries) are the truth tables — keep them exhaustive
 ```
 
 ## Invariants
@@ -65,9 +65,13 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
   does not reimplement or extend gate semantics. A gate path is a glob: `*` crosses `/`, and a whole
   `:name` segment matches exactly one non-empty segment, the rule endpoint tables use. Array order
   is precedence for installation gates only.
-- **A manifest app is a gate app or a contract app, never both.** `endpoints` (with
-  `reservedPrefixes` and `snapshot`) instead of `gates` makes a contract app; an app carrying both, or
-  OAuth resources beside a table, is refused whole. A contract app's request is one pass over the row
+- **A manifest app is exactly one of three forms.** `gates` makes a gate app; `endpoints` (with
+  `reservedPrefixes` and `snapshot`) makes a contract app — an application; `installation: true` with
+  `endpoints` makes an installation entry (ADR-0022 "Installation entries"). An app carrying two forms,
+  OAuth resources beside an application's table, or an `installation` key on a gate or contract app is
+  refused whole, never read as one of them. `isApplicationEntry` is the one predicate every hop rule
+  keys on (proxy secret, header policy, the `Authorization` delete, metadata routes); everything else is
+  an installation service. A contract app's request is one pass over the row
   `planEndpoint` selects (ADR-0022 rule 3): no row → 403; a presented `Authorization` header is a
   `px_` key and terminal, and its caller kind (`callerOf`, re-checked on cached tokens) must be one
   of the row's callers, and an `app:<id>` caller must be on an export path (`callerAdmittedAt`) → 403;
@@ -75,6 +79,15 @@ bun test   # deny-matrix.test.ts (gates) and endpoint-matrix.test.ts (endpoint t
   login bounce; `satisfies` → 403; admission (a session non-`GET` needs `Sec-Fetch-Site:
   same-origin` → 403, the media type must be one the row admits → 400). An anonymous kind reads no
   credential and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`.
+- **The installation-only forms exist in installation entries alone.** The parser refuses `protocol`,
+  `service`, method `*`, caller `oauth`, requirement `authenticated` and an `oauth` row field in an
+  application row; and an installation entry whose id holds `@`, that carries `snapshot`, `csp` or
+  `operationsOrigin`, or whose `oauth` row has no registered resource on its path (`oauthResourceOfRow`)
+  or asks for an unsupported scope. On a row that admits `oauth`, a bearer that is not a `px_` key (or
+  no bearer, when `human` is not a caller) takes the same RFC 6750 path as an `oauth` gate
+  (`verifyOAuthBearer`): local verification for the row's resource, every row scope, the challenge on
+  401/403, never a bounce. A `protocol` row reads no credential like any anonymous kind; only its hop
+  differs.
 - **A workload key opens no gate either.** A `service` gate refuses a key whose token has a workload kind (`job`,
   `webhook`, `app`) with 403 `caller_kind`, also from the cache (ADR-0022 "Principal kinds").
 - **A row's digest is checked where the manifest is parsed.** The parser recomputes

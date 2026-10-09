@@ -16,7 +16,7 @@ import { FILE_TREATMENT, headerPolicy } from '@fabrika/proxy-core/headers'
 import { encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
-import { APP, FakeIam, HOST, ISSUER, signToken, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
+import { APP, FakeIam, HOST, installationRow, ISSUER, signToken, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
 
@@ -413,6 +413,93 @@ describe('Cloudflare proxy Worker — OAuth resources', () => {
 		)
 		expect(response.status).toBe(200)
 		expect(upstream.seen?.headers.get('X-Fabrika-Token')).toBe(token)
+	})
+})
+
+describe('Cloudflare proxy Worker — an installation entry', () => {
+	const admin = installationRow({
+		id: 'admin',
+		kind: 'protocol',
+		method: '*',
+		path: '/admin/*',
+		callers: [],
+		requirement: null,
+		admission: null,
+		oauth: null,
+	})
+	const mcp = installationRow({
+		id: 'mcp',
+		kind: 'service',
+		method: '*',
+		path: '/mcp',
+		callers: ['oauth'],
+		requirement: { kind: 'authenticated' },
+		admission: null,
+		oauth: { scopes: ['authoring'] },
+	})
+	const SERVICE_CSP = "default-src 'self'; form-action https://return.example"
+	function installationEnvironment(upstream: { fetch: (request: Request) => Promise<Response> }): CloudflareProxyEnv {
+		return {
+			IAM: new FakeIam({ jwks: RESOURCE_JWKS }),
+			FABRIKA_IAM_ISSUER: ISSUER,
+			FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
+				apps: [{
+					id: APP,
+					hosts: [HOST],
+					upstream: 'APP',
+					scheme: 'https',
+					installation: true,
+					endpoints: [admin, mcp],
+					reservedPrefixes: [],
+					oauthResources: [OAUTH_RESOURCE],
+				}],
+			}),
+			APP: upstream,
+		}
+	}
+
+	test('a protocol row reaches the service with its own Authorization and the endpoint, and no token', async () => {
+		const upstream = new RecordingUpstream()
+		const response = await createCloudflareProxyHandler(installationEnvironment(upstream))(
+			new Request(`https://${HOST}/admin/apps/notes/schema`, {
+				method: 'PUT',
+				headers: { Authorization: 'Bearer px_provisioning', [ENDPOINT_HEADER]: 'forged' },
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(upstream.seen?.headers.get('Authorization')).toBe('Bearer px_provisioning')
+		expect(upstream.seen?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(admin.id, admin.digest))
+		expect(upstream.seen?.headers.get('X-Fabrika-Token')).toBeNull()
+		expect(upstream.seen?.headers.get(PROXY_SECRET_HEADER)).toBeNull()
+	})
+
+	test("the service's own policy passes through untouched", async () => {
+		const env = installationEnvironment({ fetch: () => Promise.resolve(new Response('ok', { headers: { 'Content-Security-Policy': SERVICE_CSP } })) })
+		const response = await createCloudflareProxyHandler(env)(new Request(`https://${HOST}/admin/apps`))
+		expect(response.headers.get('Content-Security-Policy')).toBe(SERVICE_CSP)
+		expect(response.headers.get('Permissions-Policy')).toBeNull()
+	})
+
+	test('serves its RFC 9728 metadata, and an oauth row answers a missing bearer with the challenge', async () => {
+		const upstream = new RecordingUpstream()
+		const handler = createCloudflareProxyHandler(installationEnvironment(upstream))
+		expect((await handler(new Request(RESOURCE_METADATA))).status).toBe(200)
+		const response = await handler(new Request(RESOURCE, { method: 'DELETE', headers: { Cookie: '__Host-px_session=session' } }))
+		expect(response.status).toBe(401)
+		expect(response.headers.get('WWW-Authenticate')).toBe(`Bearer resource_metadata="${RESOURCE_METADATA}"`)
+		expect(upstream.calls).toBe(0)
+	})
+
+	test('an oauth row injects the verified resource token and keeps the bearer', async () => {
+		const token = await signResourceToken()
+		const upstream = new RecordingUpstream()
+		const response = await createCloudflareProxyHandler(installationEnvironment(upstream))(
+			new Request(RESOURCE, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }),
+		)
+		expect(response.status).toBe(200)
+		expect(upstream.seen?.headers.get('X-Fabrika-Token')).toBe(token)
+		expect(upstream.seen?.headers.get(ENDPOINT_HEADER)).toBe(formatEndpointHeader(mcp.id, mcp.digest))
+		expect(upstream.seen?.headers.get('Authorization')).toBe(`Bearer ${token}`)
 	})
 })
 

@@ -8,7 +8,7 @@ import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import {
 	FABRIKA_PROXY_MANIFEST_JSON,
 	type GateProxyApp,
-	isContractProxyApp,
+	isGateProxyApp,
 	parseProxyManifestJson,
 	type ProxyManifest,
 } from '@fabrika/proxy-core/manifest'
@@ -25,7 +25,7 @@ import { type FakeZerops, fakeZerops, platformServices, SUBDOMAINS } from './fak
 /** The platform app `id` of a parsed manifest; every platform service is protected by gates. */
 const gateAppOf = (manifest: ProxyManifest | null, id: string): GateProxyApp | undefined => {
 	const app = manifest?.apps.find((entry) => entry.id === id)
-	return app === undefined || isContractProxyApp(app) ? undefined : app
+	return app === undefined || !isGateProxyApp(app) ? undefined : app
 }
 
 const PROJECT = { projectId: 'proj-1', projectName: 'fabrika-test' }

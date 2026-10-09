@@ -64,7 +64,14 @@ import {
 	INLINE_FILE_TYPES,
 	REMOVED_RESPONSE_HEADERS,
 } from '@fabrika/proxy-core/headers'
-import { type ContractProxyApp, isContractProxyApp, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import {
+	type ContractProxyApp,
+	isApplicationEntry,
+	isGateProxyApp,
+	isProxyHost,
+	type ProxyApp,
+	type ProxyManifest,
+} from '@fabrika/proxy-core/manifest'
 
 /**
  * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before
@@ -378,7 +385,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 		upstreams: [{ dial: app.upstream }],
 		headers: {
 			request: {
-				...(isContractProxyApp(app) ? { set: { [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(app.id)}}`] } } : {}),
+				...(isApplicationEntry(app) ? { set: { [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(app.id)}}`] } } : {}),
 				replace: {
 					Cookie: [
 						{
@@ -392,7 +399,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 			...(response === undefined ? {} : { response }),
 		},
 	})
-	const policy = isContractProxyApp(app) ? appHeaderPolicy(app) : BASE_HEADER_POLICY
+	const policy = isApplicationEntry(app) ? appHeaderPolicy(app) : BASE_HEADER_POLICY
 	return {
 		match: [{ host: app.hosts }],
 		terminal: true,
@@ -411,13 +418,13 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 						{ handler: 'headers', request: { set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] } } },
 					],
 				},
-				...(isContractProxyApp(app) ? [] : (app.oauthResources ?? [])).map((resource): CaddyRoute => ({
+				...(isApplicationEntry(app) ? [] : (app.oauthResources ?? [])).map((resource): CaddyRoute => ({
 					match: [{ path: [new URL(resource.resourceMetadata).pathname] }],
 					handle: [authRequest(app, authUpstream, OAUTH_METADATA_VERIFY_PATH)],
 					terminal: true,
 				})),
 				{ handle: [forwardAuth(app, authUpstream)] },
-				...(isContractProxyApp(app) ? contractUpstream(app, policy, upstream) : [{ handle: [upstream()] }]),
+				...(isApplicationEntry(app) ? contractUpstream(app, policy, upstream) : [{ handle: [upstream()] }]),
 			],
 		}],
 	}
@@ -496,7 +503,7 @@ function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHand
 			match: { status_code: [2] },
 			routes: [
 				{ handle: [{ handler: 'vars' }] },
-				...(isContractProxyApp(app) ? [withoutCredentialUnlessMinted()] : []),
+				...(isApplicationEntry(app) ? [withoutCredentialUnlessMinted()] : []),
 				...PROXY_ASSERTED_HEADERS.map(copyResponseHeader),
 			],
 		}],
@@ -611,7 +618,7 @@ export function uriRedactionPattern(manifest: ProxyManifest): string {
 	const names = new Set<string>()
 	for (const app of manifest.apps) {
 		// A contract app reads a key only as a bearer, never from the URL.
-		const rules = isContractProxyApp(app) ? [] : app.gates.rules
+		const rules = isGateProxyApp(app) ? app.gates.rules : []
 		for (const rule of rules) {
 			const name = queryCredentialName(rule)
 			if (name !== null) {

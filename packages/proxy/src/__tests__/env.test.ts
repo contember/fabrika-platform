@@ -65,8 +65,18 @@ describe('appsWithoutProxySecret', () => {
 	})
 	const gateApp: ProxyApp = { id: 'control', hosts: ['control.example.com'], upstream: 'control:3000', scheme: 'https', gates: { rules: [] } }
 
-	test('names each contract app whose secret variable is unset or empty, and no gate app', () => {
-		const manifest = { apps: [contract('notes@prod'), contract('notes@stage'), contract('wiki@prod'), gateApp] }
+	const installation: ProxyApp = {
+		id: 'vozka',
+		hosts: ['console.example.com'],
+		upstream: 'control:3000',
+		scheme: 'https',
+		installation: true,
+		endpoints: [],
+		reservedPrefixes: [],
+	}
+
+	test('names each contract app whose secret variable is unset or empty, and no installation service', () => {
+		const manifest = { apps: [contract('notes@prod'), contract('notes@stage'), contract('wiki@prod'), gateApp, installation] }
 		const source = { [proxySecretVariable('notes@prod')]: 'secret', [proxySecretVariable('notes@stage')]: '' }
 		expect(appsWithoutProxySecret(manifest, source)).toEqual(['notes@stage', 'wiki@prod'])
 	})

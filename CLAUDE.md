@@ -120,7 +120,9 @@ needed only when there is no app config. Platform commands load the provider's
   `docs/reference/overview.md` defines all three; keep the vocabulary.
   Array order is precedence for the installation's own gates only. A contract application gets an
   endpoint table instead: the most specific endpoint wins, and the application serves only the
-  endpoint id the proxy sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3).
+  endpoint id the proxy sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3). Only an entry that platform
+  composition marks `installation: true` may use the installation-only forms (`protocol`, `service`,
+  method `*`, caller `oauth`, requirement `authenticated`); never let an application declare one.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned
