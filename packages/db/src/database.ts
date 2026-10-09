@@ -101,9 +101,19 @@ export class Database {
 }
 Object.freeze(Database.prototype)
 
-/** A read-only session refuses every write and lock before it reaches the database, and reads in `READ ONLY` transactions. */
-export function sessionOf(database: Database, readOnly = false): Session {
-	return openSession(database, readOnly)
+/** The connection a session runs on, and whether the request running now may only read. */
+export interface SessionSource {
+	readonly database: Database
+	readonly readOnly?: () => boolean
+}
+
+/**
+ * The one way to a session: every statement of a request — a store's, a locator's, a framework table's — asks the
+ * runtime whether the request is read-only. A read-only session refuses every write and lock before it reaches the
+ * database, and reads in `READ ONLY` transactions.
+ */
+export function sessionOf(source: SessionSource): Session {
+	return openSession(source.database, source.readOnly?.() === true)
 }
 
 let executeFixed: (session: Session, compiled: CompiledQuery) => Promise<readonly unknown[]>

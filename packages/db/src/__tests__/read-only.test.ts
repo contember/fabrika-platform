@@ -13,7 +13,8 @@ import { QueryRefusedError } from '../errors'
 import { TestAuthority } from './fixtures/authority'
 import { RecordingDialect } from './fixtures/recording-dialect'
 import { migration } from './fixtures/schema'
-import { defineStores } from './fixtures/stores'
+import { connected, defineStores } from './fixtures/stores'
+import { tables } from './fixtures/tables'
 
 const alice = new TestAuthority('user:alice')
 const chain = { workspace: 'w1', organization: 'o1' }
@@ -45,6 +46,14 @@ describe('a read-only request, over a recording connection', () => {
 			await expect(write()).rejects.toThrow(QueryRefusedError)
 		}
 		expect(dialect.log).toEqual([])
+	})
+
+	test("the framework's locator reads in a READ ONLY transaction too", async () => {
+		const locating = new RecordingDialect()
+		const { locate } = connected(tables, { database: Database.fromDialect(locating), capabilities: alice, readOnly: () => true })
+		expect(await locate('note', 'n1')).toBeNull()
+		expect(locating.transactions).toEqual([{ accessMode: 'read only' }])
+		expect(locating.log).toHaveLength(1)
 	})
 
 	test('outside a read-only request a read opens no transaction', async () => {

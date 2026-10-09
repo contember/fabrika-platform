@@ -285,8 +285,7 @@ function guard(context: TableContext, root: RootKind, scope: OperationNode | und
 }
 
 function session(context: TableContext): Session {
-	const runtime = runtimeOf(context.connection)
-	return sessionOf(runtime.database, runtime.readOnly?.() === true)
+	return sessionOf(runtimeOf(context.connection))
 }
 
 /**
@@ -953,7 +952,7 @@ async function appendToInbox(models: TableModels, runtime: DataLayerRuntime, for
 		throw new QueryRefusedError(`no table is the inbox of ${form}`)
 	}
 	const row = readValues(values, inbox.columns, 'insert', inbox.name)
-	await sessionOf(runtime.database).run(insertNode(inbox.name, row, undefined), {
+	await sessionOf(runtime).run(insertNode(inbox.name, row, undefined), {
 		root: 'InsertQueryNode',
 		table: inbox.name,
 		joins: {},
@@ -1000,7 +999,7 @@ async function locateObject(
 		columns[columns.length] = owner.chain[index]?.column ?? ''
 	}
 	const context: GuardContext = { root: 'SelectQueryNode', table: owner.name, joins: {}, scope }
-	const [row] = await sessionOf(runtime.database).run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
+	const [row] = await sessionOf(runtime).run<Readonly<Record<string, unknown>>>(locateNode(owner.name, columns, scope), context)
 	if (row === undefined) {
 		return null
 	}

@@ -17,7 +17,7 @@ import type { ContractApp } from '../implement/boot'
 import { mintRef, RequestFrame, requestIsReadOnly, runInRequest } from '../implement/capability'
 import { implement } from '../implement/implement'
 import { bootApp, grant, resultOf, send, token } from './fixtures/implement/harness'
-import { contract as notesContract, NoteList } from './fixtures/scoped-notes/fabrika.contract'
+import { ById, contract as notesContract, Note, NoteList } from './fixtures/scoped-notes/fabrika.contract'
 import { migration } from './fixtures/scoped-notes/migration'
 import { tables } from './fixtures/scoped-notes/src/db/tables'
 
@@ -82,6 +82,41 @@ test('an export may declare no action that manages members', () => {
 	expect(() => compileContract(managing, tables)).toThrow("'notes.admin' manages the members of 'workspace'; an export reads only")
 })
 
+/**
+ * The same `on` endpoint as an export and as an RPC procedure, over a `notes` view whose containment column tells
+ * whether the statement ran in a READ ONLY transaction: only then is a note in `w1`.
+ */
+const locating = defineContract(notesContract.vocabulary, (c) => ({
+	api: c.rpc('/api', { callers: ['machine'] }, {
+		get: c.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),
+	}),
+	exports: {
+		notes: c.export({
+			version: 1,
+			consumers: ['digest'],
+			audience: 'any consumer user',
+			procedures: { get: c.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }) },
+		}),
+	},
+}))
+
+const VIEW_MIGRATION = `
+create table notes_data (id uuid primary key, workspace_id text not null, title text not null, created_by text not null, version integer not null);
+create view notes as select id,
+	case current_setting('transaction_read_only') when 'on' then workspace_id else 'outside-read-only' end as workspace_id,
+	title, created_by, version
+from notes_data;
+`
+
+const locatingApp = implement(locating, {
+	database: scoped(tables),
+	deps: () => ({}),
+	handlers: () => ({
+		api: { get: ({ ctx }) => ({ id: ctx.target.value, title: 'located' }) },
+		exports: { notes: { get: ({ ctx }) => ({ id: ctx.target.value, title: 'located' }) } },
+	}),
+})
+
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
 const hasPostgres = url !== ''
@@ -93,6 +128,10 @@ if (!hasPostgres) {
 const schema = applicationSchema(`ro-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
 let connection: Database
 let booted: ContractApp
+const viewSchema = applicationSchema(`rv-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
+const viewNote = Bun.randomUUIDv7()
+let viewConnection: Database
+let viewBooted: ContractApp
 
 async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
@@ -120,6 +159,12 @@ beforeAll(async () => {
 	)
 	connection = Database.postgres({ url, schema, max: 2 })
 	booted = bootApp(app, { database: connection })
+	await admin((sql) => sql.unsafe(`create schema ${viewSchema}; set search_path to ${viewSchema}; ${VIEW_MIGRATION}`))
+	await admin((sql) =>
+		sql.unsafe(`insert into ${viewSchema}.notes_data (id, workspace_id, title, created_by, version) values ($1, 'w1', 'kept', 'user-9', 1)`, [viewNote])
+	)
+	viewConnection = Database.postgres({ url, schema: viewSchema, max: 2 })
+	viewBooted = bootApp(locatingApp, { database: viewConnection })
 })
 
 afterAll(async () => {
@@ -127,7 +172,8 @@ afterAll(async () => {
 		return
 	}
 	await connection.close()
-	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
+	await viewConnection.close()
+	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade; drop schema ${viewSchema} cascade`))
 })
 
 /** The edge's request as the proxy forwards it: the key stays in `Authorization`, the token is the proxy's. */
@@ -140,6 +186,14 @@ describe.skipIf(!hasPostgres)('an export handler cannot write', () => {
 		expect(resultOf(listed)).toEqual({ items: [{ id: expect.any(String), title: 'kept' }] })
 		const probed = await send(booted, '/__fabrika/connect/notes.v1.probe', { token: edge, body: {}, headers: keyRequest })
 		expect(resultOf(probed)).toEqual({ readOnly: true })
+	})
+
+	test("the access check's locator runs READ ONLY in an export, and only there", async () => {
+		const edge = await token('service', [grant('notes.read', { type: 'workspace', value: 'w1' })])
+		const exported = await send(viewBooted, '/__fabrika/connect/notes.v1.get', { token: edge, body: { id: viewNote }, headers: keyRequest })
+		expect(resultOf(exported)).toEqual({ id: viewNote, title: 'located' })
+		const procedure = await send(viewBooted, '/api/get', { token: edge, body: { id: viewNote }, headers: keyRequest })
+		expect(procedure.status).toBe(404)
 	})
 
 	test('in a read-only request a write capability of that request is refused, and nothing is written', async () => {

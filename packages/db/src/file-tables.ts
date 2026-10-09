@@ -166,7 +166,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 	/** A file row's columns for its owner: `owner_id`, then the owner's chain under the owner's column names. */
 	const fileOwnerLinks: readonly Container[] = [{ dimension: owner.dimension, column: 'owner_id' }, ...owner.model.chain]
 	const fileLinks: readonly Container[] = [{ dimension: spec.dimension, column: 'id' }, ...fileOwnerLinks]
-	const session = (): Session => sessionOf(runtime().database)
+	const session = (): Session => sessionOf(runtime())
 
 	function grantOf(capability: unknown, dimension: string, action: string): RefGrant {
 		const grant = runtime().capabilities.resolve(capability)

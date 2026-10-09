@@ -63,7 +63,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {
-	const session = () => sessionOf(runtime().database)
+	const session = () => sessionOf(runtime())
 	return Object.freeze({
 		async createBinding(binding: NewWebhookBinding): Promise<void> {
 			const values = new Map<string, string | number>([
