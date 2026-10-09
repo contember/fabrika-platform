@@ -40,6 +40,9 @@ commit that names the expected head; a stale head fails and the client re-reads.
 | `get_deployment`      | The state of that run.                                         |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.  |
 
+The server's `instructions` are the workspace flow followed by the application rules every agent gets: the body
+of `@fabrika/app`'s `skill/SKILL.md` ([application runtime](application-runtime.md#the-agent-skill)).
+
 ## Enable it on an installation
 
 1. **Register the MCP clients.** Set `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` in the sidecar's GitHub

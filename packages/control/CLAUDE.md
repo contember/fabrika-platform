@@ -323,7 +323,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   principal; every use case re-checks `app_envs.authoring`, the action at the coordinates and ownership, and
   answers 404 otherwise. Paths are repository-relative (`isRepositoryPath`, at the MCP boundary), and
   protected paths (`zerops.y[a]ml`, `fabrika.*`, everything under `.github/`) are refused before GitHub is
-  called. `get_deployment` reaches only runs of the caller's own workspace branches.
+  called. `get_deployment` reaches only runs of the caller's own workspace branches. The server
+  `instructions` are the workspace flow, then the body of `@fabrika/app`'s `skill/SKILL.md`; never
+  restate the application rules in `src/mcp/`.
   One authoring environment per app: `apps.environments.put` answers 409 while another env holds the flag.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).

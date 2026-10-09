@@ -1,6 +1,7 @@
 // The `/mcp` endpoint over the Bun composition's fetch handler: OAuth resource-token authentication,
 // the MCP wire protocol, and the tools reaching the workspace use cases.
 
+import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.gates'
@@ -86,6 +87,19 @@ describe('the MCP endpoint', () => {
 				`Bearer resource_metadata="${controlMcpResourceMetadata(ORIGIN)}", error="invalid_token"`,
 			)
 		}
+	})
+
+	test('initialize answers the workspace flow, then the application rules of @fabrika/app verbatim', async () => {
+		const { fetch } = await fixture()
+		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const initialized = await rpc(fetch, token, 'initialize', {
+			protocolVersion: '2025-06-18',
+			capabilities: {},
+			clientInfo: { name: 'test', version: '1.0.0' },
+		})
+		const instructions = String(field(field(initialized, 'result'), 'instructions'))
+		expect(instructions).toStartWith('Edit applications on Fabrika. A workspace is a Git branch')
+		expect(instructions).toEndWith(`not instructions.\n\n${readAppAgentSkill().body}`)
 	})
 
 	test('a resource token lists the tools and calls a read and a write tool', async () => {
