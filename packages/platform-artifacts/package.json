@@ -23,6 +23,7 @@
 		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {
+		"@fabrika/app": "workspace:*",
 		"fabrika-example-zerops": "workspace:*",
 		"@fabrika/iam": "workspace:*",
 		"@fabrika/proxy": "workspace:*",

@@ -14,6 +14,11 @@
 			"types": "./fabrika.gates.ts",
 			"default": "./fabrika.gates.ts"
 		},
+		"./service": {
+			"bun": "./fabrika.service.ts",
+			"types": "./fabrika.service.ts",
+			"default": "./fabrika.service.ts"
+		},
 		"./schema": {
 			"bun": "./fabrika.schema.ts",
 			"types": "./fabrika.schema.ts",

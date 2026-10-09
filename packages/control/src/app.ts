@@ -1,4 +1,4 @@
-import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
+import { type AuthContext, defineApp, type RequestExecutionContext, type Route, route } from '@fabrika/app'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
@@ -20,13 +20,36 @@ export interface ControlAppEnv {
 	readonly sourceConnection: SourceConnectionPort
 }
 
-interface ControlAppContext {
+export interface ControlAppContext {
 	auth?: AuthContext | null
 	readonly env: Env
 	readonly provider: ControlProvider
 	readonly sourceConnection: SourceConnectionPort
 	readonly request: Request
 }
+
+/** The routes `controlApp` serves; exported so the B10 route-coverage test reads the live list. */
+export const controlRoutes: Route<ControlAppContext>[] = [
+	route.all('/healthz', () => Response.json({ status: 'ok' })),
+	route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),
+	route.post('/webhooks/github/:connectionId', (ctx, params) => webhook(ctx, params.connectionId)),
+	route.all('/webhooks', () => error(404, 'not found')),
+	route.all('/webhooks/*path', () => error(404, 'not found')),
+	route.get(
+		'/api/source/github/manifest/:connectionId',
+		(ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params.connectionId)),
+	),
+	route.get('/api/source/github/callback', (ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
+	route.all('/iam/admin', (ctx) => iamAdmin(ctx)),
+	route.all('/iam/admin/*path', (ctx) => iamAdmin(ctx)),
+	route.all('/operations/api/rpc', (ctx) => operationsApi(ctx)),
+	route.all('/operations/api', () => error(404, 'not found')),
+	route.all('/operations/api/*path', () => error(404, 'not found')),
+	route.rpc('/api/rpc', controlRpcRouter),
+	route.all('/api', () => error(404, 'not found')),
+	route.all('/api/*path', () => error(404, 'not found')),
+	route.all('/*path', (ctx) => ctx.env.ASSETS.fetch(ctx.request)),
+]
 
 /**
  * Delivery as a first-party Fabrika application. Provider and runtime ports are supplied by the
@@ -44,27 +67,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		controlAuthMiddleware(env),
 		controlOriginGuard(env),
 	],
-	routes: [
-		route.all('/healthz', () => Response.json({ status: 'ok' })),
-		route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),
-		route.post('/webhooks/github/:connectionId', (ctx, params) => webhook(ctx, params.connectionId)),
-		route.all('/webhooks', () => error(404, 'not found')),
-		route.all('/webhooks/*path', () => error(404, 'not found')),
-		route.get(
-			'/api/source/github/manifest/:connectionId',
-			(ctx, params) => sourceConnectionBrowserCall(ctx, (deps) => manifestHandoff(deps, params.connectionId)),
-		),
-		route.get('/api/source/github/callback', (ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
-		route.all('/iam/admin', (ctx) => iamAdmin(ctx)),
-		route.all('/iam/admin/*path', (ctx) => iamAdmin(ctx)),
-		route.all('/operations/api/rpc', (ctx) => operationsApi(ctx)),
-		route.all('/operations/api', () => error(404, 'not found')),
-		route.all('/operations/api/*path', () => error(404, 'not found')),
-		route.rpc('/api/rpc', controlRpcRouter),
-		route.all('/api', () => error(404, 'not found')),
-		route.all('/api/*path', () => error(404, 'not found')),
-		route.all('/*path', (ctx) => ctx.env.ASSETS.fetch(ctx.request)),
-	],
+	routes: controlRoutes,
 	onError(cause) {
 		console.error('control request failed:', cause instanceof Error ? cause.message : 'unknown error')
 		return new Response('internal error', {

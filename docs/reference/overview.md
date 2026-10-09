@@ -346,7 +346,9 @@ enforcement:
   and `service` rows, the method `*`, the caller `oauth`, the requirement
   `authenticated`), and its hop keeps `Authorization`, sets no proxy secret and leaves
   the service's answers untouched. No producer emits one yet: the services move to
-  them in work unit B10.
+  them in work unit B10. Each service's table is a service contract
+  (`@fabrika/app/service`), proved against its frozen gates by the differential in
+  `platform-artifacts/src/__tests__/service-parity/`.
 - **Authorization** — the action-and-scope check a service makes against an
   application-owned object coordinate. A path gate cannot make it, because the
   coordinate is known only once request data is validated. Every

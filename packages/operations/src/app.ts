@@ -1,4 +1,4 @@
-import { defineApp, route } from '@fabrika/app'
+import { defineApp, type Route, route } from '@fabrika/app'
 import { type AuthCarrier, type AuthContext, type Iam } from '@fabrika/auth'
 import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
@@ -21,27 +21,30 @@ export interface OperationsAppEnv extends OperationsDataEnv {
 	health: HealthRepository
 }
 
-interface OperationsAppContext extends AuthCarrier {
+export interface OperationsAppContext extends AuthCarrier {
 	auth?: AuthContext | null
 	readonly env: OperationsAppEnv
 	readonly request: Request
 }
 
+/** The routes `operationsApp` serves; exported so the B10 route-coverage test reads the live list. */
+export const operationsRoutes: Route<OperationsAppContext>[] = [
+	route.all('/healthz', (ctx) =>
+		isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)
+			? notFound()
+			: Response.json({ status: 'ok' })),
+	route.all('/api/:projectId/envelope/', (ctx) => directIngest(ctx)),
+	route.all(OPERATIONS_SOURCE_MAP_UPLOAD_PATH, (ctx) => sourceMapUpload(ctx)),
+	route.all('/private/catalog/reconcile', (ctx) => catalogReconcile(ctx)),
+	route.all(OPERATIONS_RELEASE_RECONCILE_PATH, (ctx) => releaseReconcile(ctx)),
+	route.rpc('/api/rpc', operationsRpcRouter, { use: [privateOperatorRoute] }),
+	route.all('/*path', () => notFound()),
+]
+
 /** Operations as the same runtime-neutral Fabrika application on Workers and Bun. */
 export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 	context: (env, request) => ({ env, request }),
-	routes: [
-		route.all('/healthz', (ctx) =>
-			isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)
-				? notFound()
-				: Response.json({ status: 'ok' })),
-		route.all('/api/:projectId/envelope/', (ctx) => directIngest(ctx)),
-		route.all(OPERATIONS_SOURCE_MAP_UPLOAD_PATH, (ctx) => sourceMapUpload(ctx)),
-		route.all('/private/catalog/reconcile', (ctx) => catalogReconcile(ctx)),
-		route.all(OPERATIONS_RELEASE_RECONCILE_PATH, (ctx) => releaseReconcile(ctx)),
-		route.rpc('/api/rpc', operationsRpcRouter, { use: [privateOperatorRoute] }),
-		route.all('/*path', () => notFound()),
-	],
+	routes: operationsRoutes,
 	onError() {
 		console.error('operations request failed')
 		return Response.json({ error: 'internal error' }, { status: 500 })

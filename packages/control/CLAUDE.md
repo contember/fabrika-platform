@@ -110,6 +110,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   and `HttpIamRpc` (`@fabrika/auth`, bearer `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private
   `FABRIKA_IAM_RPC_URL`) in a process. `FABRIKA_IAM_ISSUER` remains the public issuer. ONE `HttpIamRpc` per
   process, never per request: the SDK caches the JWKS in a WeakMap keyed by that object.
+- **`fabrika.service.ts` is the service contract that replaces the gates in B10e** (ADR-0022
+  "Installation entries"): `controlServiceContract({ mcp })`, exported as `@fabrika/control/service`, with
+  the MCP constants `fabrika.gates.ts` re-exports. Nothing serves or publishes it yet. Its `*-root` rows and
+  the reserved `/webhooks` and `/mcp` keep every path the service answered 404 away from the SPA; with
+  `mcp: false`, `/mcp` is a session-only 404 row. The proxy side must pass the same switch, or `/mcp`
+  answers 503. Same dependency rule as the gates module: no provider, nothing of `src/` but
+  `src/actions.ts`. `controlRoutes` is exported only so `service-routes.test.ts` can prove the frozen copy
+  of the B10 parity test still equals it.
 - **ONE auth path, locally included — there is no `DEV` var any more.** `env.IAM` and
   `FABRIKA_IAM_ISSUER` are required in every environment; `createIam` refuses to build without them, and
   `fabrika.config.ts` binds IAM locally for the same reason (the proxy Worker in front already did).

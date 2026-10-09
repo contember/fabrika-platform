@@ -44,6 +44,11 @@
 			"types": "./src/gates.ts",
 			"default": "./src/gates.ts"
 		},
+		"./service": {
+			"bun": "./src/service.ts",
+			"types": "./src/service.ts",
+			"default": "./src/service.ts"
+		},
 		"./access": {
 			"bun": "./src/access.ts",
 			"types": "./src/access.ts",

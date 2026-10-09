@@ -9,9 +9,13 @@
 // It used to live inside `fabrika.config.ts`, which imports the provider, so the local stack could not
 // import it and kept a hand-maintained copy pinned by a test instead. It must also not reach `src/`:
 // this package relaxes `noUncheckedIndexedAccess` for oblaka's sake, so pulling its runtime graph into
-// a strict consumer's program fails to compile. One type-only contract import and nothing else.
+// a strict consumer's program fails to compile. One type-only contract import, and the MCP constants of
+// `fabrika.service.ts`, the table that replaces these gates in B10e.
 
 import type { AppGates } from '@fabrika/auth-core'
+import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlMcpResource } from './fabrika.service'
+
+export { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlMcpResource, controlMcpResourceMetadata } from './fabrika.service'
 
 /**
  * The control surface's default pair: `/api/*` admits a machine `px_` key or a logged-in human. The
@@ -23,20 +27,6 @@ const CONTROL_GATES: AppGates = {
 		{ path: '/api/*', kind: 'service' },
 		{ path: '/api/*', kind: 'human' },
 	],
-}
-
-/** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for. */
-export const CONTROL_MCP_PATH = '/mcp'
-export const CONTROL_MCP_SCOPE = 'authoring'
-
-/** RFC 8707 resource URI of the MCP endpoint for a console public origin (no trailing slash). */
-export function controlMcpResource(publicOrigin: string): string {
-	return `${publicOrigin}${CONTROL_MCP_PATH}`
-}
-
-/** RFC 9728 metadata URL the proxy serves for that resource. */
-export function controlMcpResourceMetadata(publicOrigin: string): string {
-	return `${publicOrigin}/.well-known/oauth-protected-resource${CONTROL_MCP_PATH}`
 }
 
 /**

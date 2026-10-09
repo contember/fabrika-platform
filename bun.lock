@@ -445,6 +445,7 @@
         "@fabrika/proxy-core": "workspace:*",
       },
       "devDependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/iam": "workspace:*",
         "@fabrika/proxy": "workspace:*",
         "@types/bun": "latest",

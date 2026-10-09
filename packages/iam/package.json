@@ -8,6 +8,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./service": {
+			"bun": "./src/service.ts",
+			"types": "./src/service.ts",
+			"default": "./src/service.ts"
 		}
 	},
 	"scripts": {

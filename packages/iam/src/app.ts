@@ -1,4 +1,4 @@
-import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
+import { type AuthContext, defineApp, type RequestExecutionContext, type Route, route } from '@fabrika/app'
 import { WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'
 import type { ResolvedAdmin } from './admin/router'
 import { handleAdmin } from './admin/router'
@@ -52,6 +52,38 @@ export interface IamAppOptions {
 	readonly requestIdHeader?: string
 }
 
+/** The routes `createIamApp` serves for these options; exported so the B10 route-coverage test reads the live list. */
+export function iamRoutes(options: IamAppOptions): Route<IamAppContext>[] {
+	return [
+		...(options.health === true
+			? [route.all<IamAppContext, '/healthz'>('/healthz', () => Response.json({ status: 'ok' }))]
+			: []),
+		route.all('/.well-known/jwks.json', (ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId)),
+		route.all(OAUTH_METADATA_PATH, (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
+		route.all('/oauth/*path', (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
+		route.all('/auth', (ctx) => handleIamAuth(ctx, options)),
+		route.all('/auth/*path', (ctx) => handleIamAuth(ctx, options)),
+		route.rpc('/admin/rpc', adminRpcRouter, { use: [adminRpcAuth] }),
+		route.all('/admin', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
+		route.all('/admin/*path', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
+		...(options.membershipTransport === true
+			? [
+				route.all<IamAppContext, '/membership/*method'>(
+					'/membership/*method',
+					(ctx) => handleMembershipTransport(ctx.request, ctx.services, createIamRpc(ctx.env, ctx.exec)),
+				),
+			]
+			: []),
+		route.all('/rpc', (ctx) => handleIamRpc(ctx, options)),
+		route.all('/rpc/*method', (ctx) => handleIamRpc(ctx, options)),
+		route.all('/*path', () =>
+			new Response('not found', {
+				status: 404,
+				headers: { 'content-type': 'text/plain; charset=utf-8' },
+			})),
+	]
+}
+
 /**
  * Build IAM as a runtime-neutral Fabrika application.
  *
@@ -70,34 +102,7 @@ export function createIamApp(options: IamAppOptions = {}) {
 			auth: anonymousAuth(),
 			admin: null,
 		}),
-		routes: [
-			...(options.health === true
-				? [route.all<IamAppContext, '/healthz'>('/healthz', () => Response.json({ status: 'ok' }))]
-				: []),
-			route.all('/.well-known/jwks.json', (ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId)),
-			route.all(OAUTH_METADATA_PATH, (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
-			route.all('/oauth/*path', (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
-			route.all('/auth', (ctx) => handleIamAuth(ctx, options)),
-			route.all('/auth/*path', (ctx) => handleIamAuth(ctx, options)),
-			route.rpc('/admin/rpc', adminRpcRouter, { use: [adminRpcAuth] }),
-			route.all('/admin', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
-			route.all('/admin/*path', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)),
-			...(options.membershipTransport === true
-				? [
-					route.all<IamAppContext, '/membership/*method'>(
-						'/membership/*method',
-						(ctx) => handleMembershipTransport(ctx.request, ctx.services, createIamRpc(ctx.env, ctx.exec)),
-					),
-				]
-				: []),
-			route.all('/rpc', (ctx) => handleIamRpc(ctx, options)),
-			route.all('/rpc/*method', (ctx) => handleIamRpc(ctx, options)),
-			route.all('/*path', () =>
-				new Response('not found', {
-					status: 404,
-					headers: { 'content-type': 'text/plain; charset=utf-8' },
-				})),
-		],
+		routes: iamRoutes(options),
 		onError(error) {
 			console.error('iam request failed:', error instanceof Error ? error.message : 'unknown error')
 			return new Response('internal error', {

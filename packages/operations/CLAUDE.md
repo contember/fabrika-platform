@@ -29,7 +29,12 @@ The public hostname accepts only Sentry-compatible
 `OPERATIONS_PROXY_GATES` (`src/gates.ts`) therefore declares exactly those two
 `public` rules; `/api/rpc`, `/private/catalog/reconcile`, and
 `/private/releases/reconcile` are 404 on that host and stay private, so they may
-not carry a rule there. Control's same-origin gateway
+not carry a rule there. `src/service.ts` holds the two service contracts that replace
+the gates and `operationsApp` in B10c: `OPERATIONS_PUBLIC_SERVICE` (the same two
+routes, as `protocol` rows) and the never-published `OPERATIONS_PRIVATE_SERVICE`
+(liveness, the reconcile paths, and `POST /api/rpc` as a `protocol` row, because
+Control's gateway forwards the console's own `X-Fabrika-Endpoint`). Nothing serves
+them yet; `operationsRoutes` is exported only for the B10 route test. Control's same-origin gateway
 transports operator requests; Operations owns authentication, scoped
 authorization, IAM audit, and principal lookup. Authentication is verification
 only (ADR-0022): the proxy in front of whichever surface the request arrived on
