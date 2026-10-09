@@ -5,6 +5,7 @@ import { diskAssets, issuerJwks, serveContract } from '@fabrika/app/bun'
 import { createContractWorker } from '@fabrika/app/cloudflare'
 import { defineContract } from '@fabrika/app/contract'
 import { implement } from '@fabrika/app/implement'
+import { PROXY_SECRET_HEADER } from '@fabrika/auth-core'
 import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,6 +20,7 @@ import {
 	keySource,
 	ORIGIN,
 	PROXY_SECRET,
+	serveStandInIam,
 	token,
 } from './fixtures/implement/harness'
 
@@ -140,6 +142,52 @@ describe('serveContract', () => {
 			const served = serveContract(() => Promise.resolve({ default: startingApp }), env)
 			await expect(served).rejects.toThrow('FABRIKA_IAM_RPC_URL and FABRIKA_IAM_RPC_KEY on Bun')
 		})
+	})
+
+	test('asks IAM through its membership transport, with the environment key, for its own application', async () => {
+		const key = `px_${'m'.repeat(27)}`
+		const asked: { path: string; bearer: string | null; body: unknown }[] = []
+		const iam = serveStandInIam(startingApp, async (request) => {
+			asked.push({ path: new URL(request.url).pathname, bearer: request.headers.get('authorization'), body: await request.json() })
+			return Response.json({ ok: true, scope: { type: 'workspace', value: 'w9' }, role: 'owner' })
+		})
+		try {
+			await keepingProcessEnvironment(async () => {
+				const env = {
+					...frameworkEnvFor(startingApp),
+					FABRIKA_IAM_ISSUER: iam.origin,
+					FABRIKA_IAM_RPC_URL: iam.origin,
+					FABRIKA_IAM_RPC_KEY: key,
+					FABRIKA_PROXY_SECRET: PROXY_SECRET,
+					PORT: '0',
+				}
+				const server = await serveContract(() => Promise.resolve({ default: startingApp }), env)
+				try {
+					const response = await fetch(`http://localhost:${server.port}/api/start`, {
+						method: 'POST',
+						headers: {
+							[PROXY_SECRET_HEADER]: PROXY_SECRET,
+							'X-Fabrika-Token': await token('user', [grant('workspaces.create')], undefined, iam.origin),
+							'X-Fabrika-Endpoint': endpointHeaderFor(startingApp, 'POST', '/api/start') ?? '',
+							'X-Fabrika-Delegation': 'grant-1',
+							'Content-Type': 'application/json',
+							'Sec-Fetch-Site': 'same-origin',
+						},
+						body: '{}',
+					})
+					expect(await response.json()).toEqual({ result: { workspace: 'w9' } })
+				} finally {
+					await server.stop()
+				}
+			})
+		} finally {
+			await iam.stop()
+		}
+		expect(asked).toEqual([{
+			path: '/membership/createScope',
+			bearer: `Bearer ${key}`,
+			body: expect.objectContaining({ app: 'notes@prod', delegation: 'grant-1', dimension: 'workspace' }),
+		}])
 	})
 
 	test('imports the application only after the framework variables left the process', async () => {

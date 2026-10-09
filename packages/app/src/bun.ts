@@ -5,7 +5,7 @@
 // contract application is served through `serveContract`, from the generated
 // entrypoint.
 
-import { HttpIamRpc } from '@fabrika/auth'
+import { HttpIamMembership } from '@fabrika/auth'
 import { rawRequestTarget } from '@fabrika/auth-core'
 import type * as DataLayer from '@fabrika/db'
 import type { Database } from '@fabrika/db'
@@ -181,13 +181,14 @@ export function openFileStorage(framework: Readonly<Record<string, string>>): Fi
 }
 
 /**
- * IAM's membership operations over its HTTP transport, when the platform gives the process `FABRIKA_IAM_RPC_URL`
- * and `FABRIKA_IAM_RPC_KEY`; without both, there is none, and `boot` refuses a contract that needs one.
+ * IAM's membership transport, when the platform gives the process `FABRIKA_IAM_RPC_URL` (IAM's public origin) and
+ * `FABRIKA_IAM_RPC_KEY` (this environment's membership transport key); without both, there is none, and `boot` refuses
+ * a contract that needs one.
  */
-function httpMembership(framework: Readonly<Record<string, string>>): HttpIamRpc | undefined {
+function httpMembership(framework: Readonly<Record<string, string>>): HttpIamMembership | undefined {
 	const origin = framework['FABRIKA_IAM_RPC_URL']?.trim() ?? ''
 	const key = framework['FABRIKA_IAM_RPC_KEY']?.trim() ?? ''
-	return origin === '' || key === '' ? undefined : new HttpIamRpc({ origin, key })
+	return origin === '' || key === '' ? undefined : new HttpIamMembership({ origin, key })
 }
 
 /** IAM's public token exchange, at the issuer every deploy names; `boot` reports a missing issuer itself. */

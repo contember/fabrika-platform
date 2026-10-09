@@ -458,7 +458,9 @@ src/
   same table for every credential on every kind of path. The kit's own IAM issues no
   delegation grants: `options.membership` (an `IamMembershipRpc`) is both the proxy's
   delegation issuer and `boot`'s membership transport, and without it an application that
-  creates scopes, manages members or issues links does not boot in the kit.
+  creates scopes, manages members or issues links does not boot in the kit. On Bun the transport is
+  `HttpIamMembership` (`@fabrika/auth`) on `FABRIKA_IAM_RPC_URL` with the environment's own
+  `FABRIKA_IAM_RPC_KEY`, both written by the platform; on Cloudflare the `IAM` binding.
 - `options.database` is the connection `boot` binds a `scoped(tables)` database to, as
   the runtime adapter supplies it; the kit compiles the artifact exactly as `boot` does.
 - The kit stands in for Control and IAM for workloads too: each job and webhook gets a random `px_` key, and the

@@ -119,8 +119,14 @@ export function workloadTokensFor(
 	}
 }
 
-/** A stand-in IAM on a loopback port: its key set and the token exchange for `app`'s workload keys, as the Bun adapter asks. */
-export function serveStandInIam(app: ContractImplementation): { readonly origin: string; stop(): Promise<void> } {
+/**
+ * A stand-in IAM on a loopback port: its key set and the token exchange for `app`'s workload keys, as the Bun adapter
+ * asks, and its membership transport answered by `membership`.
+ */
+export function serveStandInIam(
+	app: ContractImplementation,
+	membership: (request: Request) => Promise<Response> = () => Promise.resolve(new Response('not found', { status: 404 })),
+): { readonly origin: string; stop(): Promise<void> } {
 	let tokens: WorkloadTokenSource | null = null
 	const server = Bun.serve({
 		port: 0,
@@ -136,6 +142,9 @@ export function serveStandInIam(app: ContractImplementation): { readonly origin:
 				const audience = typeof body === 'object' && body !== null && 'app' in body && typeof body.app === 'string' ? body.app : ''
 				tokens ??= workloadTokensFor(app, undefined, `http://127.0.0.1:${server.port}`)
 				return Response.json(await tokens.exchange({ app: audience, key }))
+			}
+			if (url.pathname.startsWith('/membership/')) {
+				return membership(request)
 			}
 			return new Response('not found', { status: 404 })
 		},
@@ -187,10 +196,10 @@ export function grant(action: string, scope?: { readonly type: string; readonly 
 
 export type TokenKind = 'user' | 'service' | 'link'
 
-export async function token(kind: TokenKind, perms: PermissionEntry[], audience = APP_ID): Promise<string> {
+export async function token(kind: TokenKind, perms: PermissionEntry[], audience = APP_ID, issuer = ISSUER): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
 	const claims = buildAccessClaims({
-		iss: ISSUER,
+		iss: issuer,
 		app: audience,
 		subject: kind === 'link' ? 'credential-1' : `${kind}-1`,
 		...(kind === 'link' ? {} : { type: kind }),
