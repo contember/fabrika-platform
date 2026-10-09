@@ -104,7 +104,12 @@ arguments and reports.
 - The edge key comes from `FABRIKA_CONNECT_KEY` in the ENVIRONMENT ONLY and is the only bearer sent. No message
   carries it, nor the answer's body. The origin is https, plain http only for `localhost`.
 - A description is written only when `parseExportDescription` accepts it — its digest is the digest of what it
-  describes — and it names the requested `<app>/<export>@<version>`.
+  describes — and it names the requested `<app>/<export>@<version>`. A redirect is an error and never
+  followed (`redirect: 'manual'`); the body must be `application/json` and at most
+  `CONNECT_LIMITS.maxDescriptionBytes`; a body that contains the key is refused, so it never reaches a
+  committed snapshot.
+- Every diagnostic is fixed text, a top-level field and zod's code at most, never what the owner wrote; the
+  key is cut out of every error and line regardless.
 - stdout carries the snapshot's path; what to add to the contract and to `implement()` goes to stderr.
 
 ## The `app` area

@@ -1,4 +1,14 @@
-import { CONNECT_PREFIX, ContractError, exportBase, joinPath, parseExportDescription, snapshotNames, snapshotSource } from '@fabrika/app/contract'
+import {
+	CONNECT_LIMITS,
+	CONNECT_PREFIX,
+	ContractError,
+	exportBase,
+	joinPath,
+	parseExportDescription,
+	snapshotNames,
+	snapshotSource,
+} from '@fabrika/app/contract'
+import { isJsonMediaType, readBoundedBytes } from '@fabrika/app/implement'
 import { API_KEY_PREFIX, type ExportDescription } from '@fabrika/auth-core'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -74,10 +84,14 @@ function edgeKey(source: ConnectCommandDependencies['source']): string {
 	return key
 }
 
-/** The description the owner serves; every failure is reported without the key or the answer's body. */
+/**
+ * The description the owner serves. Every failure is a fixed diagnostic: a redirect is never followed, a body is read
+ * under `CONNECT_LIMITS.maxDescriptionBytes` and only as `application/json`, and nothing of the answer is quoted.
+ */
 async function fetchDescription(target: Target, key: string, deps: ConnectCommandDependencies): Promise<ExportDescription> {
 	const named = `${target.app}/${target.export}@${target.version}`
 	const url = new URL(joinPath(CONNECT_PREFIX, exportBase(target.export, target.version)), target.origin)
+	const signal = AbortSignal.timeout(TIMEOUT_MS)
 	let response: Response
 	try {
 		response = await deps.fetch(
@@ -85,21 +99,51 @@ async function fetchDescription(target: Target, key: string, deps: ConnectComman
 				method: 'POST',
 				headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
 				body: '{}',
-				signal: AbortSignal.timeout(TIMEOUT_MS),
+				signal,
+				redirect: 'manual',
 			}),
 		)
 	} catch {
 		throw new Error(`${target.origin} could not be reached for ${named}`)
 	}
+	if (response.status >= 300 && response.status < 400) {
+		await response.body?.cancel().catch(() => {})
+		throw new Error(
+			`${target.origin} answered ${response.status} for ${named}, a redirect, which fabrika connect never follows; pass the owner's own origin`,
+		)
+	}
 	if (response.status === 401 || response.status === 403) {
 		throw new Error(`${target.origin} refused ${KEY_VARIABLE} for ${named} (${response.status}); the key must hold the export's actions`)
 	}
 	if (response.status !== 200) {
+		await response.body?.cancel().catch(() => {})
 		throw new Error(`${target.origin} answered ${response.status} for ${named}; check the origin, the export's name and its version`)
+	}
+	if (!isJsonMediaType(response.headers.get('Content-Type'))) {
+		await response.body?.cancel().catch(() => {})
+		throw new Error(`${target.origin} answered ${named} with no application/json body`)
+	}
+	let bytes: Uint8Array | null
+	try {
+		bytes = await readBoundedBytes(response.body, {
+			maxBytes: CONNECT_LIMITS.maxDescriptionBytes,
+			declaredLength: response.headers.get('Content-Length'),
+			signal,
+		})
+	} catch {
+		throw new Error(`${target.origin} did not finish its description of ${named} in time`)
+	}
+	if (bytes === null) {
+		throw new Error(`${target.origin} answered ${named} with a description larger than ${CONNECT_LIMITS.maxDescriptionBytes} bytes`)
+	}
+	const text = new TextDecoder().decode(bytes)
+	// A description that quotes the key would write the credential into a committed file.
+	if (text.includes(key)) {
+		throw new Error(`${target.origin} answered ${named} with a description that contains ${KEY_VARIABLE}; nothing was written`)
 	}
 	let body: unknown
 	try {
-		body = await response.json()
+		body = JSON.parse(text)
 	} catch {
 		throw new Error(`${target.origin} answered ${named} with no JSON`)
 	}
@@ -110,7 +154,7 @@ async function fetchDescription(target: Target, key: string, deps: ConnectComman
 		throw new Error(`${target.origin} served no valid description of ${named}${error instanceof ContractError ? `: ${error.problems.join('; ')}` : ''}`)
 	}
 	if (description.app !== target.app || description.export !== target.export || description.version !== target.version) {
-		throw new Error(`${target.origin} described ${description.app}/${description.export}@${description.version}, not ${named}`)
+		throw new Error(`${target.origin} described another export than ${named}`)
 	}
 	return description
 }
@@ -164,9 +208,20 @@ async function pull(argv: readonly string[], deps: ConnectCommandDependencies): 
 	)
 }
 
+/**
+ * Every line and error leaves with the edge key cut out. No diagnostic quotes the owner's answer; this is defence in
+ * depth against one that names a procedure after the key it was sent.
+ */
 export const runConnectCommand = async (command: string | undefined, argv: readonly string[], deps: ConnectCommandDependencies): Promise<void> => {
-	if (command === 'add') return add(argv, deps)
-	if (command === 'pull') return pull(argv, deps)
+	const key = deps.source[KEY_VARIABLE]?.trim() ?? ''
+	const redact = (text: string): string => (key === '' ? text : text.replaceAll(key, '[edge key]'))
+	const redacted: ConnectCommandDependencies = { ...deps, write: (line) => deps.write(redact(line)), note: (line) => deps.note(redact(line)) }
+	try {
+		if (command === 'add') return await add(argv, redacted)
+		if (command === 'pull') return await pull(argv, redacted)
+	} catch (error) {
+		throw new Error(redact(error instanceof Error ? error.message : 'fabrika connect failed'))
+	}
 	throw new Error(`Unknown connect command: ${command ?? '(missing)'}\n\n${CONNECT_USAGE}`)
 }
 

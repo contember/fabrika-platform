@@ -2,8 +2,8 @@
 // description that is what it claims to be. The owner here is a fake `fetch` that serves a compiled contract's
 // description; the key is a credential, so no message may carry it.
 
-import { compileContract, defineContract, exportDescription, snapshotNames, snapshotSource } from '@fabrika/app/contract'
-import type { ExportDescription } from '@fabrika/auth-core'
+import { compileContract, CONNECT_LIMITS, defineContract, exportDescription, snapshotNames, snapshotSource } from '@fabrika/app/contract'
+import { type ExportDescription, exportDigest } from '@fabrika/auth-core'
 import { checkApplication, formatFinding } from '@fabrika/check'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -152,6 +152,73 @@ describe('fabrika connect add', () => {
 		expect(fake.requests).toEqual([])
 		await run(root, 'add', ['catalog/products@1', '--origin=http://catalog.localhost:8080'], fake.fetch)
 		expect(fake.requests[0]?.url).toBe('http://catalog.localhost:8080/__fabrika/connect/products.v1')
+	})
+})
+
+describe('fabrika connect add against an owner that misbehaves', () => {
+	test('a description with a property named after the key is refused with a diagnostic that does not carry the key', async () => {
+		const root = appRoot()
+		const reflected = owner(() => Response.json({ result: { ...catalog(z.int()), [KEY]: true } }))
+		const message = await failure(run(root, 'add', target, reflected.fetch))
+		expect(message).not.toContain(KEY)
+	})
+
+	test('a description the parser refuses gets a fixed diagnostic: the field and the code, nothing it wrote', async () => {
+		const root = appRoot()
+		const reflected = owner(() => Response.json({ result: { ...catalog(z.int()), 'px_other_secret': true } }))
+		expect(await failure(run(root, 'add', target, reflected.fetch))).toBe(
+			`${ORIGIN} served no valid description of catalog/products@1: description: invalid at (root) (unrecognized_keys)`,
+		)
+	})
+
+	test('a description that quotes the key is never written', async () => {
+		const root = appRoot()
+		const served = catalog(z.int())
+		const renamed = { ...served, procedures: { [KEY]: served.procedures['get'] ?? { input: null, output: { type: 'null' } } } }
+		const fake = serving({ ...renamed, digest: exportDigest(renamed) })
+		const message = await failure(run(root, 'add', target, fake.fetch))
+		expect(message).toBe(`${ORIGIN} answered catalog/products@1 with a description that contains FABRIKA_CONNECT_KEY; nothing was written`)
+		expect(() => readFileSync(join(root, file))).toThrow()
+	})
+
+	test('a 307 is an error and is never followed', async () => {
+		const root = appRoot()
+		const fake = owner(() => new Response(null, { status: 307, headers: { Location: 'https://elsewhere.example.com/' } }))
+		expect(await failure(run(root, 'add', target, fake.fetch))).toContain('a redirect, which fabrika connect never follows')
+		expect(fake.requests.map((request) => request.redirect)).toEqual(['manual'])
+	})
+
+	test('a description over the byte budget is refused and its stream cancelled', async () => {
+		const root = appRoot()
+		let cancelled = false
+		let sent = 0
+		const chunk = new Uint8Array(64 * 1024).fill(0x20)
+		const fake = owner(() =>
+			new Response(
+				new ReadableStream<Uint8Array>({
+					pull(controller) {
+						if (sent >= 8 * 1024 * 1024) {
+							controller.close()
+							return
+						}
+						sent += chunk.byteLength
+						controller.enqueue(chunk)
+					},
+					cancel() {
+						cancelled = true
+					},
+				}),
+				{ headers: { 'Content-Type': 'application/json' } },
+			)
+		)
+		expect(await failure(run(root, 'add', target, fake.fetch))).toContain(`a description larger than ${CONNECT_LIMITS.maxDescriptionBytes} bytes`)
+		expect(cancelled).toBe(true)
+	})
+
+	test('a description served as text/html is refused', async () => {
+		const root = appRoot()
+		const fake = owner(() => new Response(JSON.stringify({ result: catalog(z.int()) }), { headers: { 'Content-Type': 'text/html' } }))
+		expect(await failure(run(root, 'add', target, fake.fetch))).toBe(`${ORIGIN} answered catalog/products@1 with no application/json body`)
 	})
 })
 
