@@ -13,9 +13,10 @@ export interface JobPrincipal {
 }
 
 /**
- * What a job handler gets. Every capability is minted in process for exactly the job's declared actions, with the
- * job's `scope: 'app'`, and only while this attempt holds the job's lease: a capability of another attempt is
- * refused, and so is every write after the attempt timed out or lost the lease.
+ * What a job handler gets. A capability is minted for a declared action only when the token IAM signed for the job's
+ * key at the start of the attempt carries it, with the job's `scope: 'app'`, and only while this attempt holds the
+ * job's lease: a capability of another attempt is refused, and so is every write after the attempt timed out or lost
+ * the lease.
  */
 export interface JobContext<A extends string, D extends string> {
 	readonly principal: JobPrincipal

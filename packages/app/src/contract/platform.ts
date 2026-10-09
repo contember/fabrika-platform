@@ -6,6 +6,7 @@ import {
 	type AppLinkMountDef,
 	type AppSchema,
 	type AppScopeDef,
+	type AppWorkloadDef,
 	type ContractArtifact,
 	type DimensionArtifact,
 	endpointDelegation,
@@ -18,7 +19,7 @@ import {
 /**
  * The IAM vocabulary of a contract application, marked `contract` so IAM refuses every wildcard written for it: the
  * dimensions as scopes with their container, creator role and members actions; the actions; the roles, a membership
- * role with its scope and the roles that may assign it; the link mounts; and the delegations. Every artifact
+ * role with its scope and the roles that may assign it; the link mounts; the delegations; and the workloads. Every artifact
  * dimension is a scope, a file collection's `file:<name>` included, because access to a file is checked there.
  */
 export function schemaFromContract(artifact: ContractArtifact): AppSchema {
@@ -32,7 +33,17 @@ export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 			const delegation = delegationOf(artifact, row)
 			return delegation === null ? [] : [[row.id, delegation]]
 		})),
+		workloads: workloadsOf(artifact),
 	}
+}
+
+/** Every job and webhook with its exact actions: what its workload key carries (ADR-0022 "Principal kinds"). */
+function workloadsOf(artifact: ContractArtifact): AppWorkloadDef[] {
+	const jobs = Object.entries(artifact.jobs).map(([name, job]): AppWorkloadDef => ({ kind: 'job', name, actions: [...job.actions].sort(byCodeUnit) }))
+	const webhooks = Object.entries(artifact.mounts).flatMap(([name, mount]): AppWorkloadDef[] =>
+		mount.kind === 'webhook' ? [{ kind: 'webhook', name, actions: [...mount.actions].sort(byCodeUnit) }] : []
+	)
+	return [...jobs, ...webhooks].sort((a, b) => byCodeUnit(`${a.kind}:${a.name}`, `${b.kind}:${b.name}`))
 }
 
 /** Key order differs between the two producers of an artifact; the schema must not. */

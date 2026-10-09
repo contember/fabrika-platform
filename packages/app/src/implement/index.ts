@@ -28,3 +28,4 @@ export type {
 	WebhookHandler,
 } from './types'
 export type { WebhookDelivery, WebhookPrincipal } from './webhook'
+export { issuerWorkloadTokens, type WorkloadTokenSource } from './workload'

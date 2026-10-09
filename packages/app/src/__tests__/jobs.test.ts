@@ -9,7 +9,16 @@ import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { defineContract } from '../contract/define'
-import { bootApp, environment, frameworkEnvFor, keepingProcessEnvironment, keySource, PROXY_SECRET } from './fixtures/implement/harness'
+import {
+	bootApp,
+	environment,
+	frameworkEnvFor,
+	keepingProcessEnvironment,
+	keySource,
+	PROXY_SECRET,
+	serveStandInIam,
+	workloadTokensFor,
+} from './fixtures/implement/harness'
 import { type JobHooks, jobsApp } from './fixtures/jobs-notes/app'
 import { migration } from './fixtures/scoped-notes/migration'
 
@@ -154,6 +163,19 @@ describe('boot binds every job or does not start', () => {
 		])
 	})
 
+	test('a job without its key, or without a token exchange for it, does not boot', () => {
+		const { FABRIKA_JOB_PURGE_KEY: _purge, ...withoutPurge } = frameworkEnvFor(jobsApp(passing))
+		const framework = { ...withoutPurge, FABRIKA_JOB_SWEEP_KEY: 'not-a-key' }
+		expect(problemsOf(() => bootApp(jobsApp(passing), { database: connection, environment: environment(framework) }))).toEqual([
+			"FABRIKA_JOB_PURGE_KEY is not set to a px_ key; Control writes the credential of the job 'purge' into every deploy",
+			"FABRIKA_JOB_SWEEP_KEY is not set to a px_ key; Control writes the credential of the job 'sweep' into every deploy",
+		])
+		const noExchange = { database: connection, environment: environment(frameworkEnvFor(jobsApp(passing))), workloadTokens: undefined }
+		expect(problemsOf(() => bootApp(jobsApp(passing), noExchange))).toEqual([
+			'the contract declares jobs or webhooks, and the runtime adapter supplies no IAM token exchange for their keys',
+		])
+	})
+
 	test('an unknown job does not run', () => {
 		const jobs = bootApp(jobsApp(passing), { database: connection }).jobs
 		expect(() => jobs.run('missing')).toThrow("no job 'missing' in the contract (jobs: purge, sweep, flaky)")
@@ -206,6 +228,33 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			last_duration_ms: expect.any(Number),
 			last_started_at: expect.any(Date),
 		})
+	})
+
+	test('a job mints only what IAM signs for its key: a declared action its token lacks is refused, and nothing is deleted', async () => {
+		const expired = await seedNote('expired')
+		const app = jobsApp(passing)
+		const narrowed = workloadTokensFor(app, (workload) => workload.actions.filter((action) => action !== 'notes.delete'))
+		const { reports, reporter } = recorder()
+		const result = await quietly(() => bootApp(app, { database, workloadTokens: narrowed }).jobs.run('sweep', { reporter }))
+		expect(result).toEqual({ status: 'failed', attempts: 1, code: 'handler_failed' })
+		expect(await noteExists(expired)).toBe(true)
+		expect(kinds(reports)).toEqual([['JobFailed', 'handler_failed']])
+	})
+
+	test('a key IAM refuses fails the run as unauthorized, and an IAM it cannot reach as iam_unavailable; no handler runs', async () => {
+		const expired = await seedNote('expired')
+		let ran = 0
+		const hooks: JobHooks = { ...passing, beforeDelete: () => Promise.resolve(void ran++) }
+		const refusing = { exchange: () => Promise.resolve({ ok: false as const, reason: 'invalid_key' as const }) }
+		const unreachable = { exchange: () => Promise.reject(new Error('connect ECONNREFUSED')) }
+		const refused = await logged(() => bootApp(jobsApp(hooks), { database, workloadTokens: refusing }).jobs.run('sweep'))
+		expect(refused.result).toEqual({ status: 'failed', attempts: 1, code: 'unauthorized' })
+		expect(refused.lines).toContain("fabrika: IAM refused the key of the job 'sweep': invalid_key")
+		const down = await logged(() => bootApp(jobsApp(hooks), { database, workloadTokens: unreachable }).jobs.run('sweep'))
+		expect(down.result).toEqual({ status: 'failed', attempts: 1, code: 'iam_unavailable' })
+		expect(down.lines.join('\n')).not.toContain('ECONNREFUSED')
+		expect(ran).toBe(0)
+		expect(await noteExists(expired)).toBe(true)
 	})
 
 	test('an overlapping run does not start', async () => {
@@ -419,8 +468,10 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 	test('fabrika job run boots like the server: framework variables leave the process before the application loads', async () => {
 		await seedNote('expired')
 		const app = jobsApp(passing)
+		const iam = serveStandInIam(app)
 		const env = {
 			...frameworkEnvFor(app),
+			FABRIKA_IAM_ISSUER: iam.origin,
 			FABRIKA_APP_ID: appId,
 			FABRIKA_APP_DATABASE_URL: url,
 			FABRIKA_PROXY_SECRET: PROXY_SECRET,
@@ -437,7 +488,8 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 				env,
 				'purge',
 			)
-		})
+		}).finally(() => iam.stop())
+		// The job's token came from IAM's public token exchange, at the issuer the deploy names.
 		expect(result).toEqual({ status: 'succeeded', attempts: 1 })
 		expect(seen).toEqual([undefined])
 	})

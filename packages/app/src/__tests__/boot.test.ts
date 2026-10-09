@@ -8,7 +8,7 @@ import { Database } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { notesApp } from './fixtures/implement/app'
-import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource } from './fixtures/implement/harness'
+import { echoAssets, environment, frameworkEnvFor, keepingProcessEnvironment, keySource, workloadTokensFor } from './fixtures/implement/harness'
 import { NOTE_TABLE, noteDatabase } from './fixtures/implement/stores'
 import { contract } from './fixtures/multi-tenant/fabrika.contract'
 import { RecordingMembership } from './fixtures/multi-tenant/iam'
@@ -166,11 +166,12 @@ describe('what this version does not serve yet stops the boot', () => {
 			deps: () => null,
 			handlers: () => ({ hook: () => undefined }),
 		})
-		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource }))).toEqual([
-			"webhook 'hook' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')",
-			"mount 'contact' is a form, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
-			"mount 'hook' is a webhook, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
-		])
+		expect(problemsOf(() => boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, workloadTokens: workloadTokensFor(app) })))
+			.toEqual([
+				"webhook 'hook' is bound to the whole application; this version serves a webhook bound to a dimension (boundTo: '<dimension>')",
+				"mount 'contact' is a form, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
+				"mount 'hook' is a webhook, which writes through @fabrika/db: pass implement({ database: scoped(tables) })",
+			])
 	})
 
 	test("a form's input field must be a column of its inbox", async () => {
@@ -182,7 +183,13 @@ describe('what this version does not serve yet stops the boot', () => {
 		try {
 			const base = multiTenantApp({ pushes: [], keys: [], failNextPush: false })
 			const app: ContractImplementation = { ...base, contract: extended }
-			const options = { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets, database: connection }
+			const options = {
+				environment: environment(frameworkEnvFor(app)),
+				iam: keySource,
+				assets: echoAssets,
+				database: connection,
+				workloadTokens: workloadTokensFor(app),
+			}
 			expect(problemsOf(() => boot(app, { ...options, membership: new RecordingMembership() }))).toEqual([
 				"the input field 'phone' of 'contact' is not a column of its inbox contact_messages",
 			])

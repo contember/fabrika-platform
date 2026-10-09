@@ -19,6 +19,7 @@ import { boot, BootError, type IamKeySource } from './implement/boot.js'
 import type { SpaAssets } from './implement/dispatch.js'
 import { captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
+import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
 import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
@@ -189,6 +190,12 @@ function httpMembership(framework: Readonly<Record<string, string>>): HttpIamRpc
 	return origin === '' || key === '' ? undefined : new HttpIamRpc({ origin, key })
 }
 
+/** IAM's public token exchange, at the issuer every deploy names; `boot` reports a missing issuer itself. */
+function workloadTokensOf(framework: Readonly<Record<string, string>>): WorkloadTokenSource | undefined {
+	const issuer = framework['FABRIKA_IAM_ISSUER']?.trim() ?? ''
+	return issuer === '' ? undefined : issuerWorkloadTokens(issuer)
+}
+
 /** The application module, imported only after the environment was captured: the generated entrypoint's `import()`. */
 export type ImplementationLoader = () => Promise<{ readonly default: ContractImplementation }>
 
@@ -211,7 +218,17 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	const membership = httpMembership(environment.framework)
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
 	const files = openFileStorage(environment.framework)
-	const served = boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, files, membership, requireProxySecret: true })
+	const workloadTokens = workloadTokensOf(environment.framework)
+	const served = boot(app, {
+		environment,
+		iam,
+		assets: diskAssets(process.cwd()),
+		database,
+		files,
+		membership,
+		workloadTokens,
+		requireProxySecret: true,
+	})
 	const server = Bun.serve({ port, hostname: '0.0.0.0', fetch: (request) => served.fetch(request) })
 	// The crontab may never fire; the serving process notices a job that stopped succeeding without being invoked.
 	const check = () => void served.jobs.check()
@@ -257,7 +274,11 @@ export async function runContractJob(
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
 	try {
-		return await boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, requireProxySecret: true }).jobs.run(name, options)
+		const workloadTokens = workloadTokensOf(environment.framework)
+		return await boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, workloadTokens, requireProxySecret: true }).jobs.run(
+			name,
+			options,
+		)
 	} finally {
 		await database?.close()
 	}

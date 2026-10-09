@@ -19,6 +19,7 @@ import {
 	SESSION_COOKIE,
 	TOKEN_ALG,
 	UNTRUSTED_FORWARD_HEADERS,
+	workloadKeyVariable,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import { refuseInProduction } from '@fabrika/db/production'
@@ -32,6 +33,7 @@ import { boot, type ContractApp } from '../implement/boot'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
+import type { WorkloadKindOf, WorkloadTokenSource } from '../implement/workload'
 import { resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
 import { endpointProxy } from './proxy'
 
@@ -131,6 +133,46 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		connectVariablesOf[variables.key] = connection.key
 		connectBindings[variables.binding] = connection.fetch
 	}
+	// The kit stands in for Control too: every job and webhook gets a key, which its stand-in IAM signs the declared actions for.
+	const workloadVariables: Record<string, string> = {}
+	const workloadsByKey = new Map<string, { readonly kind: WorkloadKindOf; readonly name: string; readonly actions: readonly string[] }>()
+	const declaredWorkloads = [
+		...Object.entries(artifact.jobs).map(([workload, job]) => ({ kind: 'job' as const, name: workload, actions: job.actions })),
+		...Object.entries(artifact.mounts).flatMap(([workload, mount]) =>
+			mount.kind === 'webhook' ? [{ kind: 'webhook' as const, name: workload, actions: mount.actions }] : []
+		),
+	]
+	for (const workload of declaredWorkloads) {
+		const key = `${API_KEY_PREFIX}test_${crypto.randomUUID().replaceAll('-', '')}`
+		workloadVariables[workloadKeyVariable(workload.kind, workload.name)] = key
+		workloadsByKey.set(key, workload)
+	}
+	const workloadTokens: WorkloadTokenSource = {
+		async exchange({ app: audience, key }) {
+			const workload = audience === appId ? workloadsByKey.get(key) : undefined
+			if (workload === undefined) {
+				return { ok: false, reason: 'invalid_key' }
+			}
+			const now = Math.floor(Date.now() / 1000)
+			const claims = buildAccessClaims({
+				iss: TEST_ISSUER,
+				app: appId,
+				subject: `${workload.kind}-${workload.name}`,
+				type: workload.kind,
+				workload: workload.name,
+				label: `${workload.kind}:${workload.name}`,
+				permissions: workload.actions.map((action) => ({ action, scope: null, source: 'grant' })),
+				issuedAt: now,
+				expiresAt: now + TOKEN_TTL_SECONDS,
+			})
+			const { privateKey } = await signing
+			return {
+				ok: true,
+				token: await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey),
+				expiresAt: claims.exp,
+			}
+		},
+	}
 	const application: ContractApp = boot(app, {
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
@@ -139,6 +181,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 				[FABRIKA_IAM_ISSUER]: TEST_ISSUER,
 				[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
 				...connectVariablesOf,
+				...workloadVariables,
 			},
 			application: options.env ?? {},
 		},
@@ -148,6 +191,7 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		files: options.files,
 		membership: options.membership,
 		connectBindings,
+		workloadTokens,
 	})
 
 	const byKey = new Map<string, TestCaller>()

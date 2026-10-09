@@ -97,6 +97,10 @@ describe('schemaFromContract', () => {
 				'webhooks.github.bind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
 				'webhooks.github.unbind': { action: 'notes.admin', dimension: 'workspace', purpose: 'members' },
 			},
+			workloads: [
+				{ kind: 'job', name: 'purgeDeleted', actions: ['notes.delete'] },
+				{ kind: 'webhook', name: 'github', actions: ['notes.write'] },
+			],
 		})
 	})
 
@@ -108,7 +112,7 @@ describe('schemaFromContract', () => {
 	})
 
 	test('a contract without link mounts or delegations says so, so IAM drops what an earlier schema had', () => {
-		expect(schemaFromContract(implemented)).toMatchObject({ links: {}, delegations: {} })
+		expect(schemaFromContract(implemented)).toMatchObject({ links: {}, delegations: {}, workloads: [] })
 	})
 
 	for (const [name, artifact] of [...FIXTURES, ['the members contract', members] as const]) {
@@ -122,6 +126,7 @@ describe('schemaFromContract', () => {
 				...Object.values(schema.roles).flatMap((role) => role.permissions),
 				...Object.values(schema.links ?? {}).flatMap((link) => [...link.grants, link.issuedBy]),
 				...Object.values(schema.delegations ?? {}).map((delegation) => delegation.action),
+				...(schema.workloads ?? []).flatMap((workload) => workload.actions),
 			]
 			expect(named.filter((action) => action.includes('*'))).toEqual([])
 		})

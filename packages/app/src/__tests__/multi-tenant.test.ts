@@ -2,14 +2,14 @@
 // link's chain re-check, the form's inbox and the webhook tables need it); IAM is a recording stand-in. Skips cleanly
 // when FABRIKA_TEST_POSTGRES_URL is unset (see scoped-database.test.ts).
 
-import { type ContractApp, LINK_BOOTSTRAP_SCRIPT, type SpaAssets } from '@fabrika/app/implement'
+import { type ContractApp, LINK_BOOTSTRAP_SCRIPT, type SpaAssets, type WorkloadTokenSource } from '@fabrika/app/implement'
 import { DELEGATION_HEADER, type PermissionEntry } from '@fabrika/auth-core'
 import { applicationSchema, Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { bootApp, errorType, grant, linkToken, resultOf, send, type Sent, token } from './fixtures/implement/harness'
+import { bootApp, errorType, grant, linkToken, resultOf, send, type Sent, token, workloadTokensFor } from './fixtures/implement/harness'
 import { RecordingMembership } from './fixtures/multi-tenant/iam'
 import { migration } from './fixtures/multi-tenant/migration'
 import { multiTenantApp, type Seen } from './fixtures/multi-tenant/src/app'
@@ -53,12 +53,14 @@ async function admin<T>(work: (sql: SQL) => Promise<T>): Promise<T> {
 }
 
 /** A fresh boot over the shared schema: its own data layer, IAM stand-in, webhook record and form rate limit. */
-function start(): { app: ContractApp; iam: RecordingMembership; seen: Seen } {
+function start(workloadTokens?: WorkloadTokenSource): { app: ContractApp; iam: RecordingMembership; seen: Seen } {
 	const iam = new RecordingMembership()
 	const seen: Seen = { pushes: [], keys: [], failNextPush: false }
 	const connection = Database.postgres({ url, schema, max: 2 })
 	opened.push(connection)
-	return { app: bootApp(multiTenantApp(seen), { database: connection, membership: iam, assets: htmlAssets }), iam, seen }
+	const app = multiTenantApp(seen)
+	const options = { database: connection, membership: iam, assets: htmlAssets, workloadTokens: workloadTokens ?? workloadTokensFor(app) }
+	return { app: bootApp(app, options), iam, seen }
 }
 
 async function seedNote(workspace: string, title: string): Promise<string> {
@@ -346,6 +348,40 @@ describe.skipIf(!hasPostgres)('c.webhook for GitHub', () => {
 		expect((await deliver(app, ours.url, ours.secret, push(43, 'other repository'), 'd-3')).status).toBe(403)
 		expect((await deliver(app, '/hooks/github/0190a0a0-0000-7000-8000-0000000000ff', ours.secret, push(42, 'unbound'), 'd-4')).status).toBe(404)
 		expect(seen.pushes).toEqual([])
+	})
+
+	test("a delivery IAM gives no authority to is a 503, not recorded, so GitHub's redelivery runs it", async () => {
+		let refusing = true
+		const signing = workloadTokensFor(multiTenantApp({ pushes: [], keys: [], failNextPush: false }))
+		const source: WorkloadTokenSource = {
+			exchange: (input) => refusing ? Promise.resolve({ ok: false, reason: 'invalid_key' }) : signing.exchange(input),
+		}
+		const { app, seen } = start(source)
+		const binding = await bind(app, 'repository:42')
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await deliver(app, binding.url, binding.secret, push(42, 'credentialed'), 'd-10')).status).toBe(503)
+		} finally {
+			log.mockRestore()
+		}
+		expect(seen.pushes).toEqual([])
+		refusing = false
+		expect((await deliver(app, binding.url, binding.secret, push(42, 'credentialed'), 'd-10-redelivered')).status).toBe(200)
+		expect(seen.pushes).toHaveLength(1)
+		expect(await count('notes', `title = 'credentialed'`)).toBe(1)
+	})
+
+	test("a declared action the webhook's token does not carry is a 503, and its handler does not run", async () => {
+		const { app, seen } = start(workloadTokensFor(multiTenantApp({ pushes: [], keys: [], failNextPush: false }), () => []))
+		const binding = await bind(app, 'repository:42')
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await deliver(app, binding.url, binding.secret, push(42, 'narrowed'), 'd-11')).status).toBe(503)
+		} finally {
+			log.mockRestore()
+		}
+		expect(seen.pushes).toEqual([])
+		expect(await count('notes', `title = 'narrowed'`)).toBe(0)
 	})
 
 	test('a handler runs at least once: a run that failed after its write runs again with the same key, a success never', async () => {

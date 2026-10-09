@@ -37,6 +37,7 @@ import { ServerFault } from './faults'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
+import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
 export interface IamKeySource {
@@ -69,6 +70,11 @@ export interface BootOptions {
 	 * without one calls its owner with `fetch`.
 	 */
 	readonly connectBindings?: Readonly<Record<string, ConnectFetch>>
+	/**
+	 * Where a job or a webhook exchanges its key for a token: IAM's public token exchange on Bun. Without it, a contract
+	 * with a job or a webhook does not boot.
+	 */
+	readonly workloadTokens?: WorkloadTokenSource
 }
 
 export interface ContractApp {
@@ -400,6 +406,14 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
 	const database = files === null || bound === null ? (bound?.database ?? null) : files.locating(bound.database)
+	const verifier = new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: variables.issuer })
+	const workloads = workloadCredentials({
+		artifact,
+		framework: options.environment.framework,
+		audience: variables.iamAppId,
+		source: options.workloadTokens,
+		verifier,
+	}, problems)
 	const connect = wireImports({
 		artifact,
 		snapshots: app.connect ?? {},
@@ -465,9 +479,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			declared.add(name)
 			const row = rows.get(name)
 			const handler = childAt(handlers, name)
+			const credential: WorkloadCredential | undefined = workloads.get(`webhook:${name}`)
 			if (row === undefined || typeof handler !== 'function') {
 				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
-			} else {
+			} else if (credential !== undefined) {
 				endpoints.set(name, {
 					kind: 'webhook',
 					row,
@@ -476,6 +491,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					actions: mount.actions,
 					input: mount.input,
 					handler: (args) => Reflect.apply(handler, undefined, [args]),
+					credential,
 				})
 				bindWebhookBindings(name, mount.path, rows, endpoints, () => frameworkOf(framework).webhooks)
 			}
@@ -491,6 +507,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		framework,
 		ownedDimensions: owned,
 		variables: options.environment.framework,
+		credentials: workloads,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -540,7 +557,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		table: compileEndpointTable(artifact),
 		endpoints,
 		digests: new Map(artifact.endpoints.map((row) => [row.id, endpointDigest(artifact, row)])),
-		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: variables.issuer }),
+		verifier,
 		audience: variables.iamAppId,
 		proxySecretDigest: proxySecret,
 		policy: applicationPolicy(artifact.csp, variables.operationsOrigin),

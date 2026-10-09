@@ -60,6 +60,7 @@ import { createScope, type IssuableLink, linkIssuing, memberManagement, type Mem
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { deliveryIdOf, deliveryKey, WEBHOOK_REPLAY_RETENTION_MS, type WebhookPrincipal, webhookSubject } from './webhook'
+import type { WorkloadCredential } from './workload'
 
 /** SHA-256 of a proxy secret: 32 bytes whatever the secret's length, as `timingSafeEqual` needs. */
 export function proxySecretDigest(secret: string): Uint8Array {
@@ -115,6 +116,8 @@ export type ServedEndpoint =
 		readonly actions: readonly string[]
 		readonly input: Schema
 		readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
+		/** The webhook's key: its refs carry only what IAM signs for it. */
+		readonly credential: WorkloadCredential
 	}
 
 export interface RuntimeParts {
@@ -522,6 +525,15 @@ export class ContractRuntime {
 		const chain = await this.#chain(binding.scope.type, binding.scope.value)
 		if (chain === null) {
 			throw new NotFoundError('The bound value no longer exists')
+		}
+		// Asked before the delivery is recorded: a delivery that cannot run is not one GitHub must not redeliver.
+		const authority = await served.credential.authority()
+		if (!authority.ok) {
+			throw new ServerFault(`the key of webhook '${served.webhook}' gives it no authority: ${authority.reason}`, 503)
+		}
+		const unheld = served.actions.find((action) => !permits([...authority.perms], action))
+		if (unheld !== undefined) {
+			throw new ServerFault(`the token IAM signed for the key of webhook '${served.webhook}' does not carry '${unheld}'`, 503)
 		}
 		const key = await deliveryKey(binding.id, body)
 		const now = Date.now()

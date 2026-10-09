@@ -3,11 +3,12 @@
 // that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). Failures, crashed runs and a job
 // that stopped succeeding are reported to Operations, each under a fixed failure code.
 
-import type { ContractArtifact, JobArtifact } from '@fabrika/auth-core'
+import { type ContractArtifact, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
 import { type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
 import { CapabilityRefusedError, mintRef, mintWithin, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
 import type { ContractDatabase } from '../implement/implement'
+import type { WorkloadCredential } from '../implement/workload'
 import { type JobReporter, logReporter, operationsReporter, operationsTarget } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
 import type { JobContext, JobPrincipal } from './types'
@@ -30,7 +31,16 @@ const UNIT_MS: Readonly<Record<string, number>> = { s: 1_000, m: 60_000, h: 3_60
  * Why a run failed. Fixed codes only: an application error's name and message may carry a secret, so neither is
  * ever logged, returned or reported.
  */
-export type JobFailureCode = 'timeout' | 'lease_lost' | 'handler_failed' | 'driver_failed' | 'crashed'
+export type JobFailureCode =
+	| 'timeout'
+	| 'lease_lost'
+	| 'handler_failed'
+	| 'driver_failed'
+	| 'crashed'
+	/** IAM refused the job's key: the attempt mints no capability. */
+	| 'unauthorized'
+	/** IAM could not be asked for the job's token. */
+	| 'iam_unavailable'
 
 export type JobRunResult =
 	| { readonly status: 'succeeded'; readonly attempts: number }
@@ -90,6 +100,7 @@ interface BoundJob {
 	readonly schedule: CronSchedule
 	readonly timeoutMs: number
 	readonly handler: (args: { readonly ctx: object }) => unknown
+	readonly credential: WorkloadCredential
 }
 
 interface RunnerContext {
@@ -110,6 +121,8 @@ export interface JobBindingInput {
 	readonly ownedDimensions: ReadonlySet<string>
 	/** The framework's variables: the Operations DSN, release and environment the reports carry. */
 	readonly variables: Readonly<Record<string, string>>
+	/** `job:<name>` → the job's key; `boot` refuses a job without one. */
+	readonly credentials: ReadonlyMap<string, WorkloadCredential>
 }
 
 export interface BoundJobs {
@@ -168,10 +181,11 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			problems.push(`${where} has the timeout '${artifact.timeout}', which is not a duration (allowed: '30s', '10m', '1h')`)
 		}
 		const handler = ownChild(tree, name)
+		const credential = input.credentials.get(`job:${name}`)
 		if (typeof handler !== 'function') {
 			problems.push(`${where} has no handler; add it to handlers.jobs`)
-		} else if (schedule !== null && timeoutMs !== null) {
-			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]) })
+		} else if (schedule !== null && timeoutMs !== null && credential !== undefined) {
+			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential })
 		}
 	}
 	const reporter = entries.length === 0 ? logReporter : reporterOf(input.variables, problems)
@@ -314,10 +328,15 @@ async function attemptOnce(
 	clock: JobClock,
 	context: RunnerContext,
 ): Promise<JobFailureCode | null> {
+	// The job's authority is what IAM signs for its key at the start of the attempt; a revoked key stops the next one.
+	const authority = await job.credential.authority()
+	if (!authority.ok) {
+		return authority.reason === 'unavailable' ? 'iam_unavailable' : 'unauthorized'
+	}
 	const frame = new RequestFrame(fence.holder, { fence })
 	const cancel = new AbortController()
 	const timer = new AbortController()
-	const ctx = jobContext(job, frame, attempt, cancel.signal, context)
+	const ctx = jobContext(job, frame, attempt, cancel.signal, context, authority.perms)
 	try {
 		const ran = runInRequest(frame, async () => {
 			await job.handler({ ctx })
@@ -338,7 +357,14 @@ function failureOf(error: unknown): JobFailureCode {
 	return error instanceof LeaseLostError ? 'lease_lost' : 'handler_failed'
 }
 
-function jobContext(job: BoundJob, frame: RequestFrame, attempt: number, signal: AbortSignal, context: RunnerContext): JobContext<string, string> {
+function jobContext(
+	job: BoundJob,
+	frame: RequestFrame,
+	attempt: number,
+	signal: AbortSignal,
+	context: RunnerContext,
+	perms: readonly PermissionEntry[],
+): JobContext<string, string> {
 	const principal: JobPrincipal = Object.freeze({ kind: 'job', id: `job:${job.name}`, job: job.name })
 	const check = (action: string, dimension: string): void => {
 		if (frame.ended) {
@@ -346,6 +372,9 @@ function jobContext(job: BoundJob, frame: RequestFrame, attempt: number, signal:
 		}
 		if (!job.artifact.actions.includes(action)) {
 			throw new CapabilityRefusedError(`job '${job.name}' does not declare this action (actions: ${job.artifact.actions.join(', ')})`)
+		}
+		if (!permits([...perms], action)) {
+			throw new CapabilityRefusedError(`the token IAM signed for the key of job '${job.name}' does not carry this action`)
 		}
 		if (!Object.hasOwn(context.artifact.dimensions, dimension)) {
 			throw new CapabilityRefusedError(`job '${job.name}' named a dimension the contract does not declare`)

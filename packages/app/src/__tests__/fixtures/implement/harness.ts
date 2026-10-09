@@ -10,6 +10,7 @@ import {
 	type ContractImplementation,
 	type IamKeySource,
 	type SpaAssets,
+	type WorkloadTokenSource,
 } from '@fabrika/app/implement'
 import {
 	buildAccessClaims,
@@ -25,6 +26,8 @@ import {
 	planEndpoint,
 	PROXY_TOKEN_HEADER,
 	rawRequestTarget,
+	WORKLOAD_TOKEN_PATH,
+	workloadKeyVariable,
 } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 
@@ -50,9 +53,94 @@ function artifactOf(app: ContractImplementation) {
 	return compileContract(app.contract, app.database?.tables ?? {})
 }
 
-/** The framework variables a deploy of `app` gets: `FRAMEWORK_ENV` plus the digest of the contract it was approved with. */
+interface Workload {
+	readonly kind: 'job' | 'webhook'
+	readonly name: string
+	readonly actions: readonly string[]
+}
+
+function workloadsOf(app: ContractImplementation): Workload[] {
+	const artifact = artifactOf(app)
+	return [
+		...Object.entries(artifact.jobs).map(([name, job]): Workload => ({ kind: 'job', name, actions: job.actions })),
+		...Object.entries(artifact.mounts).flatMap(([name, mount]): Workload[] =>
+			mount.kind === 'webhook' ? [{ kind: 'webhook', name, actions: mount.actions }] : []
+		),
+	]
+}
+
+/** The key Control would write for a workload; the stand-in IAM below signs its declared actions for it. */
+export function workloadKey(kind: 'job' | 'webhook', name: string): string {
+	return `px_harness_${kind}_${name}`
+}
+
+/**
+ * The framework variables a deploy of `app` gets: `FRAMEWORK_ENV`, the digest of the contract it was approved with,
+ * and a key for every job and webhook.
+ */
 export function frameworkEnvFor(app: ContractImplementation): Record<string, string> {
-	return { ...FRAMEWORK_ENV, [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifactOf(app)) }
+	const keys = Object.fromEntries(
+		workloadsOf(app).map((workload) => [workloadKeyVariable(workload.kind, workload.name), workloadKey(workload.kind, workload.name)]),
+	)
+	return { ...FRAMEWORK_ENV, [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifactOf(app)), ...keys }
+}
+
+/**
+ * IAM's token exchange for `app`'s workload keys: each key mints a token of its kind carrying the declared actions, or
+ * `actions(workload)` instead, so a test can make IAM carry less than the contract declares.
+ */
+export function workloadTokensFor(
+	app: ContractImplementation,
+	actions?: (workload: Workload) => readonly string[],
+	issuer = ISSUER,
+): WorkloadTokenSource {
+	const byKey = new Map(workloadsOf(app).map((workload) => [workloadKey(workload.kind, workload.name), workload]))
+	return {
+		async exchange({ app: audience, key }) {
+			const workload = audience === APP_ID ? byKey.get(key) : undefined
+			if (workload === undefined) {
+				return { ok: false, reason: 'invalid_key' }
+			}
+			const now = Math.floor(Date.now() / 1000)
+			const claims = buildAccessClaims({
+				iss: issuer,
+				app: APP_ID,
+				subject: `${workload.kind}-${workload.name}`,
+				type: workload.kind,
+				workload: workload.name,
+				label: `${workload.kind}:${workload.name}`,
+				permissions: (actions?.(workload) ?? workload.actions).map((action) => grant(action)),
+				issuedAt: now - 10,
+				expiresAt: now + 300,
+			})
+			const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign(privateKey)
+			return { ok: true, token, expiresAt: claims.exp }
+		},
+	}
+}
+
+/** A stand-in IAM on a loopback port: its key set and the token exchange for `app`'s workload keys, as the Bun adapter asks. */
+export function serveStandInIam(app: ContractImplementation): { readonly origin: string; stop(): Promise<void> } {
+	let tokens: WorkloadTokenSource | null = null
+	const server = Bun.serve({
+		port: 0,
+		hostname: '127.0.0.1',
+		async fetch(request) {
+			const url = new URL(request.url)
+			if (url.pathname === '/.well-known/jwks.json') {
+				return Response.json(JWKS)
+			}
+			if (url.pathname === WORKLOAD_TOKEN_PATH && request.method === 'POST') {
+				const key = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+				const body: unknown = await request.json()
+				const audience = typeof body === 'object' && body !== null && 'app' in body && typeof body.app === 'string' ? body.app : ''
+				tokens ??= workloadTokensFor(app, undefined, `http://127.0.0.1:${server.port}`)
+				return Response.json(await tokens.exchange({ app: audience, key }))
+			}
+			return new Response('not found', { status: 404 })
+		},
+	})
+	return { origin: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) }
 }
 
 /**
@@ -132,7 +220,13 @@ export async function linkToken(perms: PermissionEntry[], link: LinkTokenClaims)
 
 /** Boots `app` and puts it behind what the proxy adds: the endpoint header, unless the request already carries one. */
 export function bootApp(app: ContractImplementation, options: Partial<BootOptions> = {}): ContractApp {
-	const runtime = boot(app, { environment: environment(frameworkEnvFor(app)), iam: keySource, assets: echoAssets, ...options })
+	const runtime = boot(app, {
+		environment: environment(frameworkEnvFor(app)),
+		iam: keySource,
+		assets: echoAssets,
+		workloadTokens: workloadTokensFor(app),
+		...options,
+	})
 	return {
 		fetch: (request) => {
 			const header = endpointHeaderFor(app, request.method, rawRequestTarget(request.url).pathname)
