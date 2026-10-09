@@ -23,8 +23,8 @@ import {
 	type MintTokenResult,
 	type PermissionEntry,
 	permits,
-	type PrincipalType,
 	type Scope,
+	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow } from './db'
@@ -116,6 +116,8 @@ export async function mintFromKey(
 	services: Services,
 	env: MintEnv,
 	input: { app: string; key: string; requestId: string },
+	/** Mint only for a credential of one of these principal kinds; any other is `invalid_key`. Absent, any kind. */
+	kinds?: readonly TokenPrincipalType[],
 ): Promise<MintFromKeyOutcome> {
 	const cred = await services.repositories.credentials.getActiveCredentialByHash(await hashToken(input.key))
 	if (!cred) {
@@ -129,6 +131,9 @@ export async function mintFromKey(
 		const reason = effective.reason === 'wrong_app' ? 'invalid_key' : effective.reason
 		return { result: { ok: false, reason }, principalId: cred.principal_id, credentialId: cred.id }
 	}
+	if (kinds !== undefined && (effective.type === undefined || !kinds.includes(effective.type))) {
+		return { result: { ok: false, reason: 'invalid_key' }, principalId: cred.principal_id, credentialId: cred.id }
+	}
 
 	const now = Math.floor(Date.now() / 1000)
 	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, cred.expires_at ?? Number.POSITIVE_INFINITY)
@@ -137,6 +142,7 @@ export async function mintFromKey(
 			app: input.app,
 			subject: effective.subject,
 			...(effective.type === undefined ? {} : { type: effective.type }),
+			...(effective.workload === undefined ? {} : { workload: effective.workload }),
 			label: effective.label,
 			permissions: effective.permissions,
 			...(effective.link === undefined ? {} : { link: effective.link }),
@@ -157,7 +163,16 @@ export async function mintFromKey(
  * not for you" and "there is no such key" must look the same to a caller who holds neither.
  */
 export type ResolvedCredential =
-	| { ok: true; subject: string; type?: PrincipalType; label: string | null; permissions: PermissionEntry[]; link?: LinkTokenClaims }
+	| {
+		ok: true
+		subject: string
+		type?: TokenPrincipalType
+		/** A workload principal's name (`job`, `webhook`), or a connector's consuming application (`app`). */
+		workload?: string
+		label: string | null
+		permissions: PermissionEntry[]
+		link?: LinkTokenClaims
+	}
 	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' }
 
 /**
@@ -204,6 +219,18 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	}
 	if (principalStatus(principal) === 'disabled') {
 		return { ok: false, reason: 'disabled' }
+	}
+
+	// A workload's authority is what the app's schema declares for it now: exact actions, app-wide. Its grants, if an
+	// administrator wrote any, give it nothing more.
+	const workload = await services.repositories.workloads.getByPrincipal(principal.id)
+	if (workload !== null) {
+		if (workload.app !== app) {
+			return { ok: false, reason: 'wrong_app' }
+		}
+		const actions = (await services.repositories.workloads.declaredActions(workload.app, workload.kind, workload.name)) ?? []
+		const declared = actions.map((action): PermissionEntry => ({ action, scope: null, source: 'grant' }))
+		return { ok: true, subject: principal.id, type: workload.kind, workload: workload.name, label: principal.label, permissions: declared }
 	}
 
 	const resolved = await resolvePermissionsAt(services, principal, app)

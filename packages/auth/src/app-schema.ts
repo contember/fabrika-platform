@@ -35,6 +35,14 @@ const delegationSchema = z.object({
 	purpose: z.enum(['members', 'creates']),
 })
 
+/** A job, webhook or mount name of a contract. */
+const WORKLOAD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
+const workloadSchema = z.object({
+	kind: z.enum(['job', 'webhook']),
+	name: z.string().regex(WORKLOAD_NAME),
+	actions: z.array(z.string().min(1)),
+})
+
 type Issue = { path: (string | number)[]; message: string }
 
 /** The membership and link declarations IAM acts on. Every name must resolve inside the same body. */
@@ -98,6 +106,16 @@ function membershipIssues(schema: z.infer<typeof appSchemaShape>): Issue[] {
 		for (const [index, grant] of link.grants.entries()) exactAction(['links', mount, 'grants', index], grant)
 		exactAction(['links', mount, 'issuedBy'], link.issuedBy)
 	}
+	const workloads = new Set<string>()
+	for (const [index, workload] of (schema.workloads ?? []).entries()) {
+		if (schema.contract !== true) {
+			issues.push({ path: ['workloads', index, 'kind'], message: 'only a contract application declares workloads' })
+		}
+		const key = `${workload.kind}:${workload.name}`
+		if (workloads.has(key)) issues.push({ path: ['workloads', index, 'name'], message: `workload ${quote(key)} is declared twice` })
+		workloads.add(key)
+		for (const [position, action] of workload.actions.entries()) exactAction(['workloads', index, 'actions', position], action)
+	}
 	for (const [endpoint, delegation] of Object.entries(schema.delegations ?? {})) {
 		const dimension = dimensions.get(delegation.dimension)
 		exactAction(['delegations', endpoint, 'action'], delegation.action)
@@ -128,6 +146,7 @@ const appSchemaShape = z.object({
 	contract: z.boolean().optional(),
 	links: z.record(keySchema, linkSchema).optional(),
 	delegations: z.record(keySchema, delegationSchema).optional(),
+	workloads: z.array(workloadSchema).optional(),
 })
 
 /**

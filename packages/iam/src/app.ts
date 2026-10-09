@@ -1,4 +1,5 @@
 import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
+import { WORKLOAD_TOKEN_PATH } from '@fabrika/auth-core'
 import type { ResolvedAdmin } from './admin/router'
 import { handleAdmin } from './admin/router'
 import { adminRpcAuth, adminRpcRouter } from './admin/rpc'
@@ -11,6 +12,7 @@ import { readRequestId } from './request-id'
 import { createIamRpc } from './rpc'
 import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath } from './rpc-http'
 import { buildServices, type Services } from './services'
+import { handleWorkloadToken } from './workload-token'
 
 export interface IamAppContext {
 	readonly env: Env
@@ -109,6 +111,9 @@ async function handleIamAuth(ctx: IamAppContext, options: IamAppOptions): Promis
 	}
 	if (isMintPath(pathname)) {
 		return handleMintHttp(ctx.request, createIamRpc(ctx.env, ctx.exec), options.proxyKey ?? '')
+	}
+	if (pathname === WORKLOAD_TOKEN_PATH) {
+		return handleWorkloadToken(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.requestId)
 	}
 	return handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress, ctx.requestId)
 }

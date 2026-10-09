@@ -138,6 +138,12 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.mutation(({ ctx, input }) => adminUseCases.rotateApiKey(context(ctx), input)),
 		revoke: t.procedure.input(principalIdInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.revokeApiKey(context(ctx), input)),
 	}),
+	workloads: t.router({
+		issueKey: t.procedure
+			.input(z.object({ app: nonEmpty, kind: z.enum(['job', 'webhook']), name: nonEmpty, expiresAt: z.number().int() }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.issueWorkloadKey(context(ctx), input)),
+	}),
 	shareLinks: t.router({
 		list: t.procedure
 			.input(z.object({ app: nonEmpty.optional(), includeRevoked: z.boolean().optional(), ...pageInput }).default({}))

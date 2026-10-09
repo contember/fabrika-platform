@@ -27,6 +27,7 @@ export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInpu
 	const limit = normalizeLimit(input.limit)
 	const principals = await c.services.repositories.principals.listPrincipals({
 		type: 'service',
+		withoutWorkloads: true,
 		...(input.before ? { before: input.before } : {}),
 		limit,
 	})

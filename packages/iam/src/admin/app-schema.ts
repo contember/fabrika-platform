@@ -81,6 +81,11 @@ function appSchemaError(issues: readonly z.ZodIssue[]): string {
 			? `endpoint '${key}' needs an action, a dimension and a purpose of 'members' or 'creates', and a usable key`
 			: 'delegations must be an object (endpoint -> def)'
 	}
+	if (field === 'workloads') {
+		return typeof key === 'number'
+			? "each workload needs a kind of 'job' or 'webhook', a name and an array of exact actions"
+			: 'workloads must be an array'
+	}
 	if (key === undefined) return 'scopes and actions must be arrays'
 	return field === 'scopes'
 		? 'each scope needs a non-empty `type` and, when present, a non-empty `label`, `in`, `creator` and `members`'
@@ -157,6 +162,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 		contract: schema.contract === true,
 		links: Object.entries(schema.links ?? {}).map(([mount, link]) => ({ mount, ...link })),
 		delegations: Object.entries(schema.delegations ?? {}).map(([endpoint, delegation]) => ({ endpoint, ...delegation })),
+		workloads: schema.workloads ?? [],
 	})
 	await adminAudit(c, {
 		action: 'iam.app.schema.reconcile',
@@ -169,6 +175,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 			contract: schema.contract === true,
 			links: Object.keys(schema.links ?? {}),
 			delegations: Object.keys(schema.delegations ?? {}),
+			workloads: (schema.workloads ?? []).map((workload) => `${workload.kind}:${workload.name}`),
 		},
 	})
 	return json(await readAppSchemaDto(c, app))

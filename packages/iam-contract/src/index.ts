@@ -448,6 +448,29 @@ export interface ListAuthLogInput {
 type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 
 /** Browser-safe typed contract for the IAM administration API. */
+// ── Workload keys (Control's reconcile of jobs and webhooks) ──────────────────
+
+/**
+ * Issue a fresh key for one workload of an application (ADR-0022 "Principal kinds"). The key resolves to the actions
+ * the app's reconciled schema declares for the workload, and the workload's older keys except the newest are revoked.
+ */
+export interface IssueWorkloadKeyRequest {
+	/** The IAM application id `<app>@<env>`. */
+	app: string
+	kind: 'job' | 'webhook'
+	name: string
+	/** Absolute expiry (unix seconds), after now and at most 30 days ahead. */
+	expiresAt: number
+}
+
+/** The plaintext key is returned once. */
+export interface IssueWorkloadKeyResponse {
+	key: string
+	credentialId: string
+	principalId: string
+	expiresAt: number
+}
+
 export interface IamAdminRpcContract {
 	me: RpcProcedure<void, MeDto>
 	principals: {
@@ -494,6 +517,9 @@ export interface IamAdminRpcContract {
 		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
 		rotate: RpcProcedure<RotateApiKeyInput, RotateApiKeyResponse>
 		revoke: RpcProcedure<ApiKeyIdInput, OkResponse>
+	}
+	workloads: {
+		issueKey: RpcProcedure<IssueWorkloadKeyRequest, IssueWorkloadKeyResponse>
 	}
 	shareLinks: {
 		list: RpcProcedure<ListShareLinksInput, CursorList<ShareLinkListItem>>

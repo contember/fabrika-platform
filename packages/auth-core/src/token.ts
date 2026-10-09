@@ -48,6 +48,12 @@ export const SESSION_COOKIE = `${FABRIKA_COOKIE_PREFIX}session`
 /** Prefix marking a propustka opaque credential (API key / share link), e.g. `Bearer px_<random>`. */
 export const API_KEY_PREFIX = 'px_'
 
+/**
+ * Where a job or a webhook exchanges its own `px_` key for an access token at IAM's public origin: `POST` with the key
+ * as the bearer and `{ app }` as the body. IAM answers `MintFromKeyResult`, and only for a workload key of that app.
+ */
+export const WORKLOAD_TOKEN_PATH = '/auth/workload/token'
+
 /** Signing algorithm propustka issues with and the SDK verifies (ECDSA P-256 — compact, ubiquitous). */
 export const TOKEN_ALG = 'ES256'
 /** JWT `typ` of an OAuth resource access token (RFC 9068). Native app tokens carry no `typ`. */

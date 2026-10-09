@@ -1,3 +1,4 @@
+import type { WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
 import { firstRow, unixNow } from './sql'
@@ -238,6 +239,7 @@ export class AppSchemaRepository {
 		contract?: boolean
 		links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
 		delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
+		workloads?: { kind: WorkloadKind; name: string; actions: string[] }[]
 	}): Promise<void> {
 		const { app } = input
 		const statements: SqlStatement[] = [
@@ -247,6 +249,7 @@ export class AppSchemaRepository {
 			this.db.prepare('DELETE FROM contract_apps WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_link_mounts WHERE app = ?').bind(app),
 			this.db.prepare('DELETE FROM app_delegated_endpoints WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_workloads WHERE app = ?').bind(app),
 		]
 		if (input.contract === true) {
 			statements.push(this.db.prepare('INSERT INTO contract_apps (app, created_at) VALUES (?, ?)').bind(app, unixNow()))
@@ -335,6 +338,23 @@ export class AppSchemaRepository {
 					.bind(app, delegation.endpoint, delegation.action, delegation.dimension, delegation.purpose),
 			)
 		}
+		for (const workload of input.workloads ?? []) {
+			statements.push(
+				this.db
+					.prepare('INSERT INTO app_workloads (app, kind, name, actions) VALUES (?, ?, ?, ?)')
+					.bind(app, workload.kind, workload.name, JSON.stringify(workload.actions)),
+			)
+		}
+		// A workload no longer declared keeps no key: its keys are revoked in the same transaction.
+		statements.push(
+			this.db
+				.prepare(`UPDATE credentials SET revoked_at = ?
+					WHERE revoked_at IS NULL AND principal_id IN (
+						SELECT w.principal_id FROM workload_principals w
+						WHERE w.app = ? AND NOT EXISTS (
+							SELECT 1 FROM app_workloads a WHERE a.app = w.app AND a.kind = w.kind AND a.name = w.name))`)
+				.bind(unixNow(), app),
+		)
 		// Removing a link mount, or moving it to another dimension, revokes its keys in the same transaction.
 		statements.push(
 			this.db

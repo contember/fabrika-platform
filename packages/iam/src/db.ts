@@ -10,6 +10,7 @@ import { MembershipRepository } from './repositories/membership'
 import { OAuthRepository } from './repositories/oauth'
 import { PrincipalRepository } from './repositories/principals'
 import { SessionRepository } from './repositories/sessions'
+import { WorkloadRepository } from './repositories/workloads'
 
 export {
 	type AppActionRow,
@@ -35,6 +36,7 @@ export {
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
+export { type AppWorkloadRow, type WorkloadPrincipalRow, WorkloadRepository } from './repositories/workloads'
 
 /** IAM persistence capabilities selected together by a runtime composition root. */
 export interface IamRepositories {
@@ -49,6 +51,7 @@ export interface IamRepositories {
 	membership: MembershipRepository
 	oauth: OAuthRepository
 	audit: AuditRepository
+	workloads: WorkloadRepository
 }
 
 /** The portable repository bundle. A composition root may replace one complete capability. */
@@ -65,6 +68,7 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		membership: replacements.membership ?? new MembershipRepository(db),
 		oauth: replacements.oauth ?? new OAuthRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
+		workloads: replacements.workloads ?? new WorkloadRepository(db),
 	}
 }
 

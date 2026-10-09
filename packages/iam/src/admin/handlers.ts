@@ -9,6 +9,7 @@ import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePo
 import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, updatePrincipalUseCase } from './principals'
 import { listSessionsUseCase, revokeSessionsForPrincipalUseCase, revokeSessionUseCase } from './sessions'
 import { createShareLinkUseCase, listShareLinksUseCase, revokeShareLinkUseCase } from './share-links'
+import { issueWorkloadKeyUseCase } from './workloads'
 
 /** Return the app's scopes, actions, and origin='app' roles (the reconciled vocabulary). */
 export async function getAppSchema(c: AdminContext, app: string): Promise<Response> {
@@ -70,6 +71,7 @@ export const adminUseCases = {
 	revokeShareLink: revokeShareLinkUseCase,
 	listAudit: listAuditUseCase,
 	listAuthLog: listAuthLogUseCase,
+	issueWorkloadKey: issueWorkloadKeyUseCase,
 }
 
 export { putAppSchema } from './app-schema'
