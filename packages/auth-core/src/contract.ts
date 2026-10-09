@@ -280,6 +280,24 @@ export interface ExportArtifact {
 	readonly audience: string
 }
 
+/**
+ * What an export's consumer vendors (`fabrika connect add`): the export's identity and each procedure's schemas, by
+ * the procedure's dotted path in the export. `digest` is `exportDigest` of the rest, and the consumer's import names it.
+ */
+export interface ExportDescription {
+	readonly app: string
+	readonly export: string
+	readonly version: number
+	readonly audience: string
+	readonly procedures: Readonly<Record<string, ExportProcedureDescription>>
+	readonly digest: string
+}
+
+export interface ExportProcedureDescription {
+	readonly input: SchemaShape | null
+	readonly output: SchemaShape
+}
+
 export interface ImportArtifact {
 	readonly app: string
 	readonly export: string

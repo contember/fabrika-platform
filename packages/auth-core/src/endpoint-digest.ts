@@ -1,8 +1,8 @@
 // The digests that bind the proxy and the application to the same rules (ADR-0022 rule 5): one per endpoint, sent
 // with every allowed request, and one for the whole contract, checked once at startup.
 
-import type { ContractArtifact, EndpointRow } from './contract'
-import { canonicalAdmission, canonicalArtifactJson, canonicalJson } from './contract-canonical'
+import type { ContractArtifact, EndpointRow, ExportDescription } from './contract'
+import { canonicalAdmission, canonicalArtifactJson, canonicalJson, canonicalShape } from './contract-canonical'
 import { sha256Hex } from './sha256'
 
 /** The variable that carries the digest of the contract a deploy was approved with; the application compares its own. */
@@ -67,6 +67,26 @@ export function requirementDigest(rules: EndpointRules): string {
 /** The digest of the whole artifact, over its one canonical serialization. */
 export function contractDigest(artifact: ContractArtifact): string {
 	return digestOf(canonicalArtifactJson(artifact))
+}
+
+/**
+ * The digest of an export's description: what a consumer's vendored snapshot and its import name, so a schema that
+ * changed under the same version is told apart.
+ */
+export function exportDigest(description: Omit<ExportDescription, 'digest'>): string {
+	const procedures = Object.fromEntries(
+		Object.entries(description.procedures).map(([path, procedure]) => [path, {
+			input: procedure.input === null ? null : canonicalShape(procedure.input),
+			output: canonicalShape(procedure.output),
+		}]),
+	)
+	return digestOf(canonicalJson({
+		app: description.app,
+		export: description.export,
+		version: description.version,
+		audience: description.audience,
+		procedures,
+	}))
 }
 
 /** `X-Fabrika-Endpoint`'s value: the endpoint id the proxy selected and the digest of the rules it applied. */

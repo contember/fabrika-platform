@@ -100,7 +100,8 @@ export function canonicalAdmission(admission: BodyAdmission): BodyAdmission {
 	return { contentTypes: sortedTuple(admission.contentTypes), maxBytes: admission.maxBytes }
 }
 
-function canonicalShape(shape: SchemaShape): SchemaShape {
+/** A schema shape with its enum values sorted; tuple items and union options keep their order. */
+export function canonicalShape(shape: SchemaShape): SchemaShape {
 	switch (shape.type) {
 		case 'enum':
 			return { type: 'enum', values: sorted(shape.values) }
