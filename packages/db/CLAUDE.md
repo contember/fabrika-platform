@@ -27,7 +27,8 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | `registry.ts`       | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                  |
 | `framework.ts`      | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`; browser-safe. |
 | `file-table-sql.ts` | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                               |
-| `file-tables.ts`    | The rows of a file collection's table that `@fabrika/app`'s files runtime writes and reads, as guarded trees.             |
+| `file-tables.ts`    | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                     |
+| `links.ts`          | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                           |
 | `codegen.ts`        | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                    |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
@@ -57,10 +58,13 @@ reaches them).
   Never add another way to set the runtime of a `scoped` result, nor an application-facing locator.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.
-- **A file row keeps no owner containers.** Its foreign key is on the owner's key only, `ON DELETE SET NULL`; the
-  framework reads the owner's chain through the owner row. Only a removed or orphaned row is ever purged, and the
-  sweep deletes its object before its row. Timestamps are bound as ISO strings: a bound `Date` reaches Postgres as
-  `Date#toString()` through this driver.
+- **A file row carries its owner's whole chain**, under a composite foreign key with `ON UPDATE CASCADE` and
+  `ON DELETE SET NULL`, and every operation a request makes on it takes the request's `Ref` and is scoped by that
+  chain (`links.ts`, shared with the stores). Never add one keyed by the id alone: a `Ref` minted before its owner
+  moved would still reach the file. The pending insert and its completion lock the owner row `for share` on the
+  owner `Ref`'s chain in their transaction. Only a removed, orphaned or stale pending row is ever purged, after its
+  object. Timestamps are bound as ISO strings: a bound `Date` reaches Postgres as `Date#toString()` through this
+  driver.
 - **`applicationSchema` derives what `@fabrika/platform-node`'s `applicationDatabaseSchema` derives** (ADR-0017);
   `tables.test.ts` compares them. Change both together.
 

@@ -13,7 +13,7 @@ export type {
 	ScopedSelect,
 } from './description'
 export { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
-export { FILE_TABLE_PREFIX, type FileOwner, type FileOwnerKeyType, fileTableName, fileTableSql } from './file-table-sql'
+export { FILE_TABLE_PREFIX, type FileColumn, type FileColumnType, type FileOwner, fileTableName, fileTableSql } from './file-table-sql'
 export {
 	type ChildPolicy,
 	type ChildScope,

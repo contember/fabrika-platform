@@ -7,7 +7,7 @@ import { frameworkSideOf, type Locator } from './registry'
 import type { DataLayerRuntime } from './store'
 
 export { fileTableName } from './file-table-sql'
-export type { FileTables, LiveFile, NewFile, RemovableFile } from './file-tables'
+export type { FileCollectionSpec, FileCollectionTable, FileTables, LiveFile, PendingFile, RemovableFile } from './file-tables'
 export type { Locator } from './registry'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */

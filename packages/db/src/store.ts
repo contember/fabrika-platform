@@ -16,7 +16,6 @@ import {
 	ownSymbols,
 	parseList,
 	prototypeOf,
-	recordOf,
 	setOwn,
 } from './builtins'
 import { type CapabilityAuthority, MAX_WITHIN_VALUES, type Ref, type RefGrant, type Within, type WithinGrant } from './capability'
@@ -35,6 +34,7 @@ import {
 import { CapabilityError, ConflictError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 import { fileTables } from './file-tables'
 import type { ForeignKeyPair, GuardContext, RootKind } from './guard'
+import { linksPredicate, linkValues } from './links'
 import {
 	acknowledgement,
 	type AggregateColumns,
@@ -172,14 +172,6 @@ function withinGrant(context: TableContext, capability: unknown, dimension: stri
 	return grant
 }
 
-function chainValue(grant: RefGrant, chain: Readonly<Record<string, string>>, dimension: string): string {
-	const value = ownEntry(chain, dimension)
-	if (value === undefined) {
-		throw new CapabilityError(`the Ref of ${grant.dimension} carries no ${dimension} in its chain`)
-	}
-	return value
-}
-
 /** The chain links that lie above the `Within`'s own dimension: the only columns a container grant may filter on. */
 function linksAbove(model: TableModel, dimension: string): readonly Container[] {
 	for (let index = 0; index < model.chain.length; index++) {
@@ -237,47 +229,6 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 		throw new CapabilityError(`a Within carries at most ${MAX_WITHIN_VALUES} scope values; this one carries ${count}`)
 	}
 	return predicates.length === 0 ? undefined : anyOf(predicates)
-}
-
-interface LinkValue {
-	readonly link: Container
-	readonly value: string
-}
-
-/**
- * The column values a Ref addresses over `links`: the first link takes the Ref's id, every other link a value
- * from its chain. A chain entry no link covers cannot be enforced, so it is refused rather than ignored.
- */
-function linkValues(table: string, links: readonly Container[], grant: RefGrant): readonly LinkValue[] {
-	const first = links[0]
-	if (first === undefined) {
-		throw new CapabilityError(`${table} has no containment link for a Ref of ${grant.dimension}`)
-	}
-	const chain = recordOf(grant.chain)
-	const covered: string[] = []
-	for (let index = 1; index < links.length; index++) {
-		covered[covered.length] = links[index]?.dimension ?? ''
-	}
-	const coveredSet = nameSet(covered)
-	const dimensions = ownKeys(chain)
-	for (let index = 0; index < dimensions.length; index++) {
-		const dimension = dimensions[index] ?? ''
-		if (!inSet(coveredSet, dimension)) {
-			throw new CapabilityError(`the Ref of ${grant.dimension} lies in ${dimension}, which ${table} carries no column for; the layer cannot enforce it`)
-		}
-	}
-	const values: LinkValue[] = [{ link: first, value: grant.id }]
-	for (let index = 1; index < links.length; index++) {
-		const link = links[index]
-		if (link !== undefined) {
-			values[values.length] = { link, value: chainValue(grant, chain, link.dimension) }
-		}
-	}
-	return freeze(values)
-}
-
-function linksPredicate(table: string, values: readonly LinkValue[]): OperationNode {
-	return allOf(values.map(({ link, value }) => equals(table, link.column, value)))
 }
 
 /** The object a Ref of the model's own dimension names, with every link of its chain. */
@@ -874,7 +825,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			connection.runtime = bound
 			return async (dimension, id) => locateObject(models, bound, dimension, id)
 		},
-		files: fileTables(() => runtimeOf(connection)),
+		files: fileTables(models, () => runtimeOf(connection)),
 	})
 	return database
 }
