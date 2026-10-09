@@ -25,6 +25,7 @@ import {
 	type ScopeBinding,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
+import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractArtifactSchema } from './artifact-schema'
 import {
 	type AccessDeclaration,
@@ -859,7 +860,7 @@ class ArtifactBuilder {
 	#cspSources(where: string, sources: readonly CspSource[]): CspSource[] {
 		for (const source of sources) {
 			this.#keys(where, source, ['origin', 'purpose'])
-			if (!isHttpsOrigin(source.origin)) {
+			if (!isPolicyOrigin(source.origin)) {
 				this.#problem(where, `'${source.origin}' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)`)
 			}
 			this.#nonEmpty(`${where} '${source.origin}' purpose`, source.purpose)
@@ -1102,15 +1103,6 @@ function procedures<Access>(tree: ProcedureTreeDeclaration<SchemaShape, Access>,
 		}
 	}
 	return found
-}
-
-function isHttpsOrigin(origin: string): boolean {
-	try {
-		const url = new URL(origin)
-		return url.protocol === 'https:' && url.origin === origin
-	} catch {
-		return false
-	}
 }
 
 /** `' — did you mean 'notes.read'?'` for a name one or two edits from a known one. */

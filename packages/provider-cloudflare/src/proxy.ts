@@ -19,12 +19,19 @@ interface CloudflareProxyWorkerBase {
 	readonly iamUrl?: string
 }
 
+interface CloudflareContractProxyOptions {
+	readonly endpoints: ContractProxyTable
+	readonly gates?: never
+	/** The Operations ingest origin a contract application's `connect-src` admits, from its managed DSN. */
+	readonly operationsOrigin?: string
+}
+
 /**
  * What the proxy enforces: a contract application's endpoint table (`contractProxyTable(artifact)`), or the ordered
  * gates of an installation service. Never both.
  */
 export type CloudflareProxyWorkerOptions =
-	| (CloudflareProxyWorkerBase & { readonly endpoints: ContractProxyTable; readonly gates?: never })
+	| (CloudflareProxyWorkerBase & CloudflareContractProxyOptions)
 	| (CloudflareProxyWorkerBase & { readonly gates: AppGates; readonly endpoints?: never })
 
 /** Where `createCloudflareProxyWorker` points its Worker: the deployer builds every application's proxy from here. */
@@ -91,8 +98,9 @@ function proxyApp(placement: Omit<ProxyApp, 'gates' | 'endpoints'>, options: Clo
 		throw new Error("cloudflare proxy carries a contract application's endpoint table or gates, never both")
 	}
 	if (options.endpoints !== undefined) {
-		const { endpoints, reservedPrefixes, snapshot } = options.endpoints
-		return { ...placement, endpoints, reservedPrefixes, snapshot }
+		const { endpoints, reservedPrefixes, snapshot, csp } = options.endpoints
+		const operationsOrigin = options.operationsOrigin
+		return { ...placement, endpoints, reservedPrefixes, snapshot, csp, ...(operationsOrigin === undefined ? {} : { operationsOrigin }) }
 	}
 	return { ...placement, gates: options.gates }
 }

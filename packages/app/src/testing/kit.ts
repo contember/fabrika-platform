@@ -31,7 +31,6 @@ import type { AnyContract } from '../contract/define'
 import { boot, type ContractApp } from '../implement/boot'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
-import { headerPolicy, withHeaderPolicy } from '../implement/headers'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
 import { resolveGrants, type TestCaller, type TestCallerOptions, type TestGrant } from './caller'
 import { endpointProxy } from './proxy'
@@ -116,7 +115,6 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 	const host = `${name}.test`
 	const origin = `https://${host}`
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
-	const policy = headerPolicy(artifact.csp, null)
 	const signing = generateKeyPair(TOKEN_ALG)
 	const jwks: Promise<Jwks> = signing.then(async ({ publicKey }) => {
 		const { kty, crv, x, y } = await exportJWK(publicKey)
@@ -228,7 +226,8 @@ export function testKit<C extends AnyContract>(app: ContractImplementation<C>, o
 		stripClientAsserted(headers)
 		const outcome = await proxy({ method: request.method, url: request.url, headers: new Headers(headers) })
 		if (outcome.outcome === 'answer') {
-			return withHeaderPolicy(outcome.response, policy)
+			// The proxy's own answer carries its header policy, or the file treatment, as in production.
+			return outcome.response
 		}
 		stripFabrikaCookies(headers)
 		if (!outcome.keepsAuthorization) {

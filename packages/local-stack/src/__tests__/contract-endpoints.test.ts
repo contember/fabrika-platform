@@ -131,7 +131,9 @@ const KEY = { Authorization: 'Bearer px_key', 'Content-Type': 'application/json'
 describe('a contract application deploys to Zerops with its endpoint table and schema', () => {
 	test('the Fabrika manifest carries both, and the namespace proxy manifest the table, verbatim', () => {
 		expect(manifest.app.schema).toEqual(schemaFromContract(artifact))
-		expect(manifest.target.proxy).toEqual({ upstream: 'notesapi:3000', ...table })
+		// The artifact's copy keeps the rules only; the namespace proxy reads the CSP origins from the approved contract.
+		const { csp: _csp, ...rules } = table
+		expect(manifest.target.proxy).toEqual({ upstream: 'notesapi:3000', ...rules })
 		expect(proxyManifest.apps).toEqual([{ id: 'notes@prod', hosts: [HOST], upstream: 'notesapi:3000', scheme: 'https', ...table }])
 	})
 

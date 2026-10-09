@@ -237,7 +237,11 @@ describe('contract apps — the endpoint table', () => {
 		input: null,
 		output: null,
 	} satisfies EndpointRow
-	const artifact: ContractArtifact = { ...notesArtifact, endpoints: [...notesArtifact.endpoints, invite] }
+	const artifact: ContractArtifact = {
+		...notesArtifact,
+		endpoints: [...notesArtifact.endpoints, invite],
+		csp: { ...notesArtifact.csp, connectSrc: [{ origin: 'https://api.maps.example', purpose: 'the map search' }] },
+	}
 	const app = { id: 'notes@prod', hosts: ['notes.example.com'], upstream: 'notes:3000', ...contractProxyTable(artifact) }
 
 	test('contractProxyTable carries every row with its digest, the reserved prefixes and the contract digest', () => {
@@ -246,6 +250,13 @@ describe('contract apps — the endpoint table', () => {
 		expect(table.endpoints.every((row) => isDigest(row.digest))).toBe(true)
 		expect(table.reservedPrefixes).toEqual([...artifact.reservedPrefixes])
 		expect(table.snapshot).toBe(contractDigest(artifact))
+		expect(table.csp).toEqual({ connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [] })
+	})
+
+	test('an Operations ingest origin parses on http and https', () => {
+		for (const operationsOrigin of ['https://operations.example.com', 'http://operations.fabrika.localhost']) {
+			expect(parseProxyManifest({ apps: [{ ...app, operationsOrigin }] })?.apps[0]).toEqual({ ...app, scheme: 'https', operationsOrigin })
+		}
 	})
 
 	test('a delegation marks exactly the members.manage and creates endpoints', () => {
@@ -280,6 +291,12 @@ describe('contract apps — the endpoint table', () => {
 		['gates beside the table', { ...app, gates: { rules: [] } }],
 		['OAuth resources on a contract app', { ...app, oauthResources: [] }],
 		['an unknown caller kind', { ...app, endpoints: [{ ...first, callers: ['job'] }, ...rest] }],
+		['a CSP origin that is not https', { ...app, csp: { ...app.csp, imgSrc: ['http://tiles.example'] } }],
+		['a CSP origin with a path', { ...app, csp: { ...app.csp, connectSrc: ['https://api.example/v1'] } }],
+		['a CSP wildcard', { ...app, csp: { ...app.csp, frameAncestors: ['https://*.example.com'] } }],
+		['a CSP source that would end the directive', { ...app, csp: { ...app.csp, connectSrc: ["https://a.example; script-src 'unsafe-inline'"] } }],
+		['a table without its CSP origins', Object.fromEntries(Object.entries(app).filter(([key]) => key !== 'csp'))],
+		['an Operations origin with a path', { ...app, operationsOrigin: 'https://operations.example.com/api' }],
 		['a delegation its digest does not cover', {
 			...app,
 			endpoints: app.endpoints.map((row) => row.id === 'api.me' ? { ...row, delegation: 'members' } : row),

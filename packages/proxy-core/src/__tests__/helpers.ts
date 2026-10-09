@@ -28,6 +28,7 @@ import {
 	FORWARDED_PROTO_HEADER,
 	FORWARDED_URI_HEADER,
 } from '../constants'
+import { NO_CSP_ORIGINS } from '../headers'
 import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
 import type { ContractProxyApp, GateProxyApp, OAuthProtectedResource, ProxyEndpointRow, ProxyManifest } from '../manifest'
@@ -247,6 +248,7 @@ export function contractAppWith(
 		endpoints,
 		reservedPrefixes,
 		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
 		...overrides,
 	}
 }

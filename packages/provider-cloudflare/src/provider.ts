@@ -10,6 +10,7 @@ import {
 	isFrameworkVariableName,
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from '@fabrika/provider-contract'
+import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable, proxyAppGatesSchema } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
@@ -155,8 +156,24 @@ const platformProxied = (authored: Worker, config: CloudflareAppConfig, contract
 		appHost: run.domain ?? 'localhost',
 		...(run.domain === undefined ? {} : { domain: run.domain }),
 		...protection,
+		...('endpoints' in protection ? operationsOrigin(run.managedEnvironment) : {}),
 		iamUrl: run.managedEnvironment[FABRIKA_IAM_ISSUER] ?? '',
 	})
+}
+
+/** The ingest origin of the application's Operations DSN: the proxy's `connect-src` admits it, as the framework's does. */
+const operationsOrigin = (managed: ProviderManagedEnvironment): { readonly operationsOrigin?: string } => {
+	const dsn = managed['FABRIKA_OPERATIONS_DSN']
+	if (dsn === undefined || dsn === null) return {}
+	let origin: string
+	try {
+		origin = new URL(dsn).origin
+	} catch {
+		origin = ''
+	}
+	// The DSN carries the ingest key, so the message names the variable and never its value.
+	if (!isPolicyOrigin(origin, ['https:', 'http:'])) throw new Error('cloudflare: FABRIKA_OPERATIONS_DSN is not an http(s) URL with a literal host')
+	return { operationsOrigin: origin }
 }
 
 const applicationWorker = (worker: Worker): Worker => {

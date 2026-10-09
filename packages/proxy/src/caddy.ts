@@ -56,7 +56,8 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { isContractProxyApp, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, INLINE_FILE_TYPES } from '@fabrika/proxy-core/headers'
+import { type ContractProxyApp, isContractProxyApp, isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before
@@ -83,14 +84,22 @@ export interface CaddyHeaderReplacement {
 	replace: string
 }
 
+/** `RespHeaderOps`: with `require` the operations wait until the response is written and run only when it matches. */
+export interface CaddyResponseHeaderOps extends CaddyHeaderOps {
+	/** A `null` header value matches only when that header is absent (`matchHeaders`, v2.10.2). */
+	require?: { headers?: Record<string, string[] | null> }
+}
+
 export interface CaddyHeadersHandler {
 	handler: 'headers'
 	request?: CaddyHeaderOps
+	response?: CaddyResponseHeaderOps
 }
 
 export interface CaddyStaticResponseHandler {
 	handler: 'static_response'
 	status_code: number
+	headers?: Record<string, string[]>
 	body?: string
 }
 
@@ -112,7 +121,8 @@ export interface CaddyReverseProxyHandler {
 	handler: 'reverse_proxy'
 	upstreams: { dial: string }[]
 	rewrite?: { method?: string; uri?: string }
-	headers?: { request?: CaddyHeaderOps }
+	/** `response` runs on the upstream's headers before they are copied to the client, so a `set` replaces its value. */
+	headers?: { request?: CaddyHeaderOps; response?: CaddyHeaderOps }
 	handle_response?: CaddyResponseHandler[]
 }
 
@@ -127,6 +137,8 @@ export type CaddyHandler =
 export interface CaddyMatcherSet {
 	host?: string[]
 	path?: string[]
+	/** Exact values; a trailing `*` matches a prefix. */
+	header?: Record<string, string[]>
 	header_regexp?: Record<string, { pattern: string }>
 	not?: CaddyMatcherSet[]
 	vars?: Record<string, string[]>
@@ -258,7 +270,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 		return appRoute(app, options.authUpstream, ownsIamSession)
 	})
 	// Nothing falls off the end: an unmatched Host is a 404, never a pass-through to anything.
-	routes.push({ handle: [{ handler: 'static_response', status_code: 404, body: 'not found' }] })
+	routes.push({ handle: [{ handler: 'static_response', status_code: 404, headers: headerValues(BASE_HEADER_POLICY), body: 'not found' }] })
 
 	return {
 		// ADR-0022 keeps the proxy thin and stateless, and `docs/archive/08` chose redeploy over live
@@ -340,7 +352,12 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route. For a
  *      contract app it sets the proxy secret from the variable `proxySecretVariable(app.id)`, read at
  *      request time through `{env.…}`, so the secret is in no generated file (ADR-0022 rule 5). An unset
- *      variable sends an empty secret, which the application refuses.
+ *      variable sends an empty secret, which the application refuses. A contract app's answer then gets
+ *      the header policy, replacing whatever the app set; a download endpoint's gets the file treatment
+ *      instead (`contractUpstream`).
+ *
+ * A contract app's own refusal in step 1 carries its policy too; step 2's denials carry the one
+ * `@fabrika/proxy-core` set, because Caddy returns a non-2xx auth answer to the client as-is.
  */
 function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean): CaddyRoute {
 	const fabrikaCookiePattern = `(?:^|;[ \\t]*)${escapeRe2(FABRIKA_COOKIE_PREFIX)}[^=;]*=[^;]*`
@@ -348,6 +365,26 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 	const cookiePattern = ownsIamSession
 		? `((?:^|;[ \\t]*)${escapeRe2(SESSION_COOKIE)}=[^;]*)|${fabrikaCookiePattern}`
 		: fabrikaCookiePattern
+	const upstream = (response?: CaddyHeaderOps): CaddyReverseProxyHandler => ({
+		handler: 'reverse_proxy',
+		upstreams: [{ dial: app.upstream }],
+		headers: {
+			request: {
+				...(isContractProxyApp(app) ? { set: { [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(app.id)}}`] } } : {}),
+				replace: {
+					Cookie: [
+						{
+							search_regexp: cookiePattern,
+							replace: ownsIamSession ? '$1' : '',
+						},
+						{ search_regexp: '^[; \\t]+', replace: '' },
+					],
+				},
+			},
+			...(response === undefined ? {} : { response }),
+		},
+	})
+	const policy = isContractProxyApp(app) ? appHeaderPolicy(app) : BASE_HEADER_POLICY
 	return {
 		match: [{ host: app.hosts }],
 		terminal: true,
@@ -356,7 +393,7 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 			routes: [
 				{
 					match: [{ header_regexp: { Connection: { pattern: connectionNominationPattern() } } }],
-					handle: [{ handler: 'static_response', status_code: 400, body: 'bad request' }],
+					handle: [{ handler: 'static_response', status_code: 400, headers: headerValues(policy), body: 'bad request' }],
 					terminal: true,
 				},
 				{
@@ -372,29 +409,50 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 					terminal: true,
 				})),
 				{ handle: [forwardAuth(app, authUpstream)] },
-				{
-					handle: [{
-						handler: 'reverse_proxy',
-						upstreams: [{ dial: app.upstream }],
-						headers: {
-							request: {
-								...(isContractProxyApp(app) ? { set: { [PROXY_SECRET_HEADER]: [`{env.${proxySecretVariable(app.id)}}`] } } : {}),
-								replace: {
-									Cookie: [
-										{
-											search_regexp: cookiePattern,
-											replace: ownsIamSession ? '$1' : '',
-										},
-										{ search_regexp: '^[; \\t]+', replace: '' },
-									],
-								},
-							},
-						},
-					}],
-				},
+				...(isContractProxyApp(app) ? contractUpstream(app, policy, upstream) : [{ handle: [upstream()] }]),
 			],
 		}],
 	}
+}
+
+/** A header policy as Caddy's `set` and `static_response` headers: one value per name, replacing any other. */
+function headerValues(policy: HeaderPolicy): Record<string, string[]> {
+	return Object.fromEntries(policy.map(([name, value]) => [name, [value]]))
+}
+
+const DISPOSITION_TYPE = '^[^;]*'
+
+/**
+ * Step 3 of a contract app. A download endpoint is recognised by the `X-Fabrika-Endpoint` the decision asserted
+ * (step 1 deleted the client's), so no path is matched here. Its answer gets the file treatment: the upstream's
+ * disposition type becomes `attachment` with its parameters kept, an absent one is added, and only an inert image
+ * `Content-Type` turns it back to `inline`. The two deferred handlers wrap the upstream, so the later one runs first.
+ */
+function contractUpstream(
+	app: ContractProxyApp,
+	policy: HeaderPolicy,
+	upstream: (response: CaddyHeaderOps) => CaddyReverseProxyHandler,
+): CaddyRoute[] {
+	const downloads = app.endpoints.filter((row) => row.kind === 'download').map((row) => `${row.id}@*`)
+	const download: CaddyRoute = {
+		match: [{ header: { [ENDPOINT_HEADER]: downloads } }],
+		terminal: true,
+		handle: [
+			{
+				handler: 'headers',
+				response: {
+					require: { headers: { 'Content-Type': [...INLINE_FILE_TYPES] } },
+					replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'inline' }] },
+				},
+			},
+			{ handler: 'headers', response: { require: { headers: { 'Content-Disposition': null } }, set: { 'Content-Disposition': ['attachment'] } } },
+			upstream({
+				set: headerValues(FILE_TREATMENT),
+				replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'attachment' }] },
+			}),
+		],
+	}
+	return [...(downloads.length === 0 ? [] : [download]), { handle: [upstream({ set: headerValues(policy) })] }]
 }
 
 /**

@@ -18,8 +18,10 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
+import { BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { endpointRow } from '../../../proxy-core/src/__tests__/helpers'
 import {
 	buildCaddyConfig,
 	type CaddyBuildOptions,
@@ -64,6 +66,10 @@ function subrouteOf(route: CaddyRoute): CaddySubrouteHandler {
 	return { handler: 'subroute', routes }
 }
 
+function policyValues(policy: HeaderPolicy): Record<string, string[]> {
+	return Object.fromEntries(policy.map(([name, value]) => [name, [value]]))
+}
+
 function proxyHandler(route: CaddyRoute | undefined): CaddyReverseProxyHandler {
 	const handler = route?.handle[0]
 	if (handler === undefined || handler.handler !== 'reverse_proxy') {
@@ -92,7 +98,7 @@ describe('server shape', () => {
 		expect(routes[1]?.match?.[0]?.host).toEqual(['two.example.com', 'alias.example.com'])
 		// Nothing falls off the end into a default handler.
 		expect(routes[2]?.match).toBeUndefined()
-		expect(routes[2]?.handle[0]).toEqual({ handler: 'static_response', status_code: 404, body: 'not found' })
+		expect(routes[2]?.handle[0]).toEqual({ handler: 'static_response', status_code: 404, headers: policyValues(BASE_HEADER_POLICY), body: 'not found' })
 	})
 
 	test('the health route is on its own listener, so it shadows no app path', () => {
@@ -172,7 +178,7 @@ describe('the per-app chain is fail-closed by construction', () => {
 		// removeConnectionHeaders), so a client could strip the client address, the token or the endpoint.
 		for (const route of routes.slice(0, 2)) {
 			const first = rawSubrouteOf(route).routes[0]
-			expect(first?.handle).toEqual([{ handler: 'static_response', status_code: 400, body: 'bad request' }])
+			expect(first?.handle).toEqual([{ handler: 'static_response', status_code: 400, headers: policyValues(BASE_HEADER_POLICY), body: 'bad request' }])
 			expect(first?.terminal).toBe(true)
 			const pattern = first?.match?.[0]?.header_regexp?.['Connection']?.pattern ?? ''
 			expect(pattern.startsWith('(?i)')).toBe(true)
@@ -397,6 +403,7 @@ describe('a contract app — the endpoint table', () => {
 		endpoints: [],
 		reservedPrefixes: [],
 		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
 	}
 	const defined = <T>(value: T | undefined): T => {
 		if (value === undefined) throw new Error('missing fixture')
@@ -575,5 +582,96 @@ describe('OAuth protected resource metadata', () => {
 
 	test('an app without OAuth resources gets no metadata route', () => {
 		expect(appSteps({ ...app, oauthResources: undefined, gates: GATES })).toHaveLength(3)
+	})
+})
+
+describe('a contract app — the response headers', () => {
+	const download = endpointRow({
+		id: 'files.avatar.download',
+		kind: 'download',
+		method: 'GET',
+		path: '/api/files.avatar/:fileId',
+		callers: ['human'],
+		requirement: { kind: 'member' },
+		admission: null,
+	})
+	const contract: ContractProxyApp = {
+		id: 'notes@prod',
+		hosts: ['notes.example.com'],
+		upstream: 'notes:3000',
+		scheme: 'https',
+		endpoints: [download],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: { connectSrc: ['https://api.maps.example'], imgSrc: ['https://tiles.maps.example'], frameAncestors: [] },
+		operationsOrigin: 'https://operations.example.com',
+	}
+	const [contractRoute, gateRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
+		?.routes ?? []
+	const policy = headerPolicy(contract.csp, 'https://operations.example.com')
+	const chain = rawSubrouteOf(defined(contractRoute)).routes
+	const [downloadRoute, defaultRoute] = chain.slice(-2)
+
+	function defined<T>(value: T | undefined): T {
+		if (value === undefined) throw new Error('missing fixture')
+		return value
+	}
+
+	test('every answer of the app is given the policy with set, so a weaker header the app sent is replaced', () => {
+		const upstream = proxyHandler(defaultRoute)
+		expect(defaultRoute?.match).toBeUndefined()
+		expect(upstream.upstreams).toEqual([{ dial: 'notes:3000' }])
+		expect(upstream.headers?.response).toEqual({ set: policyValues(policy) })
+		const csp = upstream.headers?.response?.set?.['Content-Security-Policy']?.[0] ?? ''
+		expect(csp).toContain("connect-src 'self' https://operations.example.com https://api.maps.example;")
+		expect(csp).toContain("img-src 'self' data: blob: https://tiles.maps.example;")
+		expect(csp).toContain("frame-ancestors 'none'")
+	})
+
+	test("the app's own refusal of a Connection nomination carries its policy too", () => {
+		const refusal = chain[0]?.handle[0]
+		expect(refusal).toEqual({ handler: 'static_response', status_code: 400, headers: policyValues(policy), body: 'bad request' })
+	})
+
+	test('a download endpoint, named by the endpoint the decision asserted, gets the file treatment instead', () => {
+		expect(downloadRoute?.match).toEqual([{ header: { [ENDPOINT_HEADER]: ['files.avatar.download@*'] } }])
+		expect(downloadRoute?.terminal).toBe(true)
+		const [inlineImages, absent, upstream] = downloadRoute?.handle ?? []
+		expect(inlineImages).toEqual({
+			handler: 'headers',
+			response: {
+				require: { headers: { 'Content-Type': ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] } },
+				replace: { 'Content-Disposition': [{ search_regexp: '^[^;]*', replace: 'inline' }] },
+			},
+		})
+		expect(absent).toEqual({
+			handler: 'headers',
+			response: { require: { headers: { 'Content-Disposition': null } }, set: { 'Content-Disposition': ['attachment'] } },
+		})
+		if (upstream?.handler !== 'reverse_proxy') throw new Error('expected the upstream')
+		expect(upstream.headers?.response).toEqual({
+			set: policyValues(FILE_TREATMENT),
+			replace: { 'Content-Disposition': [{ search_regexp: '^[^;]*', replace: 'attachment' }] },
+		})
+		// The file route is the same upstream hop: the secret and the cookie strip are not lost on it.
+		expect(upstream.headers?.request).toEqual(proxyHandler(defaultRoute).headers?.request)
+	})
+
+	test('an app without a download endpoint has no file route', () => {
+		const plain = buildCaddyConfig({ apps: [{ ...contract, endpoints: [] }] }, OPTIONS).apps.http.servers['proxy']?.routes ?? []
+		const steps = rawSubrouteOf(defined(plain[0])).routes
+		expect(JSON.stringify(steps)).not.toContain('Content-Disposition')
+		expect(proxyHandler(steps.at(-1)).headers?.response).toEqual({ set: policyValues(headerPolicy(contract.csp, 'https://operations.example.com')) })
+	})
+
+	test("a gate app's answers are passed through: the policy is a contract application's", () => {
+		const steps = rawSubrouteOf(defined(gateRoute)).routes
+		expect(proxyHandler(steps.at(-1)).headers?.response).toBeUndefined()
+		expect(steps[0]?.handle[0]).toEqual({
+			handler: 'static_response',
+			status_code: 400,
+			headers: policyValues(BASE_HEADER_POLICY),
+			body: 'bad request',
+		})
 	})
 })

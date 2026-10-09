@@ -4,6 +4,7 @@
  */
 
 import { proxySecretVariable } from '@fabrika/auth-core'
+import { NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, ProxyApp } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { appsWithoutProxySecret, ProxyEnvError, readProxyEnv } from '../env'
@@ -60,6 +61,7 @@ describe('appsWithoutProxySecret', () => {
 		endpoints: [],
 		reservedPrefixes: [],
 		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
 	})
 	const gateApp: ProxyApp = { id: 'control', hosts: ['control.example.com'], upstream: 'control:3000', scheme: 'https', gates: { rules: [] } }
 

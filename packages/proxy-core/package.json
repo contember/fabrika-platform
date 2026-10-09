@@ -24,6 +24,11 @@
 			"bun": "./src/manifest.ts",
 			"types": "./src/manifest.ts",
 			"default": "./src/manifest.ts"
+		},
+		"./headers": {
+			"bun": "./src/headers.ts",
+			"types": "./src/headers.ts",
+			"default": "./src/headers.ts"
 		}
 	},
 	"scripts": {

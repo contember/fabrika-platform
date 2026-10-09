@@ -34,7 +34,7 @@ import { type ConnectFetch, wireImports } from './connect'
 import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { ServerFault } from './faults'
-import { headerPolicy } from './headers'
+import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 
@@ -543,7 +543,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		verifier: new TokenVerifier({ getJwks: () => options.iam.getJwks(), issuer: variables.issuer }),
 		audience: variables.iamAppId,
 		proxySecretDigest: proxySecret,
-		policy: headerPolicy(artifact.csp, variables.operationsOrigin),
+		policy: applicationPolicy(artifact.csp, variables.operationsOrigin),
 		database,
 		ownedDimensions: owned,
 		containers,

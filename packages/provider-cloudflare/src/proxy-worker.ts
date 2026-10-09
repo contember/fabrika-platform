@@ -1,4 +1,4 @@
-import { FABRIKA_HOP_HEADERS, rawRequestTarget } from '@fabrika/auth-core'
+import { FABRIKA_HOP_HEADERS, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
 import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
@@ -18,7 +18,8 @@ import {
 	stripFabrikaCookies,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { isContractProxyApp, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, type HeaderPolicy, withResponseHeaders } from '@fabrika/proxy-core/headers'
+import { type ContractProxyApp, isContractProxyApp, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
  * Cloudflare's managed client address — this composition's answer to "who is the client".
@@ -105,6 +106,10 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 }
 
 function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: VerifyService): ProxyFetch {
+	const answerHeaders = new Map<string, AnswerHeaders>()
+	for (const app of manifest.apps) {
+		if (isContractProxyApp(app)) answerHeaders.set(app.id, contractAnswerHeaders(app))
+	}
 	return async (request) => {
 		const url = new URL(request.url)
 		const app = findApp(manifest, url)
@@ -149,7 +154,26 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3).
 		if (isContractProxyApp(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
 
-		return upstream.fetch(new Request(request, { headers: upstreamHeaders }))
+		const answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
+		const treatment = answerHeaders.get(app.id)
+		return treatment === undefined ? answer : withResponseHeaders(answer, treatment(verification.headers.get(ENDPOINT_HEADER)))
+	}
+}
+
+/**
+ * What a contract application's answer is given, replacing whatever the application set (ADR-0022): the file
+ * treatment for the download endpoint the decision asserted, the policy otherwise. The decision's own answers carry
+ * them already.
+ */
+type AnswerHeaders = (endpoint: string | null) => (headers: Headers) => void
+
+function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
+	const policy: HeaderPolicy = appHeaderPolicy(app)
+	const downloads = new Set(app.endpoints.filter((row) => row.kind === 'download').map((row) => row.id))
+	const withPolicy = (headers: Headers) => applyHeaderPolicy(headers, policy)
+	return (endpoint) => {
+		const id = endpoint === null ? null : parseEndpointHeader(endpoint)?.id
+		return id !== undefined && id !== null && downloads.has(id) ? applyFileTreatment : withPolicy
 	}
 }
 

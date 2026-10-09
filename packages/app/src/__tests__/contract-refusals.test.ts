@@ -102,7 +102,10 @@ describe('compileContract refuses what the types let through', () => {
 			imports: {
 				catalog: { app: 'catalog', export: 'products', version: 1, digest: 'sha256:00', procedures: ['get'], usedBy: ['api.missing'] },
 			},
-			csp: { connectSrc: [{ origin: 'https://maps.example.com/tiles', purpose: 'Map tiles' }] },
+			csp: {
+				connectSrc: [{ origin: 'https://maps.example.com/tiles', purpose: 'Map tiles' }],
+				frameAncestors: [{ origin: 'https://*.example.com', purpose: 'Any portal' }],
+			},
 		}))
 		expect(compileProblems(contract)).toEqual([
 			"files 'attachments': 'image/*' is not an exact media type (allowed: 'image/png'; no wildcards or parameters)",
@@ -111,6 +114,7 @@ describe('compileContract refuses what the types let through', () => {
 			"job 'nightly': timeout 'ten minutes' is not a duration (allowed: '30s', '10m', '1h')",
 			"import 'catalog': usedBy 'api.missing' is not a procedure of this contract (allowed: an id such as 'api.products.show')",
 			"csp connectSrc: 'https://maps.example.com/tiles' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
+			"csp frameAncestors: 'https://*.example.com' is not an https origin (allowed: 'https://maps.example.com', no path or wildcard)",
 		])
 	})
 

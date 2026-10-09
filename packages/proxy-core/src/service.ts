@@ -28,6 +28,7 @@ import {
 	ENDPOINT_HEADER,
 	HANDOFF_COOKIE_TTL_SECONDS,
 	isCanonicalPath,
+	planEndpoint,
 	SESSION_COOKIE,
 	splitRequestTarget,
 } from '@fabrika/auth-core'
@@ -47,6 +48,7 @@ import {
 } from './constants'
 import { compileGates } from './gates'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
+import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, BASE_HEADER_POLICY, type HeaderPolicy } from './headers'
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
 import { formatOAuthBearerChallenge, isContractProxyApp, type ProxyApp, type ProxyManifest } from './manifest'
@@ -83,9 +85,11 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 
 	const byId = new Map<string, ResolvedApp>()
 	const byHost = new Map<string, ResolvedApp>()
+	const policies = new Map<string, HeaderPolicy>()
 	for (const app of config.manifest.apps) {
 		const resolved = resolveApp(app)
 		byId.set(app.id, resolved)
+		policies.set(app.id, isContractProxyApp(app) ? appHeaderPolicy(app) : BASE_HEADER_POLICY)
 		for (const host of app.hosts) {
 			// Normalized exactly as a forwarded host is, so the two sides cannot disagree about a port.
 			byHost.set(normalizeHost(host), resolved)
@@ -124,17 +128,15 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 
 			const read = readForwardedRequest(request, requestId)
 			if (!read.ok) {
-				return denied(logger, { requestId }, { outcome: 'deny', status: read.reason === 'non_canonical_path' ? 400 : 403, reason: read.reason })
+				const status = read.reason === 'non_canonical_path' ? 400 : 403
+				return withPolicy(denied(logger, { requestId }, { outcome: 'deny', status, reason: read.reason }), BASE_HEADER_POLICY)
 			}
 			const forwarded = read.request
 
 			const resolved = selectApp(url, forwarded.url.host, byId, byHost)
 			if (resolved === null) {
-				return denied(logger, { requestId, host: forwarded.url.host, path: redactPath(forwarded.url.pathname) }, {
-					outcome: 'deny',
-					status: 403,
-					reason: 'no_app',
-				})
+				const fields = { requestId, host: forwarded.url.host, path: redactPath(forwarded.url.pathname) }
+				return withPolicy(denied(logger, fields, { outcome: 'deny', status: 403, reason: 'no_app' }), BASE_HEADER_POLICY)
 			}
 
 			if (url.pathname === OAUTH_METADATA_VERIFY_PATH) {
@@ -170,18 +172,38 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				}
 				return new Response(null, { status: 204, headers })
 			}
-			if (decision.outcome === 'handoff') {
-				logger.info('handoff', fields)
-				return handoffResponse(decision)
-			}
-			return denied(logger, fields, decision, isCallback)
+			const answer = decision.outcome === 'handoff' ? handoff(logger, fields, decision) : denied(logger, fields, decision, isCallback)
+			return isDownload(resolved, forwarded) ? withFileTreatment(answer) : withPolicy(answer, policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
 		} catch {
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
 			// error can stringify a URL, a header or a body, any of which may carry a credential.
 			logger.error('verify failed', { requestId })
-			return textResponse(403, 'forbidden')
+			return withPolicy(textResponse(403, 'forbidden'), BASE_HEADER_POLICY)
 		}
 	}
+}
+
+function handoff(logger: ProxyLogger, fields: LogFields, decision: Extract<Decision, { outcome: 'handoff' }>): Response {
+	logger.info('handoff', fields)
+	return handoffResponse(decision)
+}
+
+/** An answer the proxy writes reaches the client as-is, so it carries the policy the application's own answers do. */
+function withPolicy(response: Response, policy: HeaderPolicy): Response {
+	applyHeaderPolicy(response.headers, policy)
+	return response
+}
+
+function withFileTreatment(response: Response): Response {
+	applyFileTreatment(response.headers)
+	return response
+}
+
+/** Whether the request selects a download endpoint, whose every answer gets the file treatment instead of the policy. */
+function isDownload(resolved: ResolvedApp, forwarded: ForwardedRequest): boolean {
+	if (resolved.kind !== 'endpoints') return false
+	const plan = planEndpoint(resolved.table, forwarded.method, forwarded.rawPath)
+	return plan.outcome === 'endpoint' && plan.endpoint.kind === 'download'
 }
 
 /**

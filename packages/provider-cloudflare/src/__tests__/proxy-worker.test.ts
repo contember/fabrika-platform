@@ -12,6 +12,7 @@ import {
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
 import type { DelegationRequest } from '@fabrika/proxy-core'
+import { FILE_TREATMENT, headerPolicy } from '@fabrika/proxy-core/headers'
 import { encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
@@ -65,6 +66,15 @@ describe('Cloudflare proxy Worker', () => {
 		})
 		const proxy = createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, gates: { rules: [] } })
 		expect(proxy.options.observability).toEqual({ logs: { enabled: true, invocation_logs: false } })
+	})
+
+	test("an installation service's answer passes through: the header policy is a contract application's", async () => {
+		const env = environment({ rules: [{ path: '/public/*', kind: 'public' }] }, {
+			fetch: () => Promise.resolve(new Response('ok', { headers: { 'Content-Security-Policy': "script-src 'self' 'unsafe-inline'" } })),
+		})
+		const response = await createCloudflareProxyHandler(env)(new Request(`https://${HOST}/public/page`))
+		expect(response.headers.get('Content-Security-Policy')).toBe("script-src 'self' 'unsafe-inline'")
+		expect(response.headers.get('Permissions-Policy')).toBeNull()
 	})
 
 	test('deletes every X-Fabrika-* hop header a client sends; Cloudflare sets no proxy secret', async () => {
@@ -450,6 +460,21 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		requirement: { kind: 'action', action: 'notes.admin', access: { form: 'in', dimension: 'workspace', from: 'workspaceId' } },
 		delegation: 'members',
 	} satisfies EndpointRules & { id: string }
+	const download = {
+		...me,
+		id: 'files.avatar.download',
+		kind: 'download',
+		method: 'GET',
+		path: '/api/files.avatar/:fileId',
+		admission: null,
+	} satisfies EndpointRules & { id: string }
+	const csp = { connectSrc: ['https://api.maps.example'], imgSrc: [], frameAncestors: [] }
+	/** The application's own headers per path: a weaker policy than the proxy's, and downloads it labels itself. */
+	const answers: Record<string, Record<string, string>> = {
+		'/api/me': { 'Content-Security-Policy': 'default-src *', 'Cache-Control': 'public, max-age=60', 'X-App': 'kept' },
+		'/api/files.avatar/drawing': { 'Content-Type': 'image/svg+xml', 'Content-Disposition': "inline; filename*=UTF-8''a.svg" },
+		'/api/files.avatar/photo': { 'Content-Type': 'image/png', 'Content-Disposition': 'attachment' },
+	}
 	const contractEnvironment = (iam: FakeIam, seen: Request[]): CloudflareProxyEnv => ({
 		IAM: iam,
 		FABRIKA_IAM_ISSUER: ISSUER,
@@ -463,17 +488,63 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 					{ ...health, digest: requirementDigest(health) },
 					{ ...me, digest: requirementDigest(me) },
 					{ ...invite, digest: requirementDigest(invite) },
+					{ ...download, digest: requirementDigest(download) },
 				],
 				reservedPrefixes: ['/api'],
 				snapshot: `sha256:${'0'.repeat(64)}`,
+				csp,
+				operationsOrigin: 'https://operations.example.com',
 			}],
 		}),
 		APP: {
 			fetch: (request: Request) => {
 				seen.push(request)
-				return Promise.resolve(new Response('ok'))
+				return Promise.resolve(new Response('ok', { headers: answers[new URL(request.url).pathname] ?? {} }))
 			},
 		},
+	})
+	const keyIam = async () =>
+		new FakeIam({ mintFromKey: { ok: true, token: await signToken({ type: 'service' }), expiresAt: Math.floor(Date.now() / 1000) + 300 } })
+	const POLICY = headerPolicy(csp, 'https://operations.example.com')
+
+	test('an application that sets a weaker policy still answers the proxy policy', async () => {
+		const response = await createCloudflareProxyHandler(contractEnvironment(await keyIam(), []))(
+			new Request(`https://${HOST}/api/me`, {
+				method: 'POST',
+				body: '{}',
+				headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' },
+			}),
+		)
+		expect(response.status).toBe(200)
+		for (const [name, value] of POLICY) {
+			expect(response.headers.get(name)).toBe(value)
+		}
+		expect(response.headers.get('Content-Security-Policy')).toContain("connect-src 'self' https://operations.example.com https://api.maps.example;")
+		expect(response.headers.get('X-App')).toBe('kept')
+		expect(await response.text()).toBe('ok')
+	})
+
+	test('a download endpoint gets the file treatment: only an inert image stays inline', async () => {
+		const handler = createCloudflareProxyHandler(contractEnvironment(await keyIam(), []))
+		const cases: [path: string, disposition: string][] = [
+			['/api/files.avatar/drawing', "attachment; filename*=UTF-8''a.svg"],
+			['/api/files.avatar/photo', 'inline'],
+		]
+		for (const [path, disposition] of cases) {
+			const response = await handler(new Request(`https://${HOST}${path}`, { headers: { Authorization: 'Bearer px_key' } }))
+			expect(response.status).toBe(200)
+			expect(response.headers.get('Content-Disposition')).toBe(disposition)
+			for (const [name, value] of FILE_TREATMENT) {
+				expect(response.headers.get(name)).toBe(value)
+			}
+			expect(response.headers.get('Permissions-Policy')).toBeNull()
+		}
+	})
+
+	test("the decision's own denial carries the application's policy", async () => {
+		const response = await createCloudflareProxyHandler(contractEnvironment(new FakeIam(), []))(new Request(`https://${HOST}/api/unknown`))
+		expect(response.status).toBe(403)
+		expect(response.headers.get('Content-Security-Policy')).toBe(POLICY[0]?.[1] ?? '')
 	})
 
 	test('an anonymous endpoint reaches the app with its endpoint header and without the key or a client-sent endpoint', async () => {

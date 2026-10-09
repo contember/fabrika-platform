@@ -18,6 +18,7 @@ import {
 	requirementDigest,
 } from '@fabrika/auth-core'
 import { z } from 'zod'
+import { type CspOrigins, cspOrigins, isPolicyOrigin } from './headers'
 import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
 
 export * from './oauth-resource'
@@ -50,10 +51,14 @@ export interface ContractProxyApp extends ProxyAppBase {
 	reservedPrefixes: string[]
 	/** The digest of the contract the table was compiled from (`contractDigest`). */
 	snapshot: string
+	/** The contract's named CSP origins, which the proxy's header policy adds to their directives. */
+	csp: CspOrigins
+	/** The installation's Operations ingest origin, admitted by `connect-src`; absent when the producer knows none. */
+	operationsOrigin?: string
 }
 
 /** What a producer adds to a contract app's placement: the output of `contractProxyTable`. */
-export type ContractProxyTable = Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot'>
+export type ContractProxyTable = Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot' | 'csp'>
 
 /** The manifest says which form an app is protected by: `endpoints` instead of `gates`. */
 export type ProxyApp = GateProxyApp | ContractProxyApp
@@ -205,12 +210,21 @@ export const proxyEndpointRowSchema = z.union([
 	unknown
 >
 
+const cspOriginSchema = z.string().refine((value) => isPolicyOrigin(value))
+const cspOriginsSchema = z.object({
+	connectSrc: z.array(cspOriginSchema),
+	imgSrc: z.array(cspOriginSchema),
+	frameAncestors: z.array(cspOriginSchema),
+}).strict() satisfies z.ZodType<CspOrigins, z.ZodTypeDef, unknown>
+
 export const contractProxyAppSchema = z.object({
 	...proxyAppFields,
 	scheme: proxyAppScheme,
 	endpoints: z.array(proxyEndpointRowSchema),
 	reservedPrefixes: z.array(z.string()),
 	snapshot: z.string().refine(isDigest),
+	csp: cspOriginsSchema,
+	operationsOrigin: z.string().refine((value) => isPolicyOrigin(value, ['https:', 'http:'])).optional(),
 	gates: z.undefined(),
 	oauthResources: z.undefined(),
 }).transform(({ gates: _gates, oauthResources: _oauthResources, ...app }) => app).superRefine((app, ctx) => {
@@ -226,7 +240,7 @@ export const proxyAppSchema = z.union([gateProxyAppSchema, contractProxyAppSchem
 
 /**
  * The manifest form of a compiled contract: every endpoint's rules with their digest and delegation, the reserved
- * prefixes, and the contract digest. Producers call this; they never assemble rows by hand.
+ * prefixes, the contract digest and the named CSP origins. Producers call this; they never assemble rows by hand.
  */
 export function contractProxyTable(artifact: ContractArtifact): ContractProxyTable {
 	return {
@@ -247,6 +261,7 @@ export function contractProxyTable(artifact: ContractArtifact): ContractProxyTab
 		}),
 		reservedPrefixes: [...artifact.reservedPrefixes],
 		snapshot: contractDigest(artifact),
+		csp: cspOrigins(artifact.csp),
 	}
 }
 
