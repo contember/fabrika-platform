@@ -1,4 +1,5 @@
 import type { CommitFilesInput, CommitSource } from '../../github/source/commit-files'
+import { healthOnly } from './contracts'
 
 /** A commit source over one in-memory tree (repository path → text); the default tree has no contract. */
 export function memoryCommits(tree: Readonly<Record<string, string>> = {}): CommitSource & { readonly opened: CommitFilesInput[] } {
@@ -17,3 +18,7 @@ export function memoryCommits(tree: Readonly<Record<string, string>> = {}): Comm
 		},
 	}
 }
+
+/** A commit of application `app` that holds only `healthOnly(app)`, at the application root `root`. */
+export const contractCommits = (app: string, root = ''): ReturnType<typeof memoryCommits> =>
+	memoryCommits({ [root === '' ? 'fabrika.contract.ts' : `${root}/fabrika.contract.ts`]: healthOnly(app) })

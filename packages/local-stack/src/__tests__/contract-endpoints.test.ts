@@ -41,18 +41,16 @@ const HOST = 'notes.example.com'
 const artifact = compileContract(contract, { notes: NOTE_TABLE })
 const table = contractProxyTable(artifact)
 
-const configWith = (proxy: { upstream: string } & ({ gates: { rules: [] } } | typeof table)) =>
-	defineApp({
-		id: 'notes',
-		schema: schemaFromContract(artifact),
-		target: {
-			platform: 'zerops',
-			services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3', enableSubdomainAccess: false }],
-			contract: artifact,
-			proxy,
-		},
-	})
-const config = configWith({ upstream: 'notesapi:3000', ...table })
+const config = defineApp({
+	id: 'notes',
+	schema: schemaFromContract(artifact),
+	target: {
+		platform: 'zerops',
+		services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3', enableSubdomainAccess: false }],
+		contract: artifact,
+		proxy: { upstream: 'notesapi:3000', ...table },
+	},
+})
 
 const contents = 'zerops:\n  - setup: notesapi\n'
 const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
@@ -135,12 +133,6 @@ describe('a contract application deploys to Zerops with its endpoint table and s
 		const { csp: _csp, ...rules } = table
 		expect(manifest.target.proxy).toEqual({ upstream: 'notesapi:3000', ...rules })
 		expect(proxyManifest.apps).toEqual([{ id: 'notes@prod', hosts: [HOST], upstream: 'notesapi:3000', scheme: 'https', ...table }])
-	})
-
-	test('a contract application behind gates is refused at build', () => {
-		expect(() => compileFabrikaManifest(configWith({ upstream: 'notesapi:3000', gates: { rules: [] } }), 'prod', SOURCE_DESCRIPTOR)).toThrow(
-			'a contract application is protected by its endpoint table',
-		)
 	})
 
 	test('the schema the deploy reconciles is a contract schema IAM accepts', () => {

@@ -16,7 +16,7 @@ import { controlApp } from '../../app'
 import { runControlJob } from '../../consumer'
 import type { Env as ControlEnv } from '../../env'
 import type { ControlJobMessage } from '../../run-lifecycle'
-import { memoryCommits } from './commits'
+import { contractCommits } from './commits'
 import { createHarness as createControlHarness } from './harness'
 import { unusedSourceConnection } from './source-connection'
 
@@ -153,7 +153,7 @@ export async function integrationFixture() {
 			REPOSITORIES: control.repositories,
 			ASSETS: { fetch: async () => new Response(null, { status: 404 }) },
 			RUN_LOGS: { get: async () => null, put: async () => {}, delete: async () => {} },
-			COMMITS: memoryCommits(),
+			COMMITS: contractCommits('sample'),
 			DEPLOY_QUEUE: {
 				send: async (job) => {
 					jobs.push(job)

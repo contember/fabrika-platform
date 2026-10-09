@@ -9,6 +9,8 @@ import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { collectSourceMaps, Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
 import { bunSpawner, createSpawner } from '../spawn'
 
@@ -40,7 +42,7 @@ const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunner
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
-	approvedAccess: { kind: 'artifact', digest: null, protected: false },
+	approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 	...overrides,
 })
 
@@ -820,21 +822,21 @@ describe('executor outcome file', () => {
 		})
 	})
 
-	test('a refused deploy still carries artifact access waiting for a human, and only that', async () => {
-		const pending = { state: 'pending', accessJson: '{"gates":null,"schema":null}' }
-		const deployed = { artifactAccess: { ...pending, state: 'deployed' }, iamReconcile: { app: 'shop', schemaJson: '{}' } }
+	test("a refused deploy carries no IAM reconcile, and a succeeded one carries the executor's; artifact access is dropped", async () => {
+		// What an executor from before applications without a contract were refused could still write.
+		const outcome = {
+			artifactAccess: { state: 'deployed', accessJson: '{"gates":null,"schema":null}' },
+			iamReconcile: { app: 'shop', schemaJson: '{}' },
+		}
 		await withWorkspace(async (workspace) => {
-			const refused = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify({ artifactAccess: pending })), 1)
-			expect(refused.status).toMatchObject({ state: 'failed', exitCode: 1, artifactAccess: pending })
-		})
-		await withWorkspace(async (workspace) => {
-			const failed = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(deployed)), 1)
-			expect(failed.status.artifactAccess).toBeUndefined()
+			const failed = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(outcome)), 1)
 			expect(failed.status.iamReconcile).toBeUndefined()
+			expect(failed.status).not.toHaveProperty('artifactAccess')
 		})
 		await withWorkspace(async (workspace) => {
-			const succeeded = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(deployed)))
-			expect(succeeded.status).toMatchObject({ state: 'succeeded', artifactAccess: deployed.artifactAccess })
+			const succeeded = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(outcome)))
+			expect(succeeded.status).toMatchObject({ state: 'succeeded', iamReconcile: outcome.iamReconcile })
+			expect(succeeded.status).not.toHaveProperty('artifactAccess')
 		})
 	})
 
@@ -960,7 +962,11 @@ describe('approved access file', () => {
 	test("the executor reads the job's approved access beside the checkout, under a name no job value redirects", async () => {
 		const { path, contents, workspace } = await runSeeing(baseJob({ managedEnvironment: { [APPROVED_ACCESS_FILE_ENV]: '/tmp/forged.json' } }))
 		expect(path).toBe(join(workspace, 'run-1.access.json'))
-		expect(contents === undefined ? undefined : JSON.parse(contents)).toEqual({ kind: 'artifact', digest: null, protected: false })
+		expect(contents === undefined ? undefined : JSON.parse(contents)).toEqual({
+			kind: 'contract',
+			contract: notesArtifact,
+			contractDigest: contractDigest(notesArtifact),
+		})
 		expect(await Bun.file(join(workspace, 'run-1.access.json')).exists()).toBe(false)
 	})
 

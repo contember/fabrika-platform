@@ -15,7 +15,6 @@ import {
 	isLeaseLoss,
 	type JsonValue,
 	type ProviderApprovedAccess,
-	type ProviderArtifactApproval,
 	ProviderInvocationAbort,
 	type ProviderManagedEnvironment,
 	type ProviderRunEvents,
@@ -82,8 +81,6 @@ export interface ZeropsDeployRun {
 	readonly artifact: FabrikaManifest
 	/** Control's approved access for the environment (ADR-0050); the lock-down and the IAM schema come from it. */
 	readonly access?: ProviderApprovedAccess
-	/** The artifact access Control approved: only an artifact with that digest deploys its descriptor and IAM schema. */
-	readonly artifactAccess?: ProviderArtifactApproval
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
@@ -728,7 +725,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 		}
 
 		case 'reconcile-schema': {
-			const schema = approvedSchemaOf(artifact, run)
+			const schema = approvedSchemaOf(run)
 			const propustkaUrl = target.propustkaUrl
 			if (schema === undefined || propustkaUrl === undefined) {
 				return

@@ -1,4 +1,3 @@
-import type { AppGates } from '@fabrika/auth'
 import { APP_PROVIDER, type AppConfigBase, isProviderAuthoredApp, type ProviderAuthoredApp } from '@fabrika/provider-contract'
 import type { Worker } from 'oblaka-iac'
 
@@ -10,10 +9,8 @@ export interface ResourceContext {
 
 /** A Cloudflare app config loaded from `fabrika.config.ts` inside the runner checkout. */
 export interface CloudflareAppConfigInput extends AppConfigBase {
-	/** The application Worker. The deployer builds the proxy Worker in front of it (ADR-0048); never return one. */
+	/** The application Worker. The deployer builds the proxy Worker in front of it from the contract (ADR-0048); never return one. */
 	readonly resources: (ctx: ResourceContext) => Worker
-	/** The ordered gates the platform-built proxy enforces for an application without a contract. */
-	readonly gates?: AppGates
 }
 
 export type CloudflareAppConfig = CloudflareAppConfigInput & ProviderAuthoredApp<'cloudflare'>

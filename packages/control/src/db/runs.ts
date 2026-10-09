@@ -1,6 +1,6 @@
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
-import { type LeaseFence, runLeaseKey } from '../lease'
+import type { LeaseFence } from '../lease'
 import { runCoordinateLockStatements } from './coordinate-lock'
 import { firstRow } from './returning'
 
@@ -37,8 +37,7 @@ export interface RunRow {
 	classification_json: string | null
 	/** The human approval of the classified change, bound to both digests. */
 	approval_json: string | null
-	/** The artifact access a deploy found waiting for a human (Cloudflare reports it from the runner); the candidate's. */
-	pending_access_json: string | null
+	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
 // Serialization must reject cycles, non-plain objects and hidden keys before JSON.stringify can erase them.
@@ -328,66 +327,6 @@ export class RunRepository {
 				RETURNING app_id`).bind(id, snapshotJson, expected.generation, expected.protectionRevision, id, fence.holder, fence.nowMs),
 		])
 		return (results.at(-1)?.results.length ?? 0) > 0
-	}
-
-	/**
-	 * Replace the published snapshot of the run's own publication with one whose artifact access the deploy applied on an
-	 * unprotected environment (ADR-0050). Only while the run is still the published one, nothing moved the generation or
-	 * the protection revision since, and the environment is still unprotected; fenced on the run's lease.
-	 */
-	async recordDeployedArtifactAccess(
-		id: string,
-		expected: { readonly generation: number; readonly protectionRevision: number },
-		snapshotJson: string,
-		fence: LeaseFence,
-	): Promise<boolean> {
-		const results = await this.d1.batch<{ app_id: string }>([
-			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
-				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
-					AND holder = ? AND expires_at > ?`).bind(id, fence.holder, fence.nowMs),
-			...runCoordinateLockStatements(this.d1, id),
-			this.d1.prepare(`UPDATE app_envs SET published_snapshot_json = ?, generation = generation + 1
-				WHERE published_run_id = ? AND generation = ? AND protection_revision = ? AND protected = 0
-					AND EXISTS (SELECT 1 FROM deploy_locks
-						WHERE lock_key = app_envs.app_id || ':' || app_envs.env AND holder = ? AND expires_at > ?)
-				RETURNING app_id`).bind(snapshotJson, id, expected.generation, expected.protectionRevision, fence.holder, fence.nowMs),
-		])
-		return (results.at(-1)?.results.length ?? 0) > 0
-	}
-
-	/**
-	 * Create a run parked for approval with the artifact access a deploy of `from` found waiting (ADR-0050): same app,
-	 * environment, ref, commit, trigger and actor, and `from`'s snapshot. Fenced on the environment's lease, which the
-	 * caller holds for `from`. A new run, so the provider never sees a run id twice.
-	 */
-	async createParkedRun(
-		input: { readonly id: string; readonly from: RunRow; readonly classificationJson: string; readonly pendingAccessJson: string },
-		fence: LeaseFence,
-	): Promise<RunRow | null> {
-		const from = input.from
-		return this.d1
-			.prepare(`INSERT INTO runs (
-					id, app_id, env, ref, commit_sha, trigger, status, actor, snapshot_json, classification_json, pending_access_json
-				)
-				SELECT ?, ?, ?, ?, ?, ?, 'awaiting_approval', ?, ?, ?, ?
-				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
-				RETURNING *`)
-			.bind(
-				input.id,
-				from.app_id,
-				from.env,
-				from.ref,
-				from.commit_sha,
-				from.trigger,
-				from.actor,
-				from.snapshot_json,
-				input.classificationJson,
-				input.pendingAccessJson,
-				runLeaseKey(from.app_id, from.env),
-				fence.holder,
-				fence.nowMs,
-			)
-			.first<RunRow>()
 	}
 
 	/**

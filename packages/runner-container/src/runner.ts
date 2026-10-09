@@ -13,7 +13,6 @@ import {
 	type CloudflareRunnerJob,
 	INSTALLATION_APPS_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
-	type RunnerArtifactAccess,
 	type RunnerIamReconcile,
 	type RunnerOutcomeFile,
 	type RunnerState,
@@ -241,7 +240,6 @@ const isFileNotFound = (err: unknown): boolean => typeof err === 'object' && err
 /** Validate the executor's outcome report; every rejection message quotes nothing from the file. */
 const outcomeFileSchema = z.object({
 	iamReconcile: z.object({ app: z.string().min(1), schemaJson: z.string().max(MAX_OUTCOME_FILE_BYTES) }).optional(),
-	artifactAccess: z.object({ state: z.enum(['deployed', 'pending']), accessJson: z.string().max(MAX_OUTCOME_FILE_BYTES) }).optional(),
 })
 
 const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
@@ -274,7 +272,6 @@ export class Runner {
 	private error: string | undefined
 	private artifactState: RunnerStatus['artifactState']
 	private iamReconcile: RunnerIamReconcile | undefined
-	private artifactAccess: RunnerArtifactAccess | undefined
 	private readonly startedAt: number
 	private finishedAt: number | undefined
 	private done = false
@@ -402,7 +399,6 @@ export class Runner {
 			...(this.error !== undefined ? { error: this.error } : {}),
 			...(this.artifactState === undefined ? {} : { artifactState: this.artifactState }),
 			...(this.iamReconcile === undefined ? {} : { iamReconcile: this.iamReconcile }),
-			...(this.artifactAccess === undefined ? {} : { artifactAccess: this.artifactAccess }),
 			...(this.job.dryRun === true ? { dryRun: true } : {}),
 			startedAt: this.startedAt,
 			...(this.finishedAt !== undefined ? { finishedAt: this.finishedAt } : {}),
@@ -604,8 +600,6 @@ export class Runner {
 			try {
 				// A dry run reports nothing to apply; Control may read this status back without knowing it was dry.
 				if (deploy.exitCode === 0 && this.job.dryRun !== true) outcome = await this.readOutcomeFile()
-				// A refused deploy may still say why: artifact access that waits for a human (ADR-0050).
-				else if (this.job.dryRun !== true) outcome = await this.readOutcomeFile().catch(() => undefined)
 			} catch (err) {
 				const message = outcomeFailure(err)
 				this.finish('failed', { exitCode: deploy.exitCode, error: message })
@@ -618,10 +612,7 @@ export class Runner {
 		}
 		if (deploy.exitCode === 0) {
 			this.iamReconcile = outcome?.iamReconcile
-			this.artifactAccess = outcome?.artifactAccess
 			await this.uploadArtifacts(dir)
-		} else if (outcome?.artifactAccess?.state === 'pending') {
-			this.artifactAccess = outcome.artifactAccess
 		}
 		this.finish(deploy.exitCode === 0 ? 'succeeded' : 'failed', { exitCode: deploy.exitCode })
 		return this.status()

@@ -23,9 +23,9 @@ import { type ControlJobMessage, executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
 import { Vault } from '../vault'
-import { memoryCommits } from './helpers/commits'
+import { contractCommits } from './helpers/commits'
 import { createHarness, harnessDatabase } from './helpers/harness'
-import { fixtureNamespaceWrite, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
+import { fixtureNamespaceWrite, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const target = (phase: string): ProviderEnvelope => ({
@@ -910,6 +910,8 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			harness.deps,
 		)
 		expect(put.status).toBe(200)
+		// Unprotected, so a deploy's first contract publishes without an approval (ADR-0050).
+		await fixtureProtect(harness.deps.repositories.registry, makeFakeLock(harness.deps.repositories), { appId: app, env: 'prod' }, false)
 	}
 
 	const republishDeps = (harness: NamespaceHarness) => ({
@@ -997,7 +999,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			...republishDeps(harness),
 			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
-			commits: memoryCommits(),
+			commits: contractCommits('alpha'),
 		}
 		const release = Promise.withResolvers<void>()
 		const entered = Promise.withResolvers<void>()
@@ -1037,7 +1039,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 			...republishDeps(harness),
 			secrets: new VaultSecretResolver({}),
 			logs: { put: () => Promise.resolve() },
-			commits: memoryCommits(),
+			commits: contractCommits('alpha'),
 		}, { runId: run })
 
 		expect(result).toEqual({ runId: run, status: 'skipped' })
@@ -1050,7 +1052,7 @@ describe('a namespace republish rebuilds the entry point from the registry under
 		...republishDeps(harness),
 		secrets: new VaultSecretResolver({}),
 		logs: { put: () => Promise.resolve() },
-		commits: memoryCommits(),
+		commits: contractCommits('alpha'),
 	})
 
 	test('a deploy hands the proxy and the application the same proxy secret, generated once per environment (ADR-0022 rule 5)', async () => {

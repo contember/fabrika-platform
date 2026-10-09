@@ -3,23 +3,12 @@
 // access widens it.
 
 import {
-	type AppActionDef,
-	type AppDelegationDef,
-	type AppGates,
-	type AppLinkMountDef,
-	type AppSchema,
-	type AppScopeDef,
-	type AppWorkloadDef,
-	type ArtifactAccess,
-	artifactAccessDigest,
-	canonicalArtifactAccess,
 	canonicalizeArtifact,
 	canonicalJson,
 	type ContractArtifact,
 	type EndpointRow,
 	type FileCollectionArtifact,
 	type RoleArtifact,
-	type RoleDef,
 	type SchemaShape,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
@@ -47,7 +36,6 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 		removed: (name) => `Migration \`${name}\` is removed`,
 		changed: (name, before, after) => (before.checksum === after.checksum ? [] : [widening(`Migration \`${name}\` changes`)]),
 	})
-	compareArtifactAccess(changes, baseline.artifact, candidate.artifact)
 	const list = changes.list
 	return { outcome: list.length === 0 ? 'unchanged' : list.some((change) => change.widens) ? 'widening' : 'removal', changes: list }
 }
@@ -62,203 +50,6 @@ class Changes {
 
 const widening = (line: string): AccessChange => ({ widens: true, line })
 const removal = (line: string): AccessChange => ({ widens: false, line })
-
-/**
- * The gates and IAM schema of an application without a contract. Nothing shows which of their changes narrow access, so
- * every change widens it, a removal included: the approver reads what changed.
- */
-function compareArtifactAccess(changes: Changes, stored: ArtifactAccess | null, candidate: ArtifactAccess | null): void {
-	if (candidate === null) {
-		if (stored !== null) changes.add(widening("The artifact's gates and IAM schema no longer apply"))
-		return
-	}
-	if (stored !== null && artifactAccessDigest(stored) === artifactAccessDigest(candidate)) return
-	const before = stored === null ? null : canonicalArtifactAccess(stored)
-	const after = canonicalArtifactAccess(candidate)
-	const detail = new Changes()
-	detail.add(...(before === null ? [widening("The artifact's gates and IAM schema apply for the first time")] : presenceChanges(before, after)))
-	detail.add(...gateChanges(before?.gates ?? null, after.gates))
-	detail.add(...schemaChanges(before?.schema ?? null, after.schema))
-	changes.add(...(detail.list.length === 0 ? [widening("The artifact's gates and IAM schema change")] : detail.list))
-}
-
-/** No gates is no proxy in front of the application, and no schema is no IAM vocabulary: not the same as empty ones. */
-function presenceChanges(before: ArtifactAccess, after: ArtifactAccess): AccessChange[] {
-	const presence = (subject: string, from: unknown, to: unknown): AccessChange[] =>
-		from === null && to !== null
-			? [widening(`${subject} start to apply`)]
-			: from !== null && to === null
-			? [widening(`${subject} no longer apply`)]
-			: []
-	return [...presence('Gates', before.gates, after.gates), ...presence('An IAM schema and its roles', before.schema, after.schema)]
-}
-
-function gateChanges(before: AppGates | null, after: AppGates | null): AccessChange[] {
-	const changes: AccessChange[] = []
-	const ruleText = (gates: AppGates | null): string[] =>
-		(gates?.rules ?? []).map(({ path, kind, ...rest }) => `${path} → ${kind}${Object.keys(rest).length === 0 ? '' : ` ${canonicalJson(rest)}`}`)
-	const beforeRules = ruleText(before)
-	const afterRules = ruleText(after)
-	for (const rule of afterRules) if (!beforeRules.includes(rule)) changes.push(widening(`Gate \`${rule}\` is added`))
-	for (const rule of beforeRules) if (!afterRules.includes(rule)) changes.push(widening(`Gate \`${rule}\` is removed`))
-	if (changes.length === 0 && canonicalJson(beforeRules) !== canonicalJson(afterRules)) changes.push(widening('The gates change order'))
-	return changes
-}
-
-const EMPTY_SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
-
-function schemaChanges(before: AppSchema | null, after: AppSchema | null): AccessChange[] {
-	return fieldChanges('The IAM schema', before ?? EMPTY_SCHEMA, after ?? EMPTY_SCHEMA, SCHEMA_FIELDS)
-}
-
-/**
- * How each field of an IAM schema entry changes, one entry per field of its type, so a field added to the type does not
- * compile until it is listed here. Every line widens (`compareArtifactAccess`).
- */
-type FieldLines<T> = { readonly [K in keyof Required<T>]: (subject: string, before: T, after: T) => readonly AccessChange[] }
-
-type RoleMember = NonNullable<RoleDef['member']>
-
-const valueLine = (field: string) => <T>(subject: string, before: T, after: T): AccessChange[] =>
-	valueChange(`${subject} ${field}`, before ?? null, after ?? null)
-
-const setLines = (subject: string, before: readonly string[], after: readonly string[], gains: string, loses: string): AccessChange[] =>
-	setChanges(subject, before, after, gains, loses).map((change) => widening(change.line))
-
-const ROLE_MEMBER_FIELDS: FieldLines<RoleMember> = {
-	scope: (subject, before, after) => valueLine('membership scope')(subject, before.scope, after.scope),
-	assignableBy: (subject, before, after) =>
-		setLines(subject, before.assignableBy ?? [], after.assignableBy ?? [], 'can be assigned by', 'can no longer be assigned by'),
-}
-
-const ROLE_FIELDS: FieldLines<RoleDef> = {
-	name: (subject, before, after) => valueLine('name')(subject, before.name, after.name),
-	description: (subject, before, after) => valueLine('description')(subject, before.description, after.description),
-	permissions: (subject, before, after) => setLines(subject, before.permissions, after.permissions, 'gains', 'loses'),
-	member: (subject, { member: from }, { member: to }) => {
-		if (from === undefined) return to === undefined ? [] : [widening(`${subject} becomes ${membershipText(to)}`)]
-		if (to === undefined) return [widening(`${subject} is no longer ${membershipText(from)}`)]
-		return fieldChanges(subject, from, to, ROLE_MEMBER_FIELDS)
-	},
-}
-
-const SCOPE_FIELDS: FieldLines<AppScopeDef> = {
-	type: (subject, before, after) => valueLine('type')(subject, before.type, after.type),
-	label: (subject, before, after) => valueLine('label')(subject, before.label, after.label),
-	in: (subject, before, after) => valueLine('containing scope')(subject, before.in, after.in),
-	creator: (subject, before, after) => valueLine('creator role')(subject, before.creator, after.creator),
-	members: (subject, before, after) => valueLine('member actions')(subject, before.members, after.members),
-}
-
-const ACTION_FIELDS: FieldLines<AppActionDef> = {
-	action: (subject, before, after) => valueLine('action')(subject, before.action, after.action),
-	description: (subject, before, after) => valueLine('description')(subject, before.description, after.description),
-}
-
-const LINK_FIELDS: FieldLines<AppLinkMountDef> = {
-	dimension: (subject, before, after) => valueLine('scope')(subject, before.dimension, after.dimension),
-	grants: (subject, before, after) => setLines(subject, before.grants, after.grants, 'grants', 'no longer grants'),
-	issuedBy: (subject, before, after) => valueLine('issuing action')(subject, before.issuedBy, after.issuedBy),
-	maxDays: (subject, before, after) => valueLine('longest life in days')(subject, before.maxDays, after.maxDays),
-}
-
-const DELEGATION_FIELDS: FieldLines<AppDelegationDef> = {
-	action: (subject, before, after) => valueLine('action')(subject, before.action, after.action),
-	dimension: (subject, before, after) => valueLine('scope')(subject, before.dimension, after.dimension),
-	purpose: (subject, before, after) => valueLine('purpose')(subject, before.purpose, after.purpose),
-}
-
-const WORKLOAD_FIELDS: FieldLines<AppWorkloadDef> = {
-	kind: (subject, before, after) => valueLine('kind')(subject, before.kind, after.kind),
-	name: (subject, before, after) => valueLine('name')(subject, before.name, after.name),
-	actions: (subject, before, after) => setLines(subject, before.actions, after.actions, 'gains', 'loses'),
-}
-
-const SCHEMA_FIELDS: FieldLines<AppSchema> = {
-	scopes: (_, before, after) =>
-		keyedWidenings(catalog(before.scopes, (scope) => scope.type), catalog(after.scopes, (scope) => scope.type), {
-			added: (key) => `New IAM scope \`${key}\``,
-			removed: (key) => `IAM scope \`${key}\` is removed`,
-			changed: (key, from, to) => fieldChanges(`IAM scope \`${key}\``, from, to, SCOPE_FIELDS),
-		}),
-	actions: (_, before, after) =>
-		keyedWidenings(catalog(before.actions, (action) => action.action), catalog(after.actions, (action) => action.action), {
-			added: (key) => `IAM action \`${key}\` is added`,
-			removed: (key) => `IAM action \`${key}\` is removed`,
-			changed: (key, from, to) => fieldChanges(`IAM action \`${key}\``, from, to, ACTION_FIELDS),
-		}),
-	roles: (_, before, after) =>
-		keyedWidenings(record(before.roles), record(after.roles), {
-			added: (key, role) =>
-				`New IAM role \`${key}\` with ${listOf(role.permissions, 'no permissions')}${
-					role.member === undefined ? '' : `, ${membershipText(role.member)}`
-				}`,
-			removed: (key) => `IAM role \`${key}\` is removed`,
-			changed: (key, from, to) => fieldChanges(`IAM role \`${key}\``, from, to, ROLE_FIELDS),
-		}),
-	contract: (subject, before, after) => valueLine('contract flag')(subject, before.contract, after.contract),
-	links: (_, before, after) =>
-		keyedWidenings(record(before.links ?? {}), record(after.links ?? {}), {
-			added: (key, link) =>
-				`New IAM link mount \`${key}\` on \`${link.dimension}\` granting ${
-					listOf(link.grants, 'nothing')
-				}, issued with \`${link.issuedBy}\`, for up to ${link.maxDays} days`,
-			removed: (key) => `IAM link mount \`${key}\` is removed`,
-			changed: (key, from, to) => fieldChanges(`IAM link mount \`${key}\``, from, to, LINK_FIELDS),
-		}),
-	delegations: (_, before, after) =>
-		keyedWidenings(record(before.delegations ?? {}), record(after.delegations ?? {}), {
-			added: (key, delegation) =>
-				`New IAM delegation for endpoint \`${key}\`: \`${delegation.action}\` on \`${delegation.dimension}\` (${delegation.purpose})`,
-			removed: (key) => `IAM delegation for endpoint \`${key}\` is removed`,
-			changed: (key, from, to) => fieldChanges(`IAM delegation for endpoint \`${key}\``, from, to, DELEGATION_FIELDS),
-		}),
-	workloads: (_, before, after) => {
-		const id = (workload: AppWorkloadDef): string => `${workload.kind}:${workload.name}`
-		return keyedWidenings(catalog(before.workloads ?? [], id), catalog(after.workloads ?? [], id), {
-			added: (key, workload) => `New IAM workload \`${key}\` with ${listOf(workload.actions, 'no actions')}`,
-			removed: (key) => `IAM workload \`${key}\` is removed`,
-			changed: (key, from, to) => fieldChanges(`IAM workload \`${key}\``, from, to, WORKLOAD_FIELDS),
-		})
-	},
-}
-
-/** The field tables, by the entry they describe; the tests hold every field IAM reads to one of them. */
-export const IAM_SCHEMA_FIELDS = {
-	schema: SCHEMA_FIELDS,
-	scope: SCOPE_FIELDS,
-	action: ACTION_FIELDS,
-	role: ROLE_FIELDS,
-	roleMember: ROLE_MEMBER_FIELDS,
-	link: LINK_FIELDS,
-	delegation: DELEGATION_FIELDS,
-	workload: WORKLOAD_FIELDS,
-} as const
-
-/** Every field's lines; a change no field describes still widens. */
-function fieldChanges<T>(subject: string, before: T, after: T, fields: FieldLines<T>): AccessChange[] {
-	const lines = Object.values<FieldLines<T>[keyof T]>(fields).flatMap((field) => field(subject, before, after))
-	return lines.length === 0 && canonicalJson(before) !== canonicalJson(after) ? [widening(`${subject} changes`)] : lines
-}
-
-function keyedWidenings<T>(
-	before: ReadonlyMap<string, T>,
-	after: ReadonlyMap<string, T>,
-	lines: { added(key: string, value: T): string; removed(key: string): string; changed(key: string, before: T, after: T): readonly AccessChange[] },
-): AccessChange[] {
-	const changes = new Changes()
-	compareKeyed(changes, before, after, { added: lines.added, removed: (key) => [widening(lines.removed(key))], changed: lines.changed })
-	return changes.list
-}
-
-function membershipText(member: RoleMember): string {
-	const assigners = member.assignableBy ?? []
-	return `a membership role of \`${member.scope}\`${assigners.length === 0 ? '' : ` assignable by ${listOf(assigners, 'nobody')}`}`
-}
-
-function catalog<T>(entries: readonly T[], identifier: (entry: T) => string): Map<string, T> {
-	return new Map(entries.map((entry) => [identifier(entry), entry]))
-}
 
 function compareContracts(changes: Changes, before: ContractArtifact | null, after: ContractArtifact | null): void {
 	if (before === null && after === null) return

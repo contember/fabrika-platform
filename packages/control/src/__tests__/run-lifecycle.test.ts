@@ -18,10 +18,10 @@ import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { appSecretPurpose, type SecretResolver, VaultSecretResolver } from '../secret-resolver'
-import { memoryCommits } from './helpers/commits'
+import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
-import { fixtureCatalogApplied, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
+import { fixtureCatalogApplied, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { createTestVault } from './helpers/vault'
 
 const vault = await createTestVault()
@@ -86,6 +86,8 @@ async function seedRun(
 				: envelope(provider, 'artifact'),
 		),
 	})
+	// Unprotected, so each test's first contract publishes without an approval (ADR-0050).
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 	await db.registry.upsertAppSecret({
 		appId: 'app',
 		env: null,
@@ -187,7 +189,7 @@ function makeDeps(
 	secrets: SecretResolver = vaultSecrets,
 	lock = makeFakeLock(db),
 ): RunDeps {
-	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() }, commits: memoryCommits() }
+	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() }, commits: contractCommits('app') }
 }
 
 function memoryLogs(
@@ -338,7 +340,9 @@ describe('provider-neutral run lifecycle', () => {
 			cancelRun: async () => {},
 		})
 		try {
-			expect((await executeDeploy({ ...makeDeps(db, provider), operations: { repository: releases } }, { runId })).status).toBe('succeeded')
+			// The Cloudflare provider reads the snapshot at the app's `workerDir`.
+			const deps = { ...makeDeps(db, provider), commits: contractCommits('app', 'worker'), operations: { repository: releases } }
+			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
 			expect(phases).toEqual(['started', 'provider_accepted', 'terminal'])
 			expect(persistedAtProjection).toEqual([commitSha, commitSha, commitSha])
 			expect(projectedCommits).toEqual([commitSha, commitSha, commitSha])

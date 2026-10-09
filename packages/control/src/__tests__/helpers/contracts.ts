@@ -40,3 +40,10 @@ export const WITHOUT_REMOVE = edited(
 	`\t\tremove: c.mutation({ input: z.strictObject({ id: z.uuid() }), output: z.strictObject({ id: z.uuid() }), access: { action: 'notes.delete', on: 'note', from: 'id' } }),\n`,
 	'',
 )
+
+/** The smallest contract an application `app` deploys with: one anonymous health check. */
+export const healthOnly = (app: string): string =>
+	`import { defineContract } from '@fabrika/app/contract'
+
+export const contract = defineContract({ app: '${app}', dimensions: {}, actions: {}, roles: {} }, (c) => ({ health: c.health('/healthz') }))
+`

@@ -1,11 +1,5 @@
-import {
-	type AppActionDef,
-	type AppEnvironment,
-	artifactAccessDigest,
-	type ContractArtifact,
-	contractDigest,
-	type GateRule,
-} from '@fabrika/auth-core'
+import { schemaFromContract } from '@fabrika/app/contract'
+import { type AppActionDef, type AppEnvironment, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import { contractProxyTable, isApplicationEntry, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
@@ -59,8 +53,8 @@ const appWorker = (): Worker => new Worker({ dir: '.', ...PRIVATE, name: 'demo',
 const bindingIam = (iam: Bindable): Worker =>
 	new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings: { IAM: iam }, main: 'src/index.ts' })
 
-/** The gates an application without a contract hands the platform-built proxy. */
-const GATES = { rules: [{ path: '/*', kind: 'public' as const }] }
+/** What a config written before the gates were removed still declares. */
+const GATES = { rules: [{ path: '/*', kind: 'public' }] }
 
 /** Where a checkout's own `bun install` puts this package: proxy code from here is the checkout's, never the platform's. */
 const INSTALLED_PROXY_DIR = '/repo/node_modules/@fabrika/provider-cloudflare/src'
@@ -140,18 +134,22 @@ const deploy = (
 		readonly generatedServices?: GeneratedService[]
 		/** What `fabrika.contract.ts` in the checkout reads as; none by default. */
 		readonly checkoutContract?: ContractArtifact
-		/** The contract Control approved for the run, or null when Control read none at the commit. */
-		readonly contract?: ContractArtifact | null
-		readonly artifactApproval?: { readonly digest: string | null; readonly protected: boolean }
+		/**
+		 * The contract Control approved for the run. An application gets `notesArtifact` by default, and a config without
+		 * a schema gets its `schemaFromContract`; a platform component (`allow`) gets none.
+		 */
+		readonly contract?: ContractArtifact
 		readonly installationApps?: readonly AppEnvironment[]
 	} = {},
-) =>
-	createCloudflareDeployer({
+) => {
+	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
+	const served = contract === undefined || appConfig.schema !== undefined ? appConfig : { ...appConfig, schema: schemaFromContract(contract) }
+	return createCloudflareDeployer({
 		accountId: 'acc-1',
 		apiToken: 'tok-1',
 		collaborators: makeCollaborators(
 			rec,
-			appConfig,
+			served,
 			options.commandResult,
 			options.checkoutDir,
 			options.runCommand,
@@ -170,8 +168,7 @@ const deploy = (
 		secrets: options.secrets ?? {},
 		vars: {},
 		managedEnvironment: options.managedEnvironment ?? {},
-		...(options.contract === undefined ? {} : { contract: options.contract }),
-		...(options.artifactApproval === undefined ? {} : { artifactApproval: options.artifactApproval }),
+		...(contract === undefined ? {} : { contract }),
 		...(options.installationApps === undefined ? {} : { installationApps: options.installationApps }),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
@@ -179,6 +176,7 @@ const deploy = (
 			rec.logs.push(line)
 		},
 	})
+}
 
 const stepError = (result: Awaited<ReturnType<typeof deploy>>, id: string): string | undefined => result.steps.find((step) => step.id === id)?.error
 
@@ -210,7 +208,7 @@ afterEach(async () => {
 })
 
 describe('Cloudflare provider', () => {
-	test('merges platform-managed values into the root Worker without exposing them in logs', async () => {
+	test('merges platform-managed values into the application Worker without exposing them in logs', async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
 		await deploy(rec, config(), {
 			dryRun: true,
@@ -220,11 +218,11 @@ describe('Cloudflare provider', () => {
 				FABRIKA_SERVICE_KEY: null,
 			},
 		})
-		expect(rec.provisionedVars[0]).toMatchObject({
+		expect(rec.applicationVars[0]).toMatchObject({
 			FABRIKA_OPERATIONS_DSN: dsn,
 			FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit',
 		})
-		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_SERVICE_KEY')
+		expect(rec.applicationVars[0]).not.toHaveProperty('FABRIKA_SERVICE_KEY')
 		expect(rec.logs.join('\n')).not.toContain(dsn)
 	})
 
@@ -250,7 +248,7 @@ describe('Cloudflare provider', () => {
 
 	test('targets platform-managed values at the private application Worker behind the platform proxy', async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
-		await deploy(rec, config({ gates: GATES }), { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
+		await deploy(rec, config(), { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
 		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_OPERATIONS_DSN')
 		expect(rec.applicationVars[0]).toMatchObject({ FABRIKA_OPERATIONS_DSN: dsn })
 	})
@@ -264,9 +262,16 @@ describe('Cloudflare provider', () => {
 			bindings: { DB: new D1Database({ name: 'main', migrationsDir: './migrations' }) },
 			main: 'src/index.ts',
 		})
-		const authored = config({ gates: GATES, resources: () => app, pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] } })
+		const authored = config({ resources: () => app, pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] } })
 		const result = await deploy(rec, authored, { secrets: { API_KEY: 'secret-value' } })
-		expect(result.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'migrate:APP.DB', 'deploy-worker', 'sync-secrets'])
+		expect(result.steps.map((step) => step.id)).toEqual([
+			'build',
+			'provision-resources',
+			'migrate:APP.DB',
+			'deploy-worker',
+			'reconcile-schema',
+			'sync-secrets',
+		])
 		expect(result.status).toBe('succeeded')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			['sh', '-c', 'bun run build'],
@@ -284,7 +289,7 @@ describe('Cloudflare provider', () => {
 
 	test('loads the checkout config and preserves the canonical Cloudflare plan', async () => {
 		const app = config({
-			schema: { scopes: [], actions: [], roles: {} },
+			schema: { scopes: [], actions: [], roles: {}, contract: true },
 			pipeline: { build: 'bun run build', secrets: ['API_KEY'] },
 			resources: () =>
 				new Worker({
@@ -301,7 +306,7 @@ describe('Cloudflare provider', () => {
 		expect(result.steps.map((step) => step.id)).toEqual([
 			'build',
 			'provision-resources',
-			'migrate:DB',
+			'migrate:APP.DB',
 			'deploy-worker',
 			'reconcile-schema',
 			'sync-secrets',
@@ -311,7 +316,7 @@ describe('Cloudflare provider', () => {
 	test('executes the plan through the provider collaborator bundle', async () => {
 		const controller = new AbortController()
 		const app = config({
-			schema: { scopes: [], actions: [], roles: {} },
+			schema: { scopes: [], actions: [], roles: {}, contract: true },
 			pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] },
 		})
 		await deploy(rec, app, { secrets: { API_KEY: 'secret-value' }, signal: controller.signal })
@@ -324,24 +329,25 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			['sh', '-c', 'bun run build'],
 			['wrangler', 'deploy'],
+			['wrangler', 'deploy'],
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[1]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
-		expect(rec.commands[2]?.stdin).toBe('secret-value')
-		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' } }])
+		expect(rec.commands[3]?.stdin).toBe('secret-value')
+		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{},"contract":true}' } }])
 	})
 
 	test('reports the authz schema for the control plane instead of calling IAM from the container', async () => {
-		const schema = { scopes: [{ type: 'team' }], actions: [{ action: 'notes.read' }], roles: {} }
+		const schema = { scopes: [{ type: 'team' }], actions: [{ action: 'notes.read' }], roles: {}, contract: true }
 		await deploy(rec, config({ schema }), { returnOrigins: ['https://demo.example.com'] })
 
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: JSON.stringify(schema) } }])
-		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy'], ['wrangler', 'deploy']])
 	})
 
 	test('refuses to report an outcome once the run is cancelled', async () => {
 		const controller = new AbortController()
-		const result = await deploy(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), {
+		const result = await deploy(rec, config({ schema: { scopes: [], actions: [], roles: {}, contract: true } }), {
 			signal: controller.signal,
 			commandResult: () => {
 				controller.abort()
@@ -355,7 +361,7 @@ describe('Cloudflare provider', () => {
 
 	test('dry-run keeps Oblaka in plan mode and skips every other mutation', async () => {
 		const app = config({
-			schema: { scopes: [], actions: [], roles: {} },
+			schema: { scopes: [], actions: [], roles: {}, contract: true },
 			pipeline: { build: 'bun run build', secrets: ['API_KEY'] },
 		})
 		const result = await deploy(rec, app, { dryRun: true, secrets: { API_KEY: 'secret-value' } })
@@ -377,7 +383,7 @@ describe('Cloudflare provider', () => {
 	test('honours an already-aborted run before the first mutation', async () => {
 		const result = await deploy(rec, config(), { signal: AbortSignal.abort() })
 		expect(result.status).toBe('failed')
-		expect(result.steps.map((step) => step.status)).toEqual(['skipped', 'skipped'])
+		expect(result.steps.map((step) => step.status)).toEqual(['skipped', 'skipped', 'skipped'])
 		expect(rec.logs).toContain('∅ provision-resources: deploy cancelled')
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -392,7 +398,7 @@ describe('Cloudflare provider', () => {
 				return new Promise<never>(() => {})
 			},
 		})
-		expect(result.steps.map((step) => step.status)).toEqual(['failed', 'skipped', 'skipped', 'skipped'])
+		expect(result.steps.map((step) => step.status)).toEqual(['failed', 'skipped', 'skipped', 'skipped', 'skipped'])
 		expect(stepError(result, 'build')).toBe('deploy cancelled')
 		expect(rec.provisions).toHaveLength(0)
 		expect(rec.commands.map((command) => command.command)).toEqual(['sh'])
@@ -407,7 +413,7 @@ describe('Cloudflare provider', () => {
 					: { exitCode: 0, stdout: '', stderr: '' },
 		})
 		expect(result.status).toBe('failed')
-		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'failed', 'skipped'])
+		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'failed', 'skipped', 'skipped'])
 		expect(stepError(result, 'deploy-worker')).toBe('wrangler deploy failed (exit 1): deploy failed')
 		expect(rec.logs).toContain('  • deploy-worker — Deploy the Worker (`wrangler deploy`)')
 		expect(rec.logs).toContain('✗ deploy-worker: wrangler deploy failed (exit 1): deploy failed')
@@ -471,48 +477,31 @@ describe('Cloudflare provider', () => {
 
 	test("only the platform proxy is routed, on this environment's own domain", async () => {
 		const foreign = [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }]
-		const routed = config({ gates: GATES, resources: () => bindingIam(emitting({ routes: foreign })) })
+		const routed = config({ resources: () => bindingIam(emitting({ routes: foreign })) })
 		await expect(deploy(rec, routed)).rejects.toThrow('application Worker `stage-demo` declares `routes`; only its proxy Worker is routed')
 		expect(rec.provisions).toHaveLength(0)
 
-		await expect(deploy(rec, config({ gates: GATES }))).resolves.toMatchObject({ status: 'succeeded' })
+		await expect(deploy(rec, config())).resolves.toMatchObject({ status: 'succeeded' })
 		const { root } = provisioned()
 		expect(root.options.routes).toEqual([{ pattern: 'stage.example.com', custom_domain: true }])
 	})
 
-	test('refuses a route, workers.dev or preview URLs on an application Worker, proxied or not', async () => {
+	test('refuses a route, workers.dev or preview URLs on an application Worker behind its proxy', async () => {
 		const ownRoute = [{ pattern: 'stage.example.com', custom_domain: true }]
-		const exposed: ReadonlyArray<readonly [Record<string, unknown>, string, string]> = [
-			[
-				{ routes: ownRoute },
-				'application Worker `stage-demo` declares `routes`; only its proxy Worker is routed (omit it or set `[]`)',
-				'cloudflare proxy app `demo` must not declare public routes',
-			],
-			[{ routes: 'stage.example.com' }, 'application Worker `stage-demo` declares `routes`', 'must not declare public routes'],
-			[
-				{ workers_dev: true },
-				'application Worker `stage-demo` leaves `workers_dev` on; it would be public on workers.dev (set `workers_dev: false`)',
-				'cloudflare proxy app `demo` must disable workers.dev',
-			],
-			[{ workers_dev: undefined }, 'application Worker `stage-demo` leaves `workers_dev` on', 'must disable workers.dev'],
-			[
-				{ preview_urls: true },
-				'application Worker `stage-demo` leaves `preview_urls` on; every version would be public on workers.dev (set `preview_urls: false`)',
-				'application Worker `stage-demo` leaves `preview_urls` on',
-			],
-			[
-				{ preview_urls: undefined },
-				'application Worker `stage-demo` leaves `preview_urls` on',
-				'application Worker `stage-demo` leaves `preview_urls` on',
-			],
+		const exposed: ReadonlyArray<readonly [Record<string, unknown>, string]> = [
+			[{ routes: ownRoute }, 'cloudflare proxy app `demo` must not declare public routes'],
+			[{ routes: 'stage.example.com' }, 'must not declare public routes'],
+			[{ workers_dev: true }, 'cloudflare proxy app `demo` must disable workers.dev'],
+			[{ workers_dev: undefined }, 'must disable workers.dev'],
+			[{ preview_urls: true }, 'application Worker `stage-demo` leaves `preview_urls` on'],
+			[{ preview_urls: undefined }, 'application Worker `stage-demo` leaves `preview_urls` on'],
 		]
-		for (const [raw, alone, proxied] of exposed) {
-			await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), raw) }))).rejects.toThrow(alone)
-			await expect(deploy(rec, config({ gates: GATES, resources: () => withRawOptions(appWorker(), raw) }))).rejects.toThrow(proxied)
+		for (const [raw, message] of exposed) {
+			await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), raw) }))).rejects.toThrow(message)
 		}
 		expect(rec.provisions).toHaveLength(0)
 
-		await expect(deploy(rec, config({ gates: GATES, resources: () => withRawOptions(appWorker(), { routes: [] }) }))).resolves.toMatchObject({
+		await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), { routes: [] }) }))).resolves.toMatchObject({
 			status: 'succeeded',
 		})
 	})
@@ -524,7 +513,7 @@ describe('Cloudflare provider', () => {
 			[{ preview_urls: true }, 'application Worker `stage-demo` leaves `preview_urls` on'],
 		]
 		for (const [extra, message] of probes) {
-			await expect(deploy(rec, config({ gates: GATES, resources: () => bindingIam(emitting(extra)) }))).rejects.toThrow(message)
+			await expect(deploy(rec, config({ resources: () => bindingIam(emitting(extra)) }))).rejects.toThrow(message)
 		}
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -548,7 +537,7 @@ describe('Cloudflare provider', () => {
 			appId: 'demo@stage',
 			appHost: 'stage.example.com',
 			domain: 'stage.example.com',
-			gates: GATES,
+			endpoints: contractProxyTable(notesArtifact),
 		})
 		const impostors = [
 			publicRoot('.', 'src/app.ts'),
@@ -558,11 +547,9 @@ describe('Cloudflare provider', () => {
 			checkoutProxy,
 		]
 		for (const impostor of impostors) {
-			for (const gates of [GATES, undefined]) {
-				await expect(deploy(rec, config({ gates, resources: () => impostor }))).rejects.toThrow(
-					'binding `APP`, a proxy of its own; return the application Worker and declare `gates`',
-				)
-			}
+			await expect(deploy(rec, config({ resources: () => impostor }))).rejects.toThrow(
+				'binding `APP`, a proxy of its own; return the application Worker, and the platform builds the proxy Worker from its contract',
+			)
 		}
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -656,7 +643,7 @@ describe('Cloudflare provider', () => {
 	// `packages/iam/src/__tests__/index.test.ts` pins the same name as the narrow class IAM exports.
 	test('an application and its platform-built proxy bind IAM at PropustkaApplication', async () => {
 		expect(IAM_APPLICATION_ENTRYPOINT).toBe('PropustkaApplication')
-		await expect(deploy(rec, config({ gates: GATES, resources: () => bindingIam(iamServiceReference()) }))).resolves.toMatchObject({
+		await expect(deploy(rec, config({ resources: () => bindingIam(iamServiceReference()) }))).resolves.toMatchObject({
 			status: 'succeeded',
 		})
 		const { root, app } = provisioned()
@@ -727,10 +714,8 @@ describe('Cloudflare provider', () => {
 			[{ tail_consumers: [{ service: 'stage-demo' }] }, 'Worker `stage-demo` sets `tail_consumers`, which an app may not configure'],
 		]
 		for (const [raw, message] of smuggled) {
-			for (const gates of [undefined, GATES]) {
-				await expect(deploy(rec, config({ gates, resources: () => withRawOptions(appWorker(), raw) }))).rejects.toThrow(message)
-				await expect(deploy(rec, config({ gates, resources: () => bindingIam(emitting(raw)) }))).rejects.toThrow(message)
-			}
+			await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), raw) }))).rejects.toThrow(message)
+			await expect(deploy(rec, config({ resources: () => bindingIam(emitting(raw)) }))).rejects.toThrow(message)
 		}
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -741,17 +726,17 @@ describe('Cloudflare provider', () => {
 			[{ kv_namespaces: [{ binding: 'KV', id: 'another-namespace-id' }] }, 'binds a KV namespace by an id'],
 		]
 		for (const [extra, message] of probes) {
-			await expect(deploy(rec, config({ gates: GATES, resources: () => bindingIam(emitting(extra)) }))).rejects.toThrow(message)
+			await expect(deploy(rec, config({ resources: () => bindingIam(emitting(extra)) }))).rejects.toThrow(message)
 		}
 		expect(rec.provisions).toHaveLength(0)
-		const declared = config({ gates: GATES, resources: () => bindingIam(new KVNamespace({ name: 'demo-cache' })) })
+		const declared = config({ resources: () => bindingIam(new KVNamespace({ name: 'demo-cache' })) })
 		await expect(deploy(rec, declared)).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test("the platform-built proxy mints for this deployment's own `<app>@<env>`", async () => {
 		for (const env of ['stage', 'prod']) {
 			rec.provisions.length = 0
-			await expect(deploy(rec, config({ gates: GATES }), { env })).resolves.toMatchObject({ status: 'succeeded' })
+			await expect(deploy(rec, config(), { env })).resolves.toMatchObject({ status: 'succeeded' })
 			const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
 			expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps.map((app) => app.id)).toEqual([`demo@${env}`])
 		}
@@ -773,7 +758,7 @@ describe('Cloudflare provider', () => {
 			routes: [],
 			bindings: { DB: new D1Database({ name: 'notes' }) },
 		})
-		await expect(deploy(rec, config({ gates: GATES, resources: () => app }))).resolves.toMatchObject({ status: 'succeeded' })
+		await expect(deploy(rec, config({ resources: () => app }))).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('bounds the name oblaka adopts, so an env name cannot split the platform prefix', async () => {
@@ -832,7 +817,10 @@ describe('Cloudflare provider', () => {
 			await writeFile(join(assets, 'nested', 'app.js'), 'export {}')
 		})
 		await deploy(rec, assetsApp(), { checkoutDir })
-		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
+		expect(rec.commands.map((command) => [command.command, ...command.args, command.cwd === CLOUDFLARE_PROXY_WORKER_DIR])).toEqual([
+			['wrangler', 'deploy', true],
+			['wrangler', 'deploy', false],
+		])
 	})
 
 	test('refuses the deploy when the assets directory holds a symbolic link, wherever it sits', async () => {
@@ -855,7 +843,7 @@ describe('Cloudflare provider', () => {
 				`Worker \`stage-demo\` assets directory \`public\` contains \`${path}\`, which is a symbolic link; wrangler follows it and would publish its target`,
 			)
 		}
-		expect(rec.commands).toHaveLength(0)
+		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR)).toHaveLength(0)
 	})
 
 	test('refuses the deploy when the assets directory is itself a symbolic link', async () => {
@@ -866,7 +854,7 @@ describe('Cloudflare provider', () => {
 		expect(stepError(result, 'deploy-worker')).toContain(
 			'Worker `stage-demo` assets directory `public` is a symbolic link; wrangler follows it and would publish its target',
 		)
-		expect(rec.commands).toHaveLength(0)
+		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR)).toHaveLength(0)
 	})
 
 	test('refuses a symbolic link the checkout plants in its own build step, after `open` has returned', async () => {
@@ -883,7 +871,7 @@ describe('Cloudflare provider', () => {
 			},
 		})
 		expect(stepError(result, 'deploy-worker')).toContain('Worker `stage-demo` assets directory `public` contains `x`, which is a symbolic link')
-		expect(rec.commands.map((command) => command.command)).toEqual(['sh'])
+		expect(rec.commands.filter((command) => command.cwd !== CLOUDFLARE_PROXY_WORKER_DIR).map((command) => command.command)).toEqual(['sh'])
 	})
 
 	test('walks no assets directory when fabrika is deploying its own components', async () => {
@@ -945,29 +933,23 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
 	})
 
-	test('a config that builds its own proxy Worker is refused, with gates or with the endpoint table', async () => {
-		const ownProxy = (protection: { readonly gates: typeof GATES } | { readonly endpoints: ReturnType<typeof contractProxyTable> }): Worker =>
-			createCloudflareProxyWorker({
-				name: 'demo-proxy',
-				app: appWorker(),
-				appId: 'demo@stage',
-				appHost: 'stage.example.com',
-				domain: 'stage.example.com',
-				...protection,
-			})
-		for (const authored of [ownProxy({ gates: GATES }), ownProxy({ endpoints: contractProxyTable(notesArtifact) })]) {
-			await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA, resources: () => authored }), { checkoutContract: notesArtifact })).rejects.toThrow(
-				'`resources` returns the Worker `demo-proxy` binding `APP`, a proxy of its own',
-			)
-		}
+	test('a config that builds its own proxy Worker is refused', async () => {
+		const authored = createCloudflareProxyWorker({
+			name: 'demo-proxy',
+			app: appWorker(),
+			appId: 'demo@stage',
+			appHost: 'stage.example.com',
+			domain: 'stage.example.com',
+			endpoints: contractProxyTable(notesArtifact),
+		})
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA, resources: () => authored }), { checkoutContract: notesArtifact })).rejects.toThrow(
+			'`resources` returns the Worker `demo-proxy` binding `APP`, a proxy of its own',
+		)
 		const named = config({
 			schema: CONTRACT_SCHEMA,
 			resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo-proxy', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
 		await expect(deploy(rec, named, { checkoutContract: notesArtifact })).rejects.toThrow('takes the name of the proxy Worker the platform builds')
-		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA, gates: GATES }), { checkoutContract: notesArtifact })).rejects.toThrow(
-			'a contract application is protected by its endpoint table; remove `gates`',
-		)
 		expect(rec.provisions).toHaveLength(0)
 	})
 
@@ -981,7 +963,7 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 	})
 
 	test('the lock-down follows the contract: an IAM schema that disagrees with it is refused', async () => {
-		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }))).rejects.toThrow(
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA }), { platformResources: 'allow' })).rejects.toThrow(
 			'the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`',
 		)
 		const loose = { scopes: [], actions: [], roles: {} }
@@ -1050,9 +1032,6 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
 		])
 		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
-		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA, gates: GATES }), { contract: notesArtifact })).rejects.toThrow(
-			'a contract application is protected by its endpoint table; remove `gates`',
-		)
 	})
 
 	test("a contract proxy admits the origin of the application's Operations DSN in its policy, never the key", async () => {
@@ -1090,73 +1069,38 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		expect(rec.provisions).toHaveLength(0)
 	})
 
-	test('a checkout with a contract Control did not read is refused when Control says the application has none', async () => {
-		await expect(deploy(rec, config({ gates: GATES }), { checkoutContract: notesArtifact, contract: null })).rejects.toThrow(
-			'the checkout has a `fabrika.contract.ts`, but the commit Control read has none',
-		)
-		expect(rec.provisions).toHaveLength(0)
-		await expect(deploy(rec, config({ gates: GATES }), { contract: null })).resolves.toMatchObject({ status: 'succeeded' })
-	})
-
-	test('a first deploy to a protected environment stops before provisioning and reports the gates and schema', async () => {
-		const schema = { scopes: [], actions: [{ action: 'notes.read' }], roles: {} }
-		const app = config({ gates: GATES, schema })
-		await expect(deploy(rec, app, { contract: null, artifactApproval: { digest: null, protected: true } })).rejects.toThrow(
-			"the config's gates and IAM schema are not the access Control approved",
-		)
+	test('an application checkout without a contract is refused before anything runs; a platform component needs none', async () => {
+		const missing = 'the checkout has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract'
+		const contractless = createCloudflareDeployer({ accountId: 'acc-1', apiToken: 'tok-1', collaborators: makeCollaborators(rec, config()) })
+		const run = { appId: 'demo', env: 'stage', cwd: '/repo', configPath: 'fabrika.config.ts', secrets: {}, vars: {}, managedEnvironment: {} }
+		for (const dryRun of [false, true]) {
+			await expect(contractless({ ...run, dryRun, signal: new AbortController().signal, log: () => {} })).rejects.toThrow(missing)
+		}
 		expect(rec.provisions).toHaveLength(0)
 		expect(rec.commands).toHaveLength(0)
-		expect(rec.outcomes).toEqual([{ artifactAccess: { state: 'pending', accessJson: JSON.stringify({ gates: GATES, schema }) } }])
+		await expect(deploy(rec, config(), { platformResources: 'allow' })).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
-	test('the approved gates and schema deploy and are reported; an unprotected change deploys too', async () => {
-		const schema = { scopes: [], actions: [{ action: 'notes.read' }], roles: {} }
-		const app = config({ gates: GATES, schema })
-		const digest = artifactAccessDigest({ gates: GATES, schema })
-		const deployedReport: RunnerOutcomeFile = { artifactAccess: { state: 'deployed', accessJson: JSON.stringify({ gates: GATES, schema }) } }
-		expect(await deploy(rec, app, { contract: null, artifactApproval: { digest, protected: true } })).toMatchObject({ status: 'succeeded' })
-		// Control applies the reported schema; the reconcile-schema step reports nothing of its own.
-		expect(rec.outcomes).toEqual([deployedReport])
-		rec.outcomes.length = 0
-		expect(await deploy(rec, app, { contract: null, artifactApproval: { digest: null, protected: false } })).toMatchObject({ status: 'succeeded' })
-		expect(rec.outcomes).toEqual([deployedReport])
+	test('a config that declares `gates` is refused, whatever else it declares', async () => {
+		const gated = { ...config(), gates: GATES }
+		await expect(deploy(rec, gated)).rejects.toThrow('the config declares `gates`, which no deployment reads any more')
+		await expect(deploy(rec, gated, { platformResources: 'allow' })).rejects.toThrow('the config declares `gates`')
+		expect(rec.provisions).toHaveLength(0)
 	})
 
-	test('an application without a contract hands its gates to the proxy the platform builds', async () => {
-		await expect(deploy(rec, config({ gates: GATES }))).resolves.toMatchObject({ status: 'succeeded' })
-		const { root, app } = provisioned()
-		expect(root.options).toMatchObject({ name: 'demo-proxy', dir: CLOUDFLARE_PROXY_WORKER_DIR, main: './proxy-worker.ts' })
-		expect(app.options.name).toBe('demo')
-		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
-		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toEqual([
-			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', gates: GATES },
-		])
-		const malformed = config({ gates: { rules: [{ path: 'no-slash', kind: 'public' }] } })
-		await expect(deploy(rec, malformed)).rejects.toThrow("the config's `gates` or IAM `schema` are malformed")
-	})
-
-	test('the proxy, the report and IAM come from the access read before `resources()` runs, whatever it changes', async () => {
-		const rules: GateRule[] = [{ path: '/*', kind: 'human' }]
+	test('the IAM schema is the one read before `resources()` runs, whatever it changes', async () => {
 		const actions: AppActionDef[] = [{ action: 'notes.read' }]
-		const schema = { scopes: [], actions, roles: {} }
-		const approved = {
-			gates: { rules: [{ path: '/*', kind: 'human' as const }] },
-			schema: { scopes: [], actions: [{ action: 'notes.read' }], roles: {} },
-		}
 		const app = config({
-			gates: { rules },
-			schema,
+			schema: { scopes: [], actions, roles: {} },
 			resources: () => {
-				rules[0] = { path: '/*', kind: 'public' }
 				actions.push({ action: 'notes.delete' })
 				return appWorker()
 			},
 		})
-		const run = { contract: null, artifactApproval: { digest: artifactAccessDigest(approved), protected: true } }
-		await expect(deploy(rec, app, run)).resolves.toMatchObject({ status: 'succeeded' })
-		const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
-		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toMatchObject([{ id: 'demo@stage', gates: approved.gates }])
-		expect(rec.outcomes).toEqual([{ artifactAccess: { state: 'deployed', accessJson: JSON.stringify(approved) } }])
+		await expect(deploy(rec, app, { platformResources: 'allow' })).resolves.toMatchObject({ status: 'succeeded' })
+		expect(rec.outcomes).toEqual([{
+			iamReconcile: { app: 'demo', schemaJson: JSON.stringify({ scopes: [], actions: [{ action: 'notes.read' }], roles: {} }) },
+		}])
 	})
 })
 
@@ -1256,7 +1200,7 @@ describe("another application's names (ADR-0048)", () => {
 			],
 		]
 		for (const [extra, message] of probes) {
-			await expect(deploy(rec, config({ gates: GATES, resources: () => bindingIam(emitting(extra)) }), { env: 'prod', installationApps })).rejects
+			await expect(deploy(rec, config({ resources: () => bindingIam(emitting(extra)) }), { env: 'prod', installationApps })).rejects
 				.toThrow(message)
 		}
 		expect(rec.provisions).toHaveLength(0)

@@ -4,6 +4,8 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { Runner, type RunnerEnv, type SpawnSpec } from '../runner'
 import { bunSpawner } from '../spawn'
 
@@ -98,7 +100,7 @@ const makeJob = (ref: string, dryRun = false): CloudflareRunnerJob => ({
 	ref,
 	env: 'stage',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'test-account', CLOUDFLARE_API_TOKEN: 'test-cloudflare-token' },
-	approvedAccess: { kind: 'artifact', digest: null, protected: false },
+	approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 	dryRun,
 })
 

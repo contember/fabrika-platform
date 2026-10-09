@@ -18,7 +18,7 @@ describe('fabrika-cloudflare-executor', () => {
 		const result = runCli(['deploy', '--env=stage', '--dry-run'], 'smoke-account')
 
 		expect(result.exitCode).toBe(0)
-		expect(result.stdout).toContain('Deploy smoke-app → stage (dry-run) — 2 step(s):')
+		expect(result.stdout).toContain('Deploy smoke-app → stage (dry-run) — 3 step(s):')
 		expect(result.stdout).toContain('\nsmoke-app → stage: succeeded\n')
 		expect(result.stdout).toContain('  ✓ deploy-worker — succeeded')
 		expect(result.stderr).toBe('')

@@ -87,14 +87,9 @@ export const readApprovedAccess = async (path: string | undefined): Promise<Runn
 	return access.data
 }
 
-/** The approved access as the deployer takes it: the contract (null when Control read none), and the artifact approval. */
-const approvedRun = (
-	access: RunnerApprovedAccess | undefined,
-): { readonly contract?: ContractArtifact | null; readonly artifactApproval?: { readonly digest: string | null; readonly protected: boolean } } => {
-	if (access === undefined) return {}
-	if (access.kind === 'contract') return { contract: access.contract }
-	return { contract: null, artifactApproval: { digest: access.digest, protected: access.protected } }
-}
+/** The approved access as the deployer takes it: the contract Control read at the commit. */
+const approvedRun = (access: RunnerApprovedAccess | undefined): { readonly contract?: ContractArtifact } =>
+	access === undefined ? {} : { contract: access.contract }
 
 export interface LoadedCloudflareCommandConfig {
 	readonly config: CloudflareAppConfig

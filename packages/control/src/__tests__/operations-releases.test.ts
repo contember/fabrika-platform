@@ -11,9 +11,9 @@ import { describe, expect, test } from 'bun:test'
 import { replayOperationsReleases } from '../operations-releases'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
-import { memoryCommits } from './helpers/commits'
+import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 
 const SYNC_KEY = 'release-sync-key-that-is-at-least-32-bytes'
 const COMMIT = 'a'.repeat(40)
@@ -82,6 +82,8 @@ async function seed(harness: ReturnType<typeof createHarness>, commitSha: string
 		providerTargetJson: JSON.stringify(envelope('target')),
 		providerArtifactJson: JSON.stringify(envelope('artifact')),
 	})
+	// Unprotected, so the first contract publishes without an approval (ADR-0050).
+	await fixtureProtect(harness.repositories.registry, makeFakeLock(harness.repositories), { appId: 'notes', env: 'prod' }, false)
 	const run = await harness.repositories.runs.createRun({
 		id: 'run-release',
 		appId: 'notes',
@@ -299,7 +301,7 @@ describe('Control release projection', () => {
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
-			commits: memoryCommits(),
+			commits: contractCommits('notes'),
 			operations: { repository: harness.repositories.operationsReleases },
 		}
 
@@ -326,7 +328,7 @@ describe('Control release projection', () => {
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
-			commits: memoryCommits(),
+			commits: contractCommits('notes'),
 			operations,
 		}
 
@@ -371,7 +373,7 @@ describe('Control release projection', () => {
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(harness.repositories),
 			logs: { put: () => Promise.resolve() },
-			commits: memoryCommits(),
+			commits: contractCommits('notes'),
 			operations: {
 				repository: harness.repositories.operationsReleases,
 				syncKey: SYNC_KEY,
@@ -393,7 +395,7 @@ describe('Control release projection', () => {
 				secrets: new VaultSecretResolver({}),
 				lock: makeFakeLock(harness.repositories),
 				logs: { put: () => Promise.resolve() },
-				commits: memoryCommits(),
+				commits: contractCommits('notes'),
 				operations: {
 					repository: harness.repositories.operationsReleases,
 					syncKey: SYNC_KEY,

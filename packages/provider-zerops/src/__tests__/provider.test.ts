@@ -28,8 +28,8 @@ import { CANCELLED, createZeropsDeployer, type ZeropsDeployResult, type ZeropsDe
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsSourceArchive } from '../source/port'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
-import { approvedArtifact } from './fixtures/access'
-import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
+import { approvedContract } from './fixtures/access'
+import { SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 
 interface Recorded {
 	calls: string[]
@@ -275,7 +275,8 @@ const target = (overrides: Partial<ZeropsRuntimeTarget> = {}): ZeropsRuntimeTarg
 
 type ZeropsDeployer = ReturnType<typeof createZeropsDeployer>
 
-const NO_MANAGED_VALUES: ManagedValues = {
+/** Every managed value removed, but the proxy secret a contract application is never deployed without. */
+const MANAGED_DEFAULTS: ManagedValues = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
@@ -283,7 +284,7 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_APP_ID: null,
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
-	FABRIKA_PROXY_SECRET: null,
+	FABRIKA_PROXY_SECRET: 'private-proxy-secret',
 	FABRIKA_IAM_RPC_URL: null,
 	FABRIKA_IAM_RPC_KEY: null,
 }
@@ -301,10 +302,10 @@ const deployRun = (
 ): ZeropsDeployRun => ({
 	appId: 'demo',
 	env: 'prod',
-	artifactAccess: approvedArtifact(compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR)),
+	access: approvedContract(),
 	secrets: {},
 	vars: { IMAGE: 'registry.test/demo:v2' },
-	managedEnvironment: NO_MANAGED_VALUES,
+	managedEnvironment: MANAGED_DEFAULTS,
 	dryRun,
 	signal,
 	events: {
@@ -384,6 +385,7 @@ describe('Zerops provider', () => {
 			'findService:db',
 			'findService:api',
 			'listServiceEnv',
+			'putServiceEnv:FABRIKA_PROXY_SECRET',
 			'createAppVersion:service-1',
 			'sourceUpload',
 			'buildAndDeployAppVersion:version-1',
@@ -396,7 +398,7 @@ describe('Zerops provider', () => {
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.externalStates).toEqual([{ appVersionId: 'version-1', triggered: false }])
 		expect(recorded.checkpoints).toEqual([{ appVersionId: 'version-1', triggered: true }])
-		expect(recorded.timeline).toEqual(['create', 'external-id', 'upload', 'checkpoint:triggered=true', 'build-call'])
+		expect(recorded.timeline).toEqual(['put:FABRIKA_PROXY_SECRET', 'create', 'external-id', 'upload', 'checkpoint:triggered=true', 'build-call'])
 		expect(recorded.creates).toEqual([{ serviceId: 'service-1', name: 'run-1' }])
 		expect(recorded.uploads).toEqual([{
 			uploadUrl: UPLOAD_URL,
@@ -404,7 +406,11 @@ describe('Zerops provider', () => {
 			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
 			archive: { kind: 'application' },
 		}])
-		expect(recorded.builds).toEqual([{ appVersionId: 'version-1', zeropsYaml: CANONICAL_DESCRIPTOR, zeropsYamlSetup: 'api' }])
+		// The approved contract locks the descriptor down: the platform generates the run section.
+		expect(recorded.builds.map(({ appVersionId, zeropsYamlSetup }) => ({ appVersionId, zeropsYamlSetup }))).toEqual([
+			{ appVersionId: 'version-1', zeropsYamlSetup: 'api' },
+		])
+		expect(recorded.builds[0]?.zeropsYaml).toContain(`FABRIKA_CONTRACT_DIGEST: "${approvedContract().contractDigest}"`)
 		expect(recorded.sleeps).toEqual([3000])
 		expect(recorded.imports[0]?.yaml).toContain('registry.test/demo:v2')
 		expect(recorded.triggers).toEqual([])
@@ -452,15 +458,14 @@ describe('Zerops provider', () => {
 			{ key: 'FABRIKA_IAM_APP_ID', value: 'demo@prod' },
 			{ key: 'FABRIKA_ENVIRONMENT', value: 'prod' },
 			{ key: 'FABRIKA_SERVICE_KEY', value: 'private-service-key' },
+			{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' },
 			{ key: 'FABRIKA_IAM_RPC_URL', value: 'https://iam.test' },
 			{ key: 'FABRIKA_IAM_RPC_KEY', value: 'px_private-membership-key' },
 		])
 		expect(recorded.envDeletes).toEqual(['env-issuer', 'env-release'])
 		// Every service-variable write settles before the build request (`userDataSyncRunning`).
 		expect(recorded.timeline.indexOf('delete:env-release')).toBeLessThan(recorded.timeline.indexOf('build-call'))
-		expect(Bun.YAML.parse(recorded.builds[0]?.zeropsYaml ?? '')).toEqual({
-			zerops: [{ setup: 'api', run: { envVariables: { FABRIKA_RELEASE: RELEASE } } }],
-		})
+		expect(recorded.builds[0]?.zeropsYaml).toContain(`FABRIKA_RELEASE: ${RELEASE}\n`)
 		const yaml = recorded.builds[0]?.zeropsYaml ?? ''
 		for (
 			const key of [
@@ -475,15 +480,15 @@ describe('Zerops provider', () => {
 				'FABRIKA_IAM_RPC_KEY',
 			]
 		) {
-			expect(yaml).not.toContain(key)
+			// A service variable, never a literal of the descriptor (the generated scripts name the app id themselves).
+			expect(yaml).not.toContain(`${key}:`)
 		}
+		expect(yaml).not.toContain('private-')
 		const log = recorded.logs.join('\n')
 		expect(log).toContain('FABRIKA_OPERATIONS_DSN: updated')
 		expect(log).toContain('FABRIKA_APP_ID: unchanged')
 		expect(log).toContain('FABRIKA_IAM_ISSUER: removed')
 		expect(log).toContain('FABRIKA_RELEASE: removed')
-		// Not a contract application: it checks no secret, so it is handed none.
-		expect(recorded.envWrites.map((write) => write.key)).not.toContain('FABRIKA_PROXY_SECRET')
 		expect(log).not.toContain('private-')
 		expect(JSON.stringify([recorded.externalStates, recorded.checkpoints])).not.toContain('private-')
 	})
@@ -501,7 +506,7 @@ describe('Zerops provider', () => {
 		await execute({
 			...deployRun(recorded),
 			managedEnvironment: {
-				...NO_MANAGED_VALUES,
+				...MANAGED_DEFAULTS,
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_JOB_NIGHTLY_KEY: 'px_private-new-nightly',
 				FABRIKA_WEBHOOK_GITHUB_KEY: 'px_private-github',
@@ -518,7 +523,7 @@ describe('Zerops provider', () => {
 
 	test('refuses a workload key that is not a px_ key, before any platform call', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const run = { ...deployRun(recorded), managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_JOB_NIGHTLY_KEY: 'plain' } }
+		const run = { ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_JOB_NIGHTLY_KEY: 'plain' } }
 		await expect(provider(run)).rejects.toThrow('FABRIKA_JOB_NIGHTLY_KEY must be a px_ key')
 		expect(recorded.timeline).toEqual([])
 	})
@@ -535,7 +540,7 @@ describe('Zerops provider', () => {
 		await execute({
 			...deployRun(recorded),
 			managedEnvironment: {
-				...NO_MANAGED_VALUES,
+				...MANAGED_DEFAULTS,
 				FABRIKA_RELEASE: RELEASE,
 				FABRIKA_CONNECT_CATALOG_KEY: 'px_private-catalog',
 				FABRIKA_CONNECT_CATALOG_URL: 'https://catalog.example.com',
@@ -549,7 +554,7 @@ describe('Zerops provider', () => {
 
 	test('refuses a connector origin that is not an https origin, and a family name no deploy writes', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
-		const handed = (extra: Record<string, string>) => ({ ...deployRun(recorded), managedEnvironment: { ...NO_MANAGED_VALUES, ...extra } })
+		const handed = (extra: Record<string, string>) => ({ ...deployRun(recorded), managedEnvironment: { ...MANAGED_DEFAULTS, ...extra } })
 		await expect(provider(handed({ FABRIKA_CONNECT_CATALOG_URL: 'http://catalog.example.com' }))).rejects.toThrow(
 			'FABRIKA_CONNECT_CATALOG_URL must be an https origin',
 		)
@@ -567,9 +572,9 @@ describe('Zerops provider', () => {
 			target: { ...app([API]).target, contract: notesArtifact, proxy: { upstream: 'api:3000', ...contractProxyTable(notesArtifact) } },
 		}
 		const artifact = compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
-		const { artifactAccess: _trusted, ...base } = deployRun(recorded)
+		const { access: _approved, ...base } = deployRun(recorded)
 		const access = { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) }
-		const run = { ...base, appId: 'notes', artifact, access }
+		const run = { ...base, appId: 'notes', artifact, access, managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_PROXY_SECRET: null } }
 		await expect(provider(run)).rejects.toThrow('a contract application needs its proxy secret')
 		expect(recorded.timeline).toEqual([])
 		// A dry run writes nothing, so it needs no secret.
@@ -579,8 +584,8 @@ describe('Zerops provider', () => {
 	test('omits FABRIKA_RELEASE from the execution descriptor when there is no release', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		await execute(deployRun(recorded), provider)
-		expect(recorded.builds[0]?.zeropsYaml).toBe(CANONICAL_DESCRIPTOR)
-		expect(recorded.envWrites).toEqual([])
+		expect(recorded.builds[0]?.zeropsYaml).not.toContain('FABRIKA_RELEASE')
+		expect(recorded.envWrites).toEqual([{ key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' }])
 		expect(recorded.envDeletes).toEqual([])
 	})
 
@@ -595,6 +600,7 @@ describe('Zerops provider', () => {
 			'findService:db',
 			'findService:api',
 			'listServiceEnv',
+			'putServiceEnv:FABRIKA_PROXY_SECRET',
 			'createAppVersion:service-1',
 			'sourceUpload',
 			'deleteAppVersion:version-1',
@@ -759,6 +765,7 @@ describe('Zerops provider', () => {
 			'findService:db',
 			'findService:api',
 			'listServiceEnv',
+			'putServiceEnv:FABRIKA_PROXY_SECRET',
 			'createAppVersion:service-1',
 			'sourceUpload',
 			'buildAndDeployAppVersion:version-1',
@@ -884,7 +891,7 @@ describe('Zerops provider', () => {
 		const result = await provider({ ...run, artifact: driftedArtifact })
 
 		expect(stepError(result, 'reserve-version')).toContain('source descriptor digest')
-		expect(recorded.calls).toEqual(['importServices', 'findService:db', 'findService:api', 'listServiceEnv'])
+		expect(recorded.calls).toEqual(['importServices', 'findService:db', 'findService:api', 'listServiceEnv', 'putServiceEnv:FABRIKA_PROXY_SECRET'])
 	})
 
 	test('propagates cancellation into an active schema reconciliation', async () => {
@@ -922,7 +929,7 @@ describe('Zerops provider', () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		await execute({
 			...deployRun(recorded, target(), true),
-			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_SERVICE_KEY: 'private-service-key' },
+			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_SERVICE_KEY: 'private-service-key' },
 		}, provider)
 		expect(recorded.calls).toEqual([])
 		expect(recorded.externalIds).toEqual([])
@@ -1039,7 +1046,7 @@ describe('Zerops compiler invariants', () => {
 const BUCKET: ZeropsServiceSpec = { hostname: 'files', type: 'object-storage', objectStorageSize: 1 }
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.example.test/7'
 
-const runOf = (services: ZeropsServiceSpec[], managedEnvironment: ManagedValues = NO_MANAGED_VALUES): ZeropsDeployRun => ({
+const runOf = (services: ZeropsServiceSpec[], managedEnvironment: ManagedValues = MANAGED_DEFAULTS): ZeropsDeployRun => ({
 	...deployRun(recorded),
 	managedEnvironment,
 	artifact: compileFabrikaManifest(app(services), 'prod', SOURCE_DESCRIPTOR),
@@ -1048,7 +1055,7 @@ const runOf = (services: ZeropsServiceSpec[], managedEnvironment: ManagedValues 
 describe('the exposure read-back before activation', () => {
 	test('a service with subdomain access on blocks the run before any version exists and raises an Operations alert', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded, { services: { api: { subdomainAccess: true } } }))
-		const result = await provider(runOf([DB, API], { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: DSN, FABRIKA_RELEASE: RELEASE }))
+		const result = await provider(runOf([DB, API], { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: DSN, FABRIKA_RELEASE: RELEASE }))
 
 		expect(result.status).toBe('failed')
 		expect(stepError(result, 'verify-exposure')).toBe(
@@ -1072,7 +1079,7 @@ describe('the exposure read-back before activation', () => {
 		const failing = createZeropsDeployer(() =>
 			makeCollaborators(recorded, { services: { api: { subdomainAccess: true } }, alertError: new Error('ingest down') })
 		)
-		const result = await failing(runOf([API], { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: DSN }))
+		const result = await failing(runOf([API], { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: DSN }))
 		expect(stepError(result, 'verify-exposure')).toContain('service `api`')
 		expect(recorded.logs).toContain('  [warn] the Operations alert could not be sent')
 		expect(recorded.calls).not.toContain('createAppVersion:service-1')
@@ -1141,39 +1148,20 @@ describe('a contract application deploy', () => {
 	}
 	const contractRun = async (
 		contract: boolean,
-		granted: ProviderApprovedAccess | 'artifact' | 'none',
+		granted: ProviderApprovedAccess | 'none',
 		services: ZeropsServiceSpec[] = [API],
 		overrides: Overrides = {},
 	): Promise<ZeropsDeployResult> => {
-		const { artifactAccess: _trusted, ...run } = deployRun(recorded)
+		const { access: _approved, ...run } = deployRun(recorded)
 		const artifact = await contractArtifact(contract, services)
 		return createZeropsDeployer(() => makeCollaborators(recorded, overrides))({
 			...run,
 			appId: 'notes',
-			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
+			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
 			artifact,
-			...(granted === 'none' ? {} : granted === 'artifact' ? { artifactAccess: approvedArtifact(artifact) } : { access: granted }),
+			...(granted === 'none' ? {} : { access: granted }),
 		})
 	}
-
-	test('an artifact that claims a contract the commit Control read does not have is refused before the build', async () => {
-		const result = await contractRun(true, 'artifact')
-		expect(stepError(result, 'trigger-build')).toBe('zerops: the artifact claims a contract, but the commit Control read has no `fabrika.contract.ts`')
-		expect(recorded.builds).toEqual([])
-	})
-
-	test('an artifact whose gates or schema are not the approved ones neither deploys nor reconciles IAM', async () => {
-		const run = deployRun(recorded)
-		const widened = compileFabrikaManifest(
-			{ ...app([DB, API]), target: { ...app([DB, API]).target, proxy: { upstream: 'api:3000', gates: { rules: [{ path: '/*', kind: 'public' }] } } } },
-			'prod',
-			SOURCE_DESCRIPTOR,
-		)
-		const result = await createZeropsDeployer(() => makeCollaborators(recorded))({ ...run, artifact: widened })
-		expect(stepError(result, 'trigger-build')).toBe("zerops: the artifact's gates and IAM schema are not the access Control approved")
-		expect(recorded.builds).toEqual([])
-		expect(recorded.schemaBodies).toEqual([])
-	})
 
 	test('an environment Control approved nothing for is refused before the build, whatever the artifact claims', async () => {
 		for (const contract of [true, false]) {

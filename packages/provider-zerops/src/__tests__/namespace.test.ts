@@ -51,7 +51,7 @@ import { decodeZeropsNamespaceProxySource } from '../namespace/proxy-source'
 import type { ZeropsNamespaceProxySource } from '../namespace/types'
 import type { ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
-import { approvedArtifact } from './fixtures/access'
+import { approvedContract } from './fixtures/access'
 
 interface FakeState {
 	projects: Map<string, ZeropsProject>
@@ -1215,8 +1215,8 @@ describe('Zerops namespace lifecycle', () => {
 				id: 'notes@prod',
 				hosts: ['notes.example.test'],
 				upstream: 'notes:3000',
-				gates: { rules: [{ path: '/*', kind: 'human' }] },
 				scheme: 'https',
+				...contractProxyTable(notesArtifact),
 			}],
 		})
 		state.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
@@ -1254,7 +1254,8 @@ describe('Zerops namespace lifecycle', () => {
 				target: {
 					platform: 'zerops',
 					services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
-					proxy: { upstream: 'notes:3000', gates: { rules: [{ path: '/*', kind: 'human' }] } },
+					contract: notesArtifact,
+					proxy: { upstream: 'notes:3000', ...contractProxyTable(notesArtifact) },
 				},
 			},
 			'prod',
@@ -1268,7 +1269,8 @@ describe('Zerops namespace lifecycle', () => {
 				env: 'prod',
 				domain: 'Notes.Example.Test',
 				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
-				artifactAccess: approvedArtifact(notes),
+				access: approvedContract(),
+				proxySecret: 'notes-secret',
 			}],
 			signal: new AbortController().signal,
 			events: { checkpoint: async () => {}, boundary: async () => {} },
@@ -1543,7 +1545,8 @@ describe('Zerops proxy-target registration', () => {
 				platform: 'zerops',
 				services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3' }],
 				deployService: 'notesapi',
-				proxy: { upstream: 'notesapi:3000', gates: { rules: [] } },
+				contract: notesArtifact,
+				proxy: { upstream: 'notesapi:3000', ...contractProxyTable(notesArtifact) },
 			},
 		}
 		return {

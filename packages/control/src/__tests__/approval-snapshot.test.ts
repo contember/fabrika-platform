@@ -1,55 +1,58 @@
-import type { ArtifactAccess } from '@fabrika/auth-core'
-import { artifactAccessDigest } from '@fabrika/auth-core'
-import { compileFabrikaManifest, defineApp, zeropsArtifactAccess } from '@fabrika/provider-zerops'
+import { canonicalArtifactJson, canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { configArtifactAccess } from '../../../provider-cloudflare/src/artifact-access'
-import { SOURCE_DESCRIPTOR } from '../../../provider-zerops/src/__tests__/fixtures/descriptor'
-import { approvedProviderAccess, EMPTY_SNAPSHOT, serializeSnapshot } from '../approval/snapshot'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { approvedProviderAccess, approvedSnapshot, EMPTY_SNAPSHOT, parseSnapshot, serializeSnapshot, snapshotDigest } from '../approval/snapshot'
 
-const GATES = {
-	rules: [
-		{ path: '/healthz', kind: 'public' as const },
-		{ path: '/api/*', kind: 'service' as const, credential: { in: 'header' as const, name: 'x-api-key' } },
-		{ path: '/mcp', kind: 'oauth' as const, resource: 'https://notes.example.test/mcp', scopes: ['notes.read'] },
-		{ path: '/*', kind: 'human' as const },
-	],
-}
-const SCHEMA = {
-	scopes: [{ type: 'team' }],
-	actions: [{ action: 'notes.read', description: 'Read notes' }, { action: 'notes.write' }],
-	roles: { editor: { name: 'Editor', permissions: ['notes.read', 'notes.write'] } },
-}
+const MIGRATIONS = [{ name: '20260101000000_init.sql', checksum: 'a'.repeat(64) }]
 
-/** The digest a provider computes, and the one Control sends after storing the access in a published snapshot. */
-const digests = (access: ArtifactAccess): [string, string | null | undefined] => {
-	const row = {
-		app_id: 'notes',
-		env: 'prod',
-		published_run_id: 'run-1',
-		published_snapshot_json: serializeSnapshot({ ...EMPTY_SNAPSHOT, artifact: access }),
-		generation: 1,
-		protected: 1,
-	}
-	return [artifactAccessDigest(access), approvedProviderAccess(row).artifactAccess?.digest]
-}
+/** A snapshot an application without a contract published before those were refused: its gates and IAM schema. */
+const ARTIFACT_PUBLICATION = JSON.stringify({
+	version: 1,
+	contract: null,
+	migrations: MIGRATIONS,
+	checker: '0.0.1',
+	artifact: {
+		gates: { rules: [{ path: '/*', kind: 'human' }] },
+		schema: { scopes: [], actions: [{ action: 'notes.read' }], roles: { reader: { name: 'Reader', permissions: ['notes.read'] } } },
+	},
+})
 
-describe('artifact access survives the published snapshot', () => {
-	test("a Zerops artifact's gates and schema hash the same in the provider and after Control stored them", () => {
-		const manifest = compileFabrikaManifest(
-			defineApp({
-				id: 'notes',
-				schema: SCHEMA,
-				target: { platform: 'zerops', services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }], proxy: { upstream: 'notes:3000', gates: GATES } },
-			}),
-			'prod',
-			SOURCE_DESCRIPTOR,
-		)
-		const [provider, control] = digests(zeropsArtifactAccess(manifest))
-		expect(control).toBe(provider)
+const published = (snapshotJson: string | null) => ({
+	app_id: 'notes',
+	env: 'prod',
+	published_run_id: snapshotJson === null ? null : 'run-1',
+	published_snapshot_json: snapshotJson,
+	generation: 4,
+})
+
+describe('a stored snapshot after applications without a contract are refused', () => {
+	test('a publication that holds artifact access approves nothing: it reads as the empty baseline', () => {
+		const active = approvedSnapshot(published(ARTIFACT_PUBLICATION))
+		expect(active).toEqual({ runId: null, generation: 4, snapshot: EMPTY_SNAPSHOT })
+		expect(approvedProviderAccess(published(ARTIFACT_PUBLICATION))).toEqual({})
 	})
 
-	test("a Cloudflare config's gates and schema hash the same in the runner and after Control stored them", () => {
-		const [runner, control] = digests(configArtifactAccess({ gates: GATES, schema: SCHEMA }))
-		expect(control).toBe(runner)
+	test('the empty unpublished baseline stays valid', () => {
+		expect(approvedSnapshot(published(null))).toEqual({ runId: null, generation: 4, snapshot: EMPTY_SNAPSHOT })
+		expect(approvedProviderAccess(published(null))).toEqual({})
+	})
+
+	test("a run's stored snapshot parses with its artifact access dropped", () => {
+		expect(parseSnapshot(ARTIFACT_PUBLICATION)).toEqual({ version: 1, contract: null, migrations: MIGRATIONS, checker: '0.0.1' })
+	})
+
+	test('a contract publication stored with `artifact: null` stays approved, with the same digest it was approved under', () => {
+		const stored = JSON.stringify({ version: 1, contract: notesArtifact, migrations: MIGRATIONS, checker: '0.0.1', artifact: null })
+		const active = approvedSnapshot(published(stored))
+		expect(active.runId).toBe('run-1')
+		expect(active.snapshot.contract).toEqual(notesArtifact)
+		expect(approvedProviderAccess(published(stored)).access?.contract).toEqual(notesArtifact)
+		// The digest formula from before: the trailing `null` was the artifact access of a contract snapshot.
+		const before = `sha256:${sha256Hex(`${canonicalArtifactJson(notesArtifact)}\n${canonicalJson(MIGRATIONS)}\nnull`)}`
+		expect(snapshotDigest(active.snapshot)).toBe(before)
+	})
+
+	test('a snapshot is stored without the artifact key', () => {
+		expect(JSON.parse(serializeSnapshot(EMPTY_SNAPSHOT))).toEqual({ version: 1, contract: null, migrations: [], checker: '' })
 	})
 })

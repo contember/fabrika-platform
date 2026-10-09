@@ -13,31 +13,31 @@ import { reconcileProviderRuns } from '../provider-reconcile'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import { memoryCommits } from './helpers/commits'
+import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { fixtureProtect, fixtureRuns, makeFakeLock } from './helpers/lock'
 
 // Control is the only writer of a Cloudflare run's row (ADR-0044). The runner persists its terminal
-// status — with the IAM reconcile the executor compiled — and Control applies that reconcile once,
-// either on the awaited `startRun` result or, after a Control restart, from the next provider reconcile.
+// status, and Control applies the approved contract's IAM schema once, either on the awaited `startRun`
+// result or, after a Control restart, from the next provider reconcile.
 
 const COMMIT = 'abcdef1234567890abcdef1234567890abcdef12'
 const RUNNER_KEY = 'test-runner-key'
-const SCHEMA_JSON = '{"scopes":[],"actions":[{"action":"notes.read"}],"roles":{}}'
 
 async function seedCloudflareRun(db: ControlRepositories): Promise<string> {
-	await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', configPath: 'fabrika.config.ts' })
+	await db.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes', configPath: 'fabrika.config.ts' })
 	await db.registry.upsertAppEnv({
-		appId: 'app',
+		appId: 'notes',
 		env: 'prod',
 		namespaceId: null,
 		provider: 'cloudflare',
 		providerTargetJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: {} }),
 		providerArtifactJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } }),
 	})
-	// Unprotected, so the schema the runner reports applies without an approval (ADR-0050).
-	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
+	// Unprotected, so the contract publishes and its schema applies without an approval (ADR-0050).
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'notes', env: 'prod' }, false)
 	const runId = uuidv7()
-	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test', commitSha: COMMIT })
+	await db.runs.createRun({ id: runId, appId: 'notes', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test', commitSha: COMMIT })
 	return runId
 }
 
@@ -50,7 +50,6 @@ function fakeRunner(options: { callerLost: boolean }): { service: CloudflareRunn
 				runId: job.runId,
 				state: 'succeeded',
 				exitCode: 0,
-				artifactAccess: { state: 'deployed', accessJson: `{"gates":null,"schema":${SCHEMA_JSON}}` },
 				startedAt: 1,
 				finishedAt: 2,
 			}
@@ -83,18 +82,30 @@ function cloudflareProvider(runner: CloudflareRunnerService, iamCalls: string[],
 	})
 }
 
-function deps(db: ControlRepositories, provider: ControlProvider): RunDeps {
+function deps(db: ControlRepositories, provider: ControlProvider, files: Record<string, string> = { 'fabrika.contract.ts': BASE }): RunDeps {
 	return {
 		repositories: db,
 		provider,
 		secrets: new VaultSecretResolver({}),
 		lock: makeFakeLock(db),
 		logs: { put: () => Promise.resolve() },
-		commits: memoryCommits(),
+		commits: memoryCommits(files),
 	}
 }
 
 describe('Cloudflare run outcome through Control', () => {
+	test('a commit without `fabrika.contract.ts` fails its run before the runner starts, and applies nothing', async () => {
+		const { db } = createHarness()
+		const runId = await seedCloudflareRun(db)
+		const iamCalls: string[] = []
+		const { service, persisted } = fakeRunner({ callerLost: false })
+
+		expect(await executeDeploy(deps(db, cloudflareProvider(service, iamCalls), {}), { runId })).toEqual({ runId, status: 'failed' })
+		expect(persisted.size).toBe(0)
+		expect(iamCalls).toEqual([])
+		expect(await db.registry.getAppEnv('notes', 'prod')).toMatchObject({ published_run_id: null })
+	})
+
 	test('the awaited result applies the IAM reconcile once and marks the run terminal once; redelivery and reconcile add nothing', async () => {
 		const { db } = createHarness()
 		const runId = await seedCloudflareRun(db)
@@ -103,13 +114,13 @@ describe('Cloudflare run outcome through Control', () => {
 		const provider = cloudflareProvider(service, iamCalls)
 
 		expect(await executeDeploy(deps(db, provider), { runId })).toEqual({ runId, status: 'succeeded' })
-		expect(iamCalls).toEqual(['app@prod'])
+		expect(iamCalls).toEqual(['notes@prod'])
 		const finished = await db.runs.getRun(runId)
 		expect(finished?.status).toBe('succeeded')
 
 		expect(await executeDeploy(deps(db, provider), { runId })).toEqual({ runId, status: 'skipped' })
 		expect(await reconcileProviderRuns(deps(db, provider))).toMatchObject({ checked: 0, succeeded: 0 })
-		expect(iamCalls).toEqual(['app@prod'])
+		expect(iamCalls).toEqual(['notes@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(finished)
 	})
 
@@ -126,14 +137,14 @@ describe('Cloudflare run outcome through Control', () => {
 
 		const restarted = cloudflareProvider(service, iamCalls)
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 1 })
-		expect(iamCalls).toEqual(['app@prod'])
+		expect(iamCalls).toEqual(['notes@prod'])
 		const settled = await db.runs.getRun(runId)
 		expect(settled?.status).toBe('succeeded')
 		expect(settled?.exit_code).toBe(0)
 
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0, succeeded: 0 })
 		expect(await executeDeploy(deps(db, restarted), { runId })).toEqual({ runId, status: 'skipped' })
-		expect(iamCalls).toEqual(['app@prod'])
+		expect(iamCalls).toEqual(['notes@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
 	})
 
@@ -171,17 +182,17 @@ describe('Cloudflare run outcome through Control', () => {
 		} finally {
 			diagnostic.mockRestore()
 		}
-		expect(iamCalls).toEqual(['app@prod'])
+		expect(iamCalls).toEqual(['notes@prod'])
 		expect((await db.runs.getRun(runId))?.status).toBe('running')
 
 		// The intruder's lease expires.
 		sqlite.run('DELETE FROM deploy_locks')
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 1, succeeded: 1 })
-		expect(iamCalls).toEqual(['app@prod', 'app@prod'])
+		expect(iamCalls).toEqual(['notes@prod', 'notes@prod'])
 		const settled = await db.runs.getRun(runId)
 		expect(settled?.status).toBe('succeeded')
 		expect(await reconcileProviderRuns(deps(db, restarted))).toMatchObject({ checked: 0 })
-		expect(iamCalls).toEqual(['app@prod', 'app@prod'])
+		expect(iamCalls).toEqual(['notes@prod', 'notes@prod'])
 		expect(await db.runs.getRun(runId)).toEqual(settled)
 	})
 
@@ -204,14 +215,12 @@ describe('Cloudflare run outcome through Control', () => {
 					queue: { send: () => Promise.resolve() },
 					lock: makeFakeLock(db),
 					request: new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin' } }),
-				}, { appId: 'app', env: 'prod', protected: true })
+				}, { appId: 'notes', env: 'prod', protected: true })
 				return 200
 			} catch (error) {
 				return error instanceof ControlApiError ? error.httpStatus : 500
 			}
 		}
-		const wider =
-			'{"scopes":[],"actions":[{"action":"notes.read"},{"action":"notes.delete"}],"roles":{"deleter":{"name":"Deleter","permissions":["notes.delete"]}}}'
 		const during: number[] = []
 		const persisted = new Map<string, RunnerStatus>()
 		const runner = (callerLost: boolean): CloudflareRunnerService => ({
@@ -221,7 +230,6 @@ describe('Cloudflare run outcome through Control', () => {
 					runId: job.runId,
 					state: 'succeeded',
 					exitCode: 0,
-					artifactAccess: { state: 'deployed', accessJson: `{"gates":{"rules":[{"path":"/*","kind":"public"}]},"schema":${wider}}` },
 					startedAt: 1,
 					finishedAt: 2,
 				}
@@ -236,13 +244,13 @@ describe('Cloudflare run outcome through Control', () => {
 
 		expect(await executeDeploy(deps(db, cloudflareProvider(runner(false), iamCalls)), { runId })).toEqual({ runId, status: 'succeeded' })
 		expect(during).toEqual([409])
-		expect(iamCalls).toEqual(['app@prod'])
-		expect(await db.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 0, protection_revision: 1 })
+		expect(iamCalls).toEqual(['notes@prod'])
+		expect(await db.registry.getAppEnv('notes', 'prod')).toMatchObject({ protected: 0, protection_revision: 1 })
 
 		const orphaned = uuidv7()
 		await db.runs.createRun({
 			id: orphaned,
-			appId: 'app',
+			appId: 'notes',
 			env: 'prod',
 			ref: 'refs/heads/main',
 			trigger: 'manual',
@@ -256,6 +264,6 @@ describe('Cloudflare run outcome through Control', () => {
 		expect(await protect()).toBe(409)
 		expect(await reconcileProviderRuns(deps(db, cloudflareProvider(runner(true), iamCalls)))).toMatchObject({ checked: 1, succeeded: 1 })
 		expect(await protect()).toBe(200)
-		expect(await db.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, protection_revision: 2 })
+		expect(await db.registry.getAppEnv('notes', 'prod')).toMatchObject({ protected: 1, protection_revision: 2 })
 	})
 })

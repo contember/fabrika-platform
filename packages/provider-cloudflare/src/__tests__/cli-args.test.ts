@@ -102,8 +102,9 @@ describe('readApprovedAccess', () => {
 	test('reads the access the runner wrote, and nothing outside a runner', async () => {
 		const access: RunnerApprovedAccess = { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) }
 		expect(await readApprovedAccess(await accessFile(JSON.stringify(access)))).toEqual(access)
-		const artifact: RunnerApprovedAccess = { kind: 'artifact', digest: `sha256:${'a'.repeat(64)}`, protected: true }
-		expect(await readApprovedAccess(await accessFile(JSON.stringify(artifact)))).toEqual(artifact)
+		// What a Control from before applications without a contract were refused could still send.
+		const artifact = { kind: 'artifact', digest: `sha256:${'a'.repeat(64)}`, protected: true }
+		await expect(readApprovedAccess(await accessFile(JSON.stringify(artifact)))).rejects.toThrow('does not hold the access Control approved')
 		await expect(readApprovedAccess(await accessFile('{"kind":"artifact"}'))).rejects.toThrow('does not hold the access Control approved')
 		expect(await readApprovedAccess(undefined)).toBeUndefined()
 	})

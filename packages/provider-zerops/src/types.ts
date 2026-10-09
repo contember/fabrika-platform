@@ -1,4 +1,4 @@
-import type { AppGates, ContractArtifact } from '@fabrika/auth-core'
+import type { ContractArtifact } from '@fabrika/auth-core'
 import type { AppConfigBase } from '@fabrika/provider-contract'
 import type { ContractProxyApp } from '@fabrika/proxy-core/manifest'
 import type { ZeropsRuntimePackage } from './execution'
@@ -84,16 +84,8 @@ export type ZeropsServiceSpec = Omit<ZeropsImportService, ZeropsCompilerOwnedSer
 
 export type ZeropsProjectSpec = Omit<ZeropsImportProject, ZeropsCompilerOwnedProjectField>
 
-/** What the namespace proxy applies to the app: ordered gates, or a contract application's endpoint table. */
-export type ZeropsProxySpec = ZeropsGateProxySpec | ZeropsContractProxySpec
-
-export interface ZeropsGateProxySpec {
-	upstream: string
-	gates: AppGates
-}
-
-/** A contract application: the manifest form of its compiled contract, from `contractProxyTable`. */
-export interface ZeropsContractProxySpec extends Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot'> {
+/** What the namespace proxy applies to the app: the manifest form of its compiled contract, from `contractProxyTable`. */
+export interface ZeropsProxySpec extends Pick<ContractProxyApp, 'endpoints' | 'reservedPrefixes' | 'snapshot'> {
 	upstream: string
 }
 

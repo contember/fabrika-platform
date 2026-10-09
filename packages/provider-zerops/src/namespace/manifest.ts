@@ -2,7 +2,7 @@ import { appEnvironmentId } from '@fabrika/auth-core'
 import { decodeEnvelope, type ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
-import { artifactAccessApproved, assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
+import { assertFabrikaManifestCoordinates, zeropsArtifactCodec } from '../manifest'
 
 /** Compile every public member of one deployment namespace into its strict proxy manifest. */
 export function compileNamespaceProxyManifest(namespaceId: string, members: readonly ProviderNamespaceMember[]): ProxyManifest {
@@ -27,8 +27,8 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 		// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
 		// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0022).
 		const scheme: ProxyApp['scheme'] = 'https'
-		// Only Control decides what routes the member (ADR-0050): its approved contract's endpoint table, or the artifact's
-		// gates when they are the artifact access Control approved. Otherwise it is not routed.
+		// Only Control decides what routes the member (ADR-0050): its approved contract's endpoint table. Otherwise it is
+		// not routed.
 		const access = member.access
 		if (access !== undefined) {
 			const operationsOrigin = member.operationsOrigin
@@ -43,8 +43,6 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 				...contractProxyTable(access.contract),
 				...(operationsOrigin === undefined ? {} : { operationsOrigin }),
 			})
-		} else if (artifactAccessApproved(manifest, member) && 'gates' in proxy) {
-			apps.push({ id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates, scheme })
 		}
 	}
 	return { apps }

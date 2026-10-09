@@ -26,6 +26,8 @@ globalThis.fetch = smokeFetch
 
 export default defineApp({
 	id: 'smoke-app',
+	// `schemaFromContract` of `fabrika.contract.ts`, which declares no vocabulary.
+	schema: { scopes: [], actions: [], roles: {}, contract: true },
 	resources: ({ env }) =>
 		new Worker({
 			dir: '.',

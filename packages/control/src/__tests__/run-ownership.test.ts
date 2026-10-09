@@ -5,9 +5,10 @@ import { acquireLease, LEASE_RENEW_MS, LEASE_TTL_MS } from '../lease'
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
 import { cancelDeploy, executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
-import { memoryCommits } from './helpers/commits'
+import { contractCommits } from './helpers/commits'
 import { createHarness } from './helpers/harness'
 import { flush, ManualClock, RecordingLocks } from './helpers/lease'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
 
 async function fixture() {
@@ -16,6 +17,8 @@ async function fixture() {
 	const { db, d1 } = harness
 	await db.registry.createApp({ id: 'app', repoUrl: 'https://github.com/example/app' })
 	await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+	// Unprotected, so the first contract publishes without an approval (ADR-0050).
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 	const row = await db.runs.createRun({ id: 'run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:test' })
 	const locks = new RecordingLocks(new SqlDeployLocks(d1, { now: clock.now }), clock)
 	const advance = (ms: number) => clock.advance(ms, locks.idle)
@@ -27,7 +30,7 @@ async function fixture() {
 		provider,
 		secrets: new VaultSecretResolver({}),
 		logs: { put: async () => {} },
-		commits: memoryCommits(),
+		commits: contractCommits('app'),
 	}
 	return { ...harness, clock, locks, advance, deps, row }
 }

@@ -20,9 +20,9 @@ import type { Env } from '../env'
 import { cloudflareGitHubSource } from '../platform-cf'
 import { executeDeploy } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
-import { memoryCommits } from './helpers/commits'
+import { contractCommits, memoryCommits } from './helpers/commits'
 import { createHarness, type Harness } from './helpers/harness'
-import { makeFakeLock } from './helpers/lock'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
 
 const REPO_URL = 'https://github.com/acme/source-identity'
 const REQUESTED_REF = 'refs/heads/main'
@@ -84,6 +84,8 @@ async function seedCloudflareRun(db: ControlRepositories, trigger: RunTrigger, r
 		providerTargetJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { stateNamespace: 'app-state' } }),
 		providerArtifactJson: JSON.stringify({ provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } }),
 	})
+	// Unprotected, so the first contract publishes without an approval (ADR-0050).
+	await fixtureProtect(db.registry, makeFakeLock(db), { appId: 'app', env: 'prod' }, false)
 	const runId = uuidv7()
 	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: REQUESTED_REF, trigger, commitSha: recordedCommit ?? null, actor: 'user:test' })
 	return runId
@@ -245,7 +247,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			secrets: new VaultSecretResolver({}),
 			lock: makeFakeLock(db),
 			logs: { put: async () => {} },
-			commits: memoryCommits(),
+			commits: contractCommits('app', 'worker'),
 			operations: {
 				repository: db.operationsReleases,
 				syncKey: SYNC_KEY,

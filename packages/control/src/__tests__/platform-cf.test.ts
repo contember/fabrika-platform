@@ -1,3 +1,5 @@
+import { schemaFromContract } from '@fabrika/app/contract'
+import { contractDigest } from '@fabrika/auth-core'
 import {
 	cloudflareArtifact,
 	cloudflareArtifactCodec,
@@ -8,6 +10,7 @@ import {
 import { type ProviderDeployInput, type ProviderEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RelayResult, RunnerStatus } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
 	cancelRunOnRunner,
 	cloudflareControlProvider,
@@ -44,7 +47,7 @@ const deployInput = (): ProviderDeployInput => ({
 		publicOrigin: 'https://public.example.com',
 		target: envelope(cloudflareStoredTargetCodec, { stateNamespace: 'api-state' }),
 		artifact: envelope(cloudflareArtifactCodec, cloudflareArtifact('deploy.config.ts')),
-		artifactAccess: { digest: null, protected: false },
+		access: { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) },
 	},
 	secrets: {},
 	vars: {},

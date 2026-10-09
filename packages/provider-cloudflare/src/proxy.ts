@@ -1,4 +1,3 @@
-import type { AppGates } from '@fabrika/auth'
 import {
 	type ContractProxyTable,
 	encodeProxyManifestJson,
@@ -27,22 +26,20 @@ interface CloudflareProxyWorkerBase {
 
 interface CloudflareContractProxyOptions {
 	readonly endpoints: ContractProxyTable
-	readonly gates?: never
 	readonly installation?: never
 	/** The Operations ingest origin a contract application's `connect-src` admits, from its managed DSN. */
 	readonly operationsOrigin?: string
 }
 
 /**
- * What the proxy enforces: a contract application's endpoint table (`contractProxyTable(artifact)`), an installation
- * service's table (`serviceProxyTable(service, …)`), or the ordered gates of an installation service. Exactly one. The
- * deployer passes only the first two forms an application can carry; `installation` is written by the platform's
- * own service configs, which is what makes the marker trusted composition (ADR-0022 "Installation entries").
+ * What the proxy enforces: a contract application's endpoint table (`contractProxyTable(artifact)`) or an installation
+ * service's table (`serviceProxyTable(service, …)`). Exactly one. The deployer passes only the first; `installation`
+ * is written by the platform's own service configs, which is what makes the marker trusted composition (ADR-0022
+ * "Installation entries").
  */
 export type CloudflareProxyWorkerOptions =
 	| (CloudflareProxyWorkerBase & CloudflareContractProxyOptions)
-	| (CloudflareProxyWorkerBase & { readonly installation: InstallationProxyTable; readonly endpoints?: never; readonly gates?: never })
-	| (CloudflareProxyWorkerBase & { readonly gates: AppGates; readonly endpoints?: never; readonly installation?: never })
+	| (CloudflareProxyWorkerBase & { readonly installation: InstallationProxyTable; readonly endpoints?: never })
 
 /** Where `createCloudflareProxyWorker` points its Worker: the deployer builds every application's proxy from here. */
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
@@ -104,18 +101,14 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 }
 
 function proxyApp(placement: Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>, options: CloudflareProxyWorkerOptions): ProxyApp {
-	const forms = [options.endpoints, options.installation, options.gates].filter((form) => form !== undefined)
-	if (forms.length !== 1) {
-		throw new Error('cloudflare proxy carries exactly one of an endpoint table, an installation table or gates')
-	}
+	// A config written before the gates were removed is refused, never served unprotected.
+	if ('gates' in options) throw new Error('cloudflare proxy: `gates` is gone; an application is protected by its endpoint table')
 	if (options.installation !== undefined) {
+		if (options.endpoints !== undefined) throw new Error('cloudflare proxy carries exactly one of an endpoint table or an installation table')
 		const { installation, endpoints, reservedPrefixes } = options.installation
 		return { ...placement, installation, endpoints, reservedPrefixes }
 	}
-	if (options.endpoints !== undefined) {
-		const { endpoints, reservedPrefixes, snapshot, csp } = options.endpoints
-		const operationsOrigin = options.operationsOrigin
-		return { ...placement, endpoints, reservedPrefixes, snapshot, csp, ...(operationsOrigin === undefined ? {} : { operationsOrigin }) }
-	}
-	return { ...placement, gates: options.gates }
+	const { endpoints, reservedPrefixes, snapshot, csp } = options.endpoints
+	const operationsOrigin = options.operationsOrigin
+	return { ...placement, endpoints, reservedPrefixes, snapshot, csp, ...(operationsOrigin === undefined ? {} : { operationsOrigin }) }
 }

@@ -228,8 +228,6 @@ describe('a contract application is refused at compile time', () => {
 		const sameContract = 'endpoint table of the same contract'
 		await expect(compile(contractApp({ proxy: { upstream: 'notesapi:3000', ...contractProxyTable(other) } }))).rejects.toThrow(sameContract)
 		await expect(compile(contractApp({ proxy: undefined }))).rejects.toThrow(sameContract)
-		await expect(compile(contractApp({ proxy: { upstream: 'notesapi:3000', gates: { rules: [{ path: '/*', kind: 'human' }] } } }))).rejects
-			.toThrow(sameContract)
 	})
 
 	test('when it ships an endpoint table without its contract', async () => {

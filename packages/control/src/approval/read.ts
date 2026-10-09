@@ -47,16 +47,24 @@ export class SnapshotRefused extends Error {
 	}
 }
 
+/** The commit has no `fabrika.contract.ts`. Fabrika deploys an application only with a contract (ADR-0050). */
+export class ContractMissing extends Error {
+	override readonly name = 'ContractMissing'
+
+	constructor() {
+		super(`the commit has no \`${CONTRACT_FILE}\`; Fabrika deploys an application only with a contract`)
+	}
+}
+
 /**
  * The snapshot of the application at `root` (repository-relative, `''` for the root) in `commit`. A commit without
- * `fabrika.contract.ts` has no contract: the application is not a contract application, whatever its configuration
- * says.
+ * `fabrika.contract.ts` is refused (`ContractMissing`), whatever its configuration says.
  */
 export async function readAccessSnapshot(commit: CommitFiles, root: string, appId: string): Promise<AccessSnapshot> {
 	const inRepository = (path: string): string => (root === '' ? path : `${root}/${path}`)
 	const exists = (path: string): boolean => commit.paths.has(inRepository(path))
+	if (!exists(CONTRACT_FILE)) throw new ContractMissing()
 	const migrations = await readMigrations(commit, root)
-	if (!exists(CONTRACT_FILE)) return { version: 1, contract: null, migrations, checker: CHECKER_VERSION, artifact: null }
 	const files = new Map<string, string>()
 	for (let round = 0;; round++) {
 		const missing = contractReaderInputs(files, exists)
@@ -70,7 +78,7 @@ export async function readAccessSnapshot(commit: CommitFiles, root: string, appI
 	if (contract.app !== appId) {
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
-	return { version: 1, contract, migrations, checker: CHECKER_VERSION, artifact: null }
+	return { version: 1, contract, migrations, checker: CHECKER_VERSION }
 }
 
 function readContract(files: ReadonlyMap<string, string>) {

@@ -1,9 +1,6 @@
 // Publishing a run's snapshot (ADR-0050 §2): classify it against the environment's active snapshot, park a widening
 // on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
 
-import { type ArtifactAccess, artifactAccessDigest } from '@fabrika/auth-core'
-import { uuidv7 } from '@fabrika/platform'
-import type { ProviderArtifactAccessReport } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { consumerEdgeProblems, ownerEdgeProblems } from '../connectors'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
@@ -11,16 +8,8 @@ import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { type AccessChange, type AccessOutcome, classifyAccess } from './diff'
-import { readAccessSnapshot, SnapshotRefused } from './read'
-import {
-	type AccessSnapshot,
-	type ActiveSnapshot,
-	approvedSnapshot,
-	artifactAccessSchema,
-	parseSnapshot,
-	serializeSnapshot,
-	snapshotDigest,
-} from './snapshot'
+import { ContractMissing, readAccessSnapshot, SnapshotRefused } from './read'
+import { type AccessSnapshot, type ActiveSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot, snapshotDigest } from './snapshot'
 
 /** What a run stores after classification: the diff, and the two digests an approval is bound to. */
 export interface StoredClassification {
@@ -79,8 +68,6 @@ export interface PublicationInput {
 	readonly root: string | null
 	readonly commitSha: string
 	readonly sourceBinding?: { readonly connectionId: string; readonly installationId: number }
-	/** The provider's reading of an environment's artifact access (`ControlProvider.artifactAccess`), when it has one. */
-	readonly artifactAccess?: (appEnv: AppEnvRow) => ArtifactAccess
 	log(line: string): void
 }
 
@@ -102,12 +89,17 @@ export async function publishRunSnapshot(
 	input: PublicationInput,
 ): Promise<PublicationResult> {
 	const runs = deps.repositories.runs
-	const commit = input.run.snapshot_json === null ? await readCandidate(deps, invocation, input) : parseSnapshot(input.run.snapshot_json)
+	const candidate = input.run.snapshot_json === null ? await readCandidate(deps, invocation, input) : parseSnapshot(input.run.snapshot_json)
+	// A run whose snapshot was stored without a contract, before those were refused, is refused like a new one.
+	if (candidate.contract === null) {
+		const missing = new ContractMissing()
+		input.log(`access: ${missing.message}`)
+		throw missing
+	}
 	for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
 		const run = await invocation.boundary()
 		const appEnv = await requireAppEnv(deps.repositories, run)
 		const active = approvedSnapshot(appEnv)
-		const candidate = candidateAgainst(commit, run, active, appEnv, input.artifactAccess)
 		await assertConnectorEdges(deps.repositories.registry, run, candidate, active, input.log)
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
@@ -128,24 +120,6 @@ export async function publishRunSnapshot(
 	throw new Error(`run ${input.run.id} lost the publication of its snapshot ${MAX_PUBLICATION_ATTEMPTS} times`)
 }
 
-/**
- * The run's candidate against this active snapshot: the commit's snapshot and, without a contract, the artifact access.
- * That is the provider's reading of the registry's artifact; else the access a deploy reported waiting for this run;
- * else, for a provider that learns it only while it deploys, the approved one, which the deploy checks against.
- */
-function candidateAgainst(
-	commit: AccessSnapshot,
-	run: RunRow,
-	active: ActiveSnapshot,
-	appEnv: AppEnvRow,
-	readArtifact: PublicationInput['artifactAccess'],
-): AccessSnapshot {
-	if (commit.contract !== null) return { ...commit, artifact: null }
-	if (readArtifact !== undefined) return { ...commit, artifact: readArtifact(appEnv) }
-	if (run.pending_access_json !== null) return { ...commit, artifact: artifactAccessSchema.parse(JSON.parse(run.pending_access_json)) }
-	return { ...commit, artifact: active.snapshot.artifact }
-}
-
 function classify(active: ActiveSnapshot, candidate: AccessSnapshot, appEnv: AppEnvRow): StoredClassification {
 	return {
 		...classifyAccess(active.snapshot, candidate),
@@ -154,56 +128,6 @@ function classify(active: ActiveSnapshot, candidate: AccessSnapshot, appEnv: App
 		baselineRunId: active.runId,
 		protected: appEnv.protected === 1,
 	}
-}
-
-/**
- * Settle what a deploy reported about the artifact access (ADR-0050), before the run is marked terminal. `pending`: the
- * deploy stopped before provisioning, and a new run waits for a human with that access as its candidate; approving it
- * deploys the approved access. A new run, so the provider never sees a run id twice. `deployed`: on an unprotected
- * environment the run's publication takes the access it applied. Returns the parked run's id, or null.
- */
-export async function settleArtifactAccessReport(
-	repositories: ControlRepositories,
-	invocation: Pick<PublicationInvocation, 'write' | 'fence'>,
-	run: RunRow,
-	report: ProviderArtifactAccessReport,
-	log: (line: string) => void,
-): Promise<string | null> {
-	const appEnv = await requireAppEnv(repositories, run)
-	const active = approvedSnapshot(appEnv)
-	if (report.state === 'pending') {
-		if (run.snapshot_json === null) throw new Error(`run ${run.id} reported artifact access without a snapshot`)
-		const candidate: AccessSnapshot = { ...parseSnapshot(run.snapshot_json), artifact: report.access }
-		const classification = classify(active, candidate, appEnv)
-		const id = uuidv7()
-		await invocation.write(async (fence) =>
-			(await repositories.runs.createParkedRun(
-				{ id, from: run, classificationJson: JSON.stringify(classification), pendingAccessJson: JSON.stringify(report.access) },
-				fence,
-			)) !== null
-		)
-		log(
-			`access: the artifact's gates and IAM schema changed (${classification.changes.length} changes); run ${id} waits for a human with access.approve`,
-		)
-		return id
-	}
-	const approved = active.snapshot.artifact
-	if (active.runId !== run.id || active.snapshot.contract !== null) return null
-	if (approved !== null && artifactAccessDigest(approved) === artifactAccessDigest(report.access)) return null
-	const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision }
-	const recorded = appEnv.protected === 0
-		&& await repositories.runs.recordDeployedArtifactAccess(
-			run.id,
-			expected,
-			serializeSnapshot({ ...active.snapshot, artifact: report.access }),
-			invocation.fence(),
-		)
-	log(
-		recorded
-			? "access: recorded the artifact's gates and IAM schema this deploy applied"
-			: "access: the artifact's gates and IAM schema this deploy applied are not recorded; the next deploy compares against the approved ones",
-	)
-	return null
 }
 
 async function readCandidate(
@@ -226,6 +150,7 @@ async function readCandidate(
 		snapshot = await readAccessSnapshot(commit, root, input.app.id)
 	} catch (error) {
 		invocation.signal.throwIfAborted()
+		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)
 		if (error instanceof SnapshotRefused) input.log(`access: ${error.message}; \`fabrika-check\` names the problems`)
 		if (error instanceof SourceFailure) input.log(`access: the commit's files cannot be read (${error.code})`)
 		throw error

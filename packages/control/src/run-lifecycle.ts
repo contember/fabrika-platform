@@ -25,7 +25,7 @@ import {
 } from '@fabrika/provider-contract'
 import { republishUnderLease, unconfirmedUpdateRefusal } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
-import { publishRunSnapshot, settleArtifactAccessReport } from './approval/publish'
+import { publishRunSnapshot } from './approval/publish'
 import { approvedProviderAccess, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
@@ -524,7 +524,6 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			registration = { ...registration, app: providerAppAtCommit(registration.app, commitSha) }
 			// A pending change is published nowhere (ADR-0050): parked here, the run reaches no proxy and no IAM.
 			const commits = deps.commits
-			const readArtifactAccess = deps.provider.artifactAccess?.bind(deps.provider)
 			if (commits === undefined) throw new Error('no commit source is configured to read the run snapshot')
 			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
 				signal: invocation.work.signal,
@@ -537,9 +536,6 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 				root: deps.provider.applicationRoot === undefined ? '' : deps.provider.applicationRoot(registration.app.source),
 				commitSha,
 				...(sourceBinding === undefined ? {} : { sourceBinding }),
-				...(readArtifactAccess === undefined
-					? {}
-					: { artifactAccess: (row: AppEnvRow) => readArtifactAccess(parseProviderEnvelope(row.provider_artifact_json, 'stored artifact')) }),
 				log: (line) => runLogs.log(line),
 			})
 			if (publication.kind === 'parked') {
@@ -671,11 +667,8 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		} finally {
 			await runLogs.flush()
 		}
-		const settledRun = await invocation.boundary()
+		await invocation.boundary()
 		if (outcome.state === 'running') return { runId, status: 'running' }
-		if (outcome.artifactAccess !== undefined && !dryRun) {
-			await settleArtifactAccessReport(deps.repositories, publicationWrites(invocation), settledRun, outcome.artifactAccess, (line) => runLogs.log(line))
-		}
 		const state = outcome.state
 		await invocation.write((fence) => runs.markRunFinished(runId, state, outcome.exitCode ?? null, fence))
 		await projectTerminalRun(deps, runId, dryRun, state, outcome.artifactState)
@@ -755,13 +748,8 @@ async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRo
 	return approvedProviderAccess(row)
 }
 
-const publicationWrites = (invocation: RunInvocation) => ({
-	write: (mutation: (fence: LeaseFence) => Promise<boolean>) => invocation.write(mutation),
-	fence: () => invocation.lease.fence(),
-})
-
 function withAccess(environment: ProviderEnvironment, access: ProviderAccessFields): ProviderEnvironment {
-	const { access: _previous, artifactAccess: _previousArtifact, ...rest } = environment
+	const { access: _previous, ...rest } = environment
 	return { ...rest, ...access }
 }
 
@@ -865,12 +853,8 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 				await appendRunLog(deps.runLogs, run.log_key, line).catch(() => console.error(`deploy run ${run.id}: failed to persist log output`))
 			},
 		})
-		const settledRun = await invocation.boundary()
+		await invocation.boundary()
 		if (outcome.state === 'running') return 'running'
-		if (outcome.artifactAccess !== undefined && outcome.dryRun !== true) {
-			const log = (line: string): void => console.info(`deploy run ${run.id}: ${line}`)
-			await settleArtifactAccessReport(deps.repositories, publicationWrites(invocation), settledRun, outcome.artifactAccess, log)
-		}
 		const state = outcome.state
 		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, state, outcome.exitCode ?? null, fence))
 		await projectSettled(deps, run.id, state, outcome)

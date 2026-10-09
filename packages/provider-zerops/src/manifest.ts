@@ -1,7 +1,7 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import { type AppSchema, type ArtifactAccess, artifactAccessDigest, isDigest } from '@fabrika/auth-core'
+import { type AppSchema, isDigest } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec, ProviderEnvironment } from '@fabrika/provider-contract'
-import { normalizeGateRule, proxyEndpointRowSchema, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
+import { proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
@@ -108,22 +108,14 @@ const jsonValue = (value: unknown): JsonValue => {
 }
 
 const nonEmptyStringsSchema = z.array(z.string().min(1))
-// Unlike the proxy wire contract, the manifest refuses a null service credential.
-const manifestGateSchema = proxyGateRuleFieldsSchema
-	.refine((rule) => rule.kind !== 'service' || rule.credential !== null)
-	.transform(normalizeGateRule)
-// Gates or an endpoint table, never both: a dropped table would leave gates nobody approved in force.
-const manifestProxySchema = z.union([
-	z.object({ upstream: z.string().min(1), gates: z.object({ rules: z.array(manifestGateSchema) }), endpoints: z.undefined() })
-		.transform(({ endpoints: _endpoints, ...proxy }) => proxy),
-	z.object({
-		upstream: z.string().min(1),
-		endpoints: z.array(proxyEndpointRowSchema),
-		reservedPrefixes: z.array(z.string()),
-		snapshot: z.string().refine(isDigest),
-		gates: z.undefined(),
-	}).transform(({ gates: _gates, ...proxy }) => proxy),
-]) satisfies z.ZodType<ZeropsProxySpec, z.ZodTypeDef, unknown>
+// An application is protected by its contract's endpoint table; a `gates` key is refused, never ignored.
+const manifestProxySchema = z.object({
+	upstream: z.string().min(1),
+	endpoints: z.array(proxyEndpointRowSchema),
+	reservedPrefixes: z.array(z.string()),
+	snapshot: z.string().refine(isDigest),
+	gates: z.undefined(),
+}).transform(({ gates: _gates, ...proxy }) => proxy) satisfies z.ZodType<ZeropsProxySpec, z.ZodTypeDef, unknown>
 const namespaceResourcesSchema = z.array(z.object({
 	resourceKey: z.literal('service:postgres'),
 	hostname: z.literal('postgres'),
@@ -351,7 +343,9 @@ const targetError = (issue: z.ZodIssue | undefined): string => {
 		case 'zeropsSetup':
 			return 'invalid fabrika manifest zeropsSetup'
 		case 'proxy':
-			return 'invalid fabrika manifest proxy declaration'
+			return rest[0] === 'gates'
+				? 'invalid fabrika manifest proxy: `gates` is gone; an application is protected by its endpoint table (`contractProxyTable(artifact)`)'
+				: 'invalid fabrika manifest proxy declaration'
 		case 'namespaceResources':
 			return 'invalid fabrika manifest namespace resources'
 		case 'contract':
@@ -426,41 +420,18 @@ export const lockedExecutionOf = (manifest: FabrikaManifest): ZeropsLockedExecut
 	}
 }
 
-/** Whether the uploaded artifact describes a contract application, whichever of its parts says so. */
-export const claimsContract = (manifest: FabrikaManifest): boolean =>
-	manifest.target.contract !== undefined || manifest.app.schema?.contract === true
-	|| (manifest.target.proxy !== undefined && 'endpoints' in manifest.target.proxy)
-
-/** The access an artifact grants without a contract (ADR-0050): its proxy's gates and its IAM schema. */
-export const zeropsArtifactAccess = (manifest: FabrikaManifest): ArtifactAccess => {
-	const proxy = manifest.target.proxy
-	return { gates: proxy !== undefined && 'gates' in proxy ? proxy.gates : null, schema: manifest.app.schema ?? null }
-}
-
-/** What Control lets a provider publish for one environment (`ProviderEnvironment.access` / `artifactAccess`). */
-export type ZeropsAccess = Pick<ProviderEnvironment, 'access' | 'artifactAccess'>
-
-/** Whether the artifact's own gates and schema are the ones Control approved for an application without a contract. */
-export const artifactAccessApproved = (manifest: FabrikaManifest, granted: ZeropsAccess): boolean => {
-	const approved = granted.artifactAccess?.digest ?? null
-	return approved !== null && !claimsContract(manifest) && artifactAccessDigest(zeropsArtifactAccess(manifest)) === approved
-}
+/** What Control lets a provider publish for one environment (`ProviderEnvironment.access`). */
+export type ZeropsAccess = Pick<ProviderEnvironment, 'access'>
 
 /**
  * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
- * so a configuration cannot drop it. Without a contract the artifact deploys its own descriptor only when its access is
- * the one Control approved; otherwise nothing deploys outside a dry run.
+ * so a configuration cannot drop it. Without an approved contract nothing deploys outside a dry run.
  */
 export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAccess, dryRun: boolean): ZeropsLockedExecution | null {
 	const access = granted.access
 	if (access === undefined) {
 		if (dryRun) return null
-		if (granted.artifactAccess === undefined) throw new Error('zerops: Control approved no access for this environment')
-		if (claimsContract(manifest)) {
-			throw new Error('zerops: the artifact claims a contract, but the commit Control read has no `fabrika.contract.ts`')
-		}
-		if (!artifactAccessApproved(manifest, granted)) throw new Error("zerops: the artifact's gates and IAM schema are not the access Control approved")
-		return null
+		throw new Error('zerops: Control approved no access for this environment')
 	}
 	if (!LOCKED_APP_ID_PATTERN.test(manifest.app.id)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
 	return {
@@ -472,13 +443,9 @@ export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAcc
 	}
 }
 
-/**
- * The IAM schema a deploy, cancel or reconcile applies: the approved contract's, or the artifact's when its access is
- * the one Control approved. `undefined` reconciles nothing.
- */
-export function approvedSchemaOf(manifest: FabrikaManifest, granted: ZeropsAccess): AppSchema | undefined {
-	if (granted.access !== undefined) return granted.access.schema
-	return artifactAccessApproved(manifest, granted) ? manifest.app.schema : undefined
+/** The IAM schema a deploy, cancel or reconcile applies: the approved contract's. `undefined` reconciles nothing. */
+export function approvedSchemaOf(granted: ZeropsAccess): AppSchema | undefined {
+	return granted.access?.schema
 }
 
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>
@@ -505,7 +472,9 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 
 	const target = manifestTargetSchema.safeParse(envelope.data.target)
 	if (!target.success) {
-		throw new Error(targetError(target.error.issues[0]))
+		// A refused `gates` key is the answer to give, whatever else the stale proxy declaration lacks.
+		const gates = target.error.issues.find((issue) => issue.path[0] === 'proxy' && issue.path[1] === 'gates')
+		throw new Error(targetError(gates ?? target.error.issues[0]))
 	}
 	const { sourceDescriptor, deployService, importDocument, zeropsSetup, proxy, namespaceResources, contract, runtimePackages } = target.data
 	assertAuthoredManagedDocument(importDocument.services)
@@ -525,16 +494,11 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
 	const selectedSetup = selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup)
-	if (proxy !== undefined && schema?.contract === true && !('endpoints' in proxy)) {
-		// A contract application is served only behind its endpoint table; behind gates it would answer 503.
-		throw new Error('invalid fabrika manifest: a contract application is protected by its endpoint table (`contractProxyTable(artifact)`), not gates')
-	}
-	const endpointTable = proxy !== undefined && 'endpoints' in proxy ? proxy : undefined
-	if (contract === undefined && (endpointTable !== undefined || schema?.contract === true)) {
+	if (contract === undefined && (proxy !== undefined || schema?.contract === true)) {
 		// An endpoint table without the contract would deploy a contract application with an authored run section.
 		throw new Error('invalid fabrika manifest: a contract application carries its contract (`target.contract`), which locks its setup down')
 	}
-	if (contract !== undefined && endpointTable?.snapshot !== contract.digest) {
+	if (contract !== undefined && proxy?.snapshot !== contract.digest) {
 		throw new Error(
 			'invalid fabrika manifest: a contract application is served behind the endpoint table of the same contract (`proxy: { upstream, ...contractProxyTable(artifact) }`)',
 		)

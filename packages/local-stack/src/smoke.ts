@@ -170,10 +170,11 @@ const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceMan
 /**
  * Every access of Notes' contract is new on the first deploy to the protected `prod`, so the run waits for a human to
  * approve the snapshot Control read at the commit (ADR-0050). The smoke approves it as the signed-in console admin; a
- * later smoke on the same stack finds it approved and does not wait.
+ * later smoke on the same stack finds it approved and does not wait. A commit without the contract fails here.
  */
 const approveIfParked = async (machineKey: string, runId: string): Promise<void> => {
 	const run = await waitForParkOrProvider(machineKey, runId)
+	if (run.status === 'failed') throw new Error(`Deploy ${runId} failed before its provider accepted it; see the run log`)
 	if (run.status !== 'awaiting_approval') return
 	console.info(`Deploy ${runId} waits for approval; approving it in the console`)
 	await approveInConsole(CONTROL_ORIGIN, runId)

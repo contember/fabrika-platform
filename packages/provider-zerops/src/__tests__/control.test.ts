@@ -9,8 +9,10 @@ import type {
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
-import { decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
@@ -20,7 +22,7 @@ import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zerops
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourcePort, ZeropsSourceUploadInput } from '../source/port'
 import type { ZeropsAppConfig } from '../types'
-import { approvedArtifact } from './fixtures/access'
+import { approvedContract } from './fixtures/access'
 import { SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
 
@@ -54,7 +56,8 @@ const config: ZeropsAppConfig = {
 
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
-const NO_MANAGED_VALUES: ManagedValues = {
+/** Every managed value removed, but the proxy secret a contract application is never deployed without. */
+const MANAGED_DEFAULTS: ManagedValues = {
 	FABRIKA_RELEASE: null,
 	FABRIKA_OPERATIONS_DSN: null,
 	FABRIKA_IAM_ISSUER: null,
@@ -62,7 +65,7 @@ const NO_MANAGED_VALUES: ManagedValues = {
 	FABRIKA_APP_ID: null,
 	FABRIKA_ENVIRONMENT: null,
 	FABRIKA_SERVICE_KEY: null,
-	FABRIKA_PROXY_SECRET: null,
+	FABRIKA_PROXY_SECRET: 'private-proxy-secret',
 	FABRIKA_IAM_RPC_URL: null,
 	FABRIKA_IAM_RPC_KEY: null,
 }
@@ -97,36 +100,26 @@ const readyNamespace = (): ProviderDeploymentNamespace => ({
 	},
 })
 
-/** Control approved the artifact's own gates and IAM schema, whichever artifact a test sets, unless it says otherwise. */
-const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvironment => {
-	const base: ProviderEnvironment = {
-		appId: 'notes',
-		env: 'prod',
-		domain: 'notes.example.test',
-		publicOrigin: 'https://public.notes.example.test',
-		namespace: readyNamespace(),
-		target: {
-			provider: 'zerops',
-			version: zeropsStoredTargetCodec.version,
-			payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1' }),
-		},
-		artifact: {
-			provider: 'zerops',
-			version: zeropsArtifactCodec.version,
-			payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)),
-		},
-		...overrides,
-	}
-	if ('artifactAccess' in overrides) return base
-	// A test's malformed artifact is what it checks the refusal of; it has no access to approve.
-	let manifest: ReturnType<typeof zeropsArtifactCodec.decode>
-	try {
-		manifest = decodeEnvelope('artifact', 'zerops', base.artifact, zeropsArtifactCodec)
-	} catch {
-		return base
-	}
-	return { ...base, artifactAccess: approvedArtifact(manifest) }
-}
+/** Control approved the contract of the commit it read, unless a test says otherwise. */
+const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvironment => ({
+	appId: 'notes',
+	env: 'prod',
+	domain: 'notes.example.test',
+	publicOrigin: 'https://public.notes.example.test',
+	namespace: readyNamespace(),
+	target: {
+		provider: 'zerops',
+		version: zeropsStoredTargetCodec.version,
+		payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1' }),
+	},
+	artifact: {
+		provider: 'zerops',
+		version: zeropsArtifactCodec.version,
+		payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)),
+	},
+	access: approvedContract(),
+	...overrides,
+})
 
 const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	runId: 'run-1',
@@ -134,7 +127,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	environment: environment(),
 	secrets: {},
 	vars: {},
-	managedEnvironment: NO_MANAGED_VALUES,
+	managedEnvironment: MANAGED_DEFAULTS,
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -841,7 +834,8 @@ describe('Zerops ControlProvider registration', () => {
 					{ hostname: zeropsSharedServiceHostname('notes', 'db'), type: 'postgresql:single@18' },
 				],
 				deployService: 'notesapi',
-				proxy: { upstream: 'notesapi:3000', gates: { rules: [] } },
+				contract: notesArtifact,
+				proxy: { upstream: 'notesapi:3000', ...contractProxyTable(notesArtifact) },
 			},
 		}
 		const registration = control.normalizeRegistration({
@@ -979,7 +973,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await expect(control.deploy({ ...deployInput(recorded), signal: controller.signal })).rejects.toBe(reason)
 		expect(recorded.calls).toEqual(['importServices', 'createAppVersion:service-1'])
 		expect(sourceCalls).toEqual([])
-		expect(recorded.envWrites).toEqual([])
+		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' }])
 	})
 	test('a lease lost at an await-version boundary neither cancels the build nor deletes the version', async () => {
 		const controller = new AbortController()
@@ -1423,11 +1417,16 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(
 			await control.deploy({
 				...deployInput(recorded),
-				managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release },
+				managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn, FABRIKA_RELEASE: release },
 			}),
 		).toEqual({ state: 'succeeded' })
-		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'FABRIKA_OPERATIONS_DSN', value: dsn }])
-		expect(builds).toEqual([`zerops:\n  - setup: api\n    run:\n      envVariables:\n        FABRIKA_RELEASE: ${release}\n`])
+		expect(recorded.envWrites).toEqual([
+			{ serviceId: 'service-1', key: 'FABRIKA_OPERATIONS_DSN', value: dsn },
+			{ serviceId: 'service-1', key: 'FABRIKA_PROXY_SECRET', value: 'private-proxy-secret' },
+		])
+		expect(builds).toHaveLength(1)
+		expect(builds[0]).toContain(`FABRIKA_RELEASE: ${release}\n`)
+		expect(builds[0]).not.toContain(dsn)
 		expect(recorded.imports[0]?.yaml).not.toContain('FABRIKA_OPERATIONS_DSN')
 		expect(recorded.imports[0]?.yaml).not.toContain(dsn)
 		expect(recorded.logs.join('\n')).not.toContain(dsn)
@@ -1444,7 +1443,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		await control.deploy({
 			...deployInput(recorded),
 			dryRun: true,
-			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_OPERATIONS_DSN: dsn },
+			managedEnvironment: { ...MANAGED_DEFAULTS, FABRIKA_OPERATIONS_DSN: dsn },
 		})
 		expect(recorded.envWrites).toEqual([])
 		expect(recorded.calls).toEqual([])

@@ -1,5 +1,7 @@
 import type { CloudflareRunnerJob, RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, mock, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { statusKey } from '../relay'
 import type { Env } from '../worker-env'
 
@@ -34,7 +36,7 @@ const job: CloudflareRunnerJob = {
 	env: 'stage',
 	runnerKey: RUNNER_KEY,
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_API_TOKEN: 'tok' },
-	approvedAccess: { kind: 'artifact', digest: null, protected: false },
+	approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 }
 
 /** Re-read a fixture as a job (a JSON round-trip keeps an intentionally malformed one honest, with no `as`). */

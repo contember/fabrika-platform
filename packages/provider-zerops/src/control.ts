@@ -32,7 +32,6 @@ import {
 	renderFabrikaImportYaml,
 	renderFabrikaProvisioningYaml,
 	verifyZeropsArtifactSourceDescriptor,
-	zeropsArtifactAccess,
 	zeropsArtifactCodec,
 } from './manifest'
 import {
@@ -255,7 +254,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		signal: AbortSignal,
 	): Promise<void> => {
 		const artifact = artifactFor(input.environment)
-		const schema = approvedSchemaOf(artifact, input.environment)
+		const schema = approvedSchemaOf(input.environment)
 		if (schema === undefined || options.propustkaUrl === undefined) return
 		const placement = resolvedEnvironment(input.environment, { requireReady: false })
 		const runtimeTarget: ZeropsRuntimeTarget = {
@@ -329,8 +328,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				return undefined
 			}
 		},
-		// The artifact carries its gates and IAM schema, so Control snapshots and classifies them before the deploy (ADR-0050).
-		artifactAccess: (artifact) => zeropsArtifactAccess(decodeEnvelope('artifact', 'zerops', artifact, zeropsArtifactCodec)),
 		resolveSource,
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
@@ -374,7 +371,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				target: runtimeTarget,
 				artifact,
 				...(input.environment.access === undefined ? {} : { access: input.environment.access }),
-				...(input.environment.artifactAccess === undefined ? {} : { artifactAccess: input.environment.artifactAccess }),
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: input.events,

@@ -1,6 +1,8 @@
 import type { RunLogLine } from '@fabrika/control-contract'
 import type { CloudflareRunnerJob, RunnerStatus } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { type ContainerLike, logsKey, type R2Like, relayRun, statusKey } from '../relay'
 
 // The relay is the testable core of vozka-runner's `startRun`. These tests drive it against a FAKE
@@ -50,7 +52,7 @@ const job: CloudflareRunnerJob = {
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_API_TOKEN: 'tok' },
-	approvedAccess: { kind: 'artifact', digest: null, protected: false },
+	approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 }
 
 const terminalStatus: RunnerStatus = { runId: 'run-relay-1', state: 'succeeded', exitCode: 0, startedAt: 1, finishedAt: 9 }

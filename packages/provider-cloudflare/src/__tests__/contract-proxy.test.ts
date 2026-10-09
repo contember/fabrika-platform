@@ -148,13 +148,21 @@ describe('a contract application behind its endpoint table on Cloudflare', () =>
 		expect(parseProxyManifestJson(bakedManifest())?.apps).toEqual([{ id: APP_ID, hosts: [HOST], upstream: 'APP', scheme: 'https', ...table }])
 	})
 
-	test('a proxy Worker given both a table and gates is refused', () => {
-		const both = { name: 'notes-proxy', app: appWorker(), appId: APP_ID, appHost: HOST, endpoints: table, gates: { rules: [] }, iamUrl: ISSUER }
-		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [both])).toThrow(
-			'exactly one of an endpoint table, an installation table or gates',
+	test('a proxy Worker given gates, or both a table and an installation table, is refused', () => {
+		const gated = { name: 'notes-proxy', app: appWorker(), appId: APP_ID, appHost: HOST, endpoints: table, gates: { rules: [] }, iamUrl: ISSUER }
+		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [gated])).toThrow(
+			'cloudflare proxy: `gates` is gone; an application is protected by its endpoint table',
 		)
-		const installationAndGates = { ...both, endpoints: undefined, installation: { installation: true, endpoints: [], reservedPrefixes: [] } }
-		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [installationAndGates])).toThrow('exactly one of')
+		const both = {
+			name: 'notes-proxy',
+			app: appWorker(),
+			appId: APP_ID,
+			appHost: HOST,
+			endpoints: table,
+			iamUrl: ISSUER,
+			installation: { installation: true, endpoints: [], reservedPrefixes: [] },
+		}
+		expect(() => Reflect.apply(createCloudflareProxyWorker, undefined, [both])).toThrow('exactly one of an endpoint table or an installation table')
 	})
 
 	test('an anonymous health check reaches the application without a token', async () => {

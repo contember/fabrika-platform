@@ -1,4 +1,7 @@
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { zeropsContractRun } from '../execution'
 import { assertAuthoredManagedDocument, overlayRelease } from '../managed-env'
 import {
 	assertFabrikaManifestCoordinates,
@@ -32,7 +35,6 @@ const config: ZeropsAppConfig = {
 		services: ({ env }) => [
 			{ hostname: env === 'prod' ? 'notes' : 'notesstage', type: 'alpine/bun@1.3', nginxConfig: process.env['IMAGE_TAG'] },
 		],
-		proxy: { upstream: 'notes:3000', gates: { rules: [{ path: '/health', kind: 'public' }, { path: '/*', kind: 'human' }] } },
 	},
 }
 
@@ -146,13 +148,23 @@ describe('Zerops static artifact', () => {
 				target: { ...manifest.target, sourceDescriptor: { ...descriptor, extra: true } },
 			})
 		).toThrow('source descriptor field')
-		expect(() => parseFabrikaManifest({ ...manifest, target: { ...manifest.target, proxy: { upstream: '', gates: { rules: [] } } } })).toThrow('proxy')
+		const table = contractProxyTable(notesArtifact)
+		expect(() => parseFabrikaManifest({ ...manifest, target: { ...manifest.target, proxy: { upstream: '', ...table } } })).toThrow('proxy')
 		expect(() =>
 			parseFabrikaManifest({
 				...manifest,
-				target: { ...manifest.target, proxy: { upstream: 'other:3000', gates: { rules: [] } } },
+				target: { ...manifest.target, contract: zeropsContractRun(notesArtifact), proxy: { upstream: 'other:3000', ...table } },
 			})
 		).toThrow('not owned')
+		// An application is protected by its contract's endpoint table; gates are refused, never ignored.
+		expect(() => parseFabrikaManifest({ ...manifest, target: { ...manifest.target, proxy: { upstream: 'notes:3000', gates: { rules: [] } } } }))
+			.toThrow('invalid fabrika manifest proxy: `gates` is gone')
+		expect(() =>
+			parseFabrikaManifest({
+				...manifest,
+				target: { ...manifest.target, contract: zeropsContractRun(notesArtifact), proxy: { upstream: 'notes:3000', ...table, gates: { rules: [] } } },
+			})
+		).toThrow('invalid fabrika manifest proxy: `gates` is gone')
 		expect(() =>
 			parseFabrikaManifest({
 				...manifest,

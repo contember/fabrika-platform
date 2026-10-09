@@ -9,6 +9,7 @@ import { cp, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { Worker } from 'oblaka-iac'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { type CloudflareDeployRun, createCloudflareDeployer, defaultCloudflareCollaborators, generateWranglerConfigs, type ProvisionInput } from '..'
 import { CLOUDFLARE_PROXY_WORKER_DIR } from '../proxy'
 
@@ -27,7 +28,7 @@ export const application = () => new Worker({
 	dir: '.', name: 'demo', main: 'src/index.ts', compatibility_flags: [], workers_dev: false, preview_urls: false,
 	bindings: ${bindings},
 })
-export default defineApp({ id: 'demo', gates: { rules: [{ path: '/*', kind: 'public' }] }, resources: application })
+export default defineApp({ id: 'demo', schema: { scopes: [], actions: [], roles: {}, contract: true }, resources: application })
 `,
 	)
 }
@@ -60,6 +61,7 @@ const deployCheckout = async (
 		vars: {},
 		managedEnvironment: { FABRIKA_IAM_ISSUER: 'https://iam.example.test' },
 		installationApps: [{ app: 'otherapp', env: 'stage' }],
+		contract: notesArtifact,
 		dryRun: false,
 		signal: new AbortController().signal,
 		log: () => {},

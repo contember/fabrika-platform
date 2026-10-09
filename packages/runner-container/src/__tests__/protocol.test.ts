@@ -1,5 +1,7 @@
 import { type CloudflareRunnerJob, cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 
 const validJob: CloudflareRunnerJob = {
 	runId: '0198c4a2-7b31-7e44-9a55-1f2e3d4c5b6a',
@@ -8,7 +10,7 @@ const validJob: CloudflareRunnerJob = {
 	env: 'prod',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'tok' },
-	approvedAccess: { kind: 'artifact', digest: null, protected: false },
+	approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
 }
 
 describe('cloudflareRunnerJobSchema', () => {

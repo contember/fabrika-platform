@@ -3,19 +3,12 @@
 // approves, an approval holds only for its baseline, a lost publication classifies again, and a removal runs through.
 
 import type { AuthContext } from '@fabrika/auth'
-import { type ArtifactAccess, artifactAccessDigest, contractDigest, permits, type Scope } from '@fabrika/auth-core'
+import { contractDigest, permits, type Scope } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
-import type {
-	ControlProvider,
-	JsonValue,
-	ProviderDeployInput,
-	ProviderDeployOutcome,
-	ProviderEnvelope,
-	ProviderNamespaceMember,
-} from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderDeployInput, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { republishNamespace } from '../api/namespaces'
@@ -24,7 +17,7 @@ import type { RegistryUseCaseContext } from '../api/registry/context'
 import { deleteAppEnvUseCase } from '../api/registry/environments'
 import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentProtectionUseCase } from '../approval/api'
 import { parseClassification } from '../approval/publish'
-import { type AccessSnapshot, approvedSnapshot, artifactAccessSchema } from '../approval/snapshot'
+import { type AccessSnapshot, approvedSnapshot } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
@@ -55,54 +48,35 @@ interface World {
 	contract: string | null
 	/** Every other file of that commit. */
 	files: Record<string, string>
-	/**
-	 * Where the provider learns an application's gates and schema (ADR-0050): nowhere (`none`), from the registry's
-	 * artifact before the deploy (`artifact`, as Zerops), or from the deploy itself (`runner`, as Cloudflare).
-	 */
-	readonly mode: 'none' | 'artifact' | 'runner'
-	/** What the runner finds in the checkout, in `runner` mode. */
-	checkout: ArtifactAccess
 }
 
-const HUMAN_GATES: ArtifactAccess = { gates: { rules: [{ path: '/*', kind: 'human' }] }, schema: null }
-const PUBLIC_GATES: ArtifactAccess = { gates: { rules: [{ path: '/*', kind: 'public' }] }, schema: null }
-
-function world(mode: World['mode'] = 'none'): World {
+function world(): World {
 	const { db, sqlite } = createHarness()
-	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE, files: {}, mode, checkout: HUMAN_GATES }
+	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE, files: {} }
 }
 
-/** A harbor artifact carries its gates and schema in the payload. */
-const harborArtifact = (access: ArtifactAccess): string => JSON.stringify({ provider: 'harbor', version: 1, payload: { ...access } })
+const HARBOR_ARTIFACT = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
 
-const harborAccess = (artifact: ProviderEnvelope): ArtifactAccess => {
-	const payload = artifact.payload
-	const field = (
-		name: string,
-	): JsonValue => (typeof payload === 'object' && payload !== null && !Array.isArray(payload) ? payload[name] ?? null : null)
-	return artifactAccessSchema.parse({ gates: field('gates'), schema: field('schema') })
-}
+/** What an application without a contract published before those were refused: its gates, and no contract. */
+const ARTIFACT_PUBLICATION = JSON.stringify({
+	version: 1,
+	contract: null,
+	migrations: [],
+	checker: '0.0.1',
+	artifact: { gates: { rules: [{ path: '/*', kind: 'human' }] }, schema: null },
+})
 
-/** The runner's check (`runner` mode): a protected mismatch stops before provisioning; anything else deploys. */
-function runnerOutcome(w: World, input: ProviderDeployInput): ProviderDeployOutcome {
-	const approval = input.environment.artifactAccess
-	if (w.mode !== 'runner' || approval === undefined) return { state: 'succeeded' }
-	if (approval.protected && artifactAccessDigest(w.checkout) !== approval.digest) {
-		return { state: 'failed', artifactAccess: { state: 'pending', access: w.checkout } }
-	}
-	return { state: 'succeeded', artifactAccess: { state: 'deployed', access: w.checkout } }
-}
+const MISSING_CONTRACT = 'access: the commit has no `fabrika.contract.ts`; Fabrika deploys an application only with a contract'
 
 function provider(w: World): ControlProvider {
 	return {
 		id: 'harbor',
 		normalizeRegistration: (input) => input,
 		applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
-		...(w.mode === 'artifact' ? { artifactAccess: harborAccess } : {}),
 		resolveSource: () => Promise.resolve({ commitSha: COMMIT }),
 		deploy: (input) => {
 			w.deploys.push(input)
-			return Promise.resolve(runnerOutcome(w, input))
+			return Promise.resolve({ state: 'succeeded' })
 		},
 		namespaces: {
 			normalize: (namespace) => namespace,
@@ -156,7 +130,7 @@ async function seed(w: World, workerDir?: string): Promise<void> {
 			namespaceId: `apps-${env}`,
 			provider: 'harbor',
 			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: {} }),
-			providerArtifactJson: harborArtifact(HUMAN_GATES),
+			providerArtifactJson: HARBOR_ARTIFACT,
 		})
 	}
 }
@@ -271,95 +245,77 @@ describe('approved access through the run lifecycle', () => {
 		// Nothing is published, so the upload's own gates do not apply either.
 		expect(prod).toMatchObject({ published_run_id: null, published_snapshot_json: null })
 		const environment = await providerEnvironment(w.db, prod)
-		expect([environment.access, environment.artifactAccess]).toEqual([undefined, undefined])
+		expect(environment.access).toBeUndefined()
 		await republishNamespace({ ...deps(w), queue: { send: () => Promise.resolve() } }, 'apps-prod', { wait: 'started' })
-		expect(w.republished.at(-1)?.members.map((member) => [member.access, member.artifactAccess])).toEqual([[undefined, undefined]])
+		expect(w.republished.at(-1)?.members.map((member) => member.access)).toEqual([undefined])
 		expect(w.deploys).toEqual([])
 	})
 
-	test('artifact access read before the deploy: the first protected deploy waits, and an approval names its digest', async () => {
-		const w = world('artifact')
+	test('a commit without `fabrika.contract.ts` fails its run on any environment, says why, and publishes nothing', async () => {
+		const w = world()
 		await seed(w)
 		w.contract = null
-		const parked = await deploy(w, 'prod')
-		expect(parked.status).toBe('awaiting_approval')
-		expect(parseClassification((await run(w, parked.runId)).classification_json ?? '').changes.map((change) => change.line)).toEqual([
-			"The artifact's gates and IAM schema apply for the first time",
-			'Gate `/* → human` is added',
-		])
-		await approve(w, parked.runId)
-		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('succeeded')
-		expect(w.deploys.map((input) => input.environment.artifactAccess)).toEqual([{ digest: artifactAccessDigest(HUMAN_GATES), protected: true }])
+		for (const env of ['stage', 'prod']) {
+			const refused = await deploy(w, env)
+			expect(refused.status).toBe('failed')
+			expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain(MISSING_CONTRACT)
+			expect(await published(w, env)).toEqual({ runId: null, generation: 0 })
+		}
+		expect(w.deploys).toEqual([])
+		expect(w.republished).toEqual([])
 	})
 
-	test('a contract removed (1 → 0) waits with the artifact access, and a later wider upload is published nowhere', async () => {
-		const w = world('artifact')
+	test('dropping the contract from the commit fails the run, and the approved contract stays published', async () => {
+		const w = world()
 		await seed(w)
 		const first = await deploy(w, 'prod')
 		await approve(w, first.runId)
 		await executeDeploy(deps(w), { runId: first.runId })
+		const before = await published(w, 'prod')
 
 		w.contract = null
-		const removal = await deploy(w, 'prod')
-		expect(removal.status).toBe('awaiting_approval')
-		const lines = parseClassification((await run(w, removal.runId)).classification_json ?? '').changes.map((change) => change.line)
-		expect(lines).toContain('The contract is removed: the proxy no longer applies an endpoint table to this application')
-		expect(lines).toContain('Gate `/* → human` is added')
-		await approve(w, removal.runId)
-		expect((await executeDeploy(deps(w), { runId: removal.runId })).status).toBe('succeeded')
+		const dropped = await deploy(w, 'prod')
+		expect(dropped.status).toBe('failed')
+		expect(w.logs.get(`runs/${dropped.runId}/logs.ndjson`)).toContain(MISSING_CONTRACT)
+		expect(await published(w, 'prod')).toEqual(before)
+		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'prod'))?.contract?.app).toBe('notes')
+	})
 
-		// A registry write changes the artifact to `/* → public`; the approved digest stays the narrow one.
+	test('a run whose snapshot was stored without a contract is refused like a new commit', async () => {
+		const w = world()
+		await seed(w)
+		const runId = uuidv7()
+		await w.db.runs.createRun({ id: runId, appId: 'notes', env: 'stage', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		w.sqlite.query('UPDATE runs SET snapshot_json = ? WHERE id = ?').run(ARTIFACT_PUBLICATION, runId)
+		expect((await executeDeploy(deps(w), { runId })).status).toBe('failed')
+		expect(w.logs.get(`runs/${runId}/logs.ndjson`)).toContain(MISSING_CONTRACT)
+		expect(w.deploys).toEqual([])
+	})
+
+	test('a publication that holds artifact access approves nothing: the first contract waits on prod, and applies on stage', async () => {
+		const w = world()
+		await seed(w)
+		const legacy = uuidv7()
+		await w.db.runs.createRun({ id: legacy, appId: 'notes', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		for (const env of ['prod', 'stage']) {
+			w.sqlite.query('UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ?, generation = 1 WHERE app_id = ? AND env = ?').run(
+				legacy,
+				ARTIFACT_PUBLICATION,
+				'notes',
+				env,
+			)
+		}
 		const prod = await w.db.registry.getAppEnv('notes', 'prod')
 		if (prod === null) throw new Error('no prod')
-		await w.db.registry.upsertAppEnv({
-			appId: 'notes',
-			env: 'prod',
-			domain: prod.domain,
-			namespaceId: prod.namespace_id,
-			provider: 'harbor',
-			providerTargetJson: prod.provider_target_json,
-			providerArtifactJson: harborArtifact(PUBLIC_GATES),
-		})
-		await republishNamespace({ ...deps(w), queue: { send: () => Promise.resolve() } }, 'apps-prod', { wait: 'started' })
-		const member = w.republished.at(-1)?.members[0]
-		expect(member?.artifactAccess?.digest).toBe(artifactAccessDigest(HUMAN_GATES))
-		expect(member === undefined ? null : artifactAccessDigest(harborAccess(member.artifact))).not.toBe(artifactAccessDigest(HUMAN_GATES))
-		// Deploying the wider upload is a change of approved access, so it waits too.
-		expect((await deploy(w, 'prod')).status).toBe('awaiting_approval')
-	})
+		expect((await providerEnvironment(w.db, prod)).access).toBeUndefined()
 
-	test('artifact access learnt in the deploy: the first protected Cloudflare deploy stops, and a new run waits for a human', async () => {
-		const w = world('runner')
-		await seed(w)
-		w.contract = null
-		const first = await deploy(w, 'prod')
-		// Nothing changed in the commit, so the run published; the runner then found gates nobody approved.
-		expect(first.status).toBe('failed')
-		expect(w.deploys.map((input) => input.environment.artifactAccess)).toEqual([{ digest: null, protected: true }])
-		const parked = (await w.db.runs.listRunsAwaitingApproval(10))[0]
-		if (parked === undefined) throw new Error('no run waits for approval')
-		expect(parked).toMatchObject({ commit_sha: COMMIT, actor: 'user:test', pending_access_json: JSON.stringify(HUMAN_GATES) })
-		expect(parseClassification(parked.classification_json ?? '')).toMatchObject({ outcome: 'widening', protected: true })
-		expect(w.logs.get(`runs/${first.runId}/logs.ndjson`)).toContain(`run ${parked.id} waits for a human with access.approve`)
-		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'prod'))?.artifact).toBeNull()
-
-		await approve(w, parked.id)
-		expect((await executeDeploy(deps(w), { runId: parked.id })).status).toBe('succeeded')
-		expect(w.deploys.at(-1)?.environment.artifactAccess).toEqual({ digest: artifactAccessDigest(HUMAN_GATES), protected: true })
-		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'prod'))?.artifact).toEqual(HUMAN_GATES)
-	})
-
-	test('on an unprotected environment the runner deploys new gates at once, and Control records them', async () => {
-		const w = world('runner')
-		await seed(w)
-		w.contract = null
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+		const classification = parseClassification((await run(w, parked.runId)).classification_json ?? '')
+		expect(classification).toMatchObject({ outcome: 'widening', protected: true, baselineRunId: null })
+		expect(classification.changes.map((change) => change.line)).toContain('The application becomes the contract application `notes`')
 		expect((await deploy(w, 'stage')).status).toBe('succeeded')
-		const stage = await w.db.registry.getAppEnv('notes', 'stage')
-		expect(approvedSnapshotOf(stage)?.artifact).toEqual(HUMAN_GATES)
-		expect(stage?.generation).toBe(2)
-		w.checkout = PUBLIC_GATES
-		expect((await deploy(w, 'stage')).status).toBe('succeeded')
-		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'stage'))?.artifact).toEqual(PUBLIC_GATES)
+		expect(w.deploys.map((input) => [input.environment.env, input.environment.access?.contractDigest])).toEqual([['stage', DIGEST]])
 	})
 
 	test('the application root is read as the provider executes it: `.` and `./` are the repository root', async () => {
@@ -518,17 +474,6 @@ describe('approved access through the run lifecycle', () => {
 		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain('access: snapshot refused (contract-invalid, 1 problem)')
 		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 0 })
 		expect(w.deploys).toEqual([])
-	})
-
-	test('dropping the contract from the commit widens, so it waits on prod', async () => {
-		const w = world()
-		await seed(w)
-		const first = await deploy(w, 'prod')
-		await approve(w, first.runId)
-		await executeDeploy(deps(w), { runId: first.runId })
-
-		w.contract = null
-		expect((await deploy(w, 'prod')).status).toBe('awaiting_approval')
 	})
 
 	test('only a person with access.approve changes the protected flag, and it is audited', async () => {

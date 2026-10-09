@@ -62,7 +62,6 @@ export {
 	verifyZeropsArtifactSourceDescriptor,
 	ZEROPS_SERVICE_HOSTNAME_PATTERN,
 	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
-	zeropsArtifactAccess,
 	zeropsArtifactCodec,
 } from './manifest'
 export type { FabrikaImportDocument, FabrikaManifest, ManifestExpectation, ZeropsArtifactSourceDescriptor } from './manifest'

@@ -13,9 +13,10 @@ import {
 } from '@fabrika/auth-core'
 import type { DelegationRequest } from '@fabrika/proxy-core'
 import { FILE_TREATMENT, headerPolicy } from '@fabrika/proxy-core/headers'
-import { encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, encodeProxyManifestJson, type OAuthProtectedResource } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { APP, FakeIam, HOST, installationRow, ISSUER, signToken, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
@@ -49,7 +50,7 @@ const environment = (
 describe('Cloudflare proxy Worker', () => {
 	test('rejects an application Worker that can still be published on workers.dev', () => {
 		const app = new Worker({ dir: '.', name: APP, main: './src/index.ts', compatibility_flags: [], bindings: {}, routes: [] })
-		expect(() => createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, gates: { rules: [] } })).toThrow(
+		expect(() => createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, endpoints: contractProxyTable(notesArtifact) })).toThrow(
 			'must disable workers.dev',
 		)
 	})
@@ -64,7 +65,7 @@ describe('Cloudflare proxy Worker', () => {
 			routes: [],
 			workers_dev: false,
 		})
-		const proxy = createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, gates: { rules: [] } })
+		const proxy = createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, endpoints: contractProxyTable(notesArtifact) })
 		expect(proxy.options.observability).toEqual({ logs: { enabled: true, invocation_logs: false } })
 	})
 
