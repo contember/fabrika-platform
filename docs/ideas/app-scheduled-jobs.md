@@ -97,6 +97,14 @@ What the framework gives on today's platform:
 - the agent skill: "background work is a job in the contract"; ask the human before giving a job an action; data
   repairs go to the operator, not into a job.
 
+The runner, the leases, the fence and the reports are built: see
+[the application runtime](../reference/application-runtime.md#jobs). Because every write of the data layer takes a
+`Ref`, a job's `ctx` also has `ref(action, dimension, id)`, and a job that deletes rows it first lists declares the
+read action too (`['notes.read', 'notes.delete']`). Only `scope: 'app'` runs; a job scoped to a dimension waits for
+per-binding jobs. Operations sees failed, crashed and overdue jobs only: its ingest takes error events
+([backlog 96](../backlog/96-operations-sees-only-failed-job-runs.md)). The alert threshold is twice the period for
+every job.
+
 ## Platform enforcement (part B)
 
 What [platform enforcement](platform-enforcement.md) adds:

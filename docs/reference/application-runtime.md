@@ -194,7 +194,8 @@ to start. `boot` verifies tokens for the audience
 `FABRIKA_CONTRACT_DIGEST` is missing or is not `contractDigest` of the compiled contract
 (ADR-0022 rule 5), when the contract
 declares something this version cannot serve yet (a file collection with `link: true`,
-jobs, exports, imports, a webhook bound to the whole application), when a file collection
+exports, imports, a webhook bound to the whole application), when a job cannot run (see
+Jobs), when a file collection
 cannot be served (below), when an `on` dimension or a link mount's dimension has no
 table, when an access form reaches a dimension that lies in a container no table can
 locate it in, when a form or a webhook has no `scoped(tables)` layer (a form's input
@@ -373,6 +374,64 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   tables, which `fabrika db migrate` applies.
 - Revocation takes effect within the token lifetime: a removed member or revoked link
   keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
+
+## Jobs
+
+A `c.cron` job of the contract gets one handler under `handlers.jobs`:
+
+```ts
+jobs: {
+	purge: async ({ ctx }) => {
+		for (const note of await notes.expired(ctx.within('notes.read', 'workspace'))) {
+			await notes.remove(await ctx.ref('notes.delete', 'note', note.id))
+		}
+	},
+},
+```
+
+Each crontab entry runs `fabrika job run <name>` in the application's container
+(Zerops only: the lease lives in the application's Postgres schema). The command boots
+the application exactly as `serveContract` does — the framework variables leave the
+process first — and runs one job:
+
+1. The run takes the job's lease in `fabrika_job_leases` (a framework table of
+   `fabrika db migrate`). While another run holds it, this run does not start. Every
+   lease time is the database's clock, so containers whose clocks disagree still agree.
+2. Each attempt holds one generation of the lease and a deadline (its `timeout`,
+   default 15 minutes). Every insert, update and delete of the data layer checks the
+   generation and the deadline inside its own transaction, before the write and again
+   just before `COMMIT`, with `statement_timeout` set to the time left. When an attempt
+   ends, the runner cancels the statements it still has running. An attempt that timed
+   out, failed or lost the lease commits nothing more (`LeaseLostError`).
+3. An attempt that outlives its `timeout` is cancelled (`ctx.signal` aborts, its
+   capabilities are refused) and fails. A failed attempt is retried up to `retries`
+   times with jittered exponential backoff, under a new generation each time.
+4. Failures are fixed codes: `timeout`, `lease_lost`, `handler_failed`,
+   `driver_failed`, `crashed`, and `boot_failed` from the CLI. An application error's
+   name and message are never logged or reported.
+5. A run that failed after its retries, and a run that crashed (its lease expired
+   before it finished), is a `JobFailed` error event in Operations. A job that has not
+   succeeded within twice its period is `JobMissed`, at most once per period. The
+   serving process registers every job when it starts and checks every job once a
+   minute, so a schedule that never fires is reported too. Reports go through the
+   application's own ingest (`FABRIKA_OPERATIONS_DSN`), and Operations alerts on the
+   new issue. Operations ingests error events only: a successful run, its start and
+   its duration stay in the lease row (backlog 96).
+
+Job reports are informational, not authenticated: they use the public ingest key, so
+whoever holds the browser DSN can forge one, as they can forge any error event.
+Operations treats the `fabrika-job-*` fingerprints like any other. With platform
+enforcement, the job's workload credential authenticates its reports.
+
+A job has no caller and no token. Its `ctx` mints capabilities in process, for the
+job's declared actions only: `ctx.within(action, dimension)` reaches every value
+(`scope: 'app'`), and `ctx.ref(action, dimension, id)` locates one object, 404 when it is
+missing. The principal of its writes is `job:<name>`. A job cannot create scopes, manage
+members or issue share links. `boot` refuses a job scoped to a dimension (per-binding
+jobs are not built), a job without `@fabrika/db`, a schedule that is not a five-field
+cron expression, and a missing or undeclared job handler. With platform enforcement a
+job runs with its own workload credential of principal kind `job`, which no mount
+accepts (ADR-0022); until then the in-process mint is the whole of its authority.
 
 ## Runtime boundary
 

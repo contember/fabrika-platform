@@ -41,4 +41,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [92](92-an-app-audit-event-takes-its-correlation-id-from-a-caller-cf-ray-on-zerops.md) — `@fabrika/auth` reads `cf-ray` on every composition; on Zerops no edge writes it and the proxy does not strip it, so a caller picks an app audit event's `request_id`.
 - [94](94-an-older-iam-schema-can-land-after-a-newer-one.md) — IAM holds one vocabulary per app but runs are serialized per environment, so two environments (or a run recovered late) can leave the older schema in IAM.
 - [95](95-close-release-recovery-without-frozen-context.md) — Decide durable release intent, exact artifact evidence and expiry semantics before repairing runs whose original release context is absent.
+- [96](96-operations-sees-only-failed-job-runs.md) — Operations ingest takes error events only, so a successful job run, its duration and its start never reach the console; job reports ride the public ingest key.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
