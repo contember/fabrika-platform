@@ -1,11 +1,29 @@
 import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type LocalSourceFixture, localSourceFixtureSchema } from '../local-source-contract'
 
 export const fixtureInputs = fileURLToPath(new URL('../../fixtures/source/', import.meta.url))
+
+/** The application fixture is the Notes example itself, so the contract Control approves is the one the container serves. */
+export const applicationFixtureRoot = fileURLToPath(new URL('../../../../examples/zerops-app/', import.meta.url))
+
+/**
+ * The example's files a deploy reads at its commit: the descriptor, and what the static contract reader and the
+ * snapshot's migration list need. The tree is pinned in `fixtures/source/manifest.json`, so an edit to one of these
+ * files moves the pin.
+ */
+export const APPLICATION_FIXTURE_FILES = [
+	'zerops.yaml',
+	'package.json',
+	'tsconfig.json',
+	'fabrika.contract.ts',
+	'src/db/tables.ts',
+	'src/db/schema.generated.ts',
+	'db/migrations/20261009140000_notes.sql',
+] as const
 
 export function sha256(bytes: Uint8Array): string {
 	return createHash('sha256').update(bytes).digest('hex')
@@ -62,9 +80,11 @@ export async function generateFixture(directory: string, kind: 'platform' | 'app
 }> {
 	await mkdir(directory)
 	await git(directory, ['init', '--quiet', '--object-format=sha1', '--initial-branch=main', '--template='])
-	const files = ['marker.txt', 'zerops.yaml']
+	const root = kind === 'platform' ? join(fixtureInputs, kind) : applicationFixtureRoot
+	const files: string[] = kind === 'platform' ? ['marker.txt', 'zerops.yaml'] : [...APPLICATION_FIXTURE_FILES]
 	for (const file of files) {
-		await writeFile(join(directory, file), await readFile(join(fixtureInputs, kind, file)), { mode: 0o644 })
+		await mkdir(dirname(join(directory, file)), { recursive: true })
+		await writeFile(join(directory, file), await readFile(join(root, file)), { mode: 0o644 })
 	}
 	if (kind === 'platform') {
 		const target = (await readFile(join(fixtureInputs, kind, 'marker-link.target'), 'utf8')).trim()
@@ -73,7 +93,7 @@ export async function generateFixture(directory: string, kind: 'platform' | 'app
 		files.push('marker-link')
 	}
 	await git(directory, ['add', '--', ...files])
-	await git(directory, ['update-index', '--chmod=-x', '--', 'marker.txt', 'zerops.yaml'])
+	await git(directory, ['update-index', '--chmod=-x', '--', ...files.filter((file) => file !== 'marker-link')])
 	await git(directory, ['commit', '--quiet', '--no-gpg-sign', '-m', `Fabrika local ${kind} source fixture v1`])
 	const text = async (args: string[]) => new TextDecoder().decode(await git(directory, args))
 	const commitSha = (await text(['rev-parse', 'HEAD'])).trim()

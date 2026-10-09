@@ -5,8 +5,6 @@
 // require holds in them. They prove NOTHING about whether the platform accepts them, whether the
 // services boot, or whether anything is reachable. Nobody has run this against a real account.
 
-import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
-import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE } from 'fabrika-example-zerops/fabrika.config'
 import {
 	compileFabrikaManifest,
 	compileImport,
@@ -31,6 +29,8 @@ import {
 	validateYaml,
 } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'
+import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
+import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE } from 'fabrika-example-zerops/fabrika.config'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { REPO_ROOT } from '../render'
@@ -474,7 +474,11 @@ describe('cheap, mid, and full namespace fixtures', () => {
 
 		expect(namespace.topology.namespacePreset).toBe('mid')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
-		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([
+			NOTES_DATABASE_SERVICE,
+			NOTES_FILES_SERVICE,
+			NOTES_SERVICE,
+		])
 		expect(app.target.namespaceResources).toBeUndefined()
 	})
 
@@ -495,7 +499,11 @@ describe('cheap, mid, and full namespace fixtures', () => {
 		expect(namespace.topology.exclusiveAppId).toBe(notesConfig.id)
 		expect(namespace.steady.document.project?.name).toBe('notes-prod')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
-		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_FILES_SERVICE, NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([
+			NOTES_DATABASE_SERVICE,
+			NOTES_FILES_SERVICE,
+			NOTES_SERVICE,
+		])
 	})
 
 	test('exclusive ownership is accepted only by the full preset', () => {

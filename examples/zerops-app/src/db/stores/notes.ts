@@ -5,7 +5,8 @@ import type { Ref, Within } from '@fabrika/db'
 import { database } from '../database'
 
 export const notes = database.defineStore('notes', (t) => ({
-	list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title', 'trashed', 'version']).orderBy('title').limit(200)),
+	list: (within: Within<'workspace', 'notes.read'>) =>
+		t.select(within, (q) => q.columns(['id', 'title', 'trashed', 'version']).orderBy('title').limit(200)),
 	trashed: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id']).where('trashed', '=', true).limit(200)),
 	get: (note: Ref<'note', 'notes.read'>) => t.get(note),
 	create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title, trashed: false }),

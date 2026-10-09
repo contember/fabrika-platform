@@ -24,10 +24,15 @@ const control = 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID=existing-key\n'
 const operations = 'FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID=existing-key\n'
 	+ 'FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY=existing-secret=with-padding\n'
 
+const notes = 'FABRIKA_PROXY_SECRET=existing-proxy-secret\n'
+	+ 'FABRIKA_APP_STORAGE_ACCESS_KEY_ID=notes\n'
+	+ 'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY=existing-storage-secret\n'
+
 async function seedExistingState(): Promise<void> {
-	for (const file of ['platform-db.env', 'apps-db.env', 'iam.env', 'platform-proxy.env', 'apps-proxy.env', 'notes.env', 'emulator.env']) {
+	for (const file of ['platform-db.env', 'apps-db.env', 'iam.env', 'platform-proxy.env', 'apps-proxy.env', 'apps-proxy-secret.env', 'emulator.env']) {
 		await Bun.write(resolve(directory, file), 'EXISTING_VALUE=must-not-rotate\n')
 	}
+	await Bun.write(resolve(directory, 'notes.env'), notes)
 	await Bun.write(resolve(directory, 'control.env'), control)
 	await Bun.write(resolve(directory, 'operations.env'), operations)
 }
@@ -60,6 +65,20 @@ describe('local storage preparation', () => {
 		rmSync(resolve(directory, 'object-storage-identities.json'))
 		await prepareLocalSecrets(directory)
 		expect(await snapshotEnvironment()).toEqual(before)
+	})
+
+	test("gives the apps storage the Notes bucket's identity, and asks for a reset when notes.env predates the contract", async () => {
+		await seedExistingState()
+		await prepareLocalSecrets(directory)
+		expect(await Bun.file(resolve(directory, 'apps-storage-identities.json')).json()).toEqual({
+			identities: [{
+				name: 'notes',
+				credentials: [{ accessKey: 'notes', secretKey: 'existing-storage-secret' }],
+				actions: ['Read:notes-files', 'Write:notes-files', 'List:notes-files'],
+			}],
+		})
+		await Bun.write(resolve(directory, 'notes.env'), 'NOTES_DATABASE_URL=postgres://legacy\n')
+		await expect(prepareLocalSecrets(directory)).rejects.toThrow('explicitly reset the local stack')
 	})
 
 	test('retains a legacy minio.env unchanged and takes credentials from the services', async () => {

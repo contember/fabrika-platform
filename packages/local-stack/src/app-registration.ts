@@ -20,9 +20,10 @@
 import { reconcileSchema } from '@fabrika/auth'
 import type { AppSchema } from '@fabrika/auth-core'
 import { controlSchema } from '@fabrika/control/schema'
-import { notesSchema } from '@fabrika/example-zerops-app/schema'
+import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
 import { readStateEnv } from './machine-key'
+import { WITNESS_IAM_APP_ID, WITNESS_ORIGIN, WITNESS_SCHEMA } from './operations-witness/placement'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
@@ -45,9 +46,15 @@ export interface LocalApp {
  * would change it, and what it costs is
  * [backlog 54](../../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md).
  */
+function notesSchema(): AppSchema {
+	if (notesConfig.schema === undefined) throw new Error('the Notes example hands its IAM schema to the deploy')
+	return notesConfig.schema
+}
+
 export const localApps: readonly LocalApp[] = [
 	{ id: 'vozka', schema: controlSchema, returnOrigins: ['http://control.fabrika.localhost:18080'] },
-	{ id: LOCAL_NOTES_IAM_APP_ID, schema: notesSchema, returnOrigins: ['http://notes.fabrika.localhost:18081'] },
+	{ id: LOCAL_NOTES_IAM_APP_ID, schema: notesSchema(), returnOrigins: ['http://notes.fabrika.localhost:18081'] },
+	{ id: WITNESS_IAM_APP_ID, schema: WITNESS_SCHEMA, returnOrigins: [WITNESS_ORIGIN] },
 ]
 
 export const registerLocalApps = async (): Promise<void> => {

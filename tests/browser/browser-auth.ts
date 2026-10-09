@@ -36,7 +36,8 @@ interface AuthResolveContext {
 
 const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? 'http://control.fabrika.localhost:18080'
 const IAM_ORIGIN = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabrika.localhost:18080'
-const NOTES_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
+// The Operations SDK witness, the one application host a scenario visits; a contract application serves no `/` to start a handoff at.
+const WITNESS_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://sdk.fabrika.localhost:18081'
 
 /**
  * Every host a scenario is signed in to, with the app id IAM knows it by. `registerLocalApps` in
@@ -45,7 +46,7 @@ const NOTES_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fab
  */
 const APP_HOSTS: readonly { app: string; origin: string }[] = [
 	{ app: 'vozka', origin: CONTROL_ORIGIN },
-	{ app: 'notes', origin: NOTES_ORIGIN },
+	{ app: 'sdk-witness', origin: WITNESS_ORIGIN },
 ]
 
 /** Where a scenario reads the principal it is signed in as. Mirrored in `support/fixtures.ts`. */

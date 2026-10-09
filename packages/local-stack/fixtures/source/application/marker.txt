@@ -1,1 +1,0 @@
-Fabrika local application source fixture v1

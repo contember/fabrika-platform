@@ -31,10 +31,9 @@ export const envViewSchema = z.object({ serviceStackId: z.unknown(), key: z.unkn
 export const managedSnapshotSchema = z.object({ services: z.array(serviceViewSchema), serviceEnv: z.array(envViewSchema) })
 export const iamSchemaResponseSchema = z.object({ actions: z.array(z.unknown()), scopes: z.array(z.unknown()) })
 export const keyPrincipalSchema = z.object({ apiKey: text, principalId: text })
-export const publicStatusSchema = z.object({ app: z.unknown() }).catch({})
-const noteViewSchema = z.object({ title: z.unknown() }).catch({})
-export const createdNoteSchema = z.object({ note: noteViewSchema }).catch({ note: {} })
-export const notesListSchema = z.object({ notes: z.array(noteViewSchema) })
+/** The Notes example's procedure answers, `{ result }` (`fabrika.contract.ts`). */
+export const createdNoteSchema = z.object({ result: z.object({ id: text }) })
+export const notesListSchema = z.object({ result: z.object({ items: z.array(z.object({ id: text, title: z.string() })) }) })
 export const issueViewSchema = z.object({
 	title: z.string().optional().catch(undefined),
 	count: z.unknown(),

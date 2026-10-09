@@ -1,16 +1,18 @@
-import { appEnvironmentId } from '@fabrika/auth-core'
-import { notesGates } from '@fabrika/example-zerops-app/gates'
-import { NOTES_APP_ID } from '@fabrika/example-zerops-app/schema'
+import { writeGeneratedEntry } from '@fabrika/app/build'
+import { appEnvironmentId, contractDigest, FABRIKA_CONTRACT_DIGEST, FABRIKA_PROXY_SECRET, proxySecretVariable } from '@fabrika/auth-core'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig, type PlatformProxyComposition } from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import type { GateProxyManifest, ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, type GateProxyManifest, type ProxyManifest } from '@fabrika/proxy-core/manifest'
+import { NOTES_APP_ID, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
+import { applicationFixtureRoot } from './local-source-fixtures/generate'
+import { WITNESS_GATES, WITNESS_HOST, WITNESS_IAM_APP_ID, WITNESS_UPSTREAM } from './operations-witness/placement'
 import { ensureLocalGitHubApps } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -71,11 +73,13 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 		'platform-proxy.env',
 		'apps-proxy.env',
 		'notes.env',
+		'apps-proxy-secret.env',
 		'emulator.env',
 	]
 	const existingFiles = requiredFiles.filter((file) => existsSync(resolve(directory, file)))
 	if (existingFiles.length === requiredFiles.length) {
 		await ensureObjectStorageSecrets(directory)
+		await ensureAppsStorageIdentity(directory)
 		await ensureLocalGitHubApps(directory)
 		return
 	}
@@ -85,6 +89,8 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 
 	const platformDatabasePassword = randomSecret()
 	const appsDatabasePassword = randomSecret()
+	const appsStorageSecret = randomSecret()
+	const notesProxySecret = randomSecret()
 	const storagePassword = randomSecret()
 	const rpcKey = `px_${randomSecret()}`
 	const proxyKey = `px_${randomSecret()}`
@@ -126,13 +132,43 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 		}),
 		writeEnv(directory, 'platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
 		writeEnv(directory, 'apps-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
+		// What the platform writes into a contract application on Zerops (ADR-0022 rule 5, F1), for the composed container.
 		writeEnv(directory, 'notes.env', {
-			NOTES_DATABASE_URL: `postgres://postgres:${appsDatabasePassword}@apps-db:5432/notes`,
+			FABRIKA_APP_DATABASE_URL: `postgres://postgres:${appsDatabasePassword}@apps-db:5432/notes`,
+			FABRIKA_PROXY_SECRET: notesProxySecret,
+			FABRIKA_APP_STORAGE_ENDPOINT: 'http://apps-storage:9000',
+			FABRIKA_APP_STORAGE_BUCKET: NOTES_BUCKET,
+			FABRIKA_APP_STORAGE_ACCESS_KEY_ID: 'notes',
+			FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: appsStorageSecret,
 		}),
+		// The apps proxy's Caddy sends it as `X-Fabrika-Proxy-Secret`; the auth service only checks that it is set.
+		writeEnv(directory, 'apps-proxy-secret.env', { [proxySecretVariable(LOCAL_NOTES_IAM_APP_ID)]: notesProxySecret }),
 		writeEnv(directory, 'emulator.env', { LOCAL_ZEROPS_TOKEN: emulatorToken }),
 	])
 	await ensureObjectStorageSecrets(directory)
+	await ensureAppsStorageIdentity(directory)
 	await ensureLocalGitHubApps(directory)
+}
+
+/** The bucket of the Notes example's `attachments` collection, on the apps network's own object storage. */
+export const NOTES_BUCKET = 'notes-files'
+
+/** The apps object storage's one identity, from the credentials `notes.env` holds; a stack from before them needs a reset. */
+async function ensureAppsStorageIdentity(directory: string): Promise<void> {
+	const notes = await readEnv(directory, 'notes.env')
+	const accessKey = envValue(notes, 'FABRIKA_APP_STORAGE_ACCESS_KEY_ID')
+	const secretKey = envValue(notes, 'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY')
+	if (!accessKey || !secretKey || !envValue(notes, FABRIKA_PROXY_SECRET)) {
+		throw new Error('local Notes credentials predate the contract application; explicitly reset the local stack')
+	}
+	const config = {
+		identities: [{
+			name: 'notes',
+			credentials: [{ accessKey, secretKey }],
+			actions: [`Read:${NOTES_BUCKET}`, `Write:${NOTES_BUCKET}`, `List:${NOTES_BUCKET}`],
+		}],
+	}
+	await Bun.write(resolve(directory, 'apps-storage-identities.json'), `${JSON.stringify(config, null, '\t')}\n`)
 }
 
 async function ensureObjectStorageSecrets(directory: string): Promise<void> {
@@ -231,17 +267,29 @@ export const localIamOAuthConfig = (mcpClients: readonly McpClient[] | undefined
 export const LOCAL_NOTES_ENVIRONMENT = 'prod'
 export const LOCAL_NOTES_IAM_APP_ID = appEnvironmentId(NOTES_APP_ID, LOCAL_NOTES_ENVIRONMENT)
 
+/**
+ * The apps proxy fronts the Notes example by its contract's endpoint table, as a namespace proxy fronts a contract
+ * application whose snapshot Control approved, and the SDK witness by its gates.
+ */
+export const localAppsProxyManifest = (): ProxyManifest => ({
+	apps: [
+		{ id: LOCAL_NOTES_IAM_APP_ID, hosts: ['notes.fabrika.localhost'], upstream: 'notes:3000', scheme: 'http', ...contractProxyTable(notesContract) },
+		{ id: WITNESS_IAM_APP_ID, hosts: [WITNESS_HOST], upstream: WITNESS_UPSTREAM, gates: WITNESS_GATES, scheme: 'http' },
+	],
+})
+
+/**
+ * Rewritten on every prepare, so a contract edit reaches the composed container: its digest (the container refuses to
+ * start under another) and the entrypoint the platform build writes.
+ */
+const prepareNotesApplication = async (): Promise<void> => {
+	await writeEnv(STATE_DIR, 'notes-contract.env', { [FABRIKA_CONTRACT_DIGEST]: contractDigest(notesContract) })
+	await writeGeneratedEntry(applicationFixtureRoot, 'bun')
+}
+
 const generateProxyConfigs = async (mcpClients: readonly McpClient[] | undefined): Promise<void> => {
 	const platformManifest = localPlatformProxyManifest(mcpClients)
-	const appsManifest: ProxyManifest = {
-		apps: [{
-			id: LOCAL_NOTES_IAM_APP_ID,
-			hosts: ['notes.fabrika.localhost'],
-			upstream: 'notes:3000',
-			gates: notesGates,
-			scheme: 'http',
-		}],
-	}
+	const appsManifest = localAppsProxyManifest()
 	await Promise.all([
 		writeJson('platform-proxy.manifest.json', platformManifest),
 		writeJson(
@@ -288,6 +336,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	// Rewritten on every prepare, so turning MCP off is unsetting the variable and running `local:up`.
 	await writeEnv(STATE_DIR, 'iam-oauth.env', { FABRIKA_IAM_OAUTH_CONFIG: localIamOAuthConfig(mcpClients) })
 	await generateProxyConfigs(mcpClients)
+	await prepareNotesApplication()
 	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpClients === undefined ? 'off' : 'on'}`)
 }
 

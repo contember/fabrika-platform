@@ -30,6 +30,7 @@
 		"@fabrika/control": "workspace:*",
 		"fabrika-example-zerops": "workspace:*",
 		"@fabrika/github-app": "workspace:*",
+		"@fabrika/jwks": "workspace:*",
 		"@fabrika/platform-artifacts": "workspace:*",
 		"@fabrika/operations": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
@@ -37,7 +38,8 @@
 		"@fabrika/proxy-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
-		"@fabrika/platform-node": "workspace:*"
+		"@fabrika/platform-node": "workspace:*",
+		"@sentry/browser": "10.69.0"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"

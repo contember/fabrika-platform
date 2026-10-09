@@ -4,9 +4,9 @@
 
 import { compileTopology, fabrikaTopologies, generatedArtifacts, parseYaml, validateYaml } from '@fabrika/provider-zerops/installation/topology'
 import { describe, expect, test } from 'bun:test'
+import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { REPO_ROOT } from '../render'
 
 const read = (path: string): string => readFileSync(resolve(REPO_ROOT, path), 'utf8')

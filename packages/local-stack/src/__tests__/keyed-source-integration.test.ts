@@ -3,7 +3,6 @@
 // Postgres, like every other database-backed suite in the repository.
 import { Vault } from '@fabrika/control/vault'
 import { createRuntime } from '@fabrika/control/zerops/runtime'
-import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import type { ProviderEnvironment, ProviderSourceResolution, ProviderSourceResolutionInput } from '@fabrika/provider-contract'
 import {
@@ -14,6 +13,7 @@ import {
 	zeropsStoredTargetCodec,
 } from '@fabrika/provider-zerops'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
 import { randomBytes } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

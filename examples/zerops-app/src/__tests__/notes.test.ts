@@ -36,7 +36,9 @@ if (postgres !== null) {
 			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Plan' })
 			expect((await authorApi.notes.list()).items).toEqual([{ id, title: 'Plan', trashed: false, version: 1 }])
 
-			const outsider = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }])) })
+			const outsider = createClient(contract, 'api', {
+				fetch: kit.browser(kit.testCaller([{ role: 'editor', scope: { type: 'workspace', value: 'w2' } }])),
+			})
 			expect((await outsider.notes.list()).items).toEqual([])
 			expect(await statusOf(outsider.notes.get({ id }))).toBe(404)
 			expect(await statusOf(outsider.notes.create({ workspaceId: 'w1', title: 'Not mine' }))).toBe(403)

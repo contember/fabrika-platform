@@ -81,7 +81,7 @@ async function seedBrowserFixtures(): Promise<void> {
 		{ browser: true },
 	)
 	const fixtures = readFixtures()
-	await compose(['up', '--detach', '--wait', '--force-recreate', 'notes'], {
+	await compose(['up', '--detach', '--wait', '--force-recreate', 'operations-witness'], {
 		browser: true,
 		env: {
 			FABRIKA_BROWSER_OPERATIONS_DSN: buildOperationsDsn(OPERATIONS_ORIGIN, fixtures.visible.publicKey, fixtures.visible.ingestProjectId),

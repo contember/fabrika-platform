@@ -62,7 +62,7 @@ describe('local immutable source fixtures', () => {
 			expect(new TextDecoder().decode(tar)).toContain(`fabrika-local-${kind}-${fixture.commitSha}/`)
 		}
 		expect(manifest.platform.tree.find(entry => entry.path === 'marker-link')?.mode).toBe('120000')
-		expect(manifest.application.tree.every(entry => entry.mode === '100644')).toBe(true)
+		expect(manifest.application.tree.filter(entry => entry.type === 'blob').every(entry => entry.mode === '100644')).toBe(true)
 	})
 
 	test('inherited Git repository, index, config and author settings cannot alter generation', async () => {

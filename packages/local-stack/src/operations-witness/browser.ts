@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/browser'
-import { parseOperationsConfig } from './operations-config'
+import { parseOperationsConfig } from './config'
 
 const configResponse = await fetch('/operations-sdk/config')
 if (!configResponse.ok) throw new Error('Operations SDK configuration is unavailable')

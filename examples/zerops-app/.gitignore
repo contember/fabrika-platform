@@ -2,3 +2,5 @@ node_modules/
 fabrika.manifest.json
 .env
 *.local
+# The platform build writes the entrypoint; the local stack writes it before it starts Notes.
+/fabrika/entry.generated.ts

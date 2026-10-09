@@ -218,12 +218,44 @@ services:
       platform-proxy-auth:
         condition: service_healthy
 
+  # The apps network's own object storage, as a namespace's application holds a bucket of its own: the app never
+  # reaches the platform's storage. It holds the Notes example's `attachments` bucket only.
+  apps-storage:
+    image: chrislusf/seaweedfs:4.42
+    command: >-
+      mini -dir=/data -s3.port=9000 -s3.config=/etc/seaweedfs/identities.json
+      -s3.autoCreateBucket=false -master.telemetry=false
+    environment:
+      S3_BUCKET: notes-files
+    volumes:
+      - apps-storage:/data
+      - ./.state/apps-storage-identities.json:/etc/seaweedfs/identities.json:ro
+    networks: [apps-prod]
+    healthcheck:
+      test: [CMD-SHELL, "curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/notes-files/?limit=1'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The Notes example as the platform starts a contract application on Zerops: the generated start script's steps,
+  # then the generated entrypoint, with the variables the deploy writes (`prepare.ts` generates the local ones).
   notes:
     <<: *bun
-    command: [sh, -c, "bun examples/zerops-app/src/migrate.ts && exec bun examples/zerops-app/src/server.ts"]
-    env_file: .state/notes.env
+    working_dir: /workspace/examples/zerops-app
+    command:
+      - sh
+      - -c
+      - >-
+        bun ../../packages/cli/src/index.ts db migrate &&
+        bun ../../packages/cli/src/index.ts db codegen --verify &&
+        bun ../../packages/cli/src/index.ts db test-isolation &&
+        exec bun fabrika/entry.generated.ts
+    env_file:
+      - .state/notes.env
+      - .state/notes-contract.env
     environment:
       PORT: "3000"
+      FABRIKA_APP_ID: notes
       FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
       FABRIKA_IAM_APP_ID: notes@prod
       FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
@@ -232,6 +264,24 @@ services:
     depends_on:
       apps-db:
         condition: service_healthy
+      apps-storage:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  # The Operations browser SDK witness: an application without a contract, because a contract application cannot
+  # hand its browser the managed DSN yet.
+  operations-witness:
+    <<: *bun
+    command: bun packages/local-stack/src/operations-witness/server.ts
+    environment:
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
+      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
+      FABRIKA_RELEASE: fabrika/local-notes/local/default/0000000000000000000000000000000000000000
+    networks: [apps-prod, iam-public]
     healthcheck:
       test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
       interval: 2s
@@ -241,7 +291,9 @@ services:
   apps-proxy-auth:
     <<: *bun
     command: bun packages/proxy/src/main.ts
-    env_file: .state/apps-proxy.env
+    env_file:
+      - .state/apps-proxy.env
+      - .state/apps-proxy-secret.env
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/apps-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
@@ -257,6 +309,8 @@ services:
     depends_on:
       notes:
         condition: service_healthy
+      operations-witness:
+        condition: service_healthy
       platform-proxy-auth:
         condition: service_healthy
     healthcheck:
@@ -268,6 +322,8 @@ services:
   apps-proxy:
     image: caddy:2.10.2-alpine
     command: caddy run --config /local-state/apps-caddy.json
+    # Caddy reads the Notes proxy secret from its environment (`{env.FABRIKA_PROXY_SECRET_…}`) and sends it upstream.
+    env_file: .state/apps-proxy-secret.env
     network_mode: service:apps-proxy-auth
     volumes:
       - ./.state:/local-state:ro
@@ -286,6 +342,7 @@ networks:
 volumes:
   platform-db: {}
   apps-db: {}
+  apps-storage: {}
   object-storage: {}
   # Retained only so an explicit reset can remove the legacy volume too.
   minio: {}

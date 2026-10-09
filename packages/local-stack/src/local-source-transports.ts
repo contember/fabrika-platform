@@ -17,6 +17,8 @@ export interface FixtureTransportSource {
 	archive: Blob
 	/** A private repository answers only a caller holding a token the access check accepts; GitHub hides it as 404 otherwise. */
 	visibility: 'public' | 'private'
+	/** Every file of the commit by path (`readFixtureFiles`); without it only the descriptor is served. */
+	files?: ReadonlyMap<string, Uint8Array<ArrayBuffer>>
 }
 
 /** Decides whether a request's Authorization header may read a private repository (the GitHub double). */
@@ -70,8 +72,11 @@ export function createFixtureTransports(
 				if (url === `${prefix}/git/trees/${fixture.treeSha}?recursive=1`) {
 					return Response.json({ sha: fixture.treeSha, truncated: false, tree: fixture.tree })
 				}
-				if (url === `${prefix}/contents/zerops.yaml?ref=${fixture.commitSha}`) {
-					return new Response(fixture.descriptorContents)
+				const files = source.files ?? new Map([['zerops.yaml', new TextEncoder().encode(fixture.descriptorContents)]])
+				for (const [path, bytes] of files) {
+					if (url === `${prefix}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${fixture.commitSha}`) {
+						return new Response(bytes)
+					}
 				}
 			}
 			return missing()

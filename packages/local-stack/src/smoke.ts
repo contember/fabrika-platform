@@ -1,7 +1,7 @@
-import { FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
+import { schemaFromContract } from '@fabrika/app/contract'
+import { contractDigest, FABRIKA_CONTRACT_DIGEST, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FABRIKA_PROXY_SECRET } from '@fabrika/auth-core'
 import { LEASE_TTL_MS } from '@fabrika/control/lease'
 import { normalizeRepoUrl } from '@fabrika/control/repo-source'
-import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
 import {
 	DEFAULT_OPERATIONS_SERVICE_KEY,
 	FABRIKA_APP_ID,
@@ -21,6 +21,8 @@ import {
 	zeropsNamespaceTargetCodec,
 	type ZeropsRunState,
 } from '@fabrika/provider-zerops'
+import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
+import { notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -50,7 +52,6 @@ import {
 	namespaceTargetViewSchema,
 	namespaceViewSchema,
 	notesListSchema,
-	publicStatusSchema,
 	runViewSchema,
 	storageIdentitySchema,
 	storageRowsSchema,
@@ -77,6 +78,8 @@ const MAINTENANCE_CRON_INTERVAL_MS = 10_000
 const POLL_TIMEOUT_MS = 30_000
 // Six sequential user-data syncs follow proxy synchronization and import; build submission can retry sync conflicts.
 export const DURABLE_BUILD_WAIT_MS = 120_000
+/** The deploy service's marker of the buckets the platform created (`STORAGE_PROVENANCE_KEY` of provider-zerops). */
+const STORAGE_PROVENANCE_VARIABLE = 'FABRIKA_STORAGE_PROVENANCE'
 
 const parseJson = (text: string, description: string): unknown => {
 	try {
@@ -392,9 +395,9 @@ const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceMan
 }
 
 /**
- * Notes has no contract, so its first deploy to the protected `prod` waits for a human to approve its gates and IAM
- * schema (ADR-0050). The smoke approves it as the signed-in console admin; a later smoke on the same stack finds them
- * approved and does not wait.
+ * Every access of Notes' contract is new on the first deploy to the protected `prod`, so the run waits for a human to
+ * approve the snapshot Control read at the commit (ADR-0050). The smoke approves it as the signed-in console admin; a
+ * later smoke on the same stack finds it approved and does not wait.
  */
 const approveIfParked = async (machineKey: string, runId: string): Promise<void> => {
 	// A run is `running` while Control classifies it, so only the park or the provider's acceptance decides.
@@ -565,17 +568,32 @@ const proveManagedOperationsEnvironment = async (
 	if (version?.status !== 'ACTIVE' || version.runEnvVariables?.[FABRIKA_RELEASE] !== release) {
 		throw new Error('The deployed version does not carry the release in its execution descriptor')
 	}
-	// No retired protocol record survives: every Fabrika-prefixed record is a managed key.
-	const managedKeys = new Set<string>([...expected.keys(), FABRIKA_RELEASE, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID])
-	if (records.some(record => record.key.startsWith('FABRIKA_') && !managedKeys.has(record.key))) {
-		throw new Error('Zerops emulator holds Fabrika records beyond the managed keys')
+	// The generated run section binds the contract digest to the version: the application refuses to start under another.
+	if (version.runEnvVariables?.[FABRIKA_CONTRACT_DIGEST] !== contractDigest(notesContract)) {
+		throw new Error('The deployed version does not carry the approved contract digest in its execution descriptor')
+	}
+	// No retired protocol record survives: every Fabrika-prefixed service variable is a managed key, and every other
+	// Fabrika-prefixed record is the active version's generated run section. A contract application also gets its proxy
+	// secret, and a bucket the import created is marked as the platform's.
+	const managedKeys = new Set<string>([...expected.keys(), FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_PROXY_SECRET, STORAGE_PROVENANCE_VARIABLE])
+	const unexpected = records.filter((record) =>
+		record.key.startsWith('FABRIKA_')
+		&& (record.type === 'ENV' ? version.runEnvVariables?.[record.key] !== record.content : !managedKeys.has(record.key))
+	)
+	if (unexpected.length > 0) {
+		throw new Error(`Zerops emulator holds Fabrika records beyond the managed keys: ${unexpected.map((record) => record.key).join(', ')}`)
 	}
 }
 
+/**
+ * IAM holds the contract's vocabulary, and the composed container answers through the endpoint table: a script's key
+ * creates and lists notes in its workspace, and a path no endpoint serves stops at the proxy.
+ */
 const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 	const schemaPath = `/admin/apps/${encodeURIComponent(LOCAL_NOTES_IAM_APP_ID)}/schema`
 	const schema = iamSchemaResponseSchema.parse(await requestJson(IAM_ORIGIN, schemaPath, { bearer: provisioningKey }))
-	if (schema.actions.length !== 4 || schema.scopes.length !== 1) {
+	const declared = schemaFromContract(notesContract)
+	if (schema.actions.length !== declared.actions.length || schema.scopes.length !== declared.scopes.length) {
 		throw new Error('notes IAM schema was not reconciled')
 	}
 	const keyResponse = await requestJson(IAM_ORIGIN, '/admin/api-keys', {
@@ -591,20 +609,15 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 	})
 	const { apiKey, principalId } = keyPrincipalSchema.parse(keyResponse)
 	try {
-		const publicResponse = await requestJson(NOTES_ORIGIN, '/public/status')
-		if (publicStatusSchema.parse(publicResponse).app !== 'notes') {
-			throw new Error('public notes route returned the wrong app')
+		const undeclared = await fetch(`${NOTES_ORIGIN}/public/status`, { headers: { authorization: `Bearer ${apiKey}` }, redirect: 'manual' })
+		if (undeclared.status !== 403) {
+			throw new Error(`a path no Notes endpoint serves answered ${undeclared.status}, expected a proxy refusal`)
 		}
 		const title = `local smoke ${Date.now()}`
-		const created = await requestJson(NOTES_ORIGIN, '/api/notes?workspace=local', {
-			bearer: apiKey,
-			body: { title },
-		})
-		if (createdNoteSchema.parse(created).note.title !== title) {
-			throw new Error('authenticated note creation returned the wrong title')
-		}
-		const listed = await requestJson(NOTES_ORIGIN, '/api/notes?workspace=local', { bearer: apiKey })
-		if (!notesListSchema.parse(listed).notes.some((note) => note.title === title)) {
+		const created = await requestJson(NOTES_ORIGIN, '/api/notes.create', { bearer: apiKey, body: { workspaceId: 'local', title } })
+		const { id } = createdNoteSchema.parse(created).result
+		const listed = await requestJson(NOTES_ORIGIN, '/api/notes.list', { bearer: apiKey, body: {} })
+		if (!notesListSchema.parse(listed).result.items.some((note) => note.id === id && note.title === title)) {
 			throw new Error('authenticated note was not persisted')
 		}
 	} finally {
