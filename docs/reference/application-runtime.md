@@ -576,7 +576,10 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
 its generated entrypoint would, for the audience `<app>@test`, behind the production
 proxy decision and a stand-in for IAM; it has no test-runner dependency. An
 application on `@fabrika/db` passes its connection as `options.database`, which the kit
-hands to `boot` as a runtime adapter does; without one it does not boot.
+hands to `boot` as a runtime adapter does; without one it does not boot. A test of the
+author's that boots the application on a database runs beside the generated endpoint
+access test only under `bun test --isolate`: the data layer binds once per process. The
+template's `test` script passes it.
 
 ```ts
 const kit = testKit(notesApp(rows))
@@ -661,7 +664,9 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
 - **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
   contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
   export) through `testKit`, on the application's own data layer, once: that layer
-  binds once per process. For every procedure with an `on` or `in` access form, a
+  binds once per process, and it gets in-memory object storage for a file collection. A
+  file collection's endpoints get no case: they are framework code, and no file row is
+  seeded. For every other procedure with an `on` or `in` access form, a
   caller holding the action in one scope names the other scope's object or value and
   gets 404 (`on`) or 403 (`in`). For every `on` and `over` procedure, a caller of the
   other scope asks first, then a caller of one scope asks for its own; the second answer
@@ -708,8 +713,8 @@ checker refuses, and what is not built yet. Three places carry it, all read thro
 
 - `fabrika builder init` installs the file verbatim as `.claude/skills/fabrika-app/` and `.agents/skills/fabrika-app/`;
 - Control's MCP server answers its body from the read-only tool `get_app_rules`, which its `instructions` name;
-- the template's `AGENTS.md` is `renderAgentsFile`: the body under a generated-file marker. The template does not
-  carry it yet.
+- the template's `AGENTS.md` is `renderAgentsFile`: the body under a generated-file marker. The template is
+  `examples/zerops-app`, and `packages/app`'s `agent-skill.test.ts` fails when its `AGENTS.md` is not the rendered file.
 
 Change the rules in that file only, and keep it to what is built.
 
@@ -747,9 +752,11 @@ runtime values:
 - `FABRIKA_RELEASE` is the current deploy-scoped release name.
 
 Applications may pass these two values to a browser, but must not expose other
-runtime configuration. The Zerops notes example demonstrates this boundary at
-`/operations-sdk` and initializes `@sentry/browser` **10.69.0** from a JSON
-config response containing only `dsn` and `release`.
+runtime configuration. A contract application cannot do it yet: neither its handlers nor its
+SPA mount see the two values (backlog 102). The local stack's SDK witness, an application
+without a contract (`packages/local-stack/src/operations-witness/`), demonstrates the boundary
+at `/operations-sdk` and initializes `@sentry/browser` **10.69.0** from a JSON config response
+containing only `dsn` and `release`.
 
 The tested compatibility profile is deliberately narrow. Fabrika accepts the
 SDK's envelope authentication query and an `event` item for a captured browser

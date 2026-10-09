@@ -63,6 +63,13 @@ bun run test:browser  # the opice suites in tests/browser/
   `iam`, `operations` and `proxy`, none of which want a console. `control` names the console build in
   its own `buildCommands`, which is where a service's build belongs. Reach this from `local:up`,
   `local:reset` and `browser:up` only.
+- **Notes is the example, deployed and served as a contract application.** The application source fixture is the
+  example's own files (`APPLICATION_FIXTURE_FILES`), pinned by tree in `fixtures/source/manifest.json`, so Control
+  approves the contract the composed container serves; an edit to one of them regenerates the pin. The container runs
+  the platform's start-script steps and the generated entrypoint with the variables `prepare.ts` writes. Never give it
+  a variable the platform would not write, and never route it by gates: the apps proxy serves its endpoint table.
+- **The Operations SDK witness is an application without a contract on its own host** (`src/operations-witness/`),
+  because a contract application cannot hand its browser the managed DSN yet (backlog 102). Delete it when that lands.
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
   remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.

@@ -1,149 +1,91 @@
-# Example app — targeting Zerops
+# Example app — a contract application on Zerops
 
-A small notes API, deployed by fabrika **to Zerops**. It is a worked example meant to be copied: every
-file here is one an app author writes, and nothing in it is a stub.
+A small notes application, deployed by fabrika **to Zerops**. It is the template an agent starts from, in the
+builder and over MCP: every file here is one an author writes or a command generates, and nothing in it is a stub.
+The rules an agent follows are in [`AGENTS.md`](./AGENTS.md), rendered from the `fabrika-app` skill of `@fabrika/app`.
+Do not edit it here; it is regenerated from the skill.
 
-This directory is both a fabrika-platform workspace fixture and the complete root of the standalone
-[`contember/fabrika-example-zerops`](https://github.com/contember/fabrika-example-zerops) repository.
-Zerops requires `zerops.yaml` at the root of the repository it builds. The standalone repository must
-therefore contain this directory's files directly, not the surrounding monorepo or an extra directory.
+This directory is both a fabrika-platform workspace member and the complete root of the standalone
+[`contember/fabrika-example-zerops`](https://github.com/contember/fabrika-example-zerops) repository. Zerops requires
+`zerops.yaml` at the root of the repository it builds, so the standalone repository contains this directory's files
+directly.
 
-The monorepo directory is the source of truth and the mirror's tree must equal it byte for byte. The
-mirror's HISTORY is curated rather than replayed, so an update is one commit on top of what is there:
+## What is where
+
+| File                                                         | What it is                                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `fabrika.contract.ts`                                        | Who may call what: dimensions, actions, roles, the `/api` procedures, `attachments`, `purge`.     |
+| `src/db/tables.ts`                                           | The table policy of `notes`: its scope, the action of each operation, the writable columns.       |
+| `db/migrations/`                                             | Plain SQL of the application's schema, the file collection's table included.                      |
+| `src/db/schema.generated.ts`                                 | Written by `fabrika db codegen` from the migrated schema.                                         |
+| `src/db/database.ts`, `src/db/stores/`                       | The data layer, `scoped(tables)`, and the store every handler and the job reach rows through.     |
+| `src/app.ts`                                                 | `implement(contract, …)`: one handler per procedure, and the `purge` job.                         |
+| `src/db/__tests__/`, `src/__tests__/endpoint-access.test.ts` | Written by `fabrika db test-scaffold`; the platform runs them at container start.                 |
+| `src/__tests__/notes.test.ts`                                | The author's own tests, through `testKit`: each allowed call has a refused twin.                  |
+| `fabrika.config.ts`                                          | The deploy surface: a database, a bucket and the runtime, the compiled contract, its proxy table. |
+| `fabrika.cheap.config.ts`                                    | The cheap tier: the bucket and the runtime, on the namespace's shared PostgreSQL.                 |
+| `zerops.yaml`                                                | Only the build base. The platform generates the rest of the setup (ADR-0043).                     |
+
+`fabrika/entry.generated.ts` is not committed: the platform build writes it, and so does the local stack.
+
+## How a deploy runs it
+
+The proxy serves the contract's endpoint table and is the only enforcement of who may call what
+([ADR-0022](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
+The data layer scopes every row operation by the capability the endpoint's access form minted. Control reads the
+contract, the table policies and the migrations at the commit; a change that widens access on `prod` waits for a person
+to approve it in the console.
+
+On Zerops the platform owns the setup. The build installs, runs `bun test`, writes the entrypoint, runs `fabrika-check`
+and the type check. The start script runs `fabrika db migrate`, `fabrika db codegen --verify` and
+`fabrika db test-isolation`, then the server; the crontab runs `fabrika job run purge`. Every `FABRIKA_*` variable is
+the platform's: the database URL from `notesdb`, the storage from `notesfiles`, the IAM issuer and audience, the proxy
+secret, the contract digest and the Operations DSN.
+
+Not built yet on Zerops: the IAM membership transport, so this example has no `creates`, members or share links; and
+handing the browser its Operations DSN (fabrika-platform backlog 102).
+
+## Running it
+
+```bash
+FABRIKA_TEST_POSTGRES_URL=postgres://… bun run test   # bun test --isolate: the author's and the generated tests
+bun run typecheck
+bunx fabrika-check .
+```
+
+Without `FABRIKA_TEST_POSTGRES_URL` every database test skips, and a skip proves nothing. `--isolate` is required
+because the generated endpoint access test and `notes.test.ts` both boot the application, and its data layer binds
+once per process.
+
+After a change to the contract or the table policies:
+
+```bash
+fabrika db new <slug>                                   # a new migration; never edit a committed one
+FABRIKA_APP_ID=notes FABRIKA_APP_DATABASE_URL=postgres://… fabrika db migrate
+FABRIKA_APP_ID=notes FABRIKA_APP_DATABASE_URL=postgres://… fabrika db codegen
+fabrika db test-scaffold
+```
+
+In fabrika-platform, `bun run local:smoke` deploys this directory through Control and the Zerops emulator and serves
+it from a composed container with the variables a deploy writes (`docs/reference/local-development.md`).
+
+## Updating the standalone repository
+
+The monorepo directory is the source of truth and the mirror's tree must equal it byte for byte. The mirror's history
+is curated rather than replayed, so an update is one commit on top of what is there:
 
 ```bash
 git clone git@github.com:contember/fabrika-example-zerops.git /tmp/fabrika-example-zerops
 cd /tmp/fabrika-example-zerops
 git fetch /path/to/fabrika-platform main
 git read-tree -u --reset FETCH_HEAD:examples/zerops-app
+bun /path/to/fabrika-platform/scripts/release.ts example-pin . --tag=<released tag>   # pin the released packages
+bun install                                             # refresh bun.lock against them
 git commit -m "…" && git push origin main
 ```
 
-`read-tree -u --reset` makes the index and the working tree exactly this directory, so a file deleted
-here is deleted there and no local edit survives. `git subtree split` is NOT the mechanism, however
-much it looks like the job: it replays the monorepo's entire history into a public example repository,
-and it rewrites the commit ids the platform has already recorded as deployed releases.
-
-Do not edit the mirror directly. A fresh export must pass `bun install --frozen-lockfile`,
-`bun run typecheck`, and `bun test` from its repository root. The normal fabrika-platform workspace
-checks continue to exercise the same files locally.
-
-The [Cloudflare example](https://github.com/contember/fabrika-platform/tree/main/examples/app) is a
-separate example because each provider owns its authoring surface and build command. A config imports
-only the provider it targets, so provider-specific resource types do not leak into a shared union. On
-both providers the proxy enforces route gates. The app only verifies the proxy-injected token and
-applies per-object checks that a path gate cannot express
-([ADR-0022](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
-
-## What is where
-
-| File                          | What it is                                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `fabrika.config.ts`           | The deploy surface: a Zerops `target` — two services in a project — plus the app's schema.              |
-| `fabrika.cheap.config.ts`     | Cheap-tier variant: one runtime that claims the namespace-owned `postgres` service.                     |
-| `fabrika.schema.ts`           | The authorization vocabulary (scopes, actions, roles), reconciled into IAM by the deploy.               |
-| `fabrika.gates.ts`            | The per-path gates. Enforced by the **proxy**, never by this process.                                   |
-| `zerops.yaml`                 | The build/run descriptor Zerops reads from the repository root.                                         |
-| `zerops.shared-postgres.yaml` | Cheap-tier build descriptor using `${postgres_connectionTlsString}`.                                    |
-| `src/server.ts`               | `run.start` — the `@fabrika/app` Bun adapter. Listens on the project's private network only.            |
-| `src/migrate.ts`              | `run.initCommands` — migrations at container start, which is why the deploy plan has no `migrate` step. |
-| `src/authz.ts`                | Verifies the proxy-injected token and answers `can()` / `scopedTo()`.                                   |
-| `src/app.ts`                  | The Fetch app: one route per gate, auth middleware, and the per-object checks gates cannot express.     |
-| `src/operations-browser.ts`   | A browser witness that sends one marked exception through the managed Operations DSN.                   |
-
-## The shape of a Zerops deploy
-
-```
-apply-import → write-service-env → reserve-version → upload-source → trigger-build → await-version → reconcile-schema
-```
-
-Seven steps, and the differences from Cloudflare's plan are all deliberate
-([ADR-0003](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0003-no-deploy-runner-on-zerops.md)):
-
-- **no `build`** — Zerops has its own CI. fabrika triggers it; it does not run it, and there is no
-  deploy runner and no container anywhere on this path.
-- **no `deploy-worker`** — build and deploy are one indivisible platform-side operation. What fabrika
-  splits instead is _triggering_ it from _observing_ it.
-- **no `migrate`** — `run.initCommands` runs on every container start.
-- **no `sync-secrets`**, and this one is a decision rather than an omission. On Zerops the platform is
-  the system of record for secret values and they change without a redeploy
-  ([ADR-0004](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0004-secrets-live-in-the-platform.md)), so a deploy-time push would
-  silently overwrite a client's GUI edit.
-
-The fabrika-platform test suite drives the Zerops deployer over a recording fake. It asserts that exact
-plan and the exact ordered sequence of API calls a real run would make.
-
-## Where the secrets go
-
-Nowhere in this directory. `fabrika.config.ts` names two under `pipeline.secrets` as documentation of
-what the app needs; nothing in fabrika transports their values on Zerops. They are written **once**, as
-service-level `envSecrets` on the `notesapi` service, through the env API — addressed by service,
-because a project-level variable is injected into every service in the project and one project holds
-many apps.
-
-That is also why the first import provisions with `startWithoutCode: true`: the env API is addressed by
-service, so the service has to exist before its secrets can be set. Bring-up is
-**import-without-code → write secrets → deploy**.
-
-`zerops.yaml` carries `${notesdb_connectionString}`, which is a _reference_ to another service's
-platform-held variable, not a value.
-
-Fabrika also manages `FABRIKA_OPERATIONS_DSN`, `FABRIKA_RELEASE` and the other `FABRIKA_*` keys
-it reserves. `write-service-env` writes all but `FABRIKA_RELEASE` as service variables;
-`trigger-build` writes `FABRIKA_RELEASE` into the execution descriptor, so it travels with the version.
-They are intentionally absent from the static app manifest and from this repository's `zerops.yaml`.
-Applications must not declare those reserved names.
-
-The authenticated `/operations-sdk` fixture is the minimal browser adoption
-example. The server exposes only those two browser-safe managed values through
-`/operations-sdk/config`; no application secret enters its HTML or JavaScript.
-It uses the exact `@sentry/browser` version pinned in `package.json` and disables
-the SDK's default integrations to keep this witness limited to error events.
-
-## Namespace isolation fixtures
-
-The example covers all three namespace tiers without changing the application protocol:
-
-- **cheap** — use `fabrika.cheap.config.ts` and copy `zerops.shared-postgres.yaml` to
-  `zerops.yaml`. The app imports only `notesapi` and claims the namespace-owned `postgres`.
-- **mid** — use the default `fabrika.config.ts` and `zerops.yaml`. The app imports its own
-  `notesdb` plus `notesapi` into a shared namespace.
-- **full** — use the same default app files as mid, but assign the environment to a namespace whose
-  `exclusiveAppId` is `notes`. The project then contains only the proxy and this app's services.
-
-The fabrika-platform topology tests compile these fixtures and prove their exact service ownership
-boundaries.
-
-## Running it
-
-There is no `bun run dev` that reproduces the deployed topology, and pretending otherwise would be the
-dishonest part of an example. What you can do locally:
-
-```bash
-bun test                       # the authorization path, with a locally generated key set
-bun run typecheck
-```
-
-To run the server you need a Postgres and an IAM origin:
-
-```bash
-NOTES_DATABASE_URL=postgres://…  FABRIKA_IAM_APP_ID=notes@prod  FABRIKA_IAM_ISSUER=https://iam.example.com \
-  bun src/migrate.ts && bun src/server.ts
-```
-
-Requests then need an `X-Fabrika-Token` the IAM service minted — in production the proxy puts it there,
-and nothing else can reach the port.
-
-## What has been proven
-
-On 2026-08-11 Zerops built the public repository's `main` branch from this repository root. Its build
-container ran `bun install --frozen-lockfile`, completed every build command, and prepared and uploaded
-a 47.3 MiB artifact. This proves the repository-root layout, descriptor discovery, and standalone
-lockfile in a real Zerops build environment.
-
-The disposable probe service omitted the app database and runtime environment, so its later deploy
-failed before the app could become active. A complete deploy, the readiness gate, the real Operations
-custom domain, and proxy path isolation remain unproven. Zerops also owns the build filesystem and the
-current provider does not publish its source maps to Operations; that remaining release-artifact work
-is tracked in
-[fabrika-platform backlog 36](https://github.com/contember/fabrika-platform/blob/main/docs/backlog/36-complete-zerops-release-artifact-correlation.md).
+`bun.lock` here pins the packages of the last release that the mirror installed. The example now needs `@fabrika/db`,
+`@fabrika/proxy-core` and `@fabrika/platform` of a release that carries the contract framework, so export it only
+after that release, with the pins and the lockfile refreshed in the mirror as above. A fresh export must pass
+`bun install --frozen-lockfile`, `bun run typecheck` and `bun run test` from its repository root. Do not edit the
+mirror directly, and do not use `git subtree split`: it replays the monorepo's history into a public repository.

@@ -32,18 +32,22 @@ machine API key described below.
    source connection `local-keyed-alpha` that owns its private repository;
 3. signs a push with that connection's webhook secret, requires its scoped route
    `/webhooks/github/local-keyed-alpha` to answer 200 with exactly one triggered
-   run, and waits for that run's external app-version id. Notes has no contract, so
-   its first deploy to the protected `prod` waits for approval of its gates and IAM
-   schema ([ADR-0050](../decisions/0050-approved-access.md)): the smoke signs in to the
+   run, and waits for that run's external app-version id. Notes is a contract
+   application: Control reads `fabrika.contract.ts`, the table policies and the
+   migrations at the commit, and every access of that snapshot is new, so its first
+   deploy to the protected `prod` waits for approval
+   ([ADR-0050](../decisions/0050-approved-access.md)): the smoke signs in to the
    console through the real handoff (`LOCAL_DEV_LOGIN`) and approves it with
    `approvals.complete` from the console's origin, as a person does;
 4. hard-kills control while the emulated pipeline is `BUILDING`;
 5. starts control after the pipeline becomes `ACTIVE`, runs the maintenance cron until the dead
    holder's deploy lease expires, and verifies that it settles the run plus terminal release projection;
 6. verifies the explicit notes `publicOrigin`, stable managed ingest
-   configuration, and deploy-scoped release values on the app service;
-7. checks the reconciled IAM schema, public and authenticated proxy routes, and
-   a real notes write to PostgreSQL;
+   configuration, the proxy secret and bucket marker on the app service, and the
+   version's generated run section (the release and the approved contract digest);
+7. checks the reconciled IAM schema against the contract, that a path no endpoint
+   serves stops at the proxy, and a note created and listed through the endpoint
+   table with a service key;
 8. verifies that an anonymous console `/api/*` call is refused by the PROXY, that
    the public Operations hostname refuses health, catalog and release
    reconciliation and every operator route outright — with and without a machine
@@ -86,10 +90,31 @@ migrated**: old run logs and Operations payloads are unavailable in the new stor
 `local:up` and `local:down` preserve both stores. Only an explicit `local:reset`
 discards all local data, including the retained MinIO volume and credentials.
 
+## The Notes container
+
+The `notes` service runs `examples/zerops-app` as the platform starts a contract
+application on Zerops: `fabrika db migrate`, `fabrika db codegen --verify`,
+`fabrika db test-isolation`, then the generated entrypoint
+(`fabrika/entry.generated.ts`, which preparation writes, as the platform build does).
+Preparation writes the variables a deploy writes: `notes.env` holds the database URL,
+the proxy secret and the bucket credentials, `notes-contract.env` the digest of the
+example's contract, and `apps-proxy-secret.env` the same secret under the apps proxy's
+`proxySecretVariable('notes@prod')`. The apps proxy serves the contract's endpoint table
+(`localAppsProxyManifest`). The bucket `notes-files` is on `apps-storage`, a SeaweedFS
+of the `apps-prod` network only, so the application never reaches the platform's
+storage. A `.state` from before the contract application asks for `local:reset`.
+
+The apps proxy also fronts the Operations browser SDK witness at
+`http://sdk.fabrika.localhost:18081`, an application without a contract behind a
+`human` gate (`src/operations-witness/`): a contract application cannot hand its
+browser the managed DSN yet (backlog 102).
+
 ## Immutable source fixtures
 
-Local preparation creates two deterministic Git repositories from
-`packages/local-stack/fixtures/source/` and stores their manifests and archives
+Local preparation creates two deterministic Git repositories, the platform's from
+`packages/local-stack/fixtures/source/platform/` and the application's from the Notes
+example's own descriptor, contract, table policies and migrations
+(`APPLICATION_FIXTURE_FILES`), and stores their manifests and archives
 under `.state/source-fixtures/`. Their commits do not depend on the enclosing
 checkout's HEAD, index, or uncommitted files. Control receives the platform
 fixture's immutable proxy source pin. Conflicting existing pins require an
@@ -97,7 +122,11 @@ explicit reset; preparation does not silently change a persisted namespace's sou
 
 The local control process uses control's real in-process source and archive
 admission (`packages/local-stack/src/control-server.ts`). Injected metadata/download
-transports (`local-source-transports.ts`) serve only these exact fixture coordinates.
+transports (`local-source-transports.ts`) serve only these exact fixture coordinates,
+and each file of the application commit only when its bytes on disk still have the
+pinned blob id (`readFixtureFiles`). The pinned tree is
+`fixtures/source/manifest.json`: an edit to one of the example's fixture files moves it,
+and `fixture.test.ts` fails until it is regenerated.
 The upload transport maps a capability-bearing logical Zerops HTTPS URL to the
 private emulator endpoint. Production destination validation is unchanged, and
 unknown coordinates or destinations have no network fallback.
@@ -140,6 +169,7 @@ the source fixture tests commit/digest/archive and lifecycle behavior.
 | IAM auth and public JWKS | `http://iam.fabrika.localhost:18080`     |
 | Operations public ingest | `http://errors.fabrika.localhost:18080`  |
 | Notes example app        | `http://notes.fabrika.localhost:18081`   |
+| Operations SDK witness   | `http://sdk.fabrika.localhost:18081`     |
 
 ## Signing in
 
@@ -186,8 +216,9 @@ That is the production round trip verbatim, including the handoff, because since
 session to reach an application's host — no cookie is shared between hosts, and
 `__Host-` makes the browser enforce it. What makes it work locally is that `local:up`
 **registers the local apps with IAM** once the composition is healthy: `vozka` with
-`http://control.fabrika.localhost:18080` and `notes` with
-`http://notes.fabrika.localhost:18081`, through the same `reconcileSchema` call a
+`http://control.fabrika.localhost:18080`, `notes` with
+`http://notes.fabrika.localhost:18081` and the SDK witness with
+`http://sdk.fabrika.localhost:18081`, through the same `reconcileSchema` call a
 deploy makes. Locally nothing deploys fabrika into its own composition, so the stack
 stands in for the deploy — the same way it already provisions the machine key. An app
 IAM has no return origin for answers `400` naming the address rather than trying
@@ -236,7 +267,7 @@ tracked files.
 
 The composition runs these real components:
 
-- IAM, Operations, control, and notes Bun servers;
+- IAM, Operations, control, notes and the SDK witness Bun servers;
 - their real PostgreSQL migrations and data stores;
 - SeaweedFS through the production S3-compatible run-log and Operations blob-store
   adapters;

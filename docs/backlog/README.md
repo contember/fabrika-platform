@@ -46,5 +46,5 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [98](98-application-migrations-have-no-destructive-change-rules.md) — The checker accepts a dropped column, a rename or a `GRANT` in an application migration; the expand-only rules are not built.
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 8 KiB token bound at a few dozen workspaces; the 1000-value `Within` cap sits behind it.
-- [101](101-two-test-files-cannot-both-boot-the-application.md) — The data layer binds once per process, so an author's database test beside the generated endpoint access test needs `bun test --isolate`.
+- [102](102-a-contract-application-cannot-hand-its-browser-the-operations-dsn.md) — The browser SDK of a contract application cannot learn its managed DSN and release, so the SDK witness stays an application without a contract.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

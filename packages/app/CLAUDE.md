@@ -142,7 +142,8 @@ src/
 - **`skill/SKILL.md` is the only copy of the agent rules.** The builder installs it, Control's MCP
   tool `get_app_rules` answers its body, and an application's `AGENTS.md` is `renderAgentsFile`; each test compares
   against `readAppAgentSkill()`. Describe what is built and say what is not; a change to a rule the
-  skill states (a command, a refusal, a provider gap) updates the skill in the same change.
+  skill states (a command, a refusal, a provider gap) updates the skill in the same change, and regenerates the
+  template's `examples/zerops-app/AGENTS.md` (`agent-skill.test.ts` fails until it is the rendered file).
 
 ## Contract framework
 
@@ -478,7 +479,8 @@ src/
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
   application. `endpointAccessKit` boots the application's own implementation through
-  `testKit`, once, because the application's layer binds once per process. A subpath of its
+  `testKit`, once, because the application's layer binds once per process, with in-memory object
+  storage so a file collection boots (no case reads an object). A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
   kit does not. Its API is what `fabrika db test-scaffold` writes against: a change
   regenerates `packages/cli`'s fixture tests.

@@ -230,6 +230,8 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   dprint-stable under this repository's configuration; an application's formatter must skip the generated files. A
   change to the generated text, or to `@fabrika/app/testing/isolation`'s API, regenerates `packages/cli`'s fixture
   tests in the same change.
+- **A file collection's endpoints get no endpoint access case** (`isAccessTested`): they are framework code, which
+  `@fabrika/app`'s own suite tests, and the seed writes no file row, so an own-scope case could only answer 404.
 - **`@babel/parser` is pinned exactly (8.0.7).** It is plain JavaScript and also runs in a Worker, which B1 needs.
   A parser upgrade can move positions and change node shapes; rerun the spike fixture test.
 - **The reader evaluates no application code, and normalizes nothing itself.** It calls only zod's own builders on
