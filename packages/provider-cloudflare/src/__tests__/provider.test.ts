@@ -1,4 +1,11 @@
-import { type AppEnvironment, artifactAccessDigest, type ContractArtifact, contractDigest } from '@fabrika/auth-core'
+import {
+	type AppActionDef,
+	type AppEnvironment,
+	artifactAccessDigest,
+	type ContractArtifact,
+	contractDigest,
+	type GateRule,
+} from '@fabrika/auth-core'
 import { contractProxyTable, isContractProxyApp, parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { symlinkSync } from 'node:fs'
@@ -1125,7 +1132,31 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', gates: GATES },
 		])
 		const malformed = config({ gates: { rules: [{ path: 'no-slash', kind: 'public' }] } })
-		await expect(deploy(rec, malformed)).rejects.toThrow("the config's `gates` are not a valid gate list")
+		await expect(deploy(rec, malformed)).rejects.toThrow("the config's `gates` or IAM `schema` are malformed")
+	})
+
+	test('the proxy, the report and IAM come from the access read before `resources()` runs, whatever it changes', async () => {
+		const rules: GateRule[] = [{ path: '/*', kind: 'human' }]
+		const actions: AppActionDef[] = [{ action: 'notes.read' }]
+		const schema = { scopes: [], actions, roles: {} }
+		const approved = {
+			gates: { rules: [{ path: '/*', kind: 'human' as const }] },
+			schema: { scopes: [], actions: [{ action: 'notes.read' }], roles: {} },
+		}
+		const app = config({
+			gates: { rules },
+			schema,
+			resources: () => {
+				rules[0] = { path: '/*', kind: 'public' }
+				actions.push({ action: 'notes.delete' })
+				return appWorker()
+			},
+		})
+		const run = { contract: null, artifactApproval: { digest: artifactAccessDigest(approved), protected: true } }
+		await expect(deploy(rec, app, run)).resolves.toMatchObject({ status: 'succeeded' })
+		const manifest = provisioned().root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toMatchObject([{ id: 'demo@stage', gates: approved.gates }])
+		expect(rec.outcomes).toEqual([{ artifactAccess: { state: 'deployed', accessJson: JSON.stringify(approved) } }])
 	})
 })
 

@@ -2,6 +2,7 @@ import type { AppGates } from '@fabrika/auth'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
+	type ArtifactAccess,
 	artifactAccessDigest,
 	type ContractArtifact,
 	contractDigest,
@@ -11,7 +12,7 @@ import {
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
-import { contractProxyTable, proxyAppGatesSchema } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import { configArtifactAccess } from './artifact-access'
@@ -108,42 +109,39 @@ const contractEnvironment = (managed: ProviderManagedEnvironment, contract: Cont
  * The lock-down follows the contract, not the config: `contract: true` in the IAM schema without a contract, or a
  * contract whose schema does not say so, would leave the proxy and IAM deciding under different rules.
  */
-const assertContractSchema = (config: CloudflareAppConfig, contract: ContractArtifact | null): void => {
-	const declared = config.schema?.contract === true
+const assertContractSchema = (access: ArtifactAccess, contract: ContractArtifact | null): void => {
+	const declared = access.schema?.contract === true
 	if (contract === null && declared) {
 		throw new Error('cloudflare: the IAM schema says `contract: true`, but the checkout has no `fabrika.contract.ts`')
 	}
 	if (contract !== null && !declared) {
 		throw new Error('cloudflare: this deployment serves a contract, so its IAM schema is `schemaFromContract(artifact)` (`contract: true`)')
 	}
-	if (contract !== null && config.gates !== undefined) {
+	if (contract !== null && access.gates !== null) {
 		throw new Error('cloudflare: a contract application is protected by its endpoint table; remove `gates` from the config')
 	}
 }
 
-/** What the platform-built proxy enforces: the contract's endpoint table, or the config's gates parsed at the boundary. */
+/** What the platform-built proxy enforces: the contract's endpoint table, or the gates of the captured access. */
 const proxyProtection = (
-	config: CloudflareAppConfig,
+	access: ArtifactAccess,
 	contract: ContractArtifact | null,
 ): { readonly endpoints: ReturnType<typeof contractProxyTable> } | { readonly gates: AppGates } | null => {
 	if (contract !== null) return { endpoints: contractProxyTable(contract) }
-	if (config.gates === undefined) return null
-	const gates = proxyAppGatesSchema.safeParse(config.gates)
-	if (!gates.success) throw new Error("cloudflare: the config's `gates` are not a valid gate list")
-	return { gates: gates.data }
+	return access.gates === null ? null : { gates: access.gates }
 }
 
 /**
  * The proxy Worker is the platform's (ADR-0048): built here, from this package's own entrypoint, around the
  * application Worker the config returns, never taken from the checkout. A config that returns a proxy is refused.
  */
-const platformProxied = (authored: Worker, config: CloudflareAppConfig, contract: ContractArtifact | null, run: CloudflareDeployRun): Worker => {
+const platformProxied = (authored: Worker, access: ArtifactAccess, contract: ContractArtifact | null, run: CloudflareDeployRun): Worker => {
 	if (authored.options.bindings?.['APP'] !== undefined) {
 		throw new Error(
 			`cloudflare: \`resources\` returns the Worker \`${authored.options.name}\` binding \`APP\`, a proxy of its own; return the application Worker and declare \`gates\` (or a contract), and the platform builds the proxy Worker`,
 		)
 	}
-	const protection = proxyProtection(config, contract)
+	const protection = proxyProtection(access, contract)
 	if (protection === null) return authored
 	const name = `${run.appId}-proxy`
 	if (authored.options.name === name) {
@@ -213,6 +211,8 @@ const migrationBinding = (binding: string): string => {
 
 interface StepEnv {
 	readonly config: CloudflareAppConfig
+	/** The gates and IAM schema read before the checkout's `resources()` ran (`configArtifactAccess`). */
+	readonly access: ArtifactAccess
 	readonly run: CloudflareDeployRun
 	readonly credentials: CloudflareCredentials
 	readonly worker: Worker
@@ -306,7 +306,8 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			return
 		}
 		case 'reconcile-schema': {
-			if (config.schema === undefined) return
+			const schema = env.access.schema
+			if (schema === null) return
 			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
 			if (dryRun) {
 				run.log(`  [dry-run] would report the authz schema for \`${config.id}\` to the control plane`)
@@ -318,7 +319,7 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			assertRunning(signal)
 			// The reconcile itself happens in the CONTROL plane, which holds IAM's admin key; this
 			// container runs the checkout's own code and never sees it (ADR-0022).
-			if (run.artifactApproval === undefined) await cf.writeOutcome({ iamReconcile: { app: config.id, schemaJson: JSON.stringify(config.schema) } })
+			if (run.artifactApproval === undefined) await cf.writeOutcome({ iamReconcile: { app: config.id, schemaJson: JSON.stringify(schema) } })
 			return
 		}
 		case 'sync-secrets': {
@@ -417,16 +418,17 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	}
 	const platformResources = options.platformResources ?? 'refuse'
 	const contract = await servedContract(cf, loaded.cwd, run.contract)
-	assertContractSchema(loaded.config, contract)
+	// Read once, before `resources()` runs the checkout's code again: nothing below reads the config's gates or schema.
+	const access = configArtifactAccess(loaded.config)
+	assertContractSchema(access, contract)
 	const approval = contract === null ? run.artifactApproval : undefined
-	const artifactAccess = approval === undefined ? null : configArtifactAccess(loaded.config)
-	if (artifactAccess !== null && approval?.protected === true && !run.dryRun && artifactAccessDigest(artifactAccess) !== approval.digest) {
-		await cf.writeOutcome({ artifactAccess: { state: 'pending', accessJson: JSON.stringify(artifactAccess) } })
+	if (approval?.protected === true && !run.dryRun && artifactAccessDigest(access) !== approval.digest) {
+		await cf.writeOutcome({ artifactAccess: { state: 'pending', accessJson: JSON.stringify(access) } })
 		throw new Error("cloudflare: the config's gates and IAM schema are not the access Control approved; the run waits for a human with access.approve")
 	}
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Fabrika's own components compose their own proxies; every application gets the platform's.
-	const served = platformResources === 'refuse' ? platformProxied(authored, loaded.config, contract, run) : authored
+	const served = platformResources === 'refuse' ? platformProxied(authored, access, contract, run) : authored
 	if (platformResources === 'refuse') assertNoFrameworkVariables(loaded.config, applicationWorker(served), run)
 	const worker = withManagedEnvironment(loaded.config, served, run, contractEnvironment(run.managedEnvironment, contract))
 	const dir = workerDir(loaded.config, loaded.cwd)
@@ -447,6 +449,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	assertGeneration(await generateWranglerConfigs(worker, run.env), bounds)
 	const env: StepEnv = {
 		config: loaded.config,
+		access,
 		run,
 		credentials: { accountId: options.accountId, apiToken: options.apiToken },
 		worker,
@@ -458,8 +461,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker), run, (step) => runStep(step, env))
 	// Control applies this access's IAM schema and records it; the reconcile-schema step reports nothing for it.
-	if (artifactAccess !== null && !run.dryRun && result.status === 'succeeded') {
-		await cf.writeOutcome({ artifactAccess: { state: 'deployed', accessJson: JSON.stringify(artifactAccess) } })
+	if (approval !== undefined && !run.dryRun && result.status === 'succeeded') {
+		await cf.writeOutcome({ artifactAccess: { state: 'deployed', accessJson: JSON.stringify(access) } })
 	}
 	return { appId: run.appId, env: run.env, ...result }
 }
