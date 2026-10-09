@@ -239,6 +239,9 @@ const makeRun = (
 		FABRIKA_SERVICE_KEY: null,
 		// Control generates one per application environment; a contract application does not deploy without it.
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
+		// The example has no creates, members or share links, so Control hands it no membership transport.
+		FABRIKA_IAM_RPC_URL: null,
+		FABRIKA_IAM_RPC_KEY: null,
 	},
 	dryRun: false,
 	signal: new AbortController().signal,
@@ -407,7 +410,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 			`[dry-run] would POST the import for 3 service(s) to project ${TARGET.projectId}:`,
 			'[dry-run] would read back subdomain access and bucket provenance of every declared service',
 			`[dry-run] would write service variables on ${TARGET.serviceId}: FABRIKA_PROXY_SECRET`,
-			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_RELEASE`,
+			`[dry-run] would remove service variables on ${TARGET.serviceId} if present: FABRIKA_OPERATIONS_DSN, FABRIKA_IAM_ISSUER, FABRIKA_IAM_APP_ID, FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_SERVICE_KEY, FABRIKA_IAM_RPC_URL, FABRIKA_IAM_RPC_KEY, FABRIKA_RELEASE`,
 			`[dry-run] would reserve an app version on service ${TARGET.serviceId}`,
 			'[dry-run] would upload the resolved repository snapshot to the reserved app version',
 			'[dry-run] would trigger build+deploy with the generated run section and build checks',
