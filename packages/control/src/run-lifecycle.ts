@@ -42,6 +42,7 @@ import {
 } from './db'
 import type { CommitSource } from './github/source/commit-files'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
+import { type MembershipTransportPort, needsMembershipTransport } from './membership-transport'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { ProxySecrets } from './proxy-secret'
 import { projectedReturnOrigins } from './return-origins'
@@ -79,6 +80,11 @@ export interface RunDeps {
 	 * issuer or a provisioning key, and then a contract that declares one does not deploy.
 	 */
 	workloadCredentials?: WorkloadCredentialsPort
+	/**
+	 * The membership transport key of an environment behind a namespace proxy, which has no IAM binding (ADR-0022 rule 6);
+	 * absent without a vault, an IAM issuer or a provisioning key, and then a contract that needs one does not deploy there.
+	 */
+	membershipTransport?: MembershipTransportPort
 }
 
 export interface DeployJobMessage {
@@ -562,10 +568,10 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 			[FABRIKA_IAM_APP_ID]: appEnvironmentId(app.id, appEnv.env),
 		}
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
+		// Behind a namespace proxy the hop to the application and to IAM is no service binding.
+		const namespaceProxy = appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
 		// Only a namespace proxy authenticates itself with a secret; a dry run generates none.
-		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && appEnv.namespace_id !== null && deps.provider.namespaces?.republish !== undefined
-			? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null
-			: null
+		managedEnvironment[FABRIKA_PROXY_SECRET] = !dryRun && namespaceProxy ? (await deps.proxySecrets?.forAppEnv(app.id, appEnv.env)) ?? null : null
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
 		// instead of deploying an app that verifies against the previous installation's tokens.
 		if (deps.iamIssuer !== undefined && deps.iamIssuer.trim() !== '') {
@@ -597,8 +603,13 @@ export async function executeDeploy(deps: RunDeps, message: DeployJobMessage): P
 		const approvedContract = registration.environment.access?.contract ?? null
 		const workloadKeys = dryRun ? {} : await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract)
 		Object.assign(managedEnvironment, workloadKeys)
+		const membershipKey = dryRun
+			? null
+			: await reconcileMembershipKey(deps, app.id, appEnv.env, namespaceProxy && needsMembershipTransport(approvedContract))
+		managedEnvironment[MEMBERSHIP_URL_VARIABLE] = membershipKey === null ? null : membershipTransportOrigin(deps.iamIssuer)
+		managedEnvironment[MEMBERSHIP_KEY_VARIABLE] = membershipKey
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id, appEnv.env)
-		runLogs.redact([...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? '', ...Object.values(workloadKeys)])
+		runLogs.redact([...Object.values(secrets), managedEnvironment[FABRIKA_PROXY_SECRET] ?? '', ...Object.values(workloadKeys), membershipKey ?? ''])
 		let outcome: ProviderDeployOutcome
 		try {
 			if (ingestGap !== null) {
@@ -706,6 +717,35 @@ async function reconcileWorkloadKeys(
 		)
 	}
 	return {}
+}
+
+/** IAM's membership transport for an application without an IAM binding: its URL (IAM's public origin) and its key. */
+const MEMBERSHIP_URL_VARIABLE = 'FABRIKA_IAM_RPC_URL'
+const MEMBERSHIP_KEY_VARIABLE = 'FABRIKA_IAM_RPC_KEY'
+
+async function reconcileMembershipKey(
+	deps: Pick<RunDeps, 'membershipTransport'>,
+	appId: string,
+	env: string,
+	needed: boolean,
+): Promise<string | null> {
+	if (deps.membershipTransport !== undefined) {
+		return deps.membershipTransport.reconcile(appId, env, needed)
+	}
+	if (needed) {
+		throw new Error(
+			'the contract manages members, creates scopes or issues share links, and this installation cannot issue the membership transport key (it needs FABRIKA_CONTROL_VAULT_KEY, FABRIKA_IAM_ISSUER and FABRIKA_IAM_PROVISIONING_KEY)',
+		)
+	}
+	return null
+}
+
+function membershipTransportOrigin(iamIssuer: string | undefined): string {
+	const origin = iamIssuer?.trim() ?? ''
+	if (origin === '') {
+		throw new Error("the membership transport needs the installation's IAM issuer, and this installation names none")
+	}
+	return origin
 }
 
 async function currentAccess(repositories: ControlRepositories, appEnv: AppEnvRow): Promise<ProviderAccessFields> {

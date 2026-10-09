@@ -26,6 +26,7 @@ import { type ApprovalUseCaseContext, completeApprovalUseCase, setEnvironmentPro
 import { parseClassification } from '../approval/publish'
 import { type AccessSnapshot, approvedSnapshot, artifactAccessSchema } from '../approval/snapshot'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
+import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { cancelDeploy, executeDeploy, providerEnvironment, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
@@ -708,6 +709,87 @@ describe('workload keys from the approved contract', () => {
 		expect((await executeDeploy(deps(w), { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
 		expect(issued).toEqual([])
 		expect(w.deploys.map((input) => Object.hasOwn(input.managedEnvironment, 'FABRIKA_JOB_NIGHTLY_KEY'))).toEqual([false, false])
+	})
+})
+
+describe('the membership transport key from the approved contract', () => {
+	const WITH_MEMBERS = edited(
+		'\t}),\n\thealth',
+		"\t\tstart: c.mutation({ output: z.strictObject({ workspace: z.string() }), access: { action: 'workspaces.create', creates: 'workspace' } }),\n\t}),\n\thealth",
+		edited("'notes.delete': 'Delete notes' }", "'notes.delete': 'Delete notes', 'workspaces.create': 'Start a workspace' }"),
+	)
+
+	function keyed(w: World) {
+		const issued: string[] = []
+		const issuer: MembershipKeyIssuer = {
+			issue: (input) => {
+				issued.push(`${input.app}:${input.keep ?? 'none'}`)
+				return Promise.resolve({ key: `px_${'m'.repeat(26)}${issued.length}`, id: `key-${issued.length}`, expiresAt: input.expiresAt })
+			},
+		}
+		return async () => {
+			const vault = await Vault.create(harnessDatabase(w.db), btoa(String.fromCharCode(...new Uint8Array(32).fill(7))))
+			return { issued, membershipTransport: new VaultMembershipTransport(w.db.membershipKeys, () => Promise.resolve(vault), issuer) }
+		}
+	}
+
+	test("an application behind a namespace proxy that creates scopes gets IAM's origin and its key, and no run log keeps the key", async () => {
+		const w = world()
+		await seed(w)
+		w.contract = WITH_MEMBERS
+		const { issued, membershipTransport } = await keyed(w)()
+		const loggingProvider = provider(w)
+		const result = await executeDeploy({
+			...deps(w),
+			iamIssuer: 'https://iam.example.test',
+			membershipTransport,
+			provider: {
+				...loggingProvider,
+				deploy: (input) => {
+					input.events.log(`key=${input.managedEnvironment['FABRIKA_IAM_RPC_KEY'] ?? 'none'}`)
+					return loggingProvider.deploy(input)
+				},
+			},
+		}, { runId: await createdRun(w, 'stage') })
+		expect(result.status).toBe('succeeded')
+		expect(issued).toEqual(['notes@stage:none'])
+		const managed = w.deploys[0]?.managedEnvironment
+		expect(managed?.['FABRIKA_IAM_RPC_URL']).toBe('https://iam.example.test')
+		expect(managed?.['FABRIKA_IAM_RPC_KEY']).toBe(`px_${'m'.repeat(26)}1`)
+		const stored = [...w.logs.values()].join('\n')
+		expect(stored).toContain('key=[redacted]')
+		expect(stored).not.toContain(`px_${'m'.repeat(26)}1`)
+	})
+
+	test('a contract with no membership operation, and a dry run, get none, and dropping the need forgets the key', async () => {
+		const w = world()
+		await seed(w)
+		w.contract = WITH_MEMBERS
+		const { issued, membershipTransport } = await keyed(w)()
+		const keyedDeps = { ...deps(w), iamIssuer: 'https://iam.example.test', membershipTransport }
+		expect((await executeDeploy(keyedDeps, { runId: await createdRun(w, 'stage'), dryRun: true })).status).toBe('succeeded')
+		expect((await executeDeploy(keyedDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(await w.db.membershipKeys.get('notes', 'stage')).not.toBeNull()
+		w.contract = BASE
+		expect((await executeDeploy(keyedDeps, { runId: await createdRun(w, 'stage') })).status).toBe('succeeded')
+		expect(issued).toEqual(['notes@stage:none'])
+		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_IAM_RPC_KEY'] !== null)).toEqual([false, true, false])
+		expect(w.deploys.map((input) => input.managedEnvironment['FABRIKA_IAM_RPC_URL'] !== null)).toEqual([false, true, false])
+		expect(await w.db.membershipKeys.get('notes', 'stage')).toBeNull()
+	})
+
+	test('a contract that creates scopes does not deploy behind a namespace proxy where Control cannot issue the key', async () => {
+		const w = world()
+		await seed(w)
+		w.contract = WITH_MEMBERS
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await deploy(w, 'stage')).status).toBe('failed')
+			expect(quiet.mock.calls.flat().map(String).join('\n')).toContain('cannot issue the membership transport key')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect(w.deploys).toEqual([])
 	})
 })
 

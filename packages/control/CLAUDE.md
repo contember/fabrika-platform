@@ -215,6 +215,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   from the run log. Two workloads whose names map to one variable are refused. Without a vault, an issuer or a
   provisioning key a contract with a workload fails the run. What a key may do is IAM's: the schema reconcile
   declares the actions. An environment not deployed for 30 days loses its workloads' keys.
+- **The membership transport key comes from the APPROVED contract too (`src/membership-transport.ts`, ADR-0022
+  rule 6).** Behind a namespace proxy an application has no IAM binding, so while `needsMembershipTransport` holds for
+  the approved contract (an endpoint with a delegation, or a share-link mount) `executeDeploy` reconciles one key per
+  environment the same way: read back while more than half its 30 days are left, otherwise IAM's
+  `membershipKeys.issue` with `keep`, sealed under `membershipKeyPurpose(app, env)` and recorded in
+  `app_env_membership_keys`. It hands `FABRIKA_IAM_RPC_URL` (`FABRIKA_IAM_ISSUER`) and `FABRIKA_IAM_RPC_KEY`, both
+  null otherwise, and redacts the key. In the application that variable is this key, never the installation's RPC
+  key. Without need the record and vault row go; IAM deletes the key with the reconcile. The key adds no authority.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a

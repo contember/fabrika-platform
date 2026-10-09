@@ -1,5 +1,6 @@
 export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
+export { MembershipKeyRepository, type MembershipKeyRow } from './db/membership-keys'
 export {
 	type AppliedOperationsIngestConfig,
 	type OperationsCatalogProjectionRow,

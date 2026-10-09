@@ -8,6 +8,7 @@ import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { GitHubConnectionWebhookSecretProvider } from './github/connections/webhook-secret'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
+import { iamMembershipKeyIssuer, type MembershipTransportPort, VaultMembershipTransport } from './membership-transport'
 import {
 	type OperationsCatalogSyncDeps,
 	type OperationsCatalogSyncSummary,
@@ -93,7 +94,23 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
 		...proxySecretDeps(env),
 		...workloadCredentialDeps(env),
+		...membershipTransportDeps(env),
 	}
+}
+
+/**
+ * The membership transport keys are issued by IAM with the provisioning key and sealed in the vault, like the workload
+ * keys; an installation without all three issues none, and a contract that needs one does not deploy behind a
+ * namespace proxy there.
+ */
+export function membershipTransportDeps(env: Env): { membershipTransport?: MembershipTransportPort } {
+	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
+	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	if (env.FABRIKA_CONTROL_VAULT_KEY === undefined || origin === '' || provisioningKey === '') {
+		return {}
+	}
+	const issuer = iamMembershipKeyIssuer({ origin, provisioningKey })
+	return { membershipTransport: new VaultMembershipTransport(repositories(env).membershipKeys, () => vault(env), issuer) }
 }
 
 /**

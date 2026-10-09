@@ -617,6 +617,8 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_IAM_ISSUER]: null,
 			[FABRIKA_IAM_APP_ID]: 'app@prod',
 			[FABRIKA_PROXY_SECRET]: null,
+			FABRIKA_IAM_RPC_URL: null,
+			FABRIKA_IAM_RPC_KEY: null,
 		})
 		expect(input.dryRun).toBe(true)
 
@@ -791,6 +793,8 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_IAM_ISSUER]: null,
 			[FABRIKA_IAM_APP_ID]: 'app@prod',
 			[FABRIKA_PROXY_SECRET]: null,
+			FABRIKA_IAM_RPC_URL: null,
+			FABRIKA_IAM_RPC_KEY: null,
 		})
 
 		const secondRunId = uuidv7()
@@ -817,6 +821,8 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_IAM_ISSUER]: null,
 			[FABRIKA_IAM_APP_ID]: 'app@prod',
 			[FABRIKA_PROXY_SECRET]: null,
+			FABRIKA_IAM_RPC_URL: null,
+			FABRIKA_IAM_RPC_KEY: null,
 		})
 	})
 

@@ -1,6 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github/connections/store'
 import { BuilderConnectionRepository } from './builder-connections'
+import { MembershipKeyRepository } from './membership-keys'
 import { OperationsCatalogRepository } from './operations-catalog'
 import { OperationsReleaseRepository } from './operations-releases'
 import { RepoPollingRepository } from './polling'
@@ -20,6 +21,7 @@ export interface ControlRepositories {
 	githubConnections: GitHubConnectionStore
 	workspaces: WorkspaceRepository
 	workloadCredentials: WorkloadCredentialRepository
+	membershipKeys: MembershipKeyRepository
 }
 
 /** The portable repository bundle. */
@@ -35,5 +37,6 @@ export function createControlRepositories(db: SqlDatabase, options: { now?: () =
 		githubConnections: new GitHubConnectionStore(db, now),
 		workspaces: new WorkspaceRepository(db),
 		workloadCredentials: new WorkloadCredentialRepository(db),
+		membershipKeys: new MembershipKeyRepository(db),
 	}
 }
