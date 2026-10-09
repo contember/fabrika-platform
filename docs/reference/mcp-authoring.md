@@ -14,8 +14,9 @@ Decision: [ADR-0049](../decisions/0049-author-applications-through-mcp-in-contro
    The user signs in to IAM and consents.
 3. IAM mints an `at+jwt` access token for that one resource of the `vozka` app. Its permissions are
    the user's live grants narrowed by the `authoring` scope grant.
-4. The proxy's `oauth` gate on `/mcp` admits the bearer for that resource and scope and injects
-   `X-Fabrika-Token`. Control verifies the token and evaluates no gate (ADR-0022).
+4. The console table's `mcp` row admits the `oauth` caller for that resource and scope. The proxy
+   injects `X-Fabrika-Token` and `X-Fabrika-Endpoint`. Control verifies the token and evaluates no
+   gate (ADR-0022).
 5. Each MCP tool calls a Control use case. Control authorizes it against the token's permissions at
    the app/environment coordinates.
 6. Control performs every Git read and write itself, through the GitHub App of the app's connection.
@@ -62,12 +63,16 @@ rules (contract first; never loosen anything to make something pass; ask when a 
    `metadataUrl` is optional; IAM fetches the client id when it is absent. The deploy refuses a
    malformed list, more than 16 clients, or `--scheme=http`, before it writes anything. With the
    list, the deploy:
-   - gates `/mcp` on the console for OAuth bearers and registers the resource in the proxy manifest;
+   - publishes the console's MCP table, whose `/mcp` row admits OAuth bearers, and registers the
+     resource in the proxy manifest;
+   - writes `FABRIKA_SERVICE_TABLE_DIGEST` on `control`: the digest of that table. Control serves
+     `/mcp` exactly when it names the MCP table, and refuses to start when it names neither table;
    - writes `FABRIKA_IAM_OAUTH_CONFIG` on `iam`: the clients, and the resource `https://<console>/mcp`
      whose `authoring` scope grants `source.workspace.read`, `source.workspace.write`,
      `source.pull-request.create`, `deploy.trigger` and `deploy.read`.
 
-   Without the list, `/mcp` falls to the console's human gate, so no OAuth client reaches it. The
+   Without the list, the console's table makes `/mcp` a session-only row that Control answers `404`,
+   so no OAuth client reaches it. The
    deploy then leaves `FABRIKA_IAM_OAUTH_CONFIG` on `iam` as it is and warns that it is still set;
    delete it there to stop IAM issuing tokens.
 
@@ -93,6 +98,7 @@ rules (contract first; never loosen anything to make something pass; ask when a 
 
 The local stack runs MCP off. Set `FABRIKA_LOCAL_MCP_CLIENTS_JSON` (same shape) before
 `bun run local:up` to turn it on; the resource is then `http://control.fabrika.localhost:18080/mcp`.
+Every prepare rewrites `.state/control-table.env` with the matching table digest, so Control follows.
 IAM still fetches each client's CIMD document over HTTPS, and a hosted client cannot reach a
 `localhost` resource, so this checks configuration rather than a full client session.
 

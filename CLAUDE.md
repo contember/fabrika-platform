@@ -118,9 +118,9 @@ needed only when there is no app config. Platform commands load the provider's
   Two other layers refuse requests and are **not** gate evaluators: **authorization** (`.require`,
   `can()`, control's scoped use-case checks) and **admission** (the console gateways' same-origin guards; IAM's `/admin/*` is bearer-only).
   `docs/reference/overview.md` defines all three; keep the vocabulary.
-  Array order is precedence for the installation's own gates only. A contract application gets an
-  endpoint table instead: the most specific endpoint wins, and the application serves only the
-  endpoint id the proxy sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3). Only an entry that platform
+  Array order is precedence for an SDK application's gates only. A contract application and each
+  installation service get an endpoint table instead: the most specific endpoint wins, and the service
+  serves only the endpoint id the proxy sets in `X-Fabrika-Endpoint` (ADR-0022 rule 3). Only an entry that platform
   composition marks `installation: true` may use the installation-only forms (`protocol`, `service`,
   method `*`, caller `oauth`, requirement `authenticated`); never let an application declare one.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a

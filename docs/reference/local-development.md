@@ -181,11 +181,13 @@ the source fixture tests commit/digest/archive and lifecycle behavior.
 
 The proxy is the only front door locally, exactly as it is in a deployed
 installation. It fronts each host with the SAME declarations a deployed proxy
-carries — `CONTROL_PROXY_GATES` (`packages/control/fabrika.gates.ts`) for the
-console, the service table `OPERATIONS_PUBLIC_SERVICE` (`packages/operations/src/service.ts`)
-for the public Operations host, imported rather than copied — and IAM by its own
-service table (`packages/iam/src/service.ts`), every row `protocol` because it
-authenticates itself.
+carries, imported rather than copied: the console by its service table
+(`packages/control/fabrika.service.ts`), the public Operations host by
+`OPERATIONS_PUBLIC_SERVICE` (`packages/operations/src/service.ts`), and IAM by its
+own service table (`packages/iam/src/service.ts`), every row `protocol` because it
+authenticates itself. Every prepare writes `.state/control-table.env`: the
+`FABRIKA_SERVICE_TABLE_DIGEST` of the console table the proxy publishes, from
+which Control reads whether it serves MCP.
 The platform Caddy generator receives IAM's trusted issuer and private upstream
 as `iamSessionOwner`. Only that exact route retains IAM's `__Host-px_session`;
 all other Fabrika cookies are removed, including handoff verifiers. Application

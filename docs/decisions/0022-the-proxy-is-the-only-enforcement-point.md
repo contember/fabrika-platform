@@ -324,6 +324,13 @@ hop, sets no proxy secret and sets no response policy; its own denials carry the
 copies `X-Fabrika-Endpoint` to the service, and the proxy answers the entry's RFC 9728 metadata paths and
 the handoff callback before selecting an endpoint, as it does for a gate entry.
 
+A service with more than one table — the console, whose `/mcp` row admits `oauth` only when the installation
+registers an authorization server for its resource — learns which one its proxy publishes from one composition
+value, `FABRIKA_SERVICE_TABLE_DIGEST`: `installationTableDigest` of the published table, over each row's id and
+digest and the reserved prefixes. The composition writes it from the manifest it gives the proxy. The service
+refuses to start when the value is missing or names no table it serves, so a disagreement fails the deploy instead
+of answering 503 at runtime.
+
 The requirement check and the admission check are part of the proxy's decision whether a request
 reaches the application. The requirement reads only the token; it needs no application-owned object.
 The application repeats the caller and requirement checks as **authorization** (rule 5).

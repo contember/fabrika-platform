@@ -335,9 +335,9 @@ Three kinds of check refuse a request, and only the first is what ADR-0022 calls
 enforcement:
 
 - **Enforcement** — the proxy's decision whether a request reaches a private
-  service at all. An installation service is protected by ordered path gates; there
-  is exactly one gate evaluator, in `@fabrika/auth-core`, and the proxy is the only
-  thing that runs it. A contract application is protected by its endpoint table: the
+  service at all. A gate-protected application (the SDK path) is protected by ordered
+  path gates; there is exactly one gate evaluator, in `@fabrika/auth-core`, and the
+  proxy is the only thing that runs it. A contract application is protected by its endpoint table: the
   proxy selects one endpoint with `planEndpoint` and checks its caller kind, its
   requirement and admission there, with no fall-through to another endpoint, then
   names the endpoint and the digest of those rules in `X-Fabrika-Endpoint`. An
@@ -345,10 +345,12 @@ enforcement:
   `installation: true`; it may use five forms no application may declare (`protocol`
   and `service` rows, the method `*`, the caller `oauth`, the requirement
   `authenticated`), and its hop keeps `Authorization`, sets no proxy secret and leaves
-  the service's answers untouched. Operations and IAM are fronted by theirs (work
-  units B10c–d); the console moves in B10e. Each service's table is a service contract
-  (`@fabrika/app/service`), proved against its frozen gates by the differential in
-  `platform-artifacts/src/__tests__/service-parity/`.
+  the service's answers untouched. The console, Operations and IAM are each fronted
+  by theirs. Each service's table is a service contract (`@fabrika/app/service`),
+  proved against its frozen gates by the differential in
+  `platform-artifacts/src/__tests__/service-parity/`. The console's table has an MCP
+  variant; Control reads which one its proxy publishes from
+  `FABRIKA_SERVICE_TABLE_DIGEST` and refuses to start under any other.
 - **Authorization** — the action-and-scope check a service makes against an
   application-owned object coordinate. A path gate cannot make it, because the
   coordinate is known only once request data is validated. Every

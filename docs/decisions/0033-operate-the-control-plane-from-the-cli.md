@@ -33,8 +33,8 @@ the proxy the only enforcement point — compose into an installation that no ma
 human has logged into the console and issued a key by hand. Backlog item 67 already records the
 symptom, that the four RPC calls which admit the first administrator live in a throwaway script.
 
-The control gates admit this client today and always did: `/api/*` carries both a `service` and a
-`human` rule (`packages/control/fabrika.gates.ts`). Only the source-connection routes are human-only,
+The console's table admits this client today and always did: `/api/rpc` admits both a `machine` and a
+`human` caller (`packages/control/fabrika.service.ts`). Only the source-connection routes are human-only,
 and they stay that way — App creation is a browser flow with a GitHub redirect in the middle, and
 `requireHuman` enforcing `principal.type === 'user'` is the correct reading of ADR-0029.
 

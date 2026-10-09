@@ -356,8 +356,8 @@ identically while replacing `iam-local` with `iam`.
 half — which apps exist, their ids, their private upstreams, the public listener each answers on and
 their gates or service tables — is declared in `packages/platform-artifacts/src/proxy-manifest.ts` and rendered into
 the committed `packages/provider-zerops/src/installation/generated/platform-proxy-manifest.ts` by `bun run --filter
-@fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `CONTROL_PROXY_GATES` or
-`OPERATIONS_PUBLIC_SERVICE`. A table entry is resolved into an installation entry (ADR-0022 "Installation
+@fabrika/platform-artifacts gen`; CI's `gen:check` fails when it drifts from `controlServiceContract`,
+`OPERATIONS_PUBLIC_SERVICE` or IAM's service table. A table entry is resolved into an installation entry (ADR-0022 "Installation
 entries") with `serviceProxyTable`. The hosts and the browser-facing scheme belong to one installation and are
 bound at deploy time by `resolvePlatformProxyManifest` (`packages/provider-zerops/src/installation/proxy-manifest.ts`).
 `localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local

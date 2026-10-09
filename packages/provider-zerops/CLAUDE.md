@@ -256,12 +256,14 @@ Invariants:
   `operationsstorage`; only the proxy may expose its ingest and source-map paths.
 - **MCP authoring is opt-in, and ONE input turns on both halves** (ADR-0049,
   [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` /
-  `--mcp-clients` makes `resolvePlatformProxyManifest` gate the console's `oauthResource` and register it,
-  and `desiredServiceEnv` write `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URI. Without it the
-  manifest carries no `oauth` rule and the IAM variable is left untouched — never cleared, because an empty
-  write on Zerops is unverified. The template's `oauthResource` is generated from `CONTROL_MCP_PATH` /
-  `CONTROL_MCP_SCOPE`; `platform-artifacts`' `proxy-manifest.test.ts` pins the resolved gates to
-  `controlProxyGates(origin)`.
+  `--mcp-clients` makes `resolvePlatformProxyManifest` publish the console's MCP table with its `oauth` row
+  and register its `oauthResource`, and `desiredServiceEnv` write `FABRIKA_IAM_OAUTH_CONFIG` for the SAME
+  resource URI. Without it the manifest carries the console's `tableWithoutOAuth` and the IAM variable is left
+  untouched — never cleared, because an empty write on Zerops is unverified. Control's half is
+  `FABRIKA_SERVICE_TABLE_DIGEST`, which `desiredServiceEnv` writes from the resolved manifest
+  (`platformServiceTableDigest`); Control refuses to start when it names neither table. The template's
+  `oauthResource` is generated from `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`; `platform-artifacts`'
+  `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp })`.
 - **There is no `source` service (ADR-0029).** A leftover one is ignored with one warning and never deleted.
 - **`platform deploy` MERGES the proxy manifest, never replaces it.** An application on the light tier
   shares the platform proxy's `FABRIKA_PROXY_MANIFEST_JSON`; an entry on a platform host is superseded and
