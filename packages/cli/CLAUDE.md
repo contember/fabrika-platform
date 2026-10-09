@@ -1,7 +1,7 @@
 # @fabrika/cli
 
 The single public `fabrika` executable. It parses the top-level `platform`,
-`app`, `namespace`, `control`, `builder`, `db`, and `job` command areas, resolves one provider where a
+`app`, `namespace`, `control`, `builder`, `db`, `job`, and `connect` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
 contains no provider implementation. The one exception is `src/namespace.ts`:
 `fabrika namespace` is a Control RPC client over the Zerops namespace planner,
@@ -91,6 +91,21 @@ arguments and reports.
   exits when the run ends, so nothing a handler left running outlives it.
 - A failure prints its fixed code. Only an `instanceof` `BootError` or `JobError` keeps its message; any other error,
   whatever its name, is `boot_failed`, because its name or message may carry a secret or `FABRIKA_APP_DATABASE_URL`.
+
+## The `connect` area
+
+`src/connect.ts` vendors another application's export into the consumer's
+`fabrika/connect/<app>.<export>.v<version>.ts`, from the description the owner serves at
+`POST <origin>/__fabrika/connect/<export>.v<version>`. It resolves no provider. The snapshot source is
+`@fabrika/app/contract`'s `snapshotSource`; this file only fetches, checks and writes.
+
+- `connect add <app>/<export>@<version> --origin=<owner origin>` writes a new snapshot and never overwrites;
+  `connect pull` with the same arguments rewrites an existing one and says whether the digest changed.
+- The edge key comes from `FABRIKA_CONNECT_KEY` in the ENVIRONMENT ONLY and is the only bearer sent. No message
+  carries it, nor the answer's body. The origin is https, plain http only for `localhost`.
+- A description is written only when `parseExportDescription` accepts it — its digest is the digest of what it
+  describes — and it names the requested `<app>/<export>@<version>`.
+- stdout carries the snapshot's path; what to add to the contract and to `implement()` goes to stderr.
 
 ## The `app` area
 

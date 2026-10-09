@@ -27,6 +27,7 @@ Usage:
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
   fabrika db <new|migrate|codegen|test-scaffold|test-isolation> [options]
   fabrika job run <name>
+  fabrika connect <add|pull> <app>/<export>@<version> --origin=<owner origin>
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
@@ -43,6 +44,9 @@ control credential from FABRIKA_CONTROL_KEY alone; a changed manifest is \`contr
 
 \`fabrika job run <name>\` runs one c.cron job of a contract application: the command each crontab entry runs. Run
 \`fabrika job --help\` for its surface.
+
+\`fabrika connect\` vendors another application's export into fabrika/connect/, from the description its owner
+serves, with the edge key in FABRIKA_CONNECT_KEY. Run \`fabrika connect --help\` for its surface.
 
 \`fabrika control\` is the operator's non-browser client for the control plane (ADR-0033). It is
 provider-neutral, loads no installation package, and speaks the same typed API the console does. Run
@@ -259,6 +263,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		console.info(JOB_USAGE)
 		return
 	}
+	if (parsed.help && parsed.area === 'connect') {
+		const { CONNECT_USAGE } = await import('./connect.js')
+		console.info(CONNECT_USAGE)
+		return
+	}
 	if (parsed.help && parsed.area === 'builder') {
 		console.info(BUILDER_USAGE)
 		return
@@ -291,6 +300,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	if (parsed.area === 'job') {
 		const { runJobCli } = await import('./job.js')
 		await runJobCli(parsed.command, parsed.rest)
+		return
+	}
+	if (parsed.area === 'connect') {
+		const { runConnectCli } = await import('./connect.js')
+		await runConnectCli(parsed.command, parsed.rest)
 		return
 	}
 	if (parsed.area === 'builder') {
