@@ -1,5 +1,12 @@
 import { schemaFromContract } from '@fabrika/app/contract'
-import { contractDigest, FABRIKA_CONTRACT_DIGEST, FABRIKA_IAM_APP_ID, FABRIKA_IAM_ISSUER, FABRIKA_PROXY_SECRET } from '@fabrika/auth-core'
+import {
+	contractDigest,
+	FABRIKA_CONTRACT_DIGEST,
+	FABRIKA_IAM_APP_ID,
+	FABRIKA_IAM_ISSUER,
+	FABRIKA_PROXY_SECRET,
+	proxySecretVariable,
+} from '@fabrika/auth-core'
 import { LEASE_TTL_MS } from '@fabrika/control/lease'
 import { normalizeRepoUrl } from '@fabrika/control/repo-source'
 import {
@@ -17,12 +24,13 @@ import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
 	parseZeropsCheckpoint,
+	ZEROPS_NAMESPACE_PROXY_HOSTNAME,
 	zeropsArtifactCodec,
 	zeropsNamespaceTargetCodec,
 	type ZeropsRunState,
 } from '@fabrika/provider-zerops'
 import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
-import { notesContract } from 'fabrika-example-zerops/fabrika.config'
+import { NOTES_FILES_SERVICE, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -36,7 +44,7 @@ import {
 } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
-import { COMPOSE_FILE, LOCAL_NOTES_ENVIRONMENT, LOCAL_NOTES_IAM_APP_ID, REPO_ROOT, STATE_DIR } from './prepare'
+import { COMPOSE_FILE, LOCAL_NOTES_ENVIRONMENT, LOCAL_NOTES_IAM_APP_ID, LOCAL_OPERATIONS_ORIGIN, REPO_ROOT, STATE_DIR } from './prepare'
 import { idResponseSchema, itemsResponseSchema, rpcResponseSchema } from './response-schemas'
 import {
 	activeOperationsConfigSchema,
@@ -568,6 +576,7 @@ const proveManagedOperationsEnvironment = async (
 	if (version?.status !== 'ACTIVE' || version.runEnvVariables?.[FABRIKA_RELEASE] !== release) {
 		throw new Error('The deployed version does not carry the release in its execution descriptor')
 	}
+	await proveContractApplicationEnvironment(snapshot, serviceId, version)
 	// The generated run section binds the contract digest to the version: the application refuses to start under another.
 	if (version.runEnvVariables?.[FABRIKA_CONTRACT_DIGEST] !== contractDigest(notesContract)) {
 		throw new Error('The deployed version does not carry the approved contract digest in its execution descriptor')
@@ -582,6 +591,53 @@ const proveManagedOperationsEnvironment = async (
 	)
 	if (unexpected.length > 0) {
 		throw new Error(`Zerops emulator holds Fabrika records beyond the managed keys: ${unexpected.map((record) => record.key).join(', ')}`)
+	}
+}
+
+type EmulatorSnapshot = Awaited<ReturnType<typeof emulatorSnapshot>>
+
+/** The one sensitive service variable `key` of `serviceId`; its value is compared, never printed. */
+const soleSecret = (snapshot: EmulatorSnapshot, serviceId: string, key: string, description: string): string => {
+	const matching = snapshot.serviceEnv.filter((record) => record.serviceStackId === serviceId && record.key === key)
+	const record = matching[0]
+	if (matching.length !== 1 || record?.type !== 'USER' || record.sensitive !== true || record.content === '') {
+		throw new Error(`Zerops emulator holds no single sensitive ${description}`)
+	}
+	return record.content
+}
+
+/**
+ * What a contract application's deploy writes beside the managed Operations keys: the proxy secret on the app and the
+ * namespace proxy, equal; the provenance of the bucket the import created; and the bucket's references in the run
+ * section.
+ */
+const proveContractApplicationEnvironment = async (
+	snapshot: EmulatorSnapshot,
+	serviceId: string,
+	version: { readonly runEnvVariables?: Readonly<Record<string, string>> },
+): Promise<void> => {
+	const app = snapshot.services.find((service) => service.id === serviceId)
+	const proxies = snapshot.services.filter((service) => service.projectId === app?.projectId && service.name === ZEROPS_NAMESPACE_PROXY_HOSTNAME)
+	const proxy = proxies[0]
+	if (proxies.length !== 1 || proxy === undefined) throw new Error('the Notes project holds no single namespace proxy')
+	const appSecret = soleSecret(snapshot, serviceId, FABRIKA_PROXY_SECRET, 'proxy secret on the Notes service')
+	if (soleSecret(snapshot, proxy.id, proxySecretVariable(LOCAL_NOTES_IAM_APP_ID), 'Notes proxy secret on the namespace proxy') !== appSecret) {
+		throw new Error('the namespace proxy sends Notes another proxy secret than the one Notes holds')
+	}
+	const buckets = snapshot.services.filter((service) => service.projectId === app?.projectId && service.name === NOTES_FILES_SERVICE)
+	const bucket = buckets[0]
+	if (buckets.length !== 1 || bucket === undefined) throw new Error('the Notes project holds no single attachments bucket')
+	if (soleSecret(snapshot, serviceId, STORAGE_PROVENANCE_VARIABLE, 'bucket provenance marker') !== bucket.id) {
+		throw new Error('the bucket provenance marker does not name the attachments bucket the import created')
+	}
+	const storage = {
+		FABRIKA_APP_STORAGE_ENDPOINT: `\${${NOTES_FILES_SERVICE}_apiUrl}`,
+		FABRIKA_APP_STORAGE_BUCKET: `\${${NOTES_FILES_SERVICE}_bucketName}`,
+		FABRIKA_APP_STORAGE_ACCESS_KEY_ID: `\${${NOTES_FILES_SERVICE}_accessKeyId}`,
+		FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY: `\${${NOTES_FILES_SERVICE}_secretAccessKey}`,
+	}
+	for (const [key, reference] of Object.entries(storage)) {
+		if (version.runEnvVariables?.[key] !== reference) throw new Error(`the deployed run section does not reference the bucket in ${key}`)
 	}
 }
 
@@ -616,7 +672,17 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 		const title = `local smoke ${Date.now()}`
 		const created = await requestJson(NOTES_ORIGIN, '/api/notes.create', { bearer: apiKey, body: { workspaceId: 'local', title } })
 		const { id } = createdNoteSchema.parse(created).result
-		const listed = await requestJson(NOTES_ORIGIN, '/api/notes.list', { bearer: apiKey, body: {} })
+		const listing = await fetch(`${NOTES_ORIGIN}/api/notes.list`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+			body: '{}',
+		})
+		const connectSrc = (listing.headers.get('content-security-policy') ?? '').split(';').map((part) => part.trim().split(/\s+/))
+			.find((directive) => directive[0] === 'connect-src')
+		if (listing.status !== 200 || connectSrc?.includes(LOCAL_OPERATIONS_ORIGIN) !== true) {
+			throw new Error("the proxy's CSP for Notes does not let the browser report to the local Operations ingest")
+		}
+		const listed: unknown = await listing.json()
 		if (!notesListSchema.parse(listed).result.items.some((note) => note.id === id && note.title === title)) {
 			throw new Error('authenticated note was not persisted')
 		}

@@ -9,6 +9,7 @@
 	"scripts": {
 		"emulator": "bun src/emulator-server.ts",
 		"prepare-stack": "bun src/prepare.ts",
+		"fixtures:pin": "bun src/local-source-fixtures/pin.ts && dprint fmt fixtures/source/manifest.json",
 		"up": "bun src/cli.ts up",
 		"status": "bun src/cli.ts status",
 		"smoke": "bun src/smoke.ts",
@@ -42,6 +43,7 @@
 		"@sentry/browser": "10.69.0"
 	},
 	"devDependencies": {
+		"@fabrika/check": "workspace:*",
 		"@types/bun": "latest"
 	}
 }

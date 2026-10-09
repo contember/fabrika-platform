@@ -22,6 +22,7 @@ export const COMPOSE_FILE = resolve(LOCAL_STACK_DIR, 'compose.yaml')
 
 const LOCAL_PUBLIC_PORT = 18080
 const IAM_ISSUER = `http://iam.fabrika.localhost:${LOCAL_PUBLIC_PORT}`
+export const LOCAL_OPERATIONS_ORIGIN = `http://errors.fabrika.localhost:${LOCAL_PUBLIC_PORT}`
 
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
@@ -273,7 +274,15 @@ export const LOCAL_NOTES_IAM_APP_ID = appEnvironmentId(NOTES_APP_ID, LOCAL_NOTES
  */
 export const localAppsProxyManifest = (): ProxyManifest => ({
 	apps: [
-		{ id: LOCAL_NOTES_IAM_APP_ID, hosts: ['notes.fabrika.localhost'], upstream: 'notes:3000', scheme: 'http', ...contractProxyTable(notesContract) },
+		{
+			id: LOCAL_NOTES_IAM_APP_ID,
+			hosts: ['notes.fabrika.localhost'],
+			upstream: 'notes:3000',
+			scheme: 'http',
+			// The origin of the local ingest DSN; the proxy's CSP lets the browser report to it.
+			operationsOrigin: LOCAL_OPERATIONS_ORIGIN,
+			...contractProxyTable(notesContract),
+		},
 		{ id: WITNESS_IAM_APP_ID, hosts: [WITNESS_HOST], upstream: WITNESS_UPSTREAM, gates: WITNESS_GATES, scheme: 'http' },
 	],
 })

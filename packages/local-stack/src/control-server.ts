@@ -13,7 +13,7 @@ import {
 	LOCAL_SOURCE_PLATFORM_REPOSITORY,
 } from './local-source-contract'
 import { loadLocalSourceFixtures, readFixtureFiles } from './local-source-fixtures/fixture'
-import { applicationFixtureRoot } from './local-source-fixtures/generate'
+import { applicationFixtureSource } from './local-source-fixtures/generate'
 import { createFixtureTransports } from './local-source-transports'
 import { readLocalGitHubApps } from './source-connection-fixture'
 
@@ -42,7 +42,7 @@ export async function localSourceSeams(stateDirectory: string): Promise<NonNulla
 			archive: Bun.file(resolve(fixtureDirectory, LOCAL_SOURCE_APPLICATION_ARCHIVE_FILE)),
 			visibility: 'private',
 			// Control reads the contract and the migrations file by file, at the commit (ADR-0050).
-			files: await readFixtureFiles(manifest.application, applicationFixtureRoot),
+			files: readFixtureFiles(manifest.application, await applicationFixtureSource()),
 		},
 	], { access: github })
 	return { ...transports, githubAppFetch: github.appFetch }

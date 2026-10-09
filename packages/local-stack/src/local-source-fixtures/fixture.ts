@@ -79,18 +79,22 @@ export async function prepareLocalSourceFixtures(directory: string): Promise<Loc
 const gitBlobSha = (bytes: Uint8Array): string => createHash('sha1').update(`blob ${bytes.byteLength}\0`).update(bytes).digest('hex')
 
 /**
- * The text of every blob of a fixture's pinned tree, read from `root` and checked against its Git blob id, so the
- * GitHub double serves exactly the committed bytes. A file edited since the fixture was generated needs a reset.
+ * Every blob of a fixture's pinned tree, from `source` (`applicationFixtureSource`) and checked against its Git blob
+ * id, so the GitHub double serves exactly the committed bytes. A file edited since the fixture was generated needs a
+ * reset.
  */
-export async function readFixtureFiles(fixture: LocalSourceFixture, root: string): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> {
+export function readFixtureFiles(
+	fixture: LocalSourceFixture,
+	source: ReadonlyMap<string, Uint8Array<ArrayBuffer>>,
+): ReadonlyMap<string, Uint8Array<ArrayBuffer>> {
 	const files = new Map<string, Uint8Array<ArrayBuffer>>()
 	for (const entry of fixture.tree) {
 		if (entry.type !== 'blob' || entry.mode === '120000') continue
-		const bytes = await readBoundedFile(join(root, entry.path), LOCAL_SOURCE_MAX_EXPANDED_BYTES)
-		if (gitBlobSha(bytes) !== entry.sha) {
+		const bytes = source.get(entry.path)
+		if (bytes === undefined || gitBlobSha(bytes) !== entry.sha) {
 			throw new Error(`local source fixture file ${entry.path} changed since its pin; explicitly reset the local stack`)
 		}
-		files.set(entry.path, new Uint8Array(bytes))
+		files.set(entry.path, bytes)
 	}
 	return files
 }

@@ -43,11 +43,14 @@ machine API key described below.
 5. starts control after the pipeline becomes `ACTIVE`, runs the maintenance cron until the dead
    holder's deploy lease expires, and verifies that it settles the run plus terminal release projection;
 6. verifies the explicit notes `publicOrigin`, stable managed ingest
-   configuration, the proxy secret and bucket marker on the app service, and the
-   version's generated run section (the release and the approved contract digest);
+   configuration, one sensitive proxy secret on the app service equal to the
+   namespace proxy's, a bucket marker naming the bucket the import created, and the
+   version's generated run section (the release, the approved contract digest and
+   the four storage references);
 7. checks the reconciled IAM schema against the contract, that a path no endpoint
-   serves stops at the proxy, and a note created and listed through the endpoint
-   table with a service key;
+   serves stops at the proxy, a note created and listed through the endpoint
+   table with a service key, and the proxy's CSP `connect-src` naming the local
+   Operations ingest;
 8. verifies that an anonymous console `/api/*` call is refused by the PROXY, that
    the public Operations hostname refuses health, catalog and release
    reconciliation and every operator route outright — with and without a machine
@@ -100,7 +103,8 @@ Preparation writes the variables a deploy writes: `notes.env` holds the database
 the proxy secret and the bucket credentials, `notes-contract.env` the digest of the
 example's contract, and `apps-proxy-secret.env` the same secret under the apps proxy's
 `proxySecretVariable('notes@prod')`. The apps proxy serves the contract's endpoint table
-(`localAppsProxyManifest`). The bucket `notes-files` is on `apps-storage`, a SeaweedFS
+(`localAppsProxyManifest`), with the local ingest origin as its `operationsOrigin`, so its CSP lets
+the browser report errors. The bucket `notes-files` is on `apps-storage`, a SeaweedFS
 of the `apps-prod` network only, so the application never reaches the platform's
 storage. A `.state` from before the contract application asks for `local:reset`.
 
@@ -112,9 +116,11 @@ browser the managed DSN yet (backlog 102).
 ## Immutable source fixtures
 
 Local preparation creates two deterministic Git repositories, the platform's from
-`packages/local-stack/fixtures/source/platform/` and the application's from the Notes
-example's own descriptor, contract, table policies and migrations
-(`APPLICATION_FIXTURE_FILES`), and stores their manifests and archives
+`packages/local-stack/fixtures/source/platform/` and the application's from the complete
+Notes example as its repository holds it, plus the entrypoint the build writes
+(`applicationFixtureSource`). `deployable.test.ts` checks that archive as a production
+build does: the checker, and on Postgres `fabrika db migrate`, `fabrika db codegen
+--verify` and `fabrika db test-isolation`. Preparation stores their manifests and archives
 under `.state/source-fixtures/`. Their commits do not depend on the enclosing
 checkout's HEAD, index, or uncommitted files. Control receives the platform
 fixture's immutable proxy source pin. Conflicting existing pins require an
@@ -125,8 +131,8 @@ admission (`packages/local-stack/src/control-server.ts`). Injected metadata/down
 transports (`local-source-transports.ts`) serve only these exact fixture coordinates,
 and each file of the application commit only when its bytes on disk still have the
 pinned blob id (`readFixtureFiles`). The pinned tree is
-`fixtures/source/manifest.json`: an edit to one of the example's fixture files moves it,
-and `fixture.test.ts` fails until it is regenerated.
+`fixtures/source/manifest.json`: an edit of the example moves it, and `fixture.test.ts`
+fails until `bun run fixtures:pin` (in `packages/local-stack`) regenerates it.
 The upload transport maps a capability-bearing logical Zerops HTTPS URL to the
 private emulator endpoint. Production destination validation is unchanged, and
 unknown coordinates or destinations have no network fallback.

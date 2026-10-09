@@ -1,6 +1,7 @@
+import { GENERATED_ENTRY_FILE, generatedEntry } from '@fabrika/app/build'
 import { createZeropsArtifactSourceDescriptor } from '@fabrika/provider-zerops'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type LocalSourceFixture, localSourceFixtureSchema } from '../local-source-contract'
@@ -10,20 +11,29 @@ export const fixtureInputs = fileURLToPath(new URL('../../fixtures/source/', imp
 /** The application fixture is the Notes example itself, so the contract Control approves is the one the container serves. */
 export const applicationFixtureRoot = fileURLToPath(new URL('../../../../examples/zerops-app/', import.meta.url))
 
+/** What the example's `.gitignore` keeps out of its repository; the generated entry is added as the build writes it. */
+const UNCOMMITTED = new Set(['node_modules', 'fabrika', '.env', 'fabrika.manifest.json'])
+
 /**
- * The example's files a deploy reads at its commit: the descriptor, and what the static contract reader and the
- * snapshot's migration list need. The tree is pinned in `fixtures/source/manifest.json`, so an edit to one of these
- * files moves the pin.
+ * The complete application commit: every file of the example an author pushes, and the entrypoint the platform build
+ * writes, so the archive is what a production build checks and what the composed container runs. The tree is pinned in
+ * `fixtures/source/manifest.json`; an edit to any of these files moves it (`bun run fixtures:pin`).
  */
-export const APPLICATION_FIXTURE_FILES = [
-	'zerops.yaml',
-	'package.json',
-	'tsconfig.json',
-	'fabrika.contract.ts',
-	'src/db/tables.ts',
-	'src/db/schema.generated.ts',
-	'db/migrations/20261009140000_notes.sql',
-] as const
+export async function applicationFixtureSource(root: string = applicationFixtureRoot): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> {
+	const files = new Map<string, Uint8Array<ArrayBuffer>>()
+	const visit = async (directory: string): Promise<void> => {
+		for (const entry of (await readdir(join(root, directory), { withFileTypes: true })).sort((left, right) => left.name < right.name ? -1 : 1)) {
+			const path = directory === '' ? entry.name : `${directory}/${entry.name}`
+			if (UNCOMMITTED.has(path) || entry.name.endsWith('.local')) continue
+			if (entry.isDirectory()) await visit(path)
+			else if (entry.isFile()) files.set(path, new Uint8Array(await readFile(join(root, path))))
+			else throw new Error(`the application fixture holds no ${path}: only regular files are committed`)
+		}
+	}
+	await visit('')
+	files.set(GENERATED_ENTRY_FILE, new TextEncoder().encode(generatedEntry('bun')))
+	return files
+}
 
 export function sha256(bytes: Uint8Array): string {
 	return createHash('sha256').update(bytes).digest('hex')
@@ -74,17 +84,28 @@ async function git(directory: string, args: string[]): Promise<Uint8Array<ArrayB
 	return stdout
 }
 
+async function platformFixtureSource(): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> {
+	const root = join(fixtureInputs, 'platform')
+	return new Map(
+		await Promise.all(
+			['marker.txt', 'zerops.yaml'].map(async (
+				file,
+			): Promise<[string, Uint8Array<ArrayBuffer>]> => [file, new Uint8Array(await readFile(join(root, file)))]),
+		),
+	)
+}
+
 export async function generateFixture(directory: string, kind: 'platform' | 'application'): Promise<{
 	fixture: LocalSourceFixture
 	archive: Uint8Array<ArrayBuffer>
 }> {
 	await mkdir(directory)
 	await git(directory, ['init', '--quiet', '--object-format=sha1', '--initial-branch=main', '--template='])
-	const root = kind === 'platform' ? join(fixtureInputs, kind) : applicationFixtureRoot
-	const files: string[] = kind === 'platform' ? ['marker.txt', 'zerops.yaml'] : [...APPLICATION_FIXTURE_FILES]
-	for (const file of files) {
+	const source = kind === 'platform' ? await platformFixtureSource() : await applicationFixtureSource()
+	const files = [...source.keys()]
+	for (const [file, bytes] of source) {
 		await mkdir(dirname(join(directory, file)), { recursive: true })
-		await writeFile(join(directory, file), await readFile(join(root, file)), { mode: 0o644 })
+		await writeFile(join(directory, file), bytes, { mode: 0o644 })
 	}
 	if (kind === 'platform') {
 		const target = (await readFile(join(fixtureInputs, kind, 'marker-link.target'), 'utf8')).trim()
@@ -92,7 +113,8 @@ export async function generateFixture(directory: string, kind: 'platform' | 'app
 		await symlink(target, join(directory, 'marker-link'))
 		files.push('marker-link')
 	}
-	await git(directory, ['add', '--', ...files])
+	// Forced: the example's own .gitignore names the generated entry, which this commit carries as the build writes it.
+	await git(directory, ['add', '--force', '--', ...files])
 	await git(directory, ['update-index', '--chmod=-x', '--', ...files.filter((file) => file !== 'marker-link')])
 	await git(directory, ['commit', '--quiet', '--no-gpg-sign', '-m', `Fabrika local ${kind} source fixture v1`])
 	const text = async (args: string[]) => new TextDecoder().decode(await git(directory, args))
