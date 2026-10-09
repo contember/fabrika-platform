@@ -8,7 +8,24 @@ import { isPlainIdentifier } from './identifier'
 type LooseDB = Record<string, Record<string, unknown>>
 type Executor = Pick<Kysely<LooseDB>, 'executeQuery'>
 
-const compiler = new PostgresQueryCompiler()
+/**
+ * With `prepare: false`, Bun.SQL sends every parameter as text and a Date as `Date#toString()`, which Postgres
+ * refuses as a timestamp. Every guarded tree compiles here, so every Date parameter of the layer is bound as ISO text.
+ */
+class ParameterCompiler extends PostgresQueryCompiler {
+	protected override addParameter(parameter: unknown): void {
+		super.addParameter(parameter instanceof Date ? timestampText(parameter) : parameter)
+	}
+}
+
+function timestampText(date: Date): string {
+	if (Number.isNaN(date.getTime())) {
+		throw new QueryRefusedError('an invalid Date cannot be bound')
+	}
+	return date.toISOString()
+}
+
+const compiler = new ParameterCompiler()
 freezePrototypeChain(compiler)
 
 /**
@@ -123,7 +140,10 @@ export class Session {
 }
 Object.freeze(Session.prototype)
 
-/** A scalar parameter of a framework statement; Bun.SQL mis-binds arrays, JSON strings and (unprepared) Dates. */
+/**
+ * A scalar parameter of a framework statement; Bun.SQL mis-binds arrays and JSON strings. No Date: these texts skip
+ * the compiler that binds one, and a lease time is the database's clock, never the process's.
+ */
 export type FixedParameter = string | number | null
 
 /**

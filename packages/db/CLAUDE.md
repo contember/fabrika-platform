@@ -99,8 +99,7 @@ and the target `Ref`, so no handler can call it.
   chain (`links.ts`, shared with the stores). Never add one keyed by the id alone: a `Ref` minted before its owner
   moved would still reach the file. The pending insert and its completion lock the owner row `for share` on the
   owner `Ref`'s chain in their transaction. Only a removed, orphaned or stale pending row is ever purged, after its
-  object. Timestamps are bound as ISO strings: a bound `Date` reaches Postgres as `Date#toString()` through this
-  driver.
+  object.
   `framework-tables.ts` needs `bun` too (it reads a unique violation off `SQL.PostgresError`); `framework.ts` imports
   only its types, and `store.ts` builds the implementation.
 - **A delivery key is recorded by its primary key.** The `delivery_id` column holds the key `@fabrika/app` derives
@@ -176,6 +175,11 @@ and the target `Ref`, so no handler can call it.
   or null; the guard refuses anything else in a `ValueNode`. The pool runs with `prepare: false`:
   otherwise Bun keeps one prepared statement per distinct SQL text, and `in` lists of different
   lengths make that grow without bound.
+- **A `Date` is bound as its ISO 8601 UTC text, in one place: the layer's compiler** (`ParameterCompiler` in
+  `database.ts`). Unprepared, `Bun.SQL` sends a `Date` as `Date#toString()`, which Postgres refuses as a
+  timestamp in every time zone. An invalid `Date` is refused there with `QueryRefusedError` before anything is sent. Callers bind
+  `Date` values; never convert one at a call site. `runFixedStatement` skips the compiler, so `FixedParameter`
+  has no `Date`. `date-binding.test.ts` is the witness, in a process west of UTC.
 - **The guard depends on Kysely internals** (node factories marked `@internal`, node property names,
   the operator and function strings the compiler prints). `kysely` and `kysely-postgres-js` are pinned
   exactly; `guard.test.ts` and `type-attacks.test.ts` are the upgrade check.

@@ -110,7 +110,7 @@ function isNull(table: string, name: string, negated: boolean): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create(negated ? 'is not' : 'is'), ValueNode.createImmediate(null))
 }
 
-function compare(table: string, name: string, operator: '=' | '<', value: string): OperationNode {
+function compare(table: string, name: string, operator: '=' | '<', value: string | Date): OperationNode {
 	return BinaryOperationNode.create(column(table, name), OperatorNode.create(operator), ValueNode.create(value))
 }
 
@@ -158,7 +158,6 @@ function integer(table: string, row: Readonly<Record<string, unknown>>, name: st
 
 const LIVE_COLUMNS = ['id', 'object_key', 'size', 'content_type', 'original_name']
 
-// A bound Date reaches Postgres as Date#toString() through this driver, so timestamps are bound as ISO strings.
 function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, spec: FileCollectionSpec): FileCollectionTable {
 	const table = tableOf(spec.name)
 	const owner = ownerOf(models, spec)
@@ -187,7 +186,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			ParensNode.create(
 				allOf([compare(table, 'status', '=', 'live'), ParensNode.create(anyOf([isNull(table, 'deleted_at', true), isNull(table, 'owner_id', false)]))]),
 			),
-			ParensNode.create(allOf([compare(table, 'status', '=', 'pending'), compare(table, 'created_at', '<', pendingBefore.toISOString())])),
+			ParensNode.create(allOf([compare(table, 'status', '=', 'pending'), compare(table, 'created_at', '<', pendingBefore)])),
 		])
 
 	/** Locks the owner row `for share` where the Ref says it lies, in `transaction`; `NotFoundError` when it does not. */
@@ -207,7 +206,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 	return freeze({
 		async begin(capability: unknown, file: PendingFile): Promise<void> {
 			const grant = grantOf(capability, owner.dimension, spec.actions.write)
-			const values = new Map<string, string | null>([['id', file.id]])
+			const values = new Map<string, string | Date | null>([['id', file.id]])
 			for (const { link, value } of linkValues(table, fileOwnerLinks, grant)) {
 				values.set(link.column, value)
 			}
@@ -216,7 +215,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			values.set('content_type', file.contentType)
 			values.set('original_name', file.originalName)
 			values.set('created_by', grant.principal)
-			values.set('created_at', file.createdAt.toISOString())
+			values.set('created_at', file.createdAt)
 			await session().transaction(async (transaction) => {
 				await lockOwner(transaction, grant)
 				await transaction.run(insertNode(table, values, acknowledgement(table, 'id', undefined)), guard('InsertQueryNode', table, undefined))
@@ -263,7 +262,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const scope = ownedFile(grant, id)
 			const node = updateNode(
 				table,
-				new Map([['deleted_at', at.toISOString()]]),
+				new Map([['deleted_at', at]]),
 				undefined,
 				scopedWhere(live(), scope),
 				acknowledgement(table, 'id', undefined),
@@ -296,7 +295,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 			const scope = linksPredicate(table, linkValues(table, fileLinks, grant))
 			const node = updateNode(
 				table,
-				new Map([['deleted_at', at.toISOString()]]),
+				new Map([['deleted_at', at]]),
 				undefined,
 				scopedWhere(live(), scope),
 				acknowledgement(table, 'id', undefined),
