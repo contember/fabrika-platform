@@ -5,6 +5,7 @@ import {
 	type AppSchema,
 	type ArtifactAccess,
 	artifactAccessDigest,
+	canonicalArtifactAccess,
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
 import type {
@@ -370,7 +371,11 @@ const reportedArtifactAccess = (report: RunnerArtifactAccess): ArtifactAccess =>
 	if (access.data.schema?.contract === true) {
 		throw new InvalidIamReport('reported a contract schema, which comes only from the contract Control approved')
 	}
-	return access.data
+	try {
+		return canonicalArtifactAccess(access.data)
+	} catch {
+		throw new InvalidIamReport('reported gates or an authz schema that name one identifier twice')
+	}
 }
 
 /** What a terminal outcome of an application without a contract may apply, and what Control hears of its access. */
