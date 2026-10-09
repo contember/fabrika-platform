@@ -36,3 +36,29 @@ export const contract = defineContract({
 		flaky: c.cron('0 * * * *', { actions: ['notes.read'], scope: 'app', retries: 1 }),
 	},
 }))
+
+/** A contract with a job and an endpoint that creates a workspace through IAM. */
+export const startingContract = defineContract({
+	app: 'notes',
+	dimensions: {
+		workspace: { creator: 'owner' },
+		note: { in: 'workspace' },
+	},
+	actions: {
+		'notes.read': 'Read notes',
+		'notes.write': 'Create and edit notes',
+		'notes.delete': 'Delete notes',
+		'workspaces.create': 'Start a workspace',
+	},
+	roles: {
+		owner: { grants: ['notes.read', 'notes.delete'], member: { scope: 'workspace', assignableBy: ['owner'] } },
+	},
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+		start: c.mutation({ output: z.strictObject({ workspace: z.string() }), access: { action: 'workspaces.create', creates: 'workspace' } }),
+	}),
+	health: c.health('/healthz'),
+	jobs: {
+		purge: c.cron('0 3 * * *', { actions: ['notes.read', 'notes.delete'], scope: 'app', timeout: '10m', retries: 2 }),
+	},
+}))

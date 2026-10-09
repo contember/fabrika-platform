@@ -3,7 +3,7 @@
 import { implement, type JobContext } from '@fabrika/app/implement'
 import { type Ref, scoped, type Within } from '@fabrika/db'
 import { tables } from '../scoped-notes/src/db/tables'
-import { contract } from './fabrika.contract'
+import { contract, startingContract } from './fabrika.contract'
 
 type Dimension = 'workspace' | 'note'
 
@@ -45,6 +45,18 @@ export function jobsApp(hooks: JobHooks) {
 				sweep: ({ ctx }) => deleteExpired('sweep', ctx),
 				flaky: ({ ctx }) => hooks.flaky(ctx, notes),
 			},
+		}),
+	})
+}
+
+/** The jobs contract with an endpoint that creates a workspace, so `boot` needs IAM's membership transport. */
+export function startingJobsApp() {
+	return implement(startingContract, {
+		database: scoped(tables),
+		deps: () => ({}),
+		handlers: () => ({
+			api: { start: ({ ctx }) => ({ workspace: ctx.created.value }) },
+			jobs: { purge: () => Promise.resolve() },
 		}),
 	})
 }

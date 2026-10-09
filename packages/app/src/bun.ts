@@ -276,10 +276,9 @@ export async function runContractJob(
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
 	try {
 		const workloadTokens = workloadTokensOf(environment.framework)
-		return await boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, workloadTokens, requireProxySecret: true }).jobs.run(
-			name,
-			options,
-		)
+		const membership = httpMembership(environment.framework)
+		return await boot(app, { environment, iam, assets: diskAssets(process.cwd()), database, membership, workloadTokens, requireProxySecret: true })
+			.jobs.run(name, options)
 	} finally {
 		await database?.close()
 	}
