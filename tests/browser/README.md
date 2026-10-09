@@ -62,6 +62,9 @@ invalidates every IAM session. Always use `OPICE_AUTH_REFRESH=1` after a reset.
   browser to read it from — the proxy injects that server-side.
 - Mutating scenarios create uniquely marked issues. They must not assert global
   table counts or rely on scenario order.
+- The `notes-agent-change` seed deploys Notes at its pinned commit and parks the
+  agent change commit for approval. Its scenario approves that run, so it runs once
+  per stack: rerun it after `browser:reset`.
 - `Hidden sibling / secret` is the negative access-control witness. Never expose
   its identifiers, release, health data, DSN, or alert target in output.
 
