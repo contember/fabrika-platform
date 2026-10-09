@@ -1,3 +1,5 @@
+import { contractArtifactSchema } from '@fabrika/app/contract'
+import { type ContractArtifact, contractDigest } from '@fabrika/auth-core'
 import { z } from 'zod'
 
 export const runnerStateSchema = z.enum(['pending', 'cloning', 'installing', 'deploying', 'succeeded', 'failed'])
@@ -19,6 +21,31 @@ export const RUNNER_OUTCOME_FILE_ENV = 'FABRIKA_RUNNER_OUTCOME_FILE'
 
 /** The executor's copy of `CloudflareRunnerJob.installationApps`: a JSON array of `<app>@<env>`. */
 export const INSTALLATION_APPS_ENV = 'FABRIKA_INSTALLATION_APPS'
+
+/**
+ * The access Control approved for a run (ADR-0050): the contract it read at the commit, or `artifact` for an
+ * application Control's registry knows has none, whose config's gates and schema apply. The proxy table and
+ * `FABRIKA_CONTRACT_DIGEST` follow this, never the checkout.
+ */
+export type RunnerApprovedAccess =
+	| { readonly kind: 'contract'; readonly contract: ContractArtifact; readonly contractDigest: string }
+	| { readonly kind: 'artifact' }
+
+export const runnerApprovedAccessSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('contract'), contract: z.unknown(), contractDigest: z.string() }).strict(),
+	z.object({ kind: z.literal('artifact') }).strict(),
+]).transform((access, context): RunnerApprovedAccess => {
+	if (access.kind === 'artifact') return access
+	const contract = contractArtifactSchema.safeParse(access.contract)
+	if (!contract.success || contractDigest(contract.data) !== access.contractDigest) {
+		context.addIssue({ code: z.ZodIssueCode.custom, message: 'not a contract artifact its digest describes' })
+		return z.NEVER
+	}
+	return { kind: 'contract', contract: contract.data, contractDigest: access.contractDigest }
+})
+
+/** Where the runner leaves the job's `RunnerApprovedAccess` as JSON for the executor — beside the checkout, never inside it. */
+export const APPROVED_ACCESS_FILE_ENV = 'FABRIKA_APPROVED_ACCESS_FILE'
 
 /** The terminal and in-progress status polled from the container, and persisted by the runner Worker once terminal. */
 export const runnerStatusSchema = z.object({

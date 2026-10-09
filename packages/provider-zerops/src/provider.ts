@@ -80,6 +80,8 @@ export interface ZeropsDeployRun {
 	readonly artifact: FabrikaManifest
 	/** Control's approved access for the environment (ADR-0050); the lock-down and the IAM schema come from it. */
 	readonly access?: ProviderApprovedAccess
+	/** Control knows the application has no contract: its artifact's descriptor and IAM schema apply (until B10). */
+	readonly artifactAccess?: true
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
@@ -639,7 +641,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 		}
 
 		case 'trigger-build': {
-			const locked = lockedExecutionFor(artifact, run.access)
+			const locked = lockedExecutionFor(artifact, run, dryRun)
 			if (dryRun) {
 				log(
 					locked === null
@@ -701,7 +703,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 		}
 
 		case 'reconcile-schema': {
-			const schema = approvedSchemaOf(artifact, run.access)
+			const schema = approvedSchemaOf(artifact, run)
 			const propustkaUrl = target.propustkaUrl
 			if (schema === undefined || propustkaUrl === undefined) {
 				return

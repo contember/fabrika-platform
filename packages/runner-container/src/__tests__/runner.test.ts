@@ -1,7 +1,12 @@
-import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, RUNNER_OUTCOME_FILE_ENV } from '@fabrika/provider-cloudflare/runner'
+import {
+	APPROVED_ACCESS_FILE_ENV,
+	type CloudflareRunnerJob,
+	cloudflareRunnerJobSchema,
+	RUNNER_OUTCOME_FILE_ENV,
+} from '@fabrika/provider-cloudflare/runner'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectSourceMaps, Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
@@ -35,6 +40,7 @@ const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunner
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
+	approvedAccess: { kind: 'artifact' },
 	...overrides,
 })
 
@@ -911,5 +917,37 @@ describe('executor outcome file', () => {
 			expect(status.error).toBe('runner outcome file exceeds the size limit')
 			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
 		})
+	})
+})
+
+describe('approved access file', () => {
+	/** Run one job in a real workspace, recording what the executor finds at the path its environment names. */
+	const runSeeing = async (job: CloudflareRunnerJob): Promise<{ path: string | undefined; contents: string | undefined; workspace: string }> => {
+		const workspace = await mkdtemp(join(tmpdir(), 'fabrika-runner-access-'))
+		workspaces.add(workspace)
+		let path: string | undefined
+		let contents: string | undefined
+		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
+			if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
+			if (spec.command === 'fabrika-cloudflare-executor') {
+				path = spec.env?.[APPROVED_ACCESS_FILE_ENV]
+				if (path !== undefined) contents = await readFile(path, 'utf8')
+			}
+			return { exitCode: 0 }
+		}
+		expect((await new Runner(job, { spawn, workspace }).run()).state).toBe('succeeded')
+		return { path, contents, workspace }
+	}
+
+	test("the executor reads the job's approved access beside the checkout, under a name no job value redirects", async () => {
+		const { path, contents, workspace } = await runSeeing(baseJob({ managedEnvironment: { [APPROVED_ACCESS_FILE_ENV]: '/tmp/forged.json' } }))
+		expect(path).toBe(join(workspace, 'run-1.access.json'))
+		expect(contents === undefined ? undefined : JSON.parse(contents)).toEqual({ kind: 'artifact' })
+		expect(await Bun.file(join(workspace, 'run-1.access.json')).exists()).toBe(false)
+	})
+
+	test('a dry run without approved access names no file, so the executor reads the checkout', async () => {
+		const { approvedAccess: _none, ...job } = baseJob({ dryRun: true, secrets: { [APPROVED_ACCESS_FILE_ENV]: '/tmp/forged.json' } })
+		expect((await runSeeing(job)).path).toBeUndefined()
 	})
 })

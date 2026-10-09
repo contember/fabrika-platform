@@ -1,6 +1,6 @@
 import { appSchemaSchema } from '@fabrika/auth'
 import { type AppSchema, isDigest } from '@fabrika/auth-core'
-import type { JsonValue, ProviderApprovedAccess, ProviderCodec } from '@fabrika/provider-contract'
+import type { JsonValue, ProviderCodec, ProviderEnvironment } from '@fabrika/provider-contract'
 import { normalizeGateRule, proxyEndpointRowSchema, proxyGateRuleFieldsSchema } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
@@ -421,13 +421,21 @@ export const claimsContract = (manifest: FabrikaManifest): boolean =>
 	manifest.target.contract !== undefined || manifest.app.schema?.contract === true
 	|| (manifest.target.proxy !== undefined && 'endpoints' in manifest.target.proxy)
 
+/** What Control lets a provider publish for one environment (`ProviderEnvironment.access` / `artifactAccess`). */
+export type ZeropsAccess = Pick<ProviderEnvironment, 'access' | 'artifactAccess'>
+
 /**
  * The execution descriptor's lock-down at deploy (ADR-0050): Control's approved contract decides it, not the artifact,
- * so a configuration cannot drop it. An artifact that claims a contract Control did not approve is refused.
+ * so a configuration cannot drop it. An application Control knows has no contract (`artifactAccess`) deploys its own
+ * descriptor, but not with an artifact that claims a contract; with neither, nothing deploys outside a dry run.
  */
-export function lockedExecutionFor(manifest: FabrikaManifest, access: ProviderApprovedAccess | undefined): ZeropsLockedExecution | null {
+export function lockedExecutionFor(manifest: FabrikaManifest, granted: ZeropsAccess, dryRun: boolean): ZeropsLockedExecution | null {
+	const access = granted.access
 	if (access === undefined) {
-		if (claimsContract(manifest)) throw new Error('zerops: a contract application deploys only with the contract Control approved at its commit')
+		if (granted.artifactAccess === true && claimsContract(manifest)) {
+			throw new Error('zerops: the artifact claims a contract, but the commit Control read has no `fabrika.contract.ts`')
+		}
+		if (granted.artifactAccess !== true && !dryRun) throw new Error('zerops: Control approved no access for this environment')
 		return null
 	}
 	if (!LOCKED_APP_ID_PATTERN.test(manifest.app.id)) throw new Error('zerops: a contract application id must match [a-z0-9][a-z0-9-]*')
@@ -440,12 +448,13 @@ export function lockedExecutionFor(manifest: FabrikaManifest, access: ProviderAp
 }
 
 /**
- * The IAM schema a deploy, cancel or reconcile applies: a contract application's comes only from the approved access;
- * an application without a contract keeps the schema its artifact declares. `undefined` reconciles nothing.
+ * The IAM schema a deploy, cancel or reconcile applies: the approved contract's, or the artifact's for an application
+ * Control knows has no contract (until B10, and never a `contract: true` one). `undefined` reconciles nothing.
  */
-export function approvedSchemaOf(manifest: FabrikaManifest, access: ProviderApprovedAccess | undefined): AppSchema | undefined {
-	if (access !== undefined) return access.schema
-	return claimsContract(manifest) ? undefined : manifest.app.schema
+export function approvedSchemaOf(manifest: FabrikaManifest, granted: ZeropsAccess): AppSchema | undefined {
+	if (granted.access !== undefined) return granted.access.schema
+	const schema = manifest.app.schema
+	return granted.artifactAccess === true && schema?.contract !== true ? schema : undefined
 }
 
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>

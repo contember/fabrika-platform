@@ -1266,6 +1266,7 @@ describe('Zerops namespace lifecycle', () => {
 				env: 'prod',
 				domain: 'Notes.Example.Test',
 				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(notes) },
+				artifactAccess: true,
 			}],
 			signal: new AbortController().signal,
 			events: { checkpoint: async () => {}, boundary: async () => {} },

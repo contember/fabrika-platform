@@ -19,7 +19,7 @@ import {
 	cloudflareStoredTargetCodec,
 	createCloudflareControlProvider,
 } from '..'
-import { cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
+import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
 import type { RunnerIamReconcile } from '../runner-protocol'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
@@ -56,6 +56,7 @@ const deployInput = (): ProviderDeployInput => ({
 		publicOrigin: 'https://public.example.com',
 		target: envelope(cloudflareStoredTargetCodec, { stateNamespace: 'api-state' }),
 		artifact: envelope(cloudflareArtifactCodec, cloudflareArtifact('deploy.config.ts')),
+		artifactAccess: true,
 	},
 	secrets: { API_KEY: 'secret' },
 	vars: { FEATURE: 'on' },
@@ -535,6 +536,7 @@ describe('Cloudflare control provider', () => {
 			configPath: 'deploy.config.ts',
 			stateNamespace: 'api-state',
 			domain: 'api.example.com',
+			approvedAccess: { kind: 'artifact' },
 			dryRun: true,
 			runnerKey: 'test-runner-key',
 			credentials: {
@@ -593,6 +595,24 @@ describe('Cloudflare control provider', () => {
 		).toThrow('expected "cloudflare"')
 	})
 
+	test('the application root Control reads the snapshot at is the directory the runner executes in', () => {
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => ({ state: 'failed' }),
+			cancelRun: async () => {},
+		})
+		const root = (workerDir?: string) =>
+			provider.applicationRoot?.({ repoUrl: 'https://github.com/example/api.git', ref: COMMIT_SHA, ...(workerDir === undefined ? {} : { workerDir }) })
+		expect([root(), root('.'), root('./'), root('.//.')]).toEqual(['', '', '', ''])
+		expect([root('apps/api/'), root('./apps//api')]).toEqual(['apps/api', 'apps/api'])
+		expect([root('a/../b'), root('..'), root('/srv/app')]).toEqual([null, null, null])
+		expect(checkoutRelativeDirectory(undefined)).toBe('')
+	})
+
 	test('rejects malformed optional runner fields', () => {
 		const valid = {
 			runId: RUN_ID,
@@ -604,6 +624,7 @@ describe('Cloudflare control provider', () => {
 				CLOUDFLARE_ACCOUNT_ID: 'account-1',
 				CLOUDFLARE_API_TOKEN: 'token-1',
 			},
+			approvedAccess: { kind: 'artifact' },
 		}
 		expect(cloudflareRunnerJobSchema.safeParse(valid).success).toBe(true)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, dryRun: 'yes' }).success).toBe(false)
@@ -637,6 +658,7 @@ describe('Cloudflare control provider', () => {
 			env: 'prod',
 			runnerKey: 'test-runner-key',
 			credentials: { CLOUDFLARE_ACCOUNT_ID: 'account-1', CLOUDFLARE_API_TOKEN: 'token-1' },
+			approvedAccess: { kind: 'artifact' },
 		}
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, runId: 'run-1' }).success).toBe(false)
 		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, repoUrl: 'ext::sh -c id' }).success).toBe(false)
@@ -759,6 +781,7 @@ describe('Cloudflare control provider', () => {
 
 	test('an approved contract reconciles its own schema, never the one the runner reports (ADR-0050)', async () => {
 		const schemas: unknown[] = []
+		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
@@ -769,15 +792,105 @@ describe('Cloudflare control provider', () => {
 			},
 			...sourceOptions,
 			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
-			startRun: async () => ({ state: 'succeeded', iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[{"action":"*"}],"roles":{}}' } }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded', iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[{"action":"*"}],"roles":{}}' } }
+			},
 			cancelRun: async () => {},
 		})
-		const input = deployInput()
+		const { environment: { artifactAccess: _trusted, ...environment }, ...input } = deployInput()
 		const access = { contract: notesArtifact, contractDigest: contractDigest(notesArtifact), schema: schemaFromContract(notesArtifact) }
-		const outcome = await provider.deploy({ ...input, dryRun: false, environment: { ...input.environment, access } })
+		const outcome = await provider.deploy({ ...input, dryRun: false, environment: { ...environment, access } })
 
 		expect(outcome).toMatchObject({ state: 'succeeded' })
 		expect(schemas).toEqual([access.schema])
+		// The runner deploys the proxy table and the digest from this, not from the checkout.
+		expect(jobs[0]?.approvedAccess).toEqual({ kind: 'contract', contract: notesArtifact, contractDigest: access.contractDigest })
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+	})
+
+	test('a deploy Control approved no access for is refused before the runner hears of it', async () => {
+		const started: CloudflareRunnerJob[] = []
+		const accepted: string[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async (job) => {
+				started.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const { environment: { artifactAccess: _trusted, ...environment }, ...input } = deployInput()
+		await expect(
+			provider.deploy({
+				...input,
+				dryRun: false,
+				environment,
+				events: { ...input.events, externalId: async (id) => void accepted.push(id) },
+			}),
+		).rejects.toThrow('Cloudflare deploy requires the access Control approved for this environment')
+		expect(started).toEqual([])
+		expect(accepted).toEqual([])
+	})
+
+	test('the runner boundary refuses a non-dry job without approved access, or with a contract its digest does not describe', () => {
+		const job = {
+			runId: RUN_ID,
+			repoUrl: 'https://github.com/example/api.git',
+			ref: COMMIT_SHA,
+			env: 'prod',
+			credentials: { CLOUDFLARE_ACCOUNT_ID: 'account-1', CLOUDFLARE_API_TOKEN: 'token-1' },
+		}
+		const digest = contractDigest(notesArtifact)
+		expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...job, dryRun: true }).success).toBe(true)
+		expect(
+			cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: digest } }).success,
+		)
+			.toBe(true)
+		const narrowed = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
+		expect(cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: narrowed, contractDigest: digest } }).success)
+			.toBe(false)
+		expect(
+			cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'contract', contract: { endpoints: [] }, contractDigest: digest } }).success,
+		)
+			.toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...job, approvedAccess: { kind: 'artifact', contract: notesArtifact } }).success).toBe(false)
+	})
+
+	test('a reconcile for an environment Control approved nothing for applies no schema the runner reported', async () => {
+		const calls: Array<{ app: string }> = []
+		const logs: string[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			propustkaUrl: 'https://iam.example.com',
+			reconcileSchema: async (input) => {
+				calls.push({ app: input.app })
+			},
+			...sourceOptions,
+			prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+			startRun: async () => ({ state: 'failed' }),
+			cancelRun: async () => {},
+			recoverRun: async () => ({ state: 'succeeded', iamReconcile: { app: 'api', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' } }),
+		})
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+		const { artifactAccess: _trusted, ...environment } = deployInput().environment
+		const outcome = await provider.reconcile({
+			runId: RUN_ID,
+			externalId: RUN_ID,
+			environment,
+			signal: new AbortController().signal,
+			log: async (line: string) => void logs.push(line),
+		})
+		expect(outcome).toEqual({ state: 'failed' })
+		expect(calls).toEqual([])
+		expect(logs).toEqual(['reconcile-schema failed: reported an authz schema, but Control approved no access for this environment'])
 	})
 
 	test('a contract schema the runner reports without an approved contract fails the run without touching IAM', async () => {

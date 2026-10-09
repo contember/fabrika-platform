@@ -8,6 +8,8 @@
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_ARTIFACT_HEADERS } from '@fabrika/operations-contract/releases'
 import {
+	APPROVED_ACCESS_FILE_ENV,
+	checkoutRelativeDirectory,
 	type CloudflareRunnerJob,
 	INSTALLATION_APPS_ENV,
 	RUNNER_OUTCOME_FILE_ENV,
@@ -16,7 +18,7 @@ import {
 	type RunnerState,
 	type RunnerStatus,
 } from '@fabrika/provider-cloudflare/runner'
-import { mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'
 
@@ -220,9 +222,10 @@ const makeRedactor = (job: CloudflareRunnerJob, gitSource: GitSource | null): Re
 /** Resolve a job-supplied path under `base`, or `null` if it is absolute, walks up, or escapes. */
 const containedPath = (base: string, value: string | undefined): string | null => {
 	const root = resolve(base)
-	if (value === undefined) return root
-	if (value.startsWith('/') || value.split('/').includes('..')) return null
-	const resolved = resolve(root, value)
+	// The one normalization Control reads the snapshot with, so both see the same application root.
+	const relative = checkoutRelativeDirectory(value)
+	if (relative === null) return null
+	const resolved = resolve(root, relative)
 	return resolved === root || resolved.startsWith(`${root}/`) ? resolved : null
 }
 
@@ -294,6 +297,11 @@ export class Runner {
 	/** Where the executor reports its outcome — beside the checkout, never inside it. */
 	get outcomeFilePath(): string {
 		return `${this.env.workspace}/${this.job.runId}.outcome.json`
+	}
+
+	/** Where the executor reads the access Control approved — beside the checkout, so the checkout cannot supply it. */
+	get approvedAccessFilePath(): string {
+		return `${this.env.workspace}/${this.job.runId}.access.json`
 	}
 
 	/** Append a line (redacted) to the buffer and fan it out to subscribers. */
@@ -472,6 +480,8 @@ export class Runner {
 		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
 		if (this.job.installationApps === undefined) delete env[INSTALLATION_APPS_ENV]
 		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
+		if (this.job.approvedAccess === undefined) delete env[APPROVED_ACCESS_FILE_ENV]
+		else env[APPROVED_ACCESS_FILE_ENV] = this.approvedAccessFilePath
 		return env
 	}
 
@@ -579,6 +589,9 @@ export class Runner {
 		if (!(await this.clearOutcomeFile())) {
 			return this.refuse('could not clear the runner outcome file')
 		}
+		if (!(await this.writeApprovedAccessFile())) {
+			return this.refuse('could not write the approved access file')
+		}
 		let deploy: SpawnResult
 		let outcome: RunnerOutcomeFile | undefined
 		try {
@@ -595,6 +608,7 @@ export class Runner {
 			}
 		} finally {
 			await this.clearOutcomeFile()
+			await rm(this.approvedAccessFilePath, { force: true }).catch(() => {})
 		}
 		if (deploy.exitCode === 0) {
 			this.iamReconcile = outcome?.iamReconcile
@@ -609,6 +623,16 @@ export class Runner {
 		this.finish('failed', { error: reason })
 		this.emit('meta', reason)
 		return this.status()
+	}
+
+	private async writeApprovedAccessFile(): Promise<boolean> {
+		try {
+			await rm(this.approvedAccessFilePath, { force: true })
+			if (this.job.approvedAccess !== undefined) await writeFile(this.approvedAccessFilePath, JSON.stringify(this.job.approvedAccess), 'utf8')
+			return true
+		} catch {
+			return false
+		}
 	}
 
 	private async clearOutcomeFile(): Promise<boolean> {

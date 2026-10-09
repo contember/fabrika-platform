@@ -1,6 +1,11 @@
-import { describe, expect, test } from 'bun:test'
+import { contractDigest } from '@fabrika/auth-core'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
-import { parseInstallationApps, parseReturnOrigins } from '../command'
+import { parseInstallationApps, parseReturnOrigins, readApprovedContract } from '../command'
 
 describe('parseCloudflareArgs', () => {
 	test('parses a provider deploy', () => {
@@ -77,5 +82,32 @@ describe('parseInstallationApps', () => {
 		expect(() => parseInstallationApps('notes@prod')).toThrow('FABRIKA_INSTALLATION_APPS is not a JSON array')
 		expect(() => parseInstallationApps('{"notes":"prod"}')).toThrow('is not a JSON array of strings')
 		expect(() => parseInstallationApps('["notes"]')).toThrow('holds `notes`, which is not `<app>@<env>`')
+	})
+})
+
+describe('readApprovedContract', () => {
+	const roots: string[] = []
+	afterAll(async () => {
+		for (const root of roots) await rm(root, { recursive: true, force: true })
+	})
+	const accessFile = async (contents: string): Promise<string> => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-access-'))
+		roots.push(root)
+		const path = join(root, 'run.access.json')
+		await writeFile(path, contents)
+		return path
+	}
+
+	test('reads the contract the runner wrote, null for an application Control knows has none, and nothing outside a runner', async () => {
+		const access = { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) }
+		expect(await readApprovedContract(await accessFile(JSON.stringify(access)))).toEqual(notesArtifact)
+		expect(await readApprovedContract(await accessFile('{"kind":"artifact"}'))).toBeNull()
+		expect(await readApprovedContract(undefined)).toBeUndefined()
+	})
+
+	test('an unreadable or malformed file fails the deploy rather than falling back to the checkout', async () => {
+		await expect(readApprovedContract('/nonexistent/run.access.json')).rejects.toThrow('does not name a readable JSON file')
+		const forged = { kind: 'contract', contract: notesArtifact, contractDigest: 'sha256:other' }
+		await expect(readApprovedContract(await accessFile(JSON.stringify(forged)))).rejects.toThrow('does not hold the access Control approved')
 	})
 })

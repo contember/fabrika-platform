@@ -1,9 +1,10 @@
-import { type AppEnvironment, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, type ContractArtifact, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { CloudflareAppConfig } from './authoring'
 import { loadCloudflareConfig } from './collaborators'
 import { type CloudflareDeployResult, createCloudflareDeployer } from './provider'
-import { INSTALLATION_APPS_ENV } from './runner-protocol'
+import { APPROVED_ACCESS_FILE_ENV, INSTALLATION_APPS_ENV, runnerApprovedAccessSchema } from './runner-protocol'
 
 const requiredEnvironmentValue = (name: string): string => {
 	const value = environmentValue(name)
@@ -68,6 +69,24 @@ export const parseInstallationApps = (raw: string | undefined): readonly AppEnvi
 	})
 }
 
+/**
+ * Read the access Control approved for this run from the file at `FABRIKA_APPROVED_ACCESS_FILE`, as the runner
+ * writes it: the contract, or null when Control read none at the commit. Undefined when no runner set it (a
+ * local deploy); a file that is unreadable or malformed fails the deploy rather than falling back to the checkout.
+ */
+export const readApprovedContract = async (path: string | undefined): Promise<ContractArtifact | null | undefined> => {
+	if (path === undefined || path === '') return undefined
+	let decoded: unknown
+	try {
+		decoded = JSON.parse(await readFile(path, 'utf8'))
+	} catch {
+		throw new Error(`${APPROVED_ACCESS_FILE_ENV} does not name a readable JSON file`)
+	}
+	const access = runnerApprovedAccessSchema.safeParse(decoded)
+	if (!access.success) throw new Error(`${APPROVED_ACCESS_FILE_ENV} does not hold the access Control approved`)
+	return access.data.kind === 'contract' ? access.data.contract : null
+}
+
 export interface LoadedCloudflareCommandConfig {
 	readonly config: CloudflareAppConfig
 	readonly absolutePath: string
@@ -93,6 +112,8 @@ export interface CloudflareCommandDeployOptions {
 /** Deploy one config with the account credentials, declared secrets and vars read from the environment. */
 export const deployCloudflareConfig = async (options: CloudflareCommandDeployOptions): Promise<CloudflareDeployResult> => {
 	const cwd = options.cwd ?? process.cwd()
+	// Before the config runs: loading it executes the checkout's code.
+	const contract = await readApprovedContract(environmentValue(APPROVED_ACCESS_FILE_ENV))
 	const loaded = await loadCloudflareCommandConfig(options.configPath ?? './fabrika.config.ts', cwd)
 	const deploy = createCloudflareDeployer({
 		accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
@@ -108,6 +129,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		...(domain === undefined ? {} : { domain }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
+		...(contract === undefined ? {} : { contract }),
 		cwd: loaded.cwd,
 		configPath: loaded.absolutePath,
 		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),

@@ -26,12 +26,12 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 		// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
 		// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0022).
 		const scheme: ProxyApp['scheme'] = 'https'
-		// A contract application is protected by the endpoint table of its approved contract, never the artifact's
-		// (ADR-0050); one with nothing approved is not routed. Every other app keeps its gates (ADR-0022 rule 3).
+		// Only Control decides what routes the member (ADR-0050): its approved contract's endpoint table, or the artifact's
+		// gates when the registry knows it has no contract (until B10). With neither, it is not routed.
 		const access = member.access
 		if (access !== undefined) {
 			apps.push({ id, hosts: [host], upstream: proxy.upstream, scheme, ...contractProxyTable(access.contract) })
-		} else if (!claimsContract(manifest) && 'gates' in proxy) {
+		} else if (member.artifactAccess === true && !claimsContract(manifest) && 'gates' in proxy) {
 			apps.push({ id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates, scheme })
 		}
 	}

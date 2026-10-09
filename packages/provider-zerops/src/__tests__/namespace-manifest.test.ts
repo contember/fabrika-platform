@@ -20,7 +20,7 @@ const TABLE = contractProxyTable(notesArtifact)
 const member = (
 	appId: string,
 	domain: string | undefined,
-	options: { manifestId?: string; manifestEnv?: string; proxy?: boolean; contract?: boolean; access?: ProviderApprovedAccess } = {},
+	options: { manifestId?: string; manifestEnv?: string; proxy?: boolean; contract?: boolean; access?: ProviderApprovedAccess; trusted?: boolean } = {},
 ): ProviderNamespaceMember => {
 	const manifest = compileFabrikaManifest(
 		defineApp({
@@ -43,6 +43,7 @@ const member = (
 		...(domain === undefined ? {} : { domain }),
 		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
 		...(options.access === undefined ? {} : { access: options.access }),
+		...(options.contract === true || options.access !== undefined || options.trusted === false ? {} : { artifactAccess: true }),
 	}
 }
 
@@ -91,6 +92,12 @@ describe('namespace proxy manifest', () => {
 	test('a configuration that drops its contract still gets the approved table, not its gates', () => {
 		const manifest = compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com', { access: approved(notesArtifact) })])
 		expect(manifest.apps[0]).toEqual({ id: 'alpha@prod', hosts: ['alpha.example.com'], upstream: 'alpha:3000', scheme: 'https', ...TABLE })
+	})
+
+	test('an uploaded gates descriptor is not routed unless Control knows the application has no contract', () => {
+		// A first protected run parked for approval: nothing published, and the upload hides its contract behind `/* → public`.
+		expect(compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com', { trusted: false })])).toEqual({ apps: [] })
+		expect(compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com')]).apps.map((app) => app.id)).toEqual(['alpha@prod'])
 	})
 
 	test('the artifact refuses an endpoint row whose digest does not describe its rules', () => {

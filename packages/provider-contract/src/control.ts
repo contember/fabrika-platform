@@ -64,11 +64,16 @@ export interface ProviderEnvironment {
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope
 	/**
-	 * The environment's approved access, from Control's `approvedSnapshot`. Absent when the published commit has no
-	 * `fabrika.contract.ts` or nothing is published yet: a contract application then has no endpoint table and no IAM
-	 * schema to publish.
+	 * The environment's approved contract, from Control's `approvedSnapshot`. Absent when nothing with a contract is
+	 * approved: then a provider publishes no endpoint table and reconciles no IAM schema, unless `artifactAccess`.
 	 */
 	readonly access?: ProviderApprovedAccess
+	/**
+	 * Set when Control's registry records that the environment's application has no contract (its published snapshot
+	 * has none, and no later snapshot brought one): until B10 its artifact's gates and IAM schema apply. Absent, a
+	 * provider publishes no application access from the artifact, whatever the artifact claims (ADR-0050).
+	 */
+	readonly artifactAccess?: true
 }
 
 /** Raw registration data passed to provider-owned validation and normalization. */
@@ -298,6 +303,8 @@ export interface ProviderNamespaceMember {
 	readonly proxySecret?: string
 	/** See `ProviderEnvironment.access`: the proxy table of a contract application comes only from here. */
 	readonly access?: ProviderApprovedAccess
+	/** See `ProviderEnvironment.artifactAccess`: only then do the artifact's gates route the member. */
+	readonly artifactAccess?: true
 }
 
 /** One idempotent namespace lifecycle invocation. */
@@ -486,4 +493,10 @@ export interface ControlProvider {
 	 * manifest — constrains what an operator may set.
 	 */
 	declaredVariables?(input: { readonly artifact: ProviderEnvelope }): readonly string[] | undefined
+	/**
+	 * The repository-relative directory this provider executes the application from, normalized as its execution
+	 * normalizes it (`''` for the repository root), or null for a root execution refuses. Control reads the run's
+	 * access snapshot there (ADR-0050). Absent means the repository root.
+	 */
+	applicationRoot?(source: ProviderSource): string | null
 }

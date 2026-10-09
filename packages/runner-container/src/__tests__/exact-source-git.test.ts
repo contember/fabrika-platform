@@ -98,6 +98,7 @@ const makeJob = (ref: string, dryRun = false): CloudflareRunnerJob => ({
 	ref,
 	env: 'stage',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'test-account', CLOUDFLARE_API_TOKEN: 'test-cloudflare-token' },
+	approvedAccess: { kind: 'artifact' },
 	dryRun,
 })
 

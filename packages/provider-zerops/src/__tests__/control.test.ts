@@ -97,6 +97,8 @@ const readyNamespace = (): ProviderDeploymentNamespace => ({
 const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvironment => ({
 	appId: 'notes',
 	env: 'prod',
+	// Control's registry knows these applications have no contract, so their artifact's descriptor and schema apply.
+	artifactAccess: true,
 	domain: 'notes.example.test',
 	publicOrigin: 'https://public.notes.example.test',
 	namespace: readyNamespace(),

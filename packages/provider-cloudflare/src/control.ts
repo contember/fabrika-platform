@@ -1,5 +1,5 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import { type AppEnvironment, type AppSchema, appEnvironmentId, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { type AppEnvironment, appEnvironmentId, type AppSchema, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -7,6 +7,7 @@ import type {
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderEnvelope,
+	ProviderEnvironment,
 	ProviderRegistration,
 	ProviderRegistrationInput,
 	ProviderSource,
@@ -20,7 +21,7 @@ import { abortableWait, decodeEnvelope, isLeaseLoss, ProviderInvocationAbort } f
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
-import { type RunnerIamReconcile, runnerIamReconcileSchema } from './runner-protocol'
+import { type RunnerApprovedAccess, runnerApprovedAccessSchema, type RunnerIamReconcile, runnerIamReconcileSchema } from './runner-protocol'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
 import { defaultReconcileSchema, parseAppSchema } from './schema'
@@ -62,6 +63,8 @@ export interface CloudflareRunnerJob {
 	readonly returnOrigins?: readonly string[]
 	/** `<app>@<env>` of every Cloudflare deployment in Control's registry; the deploy refuses another application's names. */
 	readonly installationApps?: readonly string[]
+	/** What the deployed proxy enforces and the application starts as; every run but a dry one carries it. */
+	readonly approvedAccess?: RunnerApprovedAccess
 	readonly dryRun?: boolean
 	/**
 	 * Shared secret the runner verifies before it touches D1 or the container; the binding alone proves
@@ -107,6 +110,19 @@ const isHttpsUrl = (value: string): boolean => {
 	}
 }
 
+/**
+ * The checkout-relative directory a relative `path` names, as the runner resolves it: `''` for the checkout itself
+ * (`.`, `./` and no path), empty and `.` segments dropped, or null for an absolute path or one with a `..` segment.
+ * The runner executes from this directory and Control reads the run's snapshot there, so both normalize with this.
+ */
+export const checkoutRelativeDirectory = (path: string | undefined): string | null => {
+	if (path === undefined) return ''
+	if (path.startsWith('/')) return null
+	const segments = path.split('/')
+	if (segments.includes('..')) return null
+	return segments.filter((segment) => segment !== '' && segment !== '.').join('/')
+}
+
 /** A path that stays inside the checkout: relative, and with no `..` segment to climb out of it. */
 const isContainedPath = (value: string): boolean =>
 	value !== '' && !value.startsWith('/') && !hasUnsafeChars(value) && !value.split('/').includes('..')
@@ -134,6 +150,7 @@ export const cloudflareRunnerJobSchema = z.object({
 	domain: z.string().refine((value) => isProxyHost(value.toLowerCase())).optional(),
 	returnOrigins: z.array(z.string().min(1)).optional(),
 	installationApps: z.array(z.string().refine((id) => !hasUnsafeChars(id) && parseAppEnvironmentId(id) !== null)).optional(),
+	approvedAccess: runnerApprovedAccessSchema.optional(),
 	dryRun: z.boolean().optional(),
 	secrets: stringRecordSchema.optional(),
 	vars: stringRecordSchema.optional(),
@@ -148,6 +165,7 @@ export const cloudflareRunnerJobSchema = z.object({
 		runId: z.string().min(1),
 	}).optional(),
 }).refine((job) => job.dryRun === true || isCanonicalCommit(job.ref))
+	.refine((job) => job.dryRun === true || job.approvedAccess !== undefined)
 
 export interface CloudflareCloneSource {
 	readonly repoUrl: string
@@ -235,6 +253,13 @@ const awaitWithSignal = async <T>(signal: AbortSignal, invoke: () => Promise<T>)
 	}
 }
 
+const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedAccess | undefined => {
+	if (environment.access !== undefined) {
+		return { kind: 'contract', contract: environment.access.contract, contractDigest: environment.access.contractDigest }
+	}
+	return environment.artifactAccess === true ? { kind: 'artifact' } : undefined
+}
+
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
 	input.signal.throwIfAborted()
 	assertRegistrationApp(input)
@@ -243,6 +268,10 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const ref = input.app.source.ref
 	if (!input.dryRun && !isCanonicalCommit(ref)) {
 		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
+	}
+	const approvedAccess = runnerApprovedAccess(input.environment)
+	if (!input.dryRun && approvedAccess === undefined) {
+		throw new Error('Cloudflare deploy requires the access Control approved for this environment')
 	}
 	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal, input.sourceBinding))
 	const listInstallationApps = options.installationApps
@@ -271,6 +300,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(input.environment.domain === undefined ? {} : { domain: input.environment.domain }),
 		...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 		...(installationApps === undefined ? {} : { installationApps }),
+		...(approvedAccess === undefined ? {} : { approvedAccess }),
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),
@@ -289,6 +319,8 @@ interface IamReconcileTarget {
 	readonly returnOrigins?: readonly string[]
 	/** Control's approved access (ADR-0050): a contract application's IAM schema comes from it, never from the runner. */
 	readonly access?: ProviderApprovedAccess
+	/** Control knows the application has no contract, so the schema the runner compiled from its config applies. */
+	readonly artifactAccess?: true
 	readonly signal: AbortSignal
 }
 
@@ -319,8 +351,9 @@ const applyIamReconcile = async (
 	})
 }
 
-/** The schema the runner compiled, for an application without an approved contract; a contract schema is refused. */
+/** The schema the runner compiled, for an application Control knows has no contract; a contract schema is refused. */
 const reportedSchema = (target: IamReconcileTarget, report: RunnerIamReconcile | undefined): AppSchema => {
+	if (target.artifactAccess !== true) throw new InvalidIamReport('reported an authz schema, but Control approved no access for this environment')
 	if (report === undefined) throw new InvalidIamReport('reported no authz schema')
 	const parsedReport = runnerIamReconcileSchema.safeParse(report)
 	if (!parsedReport.success) {
@@ -393,6 +426,7 @@ const isTransientIamFailure = (error: unknown): boolean => {
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
 	normalizeRegistration,
+	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	source: { binding: 'connection' },
 	resolveSource: async (input) => {
 		input.signal.throwIfAborted()
@@ -429,12 +463,13 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 		}
 		input.signal.throwIfAborted()
 		if (input.dryRun) return outcome
-		const target = {
+		const target: IamReconcileTarget = {
 			appId: input.app.id,
 			env: input.environment.env,
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 			...(input.environment.access === undefined ? {} : { access: input.environment.access }),
+			...(input.environment.artifactAccess === true ? { artifactAccess: true } : {}),
 		}
 		const log = async (line: string): Promise<void> => input.events.log(line)
 		return settleOutcome(options, target, outcome, log, false)
@@ -445,12 +480,13 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 		if (recoverRun === undefined) return { state: 'running' }
 		const recovery = await awaitWithSignal(input.signal, () => recoverRun(input.runId))
 		if (recovery.state === 'running') return { state: 'running' }
-		const target = {
+		const target: IamReconcileTarget = {
 			appId: input.environment.appId,
 			env: input.environment.env,
 			signal: input.signal,
 			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 			...(input.environment.access === undefined ? {} : { access: input.environment.access }),
+			...(input.environment.artifactAccess === true ? { artifactAccess: true } : {}),
 		}
 		const log = async (line: string): Promise<void> => {
 			if (input.log === undefined) console.error(`run ${input.runId}: ${line}`)

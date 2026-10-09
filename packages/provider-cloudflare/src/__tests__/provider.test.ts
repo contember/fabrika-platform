@@ -133,8 +133,8 @@ const deploy = (
 		readonly generatedServices?: GeneratedService[]
 		/** What `fabrika.contract.ts` in the checkout reads as; none by default. */
 		readonly checkoutContract?: ContractArtifact
-		/** The run's approved snapshot, which Control sends once B6 lands. */
-		readonly contract?: ContractArtifact
+		/** The contract Control approved for the run, or null when Control read none at the commit. */
+		readonly contract?: ContractArtifact | null
 		readonly installationApps?: readonly AppEnvironment[]
 	} = {},
 ) =>
@@ -1028,6 +1028,30 @@ describe('a contract application on Cloudflare (ADR-0048)', () => {
 		})
 		expect(result.status).toBe('succeeded')
 		expect(provisioned().app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+	})
+
+	test('what the checkout reads as cannot change the proxy table or the digest Control approved (ADR-0050)', async () => {
+		// Control classified the run `unchanged` against the approved contract; the checkout and its config moved on.
+		const widened: ContractArtifact = { ...notesArtifact, endpoints: notesArtifact.endpoints.slice(0, 1) }
+		const result = await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: widened, contract: notesArtifact })
+		expect(result.status).toBe('succeeded')
+		const { root, app } = provisioned()
+		const manifest = root.options.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		expect(parseProxyManifestJson(typeof manifest === 'string' ? manifest : '')?.apps).toEqual([
+			{ id: 'demo@stage', hosts: ['stage.example.com'], upstream: 'APP', scheme: 'https', ...contractProxyTable(notesArtifact) },
+		])
+		expect(app.options.vars?.['FABRIKA_CONTRACT_DIGEST']).toBe(contractDigest(notesArtifact))
+		await expect(deploy(rec, config({ schema: CONTRACT_SCHEMA, gates: GATES }), { contract: notesArtifact })).rejects.toThrow(
+			'a contract application is protected by its endpoint table; remove `gates`',
+		)
+	})
+
+	test('a checkout with a contract Control did not read is refused when Control says the application has none', async () => {
+		await expect(deploy(rec, config({ gates: GATES }), { checkoutContract: notesArtifact, contract: null })).rejects.toThrow(
+			'the checkout has a `fabrika.contract.ts`, but the commit Control read has none',
+		)
+		expect(rec.provisions).toHaveLength(0)
+		await expect(deploy(rec, config({ gates: GATES }), { contract: null })).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('an application without a contract hands its gates to the proxy the platform builds', async () => {

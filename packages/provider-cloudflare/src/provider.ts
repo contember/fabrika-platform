@@ -347,10 +347,10 @@ export interface CloudflareDeployRun {
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
 	/**
-	 * The contract this deployment serves, once Control sends the run's approved snapshot (ADR-0050). Without it the
-	 * deployer reads `fabrika.contract.ts` from the checkout, statically, as Control does at the commit.
+	 * The contract Control approved for this run (ADR-0050), or null when Control read none at the commit. Absent
+	 * outside Control (a local deploy), the deployer reads `fabrika.contract.ts` from the checkout, as Control does.
 	 */
-	readonly contract?: ContractArtifact
+	readonly contract?: ContractArtifact | null
 	/** Every Cloudflare deployment of the installation in Control's registry; a name of another application is refused. */
 	readonly installationApps?: readonly AppEnvironment[]
 	readonly dryRun: boolean
@@ -365,6 +365,18 @@ export interface CloudflareDeployResult {
 	readonly steps: readonly DeployStepResult[]
 }
 
+const servedContract = async (
+	cf: CloudflareCollaborators,
+	cwd: string,
+	approved: ContractArtifact | null | undefined,
+): Promise<ContractArtifact | null> => {
+	if (approved === undefined) return cf.readContract(cwd)
+	if (approved === null && (await cf.readContract(cwd)) !== null) {
+		throw new Error('cloudflare: the checkout has a `fabrika.contract.ts`, but the commit Control read has none')
+	}
+	return approved
+}
+
 export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => async (run: CloudflareDeployRun): Promise<CloudflareDeployResult> => {
 	const cf = options.collaborators ?? defaultCloudflareCollaborators
 	const loaded = await cf.loadConfig(run.cwd, run.configPath)
@@ -372,7 +384,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 	}
 	const platformResources = options.platformResources ?? 'refuse'
-	const contract = run.contract ?? (await cf.readContract(loaded.cwd))
+	const contract = await servedContract(cf, loaded.cwd, run.contract)
 	assertContractSchema(loaded.config, contract)
 	const authored = runnerWorkerGraph(loaded.config.resources({ env: run.env, domain: run.domain }))
 	// Fabrika's own components compose their own proxies; every application gets the platform's.

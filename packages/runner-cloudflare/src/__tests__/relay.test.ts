@@ -50,6 +50,7 @@ const job: CloudflareRunnerJob = {
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_API_TOKEN: 'tok' },
+	approvedAccess: { kind: 'artifact' },
 }
 
 const terminalStatus: RunnerStatus = { runId: 'run-relay-1', state: 'succeeded', exitCode: 0, startedAt: 1, finishedAt: 9 }

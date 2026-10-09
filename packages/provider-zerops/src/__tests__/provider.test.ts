@@ -298,6 +298,7 @@ const deployRun = (
 ): ZeropsDeployRun => ({
 	appId: 'demo',
 	env: 'prod',
+	artifactAccess: true,
 	secrets: {},
 	vars: { IMAGE: 'registry.test/demo:v2' },
 	managedEnvironment: NO_MANAGED_VALUES,
@@ -1056,19 +1057,30 @@ describe('a contract application deploy', () => {
 		}
 		return compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: api\n'))
 	}
-	const contractRun = async (contract: boolean, access: ProviderApprovedAccess | undefined): Promise<ZeropsDeployResult> =>
-		createZeropsDeployer(() => makeCollaborators(recorded))({
-			...deployRun(recorded),
+	const contractRun = async (contract: boolean, granted: ProviderApprovedAccess | 'artifact' | 'none'): Promise<ZeropsDeployResult> => {
+		const { artifactAccess: _trusted, ...run } = deployRun(recorded)
+		return createZeropsDeployer(() => makeCollaborators(recorded))({
+			...run,
 			appId: 'notes',
 			managedEnvironment: { ...NO_MANAGED_VALUES, FABRIKA_RELEASE: RELEASE, FABRIKA_PROXY_SECRET: 'private-proxy-secret' },
 			artifact: await contractArtifact(contract),
-			...(access === undefined ? {} : { access }),
+			...(granted === 'none' ? {} : granted === 'artifact' ? { artifactAccess: true } : { access: granted }),
 		})
+	}
 
-	test('an artifact that claims a contract Control did not approve is refused before the build', async () => {
-		const result = await contractRun(true, undefined)
-		expect(stepError(result, 'trigger-build')).toBe('zerops: a contract application deploys only with the contract Control approved at its commit')
+	test('an artifact that claims a contract the commit Control read does not have is refused before the build', async () => {
+		const result = await contractRun(true, 'artifact')
+		expect(stepError(result, 'trigger-build')).toBe('zerops: the artifact claims a contract, but the commit Control read has no `fabrika.contract.ts`')
 		expect(recorded.builds).toEqual([])
+	})
+
+	test('an environment Control approved nothing for is refused before the build, whatever the artifact claims', async () => {
+		for (const contract of [true, false]) {
+			const result = await contractRun(contract, 'none')
+			expect(stepError(result, 'trigger-build')).toBe('zerops: Control approved no access for this environment')
+		}
+		expect(recorded.builds).toEqual([])
+		expect(recorded.schemaBodies).toEqual([])
 	})
 
 	test('the approved contract locks the descriptor down even when the configuration declares none', async () => {
