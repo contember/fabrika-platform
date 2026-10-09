@@ -26,7 +26,7 @@ import { checkMigrationNames } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode } from './rules/runtime'
-import { checkGeneratedTest, checkTestNode, checkTestSuiteConfig } from './rules/tests'
+import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
 
@@ -65,9 +65,10 @@ const checkSourceModule = async (
 	module: ParsedModule,
 	text: string,
 	mappings: ImportMappings,
-	exists: (path: string) => boolean,
+	files: ReadonlyMap<string, string>,
 	findings: Finding[],
 ): Promise<void> => {
+	const exists = (path: string): boolean => files.has(path)
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
@@ -77,6 +78,7 @@ const checkSourceModule = async (
 		checkTypeNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, report)
+		checkMockModule(node, module.file, files, report)
 	})
 	checkComments(module.comments, report)
 	checkModuleReferences(module.file, moduleReferences(module.program), mappings, exists, report, isGeneratedEntry, isTest)
@@ -114,7 +116,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 			continue
 		}
 		modules.set(path, parsed.module)
-		await checkSourceModule(parsed.module, text, mappings, (candidate) => tree.files.has(candidate), findings)
+		await checkSourceModule(parsed.module, text, mappings, tree.files, findings)
 	}
 
 	const graph = new ModuleGraph(modules)

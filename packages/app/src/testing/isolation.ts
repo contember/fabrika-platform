@@ -18,3 +18,4 @@ export {
 	policyIsolationKit,
 	type ReadOutcome,
 } from './policy-isolation'
+export { afterAll, describe, expect, test } from './runner'

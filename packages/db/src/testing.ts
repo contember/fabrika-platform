@@ -49,6 +49,11 @@ export interface WorldRow {
 	readonly scope: string
 	/** The row's values of the policy's update columns, as seeded. */
 	readonly updates: Readonly<Record<string, SampleValue>>
+	/**
+	 * The distinct value written into every text column the fixture filled itself, in this row and in its containers.
+	 * Each occurs in no other fixture, so one found in an answer to another scope is a leaked row.
+	 */
+	readonly markers: readonly string[]
 }
 
 /** One row of a table in each of two containment chains that share no value. */
@@ -102,6 +107,11 @@ function sampleOf(table: string, column: CatalogColumn): Primitive {
 	if (type === 'time' || type === 'timetz') return '12:00:00'
 	if (type === 'interval') return '1 hour'
 	throw new Error(`the isolation fixture cannot fill ${table}.${column.column_name} (${type}); give the column a default or make it nullable`)
+}
+
+/** A text column the fixture writes a marker into, nullable or not, so that a leaked value is recognised anywhere. */
+function isMarkable(column: CatalogColumn): boolean {
+	return column.type_type !== 'e' && TEXT_TYPES.has(column.type_name) && column.generated === 'no'
 }
 
 function isRequired(column: CatalogColumn): boolean {
@@ -266,12 +276,16 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 
 	/** Inserts one row: `assigned` as given, every other required column sampled. Answers what the row holds. */
-	async function insert(table: string, assigned: ReadonlyMap<string, Primitive>): Promise<ReadonlyMap<string, SampleValue>> {
+	async function insert(table: string, assigned: ReadonlyMap<string, Primitive>, markers: string[]): Promise<ReadonlyMap<string, SampleValue>> {
 		const row = new Map<string, SampleValue>()
 		for (const column of await columnsOf(table)) {
 			const value = assigned.get(column.column_name)
 			if (value !== undefined) {
 				row.set(column.column_name, value)
+			} else if (isMarkable(column)) {
+				const marker = `m${randomHex()}${randomHex()}`
+				markers.push(marker)
+				row.set(column.column_name, marker)
 			} else if (isRequired(column)) {
 				row.set(column.column_name, sampleOf(table, column))
 			} else if (column.nullable && column.generated === 'no') {
@@ -310,6 +324,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 
 	async function seedWorld(models: TableModels, model: TableModel, world: string): Promise<WorldRow> {
+		const markers: string[] = []
 		const values = new Map<string, string>()
 		const links: readonly Container[] = model.chain
 		for (const link of links) {
@@ -329,10 +344,10 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			const owner = link === undefined ? undefined : ownerOf(models, link.dimension)
 			const value = link === undefined ? undefined : values.get(link.dimension)
 			if (owner !== undefined && owner.name !== model.name && value !== undefined) {
-				await insert(owner.name, placement(owner, values, value))
+				await insert(owner.name, placement(owner, values, value), markers)
 			}
 		}
-		const row = await insert(model.name, placement(model, values, key))
+		const row = await insert(model.name, placement(model, values, key), markers)
 		const updates: Record<string, SampleValue> = {}
 		for (const name of namesOf(model.update)) {
 			updates[name] = row.get(name) ?? null
@@ -343,6 +358,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			parent: scope.mode === 'child' ? (values.get(links[0]?.dimension ?? '') ?? null) : null,
 			scope: values.get(dimension) ?? key,
 			updates,
+			markers,
 		}
 	}
 

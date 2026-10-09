@@ -29,6 +29,7 @@ export const RULE_IDS = [
 	'skipped-test',
 	'test-without-assertion',
 	'generated-test-hash',
+	'mock-module',
 ] as const
 
 export type RuleId = (typeof RULE_IDS)[number]

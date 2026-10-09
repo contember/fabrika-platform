@@ -8,6 +8,8 @@ export interface ReportedCase {
 	readonly file: string
 	readonly name: string
 	readonly outcome: CaseOutcome
+	/** The `expect` calls the case ran, as Bun reports them; `null` when the report does not say. */
+	readonly assertions: number | null
 }
 
 const ENTITIES: Readonly<Record<string, string>> = { quot: '"', apos: "'", lt: '<', gt: '>', amp: '&' }
@@ -28,7 +30,8 @@ export function readJunitCases(xml: string): ReportedCase[] {
 		const name = attribute(attributes, 'name')
 		if (file === undefined || name === undefined) continue
 		const outcome: CaseOutcome = /<(failure|error)\b/.test(content) ? 'failed' : /<skipped\b/.test(content) ? 'skipped' : 'passed'
-		cases.push({ file: file.replace(/^\.\//, ''), name, outcome })
+		const assertions = attribute(attributes, 'assertions')
+		cases.push({ file: file.replace(/^\.\//, ''), name, outcome, assertions: assertions === undefined ? null : Number(assertions) })
 	}
 	return cases
 }

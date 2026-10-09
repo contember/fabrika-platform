@@ -14,6 +14,7 @@ import { SQL } from 'bun'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { readJunitCases } from './junit'
 
 /** The checker's `migration-name` contract (`@fabrika/check`, `db/migrations/`). */
@@ -27,7 +28,7 @@ Usage:
   fabrika db migrate              Apply the framework's tables, then ${MIGRATIONS_DIR}, to the application's schema app_<id>.
   fabrika db codegen [--verify]   Write ${SCHEMA_FILE} from the migrated schema; --verify only fails when it is stale.
   fabrika db test-scaffold        Write the generated tests: a policy isolation test per table a store reaches, the endpoint access test.
-  fabrika db test-isolation       Run the generated tests on a throwaway schema and fail unless every case the scaffold wrote passed.
+  fabrika db test-isolation [--verbose]  Run the generated tests on a throwaway schema; fail unless every case the scaffold wrote passed.
 
 Run from the application root. \`migrate\` and \`codegen\` read FABRIKA_APP_ID and FABRIKA_APP_DATABASE_URL from
 the environment only. \`migrate\` holds a lock derived from the application id, runs each file in one transaction
@@ -177,8 +178,15 @@ const testEnvironment = (source: DbCommandDependencies['source'], url: string): 
  * Runs exactly the generated tests, with an empty `bunfig.toml` so that no preload, root or ignore pattern of the
  * application applies, and fails unless every case the scaffold wrote is reported as passed.
  */
+/**
+ * Runs exactly the generated tests, with an empty `bunfig.toml` so that no preload, root or ignore pattern of the
+ * application applies, and the platform's preload, which captures Bun's test functions before the application loads.
+ * Fails unless every case the scaffold wrote is reported as passed with an assertion. The child's output is never
+ * printed, because a dependency may write a credential into it; `--verbose`, which the platform never passes, prints it.
+ */
 const testIsolation = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
-	refuseArguments('test-isolation', argv)
+	const verbose = argv.includes('--verbose')
+	refuseArguments('test-isolation', argv.filter((arg) => arg !== '--verbose'))
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	const { files, tests } = await expectedTests(deps.cwd)
 	for (const [path, { text }] of tests) {
@@ -197,6 +205,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 				process.execPath,
 				`--config=${join(scratch, 'bunfig.toml')}`,
 				'test',
+				`--preload=${fileURLToPath(import.meta.resolve('@fabrika/app/testing/preload'))}`,
 				...[...tests.keys()].map((path) => `./${path}`),
 				'--reporter=junit',
 				`--reporter-outfile=${report}`,
@@ -204,20 +213,27 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 			{ cwd: deps.cwd, env: testEnvironment(deps.source, url), stdout: 'pipe', stderr: 'pipe' },
 		)
 		const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+		if (verbose) deps.write(`${stdout}${stderr}\n`)
 		const reported = readJunitCases(await readFile(report, 'utf8').catch(() => ''))
-		const missing: string[] = []
+		const failed: string[] = []
+		let total = 0
 		for (const [path, { cases }] of tests) {
 			for (const name of cases) {
-				const outcome = reported.find((item) => item.file === path && item.name === name)?.outcome ?? 'not run'
-				if (outcome !== 'passed') missing.push(`${path}: ${name} (${outcome})`)
+				total++
+				const reportedCase = reported.find((item) => item.file === path && item.name === name)
+				const outcome = reportedCase === undefined ? 'not run' : reportedCase.assertions === 0 ? 'no assertion' : reportedCase.outcome
+				if (outcome !== 'passed') failed.push(`${path}: ${name} (${outcome})`)
 			}
 		}
-		if (code !== 0 || missing.length > 0) {
-			// The test output may quote the database URL, which is a credential.
-			deps.write(`${`${stdout}${stderr}`.replaceAll(url, '<FABRIKA_APP_DATABASE_URL>')}\n`)
-			throw new Error(`db test-isolation: the generated tests did not all pass (exit ${code})${missing.map((line) => `\n- ${line}`).join('')}`)
+		if (code !== 0 || failed.length > 0) {
+			const rerun = verbose ? '' : '; rerun with --verbose locally to see the test output'
+			throw new Error(
+				`db test-isolation: ${total - failed.length} of ${total} generated cases passed (exit ${code})${rerun}${
+					failed.map((line) => `\n- ${line}`).join('')
+				}`,
+			)
 		}
-		deps.write(`${[...tests.values()].reduce((count, test) => count + test.cases.length, 0)} generated cases passed\n`)
+		deps.write(`${total} generated cases passed\n`)
 	} finally {
 		await rm(scratch, { recursive: true, force: true })
 	}

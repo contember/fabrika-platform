@@ -7,6 +7,11 @@ export const TABLES_FILE = 'src/db/tables.ts'
 export const TABLES_EXPORT = 'tables'
 export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
 export const MIGRATIONS_DIR = 'db/migrations/'
+/** Where `fabrika db test-scaffold` writes the policy isolation tests, `<table>.policy-isolation.test.ts`. */
+export const POLICY_TESTS_DIR = 'src/db/__tests__/'
+export const POLICY_TEST_SUFFIX = '.policy-isolation.test.ts'
+/** The generated endpoint access tests; they import `src/app.ts`, whose default export they boot. */
+export const ENDPOINT_ACCESS_TEST = 'src/__tests__/endpoint-access.test.ts'
 export const ZEROPS_FILES = ['zerops.yaml', 'zerops.yml'] as const
 
 const SOURCE_EXTENSION = /\.(?:[mc]?[jt]s|[jt]sx)$/

@@ -428,6 +428,35 @@ const cases: readonly RuleCase[] = [
 		good: { ...CLEAN_APPLICATION, 'zerops.yaml': ZEROPS_YAML },
 	},
 	{
+		rule: 'mock-module',
+		bad: {
+			'src/app.ts': [
+				"import { mock } from 'bun:test'",
+				"mock.module('bun:test', () => ({ test: () => {} }))",
+				"mock.module('@fabrika/app/testing/isolation', () => ({}))",
+				"mock.module('./__tests__/endpoint-access.test.ts', () => ({}))",
+				"const name = 'bun:' + 'test'",
+				'mock.module(name, () => ({}))',
+				'',
+			].join('\n'),
+			'src/__tests__/endpoint-access.test.ts': '',
+		},
+		expected: ['src/app.ts:2:1', 'src/app.ts:3:1', 'src/app.ts:4:1', 'src/app.ts:6:1'],
+		good: {
+			'src/__tests__/notes.test.ts': [
+				"import { expect, mock, test } from 'bun:test'",
+				'',
+				"mock.module('../mailer.ts', () => ({ send: () => true }))",
+				'',
+				"test('sends', () => {",
+				'\texpect(1).toBe(1)',
+				'})',
+				'',
+			].join('\n'),
+			'src/mailer.ts': 'export const send = (): boolean => false\n',
+		},
+	},
+	{
 		rule: 'skipped-test',
 		bad: {
 			'src/__tests__/notes.test.ts': [

@@ -20,7 +20,7 @@ export interface DeniedOutcome {
 export interface LeakOutcome {
 	/** The status of the answer to one scope. */
 	readonly status: number
-	/** The values of the other scope's rows that the answer held: its keys, parents and scope values. */
+	/** The values of the other scope's rows that the answer held: keys, parents, scope values and text markers. */
 	readonly leaked: readonly string[]
 }
 
@@ -72,7 +72,7 @@ function fieldOf(input: SchemaShape | null, from: string | null): SchemaShape | 
 
 function worldValues(worlds: IsolationWorlds, world: 'own' | 'other'): string[] {
 	const row = worlds[world]
-	return [row.key, row.scope, ...(row.parent === null ? [] : [row.parent])]
+	return [row.key, row.scope, ...(row.parent === null ? [] : [row.parent]), ...row.markers]
 }
 
 /**

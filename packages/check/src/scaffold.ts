@@ -5,18 +5,13 @@
 
 import type { ContractArtifact, EndpointRow, TablePolicyArtifact } from '@fabrika/auth-core'
 import { readContractSource, readTablesSource } from './contract'
-import { CONTRACT_FILE, TABLES_FILE } from './layout'
+import { CONTRACT_FILE, ENDPOINT_ACCESS_TEST, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR, TABLES_FILE } from './layout'
+
+export { ENDPOINT_ACCESS_TEST, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR } from './layout'
 import { generatedTestHeader } from './rules/tests'
 import { renderSample, sample } from './scaffold-sample'
 
-/** Where the generated policy isolation tests live, relative to the application root. */
-export const POLICY_TESTS_DIR = 'src/db/__tests__/'
-const POLICY_SUFFIX = '.policy-isolation.test.ts'
-
-export const policyTestPath = (table: string): string => `${POLICY_TESTS_DIR}${table}${POLICY_SUFFIX}`
-
-/** The generated endpoint access tests of the application; it imports `src/app.ts`, whose default export it boots. */
-export const ENDPOINT_ACCESS_TEST = 'src/__tests__/endpoint-access.test.ts'
+export const policyTestPath = (table: string): string => `${POLICY_TESTS_DIR}${table}${POLICY_TEST_SUFFIX}`
 
 /** One generated test file: its full text, header included, and the name of every test case it registers. */
 export interface GeneratedTest {
@@ -113,13 +108,12 @@ const policyTestBody = (policies: Policies, table: string): { readonly body: str
 		"// the data layer enforces the policy, through a probe of their own: the application's handlers and stores do not run.",
 		'// Do not edit: @fabrika/check compares this file with what the scaffold writes; rerun it after a policy change.',
 		'',
-		"import { policyIsolationKit } from '@fabrika/app/testing/isolation'",
+		"import { afterAll, describe, expect, policyIsolationKit, test } from '@fabrika/app/testing/isolation'",
 		"import { testDatabase } from '@fabrika/db/testing'",
-		"import { afterAll, describe, expect, test } from 'bun:test'",
 		"import { contract } from '../../../fabrika.contract'",
 		"import { tables } from '../tables'",
 		'',
-		`const label = ${quote(`${table}${POLICY_SUFFIX}`)}`,
+		`const label = ${quote(`${table}${POLICY_TEST_SUFFIX}`)}`,
 		"const postgres = await testDatabase({ migrations: new URL('../../../db/migrations/', import.meta.url), label })",
 		'',
 		'if (postgres !== null) {',
@@ -182,9 +176,8 @@ const endpointTestBody = (artifact: ContractArtifact): { readonly body: string; 
 		'// compares this file with what the scaffold writes; rerun it after a contract or policy change.',
 		...skipped,
 		'',
-		"import { endpointAccessKit } from '@fabrika/app/testing/isolation'",
+		"import { afterAll, describe, endpointAccessKit, expect, test } from '@fabrika/app/testing/isolation'",
 		"import { testDatabase } from '@fabrika/db/testing'",
-		"import { afterAll, describe, expect, test } from 'bun:test'",
 		"import app from '../app'",
 		"import { tables } from '../db/tables'",
 		'',

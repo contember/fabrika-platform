@@ -60,6 +60,11 @@
 			"bun": "./src/testing/isolation.ts",
 			"types": "./src/testing/isolation.ts",
 			"default": "./src/testing/isolation.ts"
+		},
+		"./testing/preload": {
+			"bun": "./src/testing/preload.ts",
+			"types": "./src/testing/preload.ts",
+			"default": "./src/testing/preload.ts"
 		}
 	},
 	"scripts": {

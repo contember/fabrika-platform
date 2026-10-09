@@ -1,5 +1,6 @@
-import { type AstNode, child, children, type Comment, identifierName, memberPath, walk } from '../ast'
+import { type AstNode, child, children, type Comment, identifierName, memberPath, memberSuffix, staticString, walk } from '../ast'
 import type { Finding, Report } from '../finding'
+import { ENDPOINT_ACCESS_TEST, isRelativeSpecifier, joinRelative, POLICY_TEST_SUFFIX, POLICY_TESTS_DIR, resolveRelative } from '../layout'
 import { isKey, parseToml } from '../toml'
 import { BUNFIG_FILE } from '../trust'
 
@@ -148,4 +149,37 @@ export const checkTestSuiteConfig = (text: string): Finding[] => {
 		}
 	}
 	return findings
+}
+
+/** Whether `path` is a file the scaffold generates: a policy isolation test, the endpoint access test, or one with the header. */
+const isGeneratedTestPath = (path: string, files: ReadonlyMap<string, string>): boolean =>
+	path === ENDPOINT_ACCESS_TEST || (path.startsWith(POLICY_TESTS_DIR) && path.endsWith(POLICY_TEST_SUFFIX))
+	|| (files.get(path)?.startsWith(GENERATED_TEST_MARKER) ?? false)
+
+/**
+ * `mock.module(…)` of the test runner, a framework package or a generated test would let application code replace what
+ * the generated tests run on; a computed specifier could name any of them. Refused anywhere in the application.
+ */
+export const checkMockModule = (node: AstNode, file: string, files: ReadonlyMap<string, string>, report: Report): void => {
+	if (node.type !== 'CallExpression') return
+	const callee = child(node, 'callee')
+	if (callee === undefined || callee.type !== 'MemberExpression') return
+	const suffix = memberPath(callee) ?? memberSuffix(callee)
+	if (suffix.length < 2 || suffix[suffix.length - 1] !== 'module' || suffix[suffix.length - 2] !== 'mock') return
+	const allowed = 'mock.module of an application module that no generated test is, with a literal specifier'
+	const specifier = staticString(children(node, 'arguments')[0] ?? undefined)
+	if (specifier === undefined) {
+		report(node, 'mock-module', 'mock.module with a computed specifier could replace the test runner or the framework', allowed)
+		return
+	}
+	if (specifier === 'bun:test' || specifier.startsWith('@fabrika/')) {
+		report(node, 'mock-module', `mock.module('${specifier}') replaces what the generated tests run on`, allowed)
+		return
+	}
+	if (!isRelativeSpecifier(specifier)) return
+	const resolved = resolveRelative((path) => files.has(path), file, specifier)
+	const targets = resolved.kind === 'file' ? [resolved.path] : resolved.kind === 'missing' ? [joinRelative(file, specifier) ?? ''] : resolved.paths
+	if (targets.some((target) => isGeneratedTestPath(target, files))) {
+		report(node, 'mock-module', `mock.module('${specifier}') replaces a generated test`, allowed)
+	}
 }

@@ -186,7 +186,8 @@ describe('fabrika db test-isolation', () => {
 	test('reads every case of a JUnit report: passed, failed, skipped', () => {
 		const xml = [
 			'<testsuites><testsuite name="a.test.ts" file="a.test.ts">',
-			'<testcase name="passes &amp; counts" file="a.test.ts" line="1" />',
+			'<testcase name="passes &amp; counts" file="a.test.ts" line="1" assertions="2" />',
+			'<testcase name="asserts nothing" file="a.test.ts" line="1" assertions="0" />',
 			'<testcase name="fails" file="a.test.ts" line="2"><failure type="AssertionError" /></testcase>',
 			'<testcase name="skips" file="./a.test.ts" line="3">',
 			'<skipped />',
@@ -194,9 +195,10 @@ describe('fabrika db test-isolation', () => {
 			'</testsuite></testsuites>',
 		].join('\n')
 		expect(readJunitCases(xml)).toEqual([
-			{ file: 'a.test.ts', name: 'passes & counts', outcome: 'passed' },
-			{ file: 'a.test.ts', name: 'fails', outcome: 'failed' },
-			{ file: 'a.test.ts', name: 'skips', outcome: 'skipped' },
+			{ file: 'a.test.ts', name: 'passes & counts', outcome: 'passed', assertions: 2 },
+			{ file: 'a.test.ts', name: 'asserts nothing', outcome: 'passed', assertions: 0 },
+			{ file: 'a.test.ts', name: 'fails', outcome: 'failed', assertions: null },
+			{ file: 'a.test.ts', name: 'skips', outcome: 'skipped', assertions: null },
 		])
 	})
 })
@@ -302,6 +304,60 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			rmSync(bunfig, { force: true })
 			rmSync(preload, { force: true })
 		}
+	})
+
+	/** Runs `work` with the fixture's `src/app.ts` replaced by `edit` of it, then puts the original back. */
+	const withApplication = async (edit: (source: string) => string, work: () => Promise<void>): Promise<void> => {
+		const path = join(ISOLATION_APP, 'src', 'app.ts')
+		const original = readFileSync(path, 'utf8')
+		writeFileSync(path, edit(original))
+		try {
+			await work()
+		} finally {
+			writeFileSync(path, original)
+		}
+	}
+	const testIsolation = (argv: readonly string[] = []) =>
+		run(ISOLATION_APP, 'test-isolation', argv, { source: { FABRIKA_APP_DATABASE_URL: url, PATH: process.env['PATH'] } })
+	/** The note handler serves the first caller's note to everyone after it: the cache the endpoint tests must catch. */
+	const leakyGet = (source: string): string =>
+		source.replace(
+			'const note = await notes.get(ctx.target)',
+			'const note = (cached ??= await notes.get(ctx.target))',
+		).replace('export default implement(', 'let cached: { id: string; title: string } | undefined\n\nexport default implement(')
+
+	test('a mock of bun:test in application code neither silences the generated cases nor passes the checker', async () => {
+		const mocked = (source: string): string =>
+			`import { mock } from 'bun:test'\n\nmock.module('bun:test', () => ({ test: () => {}, describe: (_: string, body: () => void) => body(), expect: () => ({}), afterAll: () => {} }))\n${
+				leakyGet(source)
+			}`
+		await withApplication(mocked, async () => {
+			expect((await checkApplication({ root: ISOLATION_APP })).map((finding) => `${finding.file} ${finding.rule}`)).toContain('src/app.ts mock-module')
+			const failed = await failure(testIsolation())
+			expect(failed).toContain('db test-isolation: 57 of 58 generated cases passed')
+			expect(failed).toContain(`${ENDPOINTS}: api.notes.get: the answer to one scope holds nothing of the scope answered before it (failed)`)
+		})
+	})
+
+	test('the startup run prints no output of the tests, so a credential a dependency writes stays out of the log', async () => {
+		const password = decodeURIComponent(new URL(url).password)
+		const diagnostic = (source: string): string =>
+			`${
+				leakyGet(source)
+			}\nconsole.error(\`DIAGNOSTIC connect failed for \${decodeURIComponent(new URL(process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '').password)}\`)\n`
+		await withApplication(diagnostic, async () => {
+			const failed = await failure(testIsolation())
+			expect(failed).not.toContain('DIAGNOSTIC')
+			if (password.length > 3) expect(failed).not.toContain(password)
+			expect(failed).toContain('rerun with --verbose locally to see the test output')
+			const verbose = await failure(testIsolation(['--verbose']))
+			expect(verbose).toContain('db test-isolation:')
+		})
+	})
+
+	test('--verbose prints the test output locally', async () => {
+		expect(await testIsolation(['--verbose'])).toContain('58 generated cases passed')
+		expect(await testIsolation(['--verbose'])).toContain('58 pass')
 	})
 
 	test('the isolation fixture’s schema module is what codegen writes for its migrations', async () => {
