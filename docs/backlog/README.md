@@ -49,4 +49,8 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [102](102-a-contract-application-cannot-hand-its-browser-the-operations-dsn.md) — The browser SDK of a contract application cannot learn its managed DSN and release, so the SDK witness stays an application without a contract.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [104](104-the-query-builder-cannot-express-common-reports.md) — Aggregates over joins, anti-joins, nested AND/OR, SQL functions and full-text search do not fit the scoped builder; the answer is declared report kinds, never raw access.
+- [105](105-database-postgres-is-writable-by-application-code.md) — `Database` is not frozen, so an application module can replace `Database.postgres` and receive the database URL; the checker reports nothing.
+- [106](106-application-code-can-reach-the-capability-mint.md) — `mintRef`/`mintWithin` are reachable by loading `capability.ts` by URL, and the checker ignores a computed `import()`; a forged capability resolves.
+- [107](107-the-approval-diff-ignores-input-domains.md) — A widened input domain (a literal becomes an enum, a `max` is removed) classifies as unchanged and publishes without a human.
+- [108](108-application-migrations-can-install-triggers-and-functions.md) — The runner plans, and the checker accepts, `CREATE FUNCTION`/`CREATE TRIGGER`, so database code can write past the data layer.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
