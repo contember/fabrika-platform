@@ -11,3 +11,5 @@ decided work or status.
 
 - [Operations plane](operations-plane.md) — broad target for runtime feedback,
   observability, alerting, and response beyond the initial Errors capability.
+- [Agent-friendly application framework](agent-friendly-app-framework.md) — endpoints as named operations declared
+  in the contract, with per-operation authority, atomic preconditions and a falsification spike.
