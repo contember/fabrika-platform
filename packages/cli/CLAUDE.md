@@ -72,7 +72,9 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
   scaffold writes, and when its `schema.generated.ts` differs from codegen's.
 - `db test-isolation` is the platform's run of them (the Zerops start script): the files must equal the scaffold's
   output and no endpoint may lack its input fixture, then `bun --config=<empty> test
-  --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them on `FABRIKA_APP_DATABASE_URL` with
+  --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them, as a throwaway provisioner
+  `createTestProvisioner` makes from `FABRIKA_APP_DATABASE_URL` and drops afterwards (the tests load application code,
+  so they never get the provisioning credential itself), with
   `FABRIKA_TEST_POSTGRES_REQUIRED=1` and no framework variable, and every case name the scaffold wrote must be
   reported as passed with an assertion (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never
   applies. **It prints none of the child's output**, only the counts and the failed case names, which come from the
@@ -92,6 +94,8 @@ arguments and reports.
 - Run from the application root; it refuses a directory without `fabrika.contract.ts`.
 - One line to stdout, exit 1 when the job failed, 0 when it succeeded or another run holds the lease. The process
   exits when the run ends, so nothing a handler left running outlives it.
+- Handed `FABRIKA_APP_DATABASE_URL`, `runContractJob` runs the command again as the runtime role (the launcher, as
+  the server's); the job runs in that second process.
 - A failure prints its fixed code. Only an `instanceof` `BootError` or `JobError` keeps its message; any other error,
   whatever its name, is `boot_failed`, because its name or message may carry a secret or `FABRIKA_APP_DATABASE_URL`.
 

@@ -93,12 +93,16 @@ Read this before moving a service onto this driver.
 - **An application's SQL runs only as its own roles** (ADR-0017, `application-postgres-roles.ts`). The migration
   role `app_<id>` owns the schema and everything in it; the runtime role `run_<id>` has USAGE and DML on every table
   but the ledger (`grantRuntimeRole`, reset after every run under the lock), never DDL. `migrate(provisioningUrl)` uses
-  the provisioning credential only to create, re-password and check the family (`provisionPostgresRoles`), then applies
-  the plan as the migration role. Never apply an application's plan as the provisioning credential and never fall back
-  to it: a credential that cannot create roles, a schema the migration role does not own, and a role with any
-  attribute, membership or `CREATE` beyond the family's are refused. Passwords are HMAC-derived from the provisioning
+  the provisioning credential only to create, re-password and check the family (`provisionPostgresRoles`: attributes,
+  memberships, `CREATE`, any grant or ownership outside the schema, callable `SECURITY DEFINER` routines), then applies
+  the plan as the migration role; `application-postgres-grants.ts` clears PUBLIC from the migration role's default
+  privileges before the plan, resets PUBLIC's and the runtime role's privileges after it, and verifies the runtime
+  role's effective ones. The migration lock wait is bounded (`advisoryLockTimeoutMs`): any role may take it. Never
+  apply an application's plan as the provisioning credential and never fall back to it: a credential that cannot
+  create roles, a schema the migration role does not own, and a widened role are refused. Passwords are HMAC-derived from the provisioning
   password and sent only as SCRAM verifiers; never put a derived password in SQL text. `apply(db)` grants nothing and
-  exists for the runner's own tests. `dropApplicationDatabase` is for throwaway test databases.
+  exists for the runner's own tests. `dropApplicationDatabase` is for throwaway test databases; `createTestProvisioner` (Postgres 16+) makes the
+  credential code the platform did not write gets for them.
 - **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
   `sql-names.ts`, `pg-catalog-names.ts` and `migration-classify.ts`, which import
   nothing outside themselves: Control loads it in

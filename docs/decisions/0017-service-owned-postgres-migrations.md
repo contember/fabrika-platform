@@ -290,11 +290,20 @@ application query runs as anything else:
 - **The runtime role `run_<id>`** has `USAGE` on the schema and `SELECT`,
   `INSERT`, `UPDATE` and `DELETE` on every table of it except the ledger,
   and nothing else: no DDL, no `TRIGGER`, `TRUNCATE` or `REFERENCES`, no
-  grant on the ledger. The server and every job connect as it. After every
-  run the runner resets its grants (revoke all, then grant) in one
-  transaction under the migration lock, so a wider grant does not survive a
-  deploy and a live runtime never sees a gap. An identity column needs no
-  grant on its sequence.
+  grant on the ledger. The server and every job connect as it. Before the
+  plan runs, the runner clears `PUBLIC` from the migration role's default
+  privileges, globally and in the schema, so no table a migration creates is
+  born readable or writable through `PUBLIC`. After every run it revokes
+  everything `PUBLIC` and the runtime role hold on the schema and on every
+  table, sequence, routine and type in it, then grants the runtime role
+  `USAGE` on the schema, DML on every table but the ledger, `EXECUTE` on the
+  schema's routines and `USAGE` on its types, in one transaction under the
+  migration lock, so a wider grant does not survive a deploy and a live
+  runtime never sees a gap. Then it verifies the runtime role's effective
+  privileges, `PUBLIC`'s included: `CREATE` on the schema, `TRUNCATE`,
+  `REFERENCES`, `TRIGGER` or `MAINTAIN` on any relation, any access to the
+  ledger, or a default privilege that grants anyone else anything stops the
+  deploy. An identity column needs no grant on its sequence.
 - Neither is a superuser or holds `CREATEROLE`, `CREATEDB`, `REPLICATION` or
   `BYPASSRLS`, neither is a member of any role (so not of
   `pg_execute_server_program` or `pg_read_server_files`), and neither may
@@ -308,8 +317,13 @@ migrate` uses it on one connection, under the migration lock, only to create
 the two roles when absent, reset their passwords and their role-level
 settings (`ALTER ROLE … RESET ALL`, so a session default a role set on itself
 ends at the next deploy), create the schema owned by the migration role, and
-check the family: an attribute, a membership or a `CREATE` beyond the above
-stops the deploy before any migration runs. A schema that exists and is not
+check the family: an attribute, a membership or a `CREATE` beyond the above,
+any privilege either role was granted or ownership it holds outside its schema
+(a schema, a relation, a column, a routine, a type, the database, a large
+object or a parameter, each named), and a `SECURITY DEFINER` routine outside
+`pg_catalog` and `information_schema` that either role may call, which would
+run as its owner, stop the deploy before any migration runs. The checks cover
+the application's database only; roles are the cluster's. A schema that exists and is not
 the migration role's is refused, not adopted, like an older ledger. A
 provisioning credential that is neither a superuser nor holds `CREATEROLE` is
 refused: nothing ever runs as the provisioning credential instead. A
@@ -320,10 +334,22 @@ grants itself the migration role, because creating a schema for a role needs
 Each role's password is the HMAC-SHA-256 of its name under the provisioning
 password, so whoever holds the provisioning credential derives it and nothing
 stores it; it reaches Postgres only as a SCRAM-SHA-256 verifier, so no
-statement log holds it. The Bun runtime derives `run_<id>`'s URL from
-`FABRIKA_APP_DATABASE_URL` before the application loads, and the framework
-scrubs the variable from the process; the test kit does the same for each
-throwaway schema with `FABRIKA_TEST_POSTGRES_URL`. A view or a rule the
+statement log holds it.
+
+**The application's process never holds the provisioning credential.** The
+serving entry and `fabrika job run` are launchers: handed
+`FABRIKA_APP_DATABASE_URL`, they load no application module, derive
+`run_<id>`'s URL, and run the same command again with
+`FABRIKA_APP_RUNTIME_DATABASE_URL` in its place (stdio inherited, signals
+forwarded, the exit code propagated). The application's environment, its
+`/proc/self/environ` and anything it spawns carry the runtime credential only.
+`fabrika db test-isolation` runs the generated tests, which load application
+code, with a throwaway provisioner instead: `fabrika_tests_<hex>`, with
+`CREATEROLE` and `CREATE` on the database and nothing of any application,
+dropped after the run with every role family it created. That needs Postgres 16
+or later, where a `CREATEROLE` role administers only the roles it created. The
+test kit migrates each throwaway schema as its own migration role and connects
+and seeds as its runtime role. A view or a rule the
 migration role owns runs with its rights when the runtime role uses it, which
 is why such code is a reviewed deviation and `SECURITY DEFINER` stays
 refused.
@@ -403,11 +429,25 @@ migration file is a widening in the approval diff
   and every object in it are moved to the migration role by hand.
 - Roles are the cluster's, not the database's: two databases of one cluster
   that host the same application id share its two roles.
-- The application's process still receives the provisioning credential,
-  scrubbed from its environment before application code loads. The roles
-  bound what the application's SQL can do, not what its code could read, so a
-  cheap namespace's shared credential stays one trust domain for code
+- The launcher process keeps the provisioning credential in its own initial
+  environment, and so do the platform's processes around it (on Zerops the
+  service's supervisor and the crontab's). A process of the same operating
+  system user can read another's `/proc/<pid>/environ`, so the roles bound
+  what the application's SQL can do, and the launcher keeps the credential
+  out of the application's own process, but neither isolates application code
+  from the container it runs in. A cheap namespace's shared credential stays
+  one trust domain for code
   ([`deployment-namespaces.md`](../reference/deployment-namespaces.md)).
+- Two resources stay shared, accepted because neither reaches another
+  application's data. **Large objects**: any role may create one (storage, not
+  access), and neither role may read or unlink one it does not own unless it
+  was granted, which the provisioning check refuses. **Advisory locks**: any
+  role may take any key, so an application's code can hold another
+  application's migration lock. The runner and the provisioning step wait for
+  it at most five minutes (`lock_timeout`), then fail the deploy saying so.
+- A `SECURITY DEFINER` function anywhere in the database that the
+  application's roles may call stops every deploy of every application in that
+  database until it is dropped or `EXECUTE` on it is revoked from `PUBLIC`.
 
 ## Alternatives considered
 

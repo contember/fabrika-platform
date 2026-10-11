@@ -682,6 +682,10 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   WU6: add a `ctx.sql` case writing `fabrika_migrations` that fails with `permission denied`. WU9/WU10: the name rules
   are defense in depth and the role is the boundary now; drop "until WU12".
 - **WU12 — what stays outside the roles:** framework tests with their own Postgres setup (most of `packages/db` and
-  `packages/app`) still connect as the test superuser; the test kit, `serveContract` and `runContractJob` do not. The
-  application process still receives the provisioning credential, scrubbed before application code loads, and a
-  `test-isolation` child receives it as `FABRIKA_TEST_POSTGRES_URL`.
+  `packages/app`) still connect as the test superuser; the test kit, `serveContract` and `runContractJob` do not.
+- **WU12 review round 1:** the serving entry and `fabrika job run` became launchers that re-run the command without
+  the provisioning credential; `test-isolation` hands the generated tests a throwaway `fabrika_tests_<hex>`
+  provisioner (Postgres 16+). Each migrate clears PUBLIC from the migration role's defaults, resets PUBLIC's and the
+  runtime role's grants, verifies effective privileges, and refuses foreign grants and callable SECURITY DEFINER
+  routines; the lock wait is bounded at 5 min. Residual (ADR-0017): same-user processes can read the launcher's
+  `/proc/<pid>/environ`; large objects and advisory locks stay shared.

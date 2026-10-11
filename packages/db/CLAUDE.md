@@ -112,7 +112,8 @@ and the target `Ref`, so no handler can call it.
   `testDatabase` first drops every `app_test_*` schema and `app_test_*`/`run_test_*` role family whose lock it can
   take, and never one whose lock is held. A failed migration drops the schema and the roles, and `close` runs every
   cleanup step even when one throws. `FABRIKA_TEST_POSTGRES_URL` is a provisioning credential: it must be able to
-  create roles (a superuser, or `CREATEROLE` with `CREATE` on the database).
+  create roles (a superuser, or `CREATEROLE` with `CREATE` on the database); `fabrika db test-isolation` hands it a
+  throwaway one. A family the kit cannot administer (another provisioner's) is left to its creator.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.
 - **A file row carries its owner's whole chain**, under a composite foreign key with `ON UPDATE CASCADE` and

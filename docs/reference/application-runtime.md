@@ -191,7 +191,10 @@ block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
 `run_<FABRIKA_APP_ID>`, derived from the provisioning credential `FABRIKA_APP_DATABASE_URL`, in the schema
 `app_<FABRIKA_APP_ID>` its migrations created as the migration role `app_<FABRIKA_APP_ID>`
 ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)). The runtime role has DML on the schema's tables
-and no DDL, so no query of the application can create a trigger or write the migration ledger;
+and no DDL, so no query of the application can create a trigger or write the migration ledger. The derivation happens
+in a launcher: handed `FABRIKA_APP_DATABASE_URL`, `serveContract` and `runContractJob` load no application module and
+run the same command again with `FABRIKA_APP_RUNTIME_DATABASE_URL` in its place, so the application's process never
+holds the provisioning credential;
 `boot` binds the layer to it and to its runtime's capability authority, once, and keeps the locator the
 bind answers; the application receives neither. Only an object `scoped` created is bound.
 Without a connection (the data layer runs on Bun with Postgres only, so on Cloudflare),
