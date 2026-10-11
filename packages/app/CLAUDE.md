@@ -287,8 +287,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   job and webhook without `.handle(…)`, naming each by its path: the types refuse one in a group, and `serve` also
   catches what they skip (a callback the group refused, a job, a webhook, a link or export procedure). `c.rpc` cannot
   refuse it at runtime, because the SPA's sliced bundle carries no handler at all. The snapshots of the kit's imports
-  reach `boot` from the contract (`snapshotsOf`). `defineDeps(build)` runs `build` at each `boot`; `get()` answers the
-  last build and throws at module load.
+  reach `boot` from the contract (`snapshotsOf`). `defineDeps(build)` runs `build` at each `boot`, and each handler runs with its boot's result
+  (`AsyncLocalStorage`), so `get()` answers the boot serving the invocation, two runtimes of one process included; it
+  throws at module load.
 
 ## Service contracts (the installation's own services only)
 

@@ -167,6 +167,38 @@ describe('serve', () => {
 		expect(typeof deal === 'function' && 'declared' in deal ? deal.declared : undefined).toEqual({ sql: 'read' })
 	})
 
+	test('two runtimes of one implementation each read their own dependencies, also with requests interleaved', async () => {
+		let release = (): void => {}
+		const gate = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		const label = defineDeps((env) => ({ label: typeof env['LABEL'] === 'string' ? env['LABEL'] : 'none' }))
+		const slow = plainApp.contract((c) => ({
+			api: c.rpc('/api', {
+				label: plainApp.group({ callers: ['human'] }, (r) => ({
+					read: r.query({ output: z.strictObject({ text: z.string() }), access: { member: true } }).handle(async () => {
+						const before = label.get().label
+						await gate
+						return { text: `${before}/${label.get().label}` }
+					}),
+				})),
+			}),
+		}))
+		const implementation = serve(slow, { database: null, deps: label })
+		const bootWith = (value: string) =>
+			bootApp(implementation, {
+				environment: environment({ ...frameworkEnvFor(implementation), FABRIKA_IAM_APP_ID: 'crm@prod', LABEL: value }),
+			})
+		const [first, second] = [bootWith('first'), bootWith('second')]
+		const user = await token('user', [grant('crm.read', { type: 'org', value: 'o1' })], 'crm@prod')
+		const fromFirst = send(first, '/api/label.read', { token: user, body: {} })
+		const fromSecond = send(second, '/api/label.read', { token: user, body: {} })
+		release()
+		expect(resultOf(await fromFirst)).toEqual({ text: 'first/first' })
+		expect(resultOf(await fromSecond)).toEqual({ text: 'second/second' })
+		expect(resultOf(await send(first, '/api/label.read', { token: user, body: {} }))).toEqual({ text: 'first/first' })
+	})
+
 	test('the dependencies are read while a handler runs, not at module load', () => {
 		const unbuilt = defineDeps(() => ({ greeting: 'hi' }))
 		expect(() => unbuilt.get()).toThrow('the dependencies are built at boot')
