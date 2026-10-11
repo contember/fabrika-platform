@@ -37,11 +37,11 @@ one ticket into another, an export exceeds one page. One read action per table b
 split; the predicate grammars lack relative time and increments; one capability per endpoint blocks `merge` (the same
 cause as [backlog 97](../backlog/97-the-generated-tests-have-no-move-case.md)).
 
-**A red-team pass against `main` reproduced four holes** in today's claims. Three are fixed: `Database.postgres` is
+**A red-team pass against `main` reproduced four holes** in today's claims. All four are fixed: `Database.postgres` is
 frozen and each runtime's capability mint is its own `boot` call's (ADR-0012 §7 states the in-process trust model
-that remains), and the approval diff compares input domains ([ADR-0050](../decisions/0050-approved-access.md) §3).
-The fourth is filed as backlog
-[108](../backlog/108-application-migrations-can-install-triggers-and-functions.md), independent of this proposal.
+that remains), the approval diff compares input domains ([ADR-0050](../decisions/0050-approved-access.md) §3), and
+an application migration can no longer install database code
+([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)).
 
 ## 2. Principles
 
@@ -626,7 +626,8 @@ write, or a widening classified otherwise stops the design until the owning modu
 - **Precondition disclosure.** A conditional write reveals whether its predicate holds, one bit per call; the approval
   line states it, and a column with its own read action is refused in `when`.
 - **Catalogue trust.** Control trusts `schema.generated.ts` as it trusts the column list today; `codegen --verify` at
-  start confirms it, and backlog 108 keeps executable schema objects out of what the catalogue cannot see.
+  start confirms it, and the same start check refuses a schema that holds a trigger, rule, view, function, policy or
+  executable default, so the catalogue does not miss database code.
 - **Read-only stores** keep broad read authority until declared report kinds exist.
 
 ## Sources

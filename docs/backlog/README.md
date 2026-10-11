@@ -43,11 +43,10 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [95](95-close-release-recovery-without-frozen-context.md) — Decide durable release intent, exact artifact evidence and expiry semantics before repairing runs whose original release context is absent.
 - [96](96-operations-sees-only-failed-job-runs.md) — Operations ingest takes error events only, so a successful job run, its duration and its start never reach the console; job reports ride the public ingest key.
 - [97](97-the-generated-tests-have-no-move-case.md) — No access form hands a handler the two `Ref`s a move needs, so the generated tests have no `move` case.
-- [98](98-application-migrations-have-no-destructive-change-rules.md) — The checker accepts a dropped column, a rename or a `GRANT` in an application migration; the expand-only rules are not built.
+- [98](98-application-migrations-have-no-destructive-change-rules.md) — The checker accepts a dropped column, a rename or a `GRANT` in an application migration; the expand-only rules are not built (the runner already refuses the `GRANT`).
 - [99](99-no-check-builds-the-runner-image.md) — No CI job builds or smoke-tests the runner image, and its `bun install` runs without a lockfile.
 - [100](100-a-principal-in-many-scopes-gets-no-token.md) — One permission entry per action and scope meets the 8 KiB token bound at a few dozen workspaces; the 1000-value `Within` cap sits behind it.
 - [102](102-a-contract-application-cannot-hand-its-browser-the-operations-dsn.md) — The browser SDK of a contract application cannot learn its managed DSN and release, so the SDK witness stays an application without a contract.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [104](104-the-query-builder-cannot-express-common-reports.md) — Aggregates over joins, anti-joins, nested AND/OR, SQL functions and full-text search do not fit the scoped builder; the answer is declared report kinds, never raw access.
-- [108](108-application-migrations-can-install-triggers-and-functions.md) — The runner plans, and the checker accepts, `CREATE FUNCTION`/`CREATE TRIGGER`, so database code can write past the data layer.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

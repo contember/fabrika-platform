@@ -141,6 +141,23 @@ still the one the runner opened and, for an application, `lock_timeout`,
 also catches `set_config()`. Without this, a `ROLLBACK` in a file recorded a
 ledger row for nothing, and a `COMMIT` separated a file's effects from its row.
 
+**An application's schema holds no database code.** Before any SQL runs, an
+application plan also refuses, in the framework bundle and in `app`, a
+top-level `CREATE [OR REPLACE]` of a `FUNCTION`, `PROCEDURE`, `TRIGGER`
+(also `CONSTRAINT` and `EVENT`), `RULE`, `VIEW` (also `MATERIALIZED`),
+`POLICY`, `EXTENSION`, `LANGUAGE`, `AGGREGATE`, `OPERATOR`, `CAST`,
+`CONVERSION`, `TRANSFORM` or `SCHEMA`; a `DO` block; `GRANT`, `REVOKE` and
+`ALTER DEFAULT PRIVILEGES`; and a column default that calls a function other
+than `now()` or `gen_random_uuid()`. It names the file and line. Such code
+runs on a later write where the data layer cannot see it: a trigger fired by
+one guarded single-row update can change the rows of every tenant in the
+schema. `fabrika db codegen`, and so `codegen --verify` at start, refuses a
+schema that holds a trigger other than a foreign key's, a rule, a view, a
+function, procedure or aggregate, a policy, or such a default, so an object
+installed before the rule is found. A `CHECK` constraint, an index expression
+and a generated column can still call built-in functions, which read no other
+row. Service plans are not checked: a service is trusted platform code.
+
 The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
 plus one, so applications that share one database do not serialize each other.
 Migration file names are `YYYYMMDDHHMMSS_slug.sql` in `db/migrations/`; the
@@ -186,9 +203,13 @@ migration file is a widening in the approval diff
   diverging from the schema it describes.
 - A migration that waits on a lock fails the deploy within the timeout. The
   application author must retry or split it.
+- An application migration cannot write a trigger, a function or a view. That
+  logic lives in a handler, where the data layer and the approval diff see it.
 - Migrations and the runtime share one credential, so the running application
-  holds the same schema rights as its migrations. Separate migration and runtime
-  credentials come with per-application Postgres roles.
+  holds the same schema rights as its migrations: application code that reaches
+  a raw connection can still create a trigger, which the start check finds only
+  at the next start. Separate migration and runtime credentials come with
+  per-application Postgres roles.
 
 ## Alternatives considered
 

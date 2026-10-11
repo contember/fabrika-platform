@@ -689,7 +689,10 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   its migrations fail, and `close` runs every cleanup step. Every application plan refuses a
   migration that names `public`, an `app_…` or a `fabrika…` schema, quoted or not, so neither
   the test run nor `fabrika db migrate` can reach a live schema; names resolve through the
-  runner's `search_path`.
+  runner's `search_path`. It also refuses database code before any SQL runs: a function,
+  procedure, trigger, rule, view, policy, extension or `DO` block, `GRANT`/`REVOKE`, and a
+  column default that calls anything but `now()` or `gen_random_uuid()` (ADR-0017). Such code
+  would run on a store's guarded write, unseen by the data layer.
 - **Seeding.** Every seeded row lies in one of two containment chains that share no value,
   with each container row a table owns. Every text column the fixture fills, nullable or
   not, holds a distinct marker; a required column of another type gets a sample of its type.
@@ -746,7 +749,9 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   `generated-test-hash` findings. `bunfig.toml` may not set `[test] root`,
   `pathIgnorePatterns` or `retry` (`skipped-test`).
 - **The platform runs them** at container start on Zerops, after `fabrika db migrate`
-  and `fabrika db codegen --verify` (the build has no database): `fabrika db
+  and `fabrika db codegen --verify` (the build has no database), which also fails on a
+  schema that holds a trigger, rule, view, function, policy or such a default installed
+  before the runner refused them: `fabrika db
   test-isolation` runs exactly the generated files with an empty `bunfig.toml` and the
   platform's preload, against a throwaway schema of the application's database, and fails
   unless every case name the scaffold wrote is reported as passed, with an assertion, in the
