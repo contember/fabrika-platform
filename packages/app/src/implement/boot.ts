@@ -29,7 +29,7 @@ import type { Schema } from '../contract/define'
 import { fileCollections } from '../files/collections'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
-import { requestCapabilities, requestIsReadOnly } from './capability'
+import { claimFrameworkMint, requestCapabilities, requestIsReadOnly } from './capability'
 import { type ConnectFetch, wireImports } from './connect'
 import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
@@ -40,6 +40,9 @@ import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInpu
 import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
+/** Claimed when this module loads, which every runtime adapter does before it imports the application. */
+const mint = claimFrameworkMint()
+
 export interface IamKeySource {
 	getJwks(): Promise<Jwks>
 }
@@ -508,6 +511,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		ownedDimensions: owned,
 		variables: options.environment.framework,
 		credentials: workloads,
+		mint,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -568,6 +572,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		membership: options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId),
 		framework,
 		forms: new FormRateLimiter(),
+		mint,
 	})
 	return Object.freeze({ fetch: (request: Request) => runtime.fetch(request), jobs: jobs.jobs })
 }

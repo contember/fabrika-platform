@@ -6,7 +6,7 @@
 import { type ContractArtifact, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
 import { type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
-import { CapabilityRefusedError, mintRef, mintWithin, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
+import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
 import type { ContractDatabase } from '../implement/implement'
 import type { WorkloadCredential } from '../implement/workload'
 import { type JobReporter, logReporter, operationsReporter, operationsTarget } from './report'
@@ -109,6 +109,7 @@ interface RunnerContext {
 	readonly ownedDimensions: ReadonlySet<string>
 	readonly leases: JobLeases
 	readonly reporter: JobReporter
+	readonly mint: CapabilityMint
 }
 
 export interface JobBindingInput {
@@ -123,6 +124,8 @@ export interface JobBindingInput {
 	readonly variables: Readonly<Record<string, string>>
 	/** `job:<name>` → the job's key; `boot` refuses a job without one. */
 	readonly credentials: ReadonlyMap<string, WorkloadCredential>
+	/** The framework's capability mint, which `boot` alone holds. */
+	readonly mint: CapabilityMint
 }
 
 export interface BoundJobs {
@@ -197,6 +200,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		ownedDimensions: input.ownedDimensions,
 		leases,
 		reporter: chosen ?? reporter,
+		mint: input.mint,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -387,7 +391,7 @@ function jobContext(
 		signal,
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
-			return mintWithin(frame, dimension, action, principal.id, 'all')
+			return context.mint.within(frame, dimension, action, principal.id, 'all')
 		},
 		async ref<const Act extends string, const Dim extends string>(action: Act, dimension: Dim, id: string): Promise<Ref<Dim, Act>> {
 			check(action, dimension)
@@ -399,7 +403,7 @@ function jobContext(
 			if (chain === null) {
 				throw new NotFoundError('Not found')
 			}
-			return mintRef(frame, dimension, action, principal.id, id, chain)
+			return context.mint.ref(frame, dimension, action, principal.id, id, chain)
 		},
 	})
 }

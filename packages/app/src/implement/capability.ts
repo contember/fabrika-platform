@@ -1,6 +1,8 @@
 // `Ref` and `Within`: the capabilities the framework mints after an access check. A handler receives them in `ctx`;
 // it can neither construct one nor use one outside the request that obtained it. `@fabrika/db` checks the kind, the
 // dimension and the action of every capability it is handed, and asks `requestCapabilities` whether it is authentic.
+// No export mints what `requestCapabilities` accepts: `boot.ts` claims that mint once, when it loads, before any
+// application module.
 
 import {
 	type CapabilityAuthority,
@@ -64,9 +66,9 @@ export function runInRequest<T>(frame: RequestFrame, work: () => Promise<T>): Pr
 	return currentRequest.run(frame, work)
 }
 
-/** The request running now, or `undefined` outside every request. */
-export function activeRequest(): RequestFrame | undefined {
-	return currentRequest.getStore()
+/** Whether `frame` is the request running now. */
+export function isActiveRequest(frame: RequestFrame): boolean {
+	return currentRequest.getStore() === frame
 }
 
 /** Whether the request running now may only read; `@fabrika/db` asks it before every statement. */
@@ -140,6 +142,8 @@ interface RefFacts {
 interface Bound {
 	readonly grant: CapabilityGrant
 	readonly frame: RequestFrame
+	/** The issuer that minted it; only that issuer's authority accepts it. */
+	readonly issuer: object
 }
 
 let readRef: (value: unknown) => Bound | undefined = () => undefined
@@ -152,8 +156,18 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 	readonly #action: A
 	readonly #facts: RefFacts
 	readonly #frame: RequestFrame
+	readonly #issuer: object
 
-	constructor(token: typeof MINT, frame: RequestFrame, dimension: D, action: A, principal: string, id: string, chain: ReadonlyMap<string, string>) {
+	constructor(
+		token: typeof MINT,
+		issuer: object,
+		frame: RequestFrame,
+		dimension: D,
+		action: A,
+		principal: string,
+		id: string,
+		chain: ReadonlyMap<string, string>,
+	) {
 		if (token !== MINT) {
 			throw new CapabilityRefusedError('a Ref is minted by the framework only; declare the access form in fabrika.contract.ts')
 		}
@@ -161,6 +175,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 		this.#action = action
 		this.#facts = freeze({ dimension, action, principal, id, chain: chainOf(chain) })
 		this.#frame = frame
+		this.#issuer = issuer
 	}
 
 	get dimension(): D {
@@ -195,7 +210,7 @@ export class Ref<D extends string, A extends string> implements RefCapability<D,
 				id: facts.id,
 				chain: mapOf(facts.chain),
 			})
-			return { grant, frame: value.#frame }
+			return { grant, frame: value.#frame, issuer: value.#issuer }
 		}
 	}
 }
@@ -210,9 +225,11 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 	readonly #action: A
 	readonly #grant: WithinGrant
 	readonly #frame: RequestFrame
+	readonly #issuer: object
 
 	constructor(
 		token: typeof MINT,
+		issuer: object,
 		frame: RequestFrame,
 		dimension: D,
 		action: A,
@@ -244,6 +261,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 			containers: held,
 		})
 		this.#frame = frame
+		this.#issuer = issuer
 	}
 
 	get dimension(): D {
@@ -265,7 +283,8 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 	}
 
 	static {
-		readWithin = (value) => typeof value === 'object' && value !== null && #grant in value ? { grant: value.#grant, frame: value.#frame } : undefined
+		readWithin = (value) =>
+			typeof value === 'object' && value !== null && #grant in value ? { grant: value.#grant, frame: value.#frame, issuer: value.#issuer } : undefined
 	}
 }
 
@@ -273,50 +292,105 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 freeze(Ref.prototype)
 freeze(Within.prototype)
 
-export function mintRef<D extends string, A extends string>(
-	frame: RequestFrame,
-	dimension: D,
-	action: A,
-	principal: string,
-	id: string,
-	chain: ReadonlyMap<string, string>,
-): Ref<D, A> {
-	return new Ref(MINT, frame, dimension, action, principal, id, chain)
+/** Makes the capabilities one authority accepts; the framework's is held by `boot.ts` alone. */
+export interface CapabilityMint {
+	ref<D extends string, A extends string>(
+		frame: RequestFrame,
+		dimension: D,
+		action: A,
+		principal: string,
+		id: string,
+		chain: ReadonlyMap<string, string>,
+	): Ref<D, A>
+	within<D extends string, A extends string>(
+		frame: RequestFrame,
+		dimension: D,
+		action: A,
+		principal: string,
+		values: readonly string[] | 'all',
+		containers?: readonly ContainerGrant[],
+	): Within<D, A>
 }
 
-export function mintWithin<D extends string, A extends string>(
-	frame: RequestFrame,
-	dimension: D,
-	action: A,
-	principal: string,
-	values: readonly string[] | 'all',
-	containers: readonly ContainerGrant[] = [],
-): Within<D, A> {
-	return new Within(MINT, frame, dimension, action, principal, values, containers)
+/** A mint and the one authority that accepts what it mints. */
+export interface CapabilityIssuer {
+	readonly mint: CapabilityMint
+	readonly authority: CapabilityAuthority
 }
+
+/**
+ * A new issuer: its authority refuses every capability another issuer minted, the framework's included. The framework
+ * makes its own here; a test that needs a capability no access check gave makes another, whose capabilities reach
+ * only stores bound to that issuer's authority.
+ */
+export function createCapabilityIssuer(): CapabilityIssuer {
+	const issuer = freeze({})
+	const mint: CapabilityMint = freeze({
+		ref<D extends string, A extends string>(
+			frame: RequestFrame,
+			dimension: D,
+			action: A,
+			principal: string,
+			id: string,
+			chain: ReadonlyMap<string, string>,
+		): Ref<D, A> {
+			return new Ref(MINT, issuer, frame, dimension, action, principal, id, chain)
+		},
+		within<D extends string, A extends string>(
+			frame: RequestFrame,
+			dimension: D,
+			action: A,
+			principal: string,
+			values: readonly string[] | 'all',
+			containers: readonly ContainerGrant[] = [],
+		): Within<D, A> {
+			return new Within(MINT, issuer, frame, dimension, action, principal, values, containers)
+		},
+	})
+	const authority: CapabilityAuthority = freeze({
+		resolve(capability: unknown): CapabilityGrant {
+			const bound = readRef(capability) ?? readWithin(capability)
+			if (bound === undefined || bound.issuer !== issuer) {
+				throw new CapabilityRefusedError('not a capability the framework minted: pass the ctx.target or ctx.within of this request')
+			}
+			const { grant, frame } = bound
+			const what = `${grant.kind === 'ref' ? 'Ref' : 'Within'} of '${grant.dimension}' for '${grant.action}'`
+			if (frame.ended) {
+				throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, which has ended; never keep a capability past its request`)
+			}
+			if (currentRequest.getStore() !== frame) {
+				throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, not to the one running now; never share a capability`)
+			}
+			return grant
+		},
+
+		fence(): LeaseFence | null {
+			return currentRequest.getStore()?.fence ?? null
+		},
+	})
+	return freeze({ mint, authority })
+}
+
+const framework = createCapabilityIssuer()
 
 /**
  * The framework's side of `@fabrika/db`'s capability check. It answers only whether a value is an authentic
  * capability of the request that is running now; the data layer checks the kind, the dimension and the action.
  */
-export const requestCapabilities: CapabilityAuthority = Object.freeze({
-	resolve(capability: unknown): CapabilityGrant {
-		const bound = readRef(capability) ?? readWithin(capability)
-		if (bound === undefined) {
-			throw new CapabilityRefusedError('not a capability the framework minted: pass the ctx.target or ctx.within of this request')
-		}
-		const { grant, frame } = bound
-		const what = `${grant.kind === 'ref' ? 'Ref' : 'Within'} of '${grant.dimension}' for '${grant.action}'`
-		if (frame.ended) {
-			throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, which has ended; never keep a capability past its request`)
-		}
-		if (currentRequest.getStore() !== frame) {
-			throw new CapabilityRefusedError(`the ${what} belongs to request ${frame.id}, not to the one running now; never share a capability`)
-		}
-		return grant
-	},
+export const requestCapabilities: CapabilityAuthority = framework.authority
 
-	fence(): LeaseFence | null {
-		return currentRequest.getStore()?.fence ?? null
-	},
-})
+let unclaimedMint: CapabilityMint | null = framework.mint
+
+/**
+ * Hands the framework's mint to its one holder, `boot.ts`, which claims it when it loads; every runtime adapter loads
+ * `boot.ts` before it imports the application. Any later claim throws, so application code that loads this module by
+ * URL gets no mint.
+ */
+export function claimFrameworkMint(): CapabilityMint {
+	const mint = unclaimedMint
+	if (mint === null) {
+		throw new CapabilityRefusedError('the framework holds its capability mint; a capability comes from an access form declared in fabrika.contract.ts')
+	}
+	unclaimedMint = null
+	return mint
+}

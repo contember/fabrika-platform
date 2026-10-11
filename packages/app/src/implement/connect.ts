@@ -17,7 +17,7 @@ import { CONNECT_LIMITS, CONNECT_PREFIX, exportBase, joinPath } from '../contrac
 import { ContractError } from '../contract/problems'
 import { declaredPath, schemaFromShape } from '../contract/schema-from-shape'
 import { readBoundedBytes } from './bounded'
-import { activeRequest, type RequestFrame } from './capability'
+import { isActiveRequest, type RequestFrame } from './capability'
 
 export type ConnectFailure = 'denied' | 'invalid_input' | 'unavailable' | 'timeout' | 'contract_violation'
 
@@ -240,7 +240,7 @@ const REFUSED: ConnectResult<never> = Object.freeze({
 export function connectContext(imports: readonly ImportWire[], frame: RequestFrame): ConnectContextValue {
 	const call = (wire: ImportWire, path: string, input: unknown): Promise<ConnectResult<unknown>> => {
 		const endpoint = frame.endpoint
-		if (activeRequest() !== frame || frame.ended || frame.readOnly || endpoint === null || !wire.usedBy.has(endpoint)) {
+		if (!isActiveRequest(frame) || frame.ended || frame.readOnly || endpoint === null || !wire.usedBy.has(endpoint)) {
 			return Promise.resolve(REFUSED)
 		}
 		return wire.connector.call(path, input)

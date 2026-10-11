@@ -8,13 +8,14 @@
 // The file gets its own application schema `app_<id>`. The URL is a credential: it is never logged.
 
 import { applicationSchema, Database, type Ref, scoped, type Within } from '@fabrika/db'
+import { bindScopedDatabase } from '@fabrika/db/framework'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { compileContract } from '../contract/compile'
 import { defineContract } from '../contract/define'
 import type { ContractApp } from '../implement/boot'
-import { mintRef, RequestFrame, requestIsReadOnly, runInRequest } from '../implement/capability'
+import { createCapabilityIssuer, RequestFrame, requestIsReadOnly, runInRequest } from '../implement/capability'
 import { implement } from '../implement/implement'
 import { appToken, bootApp, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { ById, contract as notesContract, Note, NoteList } from './fixtures/scoped-notes/fabrika.contract'
@@ -38,6 +39,15 @@ const exporting = defineContract(notesContract.vocabulary, (c) => ({
 const database = scoped(tables)
 const notes = database.defineStore('notes', (t) => ({
 	list: (within: Within<'workspace', 'notes.read'>) => t.select(within, (q) => q.columns(['id', 'title']).orderBy('id')),
+}))
+
+/**
+ * A write capability no export's access check hands out, from an issuer of this file's own: the framework's mint is
+ * `boot`'s alone. This layer is bound as `boot` binds one, with the request's read-only flag.
+ */
+const issuer = createCapabilityIssuer()
+const direct = scoped(tables)
+const directNotes = direct.defineStore('notes', (t) => ({
 	create: (workspace: Ref<'workspace', 'notes.write'>, title: string) => t.insert(workspace, { title }),
 }))
 
@@ -159,6 +169,7 @@ beforeAll(async () => {
 	)
 	connection = Database.postgres({ url, schema, max: 2 })
 	booted = bootApp(app, { database: connection })
+	bindScopedDatabase(direct, { database: connection, capabilities: issuer.authority, readOnly: requestIsReadOnly })
 	await admin((sql) => sql.unsafe(`create schema ${viewSchema}; set search_path to ${viewSchema}; ${VIEW_MIGRATION}`))
 	await admin((sql) =>
 		sql.unsafe(`insert into ${viewSchema}.notes_data (id, workspace_id, title, created_by, version) values ($1, 'w1', 'kept', 'user-9', 1)`, [viewNote])
@@ -200,13 +211,16 @@ describe.skipIf(!hasPostgres)('an export handler cannot write', () => {
 	test('in a read-only request a write capability of that request is refused, and nothing is written', async () => {
 		const exportFrame = new RequestFrame('export-request', { readOnly: true })
 		await expect(runInRequest(exportFrame, () => {
-			const workspace = mintRef(exportFrame, 'workspace', 'notes.write', 'service-1', 'w1', new Map())
-			return notes.create(workspace, 'smuggled')
+			const workspace = issuer.mint.ref(exportFrame, 'workspace', 'notes.write', 'service-1', 'w1', new Map())
+			return directNotes.create(workspace, 'smuggled')
 		})).rejects.toThrow('this request is read-only')
 		expect(await count()).toEqual({ n: 1 })
 		// The same write in an ordinary request goes through: the refusal is the request's, not the capability's.
 		const mutationFrame = new RequestFrame('mutation-request')
-		await runInRequest(mutationFrame, () => notes.create(mintRef(mutationFrame, 'workspace', 'notes.write', 'user-1', 'w1', new Map()), 'written'))
+		await runInRequest(
+			mutationFrame,
+			() => directNotes.create(issuer.mint.ref(mutationFrame, 'workspace', 'notes.write', 'user-1', 'w1', new Map()), 'written'),
+		)
 		expect(await count()).toEqual({ n: 2 })
 	})
 })

@@ -79,9 +79,9 @@ src/
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
-    boot.ts           boot: framework variables, refusals, handler binding
+    boot.ts           boot: framework variables, refusals, handler binding; the holder of the mint
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
-    capability.ts     Ref, Within, requestCapabilities (the CapabilityAuthority)
+    capability.ts     Ref, Within, requestCapabilities (the CapabilityAuthority), the issuers
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
     anonymous.ts      the bounded body read, the form rate limit, the share bootstrap, GitHub's signature
     webhook.ts        the generated binding endpoints and a delivery's principal
@@ -272,9 +272,17 @@ src/
 - **`Ref` and `Within` are bound to their request** with `AsyncLocalStorage`.
   `requestCapabilities.resolve` refuses a value the framework did not mint, one whose
   request has ended, and one from another live request; `@fabrika/db` checks kind,
-  dimension and action itself. Both classes keep their grant in private fields and
-  need a module-private token to construct; never export that token or the mint
-  functions from `implement/index.ts`.
+  dimension and action itself. Both classes keep their grant and their issuer in
+  private fields and need a module-private token to construct; never export that
+  token.
+- **Only `boot.ts` holds the framework's mint.** `capability.ts` exports no function that mints what
+  `requestCapabilities` accepts: `boot.ts` takes the mint with `claimFrameworkMint` when it loads, which
+  every adapter does before it imports the application, and a second claim throws. `boot` hands it to
+  `ContractRuntime` and `bindJobs` as a parameter, never through a module export, because an application
+  can load any module of the package by URL (the package ships `src/`). `createCapabilityIssuer` makes an
+  issuer of its own, whose capabilities only its own authority accepts: the tests' way to mint. Never
+  export the framework's mint, nor a handle on the running request beyond `isActiveRequest`
+  (`capability-mint.test.ts`).
 - **A capability's facts are frozen at mint, and every resolution is a fresh copy.**
   The chain is stored as frozen pairs, copied into a new `Map` through built-ins
   captured at load, and `resolve` returns a new frozen grant each time. Whoever
@@ -288,9 +296,9 @@ src/
   application never receives the connection or the locator; a copy or a wrapper of
   the layer does not boot. A `ContractDatabase` (`tables` and `locate`) of the
   application's own is served as it is and gets no connection.
-  `serveContract` imports `@fabrika/db` before the application (it captures its
-  built-ins and freezes the Kysely compiler at load) and opens `Database.postgres` on
-  `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
+  `serveContract` and `runContractJob` import `@fabrika/db` before the application (it
+  captures its built-ins and freezes the Kysely compiler at load), take `Database.postgres`
+  then, and open it on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
   or a layer bound before boot is a `BootError`. `boot.ts` imports only
   `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter
   imports `boot`.

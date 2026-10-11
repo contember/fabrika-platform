@@ -51,7 +51,7 @@ import {
 	verifyGithubSignature,
 	withBootstrap,
 } from './anonymous'
-import { CapabilityLimitError, CapabilityRefusedError, mintRef, mintWithin, RequestFrame, runInRequest } from './capability'
+import { CapabilityLimitError, type CapabilityMint, CapabilityRefusedError, RequestFrame, runInRequest } from './capability'
 import { connectContext, type ImportWire } from './connect'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
@@ -142,6 +142,8 @@ export interface RuntimeParts {
 	/** The framework's own writes (inboxes, webhook tables); `boot` refuses a form or webhook without them. */
 	readonly framework: FrameworkTables | null
 	readonly forms: FormRateLimiter
+	/** The framework's capability mint, which `boot` alone holds. */
+	readonly mint: CapabilityMint
 }
 
 interface Caller {
@@ -410,13 +412,13 @@ export class ContractRuntime {
 			case 'over': {
 				const direct = scopedValues(caller.perms, action, access.dimension)
 				if (direct === null) {
-					return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, 'all') }, input }
+					return { context: { within: this.#parts.mint.within(frame, access.dimension, action, caller.subject, 'all') }, input }
 				}
 				const held = this.#heldContainers(caller.perms, action, access.dimension)
 				if (direct.length === 0 && held.length === 0) {
 					throw new ForbiddenError(`The caller holds '${action}' in no ${access.dimension}`)
 				}
-				return { context: { within: mintWithin(frame, access.dimension, action, caller.subject, direct, held) }, input }
+				return { context: { within: this.#parts.mint.within(frame, access.dimension, action, caller.subject, direct, held) }, input }
 			}
 			case 'in': {
 				const { value, rest } = takeField(input, access.from)
@@ -432,7 +434,7 @@ export class ContractRuntime {
 				if (chain === null) {
 					throw new NotFoundError('Not found')
 				}
-				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
+				return { context: { target: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
 			}
 			case 'on': {
 				if (access.from === null) {
@@ -444,14 +446,14 @@ export class ContractRuntime {
 				if (chain === null || !holdsOnChain(caller.perms, action, access.dimension, value, chain)) {
 					throw new NotFoundError('Not found')
 				}
-				return { context: { target: mintRef(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
+				return { context: { target: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, chain) }, input: rest }
 			}
 			case 'creates': {
 				if (membership === null) {
 					throw new ServerFault(`'${row.id}' creates a scope, and boot bound no IAM membership transport`)
 				}
 				const value = await createScope(membership)
-				return { context: { created: mintRef(frame, access.dimension, action, caller.subject, value, new Map()) }, input }
+				return { context: { created: this.#parts.mint.ref(frame, access.dimension, action, caller.subject, value, new Map()) }, input }
 			}
 		}
 	}
@@ -481,7 +483,7 @@ export class ContractRuntime {
 		if (chain === null || !unchanged) {
 			throw new NotFoundError('This link no longer reaches its object')
 		}
-		return { context: { target: mintRef(frame, dimension, action, caller.subject, object.value, chain) }, input }
+		return { context: { target: this.#parts.mint.ref(frame, dimension, action, caller.subject, object.value, chain) }, input }
 	}
 
 	/** A form appends one row of its declared fields to its inbox and answers a constant; it reads nothing. */
@@ -545,7 +547,9 @@ export class ContractRuntime {
 			await runInRequest(frame, async () => {
 				const subject = webhookSubject(binding.id)
 				const refs = Object.freeze(
-					Object.fromEntries(served.actions.map((action) => [action, mintRef(frame, served.dimension, action, subject, binding.scope.value, chain)])),
+					Object.fromEntries(
+						served.actions.map((action) => [action, this.#parts.mint.ref(frame, served.dimension, action, subject, binding.scope.value, chain)]),
+					),
 				)
 				const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
 				const delivery = Object.freeze({ key })

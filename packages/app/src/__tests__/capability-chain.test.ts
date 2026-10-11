@@ -1,21 +1,24 @@
 // A handler that resolves its own Ref and changes the containment chain it gets back changes nothing the data layer
 // sees: every resolution is a fresh copy of the chain frozen at mint. Driven through `@fabrika/db`'s own stores and
-// recording dialect, so the witness is the SQL parameters of the statement.
+// recording dialect, so the witness is the SQL parameters of the statement. The framework's mint is `boot`'s alone,
+// so the Refs come from an issuer of this file's own, whose authority the stores are bound to.
 
 import { Database } from '@fabrika/db'
 import { describe, expect, test } from 'bun:test'
 import { RecordingDialect } from '../../../db/src/__tests__/fixtures/recording-dialect'
 import { defineStores } from '../../../db/src/__tests__/fixtures/stores'
-import { mintRef, requestCapabilities, RequestFrame, runInRequest } from '../implement/capability'
+import { createCapabilityIssuer, RequestFrame, runInRequest } from '../implement/capability'
+
+const { mint, authority } = createCapabilityIssuer()
 
 describe('a Ref chain cannot be changed after authorization', () => {
 	test('mutating a resolved chain or the Ref.chain copy leaves the statement on the chain that was checked', async () => {
 		const dialect = new RecordingDialect()
-		const stores = defineStores({ database: Database.fromDialect(dialect), capabilities: requestCapabilities })
+		const stores = defineStores({ database: Database.fromDialect(dialect), capabilities: authority })
 		const frame = new RequestFrame('request-1')
 		await runInRequest(frame, async () => {
-			const note = mintRef(frame, 'note', 'notes.read', 'user-1', 'n1', new Map([['workspace', 'w1'], ['organization', 'o1']]))
-			const grant = requestCapabilities.resolve(note)
+			const note = mint.ref(frame, 'note', 'notes.read', 'user-1', 'n1', new Map([['workspace', 'w1'], ['organization', 'o1']]))
+			const grant = authority.resolve(note)
 			expect(Object.isFrozen(grant)).toBe(true)
 			// The note moved to w2 in o2 since it was authorized; the handler tries to follow it without a check.
 			if (grant.kind === 'ref' && grant.chain instanceof Map) {
@@ -38,12 +41,12 @@ describe('a Ref chain cannot be changed after authorization', () => {
 	test('a later resolution returns the chain frozen at mint', async () => {
 		const frame = new RequestFrame('request-2')
 		await runInRequest(frame, async () => {
-			const note = mintRef(frame, 'note', 'notes.read', 'user-1', 'n1', new Map([['workspace', 'w1']]))
-			const first = requestCapabilities.resolve(note)
+			const note = mint.ref(frame, 'note', 'notes.read', 'user-1', 'n1', new Map([['workspace', 'w1']]))
+			const first = authority.resolve(note)
 			if (first.kind === 'ref' && first.chain instanceof Map) {
 				first.chain.set('workspace', 'w2')
 			}
-			const second = requestCapabilities.resolve(note)
+			const second = authority.resolve(note)
 			expect(second.kind === 'ref' ? Object.fromEntries(second.chain) : null).toEqual({ workspace: 'w1' })
 		})
 		frame.end()
