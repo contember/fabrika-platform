@@ -177,7 +177,12 @@ requirement for `service:postgres` and the cross-service reference
 `${postgres_connectionString}` instead of declaring a database service. Every
 consumer receives the same provider-issued service credential. Service-level
 environment isolation does not block explicit cross-service references, so a
-cheap namespace is one shared PostgreSQL credential trust domain.
+cheap namespace is one shared PostgreSQL credential trust domain for code. Each
+consumer's migrations and queries run as its own role family, which owns or
+reaches only its `app_<id>` schema
+([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)), so one
+application's SQL cannot reach another's tables; the shared credential is only
+the provisioning credential that creates those roles.
 
 ## Zerops lifecycle and routing
 

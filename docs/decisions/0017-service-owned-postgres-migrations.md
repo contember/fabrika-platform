@@ -2,7 +2,7 @@
 id: 0017
 title: Make Postgres migrations service-owned and bundle-qualified
 status: accepted
-date: 2026-10-08
+date: 2026-10-11
 ---
 
 # 0017 — Make Postgres migrations service-owned and bundle-qualified
@@ -110,9 +110,10 @@ carries three additions that service plans do not:
 - **The ledger lives in the application's schema.** The schema is
   `app_<id>`, with each `-` of the application id written as `_` (IAM's id
   alphabet has no `_`, so two ids never share a schema; an id has at most 59
-  characters, so the schema name fits Postgres' 63). The runner creates the
-  schema when it is absent and runs each migration with it as the only
-  `search_path`. The ledger is `app_<id>.fabrika_migrations` with the columns
+  characters, so the schema name fits Postgres' 63). The schema belongs to
+  the application's migration role (below), and the runner runs each
+  migration with it as the only `search_path`. The ledger is
+  `app_<id>.fabrika_migrations` with the columns
   `(bundle, name, checksum, applied_at)`; the bundle is `app`. Only an
   application's plan may name a schema-qualified ledger, and only in its own
   schema. Tables named `fabrika_*` belong to the framework: `fabrika db migrate`
@@ -149,9 +150,8 @@ That is legitimate application code, so it is not refused: it is shown to the
 approver as needing closer review ([ADR-0050](0050-approved-access.md)).
 What is refused is what no review can make safe. The classifier is a coarse,
 fail-closed defense in depth, not a Postgres grammar: where a form is hard to
-read it refuses the form, and the least-privileged role of
-[backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md)
-is the privilege boundary. Two checks run for every
+read it refuses the form, and the application's role family (below) is the
+privilege boundary. Two checks run for every
 application plan, the framework bundle included; service plans are not
 checked, because a service is trusted platform code.
 
@@ -279,11 +279,54 @@ catalog query against the manifest of all the migration files, in a
 read-only transaction with the same pinned settings, whatever the role or
 the database sets for its sessions. The test database does the same.
 
-**These are name rules, not a privilege boundary.** A backfill runs once with
-the credential's rights; the classifier sees its names and its calls, not
-what the role may do. The complete fix is a least-privileged database role
-per application, owning its schema and nothing else
-([backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md)).
+**These are name rules; the role family is the privilege boundary.** The
+classifier sees a statement's names and calls, not what the role running it
+may do. So each application has two roles of its own, and no migration and no
+application query runs as anything else:
+
+- **The migration role `app_<id>`**, named like the schema, owns the schema
+  and every object in it, and is the only role that runs DDL there. The
+  runner applies every migration as this role.
+- **The runtime role `run_<id>`** has `USAGE` on the schema and `SELECT`,
+  `INSERT`, `UPDATE` and `DELETE` on every table of it except the ledger,
+  and nothing else: no DDL, no `TRIGGER`, `TRUNCATE` or `REFERENCES`, no
+  grant on the ledger. The server and every job connect as it. After every
+  run the runner resets its grants (revoke all, then grant) in one
+  transaction under the migration lock, so a wider grant does not survive a
+  deploy and a live runtime never sees a gap. An identity column needs no
+  grant on its sequence.
+- Neither is a superuser or holds `CREATEROLE`, `CREATEDB`, `REPLICATION` or
+  `BYPASSRLS`, neither is a member of any role (so not of
+  `pg_execute_server_program` or `pg_read_server_files`), and neither may
+  create a schema or create anything outside the migration role's schema.
+  So neither can write the catalog, unlink a large object it does not own,
+  run `COPY … PROGRAM`, read a server file or reach another application's
+  schema, whatever the classifier admitted.
+
+`FABRIKA_APP_DATABASE_URL` is the **provisioning credential**. `fabrika db
+migrate` uses it on one connection, under the migration lock, only to create
+the two roles when absent, reset their passwords and their role-level
+settings (`ALTER ROLE … RESET ALL`, so a session default a role set on itself
+ends at the next deploy), create the schema owned by the migration role, and
+check the family: an attribute, a membership or a `CREATE` beyond the above
+stops the deploy before any migration runs. A schema that exists and is not
+the migration role's is refused, not adopted, like an older ledger. A
+provisioning credential that is neither a superuser nor holds `CREATEROLE` is
+refused: nothing ever runs as the provisioning credential instead. A
+`CREATEROLE` role that is not a superuser works (Postgres 16 or later): it
+grants itself the migration role, because creating a schema for a role needs
+`SET` on it.
+
+Each role's password is the HMAC-SHA-256 of its name under the provisioning
+password, so whoever holds the provisioning credential derives it and nothing
+stores it; it reaches Postgres only as a SCRAM-SHA-256 verifier, so no
+statement log holds it. The Bun runtime derives `run_<id>`'s URL from
+`FABRIKA_APP_DATABASE_URL` before the application loads, and the framework
+scrubs the variable from the process; the test kit does the same for each
+throwaway schema with `FABRIKA_TEST_POSTGRES_URL`. A view or a rule the
+migration role owns runs with its rights when the runtime role uses it, which
+is why such code is a reviewed deviation and `SECURITY DEFINER` stays
+refused.
 
 The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
 plus one, so applications that share one database do not serialize each other.
@@ -293,8 +336,8 @@ runner refuses any other name, as the checker does.
 `fabrika db migrate` runs the migrations. It is the generated
 `run.initCommands` entry of the application's execution descriptor
 ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)), and it
-uses the application's runtime credential: `FABRIKA_APP_ID` and
-`FABRIKA_APP_DATABASE_URL`, read from the environment only. The checker
+reads `FABRIKA_APP_ID` and the provisioning credential
+`FABRIKA_APP_DATABASE_URL` from the environment only. The checker
 verifies migration file names, because an agent over MCP cannot run
 `fabrika db new`. `fabrika db codegen` generates the schema's types from the
 migrated database.
@@ -347,12 +390,24 @@ migration file is a widening in the approval diff
   not build SQL from a string (`EXECUTE`).
 - A migration cannot write the jsonb `?` operator: the driver reads a lone
   `?` as a placeholder. `?|` and `?&` work.
-- Migrations and the runtime share one credential, so the running application
-  holds the same schema rights as its migrations: application code that reaches
-  a raw connection can still create a trigger, which the start check finds only
-  at the next start. The classifier and the catalog check reduce what a
-  migration can do; the complete fix is a least-privileged role per
-  application, with separate migration and runtime credentials (backlog 110).
+- A statement that passes a name rule still runs as one of the application's
+  roles: a backfill cannot leave the schema, and a runtime query cannot create
+  a trigger, alter a table or write the ledger. The catalog check stays the
+  witness of what the migration role created.
+- Every application database needs a provisioning credential that can create
+  roles. One that cannot stops the deploy with a message saying so; on Zerops
+  whether the service's own user can is unverified
+  ([`zerops-platform.md`](../reference/zerops-platform.md)).
+- A schema created before its roles existed is refused. Before 1.0 it is
+  dropped and re-created by the next deploy (its rows are lost), or its owner
+  and every object in it are moved to the migration role by hand.
+- Roles are the cluster's, not the database's: two databases of one cluster
+  that host the same application id share its two roles.
+- The application's process still receives the provisioning credential,
+  scrubbed from its environment before application code loads. The roles
+  bound what the application's SQL can do, not what its code could read, so a
+  cheap namespace's shared credential stays one trust domain for code
+  ([`deployment-namespaces.md`](../reference/deployment-namespaces.md)).
 
 ## Alternatives considered
 
@@ -411,6 +466,21 @@ refuses them by default.
 An agent edits whatever refuses it. Without a checksum, an edited migration
 that already ran would leave the live schema different from the files, and the
 approval diff would see a change that never runs.
+
+### Run the application as the provisioning credential under `SET ROLE`
+
+One credential with `SET ROLE app_<id>` before each migration and `SET ROLE
+run_<id>` for the runtime needs no passwords, but `RESET ROLE` returns to the
+provisioning credential, and only a name rule refuses that statement. A
+separate login is the only boundary a statement cannot leave.
+
+### Store generated role passwords
+
+A random password per role must be stored where the next container finds it.
+Control cannot reach the database and writes no credential into an
+application's service, so that would be new machinery. A password derived from
+the provisioning credential needs no store and follows its rotation at the next
+deploy.
 
 ### Adopt the old filename-only ledger
 

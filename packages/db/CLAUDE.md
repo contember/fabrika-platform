@@ -45,7 +45,8 @@ Migrations are applied by `@fabrika/platform-node`'s application runner through 
 
 An application calls `scoped(tables)` once (its own `src/db/database.ts`), defines its stores with the
 `defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
-`Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
+`Database.postgres` as the runtime role `run_<FABRIKA_APP_ID>`, whose URL `@fabrika/platform-node` derives from the
+provisioning credential `FABRIKA_APP_DATABASE_URL`, on `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
 the runtime's `CapabilityAuthority` (one per `boot`), which binds each capability to its request, through
 `@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
 table's containment columns. `frameworkTablesOf` gives the framework the writes no store makes: a `c.form`
@@ -56,8 +57,9 @@ applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before t
 built yet: a store for `reference` tables, and reading an inbox.
 
 `@fabrika/db/testing` is the database half of the generated isolation tests (`fabrika db test-scaffold`, A11):
-`testDatabase` migrates a fresh `app_test_<hex>` schema through `@fabrika/platform-node`'s application runner, or
-answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
+`testDatabase` migrates a fresh `app_test_<hex>` schema with its own role family through `@fabrika/platform-node`'s
+application runner (`migrate`, as the migration role), connects and seeds as its runtime role, so every test of
+application code runs least-privileged, or answers `null` after the standard skip message; `seedWorlds` seeds one row of a table in each of two containment
 chains that share no value, every container row a table owns first; `tableProbe` reaches one table of a layer by
 name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer.
@@ -103,12 +105,14 @@ and the target `Ref`, so no handler can call it.
   non-writable, non-configurable property of `globalThis` under `Symbol.for('fabrika.production')`: every installed
   copy of this package reads it, it holds after the framework scrubbed `FABRIKA_*`, and nothing unmarks it.
   `@fabrika/check`'s `test-only-import` refuses the module outside a test file: it seeds rows past the data layer,
-  through a raw connection of its own. Its seeding fills a required column it does not place with a sample of the
+  through a raw connection of its own, as the runtime role. Its seeding fills a required column it does not place with a sample of the
   column's type, and refuses a type codegen refuses.
 - **A throwaway schema is held by its advisory lock for its whole life.** The lock (SHA-256 of
-  `fabrika-test-schema:<name>`) is taken on a reserved connection before the schema exists. Each `testDatabase` first
-  drops every `app_test_*` schema whose lock it can take, and never one whose lock is held. A failed migration drops
-  the schema, and `close` runs every cleanup step even when one throws.
+  `fabrika-test-schema:<name>`) is taken on a reserved connection before the schema and its roles exist. Each
+  `testDatabase` first drops every `app_test_*` schema and `app_test_*`/`run_test_*` role family whose lock it can
+  take, and never one whose lock is held. A failed migration drops the schema and the roles, and `close` runs every
+  cleanup step even when one throws. `FABRIKA_TEST_POSTGRES_URL` is a provisioning credential: it must be able to
+  create roles (a superuser, or `CREATEROLE` with `CREATE` on the database).
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from `file-tables.ts` (which needs the driver); `store.ts` builds the file tables of a layer.
 - **A file row carries its owner's whole chain**, under a composite foreign key with `ON UPDATE CASCADE` and

@@ -85,11 +85,20 @@ Read this before moving a service onto this driver.
   resolution would otherwise let it admit the built-in. A routine has one signature (a second create
   with another argument list is refused), so the manifest and the catalog name it by its name alone.
 - **The classifier is a coarse, fail-closed defense in depth, not a Postgres grammar**; the
-  least-privileged role (backlog 110) is the privilege boundary. Where a form is hard to read, refuse the
+  application's role family (below) is the privilege boundary. Where a form is hard to read, refuse the
   form (`parenthesizedTarget`, a field-selection call, `serial` and `CREATE SEQUENCE`, an unqualified
   `pg_…` name in DDL) rather than emulate the grammar. Never admit a built-in that runs SQL
   from a string or reaches past the schema (`query_to_xml`, `dblink`, `lo_*`, `pg_read_file`,
-  `pg_advisory_*`, `set_config`): these are name rules, not privileges, until backlog 110.
+  `pg_advisory_*`, `set_config`): these are name rules, and the role family bounds what they miss.
+- **An application's SQL runs only as its own roles** (ADR-0017, `application-postgres-roles.ts`). The migration
+  role `app_<id>` owns the schema and everything in it; the runtime role `run_<id>` has USAGE and DML on every table
+  but the ledger (`grantRuntimeRole`, reset after every run under the lock), never DDL. `migrate(provisioningUrl)` uses
+  the provisioning credential only to create, re-password and check the family (`provisionPostgresRoles`), then applies
+  the plan as the migration role. Never apply an application's plan as the provisioning credential and never fall back
+  to it: a credential that cannot create roles, a schema the migration role does not own, and a role with any
+  attribute, membership or `CREATE` beyond the family's are refused. Passwords are HMAC-derived from the provisioning
+  password and sent only as SCRAM verifiers; never put a derived password in SQL text. `apply(db)` grants nothing and
+  exists for the runner's own tests. `dropApplicationDatabase` is for throwaway test databases.
 - **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
   `sql-names.ts`, `pg-catalog-names.ts` and `migration-classify.ts`, which import
   nothing outside themselves: Control loads it in

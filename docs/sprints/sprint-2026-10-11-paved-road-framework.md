@@ -671,3 +671,17 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   literal. A group typed to admit a pending endpoint fails at the mount; a refused callback's fallback (`GroupBuild`,
   marked by a private symbol) does not, so its error is not repeated. A job's writes outside its transaction name
   `ctx.transaction((tx) => …)` and `tx.db`. The checker's allowed form is `defineTables(vocabulary, columns)({ … })`.
+- **WU12 — the role family** (→ ADR-0017): `app_<id>` (named like the schema) owns it and runs the migrations;
+  `run_<id>` has DML on every table but `fabrika_migrations` and serves. `FABRIKA_APP_DATABASE_URL` is unchanged on
+  Zerops and becomes the provisioning credential: passwords are HMAC-derived from it (no store, no new service) and
+  sent as SCRAM verifiers. A credential that cannot create roles, a schema the migration role does not own (no
+  adoption: an old local `apps-db` volume needs `local:reset` once) and a widened role stop the deploy. Whether
+  Zerops' `db` user holds `CREATEROLE`, and whether a new role connects through `portTls`, is UNVERIFIED (two
+  `not-probed` platform-facts rows).
+- **WU12 — no `ctx.sql` yet:** the witness is a raw connection as `run_<id>` (`application-postgres-roles.test.ts`).
+  WU6: add a `ctx.sql` case writing `fabrika_migrations` that fails with `permission denied`. WU9/WU10: the name rules
+  are defense in depth and the role is the boundary now; drop "until WU12".
+- **WU12 — what stays outside the roles:** framework tests with their own Postgres setup (most of `packages/db` and
+  `packages/app`) still connect as the test superuser; the test kit, `serveContract` and `runContractJob` do not. The
+  application process still receives the provisioning credential, scrubbed before application code loads, and a
+  `test-isolation` child receives it as `FABRIKA_TEST_POSTGRES_URL`.

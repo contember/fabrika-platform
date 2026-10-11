@@ -58,8 +58,11 @@ renderer is `@fabrika/db/codegen`; this file only parses arguments and reports.
 - `db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`, the name the
   checker's `migration-name` rule accepts, and never overwrites.
 - `db migrate` is the template's `run.initCommands` entry. It validates the files before
-  it connects, over ONE connection (the advisory lock is session state). It applies the
-  framework's tables (`@fabrika/db/migrations`, bundle `fabrika`) before `db/migrations/`.
+  it connects, then runs the wrapper's `migrate`: the provisioning credential
+  `FABRIKA_APP_DATABASE_URL` creates and checks the role family, and the files are applied as
+  the migration role `app_<id>` over ONE connection (the advisory lock is session state)
+  (ADR-0017). It applies the framework's tables (`@fabrika/db/migrations`, bundle `fabrika`)
+  before `db/migrations/`. `codegen` reads the catalog with the provisioning credential.
 - `db codegen [--verify]` writes `src/db/schema.generated.ts` from the migrated schema;
   `--verify` writes nothing and fails when the file differs.
 - `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own

@@ -49,5 +49,4 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [102](102-a-contract-application-cannot-hand-its-browser-the-operations-dsn.md) — The browser SDK of a contract application cannot learn its managed DSN and release, so the SDK witness stays an application without a contract.
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [104](104-the-query-builder-cannot-express-common-reports.md) — Aggregates over joins, anti-joins, nested AND/OR, SQL functions and full-text search do not fit the scoped builder; the answer is declared report kinds, never raw access.
-- [110](110-give-each-application-a-least-privileged-database-role.md) — Migrations and the runtime share one credential that may own more than the application's schema; only a role per application bounds a backfill and runtime code.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

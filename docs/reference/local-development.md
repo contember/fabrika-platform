@@ -108,6 +108,14 @@ the browser report errors. The bucket `notes-files` is on `apps-storage`, a Seaw
 of the `apps-prod` network only, so the application never reaches the platform's
 storage. A `.state` from before the contract application asks for `local:reset`.
 
+The database URL in `notes.env` is the `apps-db` superuser's, and it is only the
+provisioning credential: `fabrika db migrate` creates the role family with it and
+migrates as `app_notes`, the server connects as `run_notes`, and `local:smoke` checks
+both ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)). An
+`apps-db` volume from before the role family holds an `app_notes` schema its
+migration role does not own, which `fabrika db migrate` refuses; `local:reset` once
+starts it over.
+
 Nothing deploys the container, and the emulator runs no code. `followNotesDeploy`
 (`src/notes-follow.ts`) makes the composition serve what the emulator's active Notes
 version deployed: the endpoint table Control published on the namespace proxy, the

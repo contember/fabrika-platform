@@ -341,7 +341,9 @@ signatures are fixed, and each builder whose runtime a later unit adds throws `<
   application's own is served as it is and gets no connection.
   `serveContract` and `runContractJob` import `@fabrika/db` before the application (it
   captures its built-ins and freezes the Kysely compiler at load), take `Database.postgres`
-  then, and open it on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`. No connection (Cloudflare)
+  then, and open it on `app_<FABRIKA_APP_ID>` as the runtime role `run_<FABRIKA_APP_ID>`, whose URL
+  `applicationRuntimeUrl` derives from the provisioning credential `FABRIKA_APP_DATABASE_URL` (ADR-0017). Never
+  open the layer on that credential itself. No connection (Cloudflare)
   or a layer bound before boot is a `BootError`. `boot.ts` imports only
   `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter
   imports `boot`.

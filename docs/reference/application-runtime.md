@@ -187,8 +187,11 @@ first takes every `FABRIKA_*` variable out of `process.env` and `Bun.env`, then 
 the application, so no module of it can copy one through `process.env`. The process's original environment
 block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
 `boot(app, { environment, iam, assets, database, files, membership })`. For an application on `@fabrika/db`,
-`serveContract` loads the data layer before the application and opens its connection on
-`FABRIKA_APP_DATABASE_URL`, in the schema `app_<FABRIKA_APP_ID>` its migrations created;
+`serveContract` loads the data layer before the application and opens its connection as the runtime role
+`run_<FABRIKA_APP_ID>`, derived from the provisioning credential `FABRIKA_APP_DATABASE_URL`, in the schema
+`app_<FABRIKA_APP_ID>` its migrations created as the migration role `app_<FABRIKA_APP_ID>`
+([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)). The runtime role has DML on the schema's tables
+and no DDL, so no query of the application can create a trigger or write the migration ledger;
 `boot` binds the layer to it and to its runtime's capability authority, once, and keeps the locator the
 bind answers; the application receives neither. Only an object `scoped` created is bound.
 Without a connection (the data layer runs on Bun with Postgres only, so on Cloudflare),
