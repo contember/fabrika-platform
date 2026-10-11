@@ -285,7 +285,7 @@ vocabulary (`packages/db/CLAUDE.md`).
   each site that declares anything, by endpoint id or `job:<name>`, and is absent otherwise.
 - **`serve(contract, { database, deps })` adapts the kit to `boot`**: it walks the contract and builds the handler tree
   `implement` would (RPC and link mounts by path, webhooks by name, `jobs.<name>`, `exports.<name>.<path>`); each
-  entry is the handler, callable, with the site's `declared` beside it. It refuses (`ContractError`) every endpoint,
+  entry is a `siteHandler(handler, declared)` leaf, its handler run with the boot's dependencies. It refuses (`ContractError`) every endpoint,
   job and webhook without `.handle(…)`, naming each by its path: the types refuse one in a group, and `serve` also
   catches what they skip (a callback the group refused, a job, a webhook, a link or export procedure). `c.rpc` cannot
   refuse it at runtime, because the SPA's sliced bundle carries no handler at all. The snapshots of the kit's imports
@@ -462,8 +462,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   their transactions. Never move the record into the handler's transaction: a concurrent copy of the delivery would
   wait on it, and a failure would roll the record back with the work.
 - **A staged-kit site runs in its invocation's transaction** (`invocation.ts`). `serve` puts each site
-  into the handler tree as `siteHandler(handler, declared)`; `boot` parses the declaration (a query's `'write'`, a table
-  outside `src/db/tables.ts` and a `fabrika_*` table are `BootError`s), filters `ctx.connect` to the declared connectors
+  into the handler tree as `siteHandler(handler, declared)`; `boot` parses the leaf's declaration (a query's `'write'`, a
+  table outside `src/db/tables.ts` and a `fabrika_*` table are `BootError`s) and runs the site with the approved
+  artifact's (`approvedDeclaration`: by endpoint id or `job:<name>`, under the contract's digest), refusing a leaf whose
+  declaration differs, filters `ctx.connect` to the declared connectors
   and `ctx.links` to the declared mount, and refuses a site without a `scoped(tables)` layer. `dispatch` opens an
   `Invocation` per request (`READ ONLY` for a query and an export), builds `ctx.db` by the access form
   (`endpointData`), ends the frame when the handler returns, validates the output, and only then commits; a throw, a

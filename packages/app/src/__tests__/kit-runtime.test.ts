@@ -3,11 +3,14 @@
 // the site declares, and the dependencies `defineDeps` builds at boot.
 
 import { compileContract, ContractError, defineApp, type KitImport } from '@fabrika/app/contract'
-import { type ContractDatabase, defineDeps, serve } from '@fabrika/app/implement'
-import { tablePolicies } from '@fabrika/db/tables'
-import { describe, expect, test } from 'bun:test'
+import { type ContractApp, type ContractImplementation, defineDeps, serve } from '@fabrika/app/implement'
+import { applicationSchema, Database, scoped } from '@fabrika/db'
+import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { SQL } from 'bun'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { createCapabilityIssuer } from '../implement/capability'
+import { isSiteHandler, siteHandler } from '../implement/invocation'
 import { bootApp, environment, frameworkEnvFor, grant, resultOf, send, token } from './fixtures/implement/harness'
 import { isRecord } from './helpers'
 import { contract as kitContract } from './kit-fixture/fabrika.contract'
@@ -17,6 +20,7 @@ import { deals } from './kit-fixture/src/deals/endpoints'
 import { close } from './kit-fixture/src/jobs'
 import { ById } from './kit-fixture/src/schemas'
 import { vocabulary } from './kit-fixture/src/vocabulary'
+import { migration } from './orm-fixture/migration'
 
 const DEAL = '0190a0a0-0000-7000-8000-0000000000d1'
 
@@ -139,6 +143,54 @@ describe('buildArtifact refuses a declaration the site may not carry', () => {
 	})
 })
 
+const URL_VARIABLE = 'FABRIKA_TEST_POSTGRES_URL'
+const url = process.env[URL_VARIABLE] ?? ''
+const hasPostgres = url !== ''
+if (!hasPostgres) {
+	console.warn(`kit-runtime.test.ts: the boot cases skipped; set ${URL_VARIABLE} to run them (a staged-kit site runs on @fabrika/db)`)
+}
+const schema = applicationSchema(`kit-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
+const connections: Database[] = []
+
+async function admin(statement: string): Promise<void> {
+	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+	try {
+		await sql.unsafe(statement)
+	} finally {
+		await sql.close()
+	}
+}
+
+beforeAll(async () => {
+	if (!hasPostgres) return
+	const framework = FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')
+	await admin(`create schema ${schema}; set search_path to ${schema}; ${framework} ${migration}`)
+	await admin(`insert into ${schema}.orgs (id, name, created_by, version) values ('o1', 'One', 'u', 1)`)
+	await admin(`insert into ${schema}.companies (id, org_id, name, created_by, version) values ('c1', 'o1', 'Acme', 'u', 1)`)
+	await admin(
+		`insert into ${schema}.deals (id, company_id, org_id, title, stage, created_by, version) values ('${DEAL}', 'c1', 'o1', 'Deal', 'won', 'u', 1)`,
+	)
+})
+
+afterAll(async () => {
+	if (!hasPostgres) return
+	for (const connection of connections) await connection.close()
+	await admin(`drop schema ${schema} cascade`)
+})
+
+/**
+ * Boots `implementation` on the test database, under the digest `approved`'s contract compiles to; the harness signs
+ * for the notes application, and the kit fixture is the crm one.
+ */
+function bootOnPostgres(implementation: ContractImplementation, approved: ContractImplementation = implementation, variables = {}): ContractApp {
+	const connection = Database.postgres({ url, schema, max: 2 })
+	connections.push(connection)
+	return bootApp(implementation, {
+		environment: environment({ ...frameworkEnvFor(approved), FABRIKA_IAM_APP_ID: 'crm@prod', ...variables }),
+		database: connection,
+	})
+}
+
 describe('serve', () => {
 	const greeting = defineDeps((env) => ({ greeting: typeof env['GREETING'] === 'string' ? env['GREETING'] : 'hello' }))
 	const contract = plainApp.contract((c) => ({
@@ -151,30 +203,45 @@ describe('serve', () => {
 			})),
 		}),
 	}))
-	const database: ContractDatabase = {
-		tables: tablePolicies(tables),
-		locate: (dimension, id) =>
-			Promise.resolve(dimension === 'deal' && id === DEAL ? new Map([['deal', DEAL], ['company', 'c1'], ['org', 'o1']]) : null),
-	}
+	/** `scoped(tables)` binds once, to one `boot`, so every boot here gets an implementation of its own. */
+	const served = (deps = greeting) => serve(contract, { database: scoped(tables), deps })
 
-	test('boot serves each endpoint by the handler beside it, and a handler reads the dependencies boot built', async () => {
-		const implementation = serve(contract, { database, deps: greeting })
-		// The harness signs for the notes application; the kit fixture is the crm one.
-		const served = bootApp(implementation, { environment: environment({ ...frameworkEnvFor(implementation), FABRIKA_IAM_APP_ID: 'crm@prod' }) })
+	test.skipIf(!hasPostgres)('boot serves each endpoint by the handler beside it, and a handler reads the dependencies boot built', async () => {
+		const app = bootOnPostgres(served())
 		const reader = await token('user', [grant('crm.read', { type: 'org', value: 'o1' })], 'crm@prod')
-		expect(resultOf(await send(served, '/api/hello.me', { token: reader, body: {} }))).toEqual({ text: 'hello, user@notes.test' })
-		expect(resultOf(await send(served, '/api/hello.deal', { token: reader, body: { id: DEAL } }))).toEqual({ id: DEAL })
+		expect(resultOf(await send(app, '/api/hello.me', { token: reader, body: {} }))).toEqual({ text: 'hello, user@notes.test' })
+		expect(resultOf(await send(app, '/api/hello.deal', { token: reader, body: { id: DEAL } }))).toEqual({ id: DEAL })
 	})
 
-	test('each handler of the tree carries what its site declares', () => {
-		const tree = serve(contract, { database, deps: greeting }).handlers({}, { capabilities: createCapabilityIssuer().authority })
-		const hello = isRecord(tree) && isRecord(tree['api']) && isRecord(tree['api']['hello']) ? tree['api']['hello'] : {}
-		const deal = hello['deal']
-		expect(typeof deal).toBe('function')
-		expect(typeof deal === 'function' && 'declared' in deal ? deal.declared : undefined).toEqual({ sql: 'read' })
+	const helloTree = (tree: unknown): Readonly<Record<string, unknown>> =>
+		isRecord(tree) && isRecord(tree['api']) && isRecord(tree['api']['hello']) ? tree['api']['hello'] : {}
+
+	test('each leaf of the tree is the site with its handler and what it declares', () => {
+		const deal = helloTree(served().handlers({}, { capabilities: createCapabilityIssuer().authority }))['deal']
+		expect(isSiteHandler(deal) ? deal.declared : undefined).toEqual({ sql: 'read' })
 	})
 
-	test('two runtimes of one implementation each read their own dependencies, also with requests interleaved', async () => {
+	test.skipIf(!hasPostgres)('a declaration only the handler tree carries does not boot under the approved digest', () => {
+		const implementation = served()
+		const widened: ContractImplementation = {
+			...implementation,
+			handlers: (env, runtime) => {
+				const tree = implementation.handlers(env, runtime)
+				const hello = helloTree(tree)
+				const deal = hello['deal']
+				return !isRecord(tree) || !isSiteHandler(deal) ? tree : {
+					...tree,
+					api: { hello: { ...hello, deal: siteHandler(deal.handler, { sql: 'read', unscoped: { deals: 'read' } }) } },
+				}
+			},
+		}
+		expect(() => bootOnPostgres(widened, implementation)).toThrow(
+			`procedure 'api.hello.deal': its handler declares {"sql":"read","unscoped":[["deals","read"]],"connect":[],"issues":null}, but the approved contract declares {"sql":"read","unscoped":[],"connect":[],"issues":null}`,
+		)
+		expect(() => bootOnPostgres(served())).not.toThrow()
+	})
+
+	test.skipIf(!hasPostgres)('two runtimes that share one defineDeps each read their own dependencies, also with requests interleaved', async () => {
 		let release = (): void => {}
 		const gate = new Promise<void>((resolve) => {
 			release = resolve
@@ -191,11 +258,10 @@ describe('serve', () => {
 				})),
 			}),
 		}))
-		const implementation = serve(slow, { database: null, deps: label })
-		const bootWith = (value: string) =>
-			bootApp(implementation, {
-				environment: environment({ ...frameworkEnvFor(implementation), FABRIKA_IAM_APP_ID: 'crm@prod', LABEL: value }),
-			})
+		const bootWith = (value: string) => {
+			const implementation = serve(slow, { database: scoped(tables), deps: label })
+			return bootOnPostgres(implementation, implementation, { LABEL: value })
+		}
 		const [first, second] = [bootWith('first'), bootWith('second')]
 		const user = await token('user', [grant('crm.read', { type: 'org', value: 'o1' })], 'crm@prod')
 		const fromFirst = send(first, '/api/label.read', { token: user, body: {} })

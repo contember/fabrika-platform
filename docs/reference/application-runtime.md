@@ -289,8 +289,9 @@ report-only CSP, `Report-To`, `Reporting-Endpoints` and `NEL`; the proxy strips 
 
 A handler of the staged kit (`app.group(…)` with `.handle(…)`, its cron jobs and webhooks) reaches data through
 `ctx.db`, which `boot` builds for its site from the capability the access form minted, the site's kind and its
-declaration. `serve` puts each site into the handler tree as a `siteHandler(handler, declared)` leaf; a handler
-`implement` bound gets no `ctx.db` and keeps its stores. The API matrix:
+declaration. `serve` puts each site into the handler tree as a `siteHandler(handler, declared)` leaf. The declaration
+a site runs with is the approved artifact's (`ContractArtifact.declared`, which the contract's digest covers); a leaf
+whose own `declared` differs does not boot. A handler `implement` bound gets no `ctx.db` and keeps its stores. The API matrix:
 
 | Access form | query                                                                                                 | mutation (adds)                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |

@@ -121,6 +121,47 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 }
 
 /**
+ * The declaration a site runs with: the one the approved contract holds (`ContractArtifact.declared`, which the
+ * contract's digest covers), by the site's endpoint id or `job:<name>`. A leaf whose own `declared` says otherwise is
+ * refused, so a declaration only the handler tree carries never widens a site past what was approved.
+ */
+export function approvedDeclaration(
+	where: string,
+	site: string,
+	leaf: unknown,
+	kind: DataKind,
+	artifact: ContractArtifact,
+	problems: string[],
+): SiteDeclaration {
+	const before = problems.length
+	const declared = parseDeclaration(where, leaf, kind, artifact, problems)
+	const reach = artifact.declared === undefined || !Object.hasOwn(artifact.declared, site) ? undefined : artifact.declared[site]
+	const approved: SiteDeclaration = reach === undefined
+		? NO_DECLARATION
+		: Object.freeze({
+			sql: reach.sql,
+			unscoped: Object.freeze({ ...reach.unscoped }),
+			connect: Object.freeze([...reach.connect]),
+			issues: reach.issues,
+		})
+	// A leaf the parse refused is reported once, for what is wrong in it.
+	if (problems.length === before && describeDeclaration(declared) !== describeDeclaration(approved)) {
+		problems.push(
+			`${where}: its handler declares ${describeDeclaration(declared)}, but the approved contract declares ${
+				describeDeclaration(approved)
+			}; declare the site's reach beside its declaration in the shell, which the contract's digest covers`,
+		)
+	}
+	return approved
+}
+
+/** A declaration as one comparable line: its fields in a fixed order, its tables and connectors sorted. */
+function describeDeclaration(declaration: SiteDeclaration): string {
+	const unscoped = Object.entries(declaration.unscoped).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+	return JSON.stringify({ sql: declaration.sql, unscoped, connect: [...declaration.connect].sort(), issues: declaration.issues })
+}
+
+/**
  * Refuses a handle used outside the work it was made for: another request, another `boot`, an ended one. `handle` names
  * it in the refusal: a `ctx.db` handle, or `ctx.sql`.
  */

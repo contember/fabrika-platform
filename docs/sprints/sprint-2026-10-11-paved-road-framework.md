@@ -827,3 +827,10 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   its `handle` and removed, so its module is never requested; it fails the plugin build too. `defineTables` comes only
   from `@fabrika/db/tables`: the root of `@fabrika/db` also loads `bun`, which a browser bundle of the shell cannot.
   The SPA witnesses bundle every package.
+- **WU4 integration with WU3.** `serve` builds `siteHandler(handler, declared)` leaves, each handler run with its
+  boot's dependencies. `boot` and the job runner take each site's declaration from the approved artifact
+  (`approvedDeclaration`, `invocation.ts`: by endpoint id or `job:<name>`) and refuse a leaf whose `declared` differs,
+  reported once when the leaf's own parse already refused it; a leaf-only `unscoped` widening under the old digest no
+  longer boots (`kit-runtime.test.ts`). The orm fixture's shell moved to the kit form so its `retitle` declares
+  `unscoped` where the digest covers it; its handlers stay the tree `app.ts` writes. A kit site needs `scoped(tables)`
+  on Postgres, so `kit-runtime.test.ts`'s boot cases run against `FABRIKA_TEST_POSTGRES_URL` and skip without it.

@@ -13,6 +13,7 @@ import {
 	type DepsRuntime,
 	type ImplementationDatabase,
 } from './implement'
+import { type SiteHandler, siteHandler } from './invocation'
 
 /**
  * The application's dependencies, built at each `boot` from its own environment. A handler imports the module that
@@ -63,15 +64,6 @@ export interface ServeOptions {
 }
 
 /**
- * A served handler: the site's own handler, with what the site declares off the paved road (`sql`, `unscoped`,
- * `connect`, `issues`), which the context of each invocation is built from.
- */
-export interface ServedHandler {
-	(args: unknown): unknown
-	readonly declared: unknown
-}
-
-/**
  * The contract with the handlers its endpoints carry, ready for `boot`. The default export of `src/app.ts`. Throws
  * `ContractError` naming every endpoint, job and webhook that took no `.handle(…)`.
  */
@@ -92,13 +84,13 @@ export function serve<const C extends AnyContract>(contract: C, options: ServeOp
  */
 function handlerTree(contract: AnyContract, withDeps: WithDeps): Record<string, unknown> {
 	const missing: string[] = []
-	const served = (site: { readonly declared?: unknown }, path: string): ServedHandler | undefined => {
+	const served = (site: { readonly declared?: unknown }, path: string): SiteHandler | undefined => {
 		const handler = handlerOf(site)
 		if (typeof handler !== 'function') {
 			missing.push(path)
 			return undefined
 		}
-		return Object.assign((args: unknown): unknown => withDeps(() => Reflect.apply(handler, undefined, [args])), { declared: site.declared ?? {} })
+		return siteHandler((args) => withDeps(() => Reflect.apply(handler, undefined, [args])), site.declared ?? {})
 	}
 	const procedureHandlers = <Access>(procedures: ProcedureTreeDeclaration<Schema, Access>, path: string): Record<string, unknown> =>
 		Object.fromEntries(

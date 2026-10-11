@@ -46,7 +46,7 @@ import type { CapturedEnvironment } from './environment'
 import { ServerFault } from './faults'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
-import { isSiteHandler, parseDeclaration, type SiteDeclaration } from './invocation'
+import { approvedDeclaration, isSiteHandler, type SiteDeclaration } from './invocation'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
@@ -324,14 +324,20 @@ interface BoundHandler {
 	readonly declaration: SiteDeclaration | null
 }
 
-// The declaration is read from the leaf until the artifact carries it (WU4); then it is the approved one, and a leaf
-// that says otherwise does not boot.
-function boundHandler(node: unknown, where: string, kind: DataKind, artifact: ContractArtifact, problems: string[]): BoundHandler | null {
+/** A leaf of `site` (an endpoint id); a staged-kit site runs with the declaration the approved artifact holds. */
+function boundHandler(
+	node: unknown,
+	site: string,
+	where: string,
+	kind: DataKind,
+	artifact: ContractArtifact,
+	problems: string[],
+): BoundHandler | null {
 	if (isSiteHandler(node)) {
-		const site = node
+		const leaf = node
 		return {
-			handler: (args) => Reflect.apply(site.handler, undefined, [args]),
-			declaration: parseDeclaration(where, site.declared, kind, artifact, problems),
+			handler: (args) => Reflect.apply(leaf.handler, undefined, [args]),
+			declaration: approvedDeclaration(where, site, leaf.declared, kind, artifact, problems),
 		}
 	}
 	if (typeof node === 'function') {
@@ -520,7 +526,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			for (const { id, path, procedure } of declaredProcedures(name, mount.procedures)) {
 				declared.add(id)
 				const row = rows.get(id)
-				const bound = boundHandler(path.reduce<unknown>(childAt, handlers), `procedure '${id}'`, procedure.type, artifact, problems)
+				const bound = boundHandler(path.reduce<unknown>(childAt, handlers), id, `procedure '${id}'`, procedure.type, artifact, problems)
 				if (!isCredentialed(row)) {
 					problems.push(`procedure '${id}' has no endpoint row`)
 				} else if (bound === null) {
@@ -546,7 +552,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		} else if (mount.kind === 'webhook') {
 			declared.add(name)
 			const row = rows.get(name)
-			const bound = boundHandler(childAt(handlers, name), `webhook '${name}'`, 'mutation', artifact, problems)
+			const bound = boundHandler(childAt(handlers, name), name, `webhook '${name}'`, 'mutation', artifact, problems)
 			const credential: WorkloadCredential | undefined = workloads.get(`webhook:${name}`)
 			if (row === undefined || bound === null) {
 				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
@@ -590,7 +596,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			const at = ['exports', ...path]
 			declared.add(at.join('.'))
 			const row = rows.get(id)
-			const bound = boundHandler(at.reduce<unknown>(childAt, handlers), `export procedure '${id}'`, 'query', artifact, problems)
+			const bound = boundHandler(at.reduce<unknown>(childAt, handlers), id, `export procedure '${id}'`, 'query', artifact, problems)
 			if (!isCredentialed(row)) {
 				problems.push(`export procedure '${id}' has no endpoint row`)
 			} else if (bound === null) {

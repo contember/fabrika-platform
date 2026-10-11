@@ -3,12 +3,12 @@
 // that timed out, failed or lost the lease never commits (`@fabrika/db`'s fence). Failures, crashed runs and a job
 // that stopped succeeding are reported to Operations, each under a fixed failure code.
 
-import { type ContractArtifact, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
+import { type ContractArtifact, JOB_SITE_PREFIX, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
 import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
 import type { ContractDatabase } from '../implement/implement'
-import { boundTo, isSiteHandler, jobHandles, jobSql, parseDeclaration, siteData, type SiteDeclaration } from '../implement/invocation'
+import { approvedDeclaration, boundTo, isSiteHandler, jobHandles, jobSql, siteData, type SiteDeclaration } from '../implement/invocation'
 import type { WorkloadCredential } from '../implement/workload'
 import { type JobReporter, logReporter, operationsReporter, operationsTarget } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
@@ -191,7 +191,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		}
 		const node = ownChild(tree, name)
 		const handler = isSiteHandler(node) ? node.handler : node
-		const site = isSiteHandler(node) ? parseDeclaration(where, node.declared, 'job', input.artifact, problems) : null
+		const site = isSiteHandler(node) ? approvedDeclaration(where, `${JOB_SITE_PREFIX}${name}`, node.declared, 'job', input.artifact, problems) : null
 		const credential = input.credentials.get(`job:${name}`)
 		if (typeof handler !== 'function') {
 			problems.push(`${where} has no handler; add it to handlers.jobs`)
