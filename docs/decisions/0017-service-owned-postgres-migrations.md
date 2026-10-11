@@ -349,10 +349,34 @@ code, with a throwaway provisioner instead: `fabrika_tests_<hex>`, with
 dropped after the run with every role family it created. That needs Postgres 16
 or later, where a `CREATEROLE` role administers only the roles it created. The
 test kit migrates each throwaway schema as its own migration role and connects
-and seeds as its runtime role. A view or a rule the
-migration role owns runs with its rights when the runtime role uses it, which
-is why such code is a reviewed deviation and `SECURITY DEFINER` stays
-refused.
+and seeds as its runtime role. Before it starts the application, the launcher
+makes itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`, Linux), so a process of
+the same user, the application it started among them, cannot read its
+`/proc/<pid>/environ` or `/proc/<pid>/mem`; on Linux a failure stops the launch,
+elsewhere (a development machine) it warns once.
+
+**Why the provisioning credential must never reach application code.** It is
+not one application's: it is the credential of the database every application
+of a deployment shares.
+
+| Where                     | The application database                                                                                       | The provisioning credential                                       |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Zerops, `cheap` namespace | One namespace-owned `postgres` service; every application of the namespace has its schema in its database `db` | The service's user `db`, the same for every application           |
+| Zerops, `mid` / `full`    | The application's own PostgreSQL service                                                                       | That service's user `db`                                          |
+| Local stack               | `apps-db`, one Postgres for the `apps-prod` network (today Notes only)                                         | Its superuser                                                     |
+| Test backends             | One shared cluster, a throwaway schema and role family per test database                                       | Its superuser; a `test-isolation` run's tests get a throwaway one |
+
+In a shared database the provisioning credential created every application's
+role family, so it administers all of them: it may reset any of their
+passwords, set itself to any migration role, and so read and change every
+application's schema. Each application's own roles reach only its schema;
+code that held the provisioning credential would reach all of them. In a
+`mid` or `full` namespace it reaches only the one application, but it can still
+create roles and undo every check above.
+
+A view or a rule the migration role owns runs with its rights when the runtime
+role uses it, which is why such code is a reviewed deviation and `SECURITY
+DEFINER` stays refused.
 
 The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
 plus one, so applications that share one database do not serialize each other.
@@ -429,14 +453,16 @@ migration file is a widening in the approval diff
   and every object in it are moved to the migration role by hand.
 - Roles are the cluster's, not the database's: two databases of one cluster
   that host the same application id share its two roles.
-- The launcher process keeps the provisioning credential in its own initial
-  environment, and so do the platform's processes around it (on Zerops the
-  service's supervisor and the crontab's). A process of the same operating
-  system user can read another's `/proc/<pid>/environ`, so the roles bound
-  what the application's SQL can do, and the launcher keeps the credential
-  out of the application's own process, but neither isolates application code
-  from the container it runs in. A cheap namespace's shared credential stays
-  one trust domain for code
+- The launcher keeps the provisioning credential, unreadable to the
+  application it started. Processes the platform runs around it (on Zerops
+  the service's supervisor and the start script's shell, which `exec`s the
+  launcher) are outside this guarantee, and so is a process with root or
+  `CAP_SYS_PTRACE`: the local stack's containers run as root, and whether a
+  Zerops application's user can `sudo` at run time is unverified. The roles
+  bound what the application's SQL can do in every case; the launcher keeps
+  the credential out of reach of application code only where it runs as an
+  unprivileged user. A cheap namespace's shared credential stays one trust
+  domain for the platform's own processes
   ([`deployment-namespaces.md`](../reference/deployment-namespaces.md)).
 - Two resources stay shared, accepted because neither reaches another
   application's data. **Large objects**: any role may create one (storage, not
