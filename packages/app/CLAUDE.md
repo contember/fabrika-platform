@@ -230,7 +230,7 @@ signatures are fixed, and each builder whose runtime a later unit adds throws `<
 `defineVocabulary` and `defineTables(vocabulary, columns)` already run.
 
 - **The file order is the type order:** `src/vocabulary.ts` (`defineVocabulary`) → `src/db/tables.ts`
-  (`defineTables<DB, typeof vocabulary>(vocabulary, columns)`) → `src/app-kit.ts` (`defineApp(vocabulary, tables)`)
+  (`defineTables(vocabulary, columns)`, typed by the generated `TypedColumnList`) → `src/app-kit.ts` (`defineApp(vocabulary, tables)`)
   → `src/<slice>/endpoints.ts` (`app.group(…)`) → `fabrika.contract.ts` (`app.contract(…)`) → `src/app.ts`
   (`serve(…)`). Never type a table, a group or a handler by `typeof contract`: tsc reports TS7022 on the cycle.
 - **`defineApp` computes the kit's types once** (`KitOf`, with `@fabrika/db`'s `DbIndex<DB, P>`); every context is a
@@ -242,7 +242,13 @@ signatures are fixed, and each builder whose runtime a later unit adds throws `<
   there and a row in `kit-fixture/matrix.ts`.
 - **`.handle` answers the endpoint without the handler's type**, or, when the handler returns a field the output does
   not declare, an `Unavailable` the group refuses at the endpoint's line (`ExactReturn`). A group does not nest; a
-  mount nests groups.
+  mount nests groups. A group accepts an endpoint without `.handle`, because an options-first call cannot be checked
+  against its own callback; `c.rpc` refuses it, naming `<group>.<endpoint>`.
+- **A refused access form stays refused in the handler.** A written form is one object; when the compiler refuses it
+  and falls back to the whole constraint (a union), `CheckedAccess` makes the capability and `ctx.db` an
+  `Unavailable` that says so, never a union of every form.
+- **A declaration exists only if the object carries it**: each off-road field is inferred from its optional field and
+  then required (`DeclaredFields`), and an `unscoped` key that is no table is refused at its line.
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
   `ctx.db.unscoped`, `ctx.connect` and `ctx.links`; a query and an export declare only `'read'`. The connectors are the
   kit's `imports`.

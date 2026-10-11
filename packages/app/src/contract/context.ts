@@ -75,11 +75,29 @@ type SqlContext<S> = {
 
 type UnscopedData<Ix extends AnyDbIndex, U> = { readonly unscoped: [U] extends [never] ? NoUnscoped : UnscopedTables<Ix, U> }
 
+/** An access form the vocabulary refuses: the refusal is reported where the form is written. */
+export interface InvalidAccess {
+	readonly '~invalid': 'access'
+}
+
+type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
+
+/**
+ * `Acc`, or `InvalidAccess` when it is a union: a written form is one object, so a union is the whole constraint the
+ * compiler falls back to after refusing the form. The handler then names the refusal instead of every form.
+ */
+export type CheckedAccess<Acc> = true extends IsUnion<Acc> ? InvalidAccess : Acc
+
 /** The capability an access form hands, and what the other forms do not have. */
-export type CapabilityContext<Acc> = Acc extends MemberAccess ? {
-		readonly target: Unavailable<'a member endpoint holds no capability: declare access with on or in for ctx.target'>
-		readonly within: Unavailable<'a member endpoint holds no capability: declare access with over for ctx.within'>
+export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
+		readonly target: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
+		readonly within: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
+		readonly created: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
 	}
+	: Acc extends MemberAccess ? {
+			readonly target: Unavailable<'a member endpoint holds no capability: declare access with on or in for ctx.target'>
+			readonly within: Unavailable<'a member endpoint holds no capability: declare access with over for ctx.within'>
+		}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
 			readonly within: Within<D, A>
 			readonly target: Unavailable<'an over endpoint holds ctx.within, the scopes it may list in: declare access with on or in for ctx.target'>
@@ -90,9 +108,14 @@ export type CapabilityContext<Acc> = Acc extends MemberAccess ? {
 	: never
 
 /** `ctx.db` by access form (the API matrix of `docs/reference/application-runtime.md`). */
-type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends MemberAccess ? {
-		readonly target: Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>
+type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends InvalidAccess ? {
+		readonly target: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
+		readonly within: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
+		readonly created: Unavailable<'the access form of this endpoint is refused where it is declared: fix it there'>
 	}
+	: Acc extends MemberAccess ? {
+			readonly target: Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>
+		}
 	: Acc extends { readonly action: infer A extends string; readonly over: infer D extends string } ? {
 			readonly within: WithinTables<Ix, D, A>
 			readonly target: Unavailable<'an over endpoint lists through ctx.db.within: declare access with on or in for ctx.db.target'>
@@ -179,15 +202,18 @@ export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', un
 	& SqlContext<Of<D, 'sql'>>
 	& { readonly db: EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>> }
 
-/** A capability a job or webhook minted or received, bound to the same handles an endpoint's access form gets. */
-export interface CapabilityData<Ix extends AnyDbIndex, Kind extends DataKind> {
-	on<const D extends string, const A extends string>(ref: Ref<D, A>): ScopeTarget<Ix, D, A, Kind, 'on'>
-	in<const D extends string, const A extends string>(ref: Ref<D, A>): ScopeTarget<Ix, D, A, Kind, 'in'>
-	over<const D extends string, const A extends string>(within: Within<D, A>): WithinTables<Ix, D, A>
+/**
+ * A capability a job or webhook minted or received, of one of its declared actions `Acts`, bound to the same handles
+ * an endpoint's access form gets. A capability typed with several actions reads no column of another read action.
+ */
+export interface CapabilityData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string> {
+	on<const D extends string, const A extends Acts>(ref: Ref<D, A>): ScopeTarget<Ix, D, A, Kind, 'on'>
+	in<const D extends string, const A extends Acts>(ref: Ref<D, A>): ScopeTarget<Ix, D, A, Kind, 'in'>
+	over<const D extends string, const A extends Acts>(within: Within<D, A>): WithinTables<Ix, D, A>
 }
 
-type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, U> =
-	& CapabilityData<Ix, Kind>
+type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string, U> =
+	& CapabilityData<Ix, Kind, Acts>
 	& { readonly reference: ReferenceTables<Ix> }
 	& UnscopedData<Ix, U>
 
@@ -195,20 +221,20 @@ type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, U> =
 type ReadOnlyUnscoped<U> = { readonly [T in keyof U]: 'read' }
 
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
-export type JobTransaction<K extends KitTypes, D extends Declared<SqlMode, unknown, never, never>> =
-	& { readonly db: SiteData<K['index'], 'mutation', Of<D, 'unscoped'>> }
+export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
+	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> }
 	& SqlContext<Of<D, 'sql'>>
 
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
 export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& JobContext<A, K['dimension']>
-	& { readonly db: SiteData<K['index'], 'query', [Of<D, 'unscoped'>] extends [never] ? never : ReadOnlyUnscoped<Of<D, 'unscoped'>>> }
+	& { readonly db: SiteData<K['index'], 'query', A, [Of<D, 'unscoped'>] extends [never] ? never : ReadOnlyUnscoped<Of<D, 'unscoped'>>> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
-	& { transaction<R>(work: (tx: JobTransaction<K, D>) => Promise<R>): Promise<R> }
+	& { transaction<R>(work: (tx: JobTransaction<K, A, D>) => Promise<R>): Promise<R> }
 
 /** What a webhook delivery's handler receives: one transaction per delivery, idempotent by `ctx.delivery.key`. */
 export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& RequestContext<WebhookPrincipal>
 	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
 	& SqlContext<Of<D, 'sql'>>
-	& { readonly db: SiteData<K['index'], 'mutation', Of<D, 'unscoped'>> }
+	& { readonly db: SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>> }

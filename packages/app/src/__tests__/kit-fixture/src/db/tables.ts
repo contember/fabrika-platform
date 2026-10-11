@@ -1,11 +1,12 @@
 import { defineTables } from '@fabrika/db/tables'
 import { vocabulary } from '../vocabulary'
-import { columns, type DB } from './schema.generated'
+import { columns } from './schema.generated'
 
-export const tables = defineTables<DB, typeof vocabulary>(vocabulary, columns)({
+export const tables = defineTables(vocabulary, columns)({
 	orgs: {
 		scope: { dimension: 'org', key: 'id' },
-		actions: { read: 'crm.read', update: 'members.manage' },
+		actions: { read: 'crm.read', insert: 'orgs.create', update: 'members.manage' },
+		insert: ['name'],
 		update: ['name'],
 		version: 'version',
 		createdBy: 'created_by',
@@ -37,5 +38,6 @@ export const tables = defineTables<DB, typeof vocabulary>(vocabulary, columns)({
 	countries: {
 		scope: { reference: 'ISO 3166 country names' },
 		actions: { read: 'crm.read' },
+		columns: { note: { read: 'deals.write' } },
 	},
 })

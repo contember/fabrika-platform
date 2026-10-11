@@ -1,7 +1,8 @@
 // Compiles a directory of mistake fixtures with the package's compiler options. Each fixture marks its mistake with
 // `// mistake:` on the line before it; the repository forbids `@ts-expect-error`, so the fixtures are excluded from
 // the package typecheck and compiled here instead. A fixture may be a subdirectory: its files without a marker are
-// companions (a contract that mounts the fixture's group), and they must compile clean.
+// companions (a contract that mounts the fixture's group), and they must compile clean. A `// follow-up:` marker
+// admits one more diagnostic on the line after it: a consequence the compiler reports where the mistake is used.
 
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -56,12 +57,20 @@ function markedLine(dir: string, file: string): number {
 	return marker === -1 ? -1 : marker + 1
 }
 
+/** The zero-based lines after each `// follow-up:` marker. */
+function followUpLines(dir: string, file: string): readonly number[] {
+	const lines = readFileSync(join(dir, file), 'utf8').split('\n')
+	return lines.flatMap((line, index) => (line.trim().startsWith('// follow-up:') ? [index + 1] : []))
+}
+
 export interface MistakeOptions {
 	/**
 	 * Each diagnostic is at most two lines and prints no `never`, no truncated type (`...`) and no mapped or object
 	 * type: what an agent reads has to name the fix, not the framework's types.
 	 */
 	readonly plain?: boolean
+	/** Fixtures held to the expected text and line only: their diagnostic is the compiler's own elaboration. */
+	readonly elaborated?: readonly string[]
 }
 
 const DUMPED = ['...', '{ readonly ', '[K in', ' in keyof ']
@@ -93,8 +102,10 @@ export function expectMistakes(dir: string, expected: Readonly<Record<string, st
 			expect(found.map((diagnostic) => diagnostic.text).join('\n')).toContain(text)
 			const line = markedLine(dir, file)
 			expect(line).toBeGreaterThan(0)
-			expect(found.map((diagnostic) => diagnostic.line)).toEqual(found.map(() => line))
-			if (options.plain === true) {
+			expect(found.filter((diagnostic) => diagnostic.line === line).length).toBeGreaterThan(0)
+			const allowed = [line, ...followUpLines(dir, file)]
+			expect(found.filter((diagnostic) => !allowed.includes(diagnostic.line))).toEqual([])
+			if (options.plain === true && !(options.elaborated ?? []).includes(file)) {
 				for (const { text: message } of found) {
 					expect(message.split('\n').length).toBeLessThanOrEqual(2)
 					expect(message).not.toMatch(/\bnever\b/)

@@ -16,7 +16,7 @@ import type {
 	WebhookKitContext,
 } from '@fabrika/app/contract'
 import type { ConnectResult, LinkIssuing, MemberManagement, Ref, Within } from '@fabrika/app/implement'
-import type { DbIndex, ListPage, Tables } from '@fabrika/db/tables'
+import type { DbIndex, ListPage, ScopeTarget, Tables } from '@fabrika/db/tables'
 import type { contract } from './fabrika.contract'
 import type { app } from './src/app-kit'
 import type { DB } from './src/db/schema.generated'
@@ -42,13 +42,17 @@ type DealRow = {
 	created_by: string
 	version: number
 }
-type DealRowWithMargin = DealRow & { margin: number | null }
 type Flat<T> = { [P in keyof T]: T[P] }
+type HiddenMargin = Flat<
+	DealRow & { readonly margin?: Unavailable<"the column margin needs the read action 'deals.write', which this capability does not hold"> }
+>
+type DealRowWithMargin = DealRow & { margin: number | null }
 
 type OnQuery = Context<'query', { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }>
 type OnMutation = Context<'mutation', { readonly action: 'deals.write'; readonly on: 'deal'; readonly from: 'id' }>
 type InMutation = Context<'mutation', { readonly action: 'crm.write'; readonly in: 'org'; readonly from: 'orgId' }>
 type OverQuery = Context<'query', { readonly action: 'crm.read'; readonly over: 'org' }>
+type OverCompany = Context<'query', { readonly action: 'crm.read'; readonly over: 'company' }>
 type MemberQuery = Context<'query', { readonly member: true }>
 type Creates = Context<'mutation', { readonly action: 'orgs.create'; readonly creates: 'org' }>
 type Manages = Context<'mutation', { readonly action: 'members.manage'; readonly in: 'org'; readonly from: 'orgId' }>
@@ -67,7 +71,7 @@ type Issues = Context<
 export type Matrix = [
 	// on, query: the target's row without a column of another read action; its child tables; no write, no lock.
 	Expect<Equal<OnQuery['target'], Ref<'deal', 'crm.read'>>>,
-	Expect<Equal<Returned<OnQuery['db']['target']['get']>, DealRow>>,
+	Expect<Equal<Returned<OnQuery['db']['target']['get']>, HiddenMargin>>,
 	Expect<
 		Equal<
 			OnQuery['db']['target']['getForUpdate'],
@@ -104,6 +108,8 @@ export type Matrix = [
 	Expect<Equal<Returned<OverQuery['db']['within']['companies']['list']>['items'][number]['name'], string>>,
 	Expect<Equal<keyof OverQuery['db']['within'], 'orgs' | 'companies'>>,
 	Expect<Equal<OverQuery['within'], Within<'org', 'crm.read'>>>,
+	Expect<Equal<keyof OverCompany['db']['within'], 'deals' | 'deal_activities'>>,
+	Expect<Equal<Returned<OverCompany['db']['within']['deal_activities']['list']>['items'][number]['body'], string>>,
 	Expect<
 		Equal<
 			OverQuery['target'],
@@ -112,9 +118,28 @@ export type Matrix = [
 	>,
 	// member: no application data, only the reference tables.
 	Expect<Equal<MemberQuery['db']['target'], Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>>>,
-	Expect<Equal<Returned<MemberQuery['db']['reference']['countries']['list']>, ListPage<{ code: string; name: string }>>>,
-	// creates: the new scope, then in-style inserts into it by the insert action.
+	Expect<
+		Equal<
+			Returned<MemberQuery['db']['reference']['countries']['list']>,
+			ListPage<
+				Flat<
+					& { code: string; name: string }
+					& { readonly note?: Unavailable<"the column note needs the read action 'deals.write', which this capability does not hold"> }
+				>
+			>
+		>
+	>,
+	// creates: the new scope, its own row by the table's insert action, then in-style inserts into it.
 	Expect<Equal<Creates['created'], Ref<'org', 'orgs.create'>>>,
+	Expect<Equal<Parameters<Creates['db']['created']['orgs']['insert']>[0], { name: string }>>,
+	Expect<Equal<Returned<Creates['db']['created']['orgs']['insert']>, { readonly id: string; readonly version: number }>>,
+	Expect<
+		Equal<
+			InMutation['db']['target']['orgs']['insert'],
+			Unavailable<"insert on orgs needs the action 'orgs.create', and this endpoint holds 'crm.write'">
+		>
+	>,
+	Expect<Equal<'orgs' extends keyof OnMutation['db']['target'] ? true : false, false>>,
 	Expect<
 		Equal<
 			Creates['db']['created']['companies']['insert'],
@@ -127,8 +152,22 @@ export type Matrix = [
 	Expect<Equal<OnQuery['members'], Unavailable<'the dimension deal declares no members'>>>,
 ]
 
+type Unscoped = Context<
+	'mutation',
+	{ readonly member: true },
+	Declared<never, { readonly companies: 'write'; readonly deals: 'write' }, never, never>
+>
+
 /** The declared off-road fields: each handle exists only where the site declares it, in the declared mode. */
 export type OffRoadFields = [
+	// An unscoped insert has no capability to stamp containment from, so it takes the containment columns.
+	Expect<Equal<Parameters<Unscoped['db']['unscoped']['companies']['insert']>[0], { name: string; org_id: string }>>,
+	Expect<
+		Equal<
+			Parameters<Unscoped['db']['unscoped']['deals']['insert']>[0],
+			{ title: string; stage: 'lead' | 'proposal' | 'won' | 'lost'; margin?: number | null; company_id: string; org_id: string }
+		>
+	>,
 	Expect<Equal<OffRoad['sql'], SqlTag>>,
 	Expect<Equal<OnQuery['sql'], Unavailable<"ctx.sql needs a declaration: add sql: 'read' (or 'write' on a mutation) to this site">>>,
 	Expect<Equal<Returned<OffRoad['db']['unscoped']['companies']['get']>['org_id'], string>>,
@@ -151,11 +190,15 @@ export type OffRoadFields = [
 	Expect<Equal<OnQuery['links'], Unavailable<"declare issues: '<link mount>' on this endpoint to issue its share links">>>,
 ]
 
+/** A capability whose action type was widened holds no single action provably: it reads no column of another action. */
+type Widened = ScopeTarget<K['index'], 'deal', 'crm.read' | 'deals.write', 'query', 'on'>
+
 type JobCtx = JobKitContext<K, 'crm.read' | 'deals.write', Declared<'write', never, never, never>>
 type HookCtx = WebhookKitContext<K, 'org', 'crm.write', None>
 
 /** Jobs read outside their fenced transaction and write inside it; a webhook delivery is one transaction. */
 export type Sites = [
+	Expect<Equal<Returned<Widened['get']>, HiddenMargin>>,
 	Expect<Equal<JobCtx['sql'], Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'>>>,
 	Expect<Equal<Parameters<Parameters<JobCtx['transaction']>[0]>[0]['sql'], SqlTag>>,
 	Expect<Equal<HookCtx['refs'], { readonly 'crm.write': Ref<'org', 'crm.write'> }>>,
@@ -168,6 +211,7 @@ type Policies = typeof tables extends Tables<DB, infer P> ? P : never
 export type Composition = [
 	Expect<Equal<Get, Endpoint<'query', typeof ById, typeof Deal, { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }, None>>>,
 	Expect<Equal<K['index'], DbIndex<DB, Policies>>>,
+	Expect<Equal<typeof tables extends Tables<infer Rows, infer _Policies> ? Rows : never, DB>>,
 	Expect<Equal<typeof contract extends AnyContract ? true : false, true>>,
 	Expect<Equal<typeof contract.surface.api.callers, readonly ['human']>>,
 	Expect<Equal<typeof contract.surface.api.procedures.deals.reopen.type, 'mutation'>>,

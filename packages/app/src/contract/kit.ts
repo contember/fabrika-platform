@@ -23,8 +23,9 @@ import type {
 	Surface,
 	WebhookMount,
 } from './define'
-import type { Endpoint, ExportKit, Group, GroupKit, GroupTree, LinkGroupKit } from './group'
+import type { DeclaredFields, Endpoint, ExportKit, Group, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
 import { notImplemented } from './problems'
+
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 
 /** Fields a builder sets itself: an options object that carries one does not type-check. */
@@ -43,14 +44,10 @@ export type KitOf<V, Ix, Imp extends KitImports> = V extends AppVocabulary<infer
 	}
 	: never
 
-export interface CronOptions<Acts, Sc, S, U> extends Owned<'kind' | 'schedule'> {
-	readonly actions: Acts
-	readonly scope: Sc
-	readonly timeout?: string
-	readonly retries?: number
-	readonly sql?: S
-	readonly unscoped?: U
-}
+export type CronOptions<Acts, Sc, S, U, Tables extends string> =
+	& Owned<'kind' | 'schedule'>
+	& { readonly actions: Acts; readonly scope: Sc; readonly timeout?: string; readonly retries?: number }
+	& DeclaredFields<S, U, never, never, Tables>
 
 /** A cron job of the kit, handled. */
 export interface KitCronJob<Acts extends string, Sc extends string, D> extends CronJob<Acts, Sc> {
@@ -62,15 +59,16 @@ export interface CronBuilder<K extends KitTypes, Acts extends string, Sc extends
 	handle(handler: (args: { readonly ctx: JobKitContext<K, Acts, D> }) => void | Promise<void>): KitCronJob<Acts, Sc, D>
 }
 
-export interface WebhookOptions<B, Acts, I, S, U> extends Owned<'kind' | 'path'> {
-	readonly scheme: 'github-sha256'
-	readonly boundTo: B
-	readonly actions: Acts
-	readonly input: I & NotLoose<I>
-	readonly maxBytes?: number
-	readonly sql?: S
-	readonly unscoped?: U
-}
+export type WebhookOptions<B, Acts, I, S, U, Tables extends string> =
+	& Owned<'kind' | 'path'>
+	& {
+		readonly scheme: 'github-sha256'
+		readonly boundTo: B
+		readonly actions: Acts
+		readonly input: I & NotLoose<I>
+		readonly maxBytes?: number
+	}
+	& DeclaredFields<S, U, never, never, Tables>
 
 /** A webhook of the kit, handled. */
 export interface KitWebhook<B extends string, Acts extends string, I extends Schema, D> extends WebhookMount<B, Acts, I> {
@@ -102,10 +100,10 @@ export interface ExportTree {
 
 /** What `c.rpc` mounts: one group, or groups by name, nested. */
 export type MountedGroups =
-	| Group<readonly [RpcCaller, ...RpcCaller[]], GroupTree>
+	| Group<readonly [RpcCaller, ...RpcCaller[]], GroupInput>
 	| { readonly [name: string]: MountedGroups }
 
-type CallersOf<G> = G extends Group<infer C, GroupTree> ? C : { [K in keyof G]: CallersOf<G[K]> }[keyof G]
+type CallersOf<G> = G extends Group<infer C, GroupInput> ? C : { [K in keyof G]: CallersOf<G[K]> }[keyof G]
 type EndpointsOf<G> = G extends Group<readonly [RpcCaller, ...RpcCaller[]], infer T> ? T : { readonly [K in keyof G]: EndpointsOf<G[K]> }
 
 type Callers<G> = CallersOf<G> extends infer C extends readonly [RpcCaller, ...RpcCaller[]] ? C : never
@@ -113,9 +111,16 @@ type Endpoints<G> = EndpointsOf<G> extends infer T extends ProcedureTree ? T : n
 
 type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
-/** One RPC mount serves one set of callers, so every group it mounts names the same callers, in the same order. */
-type MountPrefix<G> = true extends IsUnion<CallersOf<G>> ? Unavailable<'every group of one RPC mount names the same callers, in the same order'>
-	: Path
+type PendingOf<G, Path extends string = ''> = G extends Group<readonly [RpcCaller, ...RpcCaller[]], infer T> ? PendingIn<T, Path>
+	: { [K in keyof G & string]: PendingOf<G[K], `${Path}${K}.`> }[keyof G & string]
+
+/**
+ * A mount takes its prefix only when it can serve every group: each endpoint took its `.handle(…)` (a group accepts
+ * one without, because its own callback cannot be checked before it is typed), and every group names the same callers.
+ */
+type MountPrefix<G> = [PendingOf<G>] extends [never]
+	? true extends IsUnion<CallersOf<G>> ? Unavailable<'every group of one RPC mount names the same callers, in the same order'> : Path
+	: Unavailable<`add .handle(…) to ${ListOf<PendingOf<G>>}: every endpoint takes its handler beside it`>
 
 /** The builders of the contract's callback: the mounts that take no handler, and `rpc`, which mounts groups. */
 export interface ContractKit<K extends KitTypes> extends Pick<Kit<K['action'], K['dimension'], K['creatable']>, 'spa' | 'health' | 'form' | 'files'> {
@@ -142,7 +147,7 @@ export type KitContract<K extends KitTypes, S extends Surface> = Contract<
 /** The kit of one application: every builder is typed by its vocabulary, its tables and its imports. */
 export interface App<K extends KitTypes> {
 	/** Endpoints for `callers`, declared and handled together; `fabrika.contract.ts` mounts the group with `c.rpc`. */
-	group<const C extends readonly [RpcCaller, ...RpcCaller[]], const T extends GroupTree>(
+	group<const C extends readonly [RpcCaller, ...RpcCaller[]], const T extends GroupInput>(
 		options: { readonly callers: C } & Owned<'kind' | 'endpoints'>,
 		build: (r: GroupKit<K, C[number]>) => T,
 	): Group<C, T>
@@ -152,7 +157,7 @@ export interface App<K extends KitTypes> {
 		const Sc extends K['dimension'] | 'app',
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
-	>(schedule: string, options: CronOptions<Acts, Sc, S, U>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, never>>
+	>(schedule: string, options: CronOptions<Acts, Sc, S, U, K['tables']>): CronBuilder<K, Acts[number], Sc, Declared<S, U, never, never>>
 	/** A GitHub webhook bound per value of `boundTo`; the contract mounts it by name. */
 	webhook<
 		const B extends K['dimension'],
@@ -160,7 +165,7 @@ export interface App<K extends KitTypes> {
 		I extends InputSchema,
 		const S extends SqlMode = never,
 		const U extends UnscopedDeclaration<K['tables'], UnscopedMode> = never,
-	>(path: Path, options: WebhookOptions<B, Acts, I, S, U>): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>>
+	>(path: Path, options: WebhookOptions<B, Acts, I, S, U, K['tables']>): WebhookBuilder<K, B, Acts[number], I, Declared<S, U, never, never>>
 	/** A share SPA under `prefix` and its procedures under `<prefix>/api`, for an anonymous key bound to one object. */
 	link<
 		const LD extends K['dimension'],

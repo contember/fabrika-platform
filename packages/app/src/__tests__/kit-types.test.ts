@@ -18,7 +18,23 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'07-unscoped-table-not-declared.ts': "deals is outside this site's scope: declare unscoped: { deals: 'read' } on it",
 	'08-write-sql-on-a-query.ts': `Type '"write"' is not assignable to type '"read"'`,
 	'09-remove-with-another-action.ts': "delete on deals needs the action 'crm.delete', and this endpoint holds 'deals.write'",
+	'10-untyped-column-list.ts': 'the column list carries no row types: import columns from the generated src/db/schema.generated.ts',
+	'11-declaration-only-in-a-type.ts': "Types of property 'sql' are incompatible",
+	'12-container-the-vocabulary-does-not-name.ts': `Type '"org"' is not assignable to type '"company"'`,
+	'13-unscoped-insert-without-its-scope.ts': "Property 'org_id' is missing in type '{ name: string; }'",
+	'14-widened-capability.ts': "the column margin needs the read action 'deals.write', which this capability does not hold",
+	'15-reference-hidden-column.ts': "the column note needs the read action 'deals.write', which this capability does not hold",
+	'16-unknown-unscoped-table-beside-a-known-one.ts': 'invoices is not a table of src/db/tables.ts',
+	'17-hidden-column.ts': "the column margin needs the read action 'deals.write', which this capability does not hold",
+	'18-missing-handle.ts': 'add .handle(…) to deals.get: every endpoint takes its handler beside it',
+	'19-access-dimension-typo.ts': `Type '"deall"' is not assignable to type '"org" | "company" | "deal"'. Did you mean '"deal"'?`,
 }
+
+/**
+ * The compiler elaborates these through the declaration's own types, so they are held to their line and text only:
+ * an optional field an annotation allows, and a scope union of the table policy (its wording is WU2's to refine).
+ */
+const ELABORATED = ['11-declaration-only-in-a-type.ts', '12-container-the-vocabulary-does-not-name.ts']
 
 describe('the staged kit', () => {
 	test('the kit fixture and its API matrix compile clean', () => {
@@ -29,6 +45,6 @@ describe('the staged kit', () => {
 	}, 60_000)
 
 	describe('the kit mistakes are type errors at their line', () => {
-		expectMistakes(join(import.meta.dir, 'kit-mistakes'), EXPECTED, { plain: true })
+		expectMistakes(join(import.meta.dir, 'kit-mistakes'), EXPECTED, { plain: true, elaborated: ELABORATED })
 	})
 })
