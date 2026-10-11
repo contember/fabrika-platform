@@ -203,7 +203,7 @@ describe('the generated module under the checker', () => {
 
 export const vocabulary = defineVocabulary({ app: 'lookup', dimensions: {}, actions: { 'countries.read': 'Read the lookup data' }, roles: {} })
 `
-	const tables = `import { defineTables } from '@fabrika/db'
+	const tables = `import { defineTables } from '@fabrika/db/tables'
 import { vocabulary } from '../vocabulary'
 import { columns } from './schema.generated'
 
