@@ -308,6 +308,31 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		})
 	})
 
+	test('refuses a schema that holds database code installed before the runner refused it', async () => {
+		const schema = await migrated(`
+			CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n bigserial, at timestamptz DEFAULT now(), label text DEFAULT 'x');
+			CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$
+			BEGIN UPDATE deals SET stage = NEW.stage WHERE id <> NEW.id; RETURN NEW; END
+			$body$;
+			CREATE TRIGGER spread AFTER UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION spread();
+			CREATE RULE mirror AS ON DELETE TO deals DO ALSO DELETE FROM deals;
+			CREATE VIEW open_deals AS SELECT id FROM deals;
+			CREATE POLICY own ON deals USING (true);
+		`)
+		const refusal =
+			`schema ${schema} holds database code the data layer cannot see: default deals.n (nextval('${schema}.deals_n_seq'::regclass)), function spread, policy deals.own, rule deals.mirror, trigger deals.spread, view open_deals; drop it in a new migration (a default may be a constant, now() or gen_random_uuid())`
+		await expect(introspectSchema(url, schema)).rejects.toThrow(refusal)
+		await expect(generateSchema(url, schema)).rejects.toThrow(CodegenError)
+	})
+
+	test('a trigger alone fails the start check', async () => {
+		const schema = await migrated(`
+			CREATE TABLE deals (id text PRIMARY KEY);
+			CREATE TRIGGER noop BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+		`)
+		await expect(generateSchema(url, schema)).rejects.toThrow(`schema ${schema} holds database code the data layer cannot see: trigger deals.noop;`)
+	})
+
 	test('refuses a schema that was never migrated', async () => {
 		await expect(introspectSchema(url, 'codegen_missing_schema')).rejects.toThrow(
 			'schema codegen_missing_schema does not exist; run fabrika db migrate first',

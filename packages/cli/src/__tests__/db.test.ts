@@ -418,6 +418,27 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		expect(await generateSchema(url, migrations.schema)).toBe(readFileSync(join(ISOLATION_APP, 'src', 'db', 'schema.generated.ts'), 'utf8'))
 	})
 
+	test('migrate refuses a trigger, and the start check finds one installed before the runner refused it', async () => {
+		const { root, source, schema } = application()
+		const trigger = 'CREATE TRIGGER noop BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()'
+		writeMigration(root, '20261008120000_init.sql', `CREATE TABLE deals (id TEXT PRIMARY KEY);\n${trigger}`)
+		expect(await failure(run(root, 'migrate', [], { source }))).toContain(
+			'Application migration 20261008120000_init.sql line 2: CREATE TRIGGER is not allowed',
+		)
+		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE deals (id TEXT PRIMARY KEY)')
+		await run(root, 'migrate', [], { source })
+		await run(root, 'codegen', [], { source })
+		const legacy = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			await legacy.unsafe(`SET search_path TO ${schema}; ${trigger}`)
+		} finally {
+			await legacy.close()
+		}
+		expect(await failure(run(root, 'codegen', ['--verify'], { source }))).toBe(
+			`schema ${schema} holds database code the data layer cannot see: trigger deals.noop; drop it in a new migration (a default may be a constant, now() or gen_random_uuid())`,
+		)
+	})
+
 	test('codegen writes the schema module and --verify fails once it is stale', async () => {
 		const { root, source, schema } = application()
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL)')

@@ -220,3 +220,8 @@ and the target `Ref`, so no handler can call it.
   start with a letter; a collision, and the table names `__proto__`, `constructor` and `prototype`, are
   refused. `fabrika db codegen --verify` compares text, so an application's formatter must
   skip the generated file (the output is already dprint-stable here).
+- **Codegen refuses a schema that holds database code** (`DATABASE_CODE_QUERY` in `codegen.ts`): a
+  trigger other than a foreign key's, a rule, a view, a function, procedure or aggregate, a policy,
+  or a default that calls anything but `now()` or `gen_random_uuid()`. A store's guarded write would
+  fire such code unseen. The migration runner refuses to install it (ADR-0017); this check is what
+  finds an object installed before that rule, at every start (`codegen --verify`) and in the test kit.

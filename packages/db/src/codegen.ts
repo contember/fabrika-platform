@@ -1,3 +1,4 @@
+import { defaultExpressionCall } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { z } from 'zod/v4'
 import { isPlainIdentifier } from './identifier'
@@ -85,7 +86,63 @@ WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND a.
 ORDER BY c.relname, a.attnum
 `
 
-/** Reads the columns of the application's schema. The URL is a credential: no message here contains it. */
+const databaseCodeSchema = z.object({
+	kind: z.enum(['default', 'function', 'aggregate', 'procedure', 'policy', 'rule', 'trigger', 'view', 'materialized view']),
+	name: z.string(),
+	/** The default's expression as the catalog prints it; `null` for every other kind. */
+	expression: z.string().nullable(),
+})
+
+/**
+ * Everything in the schema that can run on a write or a read without the data layer seeing it, and every column
+ * default (generated columns excluded: their expressions are immutable). The migration runner refuses to install
+ * any of it; this finds what was installed before it did. Foreign-key and other internal triggers are not listed.
+ */
+const DATABASE_CODE_QUERY = `
+SELECT 'default' AS kind, c.relname || '.' || a.attname AS name, pg_get_expr(d.adbin, d.adrelid) AS expression
+FROM pg_attrdef d
+JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+JOIN pg_class c ON c.oid = d.adrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND a.attgenerated = ''
+UNION ALL
+SELECT CASE p.prokind WHEN 'a' THEN 'aggregate' WHEN 'p' THEN 'procedure' ELSE 'function' END, p.proname, NULL
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = $1
+UNION ALL
+SELECT 'policy', c.relname || '.' || p.polname, NULL
+FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1
+UNION ALL
+SELECT 'rule', c.relname || '.' || r.rulename, NULL
+FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND r.rulename <> '_RETURN'
+UNION ALL
+SELECT 'trigger', c.relname || '.' || t.tgname, NULL
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND NOT t.tgisinternal
+UNION ALL
+SELECT CASE c.relkind WHEN 'm' THEN 'materialized view' ELSE 'view' END, c.relname, NULL
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND c.relkind IN ('v', 'm')
+ORDER BY 1, 2
+`
+
+/** `trigger deals.spread`, `default deals.n (nextval(…))`, for each object the start check refuses. */
+async function refusedDatabaseCode(sql: SQL, schema: string): Promise<string[]> {
+	const rows = z.array(databaseCodeSchema).parse(await sql.unsafe(DATABASE_CODE_QUERY, [schema]))
+	const refused: string[] = []
+	for (const row of rows) {
+		if (row.kind !== 'default') refused.push(`${row.kind} ${row.name}`)
+		else if (row.expression === null || defaultExpressionCall(row.expression) !== undefined) refused.push(`default ${row.name} (${row.expression})`)
+	}
+	return refused
+}
+
+/**
+ * Reads the columns of the application's schema, refusing one that holds database code. The URL is a credential:
+ * no message here contains it.
+ */
 export async function introspectSchema(url: string, schema: string): Promise<CatalogColumn[]> {
 	if (!isPlainIdentifier(schema)) throw new CodegenError(`the schema must match ^[a-z_][a-z0-9_]*$: ${schema}`)
 	const sql = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
@@ -93,6 +150,14 @@ export async function introspectSchema(url: string, schema: string): Promise<Cat
 		const namespaces: unknown = await sql.unsafe('SELECT 1 FROM pg_namespace WHERE nspname = $1', [schema])
 		if (!Array.isArray(namespaces) || namespaces.length === 0) {
 			throw new CodegenError(`schema ${schema} does not exist; run fabrika db migrate first`)
+		}
+		const refused = await refusedDatabaseCode(sql, schema)
+		if (refused.length > 0) {
+			throw new CodegenError(
+				`schema ${schema} holds database code the data layer cannot see: ${
+					refused.join(', ')
+				}; drop it in a new migration (a default may be a constant, now() or gen_random_uuid())`,
+			)
 		}
 		const rows: unknown = await sql.unsafe(CATALOG_QUERY, [schema])
 		return z.array(catalogColumnSchema).parse(rows)
