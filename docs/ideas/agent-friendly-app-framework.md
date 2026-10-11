@@ -38,10 +38,9 @@ split; the predicate grammars lack relative time and increments; one capability 
 cause as [backlog 97](../backlog/97-the-generated-tests-have-no-move-case.md)).
 
 **A red-team pass against `main` reproduced four holes** in today's claims. Three are fixed: `Database.postgres` is
-frozen and the capability mint is `boot`'s alone (ADR-0012 §7 states the in-process trust model that remains, and
-backlog [109](../backlog/109-application-code-can-boot-a-second-runtime-with-its-own-keys.md) the gap it leaves), and
-the approval diff compares input domains ([ADR-0050](../decisions/0050-approved-access.md) §3). The fourth is filed as
-backlog
+frozen and each runtime's capability mint is its own `boot` call's (ADR-0012 §7 states the in-process trust model
+that remains), and the approval diff compares input domains ([ADR-0050](../decisions/0050-approved-access.md) §3).
+The fourth is filed as backlog
 [108](../backlog/108-application-migrations-can-install-triggers-and-functions.md), independent of this proposal.
 
 ## 2. Principles

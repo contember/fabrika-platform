@@ -44,7 +44,7 @@ Migrations are applied by `@fabrika/platform-node`'s application runner through 
 An application calls `scoped(tables)` once (its own `src/db/database.ts`), defines its stores with the
 `defineStore` / `defineChildStore` it carries, and passes it to `implement({ database })`. `@fabrika/app/bun` opens
 `Database.postgres` on `FABRIKA_APP_DATABASE_URL` and `app_<FABRIKA_APP_ID>`; `boot` binds the layer to it and to
-`requestCapabilities`, the framework's `CapabilityAuthority`, which binds each capability to its request, through
+the runtime's `CapabilityAuthority` (one per `boot`), which binds each capability to its request, through
 `@fabrika/db/framework`. The bind answers the locator `on` and `in` use: one guarded select by key of the owning
 table's containment columns. `frameworkTablesOf` gives the framework the writes no store makes: a `c.form`
 appends one row to its inbox table (the declared columns only, answering nothing), and `c.webhook` keeps its

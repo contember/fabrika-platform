@@ -4,11 +4,11 @@
 // so `@fabrika/db` scopes it by the whole chain the access check saw.
 
 import type { ContractArtifact, CredentialedEndpoint, EndpointRow, FileCollectionArtifact } from '@fabrika/auth-core'
+import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { type FileCollectionTable, fileTableName, fileTablesOf, isScopedDatabase } from '@fabrika/db/framework'
 import { type FileObjectStore, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod/v4'
 import { HttpError, jsonResponse } from '../errors'
-import { requestCapabilities } from '../implement/capability'
 import { NO_FACILITIES, type ServedEndpoint } from '../implement/dispatch'
 import { ServerFault } from '../implement/faults'
 import type { ContractDatabase, ImplementationDatabase } from '../implement/implement'
@@ -130,11 +130,13 @@ export class FileCollections {
 	readonly #collections: readonly Collection[]
 	readonly #byDimension: ReadonlyMap<string, Collection>
 	readonly #store: FileObjectStore
+	readonly #capabilities: CapabilityAuthority
 
-	constructor(collections: readonly Collection[], store: FileObjectStore) {
+	constructor(collections: readonly Collection[], store: FileObjectStore, capabilities: CapabilityAuthority) {
 		this.#collections = collections
 		this.#byDimension = new Map(collections.map((collection) => [collection.dimension, collection]))
 		this.#store = store
+		this.#capabilities = capabilities
 	}
 
 	/** The `file:<name>` dimensions; the dispatcher locates them like a table's. */
@@ -264,7 +266,7 @@ export class FileCollections {
 	}
 
 	async #remove(collection: Collection, target: unknown): Promise<{ readonly id: string }> {
-		const grant = requestCapabilities.resolve(target)
+		const grant = this.#capabilities.resolve(target)
 		if (grant.kind !== 'ref') {
 			throw new ServerFault(`files '${collection.name}' remove was handed a Within`)
 		}
@@ -317,6 +319,7 @@ export function fileCollections(
 	artifact: ContractArtifact,
 	database: ImplementationDatabase | null,
 	store: FileObjectStore | undefined,
+	capabilities: CapabilityAuthority,
 	problems: string[],
 ): FileCollections | null {
 	const entries = Object.entries(artifact.files)
@@ -356,5 +359,5 @@ export function fileCollections(
 			problems.push(error instanceof Error ? error.message : `files '${name}' cannot be served`)
 		}
 	}
-	return store === undefined ? null : new FileCollections(collections, store)
+	return store === undefined ? null : new FileCollections(collections, store, capabilities)
 }

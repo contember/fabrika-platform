@@ -24,7 +24,7 @@ import {
 	satisfies,
 	scopedValues,
 } from '@fabrika/auth-core'
-import { type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
+import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
 import type { FrameworkTables } from '@fabrika/db/framework'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
@@ -142,8 +142,9 @@ export interface RuntimeParts {
 	/** The framework's own writes (inboxes, webhook tables); `boot` refuses a form or webhook without them. */
 	readonly framework: FrameworkTables | null
 	readonly forms: FormRateLimiter
-	/** The framework's capability mint, which `boot` alone holds. */
+	/** This runtime's capability mint, which `boot` alone holds, and the authority its stores are bound to. */
 	readonly mint: CapabilityMint
+	readonly capabilities: CapabilityAuthority
 }
 
 interface Caller {
@@ -379,6 +380,7 @@ export class ContractRuntime {
 			delegation: request.headers.get(DELEGATION_HEADER),
 			dimension: row.requirement.access.dimension,
 			action: row.requirement.action,
+			capabilities: this.#parts.capabilities,
 		}
 	}
 

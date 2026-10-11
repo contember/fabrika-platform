@@ -18,6 +18,7 @@ import {
 	parseAppEnvironmentId,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
+import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { bindScopedDatabase, type FrameworkTables, frameworkTablesOf, isScopedDatabase, type WebhookTables } from '@fabrika/db/framework'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
@@ -29,7 +30,7 @@ import type { Schema } from '../contract/define'
 import { fileCollections } from '../files/collections'
 import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
-import { claimFrameworkMint, requestCapabilities, requestIsReadOnly } from './capability'
+import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import { type ConnectFetch, wireImports } from './connect'
 import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
@@ -40,9 +41,6 @@ import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInpu
 import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
 /** Where the token verifier gets IAM's public keys: the IAM binding on Cloudflare, the issuer's JWKS elsewhere. */
-/** Claimed when this module loads, which every runtime adapter does before it imports the application. */
-const mint = claimFrameworkMint()
-
 export interface IamKeySource {
 	getJwks(): Promise<Jwks>
 }
@@ -279,7 +277,12 @@ interface BoundDatabase {
  * The database `dispatch` reads. A `scoped(tables)` result is bound here, once, to the adapter's connection and the
  * authority that binds capabilities to requests; the application never receives either, nor the locator.
  */
-function contractDatabase(database: ImplementationDatabase | null, connection: Database | undefined, problems: string[]): BoundDatabase | null {
+function contractDatabase(
+	database: ImplementationDatabase | null,
+	connection: Database | undefined,
+	capabilities: CapabilityAuthority,
+	problems: string[],
+): BoundDatabase | null {
 	if (database === null) {
 		return null
 	}
@@ -295,7 +298,7 @@ function contractDatabase(database: ImplementationDatabase | null, connection: D
 		return null
 	}
 	try {
-		const locate = bindScopedDatabase(database, { database: connection, capabilities: requestCapabilities, readOnly: requestIsReadOnly })
+		const locate = bindScopedDatabase(database, { database: connection, capabilities, readOnly: requestIsReadOnly })
 		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database) }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
@@ -404,8 +407,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 	}
 	const containers = containersOf(artifact)
 	unservable(artifact, options.assets, owned, containers, problems)
-	const files = fileCollections(artifact, app.database, options.files, problems)
-	const bound = contractDatabase(app.database, options.database, problems)
+	// This runtime's own: what another `boot` call mints, application code's included, its stores refuse.
+	const issuer = createCapabilityIssuer()
+	const files = fileCollections(artifact, app.database, options.files, issuer.authority, problems)
+	const bound = contractDatabase(app.database, options.database, issuer.authority, problems)
 	const framework = bound?.framework ?? null
 	frameworkProblems(artifact, framework, problems)
 	const database = files === null || bound === null ? (bound?.database ?? null) : files.locating(bound.database)
@@ -430,7 +435,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 
 	const rows = new Map(artifact.endpoints.map((row) => [row.id, row]))
 	const endpoints = new Map<string, ServedEndpoint>()
-	const handlers = app.handlers(options.environment.application, { capabilities: requestCapabilities })
+	const handlers = app.handlers(options.environment.application, { capabilities: issuer.authority })
 	const declared = new Set<string>()
 	for (const [name, mount] of Object.entries(app.contract.surface)) {
 		if (SURFACE_SECTIONS.some((section) => section === name) || typeof mount !== 'object' || !('kind' in mount)) {
@@ -511,7 +516,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		ownedDimensions: owned,
 		variables: options.environment.framework,
 		credentials: workloads,
-		mint,
+		mint: issuer.mint,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -572,7 +577,8 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		membership: options.membership === undefined ? null : new IamMembership(options.membership, variables.iamAppId),
 		framework,
 		forms: new FormRateLimiter(),
-		mint,
+		mint: issuer.mint,
+		capabilities: issuer.authority,
 	})
 	return Object.freeze({ fetch: (request: Request) => runtime.fetch(request), jobs: jobs.jobs })
 }

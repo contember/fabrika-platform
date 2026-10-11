@@ -134,7 +134,7 @@ specifier, `import.meta.resolve`, `node:module` and `process.getBuiltinModule`; 
 fixed absolute URL; a `px_` key in a string; client-supplied identity fields; logging errors, requests or headers;
 `innerHTML` and `dangerouslySetInnerHTML`; `eval` and `new Function`; misnamed migrations; `.skip`, `.only` and
 tests without an assertion; edited, missing or stale generated tests; `mock.module` of `bun:test` or `@fabrika/*`;
-missing endpoint fixtures; test kits imported outside test files; replaced `@fabrika/*` or `zod` packages.
+missing endpoint fixtures; test kits and `boot` imported outside test files; replaced `@fabrika/*` or `zod` packages.
 
 ## Never edit generated files
 

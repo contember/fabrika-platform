@@ -124,7 +124,7 @@ export interface JobBindingInput {
 	readonly variables: Readonly<Record<string, string>>
 	/** `job:<name>` → the job's key; `boot` refuses a job without one. */
 	readonly credentials: ReadonlyMap<string, WorkloadCredential>
-	/** The framework's capability mint, which `boot` alone holds. */
+	/** The runtime's capability mint, which `boot` alone holds. */
 	readonly mint: CapabilityMint
 }
 

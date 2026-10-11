@@ -380,6 +380,30 @@ const refused: readonly DirectForm[] = [
 		],
 	},
 	{
+		name: 'boot imported by name, renamed, through an import map and by a direct load, outside a test file',
+		rule: 'forbidden-import',
+		files: {
+			'package.json': '{ "name": "notes", "imports": { "#implement": "@fabrika/app/implement" } }\n',
+			'src/second.ts': [
+				"import { boot } from '@fabrika/app/implement'",
+				"import { boot as start } from '#implement'",
+				"export const later = async () => (await import('@fabrika/app/implement')).boot",
+				'export { boot, start }',
+				'',
+			].join('\n'),
+			'src/__tests__/boot.test.ts': [
+				"import { boot } from '@fabrika/app/implement'",
+				"import { expect, test } from 'bun:test'",
+				'',
+				"test('a test may boot', () => {",
+				"\texpect(typeof boot).toBe('function')",
+				'})',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/second.ts:1:1', 'src/second.ts:2:1', 'src/second.ts:3:41'],
+	},
+	{
 		name: 'delete on a prototype and a mutation of Object.getPrototypeOf',
 		rule: 'prototype-assignment',
 		files: {

@@ -1,8 +1,8 @@
 // `Ref` and `Within`: the capabilities the framework mints after an access check. A handler receives them in `ctx`;
 // it can neither construct one nor use one outside the request that obtained it. `@fabrika/db` checks the kind, the
-// dimension and the action of every capability it is handed, and asks `requestCapabilities` whether it is authentic.
-// No export mints what `requestCapabilities` accepts: `boot.ts` claims that mint once, when it loads, before any
-// application module.
+// dimension and the action of every capability it is handed, and asks the runtime's authority whether it is authentic.
+// Each `boot` makes its own issuer: its stores accept only what its own dispatcher and job runner minted, so a mint
+// that application code makes, or a second runtime it boots, reaches none of them.
 
 import {
 	type CapabilityAuthority,
@@ -292,7 +292,7 @@ export class Within<D extends string, A extends string> implements WithinCapabil
 freeze(Ref.prototype)
 freeze(Within.prototype)
 
-/** Makes the capabilities one authority accepts; the framework's is held by `boot.ts` alone. */
+/** Makes the capabilities one authority accepts; a runtime's is held by the `boot` call that made it alone. */
 export interface CapabilityMint {
 	ref<D extends string, A extends string>(
 		frame: RequestFrame,
@@ -319,9 +319,9 @@ export interface CapabilityIssuer {
 }
 
 /**
- * A new issuer: its authority refuses every capability another issuer minted, the framework's included. The framework
- * makes its own here; a test that needs a capability no access check gave makes another, whose capabilities reach
- * only stores bound to that issuer's authority.
+ * A new issuer: its authority refuses every capability another issuer minted. Every `boot` makes one and binds its
+ * data layer and its deps to the authority; a test that needs a capability no access check gave makes another, whose
+ * capabilities reach only stores bound to that issuer's authority.
  */
 export function createCapabilityIssuer(): CapabilityIssuer {
 	const issuer = freeze({})
@@ -369,28 +369,4 @@ export function createCapabilityIssuer(): CapabilityIssuer {
 		},
 	})
 	return freeze({ mint, authority })
-}
-
-const framework = createCapabilityIssuer()
-
-/**
- * The framework's side of `@fabrika/db`'s capability check. It answers only whether a value is an authentic
- * capability of the request that is running now; the data layer checks the kind, the dimension and the action.
- */
-export const requestCapabilities: CapabilityAuthority = framework.authority
-
-let unclaimedMint: CapabilityMint | null = framework.mint
-
-/**
- * Hands the framework's mint to its one holder, `boot.ts`, which claims it when it loads; every runtime adapter loads
- * `boot.ts` before it imports the application. Any later claim throws, so application code that loads this module by
- * URL gets no mint.
- */
-export function claimFrameworkMint(): CapabilityMint {
-	const mint = unclaimedMint
-	if (mint === null) {
-		throw new CapabilityRefusedError('the framework holds its capability mint; a capability comes from an access form declared in fabrika.contract.ts')
-	}
-	unclaimedMint = null
-	return mint
 }

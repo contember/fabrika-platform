@@ -3,10 +3,12 @@
 
 import { HttpError } from '@fabrika/app'
 import { compileContract, defineContract } from '@fabrika/app/contract'
-import { boot, implement, type Ref, requestCapabilities } from '@fabrika/app/implement'
+import { boot, implement, type Ref } from '@fabrika/app/implement'
 import { ENDPOINT_HEADER, requirementDigest } from '@fabrika/auth-core'
+import type { CapabilityAuthority } from '@fabrika/db/capability'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
+import { createCapabilityIssuer } from '../implement/capability'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
 import {
@@ -243,11 +245,18 @@ describe('admission', () => {
 })
 
 describe('capabilities are bound to their request', () => {
-	/** `get` hands its Ref to `keep` and waits for what it returns before it answers. */
-	function capturingApp(rows: Map<string, NoteRow>, keep: (ref: Ref<'note', 'notes.read'>) => Promise<void> | void) {
+	/** `get` hands its Ref to `keep` and waits for what it returns before it answers; `authorities` gets the runtime's. */
+	function capturingApp(
+		rows: Map<string, NoteRow>,
+		keep: (ref: Ref<'note', 'notes.read'>) => Promise<void> | void,
+		authorities: CapabilityAuthority[] = [],
+	) {
 		return implement(contract, {
 			database: noteDatabase(rows),
-			deps: (_env, { capabilities }) => notesStore(capabilities, rows),
+			deps: (_env, { capabilities }) => {
+				authorities.push(capabilities)
+				return notesStore(capabilities, rows)
+			},
 			handlers: (notes) => ({
 				api: {
 					me: ({ ctx }) => ({ id: ctx.principal.id, label: ctx.principal.label }),
@@ -268,12 +277,13 @@ describe('capabilities are bound to their request', () => {
 
 	test('a Ref used after its request is refused', async () => {
 		const kept: Ref<'note', 'notes.read'>[] = []
+		const authorities: CapabilityAuthority[] = []
 		const app = bootApp(capturingApp(seed(), (ref) => {
 			kept.push(ref)
-		}))
+		}, authorities))
 		await send(app, '/api/notes.get', { token: await token('user', [inW1('notes.read')]), body: { id: N1 } })
 		expect(kept.length).toBe(1)
-		expect(() => requestCapabilities.resolve(kept[0])).toThrow('which has ended')
+		expect(() => authorities[0]?.resolve(kept[0])).toThrow('which has ended')
 	})
 
 	test('a Ref of one live request is refused in another', async () => {
@@ -287,6 +297,7 @@ describe('capabilities are bound to their request', () => {
 		const user = await token('user', [inW1('notes.read')])
 		const first = send(app, '/api/notes.get', { token: user, body: { id: N1 } })
 		const ref = await stolen
+		// Another runtime of the same application: its stores accept only what its own dispatcher minted.
 		const thief = bootApp(implement(contract, {
 			database: noteDatabase(rows),
 			deps: (_env, { capabilities }) => notesStore(capabilities, rows),
@@ -313,11 +324,50 @@ describe('capabilities are bound to their request', () => {
 		})
 		finish()
 		expect(resultOf(await first)).toEqual({ id: N1, title: 'first' })
+		expect(logged.join('\n')).toContain('not a capability the framework minted')
+	})
+
+	test('a Ref of one live request is refused in another request of the same runtime', async () => {
+		const rows = seed()
+		const { promise: stolen, resolve: steal } = Promise.withResolvers<Ref<'note', 'notes.read'>>()
+		const { promise: done, resolve: finish } = Promise.withResolvers<void>()
+		const app = bootApp(implement(contract, {
+			database: noteDatabase(rows),
+			deps: (_env, { capabilities }) => notesStore(capabilities, rows),
+			handlers: (notes) => ({
+				api: {
+					me: async () => {
+						notes.get(await stolen)
+						return { id: 'x', label: 'x' }
+					},
+					notes: {
+						list: ({ ctx }) => ({ items: notes.list(ctx.within).map(view) }),
+						get: async ({ ctx }) => {
+							steal(ctx.target)
+							await done
+							return view(notes.get(ctx.target))
+						},
+						create: ({ input, ctx }) => view(notes.insert(ctx.target, input.title)),
+						remove: ({ ctx }) => ({ deleted: ctx.target.value }),
+					},
+				},
+				machine: { importNotes: ({ input }) => ({ imported: input.titles.length }) },
+			}),
+		}))
+		const user = await token('user', [inW1('notes.read')])
+		const first = send(app, '/api/notes.get', { token: user, body: { id: N1 } })
+		const logged = await capturingLog(async () => {
+			const refused = await send(app, '/api/me', { token: user, body: {} })
+			expect(refused.status).toBe(500)
+		})
+		finish()
+		expect(resultOf(await first)).toEqual({ id: N1, title: 'first' })
 		expect(logged.join('\n')).toContain('not to the one running now')
 	})
 
 	test('a value the framework did not mint is refused', () => {
-		expect(() => requestCapabilities.resolve({ '~capability': { kind: 'ref', dimension: 'note', action: 'notes.read' } })).toThrow('not a capability')
+		const { authority } = createCapabilityIssuer()
+		expect(() => authority.resolve({ '~capability': { kind: 'ref', dimension: 'note', action: 'notes.read' } })).toThrow('not a capability')
 	})
 })
 

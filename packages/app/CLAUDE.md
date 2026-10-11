@@ -79,9 +79,9 @@ src/
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
-    boot.ts           boot: framework variables, refusals, handler binding; the holder of the mint
+    boot.ts           boot: framework variables, refusals, handler binding; each runtime's issuer
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
-    capability.ts     Ref, Within, requestCapabilities (the CapabilityAuthority), the issuers
+    capability.ts     Ref, Within, createCapabilityIssuer (a mint and its CapabilityAuthority)
     membership.ts     creates, ctx.members and ctx.links: requests to IAM through IamMembership
     anonymous.ts      the bounded body read, the form rate limit, the share bootstrap, GitHub's signature
     webhook.ts        the generated binding endpoints and a delivery's principal
@@ -270,19 +270,20 @@ src/
   cross-site page cannot add that header without a preflight, and the application
   answers none. Every RPC request needs `Content-Type: application/json`.
 - **`Ref` and `Within` are bound to their request** with `AsyncLocalStorage`.
-  `requestCapabilities.resolve` refuses a value the framework did not mint, one whose
+  The runtime's authority refuses a value its runtime did not mint, one whose
   request has ended, and one from another live request; `@fabrika/db` checks kind,
   dimension and action itself. Both classes keep their grant and their issuer in
   private fields and need a module-private token to construct; never export that
   token.
-- **Only `boot.ts` holds the framework's mint.** `capability.ts` exports no function that mints what
-  `requestCapabilities` accepts: `boot.ts` takes the mint with `claimFrameworkMint` when it loads, which
-  every adapter does before it imports the application, and a second claim throws. `boot` hands it to
-  `ContractRuntime` and `bindJobs` as a parameter, never through a module export, because an application
-  can load any module of the package by URL (the package ships `src/`). `createCapabilityIssuer` makes an
-  issuer of its own, whose capabilities only its own authority accepts: the tests' way to mint. Never
-  export the framework's mint, nor a handle on the running request beyond `isActiveRequest`
-  (`capability-mint.test.ts`).
+- **Every `boot` call makes its own issuer, and only that call holds the mint.** `createCapabilityIssuer`
+  answers a mint and the one authority that accepts what it mints. `boot` binds the data layer, the file
+  collections, the membership requests and `deps` to the authority, and hands the mint to `ContractRuntime`
+  and `bindJobs` as a parameter, never through a module export: an application can load any module of the
+  package by URL (the package ships `src/`). So a mint application code makes, or a second runtime it boots
+  with keys of its own, mints what the served runtime's stores refuse. There is no process-wide authority:
+  the Worker adapter's runtime per environment and a retried boot each have their own. Tests mint through an
+  issuer of their own. Never export a runtime's mint, nor a handle on the running request beyond
+  `isActiveRequest` (`capability-mint.test.ts`). The checker refuses an application import of `boot`.
 - **A capability's facts are frozen at mint, and every resolution is a fresh copy.**
   The chain is stored as frozen pairs, copied into a new `Map` through built-ins
   captured at load, and `resolve` returns a new frozen grant each time. Whoever
@@ -292,7 +293,7 @@ src/
 - **`@fabrika/db` is bound by `boot`, once.** An application passes `scoped(tables)`
   as `implement({ database })`. `boot` binds only an object `scoped` created
   (`@fabrika/db/framework`'s `bindScopedDatabase`), with the adapter's connection and
-  `requestCapabilities`, and keeps the locator the bind answers for `on` and `in`. The
+  the runtime's authority, and keeps the locator the bind answers for `on` and `in`. The
   application never receives the connection or the locator; a copy or a wrapper of
   the layer does not boot. A `ContractDatabase` (`tables` and `locate`) of the
   application's own is served as it is and gets no connection.
@@ -550,7 +551,7 @@ src/
 - **A job runs only under its lease.** `fabrika job run <name>` (the crontab's command, `runContractJob` in `bun.ts`)
   captures the environment, boots like the server and takes the job's row in `fabrika_job_leases`. A live lease
   held by another run means this run does not start (`skipped`). Each attempt holds its own generation and a
-  deadline the database enforces: `RequestFrame` carries the fence and `requestCapabilities.fence()` answers it, so
+  deadline the database enforces: `RequestFrame` carries the fence and the runtime's authority answers it (`fence()`), so
   `@fabrika/db` refuses every write of an attempt that timed out, failed or lost the lease, and cancels one still
   running when the attempt ends (`attemptOnce` calls `cancelInFlight` before the runner touches the lease again). A
   retry renews the lease to a new generation before its backoff. Never run a handler outside `attemptOnce`.

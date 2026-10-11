@@ -190,15 +190,15 @@ The framework closes the same-process patches it knows of:
 
 - The Kysely compiler, `Database` (class and prototype) and the capability classes' prototypes are frozen at load,
   and the checks use built-ins captured at load.
-- The adapter takes `Database.postgres` before it imports the application. The capability mint is held by `boot`
-  alone, claimed once at load, so no import, also by URL, reaches a mint that `requestCapabilities` accepts.
+- The adapter takes `Database.postgres` before it imports the application. Each `boot` call makes its own
+  capability issuer and binds its stores to it, so no import, also by URL, and no second runtime booted with keys
+  of the application's own, mints what the served runtime's stores accept.
 - `fabrika-check` refuses the source forms that reach around them: a write to a `@fabrika/*` or `zod` value, a
-  prototype write, and a load by computed specifier, by resolved path or through `node:module`.
+  prototype write, an import of `boot`, and a load by computed specifier, by resolved path, through an indirect
+  loader call, `node:module` or `process.getBuiltinModule`.
 
 This does not stop code that sets out to escape. Application code or one of its dependencies can still alias a
-framework object past the checker, call `boot` with IAM keys of its own and receive authentic capabilities from that
-second runtime ([backlog 109](../backlog/109-application-code-can-boot-a-second-runtime-with-its-own-keys.md)), or
-read the database URL from `/proc/self/environ`, where it stays after `captureEnvironment` removed it from
+framework object past the checker, or read the database URL from `/proc/self/environ`, where it stays after `captureEnvironment` removed it from
 `process.env`. A dependency's code is not read by the checker at all. Object-level access independent of
 application code needs the platform data executor rejected for v1 (Alternatives).
 

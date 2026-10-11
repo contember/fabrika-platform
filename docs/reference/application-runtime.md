@@ -189,7 +189,7 @@ block (`/proc/self/environ` on Linux) still holds them. The adapter then calls
 `boot(app, { environment, iam, assets, database, files, membership })`. For an application on `@fabrika/db`,
 `serveContract` loads the data layer before the application and opens its connection on
 `FABRIKA_APP_DATABASE_URL`, in the schema `app_<FABRIKA_APP_ID>` its migrations created;
-`boot` binds the layer to it and to `requestCapabilities`, once, and keeps the locator the
+`boot` binds the layer to it and to its runtime's capability authority, once, and keeps the locator the
 bind answers; the application receives neither. Only an object `scoped` created is bound.
 Without a connection (the data layer runs on Bun with Postgres only, so on Cloudflare),
 with a copy or a wrapper of the layer, or with a layer bound before boot, `boot` refuses
@@ -339,15 +339,15 @@ the same pipeline:
   presigned URLs.
 
 A `Ref` and a `Within` are classes with private fields, bound to their request with
-`AsyncLocalStorage`. `requestCapabilities` — the `CapabilityAuthority` of
-`@fabrika/db` — refuses one the framework did not mint, one whose request has ended
-and one from another live request. Each resolution returns a fresh frozen copy of the
-facts fixed at mint, so changing a returned chain changes nothing the data layer sees.
-The framework's mint is held by `boot` alone: `boot.ts` claims it once, when it loads,
-before the application, and no module exports it. An application that loads
-`capability.ts` by URL finds only `createCapabilityIssuer`, whose capabilities
-`requestCapabilities` refuses. This hardening stops mistakes and makes a bypass
-conspicuous; application code stays trusted in-process
+`AsyncLocalStorage`. Each `boot` makes its own issuer: a mint, held only by that
+call, and the `CapabilityAuthority` of `@fabrika/db` that its data layer, file
+collections and `deps` are bound to. The authority refuses a capability its runtime
+did not mint, one whose request has ended and one from another live request. Each
+resolution returns a fresh frozen copy of the facts fixed at mint, so changing a
+returned chain changes nothing the data layer sees. An application that loads
+`capability.ts` by URL, or boots a second runtime with IAM keys of its own, mints
+only what the served runtime's stores refuse. This hardening stops mistakes and makes
+a bypass conspicuous; application code stays trusted in-process
 ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §7 says what it does not stop).
 
 ## Membership, share links and the anonymous kinds

@@ -65,6 +65,14 @@ const FRAMEWORK_ONLY: ReadonlyMap<string, Forbidden> = new Map([
 	}],
 ])
 
+/** Exports only the runtime adapters and the test kits call: a second runtime the application boots serves no contract. */
+const FRAMEWORK_ONLY_EXPORTS: ReadonlyMap<string, ReadonlyMap<string, Forbidden>> = new Map([
+	[
+		'@fabrika/app/implement',
+		new Map([['boot', { what: "the runtime adapters' boot", allowed: 'the generated entrypoint boots the application; tests use testKit' }]]),
+	],
+])
+
 /** The `Bun` globals that open a server, a socket, a database, a bucket or a process; imported by name from `bun`, the same bypass. */
 export const FORBIDDEN_BUN_MEMBERS: ReadonlyMap<string, Forbidden> = new Map([
 	...['sql', 'SQL'].map((name): [string, Forbidden] => [name, DATABASE]),
@@ -110,13 +118,18 @@ const containmentProblem = (target: string | undefined): string | undefined => {
 	return undefined
 }
 
-const checkPackage = (reference: ModuleReference, specifier: string, report: Report, isGeneratedEntry: boolean): void => {
+const checkPackage = (reference: ModuleReference, specifier: string, report: Report, isGeneratedEntry: boolean, isTest: boolean): void => {
 	const { node } = reference
 	const name = packageName(specifier)
 	const forbidden = FRAMEWORK_ONLY.get(specifier) ?? FORBIDDEN_PACKAGES.get(name)
 	if (forbidden !== undefined) {
 		report(node, 'forbidden-import', `'${specifier}' is ${forbidden.what}`, forbidden.allowed)
 		return
+	}
+	const exports = isTest || isGeneratedEntry ? undefined : FRAMEWORK_ONLY_EXPORTS.get(specifier)
+	for (const imported of reference.names) {
+		const only = exports?.get(imported)
+		if (only !== undefined) report(node, 'forbidden-import', `'${imported}' from '${specifier}' is ${only.what}`, only.allowed)
 	}
 	if (name === 'module') {
 		report(node, 'unchecked-import', `'${specifier}' loads modules by path (createRequire), past what the checker reads`, 'a static import')
@@ -187,13 +200,13 @@ export const checkModuleReferences = (
 		const targets = mappedTargets(mappings, specifier)
 		if (targets === undefined) {
 			testOnly(reference, specifier)
-			if (!reference.typeOnly) checkPackage(reference, specifier, report, isGeneratedEntry)
+			if (!reference.typeOnly) checkPackage(reference, specifier, report, isGeneratedEntry, isTest)
 			continue
 		}
 		for (const target of targets) {
 			if (!isRelativeSpecifier(target) && !target.startsWith('/')) {
 				testOnly(reference, target)
-				if (!reference.typeOnly) checkPackage(reference, target, report, isGeneratedEntry)
+				if (!reference.typeOnly) checkPackage(reference, target, report, isGeneratedEntry, isTest)
 				continue
 			}
 			// Mapping targets are relative to the root, where both package.json and tsconfig.json live.

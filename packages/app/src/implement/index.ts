@@ -6,7 +6,7 @@ export type { JobContext, JobHandler, JobHandlersOf, JobPrincipal } from '../job
 export { FORM_RATE_LIMIT, LINK_BOOTSTRAP_SCRIPT } from './anonymous'
 export { boot, BootError, type BootOptions, type ContractApp, type IamKeySource } from './boot'
 export { readBoundedBytes } from './bounded'
-export { CapabilityRefusedError, Ref, requestCapabilities, Within } from './capability'
+export { CapabilityRefusedError, Ref, Within } from './capability'
 export { type ConnectFailure, type ConnectFetch, type ConnectResult, type ConnectVariables, connectVariables, isJsonMediaType } from './connect'
 export type { SpaAssets } from './dispatch'
 export { type CapturedEnvironment, captureEnvironment } from './environment'

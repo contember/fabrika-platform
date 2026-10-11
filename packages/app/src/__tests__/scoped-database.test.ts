@@ -8,11 +8,12 @@
 // The file gets its own application schema `app_<id>`. The URL is a credential: it is never logged.
 
 import { serveContract } from '@fabrika/app/bun'
-import { BootError, type ContractApp, implement, requestCapabilities } from '@fabrika/app/implement'
+import { BootError, type ContractApp, implement } from '@fabrika/app/implement'
 import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped } from '@fabrika/db'
 import { bindScopedDatabase } from '@fabrika/db/framework'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { createCapabilityIssuer } from '../implement/capability'
 import {
 	bootApp,
 	errorType,
@@ -184,10 +185,14 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 		const foreign = await seedNote('w2', 'foreign')
 		const rogue = scoped(tables)
 		const rogueNotes = rogue.defineStore('notes', (t) => ({ get: (note: Ref<'note', 'notes.read'>) => t.get(note) }))
-		// An authority of the application's own: every Ref it is handed lies in w2.
+		// An authority of the application's own over the runtime's: every Ref it is handed lies in w2.
+		let runtimeAuthority: CapabilityAuthority | undefined
 		const everyWorkspace: CapabilityAuthority = {
 			resolve: (capability) => {
-				const grant = requestCapabilities.resolve(capability)
+				if (runtimeAuthority === undefined) {
+					throw new Error('the runtime has not booted')
+				}
+				const grant = runtimeAuthority.resolve(capability)
 				return grant.kind === 'ref' ? { ...grant, chain: new Map([['workspace', 'w2']]) } : grant
 			},
 			fence: () => null,
@@ -205,7 +210,10 @@ describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {
 		const wrapped = bootApp(
 			implement(contract, {
 				database: wrapper,
-				deps: () => ({}),
+				deps: (_env, { capabilities }) => {
+					runtimeAuthority = capabilities
+					return {}
+				},
 				handlers: () => ({
 					api: {
 						notes: {
@@ -281,7 +289,7 @@ describe('boot binds the data layer once', () => {
 			const server = await serveContract(() => Promise.resolve({ default: application }), env)
 			try {
 				expect((await fetch(`http://localhost:${server.port}/healthz`)).status).toBe(200)
-				expect(() => bindScopedDatabase(served, { database, capabilities: requestCapabilities })).toThrow('already connected')
+				expect(() => bindScopedDatabase(served, { database, capabilities: createCapabilityIssuer().authority })).toThrow('already connected')
 			} finally {
 				await server.stop()
 			}

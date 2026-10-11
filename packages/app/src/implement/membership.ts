@@ -5,10 +5,10 @@
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import type { InvitationItem, MemberItem, MembershipFailure, Scope } from '@fabrika/auth-core'
-import type { RefGrant } from '@fabrika/db/capability'
+import type { CapabilityAuthority, RefGrant } from '@fabrika/db/capability'
 import { joinPath } from '../contract/defaults'
 import { ConflictError, ForbiddenError, HttpError, NotFoundError, UnauthorizedError } from '../errors'
-import { CapabilityRefusedError, type Ref, requestCapabilities } from './capability'
+import { CapabilityRefusedError, type Ref } from './capability'
 import { ServerFault } from './faults'
 
 /** Who a membership is about: an address IAM invites, or a principal it already has. */
@@ -53,6 +53,8 @@ export interface MembershipRequest {
 	/** The endpoint's own access: the dimension a `Ref` passed to IAM must name, and its action. */
 	readonly dimension: string
 	readonly action: string
+	/** The runtime's authority, which the `Ref` passed to IAM must resolve with. */
+	readonly capabilities: CapabilityAuthority
 }
 
 /** IAM's decided refusal, as the answer the caller gets. A refusal IAM could not decide never arrives here. */
@@ -103,7 +105,7 @@ function delegationOf(request: MembershipRequest): string {
 
 /** The grant of a `Ref` this request minted for the endpoint's own dimension and action; anything else is refused. */
 function refGrant(request: MembershipRequest, ref: unknown): RefGrant {
-	const grant = requestCapabilities.resolve(ref)
+	const grant = request.capabilities.resolve(ref)
 	if (grant.kind !== 'ref' || grant.dimension !== request.dimension || grant.action !== request.action) {
 		throw new CapabilityRefusedError(`pass the ctx.target of this request: a Ref of '${request.dimension}' for '${request.action}'`)
 	}

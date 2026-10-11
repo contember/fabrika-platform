@@ -50,5 +50,4 @@ bring-up and release rehearsal in item [05](05-bring-up-on-a-real-zerops-account
 - [103](103-runs-keeps-an-unused-pending-access-column.md) — Nothing reads or writes `runs.pending_access_json` since contractless applications are refused; a later migration drops it.
 - [104](104-the-query-builder-cannot-express-common-reports.md) — Aggregates over joins, anti-joins, nested AND/OR, SQL functions and full-text search do not fit the scoped builder; the answer is declared report kinds, never raw access.
 - [108](108-application-migrations-can-install-triggers-and-functions.md) — The runner plans, and the checker accepts, `CREATE FUNCTION`/`CREATE TRIGGER`, so database code can write past the data layer.
-- [109](109-application-code-can-boot-a-second-runtime-with-its-own-keys.md) — `boot` is public, so an application module can boot a second runtime with IAM keys of its own and get authentic capabilities from it.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

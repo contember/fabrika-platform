@@ -224,7 +224,7 @@ const cases: readonly RuleCase[] = [
 				"Reflect.set(Database, 'postgres', (options: PostgresOptions) => original(options))",
 				'Database.postgres = original',
 				"Object.defineProperty(Database, 'fromDialect', { value: original })",
-				'Object.assign(implement.requestCapabilities, { resolve: () => null })',
+				'Object.assign(implement.Ref, { check: () => true })',
 				'delete z.string',
 				'',
 			].join('\n'),
