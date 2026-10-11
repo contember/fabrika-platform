@@ -16,7 +16,7 @@ import type {
 	WebhookKitContext,
 } from '@fabrika/app/contract'
 import type { ConnectResult, LinkIssuing, MemberManagement, Ref, Within } from '@fabrika/app/implement'
-import type { DbIndex, ListPage, ScopeTarget, Tables } from '@fabrika/db/tables'
+import type { DbIndex, ScopeTarget, Tables } from '@fabrika/db/tables'
 import type { contract } from './fabrika.contract'
 import type { app } from './src/app-kit'
 import type { DB } from './src/db/schema.generated'
@@ -43,9 +43,6 @@ type DealRow = {
 	version: number
 }
 type Flat<T> = { [P in keyof T]: T[P] }
-type HiddenMargin = Flat<
-	DealRow & { readonly margin?: Unavailable<"the column margin needs the read action 'deals.write', which this capability does not hold"> }
->
 type DealRowWithMargin = DealRow & { margin: number | null }
 
 type OnQuery = Context<'query', { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }>
@@ -71,7 +68,7 @@ type Issues = Context<
 export type Matrix = [
 	// on, query: the target's row without a column of another read action; its child tables; no write, no lock.
 	Expect<Equal<OnQuery['target'], Ref<'deal', 'crm.read'>>>,
-	Expect<Equal<Returned<OnQuery['db']['target']['get']>, HiddenMargin>>,
+	Expect<Equal<Flat<Returned<OnQuery['db']['target']['get']>>, DealRow>>,
 	Expect<
 		Equal<
 			OnQuery['db']['target']['getForUpdate'],
@@ -118,17 +115,7 @@ export type Matrix = [
 	>,
 	// member: no application data, only the reference tables.
 	Expect<Equal<MemberQuery['db']['target'], Unavailable<'a member endpoint reaches no application data: declare access with on, in or over'>>>,
-	Expect<
-		Equal<
-			Returned<MemberQuery['db']['reference']['countries']['list']>,
-			ListPage<
-				Flat<
-					& { code: string; name: string }
-					& { readonly note?: Unavailable<"the column note needs the read action 'deals.write', which this capability does not hold"> }
-				>
-			>
-		>
-	>,
+	Expect<Equal<Flat<Returned<MemberQuery['db']['reference']['countries']['list']>['items'][number]>, { code: string; name: string }>>,
 	// creates: the new scope, its own row by the table's insert action, then in-style inserts into it.
 	Expect<Equal<Creates['created'], Ref<'org', 'orgs.create'>>>,
 	Expect<Equal<Parameters<Creates['db']['created']['orgs']['insert']>[0], { name: string }>>,
@@ -198,7 +185,7 @@ type HookCtx = WebhookKitContext<K, 'org', 'crm.write', None>
 
 /** Jobs read outside their fenced transaction and write inside it; a webhook delivery is one transaction. */
 export type Sites = [
-	Expect<Equal<Returned<Widened['get']>, HiddenMargin>>,
+	Expect<Equal<Flat<Returned<Widened['get']>>, DealRow>>,
 	Expect<Equal<JobCtx['sql'], Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'>>>,
 	Expect<Equal<Parameters<Parameters<JobCtx['transaction']>[0]>[0]['sql'], SqlTag>>,
 	Expect<Equal<HookCtx['refs'], { readonly 'crm.write': Ref<'org', 'crm.write'> }>>,

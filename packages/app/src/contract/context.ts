@@ -73,7 +73,9 @@ type SqlContext<S> = {
 		: SqlTag
 }
 
-type UnscopedData<Ix extends AnyDbIndex, U> = { readonly unscoped: [U] extends [never] ? NoUnscoped : UnscopedTables<Ix, U> }
+type UnscopedData<Ix extends AnyDbIndex, U, K extends DataKind> = {
+	readonly unscoped: [U] extends [never] ? NoUnscoped : UnscopedTables<Ix, U, K>
+}
 
 /** An access form the vocabulary refuses: the refusal is reported where the form is written. */
 export interface InvalidAccess {
@@ -130,7 +132,7 @@ type AccessData<Ix extends AnyDbIndex, K extends DataKind, Acc> = Acc extends In
 export type EndpointData<Ix extends AnyDbIndex, K extends DataKind, Acc, U> =
 	& AccessData<Ix, K, Acc>
 	& { readonly reference: ReferenceTables<Ix> }
-	& UnscopedData<Ix, U>
+	& UnscopedData<Ix, U, K>
 
 /** The dimension and action of an access form that hands a `Ref` of an existing object or scope. */
 type TargetOf<Acc> = Acc extends { readonly action: infer A extends string; readonly in: infer D extends string } ? readonly [D, A]
@@ -215,10 +217,7 @@ export interface CapabilityData<Ix extends AnyDbIndex, Kind extends DataKind, Ac
 type SiteData<Ix extends AnyDbIndex, Kind extends DataKind, Acts extends string, U> =
 	& CapabilityData<Ix, Kind, Acts>
 	& { readonly reference: ReferenceTables<Ix> }
-	& UnscopedData<Ix, U>
-
-/** Reads only: a job writes inside `ctx.transaction`, where its lease fences every statement. */
-type ReadOnlyUnscoped<U> = { readonly [T in keyof U]: 'read' }
+	& UnscopedData<Ix, U, Kind>
 
 /** The fenced transaction of a job attempt: writes and `tx.sql` commit only while the attempt holds its lease. */
 export type JobTransaction<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
@@ -228,7 +227,7 @@ export type JobTransaction<K extends KitTypes, A extends string, D extends Decla
 /** What a cron job's handler receives. Its reads run outside the transaction; every write runs in `ctx.transaction`. */
 export type JobKitContext<K extends KitTypes, A extends string, D extends Declared<SqlMode, unknown, never, never>> =
 	& JobContext<A, K['dimension']>
-	& { readonly db: SiteData<K['index'], 'query', A, [Of<D, 'unscoped'>] extends [never] ? never : ReadOnlyUnscoped<Of<D, 'unscoped'>>> }
+	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
 	& { transaction<R>(work: (tx: JobTransaction<K, A, D>) => Promise<R>): Promise<R> }
 

@@ -236,7 +236,7 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 				: {
 					node: root,
 					message: 'defineTables used other than as its call',
-					allowed: 'defineTables<DB, typeof vocabulary>(vocabulary, columns)({ … })',
+					allowed: 'defineTables(vocabulary, columns)({ … })',
 				}
 	}
 }

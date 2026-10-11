@@ -1,5 +1,5 @@
 // Reads `src/db/tables.ts` into table policies without executing it: the arguments of
-// `defineTables<DB, typeof vocabulary>(vocabulary, columns)({ … })` (or `defineTables<DB, Action>(columns)({ … })`) are
+// `defineTables(vocabulary, columns)({ … })` (or `defineTables<DB, Action>(columns)({ … })`) are
 // read as literals, then parsed by `@fabrika/db`'s own policy parse.
 
 import { PolicyError, readTables, type TablePolicies, tablePolicies } from '@fabrika/db/tables'
@@ -10,7 +10,7 @@ import { BUILDER_IMPORTS, decompose } from '../rules/literal'
 import type { ReaderProblems } from './problems'
 import { type LiteralValue, ValueReader } from './value'
 
-const ALLOWED_CALL = `export const ${TABLES_EXPORT} = defineTables<DB, typeof vocabulary>(vocabulary, columns)({ … })`
+const ALLOWED_CALL = `export const ${TABLES_EXPORT} = defineTables(vocabulary, columns)({ … })`
 const ALLOWED_POLICY = 'a table policy defineTables accepts (packages/db/CLAUDE.md)'
 
 /** The policies of `src/db/tables.ts`; none when the graph has no such module. `null` after recording why not. */

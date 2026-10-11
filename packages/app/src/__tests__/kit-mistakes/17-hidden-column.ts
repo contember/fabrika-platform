@@ -6,7 +6,6 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => {
 			const deal = await ctx.db.target.get()
 			// mistake: margin declares its own read action, deals.write, which a crm.read capability does not hold
-			const margin: number | null = deal.margin
-			return { margin }
+			return { margin: deal.margin }
 		}),
 }))

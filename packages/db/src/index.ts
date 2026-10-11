@@ -42,7 +42,6 @@ export type {
 	UnscopedRows,
 	UnscopedTables,
 	VersionArguments,
-	VisibleRow,
 	WithinRows,
 	WithinTables,
 } from './orm-types'

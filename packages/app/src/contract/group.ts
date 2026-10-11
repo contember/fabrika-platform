@@ -34,8 +34,21 @@ export type DeclaredFields<S, U, Cn, Is, Tables extends string> =
 	}
 	& ([S] extends [never] ? unknown : { readonly sql: S })
 	& ([U] extends [never] ? unknown : { readonly unscoped: U & NoInfer<ExactTables<U, Tables>> })
-	& ([Cn] extends [never] ? unknown : { readonly connect: Cn })
-	& ([Is] extends [never] ? unknown : { readonly issues: Is })
+	& ([Cn] extends [never] ? unknown : { readonly connect: Cn & NoInfer<LiteralList<Cn>> })
+	& ([Is] extends [never] ? unknown : { readonly issues: Is & NoInfer<OneLiteral<Is>> })
+
+/** A list typed only by its element (`readonly 'catalog'[]`) may hold none of them; the declaration is a literal tuple. */
+type LiteralList<Cn> = Cn extends readonly unknown[]
+	? number extends Cn['length'] ? "connect names its connectors as a literal list: connect: ['catalog']"
+	: unknown
+	: unknown
+
+/** `issues` names one link mount, as a literal. */
+type OneLiteral<Is> = string extends Is ? Unavailable<"issues names one link mount, as a literal: issues: 'shared'">
+	: true extends IsUnion<Is> ? Unavailable<"issues names one link mount, as a literal: issues: 'shared'">
+	: unknown
+
+type IsUnion<T, All = T> = T extends unknown ? ([All] extends [T] ? false : true) : never
 
 /** An endpoint's declaration: its schemas, its access form and the reach it declares. */
 export type EndpointDef<I, O, Acc, S, U, Cn, Is, Tables extends string> =
@@ -138,9 +151,21 @@ export interface GroupInput {
 	readonly [name: string]: AnyEndpoint | PendingEndpoint
 }
 
+declare const failedBuild: unique symbol
+
+/**
+ * The constraint `app.group` infers against. A refused callback falls back to it, and its private symbol keeps the
+ * mount from repeating that error. It is not an annotation: a group typed with it mounts unchecked.
+ */
+export interface GroupBuild extends GroupInput {
+	readonly [failedBuild]?: true
+}
+
 /** The endpoints of a group, prefixed by `Path`, that have no `.handle(…)`. */
-export type PendingIn<T, Path extends string> = string extends keyof T ? never
-	: { [K in keyof T]: T[K] extends AnyEndpoint ? never : T[K] extends PendingEndpoint ? `${Path}${K & string}` : never }[keyof T]
+export type PendingIn<T, Path extends string> = typeof failedBuild extends keyof T ? never
+	: string extends keyof T
+		? [Extract<T[string & keyof T], PendingEndpoint>] extends [never] ? never : `${Path}* (its type admits an endpoint without a handler)`
+	: { [K in keyof T]: [Extract<T[K], PendingEndpoint>] extends [never] ? never : `${Path}${K & string}` }[keyof T]
 
 /** `app.group(…)`: endpoints for one set of callers, declared in any module and mounted by the contract. */
 export interface Group<C extends readonly [RpcCaller, ...RpcCaller[]], T extends GroupInput> {

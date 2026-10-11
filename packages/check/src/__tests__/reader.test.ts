@@ -407,6 +407,18 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 		expect(tableRefusal(withTables(TABLES.replace('export const tables', 'export const policies')))).toEqual([
 			"src/db/tables.ts:1:1 contract src/db/tables.ts exports no const 'tables'",
 		])
+		const allowed = (files: ReadonlyMap<string, string>): unknown[] => {
+			try {
+				readTablesSource(files)
+			} catch (error) {
+				if (error instanceof ContractSourceError) return error.findings.map((finding) => finding.allowed)
+				throw error
+			}
+			return []
+		}
+		expect(allowed(withTables(TABLES.replace('export const tables', 'export const policies')))).toEqual([
+			'export const tables = defineTables(vocabulary, columns)({ … })',
+		])
 		expect(tableRefusal(withTables(TABLES.replace('(columns)({', '(columns, columns, columns)({')))).toEqual([
 			"src/db/tables.ts:4:23 contract 'tables' is not one call of defineTables with the vocabulary and the column list, then the policies",
 		])

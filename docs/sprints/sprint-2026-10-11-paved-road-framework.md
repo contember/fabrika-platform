@@ -665,3 +665,9 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   builder's whole type. A refused access form keeps its one-line error; the handler's `ctx.db.target` then names the
   refusal (one follow-up line) instead of a union of every form. A widened capability type reads no column of another
   action. Left to WU4: the link mount an endpoint `issues` is not checked against the contract's mounts in the types.
+- **WU0, review round 2.** A hidden column is omitted from the row type, not an `Unavailable` property: reading it is
+  TypeScript's "Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'", because the row is the
+  generated interface where no column has a separate write type. `connect` must be a literal tuple and `issues` one
+  literal. A group typed to admit a pending endpoint fails at the mount; a refused callback's fallback (`GroupBuild`,
+  marked by a private symbol) does not, so its error is not repeated. A job's writes outside its transaction name
+  `ctx.transaction((tx) => …)` and `tx.db`. The checker's allowed form is `defineTables(vocabulary, columns)({ … })`.

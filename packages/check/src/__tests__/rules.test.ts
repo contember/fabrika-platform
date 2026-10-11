@@ -677,6 +677,14 @@ describe('generated tests', () => {
 		])
 	})
 
+	test('a defineTables call of another shape names the form that needs no type arguments', async () => {
+		const chained = "import { defineTables } from '@fabrika/db'\n\nexport const tables = defineTables(vocabulary, columns)({})({})\n"
+		const findings = await check({ ...CLEAN_APPLICATION, 'src/db/tables.ts': chained })
+		expect(findings.filter((finding) => finding.rule === 'literal').map((finding) => finding.allowed)).toEqual([
+			'defineTables(vocabulary, columns)({ … })',
+		])
+	})
+
 	test('policies the reader refuses are reported, so they cannot silence the check', async () => {
 		const refused = CLEAN_TABLES.replace("insert: ['title']", "insert: ['title', 'missing']")
 		const findings = await check({ ...CLEAN_APPLICATION, 'src/db/tables.ts': refused })

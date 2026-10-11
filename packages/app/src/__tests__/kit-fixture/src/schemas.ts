@@ -19,3 +19,14 @@ export const Push = z.strictObject({ ref: z.string() })
 export const Ok = z.strictObject({ ok: z.boolean() })
 export const Me = z.strictObject({ label: z.string() })
 export const Margin = z.strictObject({ margin: z.nullable(z.number()) })
+export const Country = z.strictObject({ code: z.string(), name: z.string() })
+export const CountryPage = z.strictObject({ items: z.array(Country), next: z.nullable(z.string()) })
+export const DealRecord = z.strictObject({
+	id: z.uuid(),
+	company_id: z.string(),
+	org_id: z.string(),
+	title: z.string(),
+	stage: Stage,
+	created_by: z.string(),
+	version: z.int(),
+})

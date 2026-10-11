@@ -243,12 +243,16 @@ signatures are fixed, and each builder whose runtime a later unit adds throws `<
 - **`.handle` answers the endpoint without the handler's type**, or, when the handler returns a field the output does
   not declare, an `Unavailable` the group refuses at the endpoint's line (`ExactReturn`). A group does not nest; a
   mount nests groups. A group accepts an endpoint without `.handle`, because an options-first call cannot be checked
-  against its own callback; `c.rpc` refuses it, naming `<group>.<endpoint>`.
+  against its own callback; `c.rpc` refuses it, naming `<group>.<endpoint>`, and refuses a group whose type is
+  widened to admit one (`GroupInput`). A callback the group refused falls back to `GroupBuild`, which the mount
+  skips, so the error is not repeated there.
 - **A refused access form stays refused in the handler.** A written form is one object; when the compiler refuses it
   and falls back to the whole constraint (a union), `CheckedAccess` makes the capability and `ctx.db` an
   `Unavailable` that says so, never a union of every form.
 - **A declaration exists only if the object carries it**: each off-road field is inferred from its optional field and
   then required (`DeclaredFields`), and an `unscoped` key that is no table is refused at its line.
+- **`connect` is a literal list and `issues` one literal**: a widened `string[]` or a union declares nothing, so the
+  site refuses it with a message that shows the literal form.
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
   `ctx.db.unscoped`, `ctx.connect` and `ctx.links`; a query and an export declare only `'read'`. The connectors are the
   kit's `imports`.

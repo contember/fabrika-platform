@@ -83,9 +83,10 @@ and the target `Ref`, so no handler can call it.
   unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
   policies' builder an `Unavailable` that names `fabrika db codegen`.
 - **A capability reads a column that declares its own read action only when its action is exactly that one**
-  (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The hidden column
-  stays in the row type as an optional `Unavailable` that names the action it needs; reference and unscoped rows
-  read through the table's read action. The static reader reads
+  (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The row type omits
+  the hidden column (`Omit<DealsTable, "margin">`, which a diagnostic names), so a read of it is TypeScript's plain
+  "does not exist" error; reference and unscoped rows read through the table's read action. A job's handles outside
+  its transaction read only: every write is an `Unavailable` that names `ctx.transaction((tx) => …)` and `tx.db`. The static reader reads
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.
 - **Only the framework binds a layer, once, and only one `scoped` created.** The object `scoped` returns has no
   `connect` and no locator; `registry.ts` keeps its framework side in a module-private `WeakMap`, so a structural copy

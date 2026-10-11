@@ -23,7 +23,7 @@ import type {
 	Surface,
 	WebhookMount,
 } from './define'
-import type { DeclaredFields, Endpoint, ExportKit, Group, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
+import type { DeclaredFields, Endpoint, ExportKit, Group, GroupBuild, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
 import { notImplemented } from './problems'
 
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
@@ -147,7 +147,7 @@ export type KitContract<K extends KitTypes, S extends Surface> = Contract<
 /** The kit of one application: every builder is typed by its vocabulary, its tables and its imports. */
 export interface App<K extends KitTypes> {
 	/** Endpoints for `callers`, declared and handled together; `fabrika.contract.ts` mounts the group with `c.rpc`. */
-	group<const C extends readonly [RpcCaller, ...RpcCaller[]], const T extends GroupInput>(
+	group<const C extends readonly [RpcCaller, ...RpcCaller[]], const T extends GroupBuild>(
 		options: { readonly callers: C } & Owned<'kind' | 'endpoints'>,
 		build: (r: GroupKit<K, C[number]>) => T,
 	): Group<C, T>

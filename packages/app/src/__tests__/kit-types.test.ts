@@ -22,12 +22,16 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'11-declaration-only-in-a-type.ts': "Types of property 'sql' are incompatible",
 	'12-container-the-vocabulary-does-not-name.ts': `Type '"org"' is not assignable to type '"company"'`,
 	'13-unscoped-insert-without-its-scope.ts': "Property 'org_id' is missing in type '{ name: string; }'",
-	'14-widened-capability.ts': "the column margin needs the read action 'deals.write', which this capability does not hold",
-	'15-reference-hidden-column.ts': "the column note needs the read action 'deals.write', which this capability does not hold",
+	'14-widened-capability.ts': `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`,
+	'15-reference-hidden-column.ts': `Property 'note' does not exist on type 'Omit<CountriesTable, "note">'`,
 	'16-unknown-unscoped-table-beside-a-known-one.ts': 'invoices is not a table of src/db/tables.ts',
-	'17-hidden-column.ts': "the column margin needs the read action 'deals.write', which this capability does not hold",
+	'17-hidden-column.ts': `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`,
 	'18-missing-handle.ts': 'add .handle(…) to deals.get: every endpoint takes its handler beside it',
 	'19-access-dimension-typo.ts': `Type '"deall"' is not assignable to type '"org" | "company" | "deal"'. Did you mean '"deal"'?`,
+	'20-connect-widened-list.ts': "connect names its connectors as a literal list: connect: ['catalog']",
+	'21-group-typed-to-admit-pending-endpoints.ts': 'add .handle(…) to group.* (its type admits an endpoint without a handler)',
+	'22-job-update-outside-its-transaction.ts': 'a job writes inside ctx.transaction((tx) => …): use tx.db there',
+	'23-job-unscoped-insert-outside-its-transaction.ts': 'a job writes inside ctx.transaction((tx) => …): use tx.db there',
 }
 
 /**
