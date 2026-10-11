@@ -21,7 +21,7 @@ that names the release which stopped using a dropped object, and a refusal of vi
   `packages/check/CLAUDE.md:253` lists squawk rules and destructive-migration markers as not built.
 - The runner refuses transaction-control and setting statements (`refusedStatement`) and a foreign schema
   (`foreignSchemaReference`). In an application plan it admits only allowlisted statements (`disallowedStatement`,
-  `packages/platform-node/src/migration-sql.ts`) and rolls back a file that leaves database code in the schema
+  `packages/platform-node/src/migration-allowlist.ts`) and rolls back a file that leaves database code in the schema
   (`databaseCodeCheck`). The checker reports none of it before the deploy.
   The runner covers the timeouts itself, so `require-lock-timeout` and `require-statement-timeout` are not needed.
 

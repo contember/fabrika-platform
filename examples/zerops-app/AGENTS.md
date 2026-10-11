@@ -61,11 +61,15 @@ refuses the shortcuts around both. Keep all three intact.
 
 - `fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
 - Write plain SQL for the application's own schema. Never name `public`, an `app_…` or a `fabrika…` schema.
-- Write only `CREATE TABLE`, `ALTER TABLE`, `CREATE [UNIQUE] INDEX`, `CREATE TYPE … AS ENUM`, `ALTER TYPE … ADD VALUE`,
-  `DROP`, `COMMENT ON` and backfill `INSERT`/`UPDATE`/`DELETE`. No function, trigger, view, policy, domain, `DO`,
-  `GRANT`, `SELECT` or `COPY`; put that logic in a handler.
-- Defaults, `CHECK`s, generated columns and index expressions may call only `now()`, `gen_random_uuid()`, `lower`,
-  `upper`, `length`, `char_length`, `octet_length` and the trims. Use `GENERATED ALWAYS AS IDENTITY`, never `serial`.
+- Write only `CREATE TABLE`, `ALTER TABLE` (columns, constraints, renames), `CREATE [UNIQUE] INDEX`,
+  `ALTER INDEX … RENAME TO`, `CREATE TYPE … AS ENUM`, `ALTER TYPE … ADD VALUE`/`RENAME VALUE`, `DROP`, `TRUNCATE`,
+  `COMMENT ON` and backfill `INSERT`/`UPDATE`/`DELETE`. No function, trigger, view, policy, domain, extension, `DO`,
+  `GRANT`, `SELECT`, `WITH`, `MERGE` or `COPY`, and no schema-qualified name; put that logic in a handler.
+- Defaults, `CHECK`s, generated columns and index expressions may use only reviewed built-ins: `now()`,
+  `gen_random_uuid()`, the text functions (`lower`, `upper`, `length`, the trims), `abs`/`round`/`trunc`/`floor`/
+  `ceil`, `date_trunc`/`date_part`/`extract`/`AT TIME ZONE`, `array_length`, `cardinality`, `to_tsvector`/`to_tsquery`,
+  comparison, arithmetic, `||`, `LIKE`, jsonb `->`/`->>`/`@>`/`<@`/`?|`/`?&`, `COALESCE`/`NULLIF`/`GREATEST`/`LEAST`.
+  Use `GENERATED ALWAYS AS IDENTITY`, never `serial`.
 - Never edit, rename or delete a committed migration. Add a new one. Change a schema by expand, switch, contract;
   the checker does not refuse a destructive change yet, so ask before you drop or rename anything.
 - `fabrika db migrate` (with `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL`), then `fabrika db codegen`, which

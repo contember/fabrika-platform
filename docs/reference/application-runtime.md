@@ -689,8 +689,8 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   its migrations fail, and `close` runs every cleanup step. Every application plan refuses a
   migration that names `public`, an `app_…` or a `fabrika…` schema, quoted or not, so neither
   the test run nor `fabrika db migrate` can reach a live schema; names resolve through the
-  runner's `search_path`. A file may hold only tables, indexes, enum types, drops, comments
-  and backfills, and a check before each commit rolls back a file that leaves database code in
+  runner's `search_path`. A file may hold only tables, indexes, enum types, renames, drops,
+  truncates, comments and backfills that name no other schema, and a check before each commit rolls back a file that leaves database code in
   the schema: a function, trigger, rule, view, policy, domain or sequence, or a default,
   `CHECK`, generated column or index expression that calls anything but a reviewed built-in
   (ADR-0017). Such code would run on a store's guarded write, unseen by the data layer.

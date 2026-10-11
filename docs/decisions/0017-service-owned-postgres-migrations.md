@@ -148,38 +148,75 @@ Two checks enforce it for every application plan, the framework bundle
 included; service plans are not checked, because a service is trusted
 platform code.
 
-- **A statement allowlist, before any SQL runs.** A file may hold only
-  `CREATE TABLE` (without `LIKE … INCLUDING` or `AS`), `ALTER TABLE` (without
-  `SET SCHEMA` or `OWNER TO`), `CREATE [UNIQUE] INDEX`, `CREATE TYPE … AS
-  ENUM`, `ALTER TYPE … ADD VALUE`/`RENAME VALUE`, `DROP` of a table, an index,
-  a type or leftover database code, `COMMENT ON`, and `INSERT`, `UPDATE` and
-  `DELETE` for a backfill. Everything else is refused by file and line:
-  `CREATE FUNCTION`, `CREATE DOMAIN`, `CREATE SEQUENCE`, `DO`, `GRANT`,
-  `SELECT`, `COPY`, `PREPARE`, `EXECUTE` and the rest. This is also what
-  closes the routes that leave the migration's transaction, such as
-  `COPY … PROGRAM`, which no rollback could undo. The file is split at every
-  `;` outside a comment, a literal or a quoted body, with Postgres' lexical
-  rules: a `--` comment ends at a carriage return too, and a dollar tag has no
-  length limit. The runner sets `standard_conforming_strings` on, so a
-  literal ends where the tokenizer says it does.
-- **A catalog check, before the commit.** The expressions inside an allowed
-  statement are Postgres' to parse. After the file runs, a check in the same
-  transaction reads what it left in the schema and fails the transaction when
-  it finds a function, operator, trigger (a foreign key's excepted), rule,
-  view, policy, domain, exclusion constraint or sequence (an identity
-  column's excepted), an operator class outside `pg_catalog`, a dependency on
-  a type outside the schema, or a default, generated column, `CHECK`, index
-  or partition expression whose parsed tree holds a node, calls a function or
-  uses an operator outside a reviewed list. Functions are trusted by name in
-  `pg_catalog` only, never by a volatility label: `now()`,
-  `gen_random_uuid()`, `lower`, `upper`, `length`, `char_length`,
-  `octet_length`, the trims and the implicit casts. So no `nextval`: a
-  `serial` column is refused, and `GENERATED ALWAYS AS IDENTITY` is the
-  alternative. The check covers the whole schema, so a migration that keeps
-  a leftover object fails until one drops it.
+- **A statement allowlist, before any SQL runs** (`migration-allowlist.ts`).
+  A file may hold only `CREATE TABLE` with a column list and nothing after
+  it (`LIKE` without `INCLUDING`; no `INHERITS`, `PARTITION`, `OF`,
+  `TABLESPACE`, `WITH` or `USING`); `ALTER TABLE` whose clauses are each
+  ADD/DROP of a column or a constraint, `ALTER COLUMN` with `TYPE`, `SET`/
+  `DROP DEFAULT`, `SET`/`DROP NOT NULL` or an identity action, `VALIDATE
+  CONSTRAINT`, or one `RENAME`; `CREATE [UNIQUE] INDEX`; `ALTER INDEX …
+  RENAME TO`; `CREATE TYPE … AS ENUM`; `ALTER TYPE … ADD VALUE`/`RENAME
+  VALUE`; `DROP` of a table, an index, a type or leftover database code (an
+  extension included, without `CASCADE`); `TRUNCATE`; `COMMENT ON`; and
+  `INSERT`, `UPDATE` and `DELETE` for a backfill. `WITH` and `MERGE` are
+  refused: a writable CTE or a merge is two statements the allowlist would
+  have to read as one. Every other statement or clause is refused by file
+  and line, `CREATE FUNCTION`, `CREATE EXTENSION`, `DO`, `GRANT`, `SELECT`,
+  `COPY`, `ALTER TABLE ALL IN TABLESPACE` and `DISABLE TRIGGER` included.
+  This also closes the routes that leave the migration's transaction, such
+  as `COPY … PROGRAM`, which no rollback could undo. A statement names no
+  schema but the application's own, `pg_catalog` included: a DDL statement
+  no qualified name, a backfill no qualified relation, call or type, and no
+  `pg_…` relation. The file is split at every `;` outside a comment, a
+  literal or a quoted body, with Postgres' lexical rules: whitespace is
+  `[ \t\n\r\f\v]` only (a no-break space is part of a name), a `--` comment
+  ends at a carriage return too, and a dollar tag has no length limit. Only
+  files not applied yet are checked: an applied file is checksum-locked, so
+  a statement refused today cannot lock an installation out of its next
+  deploy.
+- **A catalog check, before the commit** (`database-code.ts`). The
+  expressions inside an allowed statement are Postgres' to parse. After the
+  file runs, a check in the same transaction reads what it left in the
+  schema and fails the transaction when it finds a function, operator,
+  trigger (an internal constraint trigger excepted), rule, view, policy,
+  domain, exclusion constraint or sequence (an identity column's excepted),
+  an operator class outside `pg_catalog`, a dependency on a type outside the
+  schema, or a default, generated column, `CHECK`, index or partition
+  expression whose parsed tree holds a node, calls a function or uses an
+  operator outside a reviewed list. Functions and operators are trusted by
+  name in `pg_catalog` only, never by a volatility label: `now()`,
+  `gen_random_uuid()`, the text functions (`lower`, `upper`, `length`, the
+  trims), the numeric ones (`abs`, `round`, `trunc`, `floor`, `ceil`), the
+  date ones (`date_trunc`, `date_part`, `extract`, `AT TIME ZONE`),
+  `array_length`, `cardinality`, `to_tsvector`, `to_tsquery` and the
+  implicit casts; comparison, arithmetic, `||`, pattern matching, the jsonb
+  operators `->`, `->>`, `@>`, `<@`, `?|`, `?&`, array `&&` and `@@`;
+  `COALESCE`, `NULLIF`, `GREATEST`, `LEAST` and row comparisons. So no
+  `nextval`: a `serial` column is refused, and `GENERATED ALWAYS AS
+  IDENTITY` is the alternative. The check covers the whole schema, so a
+  migration that keeps a leftover object fails until one drops it.
+
+Both run on settings they pin, not the session's. A migration runs with
+`search_path` set to its schema, then `pg_catalog`, and with
+`standard_conforming_strings` on. The guard names every function, operator
+and type with `pg_catalog`. The catalog check sets `search_path` to
+`pg_catalog` and `standard_conforming_strings` on again before it runs, and
+its query has no backslash, so a file that changed either cannot blind it.
 
 `fabrika db codegen`, and so `codegen --verify` at every start, runs the same
-catalog query, so an object installed before these checks fails the start.
+catalog query in a read-only transaction with the same pinned settings, so an
+object installed before these checks fails the start, whatever the role or
+the database sets for its sessions.
+
+**What a backfill may still do.** An `INSERT`, `UPDATE` or `DELETE` runs
+once, at migration time, with the credential's rights, and may call any
+built-in that resolves unqualified. Its effect is not code that persists in
+the schema, and the catalog check sees what it leaves. A backfill that
+calls a built-in such as `lo_unlink` or `pg_advisory_lock` is therefore
+accepted, as is a role-level setting any statement could change. The
+complete fix is a least-privileged database role per application, owning
+its schema and nothing else
+([backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md)).
 
 The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
 plus one, so applications that share one database do not serialize each other.
@@ -229,12 +266,19 @@ migration file is a widening in the approval diff
 - An application migration cannot write a trigger, a function, a view or a
   `serial` column. That logic lives in a handler, where the data layer and the
   approval diff see it.
+- An application cannot use an extension: `CREATE EXTENSION` is refused, and
+  so is a type, an operator class or a function of an extension schema
+  (pgvector, citext, `pg_trgm`, PostGIS). An index or a `CHECK` may use only
+  the reviewed built-ins; an expression outside them has no place in the
+  schema, since an index cannot move to a handler.
+- A migration cannot write the jsonb `?` operator: the driver reads a lone
+  `?` as a placeholder. `?|` and `?&` work.
 - Migrations and the runtime share one credential, so the running application
   holds the same schema rights as its migrations: application code that reaches
   a raw connection can still create a trigger, which the start check finds only
   at the next start. The allowlist and the catalog check reduce what a
   migration can do; the complete fix is a least-privileged role per
-  application, with separate migration and runtime credentials.
+  application, with separate migration and runtime credentials (backlog 110).
 
 ## Alternatives considered
 
