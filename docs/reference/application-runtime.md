@@ -689,11 +689,14 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   its migrations fail, and `close` runs every cleanup step. Every application plan refuses a
   migration that names `public`, an `app_…` or a `fabrika…` schema, quoted or not, so neither
   the test run nor `fabrika db migrate` can reach a live schema; names resolve through the
-  runner's `search_path`. A file may hold only tables, indexes, enum types, renames, drops,
-  truncates, comments and backfills that name no other schema, and a check before each commit rolls back a file that leaves database code in
-  the schema: a function, trigger, rule, view, policy, domain or sequence, or a default,
-  `CHECK`, generated column or index expression that calls anything but a reviewed built-in
-  (ADR-0017). Such code would run on a store's guarded write, unseen by the data layer.
+  runner's `search_path`. A file is classified before any SQL runs (ADR-0017): tables,
+  indexes, enum types, renames, drops, truncates, comments and backfills are paved; functions,
+  triggers, views, rules, policies, domains, sequences, `DO` and an expression that calls
+  anything but a paved built-in are deviations the approver reviews; what escapes the schema,
+  the transaction or the platform (another schema, a framework `fabrika_*` table, `COPY`,
+  `GRANT`, `SECURITY DEFINER`, a foreign language, dynamic `EXECUTE`, a call outside the
+  function allowlist) is refused. A check before each commit rolls back a file that leaves an
+  escape or an object no migration declares in the schema.
 - **Seeding.** Every seeded row lies in one of two containment chains that share no value,
   with each container row a table owns. Every text column the fixture fills, nullable or
   not, holds a distinct marker; a required column of another type gets a sample of its type.
@@ -751,7 +754,7 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   `pathIgnorePatterns` or `retry` (`skipped-test`).
 - **The platform runs them** at container start on Zerops, after `fabrika db migrate`
   and `fabrika db codegen --verify` (the build has no database), which also fails on a
-  schema that holds database code installed before the runner checked for it: `fabrika db
+  schema that holds database code no migration declares, such as one created at runtime: `fabrika db
   test-isolation` runs exactly the generated files with an empty `bunfig.toml` and the
   platform's preload, against a throwaway schema of the application's database, and fails
   unless every case name the scaffold wrote is reported as passed, with an assertion, in the

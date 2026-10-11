@@ -7,19 +7,19 @@ blocked-by: []
 # 110 — Give each application a least-privileged database role
 
 **Summary.** An application's migrations and its runtime use one credential, which may own far more than the
-application's schema. The migration allowlist and the catalog check narrow what a migration can do; only a role that
+application's schema. The migration classifier and the catalog check narrow what a migration can do; only a role that
 owns the application's schema and nothing else bounds it. Large effort; a security boundary.
 
 ## Problem
 
-ADR-0017 checks every application migration twice: a statement allowlist before any SQL runs
-(`packages/platform-node/src/migration-allowlist.ts`) and a catalog check before the commit
-(`packages/platform-node/src/database-code.ts`). Both stop at what the credential may do:
+ADR-0017 checks every application migration twice: a static classifier before any SQL runs
+(`packages/platform-node/src/migration-classify.ts`) and a catalog check before the commit
+(`packages/platform-node/src/database-code.ts`). Both are name rules and stop at what the credential may do:
 
-- A backfill (`INSERT`, `UPDATE`, `DELETE`) runs once with the credential's rights and may call any built-in that
-  resolves unqualified, `lo_unlink` and `pg_advisory_lock` included. On a superuser credential, an unqualified
-  `UPDATE` of a catalog table rewrites a built-in that the catalog check trusts by name; the allowlist refuses a
-  `pg_…` relation, which is a name rule, not a privilege.
+- A backfill, a function body and a view run with the credential's rights. The classifier admits only allowlisted
+  built-ins and refuses a `pg_…` relation, another schema and a framework `fabrika_*` table by name; a built-in it
+  admits, or a route it misses, still runs with whatever the role holds. Database code (triggers, functions, views)
+  is now a deviation the approver reviews, which raises what a mistake in a reviewed body can reach.
 - Application code that reaches a raw connection holds the same rights. It can create a trigger or set a role-level
   setting at runtime; the start check (`fabrika db codegen --verify`) finds the trigger only at the next start.
 - The local stack and the test backends connect as a superuser, so nothing exercises a lesser role today.
