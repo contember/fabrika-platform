@@ -13,6 +13,7 @@ import {
 	unwrap,
 } from '../ast'
 import type { Report } from '../finding'
+import { unwrapValue } from '../graph'
 import { isRequire } from '../references'
 import { FORBIDDEN_BUN_MEMBERS } from './modules'
 import { handledProcedure } from './structure'
@@ -299,10 +300,11 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 	}
 }
 
-/** The site's options: the last object literal its builder takes (`r.query({ … })`, `c.cron('…', { … })`). */
+/** The site's options: the object literal its builder takes last (`r.query({ … })`, also `{ … } satisfies T` or `as const`). */
 const procedureOptions = (procedure: AstNode): AstNode | undefined => {
 	const last = children(procedure, 'arguments').at(-1)
-	return last === null || last === undefined || unwrap(last).type !== 'ObjectExpression' ? undefined : unwrap(last)
+	const options = last === null || last === undefined ? undefined : unwrapValue(last)
+	return options?.type === 'ObjectExpression' ? options : undefined
 }
 
 /** Whether the options declare `sql`; a spread may hold it, so it counts as declaring. */

@@ -179,11 +179,13 @@ const cases: readonly RuleCase[] = [
 				'export const group = {',
 				'\tpipeline: r.query({ access: {} }).handle(async ({ ctx }) => ctx.sql(Row)`select 1`),',
 				"\tclose: r.cron('0 3 * * *', { actions: [] }).handle(async ({ ctx }) => ctx.transaction((tx) => tx.sql(Row)`select 1`)),",
+				'\tsatisfied: r.query({ access: {} } satisfies object).handle(async ({ ctx }) => ctx.sql(Row)`select 1`),',
+				'\tconstant: r.query({ access: {} } as const).handle(async ({ ctx }) => ctx.sql(Row)`select 1`),',
 				'}',
 				'',
 			].join('\n'),
 		},
-		expected: ['src/deals/endpoints.ts:6:62', 'src/deals/endpoints.ts:7:96'],
+		expected: ['src/deals/endpoints.ts:6:62', 'src/deals/endpoints.ts:7:96', 'src/deals/endpoints.ts:8:80', 'src/deals/endpoints.ts:9:71'],
 		good: {
 			'src/deals/endpoints.ts': [
 				'type Tag = (row: unknown) => (text: TemplateStringsArray) => Promise<unknown[]>',
