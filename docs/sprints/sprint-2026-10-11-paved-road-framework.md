@@ -624,3 +624,10 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   inert), `CREATE AGGREGATE`/`OPERATOR`/`TYPE … AS (…)`/`AS RANGE`, `ALTER SEQUENCE`. `packages/app/skill/SKILL.md`
   and `examples/zerops-app/AGENTS.md` still state the old migration rules → WU10. `packages/cli/src/db.ts` threads
   the manifest into `codegen` (outside WU5's listed touch points, required by §5).
+- **WU5 review round 1:** a routine may not take any `pg_catalog` function name or keyword (a generated Postgres 17
+  list, `pg-catalog-names.ts`, pinned by a Postgres test; the catalog check also refuses a shadowing routine, which
+  catches names a later Postgres adds). Routines are keyed by `proargtypes` typnames, which leave out `OUT` arguments
+  for procedures too, so a procedure's drop or rename, whose list includes them, covers every overload of the name
+  (fail-closed). The application wrapper's `plan()` no longer scans qualifiers: the runner's role-aware refusal of a
+  pending file replaces it. The catalog query takes the schema as a constant `regnamespace`: with a subquery the
+  planner's estimate crossed `jit_above_cost` and the query took 200 ms instead of 10 ms.
