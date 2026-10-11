@@ -25,7 +25,7 @@ import {
 } from './sql-names'
 
 /** A database object a migration declares, named as the catalog check names it (`trigger deals.audit`). */
-export type DatabaseObjectKind = 'function' | 'procedure' | 'trigger' | 'view' | 'materialized view' | 'rule' | 'policy' | 'domain' | 'sequence'
+export type DatabaseObjectKind = 'function' | 'procedure' | 'trigger' | 'view' | 'materialized view' | 'rule' | 'policy' | 'sequence'
 
 export interface DatabaseObject {
 	readonly kind: DatabaseObjectKind
@@ -61,6 +61,7 @@ export type ManifestChange =
 	| { readonly change: 'drop'; readonly object: DatabaseObject }
 	| { readonly change: 'drop table'; readonly table: string }
 	| { readonly change: 'rename table'; readonly from: string; readonly to: string }
+	| { readonly change: 'rename'; readonly from: DatabaseObject; readonly to: DatabaseObject }
 
 export interface MigrationClassification {
 	readonly file: string
@@ -474,15 +475,6 @@ function createPolicy(tokens: readonly SqlToken[], at: number, context: Context,
 	declareObject(out, 'policy', `${table}.${name}`, line)
 }
 
-/** `CREATE DOMAIN name [AS] type [DEFAULT …] [CHECK (…)]`. */
-function createDomain(tokens: readonly SqlToken[], at: number, context: Context, out: Collected): void {
-	const line = tokens[0]?.line ?? 1
-	const name = ownName(tokens, at, context, 'CREATE DOMAIN')
-	refuseForeignDdl(tokens, context, 'CREATE DOMAIN')
-	checkQuery(tokens.slice(afterName(tokens, at)), context, 'a domain')
-	declareObject(out, 'domain', name, line)
-}
-
 /** `CREATE SEQUENCE [IF NOT EXISTS] name [options] [OWNED BY table.column | NONE]`. */
 function createSequence(tokens: readonly SqlToken[], at: number, context: Context, out: Collected): void {
 	const line = tokens[0]?.line ?? 1
@@ -653,6 +645,57 @@ function alterIndexOrType(tokens: readonly SqlToken[], kind: string, context: Co
 	refuseForeignDdl(tokens, context, `ALTER ${kind}`)
 }
 
+/** The kinds of database code `ALTER … RENAME TO` may rename, and what each names in the manifest. */
+const RENAMEABLE: Readonly<Record<string, readonly DatabaseObjectKind[]>> = {
+	FUNCTION: ['function'],
+	PROCEDURE: ['procedure'],
+	ROUTINE: ['function', 'procedure'],
+	VIEW: ['view'],
+	SEQUENCE: ['sequence'],
+	TRIGGER: ['trigger'],
+	RULE: ['rule'],
+	POLICY: ['policy'],
+}
+
+/**
+ * `ALTER FUNCTION|PROCEDURE|ROUTINE name [(args)] RENAME TO new`, `ALTER [MATERIALIZED] VIEW|SEQUENCE [IF EXISTS] name
+ * RENAME TO new` and `ALTER TRIGGER|RULE|POLICY name ON table RENAME TO new`: the renamed object is a deviation under
+ * its new name, and the manifest follows it. Any other `ALTER` of database code is refused.
+ */
+function alterRename(tokens: readonly SqlToken[], context: Context, out: Collected): void {
+	const line = tokens[0]?.line ?? 1
+	const materialized = upperWord(tokens[1]) === 'MATERIALIZED' && upperWord(tokens[2]) === 'VIEW'
+	const kind = materialized ? 'VIEW' : (upperWord(tokens[1]) ?? '')
+	const kinds: readonly DatabaseObjectKind[] = materialized ? ['materialized view'] : Object.hasOwn(RENAMEABLE, kind) ? (RENAMEABLE[kind] ?? []) : []
+	const label = statementKind(tokens)
+	const at = skipWords(tokens, materialized ? 3 : 2, 'IF', 'EXISTS')
+	const onTable = kind === 'TRIGGER' || kind === 'RULE' || kind === 'POLICY'
+	let name: string
+	let after: number
+	if (onTable) {
+		const own = nameText(tokens[at])
+		if (own === undefined || upperWord(tokens[at + 1]) !== 'ON') throw new Refused(label, line)
+		name = `${ownName(tokens, at + 2, context, label)}.${own}`
+		after = afterName(tokens, at + 2) ?? tokens.length
+	} else {
+		const own = ownName(tokens, at, context, label)
+		name = own
+		after = afterName(tokens, at) ?? tokens.length
+		if (isPunct(tokens[after], '(')) after = (closingParenthesis(tokens, after) ?? tokens.length) + 1
+	}
+	const target = nameText(tokens[after + 2])
+	if (
+		kinds.length === 0 || upperWord(tokens[after]) !== 'RENAME' || upperWord(tokens[after + 1]) !== 'TO' || target === undefined
+		|| after + 3 !== tokens.length
+	) {
+		throw new Refused(`${label} other than RENAME TO`, line)
+	}
+	refuseForeignDdl(tokens, context, label)
+	const renamed = onTable ? `${name.slice(0, name.indexOf('.'))}.${target}` : target
+	for (const objectKind of kinds) out.changes.push({ change: 'rename', from: { kind: objectKind, name }, to: { kind: objectKind, name: renamed } })
+	deviate(out, kinds[0] ?? 'function', renamed, line)
+}
+
 /** The objects a `DROP` removes from the manifest. */
 function dropChanges(tokens: readonly SqlToken[], kind: string, context: Context): ManifestChange[] {
 	const objectKinds: Readonly<Record<string, readonly DatabaseObjectKind[]>> = {
@@ -660,7 +703,6 @@ function dropChanges(tokens: readonly SqlToken[], kind: string, context: Context
 		PROCEDURE: ['procedure'],
 		ROUTINE: ['function', 'procedure'],
 		VIEW: ['view'],
-		DOMAIN: ['domain'],
 		SEQUENCE: ['sequence'],
 	}
 	const materialized = kind === 'MATERIALIZED'
@@ -716,7 +758,6 @@ function classifyCreate(tokens: readonly SqlToken[], context: Context, out: Coll
 	if (!replace && kind === 'MATERIALIZED' && next === 'VIEW') return createView(tokens, at + 2, 'materialized view', context, out)
 	if (kind === 'RULE') return createRule(tokens, at + 1, context, out)
 	if (!replace && kind === 'POLICY') return createPolicy(tokens, at + 1, context, out)
-	if (!replace && kind === 'DOMAIN') return createDomain(tokens, at + 1, context, out)
 	if (!replace && kind === 'SEQUENCE') return createSequence(tokens, at + 1, context, out)
 	if (kind === 'EVENT') throw new Refused('CREATE EVENT TRIGGER', line)
 	throw new Refused(statementKind(tokens), line)
@@ -758,6 +799,9 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 	const second = upperWord(tokens[1])
 	if (first === 'ALTER' && second === 'TABLE') return alterTable(tokens, context, out)
 	if (first === 'ALTER' && (second === 'INDEX' || second === 'TYPE')) return alterIndexOrType(tokens, second, context)
+	if (first === 'ALTER' && second !== undefined && (Object.hasOwn(RENAMEABLE, second) || second === 'MATERIALIZED')) {
+		return alterRename(tokens, context, out)
+	}
 	throw new Refused(statementKind(tokens), line)
 }
 
@@ -765,12 +809,13 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
  * Classifies one application migration. Paved: `CREATE TABLE` (a column list and nothing after it), `ALTER TABLE`
  * column, constraint and rename clauses, `CREATE [UNIQUE] INDEX`, `ALTER INDEX … RENAME TO`, `CREATE TYPE … AS ENUM`,
  * `ALTER TYPE … ADD|RENAME VALUE`, `DROP`, `TRUNCATE`, `COMMENT ON` and `INSERT`/`UPDATE`/`DELETE` backfills.
- * Deviations: functions, procedures, triggers, views, rules, policies, domains, sequences (a serial column's too),
- * `DO`, and a stored expression that calls anything but a paved built-in. Refused: a schema other than `schema`
- * (`pg_catalog` relations included), a framework `fabrika_*` name, `SECURITY DEFINER`, a function `SET` clause, a
- * language other than `sql` and `plpgsql`, a body that is not literal or that holds dynamic `EXECUTE` or a statement
- * outside its allowlist, a call outside the function allowlist, and every form not named here: `COPY`, `GRANT`,
- * `REVOKE`, roles, extensions, event triggers, `SELECT`, `WITH` and `MERGE` among them. Transaction control and
+ * Deviations: functions, procedures, triggers, views, rules, policies, sequences (a serial column's too), their
+ * `ALTER … RENAME TO`, `DO`, and a stored expression that calls anything but a paved built-in. Refused: a schema
+ * other than `schema` (`pg_catalog` relations included), a framework `fabrika_*` name, `SECURITY DEFINER`, a function
+ * `SET` clause, a language other than `sql` and `plpgsql`, a body that is not literal or that holds dynamic `EXECUTE`
+ * or a statement outside its allowlist, a call outside the function allowlist, and every form not named here:
+ * `COPY`, `GRANT`, `REVOKE`, roles, extensions, event triggers, domains (codegen cannot bind one), `SELECT`, `WITH`
+ * and `MERGE` among them. Transaction control and
  * `SET`/`RESET` are refused for every plan before this runs (`refusedStatement`).
  */
 export function classifyMigration(sql: string, schema: string, options: ClassifyMigrationOptions): MigrationClassification {
@@ -835,7 +880,9 @@ export function migrationManifest(classifications: readonly MigrationClassificat
 			if (change.change === 'create') objects.set(objectKey(change.object), change.object)
 			else if (change.change === 'drop') objects.delete(objectKey(change.object))
 			else if (change.change === 'drop table') { for (const object of onTable(change.table)) objects.delete(objectKey(object)) }
-			else {
+			else if (change.change === 'rename') {
+				if (objects.delete(objectKey(change.from))) objects.set(objectKey(change.to), change.to)
+			} else {
 				for (const object of onTable(change.from)) {
 					objects.delete(objectKey(object))
 					const renamed: DatabaseObject = { kind: object.kind, name: `${change.to}${object.name.slice(change.from.length)}` }

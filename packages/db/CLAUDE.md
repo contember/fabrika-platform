@@ -212,9 +212,9 @@ and the target `Ref`, so no handler can call it.
 - **A column with its own read action** (`columns: { c: { read } }`) falls back to nothing: every
   read needs the table's read action, so v1 never returns, filters or sorts by such a column.
 - **Codegen types a column exactly as `Bun.SQL` decodes it, or refuses it.** `int8` and `numeric` are
-  strings (bound as a number, bigint or string), dates are `Date`, an enum is its label union, a domain
-  is its base type (non-null when the domain is `NOT NULL`); JSON, `bytea`, arrays and a domain over a
-  domain are refused rather than typed `unknown`, because the layer cannot bind them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
+  strings (bound as a number, bigint or string), dates are `Date`, an enum is its label union; JSON,
+  `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind
+  them. `codegen.test.ts` pins every mapping against a real decode. The fixture `schema.generated.ts`
   is codegen output that the Postgres suite regenerates byte for byte: change the renderer and the
   fixture together. Interface names are `<Pascal>Table`, with a `T` prefix when the name would not
   start with a letter; a collision, and the table names `__proto__`, `constructor` and `prototype`, are

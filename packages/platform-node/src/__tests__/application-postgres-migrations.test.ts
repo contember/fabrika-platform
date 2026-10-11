@@ -361,6 +361,11 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 				// COPY … PROGRAM runs outside the migration's transaction, so no rollback could undo it.
 				["CREATE TABLE marker (id text);\nCOPY marker FROM PROGRAM 'true'", 'line 2: COPY is not allowed'],
 				['CREATE TABLE marker (id text);\nINSERT INTO app_other.t VALUES (1)', 'line 2 names the schema app_other'],
+				[
+					"CREATE TABLE marker (id text);\nUPDATE fabrika_job_leases SET holder = 'me'",
+					"line 2: a reference to the framework's fabrika_job_leases is not allowed",
+				],
+				['CREATE TABLE marker (id text);\nCREATE DOMAIN positive AS int', 'line 2: CREATE DOMAIN is not allowed'],
 				['CREATE TABLE deals (id text);\nCREATE TABLE copied (LIKE deals INCLUDING ALL)', 'line 2: CREATE TABLE … LIKE … INCLUDING is not allowed'],
 				// Postgres reads a no-break space as part of a name, so `\u00a0E'\'` is a name and the string `'\'`.
 				["CREATE TABLE marker (c text DEFAULT \u00a0E'\\'); GRANT ALL ON marker TO PUBLIC; --')", 'line 1: GRANT is not allowed'],
@@ -560,13 +565,18 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 				CREATE MATERIALIZED VIEW totals AS SELECT stage, count(*) FROM deals GROUP BY stage;
 				CREATE RULE keep AS ON DELETE TO deal_log DO INSTEAD NOTHING;
 				CREATE POLICY own ON deals USING (stage <> 'hidden');
-				CREATE DOMAIN positive AS int CHECK (VALUE > 0);
 				CREATE SEQUENCE numbers OWNED BY deals.id;
 				ALTER TABLE deals ADD COLUMN doubled int GENERATED ALWAYS AS (double_it(amount)) STORED;
 				DO $$ BEGIN UPDATE deals SET stage = 'open' WHERE stage = ''; END $$;
 				`,
 			),
-			migration('20261009120000_rename.sql', 'ALTER TABLE deals RENAME TO opportunities; DROP RULE keep ON deal_log'),
+			migration(
+				'20261009120000_rename.sql',
+				`ALTER TABLE deals RENAME TO opportunities; DROP RULE keep ON deal_log;
+				ALTER FUNCTION double_it(int) RENAME TO twice;
+				CREATE OR REPLACE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END $body$;
+				ALTER TRIGGER spread ON opportunities RENAME TO spread_stage;`,
+			),
 		]
 		expect(await migrations.apply(db, files)).toEqual(['app/20261008120000_init.sql', 'app/20261009120000_rename.sql'])
 		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()

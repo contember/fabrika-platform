@@ -168,15 +168,18 @@ checked, because a service is trusted platform code.
     backfill.
   - **Deviation** (a kind and an object name; the approval key is the two,
     never the line): a function or a procedure, a trigger, a view or a
-    materialized view, a rule, a policy, a domain, a sequence (a `serial`
-    column's included), a `DO` block, and a default, `CHECK`, generated
+    materialized view, a rule, a policy, a sequence (a `serial` column's
+    included), an `ALTER … RENAME TO` of one of them, a `DO` block, and a
+    default, `CHECK`, generated
     column or index expression that calls anything but a paved built-in
     (`now`, `gen_random_uuid`, `lower`, `upper`, `length`, the trims, `abs`,
     `round`, `trunc`, `floor`, `ceil`, `date_trunc`, `date_part`, `extract`,
     `AT TIME ZONE`, `array_length`, `cardinality`, `to_tsvector`,
     `to_tsquery` and the implicit casts).
   - **Refused**, by file and line: `COPY` in any form, `GRANT`, `REVOKE`,
-    roles, `CREATE EXTENSION`, event triggers, `SECURITY DEFINER`, a
+    roles, `CREATE EXTENSION`, event triggers, a domain (codegen cannot
+    bind one, and the data layer would have to unwrap it), any other `ALTER`
+    of database code, `SECURITY DEFINER`, a
     function `SET` clause, a language other than `sql` and `plpgsql`, any
     schema but the application's own (a `pg_…` relation counts as
     `pg_catalog`), any framework name (`fabrika_…`, case-insensitive, quoted
@@ -200,7 +203,7 @@ checked, because a service is trusted platform code.
   data: no statement a body may hold runs a string as SQL.
 
   **Function calls are an allowlist**, in bodies, views, policies, rules,
-  trigger conditions, domains and backfills alike: a name that `(` follows
+  trigger conditions and backfills alike: a name that `(` follows
   must be a paved or a reviewed built-in (pure string, number, date, JSON,
   array, text-search, window and aggregate functions, `pg_sleep`,
   `suppress_redundant_updates_trigger`) or a function the migration set
@@ -214,9 +217,9 @@ checked, because a service is trusted platform code.
 
   Each file also yields the database objects it declares. Folded in file
   order they are the **manifest**: a create adds an object (a replace keeps
-  it), a drop removes it (dropping one overload removes the name), dropping
-  a table removes its triggers, rules and policies, and renaming a table
-  renames them. The file is split at every `;` outside a comment, a literal
+  it), a rename moves it, a drop removes it (dropping one overload removes
+  the name), dropping a table removes its triggers, rules and policies, and
+  renaming a table renames them. The file is split at every `;` outside a comment, a literal
   or a quoted body, with Postgres' lexical rules: whitespace is `[ \t\n\r\f\v]`
   only (a no-break space is part of a name), a `--` comment ends at a
   carriage return too, and a dollar tag has no length limit. Only files not
@@ -305,7 +308,7 @@ migration file is a widening in the approval diff
 - An application migration may write a trigger, a function, a view, a
   policy or a `serial` column; each is a deviation the approver sees as
   needing closer review, and the catalog check holds the schema to what the
-  migrations declare.
+  migrations declare. A domain stays refused.
 - An application cannot use an extension: `CREATE EXTENSION` is refused, and
   so is a type, an operator class or a function of an extension schema
   (pgvector, citext, `pg_trgm`, PostGIS). A built-in outside the function

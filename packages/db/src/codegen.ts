@@ -63,30 +63,25 @@ const catalogColumnSchema = z.object({
 
 export type CatalogColumn = z.infer<typeof catalogColumnSchema>
 
-/**
- * One row per column of every ordinary or partitioned table in the schema, in table then column order. A column of a
- * domain is typed as the domain's base type, and is non-null when the domain is `NOT NULL`; a domain over a domain
- * keeps the inner domain as its type, which `scalarType` refuses.
- */
+/** One row per column of every ordinary or partitioned table in the schema, in table then column order. */
 const CATALOG_QUERY = `
 SELECT
 	c.relname::text AS table_name,
 	a.attname::text AS column_name,
-	COALESCE(b.typname, t.typname)::text AS type_name,
-	COALESCE(b.typtype, t.typtype)::text AS type_type,
-	COALESCE(b.typcategory, t.typcategory)::text AS type_category,
-	NOT a.attnotnull AND NOT (t.typtype = 'd' AND t.typnotnull) AS nullable,
+	t.typname::text AS type_name,
+	t.typtype::text AS type_type,
+	t.typcategory::text AS type_category,
+	NOT a.attnotnull AS nullable,
 	CASE
 		WHEN a.attgenerated <> '' OR a.attidentity = 'a' THEN 'always'
 		WHEN a.atthasdef OR a.attidentity = 'd' THEN 'default'
 		ELSE 'no'
 	END AS generated,
-	ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = COALESCE(b.oid, t.oid) ORDER BY e.enumsortorder) AS enum_labels
+	ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder) AS enum_labels
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_type t ON t.oid = a.atttypid
-LEFT JOIN pg_type b ON t.typtype = 'd' AND b.oid = t.typbasetype
 WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum
 `

@@ -362,27 +362,6 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		expect(await generateSchema(url, schema, [{ kind: 'trigger', name: 'deals.noop' }])).toContain('export interface DealsTable {')
 	})
 
-	test('types a column of a domain as its base type, non-null when the domain is NOT NULL', async () => {
-		const schema = await migrated(`
-			CREATE TYPE mood AS ENUM ('calm', 'busy');
-			CREATE DOMAIN positive AS int CHECK (VALUE > 0);
-			CREATE DOMAIN code AS varchar(8) NOT NULL;
-			CREATE DOMAIN feeling AS mood;
-			CREATE TABLE tallies (id text PRIMARY KEY, count positive, label code, feeling feeling);
-		`)
-		const domains = [{ kind: 'domain', name: 'positive' }, { kind: 'domain', name: 'code' }, { kind: 'domain', name: 'feeling' }] as const
-		const source = await generateSchema(url, schema, domains)
-		expect(interfaceOf(source, 'TalliesTable')).toBe(
-			"export interface TalliesTable {\n\tid: string\n\tcount: number | null\n\tlabel: string\n\tfeeling: 'calm' | 'busy' | null\n}\n",
-		)
-	})
-
-	test('refuses a column of a domain over a domain, whose base it does not resolve', async () => {
-		const schema = await migrated('CREATE DOMAIN positive AS int CHECK (VALUE > 0); CREATE DOMAIN small AS positive; CREATE TABLE t (n small);')
-		const domains = [{ kind: 'domain', name: 'positive' }, { kind: 'domain', name: 'small' }] as const
-		await expect(generateSchema(url, schema, domains)).rejects.toThrow('t.n has type positive, which the data layer does not read or bind')
-	})
-
 	test('refuses a schema that was never migrated', async () => {
 		await expect(introspectSchema(url, 'codegen_missing_schema', [])).rejects.toThrow(
 			'schema codegen_missing_schema does not exist; run fabrika db migrate first',
