@@ -39,6 +39,7 @@ export {
 	PostgresJobQueue,
 	type PostgresJobQueueOptions,
 } from './job-queue-postgres'
+export { defaultExpressionCall } from './migration-sql'
 export { rewritePlaceholders, type RewrittenSql } from './placeholders'
 export {
 	applyPostgresMigrations,

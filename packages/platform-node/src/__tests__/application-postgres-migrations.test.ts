@@ -50,6 +50,42 @@ describe('application migration identity', () => {
 		)
 	})
 
+	test('every plan refuses a migration that installs database code, naming the file and the line', () => {
+		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
+		// A guarded single-row write to deals would fire this and change the rows of every tenant (backlog 108).
+		const trigger = migration(
+			'20261008120000_init.sql',
+			[
+				'CREATE TABLE deals (id TEXT PRIMARY KEY, stage TEXT NOT NULL);',
+				'CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$',
+				'BEGIN UPDATE deals SET stage = NEW.stage WHERE id <> NEW.id; RETURN NEW; END',
+				'$body$;',
+				'CREATE TRIGGER spread AFTER UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION spread();',
+			].join('\n'),
+		)
+		expect(() => migrations.plan([trigger])).toThrow(
+			'Application migration 20261008120000_init.sql line 2: CREATE FUNCTION is not allowed; an application schema holds no database code and no grants, because the data layer cannot see what they do',
+		)
+		const defaulted = migration('20261008120000_init.sql', "CREATE TABLE notes (\n\tid TEXT PRIMARY KEY,\n\tn BIGINT DEFAULT nextval('s')\n)")
+		expect(() => migrations.plan([defaulted])).toThrow(
+			'Application migration 20261008120000_init.sql line 3: a column default calls nextval(); a default is a constant, now() or gen_random_uuid()',
+		)
+		const framework = definePostgresApplicationMigrations({
+			appId: 'notes',
+			directory: '/unused',
+			framework: { bundle: 'fabrika', migrations: [migration('0001_framework.sql', 'DO $$ BEGIN PERFORM 1; END $$')] },
+		})
+		expect(() => framework.plan([migration('20261008120000_init.sql', 'SELECT 1')])).toThrow(
+			'Application migration 0001_framework.sql line 1: DO is not allowed',
+		)
+	})
+
+	test("the example application's migrations are accepted", () => {
+		const directory = join(import.meta.dir, '..', '..', '..', '..', 'examples', 'zerops-app', 'db', 'migrations')
+		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory })
+		expect(migrations.plan().bundles.map((bundle) => bundle.migrations.length)).toEqual([1])
+	})
+
 	test('composes one app bundle, a ledger in the application schema and the default timeouts', () => {
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
 		const plan = migrations.plan([migration('20261008120000_init.sql', 'SELECT 1')])
@@ -324,22 +360,39 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 			'/* SET statement_timeout = 0; /* nested */ */',
 			'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT);',
 			"INSERT INTO notes VALUES ('n1', 'COMMIT; SET search_path TO public');",
-			'CREATE FUNCTION note_count() RETURNS bigint LANGUAGE plpgsql AS $body$ BEGIN RETURN (SELECT count(*) FROM notes); END; $body$;',
-			'DO $$ BEGIN PERFORM 1; END $$;',
+			"INSERT INTO notes VALUES ('n2', $body$ CREATE TRIGGER t; DO $$ COMMIT $$; GRANT ALL $body$);",
 		].join('\n')
 		expect(await migrations.apply(db, [migration('20261008120000_init.sql', sql)])).toEqual(['app/20261008120000_init.sql'])
-		const row = await db.prepare(`SELECT body FROM ${migrations.schema}.notes`).first<{ body: string }>()
-		expect(row?.body).toBe('COMMIT; SET search_path TO public')
+		const { results } = await db.prepare(`SELECT body FROM ${migrations.schema}.notes ORDER BY id`).all<{ body: string }>()
+		expect(results.map((row) => row.body)).toEqual(['COMMIT; SET search_path TO public', ' CREATE TRIGGER t; DO $$ COMMIT $$; GRANT ALL '])
 	})
 
-	test('a COMMIT inside a DO block is refused by Postgres inside the runner transaction', async () => {
+	test('a file that installs database code is refused before any SQL runs', async () => {
 		const { migrations, db } = application()
-		const failure = await failureOf(
-			migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE marker (id text); DO $$ BEGIN COMMIT; END $$')]),
-		)
-		expect(failure.message).toBe('Postgres migration app/20261008120000_init.sql failed')
+		const sql = 'CREATE TABLE marker (id text);\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$'
+		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
+		expect(failure.message).toContain('Application migration 20261008120000_init.sql line 2: CREATE FUNCTION is not allowed')
+		const schema = await db.prepare(`SELECT to_regnamespace('${migrations.schema}') AS schema`).first<{ schema: string | null }>()
+		expect(schema?.schema).toBeNull()
+	})
+
+	test("a COMMIT inside a service migration's DO block is refused by Postgres inside the runner transaction", async () => {
+		const schema = `service_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+		schemas.push(schema)
+		const admin = PostgresDatabase.connect(requireUrl(), { max: 1 })
+		await admin.prepare(`CREATE SCHEMA ${schema}`).run()
+		await admin.close()
+		const db = PostgresDatabase.connect(requireUrl(), { connection: { search_path: schema }, max: 1 })
+		openDatabases.push(db)
+		const plan = definePostgresMigrationPlan({
+			ledgerTable: 'service_schema_migrations',
+			lockKey: 8_301_101,
+			bundles: [{ name: 'service', migrations: [migration('0001_init.sql', 'CREATE TABLE marker (id text); DO $$ BEGIN COMMIT; END $$')] }],
+		})
+		const failure = await failureOf(applyPostgresMigrations(db, plan))
+		expect(failure.message).toBe('Postgres migration service/0001_init.sql failed')
 		expect(sqlStateOf(failure)).toBe('2D000')
-		const marker = await db.prepare(`SELECT to_regclass('${migrations.schema}.marker') AS relation`).first<{ relation: string | null }>()
+		const marker = await db.prepare(`SELECT to_regclass('${schema}.marker') AS relation`).first<{ relation: string | null }>()
 		expect(marker?.relation).toBeNull()
 	})
 

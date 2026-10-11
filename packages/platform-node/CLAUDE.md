@@ -61,6 +61,14 @@ Read this before moving a service onto this driver.
   resolve through the runner's `search_path`; `pg_catalog.` stays allowed. A table alias with such
   a name is refused too: the tokenizer cannot tell a schema from a table. The test kit's throwaway
   schema depends on this: a migration that reached `public` would change live rows on every run.
+- **An application migration installs no database code** (ADR-0017). Every application plan, the
+  framework bundle included, refuses a function, procedure, trigger, rule, view, policy, extension,
+  language, aggregate, operator, cast, conversion, transform or schema, a `DO` block, `GRANT`/`REVOKE`/
+  `ALTER DEFAULT PRIVILEGES` (`executableStatement`), and a default that calls anything but `now()` or
+  `gen_random_uuid()` (`refusedDefault`). `defaultExpressionCall` judges a default as `pg_get_expr`
+  prints it, for `@fabrika/db`'s start check. Any word followed by `(` in a default is a call, so the
+  rule refuses too much rather than too little; a cast's digit-only type modifier is not a call.
+  Service plans are not checked: a service owns its schema and is trusted platform code.
 - **Checksums are verified before anything is applied.** An applied file that changed fails the run with
   nothing applied; a ledger row with no file (a rollback) is tolerated.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**
