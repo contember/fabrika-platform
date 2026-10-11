@@ -355,7 +355,11 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 		tenant_items: TenantItems
 		ledgers: Ledgers
 	}
-	const extraColumns: TypedColumnList<Extra> = { tops: ['id', 'created_by'], tenant_items: ['id', 'tenant_id', 'title'], ledgers: ['id', 'version'] }
+	const extraColumns: TypedColumnList<Extra> = {
+		tops: { columns: ['id', 'created_by'], foreignKeys: [] },
+		tenant_items: { columns: ['id', 'tenant_id', 'title'], foreignKeys: [] },
+		ledgers: { columns: ['id', 'version'], foreignKeys: [] },
+	}
 	const extraVocabulary = {
 		dimensions: { top: {}, tenant: {}, tenant_item: { in: 'tenant' }, ledger: {} },
 		actions: { read: 'Read', write: 'Write' },

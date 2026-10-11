@@ -59,8 +59,9 @@ refuses the shortcuts around both. Keep all three intact.
   the generated `src/db/schema.generated.ts`.
 - A policy names its scope: a dimension table `{ dimension }`, a child table `{ child: '<parent table>' }`, or
   `{ reference: '<why>' }`. The container comes from the vocabulary. The key defaults to `id`, the container column
-  to `<container>_id` (else `in: { column }`), and a child's column to `<parent dimension>_id`. A child carries its
-  parent's scope columns and a composite foreign key to `UNIQUE (<key>, <chain columns>)` of the parent.
+  to `<container>_id` (else `in: { column }`), and a child's column to `<parent dimension>_id`. That column is a
+  foreign key to the key of the container's (or parent's) table. A child carries its parent's scope columns and a
+  composite foreign key to `UNIQUE (<key>, <chain columns>)` of the parent.
 - `actions` maps `read`, `insert`, `update` and `delete` to contract actions. `insert` and `update` list the
   writable columns. `version` names an INTEGER column, `createdBy` the creator column. A column that needs its own
   read action goes in `columns: { name: { read } }`.

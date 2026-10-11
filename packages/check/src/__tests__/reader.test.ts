@@ -342,7 +342,7 @@ export interface DB {
 	notes: { id: string; workspace_id: string; title: string }
 }
 
-export const columns: TypedColumnList<DB> = { 'notes': ['id', 'workspace_id', 'title'] }
+export const columns: TypedColumnList<DB> = { 'notes': { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] } }
 `
 	const VOCABULARY = `import { defineVocabulary } from '@fabrika/app/contract'
 
@@ -408,7 +408,11 @@ export const tables = defineTables(vocabulary, columns)({
 		expect(tableRefusal(withTables(TABLES.replace("column: 'workspace_id'", "column: 'workspace'")))).toEqual([
 			'src/db/tables.ts:5:23 contract notes: scope.in.column names workspace, which is not a column (columns: id, workspace_id, title)',
 		])
-		expect(tableRefusal(withTables(TABLES, SCHEMA_GENERATED.replace("'title']", "'title'], 'audit': ['id']")))).toEqual([
+		expect(
+			tableRefusal(
+				withTables(TABLES, SCHEMA_GENERATED.replace('foreignKeys: [] }', "foreignKeys: [] }, 'audit': { columns: ['id'], foreignKeys: [] }")),
+			),
+		).toEqual([
 			'src/db/tables.ts:5:23 contract audit: every table needs a policy in tables.ts',
 		])
 	})

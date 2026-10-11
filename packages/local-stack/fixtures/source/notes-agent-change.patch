@@ -15,10 +15,10 @@ index 0000000..066eed9
 +
 +CREATE INDEX note_labels_note ON note_labels (note_id);
 diff --git a/fabrika.contract.ts b/fabrika.contract.ts
-index e572a49..25daa0b 100644
+index 85e2cca..f4897db 100644
 --- a/fabrika.contract.ts
 +++ b/fabrika.contract.ts
-@@ -8,6 +8,7 @@ export const Note = z.strictObject({ id: z.uuid(), title: z.string(), trashed: z
+@@ -9,6 +9,7 @@ export const Note = z.strictObject({ id: z.uuid(), title: z.string(), trashed: z
  export const NoteList = z.strictObject({ items: z.array(Note) })
  export const ById = z.strictObject({ id: z.uuid() })
  export const Trash = z.strictObject({ id: z.uuid(), expectVersion: z.int().positive() })
@@ -26,7 +26,7 @@ index e572a49..25daa0b 100644
  export const NewNote = z.strictObject({ workspaceId: z.string().min(1).max(100), title: z.string().min(1).max(200) })
  export const Done = z.strictObject({ id: z.uuid() })
  
-@@ -37,6 +38,7 @@ export const contract = defineContract({
+@@ -22,6 +23,7 @@ export const contract = defineContract(vocabulary, (c) => ({
  			get: c.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),
  			create: c.mutation({ input: NewNote, output: Done, access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' } }),
  			trash: c.mutation({ input: Trash, output: Done, access: { action: 'notes.write', on: 'note', from: 'id' } }),
@@ -165,7 +165,7 @@ index 0000000..57ab5d2
 +	})
 +}
 diff --git a/src/db/schema.generated.ts b/src/db/schema.generated.ts
-index e2e68d9..82fc5ab 100644
+index 67db872..3233d5f 100644
 --- a/src/db/schema.generated.ts
 +++ b/src/db/schema.generated.ts
 @@ -2,6 +2,13 @@
@@ -182,7 +182,7 @@ index e2e68d9..82fc5ab 100644
  export interface NotesTable {
  	id: string
  	workspace_id: string
-@@ -12,10 +19,17 @@ export interface NotesTable {
+@@ -12,10 +19,26 @@ export interface NotesTable {
  }
  
  export interface DB {
@@ -191,15 +191,24 @@ index e2e68d9..82fc5ab 100644
  }
  
  export const columns: TypedColumnList<DB> = {
-+	'note_labels': [
-+		'id',
-+		'note_id',
-+		'workspace_id',
-+		'name',
-+	],
- 	'notes': [
- 		'id',
- 		'workspace_id',
++	'note_labels': {
++		columns: [
++			'id',
++			'note_id',
++			'workspace_id',
++			'name',
++		],
++		foreignKeys: [
++			{
++				columns: ['note_id', 'workspace_id'],
++				table: 'notes',
++				references: ['id', 'workspace_id'],
++			},
++		],
++	},
+ 	'notes': {
+ 		columns: [
+ 			'id',
 diff --git a/src/db/stores/notes.ts b/src/db/stores/notes.ts
 index b14b060..47b8d2a 100644
 --- a/src/db/stores/notes.ts
@@ -212,10 +221,10 @@ index b14b060..47b8d2a 100644
  	remove: (note: Ref<'note', 'notes.delete'>) => t.remove(note),
  }))
 diff --git a/src/db/tables.ts b/src/db/tables.ts
-index de5b0cf..f1fea6e 100644
+index fa8358e..77f5155 100644
 --- a/src/db/tables.ts
 +++ b/src/db/tables.ts
-@@ -6,8 +6,14 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write' | 'notes.del
+@@ -7,8 +7,14 @@ export const tables = defineTables(vocabulary, columns)({
  		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
  		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
  		insert: ['title', 'trashed'],

@@ -37,27 +37,57 @@ export interface DB {
 }
 
 export const columns: TypedColumnList<DB> = {
-	'orgs': [
-		'id',
-		'name',
-	],
-	'projects': [
-		'id',
-		'org_id',
-		'name',
-		'version',
-	],
-	'task_comments': [
-		'id',
-		'task_id',
-		'parent_project',
-		'org_id',
-		'body',
-	],
-	'tasks': [
-		'id',
-		'parent_project',
-		'org_id',
-		'title',
-	],
+	'orgs': {
+		columns: [
+			'id',
+			'name',
+		],
+		foreignKeys: [],
+	},
+	'projects': {
+		columns: [
+			'id',
+			'org_id',
+			'name',
+			'version',
+		],
+		foreignKeys: [
+			{
+				columns: ['org_id'],
+				table: 'orgs',
+				references: ['id'],
+			},
+		],
+	},
+	'task_comments': {
+		columns: [
+			'id',
+			'task_id',
+			'parent_project',
+			'org_id',
+			'body',
+		],
+		foreignKeys: [
+			{
+				columns: ['task_id', 'parent_project', 'org_id'],
+				table: 'tasks',
+				references: ['id', 'parent_project', 'org_id'],
+			},
+		],
+	},
+	'tasks': {
+		columns: [
+			'id',
+			'parent_project',
+			'org_id',
+			'title',
+		],
+		foreignKeys: [
+			{
+				columns: ['parent_project', 'org_id'],
+				table: 'projects',
+				references: ['id', 'org_id'],
+			},
+		],
+	},
 }

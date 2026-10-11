@@ -4,7 +4,7 @@
 
 import { compileContract, ContractError } from '@fabrika/app/contract'
 import { canonicalArtifactJson, type ContractArtifact, type TablePolicyArtifact } from '@fabrika/auth-core'
-import { defineTables, PolicyError, tablePolicies } from '@fabrika/db/tables'
+import { defineTables, PolicyError, readTables, tablePolicies } from '@fabrika/db/tables'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -29,6 +29,7 @@ import { contract as cleanContract } from './fixtures/clean-app/fabrika.contract
 import { contract as derivedContract } from './fixtures/derived-tables/fabrika.contract'
 import { columns as derivedColumns } from './fixtures/derived-tables/src/db/schema.generated'
 import { tables as derivedTables } from './fixtures/derived-tables/src/db/tables'
+import { vocabulary as derivedVocabulary } from './fixtures/derived-tables/src/vocabulary'
 import { contract as readerFormsContract } from './fixtures/reader-forms/fabrika.contract'
 
 const APP_TESTS = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__')
@@ -437,6 +438,116 @@ describe('the staged kit: read from source and evaluated agree', () => {
 				key: 'id',
 				container: { dimension: 'org', column: 'org_id' },
 			})
+		})
+
+		/** The reader's first finding on a tables module, and what the runtime parse throws on the same values. */
+		const refusals = (source: string, policies: unknown, columns: unknown = derivedColumns, schema?: string) => {
+			const files = new Map([
+				...derivedFiles,
+				['src/db/tables.ts', source],
+				...(schema === undefined ? [] : [['src/db/schema.generated.ts', schema] as const]),
+			])
+			let reader = 'accepted'
+			try {
+				readTablesSource(files)
+			} catch (error) {
+				if (!(error instanceof ContractSourceError)) throw error
+				reader = error.findings[0]?.message ?? 'no finding'
+			}
+			let runtime = 'accepted'
+			try {
+				readTables(JSON.parse(JSON.stringify(columns)), JSON.parse(JSON.stringify(policies)), JSON.parse(JSON.stringify(derivedVocabulary)))
+			} catch (error) {
+				if (!(error instanceof PolicyError)) throw error
+				runtime = error.message
+			}
+			return { reader, runtime }
+		}
+		const fixtureTables = derivedFiles.get('src/db/tables.ts') ?? ''
+		const policiesOf = (replace: (policies: Record<string, Record<string, unknown>>) => void) => {
+			const policies: Record<string, Record<string, unknown>> = {
+				orgs: { scope: { dimension: 'org' }, actions: { read: 'tasks.read' } },
+				projects: {
+					scope: { dimension: 'project' },
+					actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write' },
+					insert: ['name'],
+					update: ['name'],
+					version: 'version',
+				},
+				tasks: {
+					scope: { dimension: 'task', in: { column: 'parent_project' } },
+					actions: { read: 'tasks.read', insert: 'tasks.write' },
+					insert: ['title'],
+				},
+				task_comments: { scope: { child: 'tasks' }, actions: { read: 'tasks.read', insert: 'tasks.write' }, insert: ['body'] },
+			}
+			replace(policies)
+			return policies
+		}
+
+		test('a container column that is not the foreign key to its container is refused from source, as at runtime', () => {
+			const source = fixtureTables.replace("in: { column: 'parent_project' }", "in: { column: 'org_id' }")
+			const policies = policiesOf((all) => {
+				all['tasks'] = { ...all['tasks'], scope: { dimension: 'task', in: { column: 'org_id' } } }
+			})
+			const message = "tasks: org_id is not a foreign key to projects.id, which owns project; state scope.in: { column: 'parent_project' }"
+			expect(refusals(source, policies)).toEqual({ reader: message, runtime: message })
+		})
+
+		test('an action and a column read outside the vocabulary are refused from source, as at runtime', () => {
+			const action = refusals(
+				fixtureTables.replace(
+					"orgs: { scope: { dimension: 'org' }, actions: { read: 'tasks.read' } }",
+					"orgs: { scope: { dimension: 'org' }, actions: { read: 'tasks.raed' } }",
+				),
+				policiesOf((all) => {
+					all['orgs'] = { scope: { dimension: 'org' }, actions: { read: 'tasks.raed' } }
+				}),
+			)
+			expect(action).toEqual({
+				reader: 'orgs: actions.read names tasks.raed, which is not an action of the vocabulary (actions: tasks.read, tasks.write)',
+				runtime: 'orgs: actions.read names tasks.raed, which is not an action of the vocabulary (actions: tasks.read, tasks.write)',
+			})
+			const column = refusals(
+				fixtureTables.replace(
+					"orgs: { scope: { dimension: 'org' }, actions: { read: 'tasks.read' } }",
+					"orgs: { scope: { dimension: 'org' }, actions: { read: 'tasks.read' }, columns: { name: { read: 'tasks.raed' } } }",
+				),
+				policiesOf((all) => {
+					all['orgs'] = { scope: { dimension: 'org' }, actions: { read: 'tasks.read' }, columns: { name: { read: 'tasks.raed' } } }
+				}),
+			)
+			expect(column.reader).toStartWith('orgs: columns.name.read names tasks.raed, which is not an action of the vocabulary')
+			expect(column.runtime).toBe(column.reader)
+		})
+
+		test('a dimension no table owns keeps the vocabulary ancestry from source, as at runtime', () => {
+			const schema = `import type { TypedColumnList } from '@fabrika/db'
+
+export interface DB {
+	tasks: { id: string; parent_project: string; org_id: string; title: string }
+}
+
+export const columns: TypedColumnList<DB> = { tasks: { columns: ['id', 'parent_project', 'org_id', 'title'], foreignKeys: [] } }
+`
+			const source = `import { defineTables } from '@fabrika/db/tables'
+import { vocabulary } from '../vocabulary'
+import { columns } from './schema.generated'
+
+export const tables = defineTables(vocabulary, columns)({
+	tasks: { scope: { dimension: 'task', in: { column: 'parent_project' } }, actions: { read: 'tasks.read', update: 'tasks.write' }, update: ['org_id'] },
+})
+`
+			const policies = {
+				tasks: {
+					scope: { dimension: 'task', in: { column: 'parent_project' } },
+					actions: { read: 'tasks.read', update: 'tasks.write' },
+					update: ['org_id'],
+				},
+			}
+			const columns = { tasks: { columns: ['id', 'parent_project', 'org_id', 'title'], foreignKeys: [] } }
+			const message = 'tasks: org_id is stamped by the layer; remove it from insert and update'
+			expect(refusals(source, policies, columns, schema)).toEqual({ reader: message, runtime: message })
 		})
 
 		test('the reader refuses the form that names the action union by hand, as the runtime does', () => {

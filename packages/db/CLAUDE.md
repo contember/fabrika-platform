@@ -36,7 +36,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                          |
 | `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                     |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
-| `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, the column list as `TypedColumnList<DB>`) from a migrated schema.            |
+| `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).             |
 | `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
 | `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                        |
 
@@ -81,12 +81,23 @@ and the target `Ref`, so no handler can call it.
   `NormalizedPolicies`, which the kit's `DbIndex` reads.
 - **Containment is the vocabulary's, never the policy's.** A dimension table's container is the dimension the
   vocabulary puts its own in; its column is `<container>_id`, or the one `in: { column }` names off that convention.
-  A key defaults to `id`; a child's column defaults to `<parent dimension>_id`, and its chain is its parent's. A stated
-  value must agree: `in.dimension` other than the vocabulary's, `in` on a top-level dimension, or an `inherit` other
-  than the parent's chain is refused, and so is a default the table has no column for, with a message that names the
-  field to state. The authoring types pick each table's form by the scope it states (`VocabularyPolicyMap<DB, V, P>`),
-  so a misspelt dimension is reported against the vocabulary's names and a missing `key` or `in` names
-  `NamesItsKey` / `NamesItsContainerColumn` in two lines; `derived-tables.test.ts` compiles `derived-mistakes/`.
+  A key defaults to `id`; a child's column defaults to `<parent dimension>_id`, and its chain is its parent's. Above a
+  dimension no table owns, the chain keeps the vocabulary's ancestry on the `<dimension>_id` convention, so those
+  columns are carried and stamped too. A stated value must agree: `in.dimension` other than the vocabulary's, `in` on a
+  top-level dimension, or an `inherit` other than the parent's chain is refused, and so is a default the table has no
+  column for, with a message that names the field to state. The vocabulary's own containment may not be a cycle.
+- **A containment column is a foreign key to its container's key.** When a table owns the container (or the child's
+  parent), the container column (or the child's column) must be a column of a foreign key, single or composite, that
+  references that table's key; the column list carries the foreign keys. A column that only has the convention's name
+  is refused, naming the column whose foreign key does reference the key. A container no table owns (a scope only IAM
+  knows) has no key to reference, so the convention stands there.
+- **Every action is the vocabulary's.** Table actions, an inbox's `scope.read` and a column's own read action are
+  refused unless the vocabulary declares them, in the one parse: the reader refuses them from source too.
+- **The authoring types pick each table's form by the scope it states** (`VocabularyPolicyMap<DB, V, P>`): a misspelt
+  dimension is reported against the vocabulary's names, a child's parent against the tables that state a dimension
+  scope, and a missing `key`, `in` or child `column` names `NamesItsKey` / `NamesItsContainerColumn` /
+  `NamesItsParentColumn` in two lines; `derived-tables.test.ts` compiles `derived-mistakes/`. A map annotated with
+  `VocabularyPolicyMap<DB, V>` states nothing narrower, so it is checked against every form.
 - **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only
   unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
   policies' builder an `Unavailable` that names `fabrika db codegen`.

@@ -63,6 +63,22 @@ const catalogColumnSchema = z.object({
 
 export type CatalogColumn = z.infer<typeof catalogColumnSchema>
 
+const catalogForeignKeySchema = z.object({
+	table_name: z.string(),
+	constraint_name: z.string(),
+	columns: z.array(z.string()),
+	referenced_table: z.string(),
+	referenced_columns: z.array(z.string()),
+})
+
+export type CatalogForeignKey = z.infer<typeof catalogForeignKeySchema>
+
+/** What codegen reads of the schema: every column, and every foreign key between its tables. */
+export interface Catalog {
+	readonly columns: readonly CatalogColumn[]
+	readonly foreignKeys: readonly CatalogForeignKey[]
+}
+
 /** One row per column of every ordinary or partitioned table in the schema, in table then column order. */
 const CATALOG_QUERY = `
 SELECT
@@ -86,12 +102,40 @@ WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND a.
 ORDER BY c.relname, a.attnum
 `
 
+/** One row per foreign key between two tables of the schema, its columns in key order, by table then constraint name. */
+const FOREIGN_KEY_QUERY = `
+SELECT
+	c.relname::text AS table_name,
+	k.conname::text AS constraint_name,
+	ARRAY(
+		SELECT a.attname::text FROM unnest(k.conkey) WITH ORDINALITY AS u(attnum, position)
+		JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.attnum ORDER BY u.position
+	) AS columns,
+	r.relname::text AS referenced_table,
+	ARRAY(
+		SELECT a.attname::text FROM unnest(k.confkey) WITH ORDINALITY AS u(attnum, position)
+		JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = u.attnum ORDER BY u.position
+	) AS referenced_columns
+FROM pg_constraint k
+JOIN pg_class c ON c.oid = k.conrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_class r ON r.oid = k.confrelid
+JOIN pg_namespace rn ON rn.oid = r.relnamespace
+WHERE k.contype = 'f' AND n.nspname = $1 AND rn.nspname = $1
+ORDER BY c.relname, k.conname
+`
+
 /**
  * Reads the columns of the application's schema, refusing one that escapes it or holds a database object that
  * `objects`, the migrations' manifest (`PostgresApplicationMigrations.objects`), does not name. The URL is a
  * credential: no message here contains it.
  */
-export async function introspectSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<CatalogColumn[]> {
+export async function introspectSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<readonly CatalogColumn[]> {
+	return (await introspectCatalog(url, schema, objects)).columns
+}
+
+/** `introspectSchema`, with the foreign keys between the schema's tables. */
+export async function introspectCatalog(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<Catalog> {
 	if (!isPlainIdentifier(schema)) throw new CodegenError(`the schema must match ^[a-z_][a-z0-9_]*$: ${schema}`)
 	const sql = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	try {
@@ -112,7 +156,10 @@ export async function introspectSchema(url: string, schema: string, objects: rea
 					}; declare it in a migration or drop it in a new one`,
 				)
 			}
-			return z.array(catalogColumnSchema).parse(await tx.unsafe(CATALOG_QUERY, [schema]))
+			return {
+				columns: z.array(catalogColumnSchema).parse(await tx.unsafe(CATALOG_QUERY, [schema])),
+				foreignKeys: z.array(catalogForeignKeySchema).parse(await tx.unsafe(FOREIGN_KEY_QUERY, [schema])),
+			}
 		})
 	} finally {
 		await sql.close()
@@ -172,9 +219,10 @@ function columnType(column: CatalogColumn): Rendered {
 
 /**
  * The generated module: one interface per application table, the `DB` map Kysely and `defineTables` take, and the
- * runtime column list. Deterministic for a given catalog, so `fabrika db codegen --verify` can compare text.
+ * runtime column list with each table's foreign keys to application tables. Deterministic for a given catalog, so
+ * `fabrika db codegen --verify` can compare text.
  */
-export function renderSchema(catalog: readonly CatalogColumn[]): string {
+export function renderSchema(catalog: readonly CatalogColumn[], foreignKeys: readonly CatalogForeignKey[] = []): string {
 	const tables = new Map<string, CatalogColumn[]>()
 	for (const column of catalog) {
 		if (column.table_name.startsWith(FRAMEWORK_TABLE_PREFIX)) continue
@@ -210,8 +258,21 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 		...(kyselyNames.length === 0 ? [] : [`import type { ${kyselyNames.join(', ')} } from 'kysely'\n`]),
 	]
 	const db = names.map((table) => `\t${table}: ${interfaceName(table)}\n`).join('')
+	const keysOf = (table: string): string => {
+		const keys = foreignKeys.filter((key) => key.table_name === table && tables.has(key.referenced_table))
+		if (keys.length === 0) return '\t\tforeignKeys: [],\n'
+		const rendered = keys.map((key) =>
+			`\t\t\t{\n\t\t\t\tcolumns: [${key.columns.map(quote).join(', ')}],\n\t\t\t\ttable: ${quote(key.referenced_table)},\n`
+			+ `\t\t\t\treferences: [${key.referenced_columns.map(quote).join(', ')}],\n\t\t\t},\n`
+		)
+		return `\t\tforeignKeys: [\n${rendered.join('')}\t\t],\n`
+	}
 	const columns = names
-		.map((table) => `\t'${table}': [\n${(tables.get(table) ?? []).map((column) => `\t\t'${column.column_name}',\n`).join('')}\t],\n`)
+		.map((table) =>
+			`\t'${table}': {\n\t\tcolumns: [\n${(tables.get(table) ?? []).map((column) => `\t\t\t'${column.column_name}',\n`).join('')}\t\t],\n${
+				keysOf(table)
+			}\t},\n`
+		)
 		.join('')
 	return [
 		`${HEADER}\n`,
@@ -224,5 +285,6 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 
 /** Introspects the migrated schema, checked against the migrations' manifest, and renders the module for `SCHEMA_FILE`. */
 export async function generateSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<string> {
-	return renderSchema(await introspectSchema(url, schema, objects))
+	const catalog = await introspectCatalog(url, schema, objects)
+	return renderSchema(catalog.columns, catalog.foreignKeys)
 }

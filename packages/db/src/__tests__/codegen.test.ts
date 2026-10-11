@@ -67,7 +67,48 @@ describe('renderSchema', () => {
 		expect(source).not.toContain('fabrika_migrations')
 		expect(source).not.toContain("from 'kysely'")
 		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
-		expect(source).toContain("export const columns: TypedColumnList<DB> = {\n\t'notes': [\n\t\t'id',\n\t],\n}\n")
+		expect(source).toContain(
+			"export const columns: TypedColumnList<DB> = {\n\t'notes': {\n\t\tcolumns: [\n\t\t\t'id',\n\t\t],\n\t\tforeignKeys: [],\n\t},\n}\n",
+		)
+	})
+
+	test("writes each table's foreign keys to application tables, a composite one in key order", () => {
+		const foreignKey = (table: string, name: string, columns: string[], referenced: string, references: string[]) => ({
+			table_name: table,
+			constraint_name: name,
+			columns,
+			referenced_table: referenced,
+			referenced_columns: references,
+		})
+		const source = renderSchema(
+			[
+				column('workspaces', 'id', 'text'),
+				column('workspaces', 'org_id', 'text'),
+				column('notes', 'id', 'text'),
+				column('notes', 'workspace_id', 'text'),
+				column('notes', 'org_id', 'text'),
+			],
+			[
+				foreignKey('notes', 'notes_workspace_fkey', ['workspace_id', 'org_id'], 'workspaces', ['id', 'org_id']),
+				foreignKey('notes', 'notes_ledger_fkey', ['id'], 'fabrika_migrations', ['name']),
+			],
+		)
+		expect(source).toContain(`	'notes': {
+		columns: [
+			'id',
+			'workspace_id',
+			'org_id',
+		],
+		foreignKeys: [
+			{
+				columns: ['workspace_id', 'org_id'],
+				table: 'workspaces',
+				references: ['id', 'org_id'],
+			},
+		],
+	},
+`)
+		expect(source).not.toContain('fabrika_migrations')
 	})
 
 	test('orders tables by name and keeps column order', () => {

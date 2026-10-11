@@ -72,53 +72,101 @@ export interface DB {
 }
 
 export const columns: TypedColumnList<DB> = {
-	'contact_messages': [
-		'id',
-		'email',
-		'body',
-	],
-	'countries': [
-		'code',
-		'name',
-	],
-	'note_comments': [
-		'id',
-		'note_id',
-		'workspace_id',
-		'organization_id',
-		'body',
-	],
-	'note_flags': [
-		'id',
-		'note_id',
-		'workspace_id',
-		'organization_id',
-		'reason',
-	],
-	'notes': [
-		'id',
-		'workspace_id',
-		'organization_id',
-		'title',
-		'body',
-		'word_count',
-		'internal',
-		'created_by',
-		'version',
-		'created_at',
-	],
-	'organizations': [
-		'id',
-		'name',
-	],
-	'secrets': [
-		'id',
-		'value',
-	],
-	'workspaces': [
-		'id',
-		'organization_id',
-		'name',
-		'created_by',
-	],
+	'contact_messages': {
+		columns: [
+			'id',
+			'email',
+			'body',
+		],
+		foreignKeys: [],
+	},
+	'countries': {
+		columns: [
+			'code',
+			'name',
+		],
+		foreignKeys: [],
+	},
+	'note_comments': {
+		columns: [
+			'id',
+			'note_id',
+			'workspace_id',
+			'organization_id',
+			'body',
+		],
+		foreignKeys: [
+			{
+				columns: ['note_id', 'workspace_id', 'organization_id'],
+				table: 'notes',
+				references: ['id', 'workspace_id', 'organization_id'],
+			},
+		],
+	},
+	'note_flags': {
+		columns: [
+			'id',
+			'note_id',
+			'workspace_id',
+			'organization_id',
+			'reason',
+		],
+		foreignKeys: [
+			{
+				columns: ['note_id', 'workspace_id', 'organization_id'],
+				table: 'notes',
+				references: ['id', 'workspace_id', 'organization_id'],
+			},
+		],
+	},
+	'notes': {
+		columns: [
+			'id',
+			'workspace_id',
+			'organization_id',
+			'title',
+			'body',
+			'word_count',
+			'internal',
+			'created_by',
+			'version',
+			'created_at',
+		],
+		foreignKeys: [
+			{
+				columns: ['workspace_id', 'organization_id'],
+				table: 'workspaces',
+				references: ['id', 'organization_id'],
+			},
+		],
+	},
+	'organizations': {
+		columns: [
+			'id',
+			'name',
+		],
+		foreignKeys: [],
+	},
+	'secrets': {
+		columns: [
+			'id',
+			'value',
+		],
+		foreignKeys: [],
+	},
+	'workspaces': {
+		columns: [
+			'id',
+			'organization_id',
+			'name',
+			'created_by',
+		],
+		foreignKeys: [
+			{
+				columns: ['organization_id'],
+				table: 'organizations',
+				references: ['id'],
+			},
+		],
+	},
 }

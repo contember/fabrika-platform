@@ -47,35 +47,68 @@ export interface DB {
 }
 
 export const columns: TypedColumnList<DB> = {
-	'countries': [
-		'code',
-		'name',
-	],
-	'note_comments': [
-		'id',
-		'note_id',
-		'workspace_id',
-		'organization_id',
-		'body',
-	],
-	'notes': [
-		'id',
-		'workspace_id',
-		'organization_id',
-		'title',
-		'body',
-		'internal',
-		'pinned',
-		'created_by',
-		'version',
-	],
-	'organizations': [
-		'id',
-		'name',
-	],
-	'workspaces': [
-		'id',
-		'organization_id',
-		'name',
-	],
+	'countries': {
+		columns: [
+			'code',
+			'name',
+		],
+		foreignKeys: [],
+	},
+	'note_comments': {
+		columns: [
+			'id',
+			'note_id',
+			'workspace_id',
+			'organization_id',
+			'body',
+		],
+		foreignKeys: [
+			{
+				columns: ['note_id', 'workspace_id', 'organization_id'],
+				table: 'notes',
+				references: ['id', 'workspace_id', 'organization_id'],
+			},
+		],
+	},
+	'notes': {
+		columns: [
+			'id',
+			'workspace_id',
+			'organization_id',
+			'title',
+			'body',
+			'internal',
+			'pinned',
+			'created_by',
+			'version',
+		],
+		foreignKeys: [
+			{
+				columns: ['workspace_id', 'organization_id'],
+				table: 'workspaces',
+				references: ['id', 'organization_id'],
+			},
+		],
+	},
+	'organizations': {
+		columns: [
+			'id',
+			'name',
+		],
+		foreignKeys: [],
+	},
+	'workspaces': {
+		columns: [
+			'id',
+			'organization_id',
+			'name',
+		],
+		foreignKeys: [
+			{
+				columns: ['organization_id'],
+				table: 'organizations',
+				references: ['id'],
+			},
+		],
+	},
 }

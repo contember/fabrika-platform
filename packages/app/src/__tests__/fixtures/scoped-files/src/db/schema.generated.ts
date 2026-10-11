@@ -15,11 +15,14 @@ export interface DB {
 }
 
 export const columns: TypedColumnList<DB> = {
-	'notes': [
-		'id',
-		'workspace_id',
-		'title',
-		'created_by',
-		'version',
-	],
+	'notes': {
+		columns: [
+			'id',
+			'workspace_id',
+			'title',
+			'created_by',
+			'version',
+		],
+		foreignKeys: [],
+	},
 }

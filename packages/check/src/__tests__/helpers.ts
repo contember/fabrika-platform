@@ -51,7 +51,7 @@ export interface DB {
 	notes: { id: string; workspace_id: string; title: string }
 }
 
-export const columns: TypedColumnList<DB> = { notes: ['id', 'workspace_id', 'title'] }
+export const columns: TypedColumnList<DB> = { notes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] } }
 `
 
 const CLEAN_SOURCES = new Map([

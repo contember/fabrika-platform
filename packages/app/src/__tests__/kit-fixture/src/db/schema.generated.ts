@@ -52,40 +52,73 @@ export interface DB {
 }
 
 export const columns: TypedColumnList<DB> = {
-	'orgs': [
-		'id',
-		'name',
-		'created_by',
-		'version',
-	],
-	'companies': [
-		'id',
-		'org_id',
-		'name',
-		'created_by',
-		'version',
-	],
-	'deals': [
-		'id',
-		'company_id',
-		'org_id',
-		'title',
-		'stage',
-		'margin',
-		'created_by',
-		'version',
-	],
-	'deal_activities': [
-		'id',
-		'deal_id',
-		'company_id',
-		'org_id',
-		'body',
-		'created_by',
-	],
-	'countries': [
-		'code',
-		'name',
-		'note',
-	],
+	'orgs': {
+		columns: [
+			'id',
+			'name',
+			'created_by',
+			'version',
+		],
+		foreignKeys: [],
+	},
+	'companies': {
+		columns: [
+			'id',
+			'org_id',
+			'name',
+			'created_by',
+			'version',
+		],
+		foreignKeys: [
+			{
+				columns: ['org_id'],
+				table: 'orgs',
+				references: ['id'],
+			},
+		],
+	},
+	'deals': {
+		columns: [
+			'id',
+			'company_id',
+			'org_id',
+			'title',
+			'stage',
+			'margin',
+			'created_by',
+			'version',
+		],
+		foreignKeys: [
+			{
+				columns: ['company_id', 'org_id'],
+				table: 'companies',
+				references: ['id', 'org_id'],
+			},
+		],
+	},
+	'deal_activities': {
+		columns: [
+			'id',
+			'deal_id',
+			'company_id',
+			'org_id',
+			'body',
+			'created_by',
+		],
+		foreignKeys: [
+			{
+				columns: ['deal_id', 'company_id', 'org_id'],
+				table: 'deals',
+				references: ['id', 'company_id', 'org_id'],
+			},
+		],
+	},
+	'countries': {
+		columns: [
+			'code',
+			'name',
+			'note',
+		],
+		foreignKeys: [],
+	},
 }

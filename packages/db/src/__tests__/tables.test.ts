@@ -19,7 +19,7 @@ const notes = {
 	actions: { read: 'notes.read', insert: 'notes.write' },
 	insert: ['title'],
 }
-const noteColumns = { notes: ['id', 'workspace_id', 'title'] }
+const noteColumns = { notes: { columns: ['id', 'workspace_id', 'title'], foreignKeys: [] } }
 
 describe('the policies as data', () => {
 	test('tablePolicies gives every table its artifact form, with every optional field present', () => {

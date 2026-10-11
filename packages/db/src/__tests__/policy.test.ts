@@ -5,7 +5,20 @@ import { tables } from './fixtures/tables'
 
 // The refusals run on values nobody type-checked, through `readTables`: the parse `defineTables` runs.
 
-const vocabulary = { dimensions: { workspace: {}, note: { in: 'workspace' } }, actions: {} }
+type Key = readonly [columns: readonly string[], table: string, references: readonly string[]]
+
+/** A generated column list from each table's columns and its foreign keys. */
+const listOf = (tables: Readonly<Record<string, readonly string[]>>, keys: Readonly<Record<string, readonly Key[]>>) =>
+	Object.fromEntries(
+		Object.entries(tables).map(([table, columns]) => [
+			table,
+			{ columns, foreignKeys: (keys[table] ?? []).map(([from, to, references]) => ({ columns: from, table: to, references })) },
+		]),
+	)
+
+const actions = { 'notes.read': 'Read', 'notes.write': 'Write', 'notes.admin': 'Administer' }
+const vocabulary = { dimensions: { workspace: {}, note: { in: 'workspace' } }, actions }
+const keys: Readonly<Record<string, readonly Key[]>> = { note_comments: [[['note_id', 'workspace_id'], 'notes', ['id', 'workspace_id']]] }
 
 const columns = {
 	notes: ['id', 'workspace_id', 'title', 'version', 'created_by'],
@@ -29,7 +42,8 @@ const comments = {
 
 const countries = { scope: { reference: 'lookup data' }, actions: { read: 'notes.read' } } as const
 
-const define = (columnList: unknown, policies: unknown) => readTables(columnList, policies, vocabulary)
+const define = (columnList: Readonly<Record<string, readonly string[]>>, policies: unknown) =>
+	readTables(listOf(columnList, keys), policies, vocabulary)
 
 describe('defineTables refuses a policy it cannot enforce', () => {
 	test('a column the column list does not have', () => {
@@ -114,8 +128,13 @@ describe('a column holds at most one stamped role', () => {
 		insert: ['body'],
 	} as const
 	const stamped = { tenants, items, docs, item_notes: itemNotes }
-	const stampedVocabulary = { dimensions: { tenant: {}, item: { in: 'tenant' }, doc: { in: 'item' } }, actions: {} }
-	const define = (policies: unknown) => readTables(stampedColumns, policies, stampedVocabulary)
+	const stampedVocabulary = { dimensions: { tenant: {}, item: { in: 'tenant' }, doc: { in: 'item' } }, actions: { read: 'Read', write: 'Write' } }
+	const stampedKeys: Readonly<Record<string, readonly Key[]>> = {
+		items: [[['tenant_id'], 'tenants', ['id']], [['id'], 'tenants', ['id']]],
+		docs: [[['item_id', 'tenant_id'], 'items', ['id', 'tenant_id']]],
+		item_notes: [[['item_id', 'tenant_id'], 'items', ['id', 'tenant_id']]],
+	}
+	const define = (policies: unknown) => readTables(listOf(stampedColumns, stampedKeys), policies, stampedVocabulary)
 
 	test('distinct stamped columns are accepted', () => {
 		expect(modelOf(tableModels(define(stamped)), 'docs')?.chain).toEqual([
@@ -200,9 +219,14 @@ describe('every row carries its whole containment chain', () => {
 	} as const
 	const deepComments = { ...comments, scope: { ...comments.scope, inherit: ['workspace_id', 'organization_id'] } } as const
 	const deep = { organizations, workspaces, notes, note_comments: deepComments, countries }
-	const deepVocabulary = { dimensions: { organization: {}, workspace: { in: 'organization' }, note: { in: 'workspace' } }, actions: {} }
-	const defineDeep = (columnList: unknown, policies: unknown, dimensions: unknown = deepVocabulary.dimensions) =>
-		readTables(columnList, policies, { dimensions, actions: {} })
+	const deepDimensions = { organization: {}, workspace: { in: 'organization' }, note: { in: 'workspace' } }
+	const deepKeys: Readonly<Record<string, readonly Key[]>> = {
+		workspaces: [[['organization_id'], 'organizations', ['id']]],
+		notes: [[['workspace_id', 'organization_id'], 'workspaces', ['id', 'organization_id']]],
+		note_comments: [[['note_id', 'workspace_id', 'organization_id'], 'notes', ['id', 'workspace_id', 'organization_id']]],
+	}
+	const defineDeep = (columnList: Readonly<Record<string, readonly string[]>>, policies: unknown, dimensions: unknown = deepDimensions) =>
+		readTables(listOf(columnList, deepKeys), policies, { dimensions, actions })
 
 	test('the chains are resolved through the tables that own each dimension', () => {
 		const models = tableModels(defineDeep(deepColumns, deep))
@@ -219,7 +243,14 @@ describe('every row carries its whole containment chain', () => {
 
 	test('a table without a column for an ancestor is refused', () => {
 		const shallow = { ...deepColumns, notes: ['id', 'workspace_id', 'title', 'version', 'created_by'] as const }
-		expect(() => defineDeep(shallow, deep)).toThrow('notes: must carry organization_id, because it lies in organization')
+		const shallowKeys: Readonly<Record<string, readonly Key[]>> = {
+			...deepKeys,
+			notes: [[['workspace_id'], 'workspaces', ['id']]],
+			note_comments: [[['note_id', 'workspace_id'], 'notes', ['id', 'workspace_id']]],
+		}
+		expect(() => readTables(listOf(shallow, shallowKeys), deep, { dimensions: deepDimensions, actions })).toThrow(
+			'notes: must carry organization_id, because it lies in organization',
+		)
 	})
 
 	test('a child that inherits only part of its parent chain is refused', () => {
@@ -233,10 +264,12 @@ describe('every row carries its whole containment chain', () => {
 		expect(() => defineDeep(deepColumns, { ...deep, notes: writable })).toThrow('organization_id is stamped by the layer')
 	})
 
-	test('a containment cycle is refused', () => {
+	test('a containment cycle in the vocabulary is refused', () => {
 		const looping = { ...organizations, scope: { dimension: 'organization', key: 'id', in: { column: 'id' } } } as const
-		const cyclic = { ...deepVocabulary.dimensions, organization: { in: 'workspace' } }
-		expect(() => defineDeep(deepColumns, { ...deep, organizations: looping }, cyclic)).toThrow('its containment is a cycle')
+		const cyclic = { ...deepDimensions, organization: { in: 'workspace' } }
+		expect(() => defineDeep(deepColumns, { ...deep, organizations: looping }, cyclic)).toThrow(
+			"the vocabulary's containment is a cycle (organization → workspace → organization)",
+		)
 	})
 })
 

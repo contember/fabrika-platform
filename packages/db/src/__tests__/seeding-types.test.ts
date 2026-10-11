@@ -42,7 +42,9 @@ interface DB {
 	}
 }
 
-const columns: TypedColumnList<DB> = { tasks: ['id', 'project_id', 'title', 'due_on', 'remind_at', 'priority', 'version'] }
+const columns: TypedColumnList<DB> = {
+	tasks: { columns: ['id', 'project_id', 'title', 'due_on', 'remind_at', 'priority', 'version'], foreignKeys: [] },
+}
 const vocabulary = {
 	dimensions: { project: {}, task: { in: 'project' } },
 	actions: { 'tasks.read': 'Read tasks', 'tasks.write': 'Write tasks' },

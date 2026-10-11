@@ -97,8 +97,21 @@ export interface InboxPolicy<Col extends string, A extends string> extends ReadO
 /** The columns a version can live in: those whose generated select type is `number`, an INTEGER (int4). */
 export type VersionColumn<Row> = { [K in keyof Row & string]: SelectType<Row[K]> extends number ? K : never }[keyof Row & string]
 
-/** The column names of every table, generated next to the schema types. */
-export type ColumnList<DB> = { readonly [T in keyof DB & string]: readonly (keyof DB[T] & string)[] }
+/** A foreign key within the schema, as codegen reads it: `columns[i]` references column `references[i]` of `table`. */
+export interface ForeignKey<Col extends string = string, Table extends string = string> {
+	readonly columns: readonly Col[]
+	readonly table: Table
+	readonly references: readonly string[]
+}
+
+/** One table of the generated column list: its column names, and its foreign keys to tables of the schema. */
+export interface TableColumns<Col extends string = string, Table extends string = string> {
+	readonly columns: readonly Col[]
+	readonly foreignKeys: readonly ForeignKey<Col, Table>[]
+}
+
+/** The columns and foreign keys of every table, generated next to the schema types. */
+export type ColumnList<DB> = { readonly [T in keyof DB & string]: TableColumns<keyof DB[T] & string, keyof DB & string> }
 
 export interface Container {
 	readonly dimension: string
@@ -133,6 +146,8 @@ export interface TableModel {
 	readonly createdBy: string | undefined
 	/** The columns that declare their own read action, as declared (also those equal to the table's). */
 	readonly columnReads: Readonly<Record<string, string>>
+	/** The table's foreign keys, from the column list; a containment column must be one to its container's key. */
+	readonly foreignKeys: readonly ForeignKey[]
 	/**
 	 * The containment links this table carries a column for, nearest first: a dimension table's container and
 	 * the container's own chain; a child's parent and the parent's chain. Every predicate of a Ref covers all.
@@ -220,8 +235,13 @@ export function readTables(columns: unknown, policies: unknown, vocabulary: unkn
 /** Each dimension of the vocabulary, by name, with the dimension it lies in (`undefined` for a top-level one). */
 type Containment = Readonly<Record<string, { readonly container: string | undefined }>>
 
-/** The vocabulary's dimensions and their containers; its other sections are the contract's to check. */
-function parseVocabulary(input: unknown): Containment {
+/** What the parse reads of the vocabulary: its containment and its action names; its roles are the contract's. */
+interface VocabularyModel {
+	readonly dimensions: Containment
+	readonly actions: NameSet
+}
+
+function parseVocabulary(input: unknown): VocabularyModel {
 	const vocabulary = plainRecord(input, 'the vocabulary')
 	const dimensions = plainRecord(ownEntry(vocabulary, 'dimensions'), 'the vocabulary dimensions')
 	const names = ownKeys(dimensions)
@@ -234,9 +254,21 @@ function parseVocabulary(input: unknown): Containment {
 		}
 		setOwn(containment, name, freeze({ container }))
 	}
-	return freeze(containment)
+	for (let index = 0; index < names.length; index++) {
+		const path = [names[index] ?? '']
+		for (let above = ownEntry(containment, path[0] ?? '')?.container; above !== undefined; above = ownEntry(containment, above)?.container) {
+			path[path.length] = above
+			if (above === path[0] || path.length > names.length) {
+				throw new PolicyError(`the vocabulary's containment is a cycle (${path.join(' → ')})`)
+			}
+		}
+	}
+	const actions = ownKeys(plainRecord(ownEntry(vocabulary, 'actions'), 'the vocabulary actions'))
+	return freeze({ dimensions: freeze(containment), actions: nameSet(actions) })
 }
 
+const COLUMN_LIST_FIELDS = nameSet(['columns', 'foreignKeys'])
+const FOREIGN_KEY_FIELDS = nameSet(['columns', 'table', 'references'])
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
 const ACTION_FIELDS = nameSet(['read', 'insert', 'update', 'delete'])
 const DIMENSION_FIELDS = nameSet(['dimension', 'key', 'in'])
@@ -276,7 +308,7 @@ function onlyFields(record: Readonly<Record<string, unknown>>, allowed: NameSet,
 	}
 }
 
-function parseTables(columnsInput: unknown, policiesInput: unknown, containment: Containment): TableModels {
+function parseTables(columnsInput: unknown, policiesInput: unknown, vocabulary: VocabularyModel): TableModels {
 	const columns = plainRecord(columnsInput, 'the column list')
 	const policies = plainRecord(policiesInput, 'the table policies')
 	const tables = ownKeys(columns)
@@ -294,9 +326,9 @@ function parseTables(columnsInput: unknown, policiesInput: unknown, containment:
 		if (policy === undefined) {
 			throw new PolicyError(`${table}: every table needs a policy in tables.ts`)
 		}
-		parsed[index] = parseTable(table, ownEntry(columns, table), policy, containment)
+		parsed[index] = parseTable(table, ownEntry(columns, table), policy, vocabulary)
 	}
-	return linkTables(parsed)
+	return linkTables(parsed, vocabulary.dimensions)
 }
 
 /** How a policy names its columns: one it states must exist, and so must one a convention derives for it. */
@@ -307,13 +339,15 @@ interface ColumnReader {
 	readonly derived: (name: string, field: string, reason: string, fix: string) => string
 }
 
-function parseTable(table: string, columnList: unknown, policyInput: unknown, containment: Containment): ParsedTable {
+function parseTable(table: string, columnList: unknown, policyInput: unknown, vocabulary: VocabularyModel): ParsedTable {
 	if (!isPlainIdentifier(table)) {
 		throw new PolicyError(`${table}: a table name must match ^[a-z_][a-z0-9_]*$`)
 	}
 	const policy = plainRecord(policyInput, `${table}: the policy`)
 	onlyFields(policy, POLICY_FIELDS, `${table}: the policy`)
-	const columnNames = parseList(columnList, (name) => {
+	const entry = plainRecord(columnList, `${table}: the column list entry`)
+	onlyFields(entry, COLUMN_LIST_FIELDS, `${table}: the column list entry`)
+	const columnNames = parseList(ownEntry(entry, 'columns'), (name) => {
 		if (!isPlainIdentifier(name)) {
 			throw new PolicyError(`${table}.${String(name)}: a column name must match ^[a-z_][a-z0-9_]*$`)
 		}
@@ -348,8 +382,18 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, co
 		return name
 	}
 	const scopeInput = plainRecord(ownEntry(policy, 'scope'), `${table}: scope`)
-	const scope = parseScope(table, scopeInput, { column, columnsOf, derived }, containment)
-	const actions = parseActions(table, scopeInput, ownEntry(policy, 'actions'))
+	const foreignKeys = parseForeignKeys(table, ownEntry(entry, 'foreignKeys'), column)
+	const scope = parseScope(table, scopeInput, { column, columnsOf, derived }, vocabulary.dimensions)
+	const action = (value: unknown, field: string): string => {
+		const name = nonEmpty(table, value, field)
+		if (!inSet(vocabulary.actions, name)) {
+			throw new PolicyError(
+				`${table}: ${field} names ${name}, which is not an action of the vocabulary (actions: ${namesOf(vocabulary.actions).join(', ')})`,
+			)
+		}
+		return name
+	}
+	const actions = parseActions(table, scopeInput, ownEntry(policy, 'actions'), action)
 	const insert = nameSet(columnsOf(ownEntry(policy, 'insert'), 'insert'))
 	const update = nameSet(columnsOf(ownEntry(policy, 'update'), 'update'))
 	const versionInput = ownEntry(policy, 'version')
@@ -365,7 +409,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, co
 		const name = column(restrictable[index], 'columns')
 		const columnPolicy = plainRecord(ownEntry(columnPolicies, name), `${table}: columns.${name}`)
 		onlyFields(columnPolicy, COLUMN_FIELDS, `${table}: columns.${name}`)
-		const read = nonEmpty(table, ownEntry(columnPolicy, 'read'), `columns.${name}.read`)
+		const read = action(ownEntry(columnPolicy, 'read'), `columns.${name}.read`)
 		setOwn(columnReads, name, read)
 		if (read !== actions.read) {
 			restricted[restricted.length] = name
@@ -387,7 +431,37 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, co
 			visible[visible.length] = name
 		}
 	}
-	return { name: table, scope, actions, columns, visible: freeze(visible), insert, update, version, createdBy, columnReads: freeze(columnReads) }
+	return {
+		name: table,
+		scope,
+		actions,
+		columns,
+		visible: freeze(visible),
+		insert,
+		update,
+		version,
+		createdBy,
+		columnReads: freeze(columnReads),
+		foreignKeys,
+	}
+}
+
+/** The table's foreign keys, each column one of its own; the referenced side is checked once every table is parsed. */
+function parseForeignKeys(table: string, input: unknown, column: (name: unknown, field: string) => string): readonly ForeignKey[] {
+	const keys = parseList(input, (item) => {
+		const key = plainRecord(item, `${table}: a foreign key`)
+		onlyFields(key, FOREIGN_KEY_FIELDS, `${table}: a foreign key`)
+		const columns = parseList(ownEntry(key, 'columns'), (name) => column(name, 'a foreign key'))
+		const references = parseList(ownEntry(key, 'references'), (name) => nonEmpty(table, name, 'a foreign key reference'))
+		if (columns === undefined || references === undefined || columns.length === 0 || columns.length !== references.length) {
+			throw new PolicyError(`${table}: a foreign key takes columns and references, two plain arrays of one length`)
+		}
+		return freeze({ columns: freeze(columns), table: nonEmpty(table, ownEntry(key, 'table'), 'a foreign key table'), references: freeze(references) })
+	})
+	if (keys === undefined) {
+		throw new PolicyError(`${table}: the column list entry takes foreignKeys, a plain array`)
+	}
+	return freeze(keys)
 }
 
 function parseScope(table: string, scope: Readonly<Record<string, unknown>>, columns: ColumnReader, containment: Containment): ParsedScope {
@@ -461,12 +535,17 @@ function parseContainer(
 	return freeze({ dimension: container, column: columns.column(ownEntry(stated, 'column'), 'scope.in.column') })
 }
 
-function parseActions(table: string, scope: Readonly<Record<string, unknown>>, actionsInput: unknown): ActionModel {
+function parseActions(
+	table: string,
+	scope: Readonly<Record<string, unknown>>,
+	actionsInput: unknown,
+	action: (value: unknown, field: string) => string,
+): ActionModel {
 	if (hasOwn(scope, 'inbox')) {
 		if (actionsInput !== undefined) {
 			throw new PolicyError(`${table}: an inbox table takes its read action as scope.read and no actions; only its form appends`)
 		}
-		return freeze({ read: nonEmpty(table, ownEntry(scope, 'read'), 'scope.read'), insert: undefined, update: undefined, delete: undefined })
+		return freeze({ read: action(ownEntry(scope, 'read'), 'scope.read'), insert: undefined, update: undefined, delete: undefined })
 	}
 	if (actionsInput === undefined) {
 		throw new PolicyError(`${table}: the policy needs actions`)
@@ -475,10 +554,10 @@ function parseActions(table: string, scope: Readonly<Record<string, unknown>>, a
 	onlyFields(actions, ACTION_FIELDS, `${table}: actions`)
 	const optional = (field: 'insert' | 'update' | 'delete') => {
 		const value = ownEntry(actions, field)
-		return value === undefined ? undefined : nonEmpty(table, value, `actions.${field}`)
+		return value === undefined ? undefined : action(value, `actions.${field}`)
 	}
 	return freeze({
-		read: nonEmpty(table, ownEntry(actions, 'read'), 'actions.read'),
+		read: action(ownEntry(actions, 'read'), 'actions.read'),
 		insert: optional('insert'),
 		update: optional('update'),
 		delete: optional('delete'),
@@ -565,7 +644,7 @@ function includes(names: readonly string[], name: string): boolean {
 }
 
 /** Resolves every table's containment chain and refuses a shape the layer cannot enforce. */
-function linkTables(parsed: readonly ParsedTable[]): TableModels {
+function linkTables(parsed: readonly ParsedTable[], containment: Containment): TableModels {
 	const byName: Record<string, ParsedTable> = {}
 	const owners: Record<string, ParsedTable> = {}
 	for (let index = 0; index < parsed.length; index++) {
@@ -583,6 +662,12 @@ function linkTables(parsed: readonly ParsedTable[]): TableModels {
 		}
 		setOwn(owners, table.scope.dimension, table)
 	}
+	for (let index = 0; index < parsed.length; index++) {
+		const table = parsed[index]
+		if (table !== undefined) {
+			checkForeignKeys(table, byName)
+		}
+	}
 
 	const resolved: Record<string, Resolved> = {}
 	const resolve = (table: ParsedTable, visiting: readonly string[]): Resolved => {
@@ -594,7 +679,7 @@ function linkTables(parsed: readonly ParsedTable[]): TableModels {
 		if (includes(visiting, table.name)) {
 			throw new PolicyError(`${table.name}: its containment is a cycle (${path.join(' → ')})`)
 		}
-		const result = resolveChain(table, byName, owners, (next) => resolve(next, path).chain)
+		const result = resolveChain(table, byName, owners, containment, (next) => resolve(next, path).chain)
 		const chain = result.chain
 		for (let index = 0; index < chain.length; index++) {
 			const link = chain[index]
@@ -630,16 +715,32 @@ function resolveChain(
 	table: ParsedTable,
 	byName: Readonly<Record<string, ParsedTable>>,
 	owners: Readonly<Record<string, ParsedTable>>,
+	containment: Containment,
 	chainOf: (table: ParsedTable) => readonly Container[],
 ): Resolved {
+	/**
+	 * The links above `dimension`: the chain of the table that owns it, whose ancestors' columns a contained row carries
+	 * under the same names; past a dimension no table owns, the vocabulary's ancestry on the `<dimension>_id` convention.
+	 */
+	const above = (dimension: string): readonly Container[] => {
+		const owner = ownEntry(owners, dimension)
+		if (owner !== undefined) {
+			return chainOf(owner)
+		}
+		const container = ownEntry(containment, dimension)?.container
+		return container === undefined ? freeze([]) : prepend({ dimension: container, column: `${container}_id` }, above(container))
+	}
 	const scope = table.scope
 	if (scope.mode === 'dimension') {
-		if (scope.container === undefined) {
+		const container = scope.container
+		if (container === undefined) {
 			return { scope, chain: freeze([]) }
 		}
-		const owner = ownEntry(owners, scope.container.dimension)
-		// An ancestor carries its column under the same name as in the table that owns its dimension.
-		return { scope, chain: prepend(scope.container, owner === undefined ? [] : chainOf(owner)) }
+		const owner = ownEntry(owners, container.dimension)
+		if (owner !== undefined) {
+			requireReference(table, container, owner, (column) => `scope.in: { column: '${column}' }`)
+		}
+		return { scope, chain: prepend(container, above(container.dimension)) }
 	}
 	if (scope.mode !== 'child') {
 		return { scope, chain: freeze([]) }
@@ -667,10 +768,71 @@ function resolveChain(
 		)
 	}
 	const dimension = parent.scope.dimension
-	const column = scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent)
+	const link = { dimension, column: scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent) }
+	requireReference(table, link, parent, (column) => `scope.column: '${column}'`)
 	return {
-		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column, inherit }),
-		chain: prepend({ dimension, column }, parentChain),
+		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column: link.column, inherit }),
+		chain: prepend(link, parentChain),
+	}
+}
+
+/** Whether a foreign key of `table` takes `column` to `key` of `target`, alone or as part of a composite key. */
+function references(table: ParsedTable, column: string, target: string, key: string): boolean {
+	for (let index = 0; index < table.foreignKeys.length; index++) {
+		const foreignKey = table.foreignKeys[index]
+		if (foreignKey === undefined || foreignKey.table !== target) {
+			continue
+		}
+		for (let position = 0; position < foreignKey.columns.length; position++) {
+			if (foreignKey.columns[position] === column && foreignKey.references[position] === key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+/**
+ * A containment column is a foreign key to the key of the table that owns the container: a column that only shares
+ * the convention's name would place a row in a scope its real reference contradicts.
+ */
+function requireReference(table: ParsedTable, link: Container, owner: ParsedTable, fix: (column: string) => string): void {
+	const key = owner.scope.mode === 'dimension' ? owner.scope.key : ''
+	if (references(table, link.column, owner.name, key)) {
+		return
+	}
+	const names = namesOf(table.columns)
+	const candidates: string[] = []
+	for (let index = 0; index < names.length; index++) {
+		const name = names[index] ?? ''
+		if (references(table, name, owner.name, key)) {
+			candidates[candidates.length] = name
+		}
+	}
+	const [only] = candidates
+	const hint = candidates.length === 1 && only !== undefined
+		? `state ${fix(only)}`
+		: `add a foreign key from ${link.column} to ${owner.name} (${key}) in a migration`
+	throw new PolicyError(`${table.name}: ${link.column} is not a foreign key to ${owner.name}.${key}, which owns ${link.dimension}; ${hint}`)
+}
+
+/** Every foreign key names a table of the column list and columns it has. */
+function checkForeignKeys(table: ParsedTable, byName: Readonly<Record<string, ParsedTable>>): void {
+	for (let index = 0; index < table.foreignKeys.length; index++) {
+		const foreignKey = table.foreignKeys[index]
+		if (foreignKey === undefined) {
+			continue
+		}
+		const target = ownEntry(byName, foreignKey.table)
+		if (target === undefined) {
+			throw new PolicyError(`${table.name}: a foreign key references ${foreignKey.table}, which is not a table of the column list`)
+		}
+		for (let position = 0; position < foreignKey.references.length; position++) {
+			const referenced = foreignKey.references[position]
+			if (!inSet(target.columns, referenced)) {
+				throw new PolicyError(`${table.name}: a foreign key references ${foreignKey.table}.${String(referenced)}, which is not a column`)
+			}
+		}
 	}
 }
 

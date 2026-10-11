@@ -151,7 +151,8 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   `@fabrika/db/tables`, only as `defineTables(vocabulary, columns)({ … })` (the first argument an object with the
   vocabulary's four sections), with `columns` imported from the generated `src/db/schema.generated.ts`; the form that
   names the action union by hand, `defineTables<DB, Action>(columns)`, is refused. The vocabulary reaches
-  `readTables`, which derives each table's containment as `defineTables` does and refuses what it refuses.
+  `readTables`, which derives each table's containment as `defineTables` does and refuses what it refuses; the
+  foreign keys it checks a containment column against are the generated column list's, read from source.
 - **Functions:** an inline arrow with one parameter and an expression body, only as the second argument of
   `defineContract` and as `procedures` in the options of `c.link(path, { … })`. Its parameter is used only as
   `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `form`, `webhook`, `files`, `cron`, `export`.
