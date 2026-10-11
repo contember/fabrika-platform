@@ -61,19 +61,34 @@ Read this before moving a service onto this driver.
   resolve through the runner's `search_path`; `pg_catalog.` stays allowed. A table alias with such
   a name is refused too: the tokenizer cannot tell a schema from a table. The test kit's throwaway
   schema depends on this: a migration that reached `public` would change live rows on every run.
-- **An application migration installs no database code** (ADR-0017), checked twice for every
-  application plan, the framework bundle included. Before any SQL runs, `disallowedStatement`
-  (`migration-allowlist.ts`) admits only the allowlisted statements, `ALTER TABLE` clauses and
-  `CREATE TABLE` forms, naming no schema but the application's: an allowlist at every level, never a
-  blocklist, because a missed form is then refused instead of executed. It reads only files the ledger
-  has not recorded, since applied files are checksum-locked. Inside the migration's transaction,
-  before its commit, `databaseCodeCheck` (`database-code.ts`) reads the catalog and fails the
-  transaction on any database code, including expressions whose parsed tree calls a function or
-  operator outside the reviewed `pg_catalog` lists. Trust built-ins by name, never by volatility.
-  `@fabrika/db`'s codegen runs the same `databaseCodeQuery` at start.
+- **An application migration may not escape; its database code is a deviation** (ADR-0017), checked
+  twice for every application plan, the framework bundle included. Before any SQL runs,
+  `classifyMigrations` (`migration-classify.ts`) sorts every statement into paved, deviation (`{ kind,
+  object, file, line }`, keyed by `kind` + `object`, never the line) or refused, and the runner refuses a
+  file the ledger has not recorded that holds a refusal. An allowlist at every level, never a blocklist:
+  a statement form, an `ALTER TABLE` clause, a body statement and a function call it does not name are
+  refused, so a form a later Postgres adds is refused instead of executed. Bodies are parsed with the
+  same lexer; a qualified name is a schema only where it names a relation, a call or a type
+  (`nameReferences`, `sql-names.ts`), so `NEW.x` and `alias.col` stay columns. Inside the migration's
+  transaction, before its commit, `databaseCodeCheck` (`database-code.ts`) fails it on an integrity
+  escape or on any database object the manifest folded through that file does not name. The classifier
+  feeds the approval (Control cannot reach the database); the catalog check is its runtime witness, and
+  `@fabrika/db`'s codegen runs the same `databaseCodeQuery` against the whole manifest at every start.
+- **No framework name in an application migration.** The framework's tables (`fabrika_*`) share the
+  schema and hold webhook secrets, deliveries and job leases; `isFrameworkName` refuses every reference,
+  case-insensitive, quoted or not, in bodies too. Only the bundle the plan marks `frameworkBundle` (the
+  first of several) is exempt, and a file collection's own `fabrika_files_<name>` table and indexes.
+- **Function calls are an allowlist** (`functionUse`, `refusedFunctionCall`): a paved or reviewed
+  `pg_catalog` built-in, or a function the migration set declares. Never admit a built-in that runs SQL
+  from a string or reaches past the schema (`query_to_xml`, `dblink`, `lo_*`, `pg_read_file`,
+  `pg_advisory_*`, `set_config`): these are name rules, not privileges, until backlog 110.
+- **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
+  `sql-names.ts` and `migration-classify.ts`, which import nothing outside themselves: Control loads it in
+  a Worker. `sql-subpath.test.ts` pins the import graph; never import Bun, Node or a driver there.
 - **Neither check may depend on the session.** `sqlTokens` follows Postgres' lexer (whitespace is
-  `[ \t\n\r\f\v]`; every character from U+0080 up belongs to a name), the catalog query has no backslash,
-  and every place that runs it pins `search_path` to `pg_catalog` and `standard_conforming_strings` on.
+  `[ \t\n\r\f\v]`; every character from U+0080 up belongs to a name; unquoted names fold ASCII only and
+  truncate at 63 bytes), the catalog query has no backslash and carries the manifest as hex text, and
+  every place that runs it pins `search_path` to `pg_catalog` and `standard_conforming_strings` on.
   The guard qualifies every function, operator and type with `pg_catalog`, because a migration runs with
   its own schema first on the path. Service plans are not checked: a service is trusted platform code.
 - **Checksums are verified before anything is applied.** An applied file that changed fails the run with

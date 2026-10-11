@@ -1,4 +1,4 @@
-import { databaseCodeQuery } from '@fabrika/platform-node'
+import { databaseCodeQuery, type DatabaseObject } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { z } from 'zod/v4'
 import { isPlainIdentifier } from './identifier'
@@ -63,34 +63,40 @@ const catalogColumnSchema = z.object({
 
 export type CatalogColumn = z.infer<typeof catalogColumnSchema>
 
-/** One row per column of every ordinary or partitioned table in the schema, in table then column order. */
+/**
+ * One row per column of every ordinary or partitioned table in the schema, in table then column order. A column of a
+ * domain is typed as the domain's base type, and is non-null when the domain is `NOT NULL`; a domain over a domain
+ * keeps the inner domain as its type, which `scalarType` refuses.
+ */
 const CATALOG_QUERY = `
 SELECT
 	c.relname::text AS table_name,
 	a.attname::text AS column_name,
-	t.typname::text AS type_name,
-	t.typtype::text AS type_type,
-	t.typcategory::text AS type_category,
-	NOT a.attnotnull AS nullable,
+	COALESCE(b.typname, t.typname)::text AS type_name,
+	COALESCE(b.typtype, t.typtype)::text AS type_type,
+	COALESCE(b.typcategory, t.typcategory)::text AS type_category,
+	NOT a.attnotnull AND NOT (t.typtype = 'd' AND t.typnotnull) AS nullable,
 	CASE
 		WHEN a.attgenerated <> '' OR a.attidentity = 'a' THEN 'always'
 		WHEN a.atthasdef OR a.attidentity = 'd' THEN 'default'
 		ELSE 'no'
 	END AS generated,
-	ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder) AS enum_labels
+	ARRAY(SELECT e.enumlabel::text FROM pg_enum e WHERE e.enumtypid = COALESCE(b.oid, t.oid) ORDER BY e.enumsortorder) AS enum_labels
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_type t ON t.oid = a.atttypid
+LEFT JOIN pg_type b ON t.typtype = 'd' AND b.oid = t.typbasetype
 WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum
 `
 
 /**
- * Reads the columns of the application's schema, refusing one that holds database code. The URL is a credential:
- * no message here contains it.
+ * Reads the columns of the application's schema, refusing one that escapes it or holds a database object that
+ * `objects`, the migrations' manifest (`PostgresApplicationMigrations.objects`), does not name. The URL is a
+ * credential: no message here contains it.
  */
-export async function introspectSchema(url: string, schema: string): Promise<CatalogColumn[]> {
+export async function introspectSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<CatalogColumn[]> {
 	if (!isPlainIdentifier(schema)) throw new CodegenError(`the schema must match ^[a-z_][a-z0-9_]*$: ${schema}`)
 	const sql = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	try {
@@ -102,11 +108,13 @@ export async function introspectSchema(url: string, schema: string): Promise<Cat
 			if (!Array.isArray(namespaces) || namespaces.length === 0) {
 				throw new CodegenError(`schema ${schema} does not exist; run fabrika db migrate first`)
 			}
-			// The migration runner's own pre-commit check, so an object installed before it existed fails every start.
-			const code = z.array(z.object({ violation: z.string() })).parse(await tx.unsafe(databaseCodeQuery(schema)))
+			// The migration runner's own pre-commit check, so an object created outside a migration fails every start.
+			const code = z.array(z.object({ violation: z.string() })).parse(await tx.unsafe(databaseCodeQuery(schema, objects)))
 			if (code.length > 0) {
 				throw new CodegenError(
-					`schema ${schema} holds database code the data layer cannot see: ${code.map((row) => row.violation).join(', ')}; drop it in a new migration`,
+					`schema ${schema} holds database code that escapes it or that no migration declares: ${
+						code.map((row) => row.violation).join(', ')
+					}; declare it in a migration or drop it in a new one`,
 				)
 			}
 			return z.array(catalogColumnSchema).parse(await tx.unsafe(CATALOG_QUERY, [schema]))
@@ -219,7 +227,7 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 	].join('\n')
 }
 
-/** Introspects the migrated schema and renders the module that belongs at `SCHEMA_FILE`. */
-export async function generateSchema(url: string, schema: string): Promise<string> {
-	return renderSchema(await introspectSchema(url, schema))
+/** Introspects the migrated schema, checked against the migrations' manifest, and renders the module for `SCHEMA_FILE`. */
+export async function generateSchema(url: string, schema: string, objects: readonly DatabaseObject[]): Promise<string> {
+	return renderSchema(await introspectSchema(url, schema, objects))
 }

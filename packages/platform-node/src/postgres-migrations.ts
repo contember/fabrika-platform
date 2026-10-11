@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATABASE_CODE_FAILURE, databaseCodeCheck } from './database-code'
-import { disallowedStatement } from './migration-allowlist'
+import { classifyMigrations, type DatabaseObject, migrationManifest } from './migration-classify'
 import { refusedStatement } from './migration-sql'
 
 const IDENTIFIER = /^[a-z][a-z0-9_]*$/
@@ -40,6 +40,8 @@ export interface PostgresApplicationMigrationSettings {
 	/** `lock_timeout` of each migration, so a blocked `ALTER` fails the deploy instead of stalling the live version. */
 	lockTimeoutMs: number
 	statementTimeoutMs: number
+	/** The framework's own bundle (`fabrika`), which alone may name the framework's `fabrika_*` tables. */
+	frameworkBundle?: string
 }
 
 /** A refusal or failure of the runner itself. Its message names no credential; a driver error is its `cause`. */
@@ -154,9 +156,10 @@ export async function applyPostgresMigrations(
 	const fresh: string[] = []
 	try {
 		const applied = await appliedChecksums(db, plan)
+		let manifests: ReadonlyMap<string, readonly DatabaseObject[]> = new Map()
 		if (plan.application !== undefined) {
 			verifyChecksums(plan.bundles, applied)
-			refuseDisallowedStatements(plan.bundles, applied, plan.application.schema)
+			manifests = classifyApplicationPlan(plan.bundles, applied, plan.application)
 		}
 		await ensureLedger(db, plan)
 		for (const bundle of plan.bundles) {
@@ -169,7 +172,7 @@ export async function applyPostgresMigrations(
 						db.prepare(GUARD_MARK),
 						db.prepare(migration.sql),
 						db.prepare(guardCheck(plan.application)),
-						...databaseCodeStatements(db, plan.application),
+						...databaseCodeStatements(db, plan.application, manifests.get(identity) ?? []),
 						ledgerInsert(db, plan, bundle.name, migration, (options.now ?? unixNow)()),
 					])
 				} catch (error) {
@@ -180,7 +183,7 @@ export async function applyPostgresMigrations(
 					}
 					if (error instanceof Error && error.message.startsWith(DATABASE_CODE_FAILURE)) {
 						throw new PostgresMigrationError(
-							`Postgres migration ${identity} was rolled back: the schema would hold database code the data layer cannot see: ${
+							`Postgres migration ${identity} was rolled back: the schema would hold database code that escapes it or that no migration declares: ${
 								error.message.slice(DATABASE_CODE_FAILURE.length)
 							}`,
 						)
@@ -249,6 +252,10 @@ function validateLedgerTable(plan: PostgresMigrationPlan): void {
 	validateIdentifier(plan.ledgerTable.slice(prefix.length), 'migration ledger table')
 	validateTimeout(application.lockTimeoutMs, 'lock timeout')
 	validateTimeout(application.statementTimeoutMs, 'statement timeout')
+	// Only the framework's bundle may name `fabrika_*`; it runs first, before an application's own.
+	if (application.frameworkBundle !== undefined && (plan.bundles.length < 2 || plan.bundles[0]?.name !== application.frameworkBundle)) {
+		throw new Error(`Invalid framework bundle: ${application.frameworkBundle} is not the first of several bundles`)
+	}
 }
 
 function validateTimeout(value: number, label: string): void {
@@ -328,25 +335,34 @@ function verifyChecksums(bundles: readonly PostgresMigrationBundle[], applied: R
 }
 
 /**
- * Refuses an application file that is not applied yet and holds a statement outside the allowlist, before any SQL
- * runs. An applied file is already checksum-locked, so a statement the allowlist refuses today cannot lock an
- * installation out of its next deploy.
+ * Classifies every file of an application plan and refuses one that is not applied yet and holds a refused statement,
+ * before any SQL runs. An applied file is already checksum-locked, so a statement refused today cannot lock an
+ * installation out of its next deploy. Returns, per migration identity, the manifest folded through that file: what
+ * the catalog check admits right after it ran.
  */
-function refuseDisallowedStatements(
+function classifyApplicationPlan(
 	bundles: readonly PostgresMigrationBundle[],
 	applied: ReadonlyMap<string, string | undefined>,
-	schema: string,
-): void {
-	for (const bundle of bundles) {
-		for (const migration of bundle.migrations) {
-			if (applied.has(postgresMigrationIdentity(bundle.name, migration.name))) continue
-			const refused = disallowedStatement(migration.sql, schema)
-			if (refused === undefined) continue
-			throw new PostgresMigrationError(
-				`Application migration ${migration.name} line ${refused.line}: ${refused.statement} is not allowed; an application migration holds only CREATE TABLE, ALTER TABLE, CREATE [UNIQUE] INDEX, ALTER INDEX … RENAME TO, CREATE TYPE … AS ENUM, ALTER TYPE … ADD/RENAME VALUE, DROP, TRUNCATE, COMMENT ON, INSERT, UPDATE and DELETE, naming no other schema`,
-			)
-		}
+	application: PostgresApplicationMigrationSettings,
+): ReadonlyMap<string, readonly DatabaseObject[]> {
+	const files = bundles.flatMap((bundle) =>
+		bundle.migrations.map((migration) => ({
+			name: migration.name,
+			sql: migration.sql,
+			framework: bundle.name === application.frameworkBundle,
+			identity: postgresMigrationIdentity(bundle.name, migration.name),
+		}))
+	)
+	const classified = classifyMigrations(files, application.schema)
+	for (const [index, file] of files.entries()) {
+		if (applied.has(file.identity)) continue
+		const refused = classified.files[index]?.refused[0]
+		if (refused === undefined) continue
+		throw new PostgresMigrationError(
+			`Application migration ${file.name} line ${refused.line}: ${refused.reason} is not allowed; an application migration may not leave its schema, its transaction or the platform (ADR-0017)`,
+		)
 	}
+	return new Map(files.map((file, index) => [file.identity, migrationManifest(classified.files.slice(0, index + 1))]))
 }
 
 /** SHA-256 of the file's text, hex. */
@@ -397,12 +413,16 @@ function applicationSettings(db: SqlDatabase, application: PostgresApplicationMi
  * The catalog check, after the file and before the commit, on settings it pins itself: the file may have changed
  * `standard_conforming_strings`, and nothing the application installed may resolve before `pg_catalog`.
  */
-function databaseCodeStatements(db: SqlDatabase, application: PostgresApplicationMigrationSettings | undefined): SqlStatement[] {
+function databaseCodeStatements(
+	db: SqlDatabase,
+	application: PostgresApplicationMigrationSettings | undefined,
+	manifest: readonly DatabaseObject[],
+): SqlStatement[] {
 	if (application === undefined) return []
 	return [
 		db.prepare('SET LOCAL search_path TO pg_catalog, pg_temp'),
 		db.prepare('SET LOCAL standard_conforming_strings = on'),
-		db.prepare(databaseCodeCheck(application.schema)),
+		db.prepare(databaseCodeCheck(application.schema, manifest)),
 	]
 }
 

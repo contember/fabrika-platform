@@ -40,6 +40,7 @@ export {
 	PostgresJobQueue,
 	type PostgresJobQueueOptions,
 } from './job-queue-postgres'
+export type { DatabaseObject, DatabaseObjectKind } from './migration-classify'
 export { rewritePlaceholders, type RewrittenSql } from './placeholders'
 export {
 	applyPostgresMigrations,

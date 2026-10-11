@@ -45,7 +45,8 @@ function dollarTagAt(sql: string, index: number): string | undefined {
 export type SqlToken =
 	| { readonly kind: 'word'; readonly text: string; readonly line: number }
 	| { readonly kind: 'quoted'; readonly text: string; readonly line: number }
-	| { readonly kind: 'string'; readonly line: number }
+	/** `text` is the literal's value for a plain `'…'` string; an `E'…'` string, whose escapes are not decoded, has none. */
+	| { readonly kind: 'string'; readonly text: string | undefined; readonly line: number }
 	| { readonly kind: 'dollar'; readonly body: string; readonly line: number }
 	| { readonly kind: 'punct'; readonly char: string; readonly line: number }
 
@@ -54,7 +55,19 @@ export type SqlToken =
  * identifiers (`""` unescaped) and dollar-quoted bodies are each one token, so a keyword inside them is no word.
  */
 export function sqlTokens(sql: string): SqlToken[] {
+	return lexSql(sql).tokens
+}
+
+/**
+ * The tokens of `sql`, and the line of the first string, quoted identifier, dollar-quoted body or block comment that
+ * never closes. Text after it is one token, which a check of names cannot read.
+ */
+export function lexSql(sql: string): { readonly tokens: SqlToken[]; readonly unterminated: number | undefined } {
 	const tokens: SqlToken[] = []
+	let unterminated: number | undefined
+	const open = (closed: boolean, at: number): void => {
+		if (!closed) unterminated ??= at
+	}
 	let line = 1
 	let index = 0
 	/** Moves to `end`, counting the newlines it passes. */
@@ -89,17 +102,23 @@ export function sqlTokens(sql: string): SqlToken[] {
 					if (nesting === 0) break
 				} else at++
 			}
+			open(nesting === 0, line)
 			skipTo(at)
 		} else if (char === "'" || ((char === 'E' || char === 'e') && next === "'")) {
-			tokens.push({ kind: 'string', line })
 			const escapes = char !== "'"
+			const startLine = line
 			let at = index + (escapes ? 2 : 1)
+			let text = ''
 			while (at < sql.length) {
 				if (escapes && sql[at] === '\\') at += 2
-				else if (sql[at] === "'" && sql[at + 1] === "'") at += 2
-				else if (sql[at] === "'") break
-				else at++
+				else if (sql[at] === "'" && sql[at + 1] === "'") {
+					text += "'"
+					at += 2
+				} else if (sql[at] === "'") break
+				else text += sql[at++] ?? ''
 			}
+			tokens.push({ kind: 'string', text: escapes ? undefined : text, line: startLine })
+			open(at < sql.length, startLine)
 			skipTo(at + 1)
 		} else if (char === '"') {
 			const startLine = line
@@ -113,10 +132,12 @@ export function sqlTokens(sql: string): SqlToken[] {
 				else text += sql[at++] ?? ''
 			}
 			tokens.push({ kind: 'quoted', text, line: startLine })
+			open(at < sql.length, startLine)
 			skipTo(at + 1)
 		} else if (tag !== undefined) {
 			const end = sql.indexOf(tag, index + tag.length)
 			tokens.push({ kind: 'dollar', body: sql.slice(index + tag.length, end === -1 ? sql.length : end), line })
+			open(end !== -1, line)
 			skipTo(end === -1 ? sql.length : end + tag.length)
 		} else if (isWordStart(char)) {
 			let at = index + 1
@@ -128,7 +149,7 @@ export function sqlTokens(sql: string): SqlToken[] {
 			index++
 		}
 	}
-	return tokens
+	return { tokens, unterminated }
 }
 
 export interface Statement {

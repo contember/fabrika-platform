@@ -3,6 +3,7 @@
 // codegen's output for the fixture migration, and the Postgres suite regenerates it byte for byte.
 
 import { checkApplication, formatFinding } from '@fabrika/check'
+import { classifyMigrations } from '@fabrika/platform-node/sql'
 import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -218,7 +219,7 @@ async function migrated(ddl: string): Promise<string> {
 describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 	test('regenerates the committed fixture from the fixture migration', async () => {
 		const schema = await migrated(migration)
-		expect(await generateSchema(url, schema)).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text())
+		expect(await generateSchema(url, schema, [])).toBe(await Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text())
 	})
 
 	test('types each supported column as Bun.SQL decodes it', async () => {
@@ -249,7 +250,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			INSERT INTO samples (label, code, small, medium, big, amount, ratio, share, done, due, seen, starts, starts_tz, length, state)
 			VALUES ('a', 'xy', 1, 2, 3, 4.5, 1.5, 2.5, true, '2026-10-08', '2026-10-08 12:00', '12:00', '12:00+02', '1 hour', 'busy');
 		`)
-		const source = await generateSchema(url, schema)
+		const source = await generateSchema(url, schema, [])
 		expect(interfaceOf(source, 'SamplesTable')).toBe(`export interface SamplesTable {
 	id: Generated<string>
 	label: string
@@ -308,8 +309,8 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		})
 	})
 
-	test('refuses a schema that holds database code installed before the runner refused it', async () => {
-		const schema = await migrated(`
+	test('refuses database code no migration declares, and admits what the manifest names', async () => {
+		const ddl = `
 			CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n bigserial, at timestamptz DEFAULT now(), label text DEFAULT 'x');
 			CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$
 			BEGIN UPDATE deals SET stage = NEW.stage WHERE id <> NEW.id; RETURN NEW; END
@@ -318,15 +319,21 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			CREATE RULE mirror AS ON DELETE TO deals DO ALSO DELETE FROM deals;
 			CREATE VIEW open_deals AS SELECT id FROM deals;
 			CREATE POLICY own ON deals USING (true);
-		`)
-		const refusal =
-			`schema ${schema} holds database code the data layer cannot see: default deals.n calls pg_catalog.nextval, function spread, policy deals.own, rule deals.mirror, sequence deals_n_seq (a serial column; use GENERATED ALWAYS AS IDENTITY), trigger deals.spread, view open_deals; drop it in a new migration`
-		await expect(introspectSchema(url, schema)).rejects.toThrow(refusal)
-		await expect(generateSchema(url, schema)).rejects.toThrow(CodegenError)
+		`
+		const schema = await migrated(ddl)
+		const undeclared = ['function spread', 'policy deals.own', 'rule deals.mirror', 'trigger deals.spread', 'view open_deals']
+		const refusal = `schema ${schema} holds database code that escapes it or that no migration declares: ${
+			undeclared.map((object) => `${object} (no migration declares it)`).join(', ')
+		}; declare it in a migration or drop it in a new one`
+		await expect(introspectSchema(url, schema, [])).rejects.toThrow(refusal)
+		await expect(generateSchema(url, schema, [])).rejects.toThrow(CodegenError)
+		const { files, objects } = classifyMigrations([{ name: '20261008120000_init.sql', sql: ddl }], schema)
+		expect(files[0]?.refused).toEqual([])
+		expect(await generateSchema(url, schema, objects)).toContain('export interface DealsTable {')
 	})
 
 	test('the start check holds when the role sets standard_conforming_strings off and puts the schema first', async () => {
-		const schema = await migrated('CREATE TABLE deals (id text PRIMARY KEY, n serial)')
+		const schema = await migrated('CREATE TABLE deals (id text PRIMARY KEY); CREATE FUNCTION shadow() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;')
 		const role = `codegen_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 		const password = Bun.randomUUIDv7()
 		const admin = new SQL({ url, adapter: 'postgres', max: 1 })
@@ -337,23 +344,47 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			const hostile = new URL(url)
 			hostile.username = role
 			hostile.password = password
-			await expect(introspectSchema(hostile.toString(), schema)).rejects.toThrow('default deals.n calls pg_catalog.nextval')
+			await expect(introspectSchema(hostile.toString(), schema, [])).rejects.toThrow('function shadow (no migration declares it)')
 		} finally {
 			await admin.unsafe(`DROP ROLE IF EXISTS ${role}`)
 			await admin.close()
 		}
 	})
 
-	test('a trigger alone fails the start check', async () => {
+	test('a trigger alone fails the start check unless a migration declares it', async () => {
 		const schema = await migrated(`
 			CREATE TABLE deals (id text PRIMARY KEY);
 			CREATE TRIGGER noop BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
 		`)
-		await expect(generateSchema(url, schema)).rejects.toThrow(`schema ${schema} holds database code the data layer cannot see: trigger deals.noop;`)
+		await expect(generateSchema(url, schema, [])).rejects.toThrow(
+			`schema ${schema} holds database code that escapes it or that no migration declares: trigger deals.noop (no migration declares it);`,
+		)
+		expect(await generateSchema(url, schema, [{ kind: 'trigger', name: 'deals.noop' }])).toContain('export interface DealsTable {')
+	})
+
+	test('types a column of a domain as its base type, non-null when the domain is NOT NULL', async () => {
+		const schema = await migrated(`
+			CREATE TYPE mood AS ENUM ('calm', 'busy');
+			CREATE DOMAIN positive AS int CHECK (VALUE > 0);
+			CREATE DOMAIN code AS varchar(8) NOT NULL;
+			CREATE DOMAIN feeling AS mood;
+			CREATE TABLE tallies (id text PRIMARY KEY, count positive, label code, feeling feeling);
+		`)
+		const domains = [{ kind: 'domain', name: 'positive' }, { kind: 'domain', name: 'code' }, { kind: 'domain', name: 'feeling' }] as const
+		const source = await generateSchema(url, schema, domains)
+		expect(interfaceOf(source, 'TalliesTable')).toBe(
+			"export interface TalliesTable {\n\tid: string\n\tcount: number | null\n\tlabel: string\n\tfeeling: 'calm' | 'busy' | null\n}\n",
+		)
+	})
+
+	test('refuses a column of a domain over a domain, whose base it does not resolve', async () => {
+		const schema = await migrated('CREATE DOMAIN positive AS int CHECK (VALUE > 0); CREATE DOMAIN small AS positive; CREATE TABLE t (n small);')
+		const domains = [{ kind: 'domain', name: 'positive' }, { kind: 'domain', name: 'small' }] as const
+		await expect(generateSchema(url, schema, domains)).rejects.toThrow('t.n has type positive, which the data layer does not read or bind')
 	})
 
 	test('refuses a schema that was never migrated', async () => {
-		await expect(introspectSchema(url, 'codegen_missing_schema')).rejects.toThrow(
+		await expect(introspectSchema(url, 'codegen_missing_schema', [])).rejects.toThrow(
 			'schema codegen_missing_schema does not exist; run fabrika db migrate first',
 		)
 	})

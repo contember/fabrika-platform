@@ -122,7 +122,7 @@ afterAll(async () => {
 describe.skipIf(!hasPostgres)('locators generated from the table policies', () => {
 	test('the fixture types are what codegen writes for its migration', async () => {
 		const committed = await Bun.file(join(import.meta.dir, 'fixtures', 'scoped-organizations', 'src', 'db', 'schema.generated.ts')).text()
-		expect(await generateSchema(url, schema)).toBe(committed)
+		expect(await generateSchema(url, schema, [])).toBe(committed)
 	})
 
 	test('on: a note of another workspace or organization is 404; a grant on its organization reaches it', async () => {

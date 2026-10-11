@@ -11,10 +11,10 @@ import {
 import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import {
-	applicationDatabaseSchema,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 	definePostgresApplicationMigrations,
+	type PostgresApplicationMigrations,
 	PostgresDatabase,
 	PostgresMigrationError,
 	postgresMigrationResultMessage,
@@ -104,15 +104,18 @@ const serverError = (error: unknown): string | undefined =>
 		? `${error.message} (SQLSTATE ${error.errno ?? 'unknown'})`
 		: undefined
 
-const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
-	refuseArguments('migrate', argv)
-	const appId = required(deps.source, 'FABRIKA_APP_ID')
-	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
-	const migrations = definePostgresApplicationMigrations({
+/** The framework's tables, then the application's `db/migrations`, as `migrate` applies them and `codegen` checks them. */
+const applicationMigrations = (appId: string, cwd: string): PostgresApplicationMigrations =>
+	definePostgresApplicationMigrations({
 		appId,
-		directory: join(deps.cwd, MIGRATIONS_DIR),
+		directory: join(cwd, MIGRATIONS_DIR),
 		framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS },
 	})
+
+const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
+	refuseArguments('migrate', argv)
+	const migrations = applicationMigrations(required(deps.source, 'FABRIKA_APP_ID'), deps.cwd)
+	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	const files = migrations.read()
 	migrations.plan(files)
 	// One connection: the advisory lock is session state.
@@ -129,11 +132,12 @@ const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
 	const verify = argv.includes('--verify')
 	refuseArguments('codegen', argv.filter((arg) => arg !== '--verify'))
-	const schema = applicationDatabaseSchema(required(deps.source, 'FABRIKA_APP_ID'))
+	const migrations = applicationMigrations(required(deps.source, 'FABRIKA_APP_ID'), deps.cwd)
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	let source: string
 	try {
-		source = await generateSchema(url, schema)
+		// The migrations' manifest: the start check refuses any database object no migration declares.
+		source = await generateSchema(url, migrations.schema, migrations.objects())
 	} catch (error) {
 		throw reportable(error)
 	}

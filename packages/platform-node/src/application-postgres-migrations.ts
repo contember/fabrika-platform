@@ -1,6 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { classifyMigrations, type DatabaseObject } from './migration-classify'
 import { foreignSchemaReference } from './migration-sql'
 import {
 	applyPostgresMigrations,
@@ -44,6 +45,11 @@ export interface PostgresApplicationMigrations {
 	readonly schema: string
 	read(): PostgresMigration[]
 	plan(migrations?: readonly PostgresMigration[]): PostgresMigrationPlan
+	/**
+	 * The manifest of the framework's and the application's migrations: the database objects they declare, which the
+	 * catalog check admits at every start (`fabrika db codegen`) as the runner does before each commit.
+	 */
+	objects(migrations?: readonly PostgresMigration[]): DatabaseObject[]
 	apply(db: SqlDatabase, migrations?: readonly PostgresMigration[]): Promise<string[]>
 }
 
@@ -98,10 +104,15 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 				schema,
 				lockTimeoutMs: config.lockTimeoutMs ?? DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 				statementTimeoutMs: config.statementTimeoutMs ?? DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
+				...(config.framework === undefined ? {} : { frameworkBundle: config.framework.bundle }),
 			},
 		})
 	}
+	const objects = (migrations: readonly PostgresMigration[] = read()): DatabaseObject[] => {
+		const framework = (config.framework?.migrations ?? []).map((migration) => ({ ...migration, framework: true }))
+		return [...classifyMigrations([...framework, ...migrations], schema).objects]
+	}
 	const apply = async (db: SqlDatabase, migrations: readonly PostgresMigration[] = read()): Promise<string[]> =>
 		applyPostgresMigrations(db, plan(migrations))
-	return { schema, read, plan, apply }
+	return { schema, read, plan, objects, apply }
 }

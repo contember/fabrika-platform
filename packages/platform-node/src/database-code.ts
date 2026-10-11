@@ -1,196 +1,54 @@
-// The catalog half of "an application schema holds no database code" (ADR-0017). Postgres has already parsed every
-// expression the schema stores, so this reads the parsed trees instead of the SQL text: the runner runs it inside each
-// migration's transaction, before its commit, and `@fabrika/db`'s codegen runs it at every start.
+// The catalog half of ADR-0017's migration rules: the runtime witness. Postgres has already resolved every name the
+// schema stores, so this reads the catalog instead of the SQL text: the runner runs it inside each migration's
+// transaction, before its commit, and `@fabrika/db`'s codegen runs it at every start. It refuses what escapes the
+// schema and any database object that no migration declares, such as one created at runtime.
+
+import type { DatabaseObject } from './migration-classify'
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/
+const encoder = new TextEncoder()
 
-/** Reviewed `pg_catalog` functions an expression may call: no side effect, no read of another row. Trusted by name. */
-const FUNCTIONS = [
-	'now',
-	'gen_random_uuid',
-	'lower',
-	'upper',
-	'length',
-	'char_length',
-	'octet_length',
-	'btrim',
-	'ltrim',
-	'rtrim',
-	'abs',
-	'round',
-	'trunc',
-	'floor',
-	'ceil',
-	'ceiling',
-	'date_trunc',
-	// `AT TIME ZONE`, which an index on a timestamptz needs to stay immutable.
-	'timezone',
-	'date_part',
-	'extract',
-	'array_length',
-	'cardinality',
-	'to_tsvector',
-	'to_tsquery',
-	// The casts Postgres inserts on its own, such as `int8(int4)` for `DEFAULT 0` on a BIGINT column.
-	'int2',
-	'int4',
-	'int8',
-	'float4',
-	'float8',
-	'numeric',
-	'text',
-	'varchar',
-	'bpchar',
-	'bool',
-	'date',
-	'time',
-	'timetz',
-	'timestamp',
-	'timestamptz',
-	'interval',
-]
+/** A text literal with no quote and no backslash in it, whatever the session's `standard_conforming_strings`. */
+function hexText(value: string): string {
+	const hex = Array.from(encoder.encode(value), (byte) => byte.toString(16).padStart(2, '0')).join('')
+	return `pg_catalog.convert_from(pg_catalog.decode('${hex}', 'hex'), 'UTF8')`
+}
+
+/** The manifest as a `text[]` of `<kind> <name>`, the names `objects` gives the schema's objects. */
+function declaredArray(declared: readonly DatabaseObject[]): string {
+	if (declared.length === 0) return 'ARRAY[]::pg_catalog.text[]'
+	return `ARRAY[${declared.map((object) => hexText(`${object.kind} ${object.name}`)).join(', ')}]::pg_catalog.text[]`
+}
+
+/** A catalog's `regclass`, qualified, since the query may run with the application's schema first on the path. */
+const catalog = (table: string): string => `'pg_catalog.${table}'::pg_catalog.regclass`
 
 /**
- * Reviewed `pg_catalog` operators: comparison, arithmetic, concatenation, pattern matching, jsonb access and
- * containment, array overlap and text search. Trusted by name: every `pg_catalog` operator of these names is a pure
- * built-in, whatever its operand types. A migration cannot write a lone `?`, which the driver reads as a placeholder;
- * `?|` and `?&` pass through.
+ * One row (`violation`) per escape and per undeclared object in `schema`. Escapes: a function that is `SECURITY
+ * DEFINER`, has a `SET` clause or a language other than `sql` and `plpgsql`; an event trigger on a function of the
+ * schema; and any dependency of an object of the schema on a type, function, relation, operator, operator class or
+ * collation outside the schema and `pg_catalog`. Undeclared: a function, procedure, aggregate, operator, trigger (a
+ * foreign key's excepted), rule, view, policy, domain or sequence (an identity or serial column's excepted) that
+ * `declared` does not name. Every name is qualified with `pg_catalog`, the query has no backslash, and the manifest is
+ * hex text, so the session's `search_path` and `standard_conforming_strings` cannot change what it finds.
  */
-const OPERATORS = [
-	'=',
-	'<>',
-	'<',
-	'<=',
-	'>',
-	'>=',
-	'+',
-	'-',
-	'*',
-	'/',
-	'%',
-	'||',
-	'~~',
-	'!~~',
-	'~~*',
-	'!~~*',
-	'~',
-	'!~',
-	'~*',
-	'!~*',
-	'->',
-	'->>',
-	'@>',
-	'<@',
-	'?',
-	'?|',
-	'?&',
-	'&&',
-	'@@',
-]
-
-/**
- * The expression nodes (`pg_node_tree`) an expression may hold. `COALESCE`, `NULLIF`, `GREATEST` and `LEAST` are
- * nodes, not functions. Anything else, a domain coercion, a subplan or a node
- * a later Postgres adds, is refused rather than understood.
- */
-const NODES = [
-	'CONST',
-	'VAR',
-	'FUNCEXPR',
-	'OPEXPR',
-	'DISTINCTEXPR',
-	'NULLIFEXPR',
-	'SCALARARRAYOPEXPR',
-	'BOOLEXPR',
-	'NULLTEST',
-	'BOOLEANTEST',
-	'RELABELTYPE',
-	'COERCEVIAIO',
-	'CASEEXPR',
-	'CASEWHEN',
-	'CASETESTEXPR',
-	'COALESCEEXPR',
-	'MINMAXEXPR',
-	'SQLVALUEFUNCTION',
-	'COLLATEEXPR',
-	'ARRAYEXPR',
-	'ROWEXPR',
-	'ROWCOMPAREEXPR',
-]
-
-const list = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(', ')
-
-/**
- * One row (`violation`) per piece of database code in `schema`: a function, operator, trigger (a foreign key's
- * excepted), rule, view, policy, domain, exclusion constraint or sequence (an identity column's excepted); an index
- * or partition key with an operator class outside `pg_catalog`; an object that depends on a type outside the schema;
- * and a default, generated column, `CHECK`, index or partition expression that holds a node, calls a function or uses
- * an operator outside the reviewed lists. Every name is qualified with `pg_catalog`, because the runner runs this with
- * the application's schema as its `search_path`.
- */
-export function databaseCodeQuery(schema: string): string {
+export function databaseCodeQuery(schema: string, declared: readonly DatabaseObject[]): string {
 	if (!IDENTIFIER.test(schema)) throw new Error(`Invalid application schema: ${schema}`)
 	const namespace = `(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '${schema}')`
-	const relations = `(SELECT oid FROM pg_catalog.pg_class WHERE relnamespace = ${namespace})`
+	const trusted = `(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname IN ('${schema}', 'pg_catalog'))`
+	const outside = (kind: string, table: string, name: string, namespaceColumn: string): string =>
+		`SELECT d.object || ' depends on the ${kind} ' || s.nspname || '.' || r.${name}
+	FROM dependencies d
+	JOIN pg_catalog.${table} r ON d.refclassid = ${catalog(table)} AND r.oid = d.refobjid
+	JOIN pg_catalog.pg_namespace s ON s.oid = r.${namespaceColumn}
+	WHERE r.${namespaceColumn} NOT IN ${trusted}`
 	return `
-WITH expressions AS (
-	SELECT 'default ' || c.relname || '.' || a.attname AS object, d.adbin::pg_catalog.text AS tree
-	FROM pg_catalog.pg_attrdef d
-	JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-	JOIN pg_catalog.pg_class c ON c.oid = d.adrelid
-	WHERE c.relnamespace = ${namespace}
-	UNION ALL
-	SELECT 'constraint ' || k.conname, k.conbin::pg_catalog.text
-	FROM pg_catalog.pg_constraint k
-	WHERE k.connamespace = ${namespace} AND k.conbin IS NOT NULL
-	UNION ALL
-	SELECT 'index ' || c.relname, pg_catalog.concat(i.indexprs::pg_catalog.text, ' ', i.indpred::pg_catalog.text)
-	FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
-	WHERE c.relnamespace = ${namespace} AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)
-	UNION ALL
-	SELECT 'partition key of ' || c.relname, p.partexprs::pg_catalog.text
-	FROM pg_catalog.pg_partitioned_table p JOIN pg_catalog.pg_class c ON c.oid = p.partrelid
-	WHERE c.relnamespace = ${namespace} AND p.partexprs IS NOT NULL
-),
-nodes AS (
-	SELECT DISTINCT e.object, m[1] AS node FROM expressions e, pg_catalog.regexp_matches(e.tree, '[{]([A-Z_]+)', 'g') AS m
-),
-calls AS (
-	SELECT DISTINCT e.object, m[1]::pg_catalog.oid AS function
-	FROM expressions e, pg_catalog.regexp_matches(e.tree, ':funcid ([0-9]+)', 'g') AS m
-),
-operators AS (
-	SELECT DISTINCT e.object, m[1]::pg_catalog.oid AS operator
-	FROM expressions e, pg_catalog.regexp_matches(e.tree, ':opno ([0-9]+)', 'g') AS m
-	UNION
-	-- A row comparison lists its operators as :opnos (o 96 97).
-	SELECT DISTINCT e.object, o::pg_catalog.oid
-	FROM expressions e, pg_catalog.regexp_matches(e.tree, ':opnos [(]o ([0-9 ]+)[)]', 'g') AS m,
-		pg_catalog.unnest(pg_catalog.string_to_array(m[1], ' ')) AS o
-),
-classes AS (
-	SELECT 'index ' || c.relname AS object, k.class
-	FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid, pg_catalog.unnest(i.indclass::pg_catalog.oid[]) AS k(class)
-	WHERE c.relnamespace = ${namespace}
-	UNION ALL
-	SELECT 'partition key of ' || c.relname, k.class
-	FROM pg_catalog.pg_partitioned_table p JOIN pg_catalog.pg_class c ON c.oid = p.partrelid, pg_catalog.unnest(p.partclass::pg_catalog.oid[]) AS k(class)
-	WHERE c.relnamespace = ${namespace}
-),
-types AS (
-	SELECT DISTINCT d.refobjid AS type
-	FROM pg_catalog.pg_depend d
-	WHERE d.refclassid = 'pg_catalog.pg_type'::pg_catalog.regclass AND (
-		(d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid IN ${relations})
-		OR (d.classid = 'pg_catalog.pg_attrdef'::pg_catalog.regclass
-			AND d.objid IN (SELECT oid FROM pg_catalog.pg_attrdef WHERE adrelid IN ${relations}))
-		OR (d.classid = 'pg_catalog.pg_constraint'::pg_catalog.regclass
-			AND d.objid IN (SELECT oid FROM pg_catalog.pg_constraint WHERE connamespace = ${namespace}))
+WITH objects AS (
+	SELECT CASE p.prokind WHEN 'a' THEN 'aggregate ' WHEN 'p' THEN 'procedure ' ELSE 'function ' END || p.proname AS object
+	FROM pg_catalog.pg_proc p
+	WHERE p.pronamespace = ${namespace} AND NOT EXISTS (
+		SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid = ${catalog('pg_proc')} AND d.objid = p.oid AND d.deptype = 'i'
 	)
-),
-violations AS (
-	SELECT CASE p.prokind WHEN 'a' THEN 'aggregate ' WHEN 'p' THEN 'procedure ' ELSE 'function ' END || p.proname AS violation
-	FROM pg_catalog.pg_proc p WHERE p.pronamespace = ${namespace}
 	UNION ALL
 	SELECT 'operator ' || o.oprname FROM pg_catalog.pg_operator o WHERE o.oprnamespace = ${namespace}
 	UNION ALL
@@ -211,40 +69,73 @@ violations AS (
 	UNION ALL
 	SELECT 'domain ' || t.typname FROM pg_catalog.pg_type t WHERE t.typnamespace = ${namespace} AND t.typtype = 'd'
 	UNION ALL
-	SELECT 'exclusion constraint ' || k.conname FROM pg_catalog.pg_constraint k WHERE k.connamespace = ${namespace} AND k.contype = 'x'
-	UNION ALL
-	SELECT 'sequence ' || c.relname || ' (a serial column; use GENERATED ALWAYS AS IDENTITY)'
+	SELECT 'sequence ' || c.relname
 	FROM pg_catalog.pg_class c
 	WHERE c.relnamespace = ${namespace} AND c.relkind = 'S' AND NOT EXISTS (
 		SELECT 1 FROM pg_catalog.pg_depend d
-		WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = c.oid AND d.deptype = 'i'
+		WHERE d.classid = ${catalog('pg_class')} AND d.objid = c.oid AND d.refclassid = ${catalog('pg_class')}
+			AND d.refobjsubid > 0 AND d.deptype IN ('i', 'a')
 	)
+),
+dependents AS (
+	SELECT ${catalog('pg_class')} AS classid, c.oid AS objid,
+		CASE c.relkind WHEN 'i' THEN 'index ' WHEN 'v' THEN 'view ' WHEN 'm' THEN 'materialized view ' WHEN 'S' THEN 'sequence ' ELSE 'table ' END
+			|| c.relname AS object
+	FROM pg_catalog.pg_class c WHERE c.relnamespace = ${namespace}
 	UNION ALL
-	SELECT n.object || ' holds ' || n.node FROM nodes n WHERE n.node NOT IN (${list(NODES)})
+	SELECT ${catalog('pg_proc')}, p.oid, 'function ' || p.proname FROM pg_catalog.pg_proc p WHERE p.pronamespace = ${namespace}
 	UNION ALL
-	SELECT c.object || ' calls ' || COALESCE(s.nspname || '.' || p.proname, c.function::pg_catalog.text)
-	FROM calls c
-	LEFT JOIN pg_catalog.pg_proc p ON p.oid = c.function
-	LEFT JOIN pg_catalog.pg_namespace s ON s.oid = p.pronamespace
-	WHERE s.nspname IS DISTINCT FROM 'pg_catalog' OR p.proname NOT IN (${list(FUNCTIONS)})
+	SELECT ${catalog('pg_type')}, t.oid, 'type ' || t.typname FROM pg_catalog.pg_type t WHERE t.typnamespace = ${namespace}
 	UNION ALL
-	SELECT o.object || ' uses the operator ' || COALESCE(s.nspname || '.' || p.oprname, o.operator::pg_catalog.text)
-	FROM operators o
-	LEFT JOIN pg_catalog.pg_operator p ON p.oid = o.operator
-	LEFT JOIN pg_catalog.pg_namespace s ON s.oid = p.oprnamespace
-	WHERE s.nspname IS DISTINCT FROM 'pg_catalog' OR p.oprname NOT IN (${list(OPERATORS)})
+	SELECT ${catalog('pg_operator')}, o.oid, 'operator ' || o.oprname FROM pg_catalog.pg_operator o WHERE o.oprnamespace = ${namespace}
 	UNION ALL
-	SELECT c.object || ' uses the operator class ' || s.nspname || '.' || o.opcname
-	FROM classes c
-	JOIN pg_catalog.pg_opclass o ON o.oid = c.class
-	JOIN pg_catalog.pg_namespace s ON s.oid = o.opcnamespace
-	WHERE s.nspname <> 'pg_catalog'
+	SELECT ${catalog('pg_constraint')}, k.oid, 'constraint ' || k.conname FROM pg_catalog.pg_constraint k WHERE k.connamespace = ${namespace}
 	UNION ALL
-	SELECT 'the type ' || s.nspname || '.' || t.typname
-	FROM types d
-	JOIN pg_catalog.pg_type t ON t.oid = d.type
-	JOIN pg_catalog.pg_namespace s ON s.oid = t.typnamespace
-	WHERE t.typnamespace <> ${namespace}
+	SELECT ${catalog('pg_attrdef')}, d.oid, 'default ' || c.relname || '.' || a.attname
+	FROM pg_catalog.pg_attrdef d
+	JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+	JOIN pg_catalog.pg_class c ON c.oid = d.adrelid
+	WHERE c.relnamespace = ${namespace}
+	UNION ALL
+	SELECT ${catalog('pg_trigger')}, t.oid, 'trigger ' || c.relname || '.' || t.tgname
+	FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = ${namespace}
+	UNION ALL
+	SELECT ${catalog('pg_rewrite')}, r.oid, CASE WHEN r.rulename = '_RETURN' THEN 'view ' || c.relname ELSE 'rule ' || c.relname || '.' || r.rulename END
+	FROM pg_catalog.pg_rewrite r JOIN pg_catalog.pg_class c ON c.oid = r.ev_class WHERE c.relnamespace = ${namespace}
+	UNION ALL
+	SELECT ${catalog('pg_policy')}, p.oid, 'policy ' || c.relname || '.' || p.polname
+	FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid WHERE c.relnamespace = ${namespace}
+),
+dependencies AS (
+	SELECT DISTINCT o.object, d.refclassid, d.refobjid
+	FROM pg_catalog.pg_depend d JOIN dependents o ON o.classid = d.classid AND o.objid = d.objid
+),
+violations AS (
+	SELECT 'function ' || p.proname || ' is SECURITY DEFINER' AS violation
+	FROM pg_catalog.pg_proc p WHERE p.pronamespace = ${namespace} AND p.prosecdef
+	UNION ALL
+	SELECT 'function ' || p.proname || ' has a SET clause' FROM pg_catalog.pg_proc p WHERE p.pronamespace = ${namespace} AND p.proconfig IS NOT NULL
+	UNION ALL
+	SELECT 'function ' || p.proname || ' is in the language ' || l.lanname
+	FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+	WHERE p.pronamespace = ${namespace} AND l.lanname NOT IN ('sql', 'plpgsql')
+	UNION ALL
+	SELECT 'event trigger ' || e.evtname FROM pg_catalog.pg_event_trigger e JOIN pg_catalog.pg_proc p ON p.oid = e.evtfoid
+	WHERE p.pronamespace = ${namespace}
+	UNION ALL
+	${outside('type', 'pg_type', 'typname', 'typnamespace')}
+	UNION ALL
+	${outside('function', 'pg_proc', 'proname', 'pronamespace')}
+	UNION ALL
+	${outside('relation', 'pg_class', 'relname', 'relnamespace')}
+	UNION ALL
+	${outside('operator', 'pg_operator', 'oprname', 'oprnamespace')}
+	UNION ALL
+	${outside('operator class', 'pg_opclass', 'opcname', 'opcnamespace')}
+	UNION ALL
+	${outside('collation', 'pg_collation', 'collname', 'collnamespace')}
+	UNION ALL
+	SELECT o.object || ' (no migration declares it)' FROM objects o WHERE o.object <> ALL (${declaredArray(declared)})
 )
 SELECT DISTINCT violation FROM violations ORDER BY violation`
 }
@@ -252,12 +143,12 @@ SELECT DISTINCT violation FROM violations ORDER BY violation`
 /** The message a `databaseCodeCheck` failure carries before its list of violations. */
 export const DATABASE_CODE_FAILURE = 'fabrika-migration-database-code: '
 
-/** Fails the transaction it runs in when `schema` holds database code, listing it after `DATABASE_CODE_FAILURE`. */
-export function databaseCodeCheck(schema: string): string {
+/** Fails the transaction it runs in when `schema` escapes or holds an object `declared` does not name. */
+export function databaseCodeCheck(schema: string, declared: readonly DatabaseObject[]): string {
 	return `DO $check$
 DECLARE found text;
 BEGIN
-	SELECT pg_catalog.string_agg(violation, ', ' ORDER BY violation) INTO found FROM (${databaseCodeQuery(schema)}) AS code;
+	SELECT pg_catalog.string_agg(violation, ', ' ORDER BY violation) INTO found FROM (${databaseCodeQuery(schema, declared)}) AS code;
 	IF found IS NOT NULL THEN RAISE EXCEPTION '${DATABASE_CODE_FAILURE}%', found; END IF;
 END $check$`
 }

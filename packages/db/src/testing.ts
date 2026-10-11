@@ -252,7 +252,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	let catalog: Promise<readonly CatalogColumn[]> | undefined
 
 	async function columnsOf(table: string): Promise<readonly CatalogColumn[]> {
-		catalog ??= introspectSchema(url, schema)
+		catalog ??= introspectSchema(url, schema, migrations.objects())
 		const columns = (await catalog).filter((column) => column.table_name === table)
 		if (columns.length === 0) {
 			throw new Error(`${table} is not a table of the migrated schema; write its migration first`)

@@ -25,6 +25,11 @@
 			"bun": "./src/postgres-migrations.ts",
 			"types": "./src/postgres-migrations.ts",
 			"default": "./src/postgres-migrations.ts"
+		},
+		"./sql": {
+			"bun": "./src/sql.ts",
+			"types": "./src/sql.ts",
+			"default": "./src/sql.ts"
 		}
 	},
 	"scripts": {

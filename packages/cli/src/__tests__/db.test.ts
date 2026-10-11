@@ -415,27 +415,37 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		} finally {
 			await db.close()
 		}
-		expect(await generateSchema(url, migrations.schema)).toBe(readFileSync(join(ISOLATION_APP, 'src', 'db', 'schema.generated.ts'), 'utf8'))
+		expect(await generateSchema(url, migrations.schema, migrations.objects())).toBe(
+			readFileSync(join(ISOLATION_APP, 'src', 'db', 'schema.generated.ts'), 'utf8'),
+		)
 	})
 
-	test('migrate refuses a trigger, and the start check finds one installed before the runner refused it', async () => {
+	test('migrate applies a declared trigger, and the start check refuses one no migration declares', async () => {
 		const { root, source, schema } = application()
-		const trigger = 'CREATE TRIGGER noop BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()'
-		writeMigration(root, '20261008120000_init.sql', `CREATE TABLE deals (id TEXT PRIMARY KEY);\n${trigger}`)
-		expect(await failure(run(root, 'migrate', [], { source }))).toContain(
-			'Application migration 20261008120000_init.sql line 2: CREATE TRIGGER is not allowed',
-		)
-		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE deals (id TEXT PRIMARY KEY)')
+		const trigger = (name: string): string =>
+			`CREATE TRIGGER ${name} BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`
+		writeMigration(root, '20261008120000_init.sql', `CREATE TABLE deals (id TEXT PRIMARY KEY);\n${trigger('noop')}`)
 		await run(root, 'migrate', [], { source })
 		await run(root, 'codegen', [], { source })
-		const legacy = new SQL({ url, adapter: 'postgres', max: 1 })
+		expect(await run(root, 'codegen', ['--verify'], { source })).toBe('src/db/schema.generated.ts is current\n')
+		const runtime = new SQL({ url, adapter: 'postgres', max: 1 })
 		try {
-			await legacy.unsafe(`SET search_path TO ${schema}; ${trigger}`)
+			await runtime.unsafe(`SET search_path TO ${schema}; ${trigger('later')}`)
 		} finally {
-			await legacy.close()
+			await runtime.close()
 		}
 		expect(await failure(run(root, 'codegen', ['--verify'], { source }))).toBe(
-			`schema ${schema} holds database code the data layer cannot see: trigger deals.noop; drop it in a new migration`,
+			`schema ${schema} holds database code that escapes it or that no migration declares: trigger deals.later (no migration declares it); declare it in a migration or drop it in a new one`,
+		)
+	})
+
+	test('migrate refuses COPY … PROGRAM and another schema before any SQL runs', async () => {
+		const { root, source } = application()
+		writeMigration(root, '20261008120000_init.sql', "CREATE TABLE deals (id TEXT PRIMARY KEY);\nCOPY deals FROM PROGRAM 'true'")
+		expect(await failure(run(root, 'migrate', [], { source }))).toContain('Application migration 20261008120000_init.sql line 2: COPY is not allowed')
+		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE deals (id TEXT PRIMARY KEY);\nINSERT INTO app_other.t VALUES (1)')
+		expect(await failure(run(root, 'migrate', [], { source }))).toContain(
+			'Application migration 20261008120000_init.sql line 2 names the schema app_other',
 		)
 	})
 
@@ -450,7 +460,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		)
 		expect(await run(root, 'codegen', [], { source })).toBe('src/db/schema.generated.ts\n')
 		const generated = readFileSync(join(root, 'src', 'db', 'schema.generated.ts'), 'utf8')
-		expect(generated).toBe(await generateSchema(url, schema))
+		expect(generated).toBe(await generateSchema(url, schema, []))
 		expect(generated).toContain('export interface NotesTable {\n\tid: string\n\ttitle: string\n}\n')
 		expect(await run(root, 'codegen', ['--verify'], { source })).toBe('src/db/schema.generated.ts is current\n')
 

@@ -186,8 +186,12 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 		schemas.push(migrations.schema)
 		const db = PostgresDatabase.connect(requireUrl(), { max: 1 })
 		openDatabases.push(db)
-		// The application's first migration may reference a framework table: the framework bundle runs first.
-		const files = [migration('20261008120000_init.sql', 'CREATE TABLE notes (thing TEXT REFERENCES fabrika_things (id))')]
+		// The framework's tables share the schema; an application migration may not name one.
+		const reaching = [migration('20261008120000_init.sql', 'CREATE TABLE notes (thing TEXT REFERENCES fabrika_things (id))')]
+		expect((await failureOf(migrations.apply(db, reaching))).message).toContain(
+			"Application migration 20261008120000_init.sql line 1: a reference to the framework's fabrika_things is not allowed",
+		)
+		const files = [migration('20261008120000_init.sql', 'CREATE TABLE notes (thing TEXT)')]
 		expect(await migrations.apply(db, files)).toEqual(['fabrika/0001_framework.sql', 'app/20261008120000_init.sql'])
 		const changed = definePostgresApplicationMigrations({
 			appId,
@@ -302,25 +306,31 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 		expect(schema?.schema).toBeNull()
 	})
 
-	test('a runner-owned setting changed through set_config fails the migration and rolls it back', async () => {
+	test('a runner-owned setting changed where the classifier cannot see it fails the migration and rolls it back', async () => {
 		for (
-			const sql of [
-				"insert into marker select set_config('statement_timeout', '0', true)",
-				"insert into marker select set_config('lock_timeout', '0', true)",
-				"insert into marker select set_config('search_path', 'public', true)",
-				"insert into marker select set_config('fabrika.migration_xact', '0', true)",
-			]
+			const [name, value] of [
+				['statement_timeout', '0'],
+				['lock_timeout', '0'],
+				['search_path', 'public'],
+				['fabrika.migration_xact', '0'],
+			] as const
 		) {
 			const { migrations, db } = application()
-			const failure = await failureOf(
-				migrations.apply(db, [migration('20261008120000_init.sql', `CREATE TABLE marker (id text); ${sql}`)]),
-			)
+			const init = migration('20261008120000_init.sql', 'CREATE TABLE marker (id text)')
+			await migrations.apply(db, [init])
+			// Installed outside any migration, so only the guard sees it fire during the next one.
+			await db.prepare(`CREATE FUNCTION ${migrations.schema}.loosen() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN PERFORM pg_catalog.set_config(TG_ARGV[0], TG_ARGV[1], true); RETURN NEW; END $$`).run()
+			await db
+				.prepare(
+					`CREATE TRIGGER loosen BEFORE INSERT ON ${migrations.schema}.marker FOR EACH ROW EXECUTE FUNCTION ${migrations.schema}.loosen('${name}', '${value}')`,
+				)
+				.run()
+			const failure = await failureOf(migrations.apply(db, [init, migration('20261009120000_mark.sql', "INSERT INTO marker VALUES ('x')")]))
 			expect(failure.message).toBe(
-				"Postgres migration app/20261008120000_init.sql ended the runner's transaction or changed its lock_timeout, statement_timeout or search_path",
+				"Postgres migration app/20261009120000_mark.sql ended the runner's transaction or changed its lock_timeout, statement_timeout or search_path",
 			)
-			const marker = await db.prepare(`SELECT to_regclass('${migrations.schema}.marker') AS relation`).first<{ relation: string | null }>()
-			expect(marker?.relation).toBeNull()
-			const { results } = await db.prepare(`SELECT name FROM ${migrations.schema}.fabrika_migrations`).all()
+			const { results } = await db.prepare(`SELECT id FROM ${migrations.schema}.marker`).all()
 			expect(results).toEqual([])
 		}
 	})
@@ -339,47 +349,51 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 		expect(results.map((row) => row.body)).toEqual(['COMMIT; SET search_path TO public', ' CREATE TRIGGER t; DO $$ COMMIT $$; GRANT ALL '])
 	})
 
-	test('a statement outside the allowlist is refused before any SQL runs, however the file hides it', async () => {
+	test('a refused statement is refused before any SQL runs, however the file hides it', async () => {
 		const tag = `$${'t'.repeat(70)}$`
 		for (
 			const [sql, refusal] of [
-				['CREATE TABLE marker (id text);\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$', 'line 2: CREATE FUNCTION'],
+				['CREATE TABLE marker (id text);\nGRANT ALL ON marker TO PUBLIC', 'line 2: GRANT is not allowed'],
 				// Postgres ends a `--` comment at a lone carriage return.
-				['CREATE TABLE marker (id text); -- a note\rCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$', 'line 1: CREATE FUNCTION'],
+				['CREATE TABLE marker (id text); -- a note\rGRANT ALL ON marker TO PUBLIC', 'line 1: GRANT is not allowed'],
 				// A dollar tag has no length limit, and a parenthesis inside its body is text.
-				[
-					`CREATE TABLE marker (id text);\nCOMMENT ON TABLE marker IS ${tag} ( ${tag};\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`,
-					'line 3: CREATE FUNCTION',
-				],
+				[`CREATE TABLE marker (id text);\nCOMMENT ON TABLE marker IS ${tag} ( ${tag};\nGRANT ALL ON marker TO PUBLIC`, 'line 3: GRANT is not allowed'],
 				// COPY … PROGRAM runs outside the migration's transaction, so no rollback could undo it.
-				["CREATE TABLE marker (id text);\nCOPY marker FROM PROGRAM 'true'", 'line 2: COPY'],
-				['CREATE TABLE deals (id text);\nCREATE TABLE copied (LIKE deals INCLUDING ALL)', 'line 2: CREATE TABLE … LIKE … INCLUDING'],
+				["CREATE TABLE marker (id text);\nCOPY marker FROM PROGRAM 'true'", 'line 2: COPY is not allowed'],
+				['CREATE TABLE marker (id text);\nINSERT INTO app_other.t VALUES (1)', 'line 2 names the schema app_other'],
+				['CREATE TABLE deals (id text);\nCREATE TABLE copied (LIKE deals INCLUDING ALL)', 'line 2: CREATE TABLE … LIKE … INCLUDING is not allowed'],
 				// Postgres reads a no-break space as part of a name, so `\u00a0E'\'` is a name and the string `'\'`.
-				[
-					"CREATE TABLE marker (c text DEFAULT \u00a0E'\\'); CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$; --')",
-					'line 1: CREATE FUNCTION',
-				],
-				// A guarded single-row write to deals would fire this and change the rows of every tenant (backlog 108).
-				[
-					[
-						'CREATE TABLE deals (id TEXT PRIMARY KEY, stage TEXT NOT NULL);',
-						'CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$',
-						'BEGIN UPDATE deals SET stage = NEW.stage WHERE id <> NEW.id; RETURN NEW; END',
-						'$body$;',
-						'CREATE TRIGGER spread AFTER UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION spread();',
-					].join('\n'),
-					'line 2: CREATE FUNCTION',
-				],
+				["CREATE TABLE marker (c text DEFAULT \u00a0E'\\'); GRANT ALL ON marker TO PUBLIC; --')", 'line 1: GRANT is not allowed'],
 				[
 					"CREATE TABLE marker (id text);\nUPDATE pg_proc SET prosrc = 'select 1' WHERE proname = 'lower'",
-					'line 2: UPDATE reaching the schema pg_catalog',
+					'line 2: UPDATE reaching the schema pg_catalog is not allowed',
 				],
-				['CREATE TABLE marker (id text);\nALTER TABLE ALL IN TABLESPACE pg_default SET TABLESPACE pg_default', 'line 2: ALTER TABLE ALL IN TABLESPACE'],
+				[
+					'CREATE TABLE marker (id text);\nALTER TABLE ALL IN TABLESPACE pg_default SET TABLESPACE pg_default',
+					'line 2: ALTER TABLE ALL IN TABLESPACE is not allowed',
+				],
+				[
+					"CREATE TABLE marker (id text);\nINSERT INTO marker SELECT set_config('statement_timeout', '0', true)",
+					'line 2: a call of set_config is not allowed',
+				],
+				['CREATE TABLE files (id oid CHECK (lo_unlink(id) = 1))', 'line 1: a call of lo_unlink is not allowed'],
+				[
+					"CREATE TABLE marker (id text);\nINSERT INTO marker SELECT query_to_xml('select 1', true, true, '')",
+					'line 2: a call of query_to_xml is not allowed',
+				],
+				[
+					'CREATE TABLE deals (id text);\nCREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$',
+					'line 2: SECURITY DEFINER is not allowed',
+				],
+				[
+					"CREATE TABLE deals (id text);\nCREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'DROP TABLE deals'; END $$",
+					'line 2: a dynamic EXECUTE in a body is not allowed',
+				],
 			] as const
 		) {
 			const { migrations, db } = application()
 			const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
-			expect(failure.message).toContain(`Application migration 20261008120000_init.sql ${refusal} is not allowed`)
+			expect(failure.message).toContain(`Application migration 20261008120000_init.sql ${refusal}`)
 			const schema = await db.prepare(`SELECT to_regnamespace('${migrations.schema}') AS schema`).first<{ schema: string | null }>()
 			expect(schema?.schema).toBeNull()
 		}
@@ -452,7 +466,7 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		const { migrations, db } = application()
 		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
 		expect(failure.message).toStartWith(
-			'Postgres migration app/20261008120000_init.sql was rolled back: the schema would hold database code the data layer cannot see: ',
+			'Postgres migration app/20261008120000_init.sql was rolled back: the schema would hold database code that escapes it or that no migration declares: ',
 		)
 		const relation = await db.prepare(`SELECT to_regclass('${migrations.schema}.${table}') AS relation`).first<{ relation: string | null }>()
 		expect(relation?.relation).toBeNull()
@@ -520,30 +534,79 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		await db.prepare(`ALTER TABLE ${migrations.schema}.deals ADD COLUMN spread text GENERATED ALWAYS AS (${outside}.spread(stage)) STORED`).run()
 		await db.prepare(`CREATE INDEX deals_spread ON ${migrations.schema}.deals (${outside}.spread(stage))`).run()
 		await db.prepare(`ALTER TABLE ${migrations.schema}.deals ADD COLUMN n int DEFAULT 1::${outside}.sneaky::int`).run()
-		const { results } = await db.prepare(databaseCodeQuery(migrations.schema)).all<{ violation: string }>()
+		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, [])).all<{ violation: string }>()
 		expect(results.map((row) => row.violation)).toEqual([
-			'default deals.n holds COERCETODOMAIN',
-			`default deals.spread calls ${outside}.spread`,
-			`index deals_spread calls ${outside}.spread`,
-			`the type ${outside}.sneaky`,
+			`default deals.n depends on the type ${outside}.sneaky`,
+			`default deals.spread depends on the function ${outside}.spread`,
+			`index deals_spread depends on the function ${outside}.spread`,
 		])
 	})
 
-	test('a CHECK that calls a built-in outside the reviewed list is rolled back', async () => {
-		expect(await rolledBack('CREATE TABLE files (id oid CHECK (lo_unlink(id) = 1))', 'files')).toContain(
-			'constraint files_id_check calls pg_catalog.lo_unlink',
-		)
+	test('database code a migration declares applies and passes the start check, its names matching the catalog', async () => {
+		const { migrations, db } = application()
+		const files = [
+			migration(
+				'20261008120000_init.sql',
+				`
+				CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n serial, amount int);
+				CREATE TABLE deal_log (deal_id text, stage text);
+				CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$
+				BEGIN INSERT INTO deal_log VALUES (NEW.id, NEW.stage); RETURN NEW; END
+				$body$;
+				CREATE TRIGGER spread AFTER UPDATE ON deals FOR EACH ROW WHEN (OLD.stage IS DISTINCT FROM NEW.stage) EXECUTE FUNCTION spread();
+				CREATE PROCEDURE tidy() LANGUAGE sql AS $$ DELETE FROM deal_log WHERE stage IS NULL $$;
+				CREATE FUNCTION double_it(v int) RETURNS int LANGUAGE sql IMMUTABLE RETURN v * 2;
+				CREATE VIEW open_deals AS SELECT d.id FROM deals d WHERE d.stage <> 'won';
+				CREATE MATERIALIZED VIEW totals AS SELECT stage, count(*) FROM deals GROUP BY stage;
+				CREATE RULE keep AS ON DELETE TO deal_log DO INSTEAD NOTHING;
+				CREATE POLICY own ON deals USING (stage <> 'hidden');
+				CREATE DOMAIN positive AS int CHECK (VALUE > 0);
+				CREATE SEQUENCE numbers OWNED BY deals.id;
+				ALTER TABLE deals ADD COLUMN doubled int GENERATED ALWAYS AS (double_it(amount)) STORED;
+				DO $$ BEGIN UPDATE deals SET stage = 'open' WHERE stage = ''; END $$;
+				`,
+			),
+			migration('20261009120000_rename.sql', 'ALTER TABLE deals RENAME TO opportunities; DROP RULE keep ON deal_log'),
+		]
+		expect(await migrations.apply(db, files)).toEqual(['app/20261008120000_init.sql', 'app/20261009120000_rename.sql'])
+		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
+		expect(results).toEqual([])
 	})
 
-	test('a default that calls a built-in behind a cast is rolled back', async () => {
-		expect(await rolledBack('CREATE TABLE deals (locked boolean DEFAULT (false::boolean OR pg_try_advisory_xact_lock(1, 2)))', 'deals'))
-			.toContain('default deals.locked calls pg_catalog.pg_try_advisory_xact_lock')
+	test('the start check refuses an object no migration declares, and what escapes the schema', async () => {
+		const { migrations, db } = application()
+		const files = [migration('20261008120000_init.sql', 'CREATE TABLE deals (id text PRIMARY KEY)')]
+		await migrations.apply(db, files)
+		await db.prepare(
+			`CREATE TRIGGER noop BEFORE UPDATE ON ${migrations.schema}.deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`,
+		).run()
+		await db.prepare(
+			`CREATE FUNCTION ${migrations.schema}.definer() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT 1 $$`,
+		).run()
+		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
+		expect(results.map((row) => row.violation)).toEqual([
+			'function definer (no migration declares it)',
+			'function definer has a SET clause',
+			'function definer is SECURITY DEFINER',
+			'trigger deals.noop (no migration declares it)',
+		])
+		const declared = migrations.objects([
+			...files,
+			migration(
+				'20261009120000_noop.sql',
+				'CREATE TRIGGER noop BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()',
+			),
+		])
+		const { results: later } = await db.prepare(databaseCodeQuery(migrations.schema, declared)).all<{ violation: string }>()
+		expect(later.map((row) => row.violation)).not.toContain('trigger deals.noop (no migration declares it)')
 	})
 
-	test('a serial column is rolled back: its sequence and its nextval default', async () => {
-		const message = await rolledBack('CREATE TABLE deals (n serial PRIMARY KEY)', 'deals')
-		expect(message).toContain('default deals.n calls pg_catalog.nextval')
-		expect(message).toContain('sequence deals_n_seq (a serial column; use GENERATED ALWAYS AS IDENTITY)')
+	test('dropping one overload drops the name from the manifest, so the catalog check rolls the migration back', async () => {
+		const sql = `CREATE TABLE deals (id text);
+			CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql RETURN a;
+			CREATE FUNCTION f(a text) RETURNS text LANGUAGE sql RETURN a;
+			DROP FUNCTION f(int);`
+		expect(await rolledBack(sql, 'deals')).toContain('function f (no migration declares it)')
 	})
 
 	test('the check covers the whole schema, so a later migration that keeps a leftover trigger fails until it drops it', async () => {
@@ -587,13 +650,16 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 	test('the catalog query does not depend on the session: standard_conforming_strings off, the schema first on the path', async () => {
 		const { migrations, db } = application()
 		await migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE deals (id text PRIMARY KEY)')])
-		await db.prepare(`ALTER TABLE ${migrations.schema}.deals ADD COLUMN n bigint DEFAULT nextval('pg_catalog.pg_class'::regclass)`).run()
+		await db.prepare(`CREATE FUNCTION ${migrations.schema}."it's\\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`).run()
+		await db.prepare(`CREATE FUNCTION ${migrations.schema}.shadow() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`).run()
 		const hostile = PostgresDatabase.connect(requireUrl(), {
 			connection: { standard_conforming_strings: 'off', search_path: `${migrations.schema}, pg_catalog` },
 			max: 1,
 		})
 		openDatabases.push(hostile)
-		const { results } = await hostile.prepare(databaseCodeQuery(migrations.schema)).all<{ violation: string }>()
-		expect(results.map((row) => row.violation)).toEqual(['default deals.n calls pg_catalog.nextval'])
+		const query = databaseCodeQuery(migrations.schema, [{ kind: 'function', name: "it's\\" }])
+		expect(query).not.toContain('\\')
+		const { results } = await hostile.prepare(query).all<{ violation: string }>()
+		expect(results.map((row) => row.violation)).toEqual(['function shadow (no migration declares it)'])
 	})
 })
