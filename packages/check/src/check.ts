@@ -27,6 +27,7 @@ import { checkMigrationNames } from './rules/migrations'
 import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkRuntimeNode } from './rules/runtime'
+import { checkStructureNode, checkStructureReferences, structurePlace } from './rules/structure'
 import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
@@ -75,6 +76,7 @@ const checkSourceModule = async (
 	const isTest = isTestFile(module.file)
 	const context = { report, isGeneratedEntry }
 	const trusted = trustedBindings(module.program, mappings)
+	const place = structurePlace(module.file, isGeneratedEntry)
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
 		checkFrameworkWrite(node, ancestors, trusted, report)
@@ -82,9 +84,12 @@ const checkSourceModule = async (
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, report)
 		checkMockModule(node, module.file, files, report)
+		checkStructureNode(place, node, report)
 	})
 	checkComments(module.comments, report)
-	checkModuleReferences(module.file, moduleReferences(module.program), mappings, exists, report, isGeneratedEntry, isTest)
+	const references = moduleReferences(module.program)
+	checkModuleReferences(module.file, references, mappings, exists, report, isGeneratedEntry, isTest)
+	checkStructureReferences(place, references, mappings, files, report)
 	await checkGeneratedTest(text, module.comments, report)
 }
 
@@ -104,6 +109,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 			file: link,
 			line: 1,
 			column: 1,
+			severity: 'refusal',
 			rule: 'unchecked-import',
 			message: 'a symbolic link, which the checker does not follow',
 			allowed: 'a regular file or directory inside the application',

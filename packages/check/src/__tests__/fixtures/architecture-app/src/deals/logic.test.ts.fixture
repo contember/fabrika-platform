@@ -1,0 +1,7 @@
+import { expect, test } from 'bun:test'
+import { canReopen } from './logic'
+
+test('a decided deal reopens, an open one does not', () => {
+	expect(canReopen('won')).toBe(true)
+	expect(canReopen('lead')).toBe(false)
+})

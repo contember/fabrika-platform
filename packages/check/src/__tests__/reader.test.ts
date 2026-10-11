@@ -226,6 +226,7 @@ describe('the checker reports what the reader refuses', () => {
 			file: 'fabrika.contract.ts',
 			line: 5,
 			column: 25,
+			severity: 'refusal',
 			rule: 'contract',
 			message: "mount 'api' procedure 'get' output.title: the pattern /^[a-z]+$/ has flags",
 			allowed: 'a pattern without flags',

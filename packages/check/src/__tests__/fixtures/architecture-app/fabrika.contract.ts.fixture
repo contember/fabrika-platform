@@ -1,0 +1,9 @@
+import { app } from './src/app-kit'
+import { companies } from './src/companies/endpoints'
+import { deals } from './src/deals/endpoints'
+
+export const contract = app.contract((c) => ({
+	api: c.rpc('/api', { companies, deals }),
+	site: c.spa('/', { callers: ['human'] }),
+	health: c.health('/healthz'),
+}))

@@ -1,0 +1,5 @@
+import { fromRow } from '@fabrika/db'
+import type { CompanyHandle } from '../app-kit'
+import { Company } from '../schemas'
+
+export const companyOf = async (company: CompanyHandle) => fromRow(Company, await company.get())

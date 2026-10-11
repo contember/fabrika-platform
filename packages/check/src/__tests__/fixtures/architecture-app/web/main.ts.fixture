@@ -1,0 +1,8 @@
+import { createClient } from '@fabrika/app/client'
+import { contract } from '../fabrika.contract'
+import { DEAL_STAGES } from '../src/schemas'
+import { render } from './view'
+
+const api = createClient(contract, 'api', { bounceOnAuth: true })
+
+export const showPipeline = async (orgId: string): Promise<void> => render(DEAL_STAGES, await api.deals.pipeline({ orgId }))

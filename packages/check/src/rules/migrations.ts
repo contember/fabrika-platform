@@ -26,7 +26,7 @@ export const checkMigrationNames = (paths: readonly string[]): Finding[] => {
 			: match === null
 			? `'${name}' is not a migration file name`
 			: `'${name}' does not start with a real UTC timestamp`
-		findings.push({ file: path, line: 1, column: 1, rule: 'migration-name', message, allowed: ALLOWED })
+		findings.push({ file: path, line: 1, column: 1, severity: 'refusal', rule: 'migration-name', message, allowed: ALLOWED })
 	}
 	return findings
 }

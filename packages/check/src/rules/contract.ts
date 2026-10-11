@@ -33,6 +33,7 @@ export const checkContractRead = (graph: ModuleGraph): Finding[] => {
 			return {
 				file: CONTRACT_FILE,
 				...at,
+				severity: 'refusal',
 				rule: 'contract',
 				message: parts?.['message'] ?? problem,
 				allowed: parts?.['allowed'] ?? SCHEMA_SUBSET,

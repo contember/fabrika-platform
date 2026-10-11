@@ -159,7 +159,15 @@ function sourceBudget(modules: readonly ParsedModule[], entry = CONTRACT_FILE): 
 }
 
 function overBudget(file: string, message: string): Finding {
-	return { file, line: 1, column: 1, rule: 'contract', message, allowed: 'a contract within CONTRACT_LIMITS (packages/check/CLAUDE.md)' }
+	return {
+		file,
+		line: 1,
+		column: 1,
+		severity: 'refusal',
+		rule: 'contract',
+		message,
+		allowed: 'a contract within CONTRACT_LIMITS (packages/check/CLAUDE.md)',
+	}
 }
 
 type ParsedGraph = { readonly ok: true; readonly graph: ModuleGraph } | { readonly ok: false; readonly findings: readonly Finding[] }
@@ -189,7 +197,14 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		}
 		const parsed = parseModule(path, text)
 		if (!parsed.ok) {
-			findings.push({ file: path, ...parsed.position, rule: 'parse-error', message: parsed.message, allowed: 'source the TypeScript parser accepts' })
+			findings.push({
+				file: path,
+				...parsed.position,
+				severity: 'refusal',
+				rule: 'parse-error',
+				message: parsed.message,
+				allowed: 'source the TypeScript parser accepts',
+			})
 			continue
 		}
 		if (nodeDepth(parsed.module.program) > CONTRACT_LIMITS.astDepth) {
@@ -213,6 +228,7 @@ function missingFile(file: string): Finding {
 		file,
 		line: 1,
 		column: 1,
+		severity: 'refusal',
 		rule: 'contract',
 		message: `the application has no ${file}`,
 		allowed: `${file} with export const ${CONTRACT_EXPORT} = defineContract(…)`,

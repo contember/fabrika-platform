@@ -1,0 +1,11 @@
+import type { ColumnList } from '@fabrika/db'
+
+export interface DB {
+	companies: { id: string; org_id: string; name: string; version: number }
+	deals: { id: string; company_id: string; title: string; stage: string; version: number }
+}
+
+export const columns = {
+	companies: ['id', 'org_id', 'name', 'version'],
+	deals: ['id', 'company_id', 'title', 'stage', 'version'],
+} as const satisfies ColumnList<DB>

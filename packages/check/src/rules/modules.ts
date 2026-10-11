@@ -97,7 +97,7 @@ const ALLOWED_ENV = 'values the framework hands the handler through deps or ctx'
 const TEST_KITS = ['@fabrika/app/testing', '@fabrika/db/testing']
 const TEST_ONLY_ALLOWED = 'the kit in a test file (*.test.ts, *.spec.ts or a __tests__ directory) only'
 
-const isTestKit = (specifier: string): boolean => TEST_KITS.some((kit) => specifier === kit || specifier.startsWith(`${kit}/`))
+export const isTestKit = (specifier: string): boolean => TEST_KITS.some((kit) => specifier === kit || specifier.startsWith(`${kit}/`))
 
 /**
  * A non-test module may reach neither the kit nor a test module: a test helper may load the kit, so a production

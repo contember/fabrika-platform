@@ -1,0 +1,18 @@
+import { ConflictError } from '@fabrika/app'
+import { app } from '../app-kit'
+import { NewDeal, OrgInput, Pipeline, ReopenDeal, Saved } from '../schemas'
+import { canReopen } from './logic'
+import { pipelineOf } from './queries'
+
+export const deals = app.group({ callers: ['human'] }, (r) => ({
+	create: r.mutation({ input: NewDeal, output: Saved, access: { action: 'deals.write', in: 'company', from: 'companyId' } })
+		.handle(async ({ input, ctx }) => ctx.db.target.deals.insert({ title: input.title, stage: 'lead' })),
+	reopen: r.mutation({ input: ReopenDeal, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } })
+		.handle(async ({ input, ctx }) => {
+			const deal = await ctx.db.target.getForUpdate()
+			if (!canReopen(deal.stage)) throw new ConflictError('only a won or lost deal reopens')
+			return ctx.db.target.update({ stage: 'proposal' }, { expectVersion: input.expectVersion })
+		}),
+	pipeline: r.query({ input: OrgInput, output: Pipeline, access: { action: 'crm.read', in: 'org', from: 'orgId' }, sql: 'read' })
+		.handle(async ({ ctx }) => ({ rows: await pipelineOf(ctx.sql, ctx.target.id) })),
+}))

@@ -1,0 +1,20 @@
+import { defineTables } from '@fabrika/db/tables'
+import { vocabulary } from '../vocabulary'
+import { columns } from './schema.generated'
+
+export const tables = defineTables(vocabulary, columns)({
+	companies: {
+		scope: { dimension: 'company' },
+		actions: { read: 'crm.read', insert: 'companies.write', update: 'companies.write', delete: 'companies.write' },
+		insert: ['name'],
+		update: ['name'],
+		version: 'version',
+	},
+	deals: {
+		scope: { dimension: 'deal' },
+		actions: { read: 'crm.read', insert: 'deals.write', update: 'deals.write', delete: 'deals.write' },
+		insert: ['title', 'stage'],
+		update: ['title', 'stage'],
+		version: 'version',
+	},
+})

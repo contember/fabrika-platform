@@ -43,7 +43,7 @@ const lockfilePackage = (key: string): string => {
 export const checkPackageReplacement = (files: ReadonlyMap<string, string>): Finding[] => {
 	const findings: Finding[] = []
 	const finding = (file: string, needle: string, message: string, allowed: string): void => {
-		findings.push({ file, ...positionIn(files.get(file) ?? '', needle), rule: 'package-replacement', message, allowed })
+		findings.push({ file, ...positionIn(files.get(file) ?? '', needle), severity: 'refusal', rule: 'package-replacement', message, allowed })
 	}
 	for (const [path, text] of files) {
 		if (baseName(path) === 'package.json') checkManifest(path, text, finding)

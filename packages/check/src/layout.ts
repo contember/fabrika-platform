@@ -16,6 +16,20 @@ export const ENDPOINT_ACCESS_TEST = 'src/__tests__/endpoint-access.test.ts'
 export const ENDPOINT_FIXTURES_FILE = 'src/__tests__/endpoint-access.fixtures.ts'
 export const ZEROPS_FILES = ['zerops.yaml', 'zerops.yml'] as const
 
+/** The application architecture (docs/reference/application-architecture.md): where each layer's code lives. */
+export const VOCABULARY_FILE = 'src/vocabulary.ts'
+export const APP_KIT_FILE = 'src/app-kit.ts'
+/** The shared zod schemas the shell and the SPA import: one module, or a directory of them once it grows. */
+export const SCHEMAS_FILE = 'src/schemas.ts'
+export const SCHEMAS_DIR = 'src/schemas/'
+/** `src/db/`: the tables, the generated schema and their generated tests; never a slice. */
+export const DATABASE_DIR = 'src/db/'
+/** A slice is a directory `src/<slice>/` that holds these modules, each optional. */
+export const SLICE_ENDPOINTS_FILE = 'endpoints.ts'
+export const SLICE_LOGIC_FILE = 'logic.ts'
+export const SLICE_QUERIES_FILE = 'queries.ts'
+export const SPA_DIR = 'web/'
+
 const SOURCE_EXTENSION = /\.(?:[mc]?[jt]s|[jt]sx)$/
 const TEST_FILE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[mc]?[jt]sx?$/
 

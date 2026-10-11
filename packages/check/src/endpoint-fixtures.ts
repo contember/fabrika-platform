@@ -16,7 +16,7 @@ export type EndpointFixtures = Readonly<Record<string, Readonly<Record<string, S
 
 const finding = (at: AstNode | undefined, message: string): Finding => {
 	const { line, column } = at === undefined ? { line: 1, column: 1 } : positionOf(at)
-	return { file: ENDPOINT_FIXTURES_FILE, line, column, rule: 'endpoint-fixture', message, allowed: ALLOWED }
+	return { file: ENDPOINT_FIXTURES_FILE, line, column, severity: 'refusal', rule: 'endpoint-fixture', message, allowed: ALLOWED }
 }
 
 export function isSampleObject(value: Sample): value is { readonly [key: string]: Sample } {

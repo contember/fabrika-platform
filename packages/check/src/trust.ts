@@ -67,7 +67,7 @@ const positionIn = (text: string, needle: string): { readonly line: number; read
 export const checkTrustedResolution = (files: ReadonlyMap<string, string>): Finding[] => {
 	const findings: Finding[] = []
 	const finding = (file: string, needle: string, message: string, allowed: string): void => {
-		findings.push({ file, ...positionIn(files.get(file) ?? '', needle), rule: 'unchecked-import', message, allowed })
+		findings.push({ file, ...positionIn(files.get(file) ?? '', needle), severity: 'refusal', rule: 'unchecked-import', message, allowed })
 	}
 	for (const [path, text] of files) {
 		if (TSCONFIG_NAMES.includes(baseName(path))) {

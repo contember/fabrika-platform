@@ -1,0 +1,6 @@
+import type { DEAL_STAGES } from '../schemas'
+
+type Stage = (typeof DEAL_STAGES)[number]
+
+/** A deal reopens only once it is decided. */
+export const canReopen = (stage: Stage): boolean => stage === 'won' || stage === 'lost'

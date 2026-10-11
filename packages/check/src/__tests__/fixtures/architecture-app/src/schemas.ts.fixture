@@ -1,0 +1,16 @@
+import { z } from 'zod/v4'
+
+export const DEAL_STAGES = ['lead', 'proposal', 'won', 'lost'] as const
+
+export const ById = z.strictObject({ id: z.uuid() })
+export const OrgInput = z.strictObject({ orgId: z.string().min(1).max(100) })
+export const Saved = z.strictObject({ id: z.uuid(), version: z.int() })
+
+export const Company = z.strictObject({ id: z.uuid(), name: z.string(), version: z.int() })
+export const NewCompany = z.strictObject({ orgId: z.string().min(1).max(100), name: z.string().min(1).max(200) })
+
+export const Deal = z.strictObject({ id: z.uuid(), title: z.string(), stage: z.enum(DEAL_STAGES), version: z.int() })
+export const NewDeal = z.strictObject({ companyId: z.uuid(), title: z.string().min(1).max(200) })
+export const ReopenDeal = z.strictObject({ id: z.uuid(), expectVersion: z.int().positive() })
+export const PipelineRow = z.strictObject({ stage: z.enum(DEAL_STAGES), deals: z.int() })
+export const Pipeline = z.strictObject({ rows: z.array(PipelineRow) })

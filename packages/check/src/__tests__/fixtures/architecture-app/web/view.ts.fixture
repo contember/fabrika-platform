@@ -1,0 +1,4 @@
+export const render = (stages: readonly string[], value: unknown): void => {
+	const root = document.getElementById('app')
+	if (root !== null) root.textContent = `${stages.join(' · ')}: ${JSON.stringify(value)}`
+}

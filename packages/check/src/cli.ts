@@ -12,9 +12,16 @@ Usage:
 Checks the application in <root> (default: the current directory) and prints one line per finding:
   <file>:<line>:<column> <rule> <message> (allowed form: <what to write instead>)
 
-Exit status: 0 with no findings, 1 with findings, 2 on a usage or read error.
+A refusal fails the check. A hint, printed under its own heading after the refusals, reports a step out of the
+application architecture and does not fail it.
+
+Exit status: 0 with no refusals, 1 with a refusal, 2 on a usage or read error.
 There is no suppression syntax; a finding is fixed in the code.
 `
+
+const HINTS_HEADING = 'Hints — the application architecture; they do not fail the check:'
+
+const count = (amount: number, noun: string): string => `${amount} ${noun}${amount === 1 ? '' : 's'}`
 
 const main = async (argv: readonly string[]): Promise<number> => {
 	if (argv.includes('--help') || argv.includes('-h')) {
@@ -34,9 +41,13 @@ const main = async (argv: readonly string[]): Promise<number> => {
 		console.error(`fabrika-check: cannot read ${root}: ${error instanceof Error ? error.message : 'unknown error'}`)
 		return 2
 	}
-	for (const finding of findings) console.log(formatFinding(finding))
-	console.error(`fabrika-check: ${findings.length} finding${findings.length === 1 ? '' : 's'}`)
-	return findings.length === 0 ? 0 : 1
+	const refusals = findings.filter((finding) => finding.severity === 'refusal')
+	const hints = findings.filter((finding) => finding.severity === 'hint')
+	for (const finding of refusals) console.log(formatFinding(finding))
+	if (hints.length > 0) console.log(HINTS_HEADING)
+	for (const finding of hints) console.log(formatFinding(finding))
+	console.error(`fabrika-check: ${count(refusals.length, 'refusal')}, ${count(hints.length, 'hint')}`)
+	return refusals.length === 0 ? 0 : 1
 }
 
 process.exitCode = await main(process.argv.slice(2))

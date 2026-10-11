@@ -69,7 +69,7 @@ describe('fabrika-check', () => {
 		expect(result.stdout).toBe(
 			'src/config.ts:1:20 env-read process.env is read outside the generated entrypoint (allowed form: values the framework hands the handler through deps or ctx)\n',
 		)
-		expect(result.stderr).toBe('fabrika-check: 1 finding\n')
+		expect(result.stderr).toBe('fabrika-check: 1 refusal, 0 hints\n')
 	})
 
 	test('reads no build output, installed package or dot-directory', async () => {
@@ -82,7 +82,7 @@ describe('fabrika-check', () => {
 
 		const result = await run(root)
 
-		expect(result).toEqual({ code: 0, stdout: '', stderr: 'fabrika-check: 0 findings\n' })
+		expect(result).toEqual({ code: 0, stdout: '', stderr: 'fabrika-check: 0 refusals, 0 hints\n' })
 	})
 
 	test('reports a symbolic link instead of following it', async () => {

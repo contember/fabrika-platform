@@ -1,0 +1,10 @@
+import { app } from '../app-kit'
+import { ById, Company, NewCompany, Saved } from '../schemas'
+import { companyOf } from './queries'
+
+export const companies = app.group({ callers: ['human'] }, (r) => ({
+	get: r.query({ input: ById, output: Company, access: { action: 'crm.read', on: 'company', from: 'id' } })
+		.handle(async ({ ctx }) => companyOf(ctx.db.target)),
+	create: r.mutation({ input: NewCompany, output: Saved, access: { action: 'companies.write', in: 'org', from: 'orgId' } })
+		.handle(async ({ input, ctx }) => ctx.db.target.companies.insert({ name: input.name })),
+}))

@@ -367,7 +367,11 @@ describe('every fixture directory is registered', () => {
 			readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) =>
 				relative(join(import.meta.dir, '..', '..', '..'), join(root, entry.name))
 			)
-		const refusedOnly = new Set(['check/src/__tests__/fixtures/spike-contract', 'check/src/__tests__/fixtures/paired'])
+		const refusedOnly = new Set([
+			'check/src/__tests__/fixtures/spike-contract',
+			'check/src/__tests__/fixtures/paired',
+			'check/src/__tests__/fixtures/architecture-app',
+		])
 		const found = [...directories(join(import.meta.dir, 'fixtures')), ...directories(join(APP_TESTS, 'fixtures'))]
 		expect(found.filter((directory) => !registered.has(directory) && !refusedOnly.has(directory))).toEqual([])
 	})

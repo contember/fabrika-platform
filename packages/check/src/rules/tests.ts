@@ -141,6 +141,7 @@ export const checkTestSuiteConfig = (text: string): Finding[] => {
 					file: BUNFIG_FILE,
 					line: entry.line,
 					column: 1,
+					severity: 'refusal',
 					rule: 'skipped-test',
 					message: `[test] ${key} changes which tests run or whether a failure counts`,
 					allowed: 'no [test] root, pathIgnorePatterns or retry in bunfig.toml',
@@ -152,7 +153,7 @@ export const checkTestSuiteConfig = (text: string): Finding[] => {
 }
 
 /** Whether `path` is a file the scaffold generates: a policy isolation test, the endpoint access test, or one with the header. */
-const isGeneratedTestPath = (path: string, files: ReadonlyMap<string, string>): boolean =>
+export const isGeneratedTestPath = (path: string, files: ReadonlyMap<string, string>): boolean =>
 	path === ENDPOINT_ACCESS_TEST || (path.startsWith(POLICY_TESTS_DIR) && path.endsWith(POLICY_TEST_SUFFIX))
 	|| (files.get(path)?.startsWith(GENERATED_TEST_MARKER) ?? false)
 

@@ -293,6 +293,7 @@ export const missingEndpointFixtures = ({ policies, artifact, fixtures }: Scaffo
 		file: ENDPOINT_FIXTURES_FILE,
 		line: 1,
 		column: 1,
+		severity: 'refusal',
 		rule: 'endpoint-fixture',
 		message,
 		allowed,

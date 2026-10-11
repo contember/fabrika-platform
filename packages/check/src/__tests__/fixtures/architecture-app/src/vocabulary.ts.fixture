@@ -1,0 +1,8 @@
+import { defineVocabulary } from '@fabrika/app/contract'
+
+export const vocabulary = defineVocabulary({
+	app: 'crm',
+	dimensions: { org: { creator: 'owner' }, company: { in: 'org' }, deal: { in: 'company' } },
+	actions: { 'crm.read': 'Read the CRM', 'companies.write': 'Edit companies', 'deals.write': 'Edit deals' },
+	roles: { owner: { grants: ['crm.read', 'companies.write', 'deals.write'], member: { scope: 'org', assignableBy: ['owner'] } } },
+})

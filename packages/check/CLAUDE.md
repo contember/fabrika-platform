@@ -11,16 +11,20 @@ static contract reader (B1), which Control runs on the files of a commit.
 
 ```bash
 bun run typecheck
-bun test                    # rules · direct-forms · spike-contract · cli · reader · differential
+bun test                    # rules · direct-forms · structure · spike-contract · cli · reader · differential
 bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check`
 ```
 
 - Library: `checkApplication({ root, files? }) → Promise<Finding[]>`. Without `files` it reads the tree under
   `root`; with `files` (path relative to the root → text) it reads nothing from disk, as a caller with the files of
   a commit needs.
-- Bin: `fabrika-check [<root>]` prints one line per finding,
-  `file:line:col rule-id message (allowed form: …)`, then a count on stderr. Exit 0 clean, 1 with findings, 2 on a
-  usage or read error.
+- `Finding.severity` is its rule's (`REFUSAL_RULE_IDS`, `HINT_RULE_IDS` in `finding.ts`; the `Finding` union ties
+  them). A **refusal** fails the check. A **hint** reports a step out of the application architecture
+  ([`docs/reference/application-architecture.md`](../../docs/reference/application-architecture.md)); it is checker
+  output only, never part of the contract or the approval snapshot.
+- Bin: `fabrika-check [<root>]` prints one line per refusal, `file:line:col rule-id message (allowed form: …)`, then
+  the hints in the same form under the heading `Hints — …`, then `N refusals, M hints` on stderr. Exit 0 with no
+  refusal (hints only included), 1 with a refusal, 2 on a usage or read error.
 - Reader: `@fabrika/check/contract` exports `readContractSource(files, tables?) → ContractArtifact`,
   `readContract(files) → AnyContract` and `readTablesSource(files) → TablePolicies`. `files` holds
   `fabrika.contract.ts`, `src/db/tables.ts`, the modules they import (path → text) and every `package.json`,
@@ -59,12 +63,16 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `scaffold-sample.ts`   | The fixed input literal of an endpoint's schema that an endpoint access case sends.                    |
 | `endpoint-fixtures.ts` | `src/__tests__/endpoint-access.fixtures.ts`: the author's inputs, read statically within the budget.   |
 | `rules/isolation.ts`   | Every generated test is byte for byte what the scaffold writes now; none it no longer writes.          |
+| `rules/structure.ts`   | The application architecture: where a module sits (slice, part, SPA) and the refusals and hints of it. |
 | `reader/value.ts`      | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                 |
 | `reader/schema.ts`     | Each `z` factory and method applied to real zod, with its arguments and options checked.               |
 | `reader/surface.ts`    | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.  |
 | `reader/tables.ts`     | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`. |
 
-Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id; `direct-forms.test.ts` holds the
+Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id but the architecture's, which
+`structure.test.ts` holds over `fixtures/architecture-app/` (a two-slice application in the target layout, its sources
+named `*.ts.fixture` so this repository's typecheck skips them; until the reader reads that form, only the
+architecture's rules are asserted on it); `direct-forms.test.ts` holds the
 directly spelled forms each rule must also refuse, and the documented escapes. `reader.test.ts` holds every refusal
 of the reader and its budget; `differential.test.ts` compiles each fixture contract from source and from the evaluated
 module and expects the same artifact and canonical bytes (`fixtures/reader-forms/` holds every form the reader
@@ -106,6 +114,18 @@ directory that no table registers fails the test.
 | `mock-module`                | `mock.module(…)` of `bun:test`, of a `@fabrika/*` specifier, of a relative path into a generated test, or with a computed specifier, anywhere in the application                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `endpoint-fixture`           | an endpoint with an access form whose input the scaffold cannot sample and that has no fixture; a fixture of no tested endpoint; a fixtures file that is not one `export const fixtures = { … }` of plain literals                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `parse-error`                | a source file the parser does not accept                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `spa-server-import`          | in a module under `web/` (not a test): a value load of an application module other than `fabrika.contract.ts`, `src/schemas.ts`, `src/schemas/**` and `web/**`, of a `@fabrika/*` module other than `@fabrika/app/client`, or of `bun`, `bun:*`, `node:*`                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `layer-import`               | in `src/<slice>/logic.ts` and `queries.ts`: a value load of a `@fabrika/*` module other than `@fabrika/app` and `@fabrika/db`; the test kits stay `test-only-import`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `generated-test-import`      | in any module, tests included: an import, re-export or load of a generated test, type-only too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+The hints (severity `hint`; not in test files or the generated entrypoint):
+
+| Rule id                | Reports                                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `logic-data-access`    | `src/<slice>/logic.ts` that value-loads `@fabrika/db`, a slice's `queries.ts` or a module of `src/db/`, or uses `ctx.db`/`ctx.sql` |
+| `cross-slice-queries`  | a module of the slice `src/<a>/` that value-loads `src/<b>/queries.ts`                                                             |
+| `handler-location`     | `.handle(…)` on `<x>.query`/`mutation`/`cron`/`webhook`/`export(…)` outside `src/<slice>/endpoints.ts`                             |
+| `data-access-location` | `ctx.db` or `ctx.sql` outside a slice's `endpoints.ts`, `queries.ts` and `logic.ts`                                                |
 
 ## The literal subset (shared with B1)
 
@@ -217,6 +237,9 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   `@fabrika/provider-zerops`'s generated build, ADR-0043), never the application's own copy. `package-replacement` is
   what makes the application's frozen install the published `@fabrika/*`; it reads the root `.npmrc` and `bun.lock`,
   the only dot file and lockfile the checker reads.
+- **A hint never fails the check, and never reaches Control.** It is syntactic and easy to escape (destructured
+  `ctx`, a handle passed into a helper); a rule that guards platform integrity is a refusal instead. Every rule id is
+  in exactly one of `REFUSAL_RULE_IDS` and `HINT_RULE_IDS`.
 - **The layout constants in `layout.ts` are a contract with other work units.** `fabrika/entry.generated.ts`
   (A4 writes it), `db/migrations/` (A9), the crontab command `fabrika job run <name>` with `allContainers: false`
   (A15) and the generated-test header `// @generated by fabrika db test-scaffold sha256:<hex>`, whose hash is the

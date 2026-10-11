@@ -7,7 +7,15 @@ import { GENERATED_TEST_HEADER, generatedTestHeader } from './tests'
 
 const RESCAFFOLD = 'the files fabrika db test-scaffold writes for the current contract and src/db/tables.ts; run it and commit the result'
 
-const at = (file: string, message: string): Finding => ({ file, line: 1, column: 1, rule: 'generated-test-hash', message, allowed: RESCAFFOLD })
+const at = (file: string, message: string): Finding => ({
+	file,
+	line: 1,
+	column: 1,
+	severity: 'refusal',
+	rule: 'generated-test-hash',
+	message,
+	allowed: RESCAFFOLD,
+})
 
 /** Whether the first line is a generated-test header whose hash fails: `checkGeneratedTest` reports that file already. */
 const failsItsHash = async (text: string): Promise<boolean> => {
@@ -31,11 +39,12 @@ export const expectedGeneratedTests = async (
 		if (error instanceof ContractError) {
 			return {
 				ok: false,
-				findings: error.problems.map((problem) => ({
+				findings: error.problems.map((problem): Finding => ({
 					file: CONTRACT_FILE,
 					line: 1,
 					column: 1,
-					rule: 'contract' as const,
+					severity: 'refusal',
+					rule: 'contract',
 					message: problem,
 					allowed: 'a contract that compiles against src/db/tables.ts',
 				})),

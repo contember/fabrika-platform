@@ -55,7 +55,8 @@ const lineOf = (text: string, needle: string, after = 0): number => {
 /** Each setup that runs the application carries exactly the contract's jobs as crontab entries, and nothing else. */
 export const checkCrontab = (file: string, text: string, jobs: readonly ContractJob[]): Finding[] => {
 	const findings: Finding[] = []
-	const finding = (line: number, message: string, allowed: string) => findings.push({ file, line, column: 1, rule: 'crontab', message, allowed })
+	const finding = (line: number, message: string, allowed: string) =>
+		findings.push({ file, line, column: 1, severity: 'refusal', rule: 'crontab', message, allowed })
 	let document: unknown
 	try {
 		document = Bun.YAML.parse(text)
