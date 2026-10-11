@@ -34,6 +34,7 @@ import {
 	KIT_ROOT,
 	materialize as materializeFiles,
 	readTree as readKitTree,
+	removeMaterialized,
 } from './colocated-helpers'
 import { contract as cleanContract } from './fixtures/clean-app/fabrika.contract'
 import { contract as derivedContract } from './fixtures/derived-tables/fabrika.contract'
@@ -41,6 +42,8 @@ import { columns as derivedColumns } from './fixtures/derived-tables/src/db/sche
 import { tables as derivedTables } from './fixtures/derived-tables/src/db/tables'
 import { vocabulary as derivedVocabulary } from './fixtures/derived-tables/src/vocabulary'
 import { contract as readerFormsContract } from './fixtures/reader-forms/fabrika.contract'
+
+afterAll(removeMaterialized)
 
 const APP_TESTS = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__')
 

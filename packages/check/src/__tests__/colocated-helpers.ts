@@ -1,7 +1,6 @@
 // Shared by the tests of the shell slice: an application as Control reads it from a commit, the files Control asks
 // for, and the same files written out and evaluated by Bun. Not a `*.test.ts`, so bun does not run it.
 
-import { afterAll } from 'bun:test'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { z } from 'zod/v4'
@@ -39,9 +38,11 @@ export const fetchedByControl = (commit: ReadonlyMap<string, string>): Map<strin
 }
 
 const temporary: string[] = []
-afterAll(() => {
-	for (const directory of temporary) rmSync(directory, { recursive: true, force: true })
-})
+
+/** Removes every directory `materialize` wrote; each test file that materializes runs it `afterAll`. */
+export const removeMaterialized = (): void => {
+	for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true })
+}
 
 /** The files written under the package, so that Bun resolves zod and the framework from its node_modules. */
 export const materialize = (files: ReadonlyMap<string, string>): string => {

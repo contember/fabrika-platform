@@ -4,7 +4,7 @@
 
 import { compileContract } from '@fabrika/app/contract'
 import { canonicalArtifactJson } from '@fabrika/auth-core'
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/fabrika.contract'
@@ -13,7 +13,7 @@ import { shellSlicePlugin } from '../bun-plugin'
 import { checkApplication } from '../check'
 import { ContractSourceError, readContractSource } from '../contract'
 import { shellSlice } from '../slice'
-import { ARCHITECTURE_ROOT, evaluateInBun, fetchedByControl, KIT_ROOT, materialize, readTree } from './colocated-helpers'
+import { ARCHITECTURE_ROOT, evaluateInBun, fetchedByControl, KIT_ROOT, materialize, readTree, removeMaterialized } from './colocated-helpers'
 
 /** A module only handlers import, which leaves a mark and throws when it runs. */
 const THROWING_LOGIC = `import { mkdirSync } from 'node:fs'
@@ -23,6 +23,8 @@ throw new Error('a handler module ran at import')
 
 export const canReopen = (stage: string): boolean => stage === 'won' || stage === 'lost'
 `
+
+afterAll(removeMaterialized)
 
 const kitTree = (): Map<string, string> => new Map([...readTree(KIT_ROOT), ['src/deals/logic.ts', THROWING_LOGIC]])
 
