@@ -275,12 +275,8 @@ function coreChanges(site: SchemaSite, from: SchemaShape, to: SchemaShape): Acce
 			...schemaChanges(itemsSite(site), from.items, to.items),
 		]
 	}
-	if (from.type === 'union' && to.type === 'union') {
-		const kept = new Set(from.options.map((option) => canonicalJson(option)))
-		return to.options.every((option) => kept.has(canonicalJson(option)))
-			? [removal(`${label} loses a union option`)]
-			: valueChange(label, from, to)
-	}
+	// Every union change widens, a removed or reordered option too: the first option that accepts a value decides what
+	// projection keeps of it, so another option can pass on fields the old one stripped.
 	return valueChange(label, from, to)
 }
 

@@ -157,7 +157,8 @@ whole table or a whole column stays a removal.
 fewer values narrows: an enum that loses a value, a lowered maximum, a raised minimum, an added pattern, a
 field that becomes required or loses `null`. Every other change widens: a literal that becomes an enum, an
 enum that gains a value, a removed or relaxed bound, a field that becomes optional or nullable, any new field,
-a changed type. A removed field narrows, except a required input field: an input that omits it was refused
+a changed type, any change of a union (its first accepting option decides what projection keeps of a value). A
+removed field narrows, except a required input field: an input that omits it was refused
 before and is admitted now. The comparison descends into objects, arrays, optional and nullable values and
 names the field, for example "Endpoint `api.deals.move` input `items[].stage` admits `won`". It attempts no
 logical implication between schemas, so an equivalent rewrite of a schema widens too. The proxy applies no

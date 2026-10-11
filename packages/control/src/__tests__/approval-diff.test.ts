@@ -267,6 +267,17 @@ describe('classifyAccess compares output shapes', () => {
 		expect(classifyAccess(wider, before).outcome).toBe('removal')
 	})
 
+	test('any change of an output union widens: projection takes the first branch that accepts the result', () => {
+		const output = (branches: string) => snapshot(edited('output: Note', `output: z.union([${branches}])`))
+		const plain = 'z.strictObject({ title: z.string() })'
+		const secret = 'z.strictObject({ title: z.string(), secret: z.string() })'
+		const reordered = classifyAccess(output(`${plain}, ${secret}`), output(`${secret}, ${plain}`))
+		expect(reordered.outcome).toBe('widening')
+		expect(reordered.changes).toEqual([{ widens: true, line: expect.stringMatching(/^Endpoint `api.get` output changes from /) }])
+		expect(classifyAccess(output(`${plain}, ${secret}`), output(secret)).outcome).toBe('widening')
+		expect(classifyAccess(output(`${plain}, ${secret}`), output(plain)).outcome).toBe('widening')
+	})
+
 	test('an output field removed only removes, required or not', () => {
 		const before = notes('z.strictObject({ id: z.uuid(), title: z.string() })')
 		const fewer = notes('z.strictObject({ id: z.uuid() })')
