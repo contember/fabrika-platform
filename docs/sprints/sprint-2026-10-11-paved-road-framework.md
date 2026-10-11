@@ -9,15 +9,16 @@ On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
 # Sprint — the paved-road application framework (2026-10-11)
 
 **Goal.** An agent writes a Fabrika application on a paved road: a declarative shell, handlers colocated with their
-endpoints, a mini-ORM scoped by the endpoint's capability, and raw SQL when it needs it, with every step off the road
-detected and shown to the human who approves the deploy.
+endpoints, a mini-ORM scoped by the endpoint's capability, and raw SQL when it needs it. Every step off the road is
+declared in the shell, so the human who approves the deploy sees it.
 
 **Theme.** The platform guarantees two things at the high level: nobody reaches an endpoint outside authorization
 (the proxy, [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)), and a widening waits for a human
 on a protected environment ([ADR-0050](../decisions/0050-approved-access.md)). What a handler does with data is the
-code's and the review's job. The framework makes the straightforward way the sound way, and turns a step off the road
-into a review signal instead of a refusal. Success is the CRM rewritten in the new form, shorter than the dogfood
-baseline, written by fresh agents from the skill alone, with an off-road request flagged all the way to the approval.
+code's and the review's job. The framework makes the straightforward way the sound way. A step off the road (raw SQL,
+an unscoped table, a connector, database code) is a declared deviation: allowed, bound to its endpoint at runtime, and
+a review signal instead of a refusal. Success is the CRM rewritten in the new form, shorter than the dogfood baseline,
+written by fresh agents from the skill alone, with an off-road request declared, flagged and parked for approval.
 
 ## Evidence carried over
 
@@ -41,6 +42,9 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
 - **The operations spike (`spike/operations`, not merged):** fresh agents with only the skill text finished a domain
   in at most 2–3 tsc/checker runs per endpoint group. Type errors are product surface: an error must land on its own
   line, name the fix, and print no mapped-type dump or `never`.
+- **Two independent reviews of this plan** (at `cf1e292c`) found a type cycle in the first file order (contract →
+  slice → tables → `typeof contract`, TS7022 with tsc 5.9), and that a syntactic deviation detector is evaded by
+  destructuring, helper modules and `ctx[k]`. WU0 and the declared off-road fields answer them.
 
 ## Refs re-verified at HEAD (2026-10-11, `5b81b901`)
 
@@ -48,11 +52,15 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
 
 - ✔ The mirrored tree: `implement(contract, { database, deps, handlers })` takes a handler tree typed equal to the
   contract — `packages/app/src/implement/implement.ts:50-57`, `ExactHandlers` at `packages/app/src/implement/types.ts:193`.
+- ✔ The composition entry is `src/app.ts`; the generated entrypoint imports it — `packages/app/src/build.ts:15`, `:31`, `:41`.
 - ✔ The hand-written action union: `defineTables<DB, A extends string>(columns)` — `packages/db/src/policy.ts:193`.
 - ✔ The read gap: `DimensionTable.get` takes only a `Ref` of the table's read action; `update` takes the update
   action — `packages/db/src/store.ts:630`, `:642`. `expectVersion` already exists — `store.ts:363`.
 - ✔ No locking read: the guard admits one lock, `FOR SHARE` on a mutation's destination —
   `packages/db/src/guard.ts:22-23`, `:313-314`.
+- ✔ The framework's own tables live in the application's schema: `fabrika_webhook_bindings`,
+  `fabrika_webhook_deliveries`, `fabrika_job_leases` — `packages/db/src/migrations.ts:8-10`; file tables are
+  `fabrika_files_<name>` and the ledger is `fabrika_migrations`.
 - ✔ The boot digest backstop for a slice: `boot` refuses a compiled contract other than `FABRIKA_CONTRACT_DIGEST` —
   `packages/app/src/implement/boot.ts:140-147`.
 - ✔ The snapshot holds the contract and the migration list with checksums only; the digest keeps a trailing `null` so
@@ -63,10 +71,17 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
   exports only `.` and `./postgres-migrations`; `@fabrika/check` does not depend on it directly.
 - ✔ The migration checks: statement allowlist `disallowedStatement` — `packages/platform-node/src/migration-allowlist.ts:294`;
   catalog check `databaseCodeQuery` / `databaseCodeCheck` — `packages/platform-node/src/database-code.ts:131`, `:256`;
-  `codegen --verify` runs the same query — `packages/db/CLAUDE.md:223-229`.
+  `codegen --verify` runs the same query — `packages/db/CLAUDE.md:223-229`. Codegen refuses domains —
+  `packages/db/CLAUDE.md:214-216`.
 - ✔ The generated schema file declares interfaces and `columns` — `packages/db/src/codegen.ts:218`. Kept (Out of scope).
+- ✔ Application jobs are cron only (`c.cron`); there is no on-demand job kind and no application job queue —
+  `packages/app/src/contract/define.ts:384`.
 - ✔ The skill is one file read from the package — `packages/app/src/agent-skill.ts:9-24`; Control answers its own
-  copy through `get_app_rules` — `packages/control/src/mcp/handler.ts:154`.
+  copy through `get_app_rules` — `packages/control/src/mcp/handler.ts:154`; the builder copies `SKILL.md` only —
+  `packages/builder/cli/src/inject-skills.ts`.
+- ⚠ Two `ConflictError` classes: `packages/app/src/errors.ts:54` and `packages/db/src/errors.ts:22`. WU3.
+- ⚠ A webhook has no attempt lease: its delivery key is recorded before the handler and forgotten when it throws, and
+  "the handler's stores own their transactions" — `packages/app/CLAUDE.md:373-377`. WU3 defines its semantics.
 - ⚠ The skill has no version: its frontmatter carries only `name` and `description` — `packages/app/skill/SKILL.md:1-9`.
   WU10.
 - ⚠ The local stack deploys only Notes: `prepare.ts` imports `notesContract` — `packages/local-stack/src/prepare.ts:22`
@@ -77,270 +92,361 @@ it) is rejected by the owner as too declarative. Its still-valid evidence:
   refusal list — `packages/app/skill/SKILL.md:137-139`; backlog 104 "Never add a raw handle, a `sql` escape" —
   `docs/backlog/104-the-query-builder-cannot-express-common-reports.md:36`. WU6, WU9, WU10.
 - ⚠ Decision 3 (a capability reads its own target) contradicts "A write action does not include the read action" —
-  `packages/db/CLAUDE.md:162-163`. WU3.
+  `packages/db/CLAUDE.md:162-163`. WU3, WU9.
 - ⚠ Decision 3 (handlers colocated) contradicts "the contract is a literal … no call of the application's own
   functions" — `docs/decisions/0012-fabrika-app-runtime.md:66-69`, the `implement`-only rule at `:79-84`, and the
-  literal subset's one allowed function — `packages/check/CLAUDE.md:130-132`. WU4, WU9.
+  literal subset's one allowed function — `packages/check/CLAUDE.md:130-132`. WU0, WU4, WU9.
 - ⚠ Decision 6 contradicts "An application's schema holds no database code" — `docs/decisions/0017-service-owned-postgres-migrations.md:144-198`,
   the codegen refusal — `packages/db/CLAUDE.md:223-229`, and the skill's migration rules —
   `packages/app/skill/SKILL.md:72-75`. WU5, WU10.
 - ⚠ Decision 5 contradicts ADR-0050's "a code-only change deploys without a prompt" —
-  `docs/decisions/0050-approved-access.md:217-219`: a code change that adds a deviation now waits. WU7, WU9.
-- ⚠ The webhook rule "the handler's stores own their transactions" — `packages/app/CLAUDE.md:373-377` — meets WU3's
-  one transaction per invocation. The delivery record stays outside the handler's transaction; WU3 keeps it so.
+  `docs/decisions/0050-approved-access.md:217-219`: a change that declares a new deviation now waits. WU7, WU9.
 
-## Target shape (the default every unit builds to; WU1 and WU3 fix the exact names)
+## Target shape (WU0 fixes the signatures; WU1 the layout; WU3 the API matrix)
 
 ```text
-fabrika.contract.ts                 the shell: vocabulary, mounts, sections; composes the slices' groups
-src/schemas.ts                      shared zod schemas (literal), imported by the contract and the SPA
-src/<slice>/endpoints.ts            the slice's endpoints with .handle(…) bodies (a contract module, sliced by the reader)
-src/<slice>/logic.ts                business rules: plain TypeScript, no ctx, no data access
-src/<slice>/queries.ts              reusable data access: mini-ORM calls and ctx.sql, given the endpoint's db handle
-src/db/tables.ts                    table scopes, typed against the contract's vocabulary (no action union)
+src/vocabulary.ts                   defineVocabulary({ app, dimensions, actions, roles }): the authorization vocabulary
+src/db/tables.ts                    defineTables(vocabulary, columns)({ … }): table scopes typed by the vocabulary
 src/db/schema.generated.ts          codegen
-db/migrations/*.sql                 plain SQL; database code allowed as a deviation
-web/                                the SPA: imports the contract's types, src/schemas.ts and @fabrika/app/client only
-src/**/__tests__/                   generated tests (committed, never edited) and authored tests
+src/app-kit.ts                      defineApp(vocabulary, tables): the kit, typed by the vocabulary, DB and policies
+src/schemas.ts                      shared zod schemas (literal), imported by the shell and the SPA
+src/<slice>/endpoints.ts            app.group(…) with .handle(…) bodies: a shell module, sliced by the reader
+src/<slice>/logic.ts                business rules: plain TypeScript, no ctx, no data access
+src/<slice>/queries.ts              reusable data access over the handle a handler passes in
+fabrika.contract.ts                 app.contract((c) => …): mounts and sections composing the slices' groups
+src/app.ts                          serve(contract, { database, deps }): the composition entry build.ts and the job CLI load
+db/migrations/*.sql                 plain SQL; declared database code is a deviation
+web/                                the SPA: the contract's types, src/schemas.ts and @fabrika/app/client only
+src/**/__tests__/                   generated tests (committed, never edited) and authored tests and fixtures
 ```
+
+The order breaks the cycle: the vocabulary knows nothing, the tables know the vocabulary, the kit knows both, and
+the groups and the contract know the kit. Nothing imports `typeof contract` to type a table.
 
 ```ts
-// src/deals/endpoints.ts — one endpoint as the agent writes it
-reopen: r.mutation({ input: ReopenDeal, output: Done, access: { action: 'deals.write', on: 'deal', from: 'id' } })
-	.handle(async ({ input, ctx }) => {
-		const deal = await ctx.db.target.getForUpdate()
-		if (!canReopen(deal.stage)) throw new ConflictError('only a won or lost deal reopens')
-		return ctx.db.target.update({ stage: 'proposal' }, { expectVersion: input.expectVersion })
-	}),
+// src/deals/endpoints.ts
+export const deals = app.group({ callers: ['human'] }, (r) => ({
+	reopen: r.mutation({
+		input: ReopenDeal,
+		output: Saved,
+		access: { action: 'deals.write', on: 'deal', from: 'id' },
+	})
+		.handle(async ({ input, ctx }) => {
+			const deal = await ctx.db.target.getForUpdate()
+			if (!canReopen(deal.stage)) {
+				throw new ConflictError('only a won or lost deal reopens')
+			}
+			return ctx.db.target.update({ stage: 'proposal' }, {
+				expectVersion: input.expectVersion,
+			})
+		}),
+	pipeline: r.query({
+		input: OrgInput,
+		output: Pipeline,
+		access: { action: 'crm.read', in: 'org', from: 'orgId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => ({
+			rows: await ctx.sql(
+				PipelineRow,
+			)`select stage, count(*) as deals from deals where org_id = ${ctx.target.id} group by stage`,
+		})),
+}))
 ```
 
-- `ctx.db.target` is the endpoint's own object (`on`) or scope (`in`): `get`, `getForUpdate`, `update`, `remove`, and
-  its child tables. `ctx.db.within` serves `over`: `list`, `count`, `aggregate`. Jobs and webhooks get `ctx.db.ref` and
-  `ctx.db.within` from their key. A query runs in one read-only transaction; a mutation in one read-write transaction.
-- `ctx.db.unscoped.<table>` is the typed form off the road: guarded, in the endpoint's transaction, no scope
-  predicate. `ctx.sql` is the raw form. Both are allowed and both are deviations.
-- `fromRow(Schema, row)` maps a row to an output schema (snake_case → camelCase, `Date` → ISO text).
+**Names.** `ctx.target` is the capability (a `Ref`) the access form minted; `ctx.db.target` is the data handle bound
+to it. No other API says "target". `ConflictError`, `NotFoundError` and `BadRequestError` come from `@fabrika/app`
+only. A paved-road mutation answers `Saved = { id, version }`.
+
+**Declared off-road fields** (literal, in the shell, read by Control, part of the contract digest):
+
+| Field                                      | On                     | Runtime effect                                                                                   |
+| ------------------------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `sql: 'read' \| 'write'`                   | endpoint, job, webhook | `ctx.sql` exists only here; `'read'` runs read-only; a query or export may declare only `'read'` |
+| `unscoped: { <table>: 'read' \| 'write' }` | endpoint, job, webhook | `ctx.db.unscoped.<table>` exists only for those tables, in that mode; only tables of `tables.ts` |
+| `connect: ['<connector>']`                 | endpoint               | `ctx.connect.<connector>` exists only here (replaces the import's `usedBy`)                      |
+| link issuing (`issues: '<mount>'`)         | endpoint               | `ctx.links.issue` exists only here                                                               |
+
+A new declaration, a new table or a mode change (`read` → `write`) is a widening with a "needs closer review" line.
+The checker's syntactic lint ("declare `sql: 'read'` on `api.deals.pipeline`") is a hint, not the boundary.
 
 ## Work units
+
+### WU0 — The staged kit, landed first (M/L)
+
+- **Problem.** Spike B typed handlers through `typeof contract`; with tables typed by the contract and handlers in
+  the contract's slice modules, tsc fails with TS7022. Parallel units cannot each invent the fix.
+- **Verify first.** Reproduce TS7022 on spike B's CRM with `src/db/tables.ts` typed by `typeof contract`; measure
+  today's `contract-scale` and `implement-scale` figures.
+- **Scope.** The public signatures of the file order above, each with type-level tests, and runtime stubs that throw
+  "not implemented in WU0":
+  1. `defineVocabulary`, `defineTables(vocabulary, columns)`, `defineApp(vocabulary, tables)`, `app.group`,
+     `app.contract`, `serve(contract, { database, deps })`.
+  2. Multi-file groups; exact output through `ExactReturn`; `.handle()` whose return type does not mention the
+     handler; the declared off-road fields; connectors and links; a `DbIndex<DB, P>` built once per app.
+  3. Method gating by string-literal error tuples, so a gated method fails at its line in at most two lines.
+  4. The shared fixtures migrated to the new table form; the skeletons of `differential.test.ts`'s new cases.
+- **Acceptance / witness.** `packages/app/src/__tests__/kit-types.test.ts` compiles `src/__tests__/kit-mistakes/`
+  (a group in another file, a wrong output field, `getForUpdate` in a query, `ctx.sql` without `sql`, `unscoped` of an
+  undeclared table, `write` sql on a query) and asserts each diagnostic at its line, two lines at most, no `never`, no
+  mapped-type dump. `kit-scale.test.ts`: 200 procedures in 10 groups within today's `implement-scale` budget.
+- **Touch points.** `packages/app/src/contract/{vocabulary.ts,kit.ts,group.ts} (new)`, `packages/app/src/implement/serve.ts (new)`,
+  `packages/db/src/{policy.ts (signature only),index.ts (types)}`, `packages/app/src/__tests__/{kit-*}`,
+  `packages/check/src/__tests__/differential.test.ts` (skeleton cases), shared fixtures under `packages/app/src/__tests__/fixtures/`.
 
 ### WU1 — The application architecture (M)
 
 - **Problem.** No document says where an application's code goes. The dogfood CRM and the spikes each invented a
   layout. The checker has only refusals, so it cannot say "this left the structure" without blocking the build.
-- **Verify first.** The checker's layout constants — `packages/check/src/layout.ts` — and that `Finding` has no severity —
-  `packages/check/src/finding.ts`. The literal rule's contract graph — `packages/check/src/rules/literal.ts`.
+- **Verify first.** The layout constants — `packages/check/src/layout.ts` — and that `Finding` has no severity —
+  `packages/check/src/finding.ts`.
 - **Scope.**
   1. `docs/reference/application-architecture.md`: the layers and the slice (the target shape above), what lives in
-     which directory and file, and what each layer may import or call: the shell, endpoint handlers, logic, data
-     access (mini-ORM, `ctx.sql`), jobs, webhooks, files, the SPA and its typed client, shared schemas, generated and
-     authored tests. A feature slice (`src/deals/`) holds its endpoints, logic and queries.
-  2. The directions the checker enforces as **refusals** (platform integrity): the SPA imports no server module; logic
-     and queries import no `@fabrika/app/implement`, test kit or framework internal; nothing imports a generated test.
-  3. The directions that are **deviations** (a review signal): logic that reaches data (`ctx`, `@fabrika/db`, a
-     queries module); a slice that imports another slice's queries; a handler outside a slice's `endpoints.ts`; data
-     access outside `endpoints.ts`/`queries.ts`.
-  4. The deviation seam in `@fabrika/check`: `Finding` gains `severity: 'refusal' | 'deviation'`; a deviation has a
-     stable key `{ rule, site, tables }` (site = endpoint id, job name, or `<file>#<top-level declaration>`; never a
-     line). `fabrika-check` prints deviations under their own heading and exits 0 when only deviations remain. Still no
-     suppression syntax.
+     which file, and what each layer may import or call: the shell, handlers, logic, data access (mini-ORM, `ctx.sql`),
+     jobs, webhooks, files, the SPA and its typed client, shared schemas, generated and authored tests and fixtures.
+  2. **Refusals** (platform integrity): the SPA imports no server module; logic and queries import no framework
+     internal or test kit; nothing imports a generated test.
+  3. **Structure findings** (checker output only, never in the snapshot): logic that reaches data; a slice that imports
+     another slice's queries; a handler outside a slice's `endpoints.ts`; data access outside `endpoints.ts`/`queries.ts`.
+  4. `Finding` gains `severity: 'refusal' | 'hint'`. `fabrika-check` prints hints under their own heading and exits 0
+     when only hints remain. Still no suppression syntax.
 - **Acceptance / witness.** `packages/check/src/__tests__/structure.test.ts` over `fixtures/architecture-app/`: each
-  deviation direction above is reported as a deviation with its key, each refusal direction as a refusal, the clean
-  layout reports nothing, and the CLI exits 0 with deviations only and 1 with a refusal.
+  structure violation is reported as a hint, each integrity violation as a refusal, the clean layout reports nothing,
+  the CLI exits 0 with hints only and 1 with a refusal.
 - **Touch points.** `docs/reference/application-architecture.md` (new), `docs/reference/README.md`,
   `packages/check/src/{finding.ts,layout.ts,check.ts,cli.ts}`, `packages/check/src/rules/structure.ts` (new),
-  `packages/check/src/__tests__/`, `packages/check/CLAUDE.md`.
+  `packages/check/src/__tests__/{structure.test.ts,fixtures/architecture-app/}`, `packages/check/CLAUDE.md`.
 
-### WU2 — Tables derived from the contract (M)
+### WU2 — Tables derived from the vocabulary (M)
 
 - **Problem.** `src/db/tables.ts` restates the action names as a hand union and each table's containment
-  (`policy.ts:193`). Spike A's `derive` removed both without changing the endpoint table.
-- **Verify first.** Spike A's `defineTables(contract, columns)` overload and `reader/tables.ts` change (branch
-  `spike/derive`, commit `d24b717c`); `packages/db/src/tables.ts` stays browser-safe.
-- **Scope.** `defineTables<DB, typeof contract>(contract, columns)({ … })`: action and dimension names typed from the
-  contract; a table's container column and a child's inherited chain derived from `dimensions`, with `in: { column }`
-  only when the column breaks the `<container>_id` convention. The static reader reads the contract form
-  (`readTablesSource` resolves the contract's `dimensions` literal). `TableInsert` / `TableUpdate` types. Refuse the
-  old form; pre-1.0, no dual reader.
-- **Acceptance / witness.** `packages/db/src/__tests__/derived-tables.test.ts` (typo in an action, a dimension, a child
-  parent or a container column fails tsc at its line; a wrong derived column is refused by `defineTables`); a reader
-  differential case in `packages/check/src/__tests__/differential.test.ts` (static read equals the evaluated policies).
-- **Touch points.** `packages/db/src/{policy.ts,tables.ts}`, `packages/check/src/reader/tables.ts`, their tests,
-  `packages/db/CLAUDE.md` (policy section).
+  (`policy.ts:193`). Spike A removed both without changing the endpoint table.
+- **Verify first.** WU0's `defineTables(vocabulary, columns)` signature; spike A's derivation (branch `spike/derive`,
+  commit `d24b717c`); `packages/db/src/tables.ts` stays browser-safe.
+- **Scope.** The implementation behind WU0's signature: action and dimension names from the vocabulary; a container
+  column and a child's chain derived from `dimensions`, `in: { column }` only off the `<container>_id` convention;
+  `TableInsert` / `TableUpdate`; the static reader reads `src/vocabulary.ts` and the table form. The old form is
+  refused; pre-1.0, no dual reader.
+- **Acceptance / witness.** `packages/db/src/__tests__/derived-tables.test.ts` (an action, dimension, child parent or
+  container-column typo fails tsc at its line; a wrong derived column is refused); WU0's `differential.test.ts`
+  table cases filled in and passing.
+- **Touch points.** `packages/db/src/{policy.ts,tables.ts}`, `packages/check/src/reader/tables.ts`,
+  `packages/db/src/__tests__/derived-tables.test.ts`, the table cases of `differential.test.ts`, `packages/db/CLAUDE.md` (policy).
 
-### WU3 — The mini-ORM, scoped by the endpoint's capability (L)
+### WU3 — The mini-ORM and the invocation's transaction (L)
 
 - **Problem.** A handler reaches data through hand-written stores (109 lines in the CRM), a write capability cannot
-  read its row (`store.ts:630`), and there is no locking read (`guard.ts:313`), so a precondition races.
-- **Verify first.** How `boot` binds the layer and the `RequestFrame` (`packages/app/src/implement/boot.ts`,
-  `dispatch.ts`); how a job's mutation is fenced (`fencedTransaction`, `packages/db/src/job-leases.ts`).
+  read its row (`store.ts:630`), there is no locking read (`guard.ts:313`), and every store call owns its transaction,
+  so a precondition races.
+- **Verify first.** How `boot` binds the layer and the `RequestFrame` (`boot.ts`, `dispatch.ts`); job fencing
+  (`fencedTransaction`, `packages/db/src/job-leases.ts`); the webhook order (`packages/app/CLAUDE.md:363-377`).
 - **Scope.**
-  1. `ctx.db` per invocation, built from the bound layer and the minted capability (the target shape above). No
-     `defineStore` on the paved road.
-  2. **The capability reads its own target**: a `Ref` of any action the table's policy names reads its own row,
-     without the columns that carry their own read action the caller does not hold.
-  3. `getForUpdate()`: `SELECT … FOR UPDATE` on the target's object predicate, in a mutation's transaction only; the
-     guard admits that lock and no other new one.
-  4. One transaction per request invocation (read-only for a query and an export); jobs and webhooks get
-     `ctx.transaction(fn)`, fenced by the attempt's lease as today. A connector call never joins it. The webhook
-     delivery record stays outside it.
-  5. `expectVersion` on `update` and `remove`; `fromRow`.
-  6. `ctx.db.unscoped.<table>`: guarded, in the invocation's transaction, scope predicate `true`; read-only in a query.
-- **Acceptance / witness.** `packages/db/src/__tests__/orm.test.ts` and `packages/app/src/__tests__/orm-dispatch.test.ts`
-  (Postgres required): a write `Ref` reads its row and no other; a hidden column stays hidden; two concurrent reopens —
-  one wins, the other answers 409; a thrown handler commits nothing; a query cannot write, even through `unscoped`; a
-  `ctx.db` kept past its request is refused. Type fixtures in `src/__tests__/implement-mistakes/` (a `getForUpdate`
-  in a query, an unknown column in `update`) fail at their line in at most two lines. `implement-scale.test.ts` stays
-  in budget.
-- **Touch points.** `packages/db/src/{store.ts,guard.ts,orm.ts (new),database.ts}`,
-  `packages/app/src/implement/{boot.ts,dispatch.ts,types.ts}`, `packages/app/src/jobs/runner.ts`, their tests,
-  `packages/db/CLAUDE.md`, `packages/app/CLAUDE.md` (Serving a contract).
+  1. **The API matrix** (written in `docs/reference/application-runtime.md`, mirrored in the skill):
 
-### WU4 — Handlers colocated with their endpoints (L)
+     | Access form | query                                                                                                 | mutation (adds)                                                                                                            |
+     | ----------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+     | `on`        | `ctx.db.target.get()`; child tables `list`/`get`                                                      | `getForUpdate`, `update(v, { expectVersion })`, `remove({ expectVersion })`; child `insert`/`update`/`remove`              |
+     | `in`        | `ctx.db.target.get()` (the container); `.<table>.list`                                                | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's |
+     | `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`         | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
+     | `creates`   | —                                                                                                     | `ctx.created` (IAM made the scope), then `in`-style inserts into it                                                        |
+     | `member`    | no application data                                                                                   | no application data                                                                                                        |
+     | any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage` | —                                                                                                                          |
 
-- **Problem.** Every endpoint is written twice, in the contract and in the `implement` tree (`types.ts:193`). Spike B
-  proved `.handle()` with a reader slice; it left links, webhooks, exports, `deps`, multi-file groups and the SPA build
-  open.
-- **Verify first.** Spike B's `slice.ts`, `colocated.ts` and `bun-plugin.ts` (branch `spike/colocated`, commit
-  `f80f07c0`); that WU1's layout constants name the slice modules.
-- **Scope.** `.handle(fn)` on `query`, `mutation`, `cron`, `webhook`, link procedures and export procedures; group
-  modules (`src/<slice>/endpoints.ts`) composed by the contract; `serve(contract, { database, deps })` with a typed
-  `deps` channel; the reader's slice applied to every contract module, so Control never fetches a handler-only module;
-  `@fabrika/check/bun-plugin` for the SPA build; a differential corpus (slice vs evaluation). `implement` leaves the
-  application surface in WU8.
-- **Acceptance / witness.** `packages/check/src/__tests__/colocated.test.ts`: a handler module that throws at import
-  is never requested by `contractReaderInputs` and never runs, and the static read equals `compileContract` of the
-  evaluated modules; the differential corpus passes; a SPA build through the plugin holds no handler code. Type
-  fixtures (`src/__tests__/colocated-mistakes/`): a missing `.handle`, `ctx.target` on `over`, the wrong principal, an
-  undeclared job action — each at its line. `colocated-scale.test.ts`: 200 procedures within today's budget.
-- **Touch points.** `packages/app/src/contract/{define.ts,colocated.ts (new)}`, `packages/app/src/implement/implement.ts`,
-  `packages/check/src/{slice.ts (new),bun-plugin.ts (new),contract.ts,inputs.ts}`, `packages/check/src/reader/{value.ts,surface.ts}`,
-  `packages/check/src/rules/literal.ts`, `packages/check/package.json` (export), their tests, `packages/check/CLAUDE.md`
-  (literal subset).
+     Plus: file collections are generated endpoints, not handler API; form inbox reads are not built; a job attempt
+     retries, so its writes are idempotent; a webhook keys idempotency on `ctx.delivery.key`; errors from `@fabrika/app`.
+     "Target subtree" = the target's child tables plus the dimension tables it contains.
+  2. **Own-target read**: a `Ref` of any action the table names reads its own row; every column that carries a read
+     action other than the capability's own is hidden, in the runtime projection and in the return type alike.
+  3. `getForUpdate()`: `SELECT … FOR UPDATE` on the target's object predicate, in a mutation only; the guard admits that
+     lock and no other new one.
+  4. **The transaction is a runtime mechanism.** The invocation owns one session, opened on first data use, committed
+     after the handler returns and output validation passes, rolled back on throw, validation failure or cancellation;
+     the framework sets `idle_in_transaction_session_timeout`. The ORM and `ctx.sql` both route through it.
+     Queries and exports run read-only. Jobs: data writes and `ctx.sql` only inside the fenced `ctx.transaction(fn)`.
+     Webhooks: one transaction per delivery, idempotent by delivery key, the delivery record outside it. IAM, object
+     storage and connector effects never roll back: data work first, external calls after.
+  5. No `ctx.jobs.enqueue`: application jobs are cron only and have no queue, so an outbox has no consumer. The pattern
+     is a row in the invocation's transaction that the next cron run picks up.
+  6. `ctx.db.unscoped.<table>` per WU0's declaration and mode: guarded, in the invocation's transaction, scope
+     predicate `true`; never a `fabrika_*` table.
+  7. `fromRow(Schema, row)`: snake_case → camelCase, `Date` → ISO; literal-string fields are widened on input and
+     checked by `parse`. One `ConflictError` on the application surface (`@fabrika/app`); `@fabrika/db`'s stays internal.
+  8. Every handle (`ctx.db.*`, `unscoped`) is bound to its invocation.
+- **Acceptance / witness.** `packages/db/src/__tests__/orm.test.ts`, `packages/app/src/__tests__/orm-dispatch.test.ts`
+  (Postgres required): a write `Ref` reads its own row, with another action's columns hidden in data and type; two
+  concurrent reopens — one wins, one 409; a thrown handler and a refused output commit nothing; a query cannot write,
+  not even through `unscoped`; a captured handle called from another live request, from another `boot` and from an
+  expired job attempt is refused; a webhook delivery that throws commits nothing and runs again. Type fixtures in
+  `src/__tests__/orm-mistakes/`. WU0's scale budget rerun after this unit.
+- **Touch points.** `packages/db/src/{store.ts,guard.ts,orm.ts (new),database.ts,errors.ts}`,
+  `packages/app/src/implement/{boot.ts,dispatch.ts,types.ts,webhook.ts}`, `packages/app/src/jobs/runner.ts`,
+  `packages/app/src/__tests__/{orm-dispatch.test.ts,orm-mistakes/}`, `packages/db/src/__tests__/orm.test.ts`,
+  `docs/reference/application-runtime.md` (the matrix), `packages/db/CLAUDE.md`, `packages/app/CLAUDE.md` (Serving a contract).
 
-### WU5 — Migration SQL: refuse only escapes, flag database code (M)
+### WU4 — Colocated handlers and the reader slice (L)
+
+- **Problem.** Every endpoint is written twice (`types.ts:193`). Spike B proved `.handle()` with a reader slice and
+  left links, webhooks, exports, `deps`, multi-file groups and the SPA build open.
+- **Verify first.** WU0's group and `.handle()` signatures; spike B's `slice.ts` and `bun-plugin.ts` (branch
+  `spike/colocated`, commit `f80f07c0`).
+- **Scope.** The implementation behind WU0: `.handle()` on `query`, `mutation`, `cron`, `webhook`, link and export
+  procedures; groups across files; `serve` binding handlers by endpoint id; the declared fields (`sql`, `unscoped`,
+  `connect`, `issues`) in the kit, the artifact and the reader, `connect` replacing the import's `usedBy`; the reader's
+  slice on every shell module, so Control reads only the shell; `@fabrika/check/bun-plugin` for the SPA build.
+- **Acceptance / witness.** `packages/check/src/__tests__/colocated.test.ts`: a handler-only module that throws at
+  import is never requested by `contractReaderInputs` and never runs; the static read equals `compileContract` of the
+  evaluated modules; WU0's `differential.test.ts` slice cases pass; a plugin build holds no handler code.
+  `colocated-mistakes/` fixtures (missing `.handle`, `ctx.target` on `over`, the wrong principal, an undeclared job
+  action) each at its line.
+- **Touch points.** `packages/app/src/contract/{define.ts,kit.ts,group.ts}`, `packages/app/src/implement/serve.ts`,
+  `packages/auth-core` (artifact fields), `packages/check/src/{slice.ts (new),bun-plugin.ts (new),contract.ts,inputs.ts}`,
+  `packages/check/src/reader/{value.ts,surface.ts}`, `packages/check/src/rules/literal.ts`, `packages/check/package.json`,
+  the slice cases of `differential.test.ts`, `packages/check/CLAUDE.md` (literal subset).
+
+### WU5 — Migration SQL: refuse escapes, declare database code (L; in progress in its worktree)
 
 - **Problem.** Backlog 108 merged an allowlist that refuses every trigger, function, view and unusual expression
   (ADR-0017 `:144-198`). Decision 6 keeps a refusal only for what escapes the schema, the transaction or the platform.
-- **Verify first.** Which allowlist rows are escapes and which are database code (`migration-allowlist.ts`); what the
-  catalog check reads (`database-code.ts:131`).
+- **Verify first.** Which allowlist rows are escapes (`migration-allowlist.ts`); what the catalog check reads
+  (`database-code.ts:131`); the plan the runner applies (`postgres-migrations.ts`).
 - **Scope.**
-  1. `@fabrika/platform-node/sql`, a runtime-neutral subpath (no Bun, no driver): the lexer and
+  1. `@fabrika/platform-node/sql`, runtime-neutral: the lexer, the function allowlist, and
      `classifyMigration(sql, schema) → { refused, deviations, objects }`.
-  2. **Refused** (by file and line): transaction control and `SET`/`RESET`/`set_config`, `COPY` (any form), `GRANT`/
-     `REVOKE`, `CREATE`/`ALTER ROLE`, `CREATE EXTENSION`, any schema but the application's own (`pg_catalog` relations
-     included), `SECURITY DEFINER`, a function `SET` clause, a language other than `sql` and `plpgsql`, event triggers,
-     and in a function or `DO` body: dynamic `EXECUTE` and any qualified name outside the schema.
-  3. **Deviations** (with kind and object name): functions, triggers, views, rules, policies, domains, sequences,
-     `DO`, and a default, `CHECK`, generated column or index expression that calls a function outside the reviewed list.
-  4. The catalog check stays, as the runtime witness, not the approval's detector (Control cannot reach the database,
-     ADR-0017 Alternatives): before the commit and at every start (`codegen --verify`) it refuses an integrity escape
-     (a dependency outside the schema and `pg_catalog`, a definer function, a foreign language) and any database
-     object that no migration file declares (`objects`), e.g. one created at runtime.
-  5. Rewrite ADR-0017's "An application's schema holds no database code" section in place.
-- **Acceptance / witness.** `packages/platform-node/src/__tests__/migration-classify.test.ts` (each refused form, each
-  deviation kind, a plain file with none); `application-migrations.test.ts` on Postgres: a trigger declared in a
-  migration applies and passes the start check, a trigger created outside a migration fails the start check, `COPY …
-  PROGRAM` and `app_other.t` are refused before any SQL runs.
-- **Touch points.** `packages/platform-node/src/{migration-sql.ts,migration-allowlist.ts,database-code.ts,application-postgres-migrations.ts}`,
-  `packages/platform-node/package.json` (export), `packages/db/src/codegen.ts`, their tests,
-  `docs/decisions/0017-service-owned-postgres-migrations.md`, `packages/db/CLAUDE.md` (codegen invariant).
+  2. **Refused** (by file and line): transaction control, `SET`/`RESET`, `COPY` (any form), `GRANT`/`REVOKE`, roles,
+     `CREATE EXTENSION`, any schema but the application's own, any `fabrika_*` relation, `SECURITY DEFINER`, a function
+     `SET` clause, a language other than `sql` and `plpgsql`, event triggers, dynamic `EXECUTE`, and a body the lexer
+     cannot parse.
+  3. **The function allowlist, not name rules**, in function and `DO` bodies and in expressions: an identifier followed
+     by `(` is a reviewed `pg_catalog` built-in or a function the application's migrations declare.
+     `query_to_xml`, `cursor_to_xml`, `lo_*`, `pg_read_file`, `pg_advisory_*`, `dblink*` and `set_config` are refused.
+     Dollar-quoted and single-quoted bodies are both parsed recursively. A schema qualifier is told apart from a table
+     alias and from `NEW`/`OLD`.
+  4. **Deviations** (kind and object name): functions, triggers, views, rules, policies, sequences, `DO`, and an
+     expression that calls a function the application declares.
+  5. **The object manifest**: the objects the migration files declare, with create, `CREATE OR REPLACE`, drop and
+     rename applied in file order, is the authority. It is threaded through the runner, the CLI, codegen and the test
+     database.
+  6. **The catalog check is the runtime witness**, not the approval's detector (Control cannot reach the database):
+     before the commit and at every start (`codegen --verify`) it refuses an integrity escape and any object the
+     manifest does not declare.
+  7. **Domains stay refused**: codegen cannot bind them (`packages/db/CLAUDE.md:214-216`), and a domain adds a type the
+     data layer would have to unwrap.
+  8. Rewrite ADR-0017's "An application's schema holds no database code" section in place.
+- **Acceptance / witness.** `packages/platform-node/src/__tests__/migration-classify.test.ts` (each refused form and
+  function, each deviation kind, a single-quoted body, an alias that looks like a schema, a plain file); on Postgres: a
+  declared trigger applies and passes the start check, a trigger created outside a migration fails it, a renamed and a
+  replaced function stay declared, `COPY … PROGRAM`, `app_other.t` and `fabrika_job_leases` are refused before any SQL runs.
+- **Touch points.** `packages/platform-node/src/{migration-sql.ts,migration-allowlist.ts,database-code.ts,postgres-migrations.ts,application-postgres-migrations.ts}`,
+  `packages/platform-node/package.json`, `packages/db/src/{codegen.ts,testing.ts}`, `packages/cli/src/db.ts`, their
+  tests, `docs/decisions/0017-service-owned-postgres-migrations.md`, `packages/db/CLAUDE.md` (codegen invariant).
 
-### WU6 — Raw SQL as a legitimate tool (M)
+### WU6 — Raw SQL, declared (M)
 
 - **Problem.** The checker refuses raw SQL (`rules/runtime.ts:259`), so an agent that needs a join report loads every
   row or invents a hack. Decision 4: `ctx.sql` is legitimate.
-- **Verify first.** That WU3's invocation transaction is the one `ctx.sql` must join; that WU5's lexer subpath exists.
-- **Scope.** `ctx.sql` as a tagged template: values bound as parameters only, run in the invocation's transaction,
-  read-only in a query or an export, answering plain rows. Runtime refusals (platform integrity), from the static parts
-  of the template with WU5's lexer: DDL, transaction control, `SET`/`set_config`, `COPY`, `LISTEN`/`NOTIFY`, a
-  qualified name outside the schema, a `pg_*` relation, more than one statement. The `raw-sql` rule keeps refusing a
-  driver's `sql` (Kysely, `bun`) and stops refusing `ctx.sql`, which WU7 reports as a deviation.
+- **Verify first.** WU3's invocation session; WU5's `@fabrika/platform-node/sql` lexer and function allowlist.
+- **Scope.** `ctx.sql(Schema)` as a tagged template, built only for a site that declares `sql`: values bound as
+  parameters only, run in the invocation's session, read-only for `'read'`, rows parsed (snake → camel, `Date` → ISO,
+  then zod; no row-type parameter). Runtime refusals from the template's static text: DDL, transaction control,
+  `SET`, `COPY`, `LISTEN`/`NOTIFY`, a qualified name outside the schema, any `fabrika_*` or `pg_*` relation, a function
+  outside WU5's allowlist, more than one statement. The `raw-sql` rule keeps refusing a driver's `sql`; a `ctx.sql` use
+  on a site without the declaration is a checker hint naming the declaration to add.
 - **Acceptance / witness.** `packages/db/src/__tests__/raw-sql.test.ts` (Postgres required): a join report answers in
-  the endpoint's transaction and rolls back with it; each refused form throws before anything is sent; an interpolated
-  value is a parameter, never text; a query's `ctx.sql` cannot write. `rules.test.ts` holds the changed rule's pair.
-- **Touch points.** `packages/db/src/sql.ts` (new), `packages/app/src/implement/{types.ts,dispatch.ts}`,
-  `packages/check/src/rules/runtime.ts`, `packages/check/package.json` (dependency), their tests, `packages/db/CLAUDE.md`
-  ("No raw handle" invariant rewritten).
+  the invocation's transaction and rolls back with it; a `'read'` site cannot write; a site without `sql` has no
+  `ctx.sql` at runtime; a captured `ctx.sql` called from another request is refused; each refused form and function
+  throws before anything is sent; an interpolated value is a parameter. `rules.test.ts` holds the changed pair.
+- **Touch points.** `packages/db/src/sql.ts` (new), `packages/app/src/implement/dispatch.ts` (binding only),
+  `packages/check/src/rules/runtime.ts`, `packages/check/package.json`, their tests, `packages/db/CLAUDE.md` ("No raw
+  handle" rewritten).
 
 ### WU7 — Deviations in the reviewed snapshot (L)
 
-- **Problem.** Control's snapshot holds the contract and migration checksums (`snapshot.ts:16`); nothing records code
-  that leaves the paved road, so the approver cannot see it.
-- **Verify first.** `contractReaderInputs` rounds and `SNAPSHOT_LIMITS` (`read.ts:20`); how the approval page renders
-  `AccessChange` lines (`packages/dashboard/src/routes/approvals/detail.tsx`).
+- **Problem.** Control's snapshot holds the contract and migration checksums (`snapshot.ts:16`); the approver sees no
+  data reach beyond the paved road.
+- **Verify first.** How `classifyAccess` keys endpoints (`diff.ts`); how the approval page renders `AccessChange`
+  (`packages/dashboard/src/routes/approvals/detail.tsx`).
 - **Scope.**
-  1. `readDeviations(files)` in `@fabrika/check/contract` (Worker-safe): WU1's structure deviations, `ctx.sql` sites
-     with the tables their static text names and whether they write, `ctx.db.unscoped` sites, and writes to a table
-     outside the endpoint's target and its children. A reference to `ctx.sql` or `ctx.db.unscoped` in any position
-     counts, so an alias is still a deviation. The checker prints the same list.
-  2. The snapshot gains `deviations` (code, keyed as WU1 says) and per-migration deviations (WU5's `classifyMigration`).
-     The digest covers them only when non-empty, so every stored approval stays valid.
-  3. `classifyAccess`: a new deviation key widens, with `review: 'closer'` on its line ("Endpoint `api.deals.pipeline`
-     runs raw SQL reading `deals`, `companies` — needs closer review"); a removed one is a removal.
-  4. The approval page and the environment page show deviation lines as "needs closer review", and the environment
-     page lists the published snapshot's deviations, protected or not. MCP `get_deployment` names them.
-- **Acceptance / witness.** `packages/control/src/__tests__/approval-deviations.test.ts`: a commit pair that adds a
-  `ctx.sql` site parks on a protected environment and publishes at once on an unprotected one, with the closer-review
-  line in both; the same deviation on the next deploy is unchanged; an old snapshot's digest is unchanged.
-  `packages/check/src/__tests__/deviations.test.ts`: every kind, the alias case, line moves keep the key.
-- **Touch points.** `packages/check/src/{contract.ts,deviations/ (new)}`, `packages/control/src/approval/{snapshot.ts,read.ts,diff.ts}`,
-  `packages/control-contract/src/` (DTO), `packages/dashboard/src/routes/{approvals/detail.tsx,apps/detail.tsx}`,
-  `packages/control/src/mcp/handler.ts` (`get_deployment` only), their tests, `packages/control/CLAUDE.md`.
+  1. **Only data-reach deviations reach the snapshot**: the declared `sql`, `unscoped`, `connect` and link issuing
+     (already in the contract) and WU5's migration database code (a new snapshot field). WU1's structure hints stay
+     checker output, so they cost no approval.
+  2. Comparison: the site's identity (endpoint id, job, webhook, or migration object) is stable; its effect (mode,
+     tables, connector) is compared separately. A new site, a new table, a new connector or `read` → `write` widens with
+     `review: 'closer'`; a removal narrows; anything the diff cannot classify gets closer review.
+  3. The digest covers the migration deviations only when there are some, so stored approvals stay valid.
+  4. The approval page and the environment page mark the lines "needs closer review"; the environment page lists the
+     published snapshot's deviations, protected or not. MCP `get_deployment` names them.
+- **Acceptance / witness.** `packages/control/src/__tests__/approval-deviations.test.ts`: a commit pair adding
+  `sql: 'read'` parks on a protected environment and publishes at once on an unprotected one, with the closer-review
+  line in both; `read` → `write` and a new `unscoped` table each widen; a moved handler body with the same declaration is
+  unchanged; a declared trigger widens; an old snapshot's digest is unchanged.
+- **Touch points.** `packages/control/src/approval/{snapshot.ts,read.ts,diff.ts}`, `packages/control-contract/src/` (DTO),
+  `packages/dashboard/src/routes/{approvals/detail.tsx,apps/detail.tsx}`, `packages/control/src/mcp/handler.ts`
+  (`get_deployment` only), their tests, `packages/control/CLAUDE.md`.
 
-### WU8 — The Zerops example and the generated tests in the new form (M)
+### WU8 — The Zerops example, the generated tests and the application surface (M)
 
-- **Problem.** `examples/zerops-app` (128 hand-written server lines without `fabrika.config.ts`, `implement`, a store) and the generated tests
-  (`endpointAccessKit` boots `implement`'s result) show the old form, and the template is what agents copy.
-- **Verify first.** `fabrika db test-scaffold`'s inputs (`scaffoldInputs`, `packages/check/src/scaffold.ts:277`) and
-  the fixture app in `packages/cli/src/__tests__/fixtures/isolation-app/`.
-- **Scope.** Rewrite `examples/zerops-app` to WU1's structure on WU2–WU4 and WU6 (`notes/endpoints.ts`, no store, no
-  `src/app.ts` tree). `test-scaffold` and `@fabrika/app/testing/isolation` boot `serve`; the endpoint access cases
-  cover own-target reads. Remove `implement`, `defineStore` and `defineChildStore` from the application surface
-  (framework tests keep an internal entry). Regenerate `packages/cli`'s fixture tests and the local stack's Notes
-  fixture. Count lines before and after.
-- **Acceptance / witness.** `bun run test:examples` and `FABRIKA_TEST_POSTGRES_URL=… bun test --isolate examples/zerops-app`
-  pass; `fabrika-check examples/zerops-app` reports no refusal and no deviation; the regenerated `packages/cli` fixtures
-  pass; `bun run local:smoke` deploys Notes.
+- **Problem.** `examples/zerops-app` (128 hand-written server lines without `fabrika.config.ts`, `implement`, a store)
+  and the generated tests (`endpointAccessKit` boots `implement`'s result) show the old form, and agents copy the
+  template.
+- **Verify first.** `scaffoldInputs` (`packages/check/src/scaffold.ts:277`) and the fixture app in
+  `packages/cli/src/__tests__/fixtures/isolation-app/`.
+- **Scope.**
+  1. `examples/zerops-app` in WU1's structure on WU0–WU4 and WU6; `src/app.ts` is `serve(…)`, the entry `build.ts` and
+     the job CLI load.
+  2. `test-scaffold` and `@fabrika/app/testing/isolation` boot `serve`. An endpoint that declares `unscoped` gets no
+     other-scope isolation case and keeps its authorization-denial cases. Own-target read cases for a write-only role
+     and a link holder. Authored seed fixtures set up preconditions (`deals.reopen` needs a won deal); generated tests
+     are never edited.
+  3. Remove `implement` from its subpath and `defineStore`/`defineChildStore` from `scoped()` on the application surface;
+     framework tests keep an internal entry. Regenerate `packages/cli`'s fixtures and the local stack's Notes fixture.
+  4. A real SPA build test: the example's SPA bundle through the plugin, with no transitive server import.
+- **Acceptance / witness.** `bun run test:examples` and the example's Postgres suite pass; `fabrika-check
+  examples/zerops-app` reports no refusal and no hint; the SPA build test passes; the regenerated fixtures pass;
+  `bun run local:smoke` deploys Notes.
 - **Touch points.** `examples/zerops-app/`, `packages/check/src/{scaffold.ts,scaffold-sample.ts}`,
-  `packages/app/src/testing/{isolation.ts,endpoint-access.ts,policy-isolation.ts}`, `packages/app/src/index.ts` and
-  `packages/db/src/index.ts` (exports), `packages/cli/src/__tests__/fixtures/`, `packages/local-stack/src/` (fixture only).
+  `packages/app/src/testing/{isolation.ts,endpoint-access.ts,policy-isolation.ts}`, `packages/app/package.json`
+  (exports), `packages/db/src/{index.ts,store.ts (surface only)}`, `packages/cli/src/__tests__/fixtures/`, the Notes
+  fixture under `packages/local-stack/` (no other local-stack file).
 
 ### WU9 — ADR-0012 and ADR-0050 rewritten (S)
 
 - **Problem.** ADR-0012 states the literal contract and `implement` as the only way (`:66-84`); ADR-0050 says a
-  code-only change never prompts (`:217-219`).
-- **Verify first.** The sprint's Decisions section; ADR-0017 is WU5's.
-- **Scope.** Rewrite ADR-0012 in place: the declarative shell, colocated handlers and the slice, the paved road
-  (mini-ORM, own-target read, `getForUpdate`), raw SQL as legitimate, deviations as a review signal, and the rejected
-  declared operations, RLS and isolated host in Alternatives. Rewrite ADR-0050 §1 and §3 for deviations in the
-  snapshot and their classification. Update `docs/reference/application-runtime.md`. Delete backlog 104 (raw SQL
-  replaces declared report kinds) and repoint its references.
-- **Acceptance / witness.** `grep -rn` finds no statement that `implement` is the only way, that raw SQL is refused,
-  or that a code-only change never prompts, across `docs/` and every `CLAUDE.md`; `bunx dprint check` passes.
+  code-only change never prompts (`:217-219`) and does not state the own-target read's action semantics.
+- **Verify first.** This sprint's Decisions; ADR-0017 is WU5's.
+- **Scope.** ADR-0012 in place: the staged kit, the declarative shell with declared off-road fields, colocated handlers
+  and the slice, the paved road, raw SQL as legitimate, deviations as a review signal, and declared operations, RLS and
+  the isolated host in Alternatives. ADR-0050 §1 and §3: the declared fields and migration deviations in the snapshot,
+  their classification, and the own-target read (a capability reads its row except columns of another action). Both
+  state that until WU12 lands the name rules are defense in depth only. Update `docs/reference/application-runtime.md`.
+  Delete backlog 104 (raw SQL replaces declared report kinds) and repoint its references.
+- **Acceptance / witness.** In operative docs (`docs/reference/`, `docs/decisions/` outside Alternatives, every
+  `CLAUDE.md`, the skill; not `docs/archive/`), `grep -rn` finds no statement that `implement` is the only way, that raw
+  SQL is refused, or that a code-only change never prompts; `bunx dprint check` passes.
 - **Touch points.** `docs/decisions/{0012-fabrika-app-runtime.md,0050-approved-access.md,README.md}`,
-  `docs/reference/application-runtime.md`, `docs/backlog/{104-…md,README.md}`.
+  `docs/reference/application-runtime.md` (text around WU3's matrix), `docs/backlog/{104-…md,README.md}`.
 
 ### WU10 — Agent skills (M)
 
-- **Problem.** The skill is one 162-line file of rules in refusal order, with no version
-  (`packages/app/skill/SKILL.md:1-9`), and dogfood findings 14–16 are gaps in it.
-- **Verify first.** Who reads it: the builder install, `get_app_rules`, `renderAgentsFile` and their tests
-  (`agent-skill.test.ts`).
+- **Problem.** The skill is one 162-line file in refusal order, with no version (`SKILL.md:1-9`); the builder copies
+  only `SKILL.md`; dogfood findings 14–16 are gaps in it.
+- **Verify first.** Every reader: the builder install (`packages/builder/cli/src/inject-skills.ts`), `get_app_rules`,
+  `renderAgentsFile` and `agent-skill.test.ts`.
 - **Scope.** **One skill, `fabrika-app`, with focused reference files**, not several skills: one trigger and one
-  version to match, the MCP tool and `AGENTS.md` need one body anyway, and the always-loaded part stays short while the
-  rest loads on demand. `skill/SKILL.md` (at most ~120 lines): the paved road first, the architecture, the loop
-  (edit → `fabrika db codegen` → `test-scaffold` → typecheck → `fabrika-check`), what a deviation is and when raw SQL is
-  fine, and when to ask the human. `skill/references/`: `endpoint.md`, `table-and-migration.md`, `jobs.md`, `files.md`,
-  `webhooks-links-connectors.md`, `errors.md` (reading checker findings and type errors). Frontmatter `version` equals
-  `@fabrika/app`'s version; the builder installs the skill from the application's installed `@fabrika/app`;
-  `get_app_rules` takes an optional topic, states its version and warns when the workspace pins another.
-  `renderAgentsFile` renders all of it. Fix dogfood findings 14 (`admin` is reserved), 15 (`fileTableSql` key and
-  chain shape) and 16 (the test seed's limits).
-- **Acceptance / witness.** `agent-skill.test.ts`: version equals `package.json`, every reference file is rendered,
-  `examples/zerops-app/AGENTS.md` is the rendered file; every code block in the skill type-checks against the workspace
-  (a test compiles them). WU11's fresh-agent trial uses only these files.
+  version to match, the MCP tool and `AGENTS.md` need one body anyway, and the always-loaded part stays short.
+  `skill/SKILL.md` (at most ~120 lines): the paved road first, the architecture, the loop (edit → `fabrika db codegen`
+  → `test-scaffold` → typecheck → `fabrika-check`), the declared off-road fields and when raw SQL is fine, "data work
+  first, external calls after", the one `ConflictError`, when to ask the human, and that the name rules are defense in
+  depth until WU12. `skill/references/`: `endpoint.md` (with WU3's API matrix), `table-and-migration.md`, `jobs.md`,
+  `files.md`, `webhooks-links-connectors.md`, `errors.md` (checker findings and type errors). Frontmatter `version`
+  equals `@fabrika/app`'s; the builder installs every file from the application's pinned `@fabrika/app`;
+  `get_app_rules` takes an optional topic, states its version and warns when the workspace pins another;
+  `renderAgentsFile` renders all of it. Fix dogfood findings 14 (`admin` is reserved), 15 (`fileTableSql` key and chain
+  shape) and 16 (the seed's limits).
+- **Acceptance / witness.** `agent-skill.test.ts`: version equals `package.json`; every reference file is rendered and
+  installed from the application-pinned package (a builder test over a fixture app); `examples/zerops-app/AGENTS.md`
+  is the rendered file; every code block type-checks against the workspace. WU11's fresh-agent trial uses only these files.
 - **Touch points.** `packages/app/skill/`, `packages/app/src/agent-skill.ts`, `packages/app/src/__tests__/agent-skill.test.ts`,
-  `packages/control/src/mcp/handler.ts` (`get_app_rules` only), the builder's skill install (`packages/builder/cli/src/inject-skills.ts`),
+  `packages/builder/cli/src/inject-skills.ts` and its test, `packages/control/src/mcp/handler.ts` (`get_app_rules` only),
   `examples/zerops-app/AGENTS.md`, `packages/app/CLAUDE.md` (the skill invariant).
 
 ### WU11 — Acceptance: the CRM in the new form (L)
@@ -348,49 +454,64 @@ reopen: r.mutation({ input: ReopenDeal, output: Done, access: { action: 'deals.w
 - **Problem.** No unit alone proves the road is shorter, learnable from the skill, and honest about deviations.
 - **Verify first.** The dogfood baseline counts (Evidence); the dogfood CRM's 30 endpoints, job, files and SPA.
 - **Scope.**
-  1. `examples/crm`: the dogfood CRM rewritten to WU1's structure with the same surface, plus spike exercises
-     `deals.reopen` (precondition enforced with `getForUpdate`) and `deals.source`, and a pipeline report on `ctx.sql`.
-     Add it to `test:examples`.
-  2. **Counts** against the baseline, the same file classes: hand-written server lines and files. Pass: at most
-     400 lines (−25 %) and no file that only mirrors another; report migrations and tests apart.
+  1. `examples/crm`: the dogfood CRM in WU1's structure with the same surface, plus `deals.reopen` (`getForUpdate`),
+     `deals.source`, and a pipeline report on a declared `sql: 'read'`. Add it to `test:examples`.
+  2. **Counts** against the baseline, the same file classes. Pass: at most 400 hand-written server lines (−25 %) and no
+     file that only mirrors another; migrations and tests reported apart.
   3. **Fresh-agent trial**: agents that see only WU10's skill files write the CRM's endpoint groups from a feature
-     brief. Record every tsc and checker run. Pass: at most 3 runs per endpoint group, no edited generated file, no
-     loosened access to make a test pass.
-  4. **Deviation trial**: an agent asked for something off the road (an audit trigger on `deals`; a cross-scope admin
-     report) produces code the checker flags as a deviation and does not refuse. On Notes through the local stack
-     (`local:smoke` path, protected `prod`), the run parks and the approval page shows the line as "needs closer
-     review"; on the CRM, Control's reader and `classifyAccess` over the commit pair show the same line.
-- **Acceptance / witness.** `bun run test:examples` green with `examples/crm` (Postgres required); the counts, the trial
-  table and the parked run recorded in the Run log; the deviation trial's parked run seen in the dashboard
-  (agent-browser screenshot named in the log).
-- **Touch points.** `examples/crm/` (new), root `package.json` (`test:examples`), `docs/sprints/` (this Run log).
+     brief. Every tsc and checker run is recorded. Pass: at most 3 runs per endpoint group, no edited generated file,
+     no loosened access to make a test pass.
+  4. **Deviation trial**: an agent asked for something off the road (a cross-scope admin report; an audit trigger on
+     `deals`) declares `unscoped`/`sql` or writes the trigger migration; nothing is refused. On Notes through the local
+     stack (protected `prod`), the run parks and the approval page shows "needs closer review"; on the CRM, Control's
+     reader and `classifyAccess` over the commit pair show the same lines. An agent that uses `ctx.sql` without the
+     declaration gets the checker hint and a runtime refusal.
+- **Acceptance / witness.** `bun run test:examples` green with `examples/crm` (Postgres required); counts, trial table
+  and parked run in the Run log; the parked run seen in the dashboard (agent-browser screenshot named in the log).
+- **Touch points.** `examples/crm/` (new), root `package.json` (`test:examples`), this sprint's Run log.
+
+### WU12 — A least-privileged database role per application (L)
+
+- **Problem.** Migrations and the runtime share one credential that may own far more than `app_<id>`
+  ([backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md)). With raw SQL legitimate,
+  the name rules of WU5 and WU6 are defense in depth; only a role bounds what a statement can do.
+- **Verify first.** The credential `provider-zerops` writes (`FABRIKA_APP_DATABASE_URL`); the local stack's and the
+  test backends' superuser connections.
+- **Scope.** Backlog 110's approach: a role family per application that owns `app_<id>` and nothing else (no superuser,
+  `CREATEROLE`, `CREATEDB`, `pg_execute_server_program`, `pg_read_server_files`, no other membership); a migration role
+  with DDL and a runtime role with DML only; the runner and the runtime use their own; the local stack and the test
+  databases exercise the roles. Delete backlog 110 when it ships.
+- **Acceptance / witness.** A Postgres test: the application role cannot update a catalog table, call `lo_unlink` on an
+  object it does not own, create a function in another schema, run `COPY … PROGRAM` or read another application's
+  schema; the runtime role cannot create a trigger; `ctx.sql` on the runtime role cannot write `fabrika_migrations`.
+- **Touch points.** `packages/provider-zerops/` (the credentials it writes), `packages/local-stack/` (roles; not the
+  Notes fixture), `packages/platform-node/src/application-postgres-migrations.ts`, `packages/db/src/testing.ts`
+  (test database role), `docs/decisions/0017-service-owned-postgres-migrations.md` (the role paragraph),
+  `docs/backlog/{110-…md,README.md}`.
 
 ## Out of scope (explicit)
 
-- **Declared operations** (`c.read`/`c.update` with `when`/`set`/`inc`): rejected by the owner as too declarative,
-  although its spike passed. Business logic is TypeScript.
+- **Declared operations** (`c.read`/`c.update` with `when`/`set`/`inc`): rejected by the owner as too declarative.
+  Business logic is TypeScript; only the reach off the road is declared.
 - **Row-level security** and any attempt to make data security statically provable: decision 1.
-- **An isolated handler host or a platform data executor**: decision 1; it stays the long-term hard boundary in
-  ADR-0012's Alternatives.
-- **One literal column catalogue in `schema.generated.ts`**: the file is generated and `codegen --verify` guards it,
-  so its two declarations (interfaces and `columns`) are not a fact an agent repeats.
-- **Deriving zod inputs from rows**: spike A lost bounds silently and made a migration an API change. Inputs stay
-  written; `fromRow` covers outputs.
+- **An isolated handler host or a platform data executor**: decision 1; the long-term hard boundary in ADR-0012's
+  Alternatives.
+- **A syntactic detector as the boundary**: destructuring, helper modules and `ctx[k]` evade it. It stays a hint.
+- **One literal column catalogue in `schema.generated.ts`**: the file is generated and `codegen --verify` guards it.
+- **Deriving zod inputs from rows**: spike A lost bounds and made a migration an API change. `fromRow` covers outputs.
 - **File-based routing** (spike C) and **entity sugar** (spike D).
-- **A least-privileged database role** ([backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md)).
-  WU5's and WU6's refusals are name rules, not privileges. Raising raw SQL to a legitimate tool raises 110's priority;
-  it is still large and provider-wide.
+- **`ctx.jobs.enqueue`**: application jobs are cron only and have no queue (WU3 §5).
+- **Form inbox reads** and **list writes on the road** (`over` mutations): `unscoped` or `sql` cover them, declared.
 - **Two-capability access** for `move` and merges ([backlog 97](../backlog/97-the-generated-tests-have-no-move-case.md)).
 - **Destructive-migration rules** ([backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)).
 - **A data layer on Cloudflare**: still Bun and Postgres only.
-- **Dogfood findings not addressed:** 1 (unpublished packages: the release path), 2 (a second app on the local
-  stack: WU11 uses Notes instead), 6 (a membership stand-in for the endpoint test), 7 (the seed and `CHECK`
-  columns), 8 (a deploy failing before the build gives no reason), 9 (own rows only), 10 (listing attachments), 11
-  (listing members without `members.manage`), 12 (author tests for jobs), 13 (`fabrika dev`), 17 (builder and MCP
-  locally), 18 (the template's `bun.lock`), 19 (refusal texts), 20 (the checker reads dev scripts: reading less is a
-  place to hide code and needs its own decision), 21 (smaller items). WU10 fixes 14–16.
-- The 105/106/109 hardening (frozen `Database`, the per-`boot` mint, the checker's load rules) and 107 (input domains
-  in the approval diff) stay as they are; no unit relaxes them.
+- **Dogfood findings not addressed:** 1 (unpublished packages), 2 (a second app on the local stack: WU11 uses Notes),
+  6 (a membership stand-in for the endpoint test), 7 (the seed and `CHECK` columns), 8 (a deploy failing before the
+  build gives no reason), 9 (own rows only), 10 (listing attachments), 11 (listing members without `members.manage`),
+  12 (author tests for jobs), 13 (`fabrika dev`), 17 (builder and MCP locally), 18 (the template's `bun.lock`), 19
+  (refusal texts), 20 (the checker reads dev scripts: reading less is a place to hide code), 21 (smaller items).
+  WU10 fixes 14–16.
+- The 105/106/109 hardening and 107 stay as they are; no unit relaxes them.
 
 ## Decisions
 
@@ -402,54 +523,61 @@ Owner decisions, binding (condensed):
 2. **The platform protects at the high level:** the proxy admits only authorized calls (ADR-0022); a human approves
    every widening on a protected environment (ADR-0050). What a handler does with data is the code's and the review's.
 3. **A paved road with strong guarantees:** the mini-ORM scoped by the endpoint's capability, which reads its own
-   target; `expectVersion` and `getForUpdate`; `fromRow`; table scope and action names derived from the contract;
+   target; `expectVersion` and `getForUpdate`; `fromRow`; table scope and action names derived from the vocabulary;
    `.handle()` colocated with the endpoint and sliced off by the reader; no mirrored `implement` tree.
 4. **Raw SQL is legitimate**: `ctx.sql`, parametrized, in the endpoint's transaction.
-5. **Deviation is a review signal, not a refusal.** Static analysis detects raw SQL, unscoped queries, writes outside
-   the endpoint's target and leaving the architecture. Deviations are part of the reviewed snapshot; a new one waits
-   for a human on a protected environment and the console marks it "needs closer review". Hard refusals stay only for
-   platform integrity: secrets, framework internals, escaping the schema or the transaction.
-6. **Migration SQL**: refuse only what escapes the schema, the transaction or the platform; database code and unusual
-   expressions become deviations.
+5. **Deviation is a review signal, not a refusal.** Hard refusals stay only for platform integrity: secrets,
+   framework internals and `fabrika_*` objects, escaping the schema or the transaction.
+6. **Migration SQL**: refuse only escapes; database code becomes a deviation.
 7. The 105/106/109 hardening and 107 stay.
-8. **The application architecture** is prescribed in a reference document (WU1); examples and the CRM follow it.
+8. **The application architecture** is a reference document (WU1); the examples and the CRM follow it.
 9. **Agent skills** ship in `@fabrika/app` and are the only text the fresh-agent trial sees (WU10).
+
+Revision decisions (after two independent reviews), binding:
+
+10. **The staged kit lands first** (WU0): vocabulary → tables → kit → groups → contract → `src/app.ts`, public
+    signatures with type tests and stubs, so WU2–WU4 implement against fixed signatures.
+11. **Off-road reach is declared in the shell** (`sql`, `unscoped`, `connect`, link issuing). The runtime builds each
+    handle only for the declaring site and enforces the mode. The declarations are the deviations; Control keeps
+    reading only the shell.
+12. **`fabrika_*` objects are reserved**: refused in `ctx.sql`, in migrations, in any body, and in `unscoped`.
+13. **A function allowlist, not name rules**, for bodies, expressions and `ctx.sql` text.
+14. **Backlog 110 is pulled in** (WU12). Until it lands the name rules are defense in depth only.
+15. **The transaction is the invocation's** (WU3 §4), with the stated semantics for jobs, webhooks and external effects.
+16. **Own-target read hides every column of another action**, in data and type.
+17. **The snapshot holds only data-reach deviations**; structure findings are checker hints.
 
 Resolved in this sprint:
 
-- **The catalog check is the runtime witness, not the detector.** Control decides approval from the commit and
-  cannot reach the database, so the static classifier (WU5) feeds the snapshot. The catalog check refuses integrity
-  escapes and database objects no migration declares, before the commit and at every start.
-- **Function bodies are opaque**, so a body may hold no dynamic `EXECUTE` and no name outside the schema; a function
-  is never `SECURITY DEFINER`. These are refusals because they can escape the schema.
-- **`ctx.db.unscoped`** exists so that a cross-scope need has a typed, guarded form; agents otherwise reach for raw
-  SQL. It is a deviation like `ctx.sql`.
-- **A deviation's key has no line number**, so moving code does not re-prompt; the site is the endpoint, the job or the
-  top-level declaration.
-- **The snapshot digest covers deviations only when there are some**, so approvals stored before this sprint stay valid.
+- **The catalog check is the runtime witness, not the detector**: Control decides approval from the commit and cannot
+  reach the database. It checks the database against the object manifest the migration files declare.
+- **Domains stay refused** (WU5 §7).
+- **No `ctx.jobs.enqueue`** (WU3 §5).
 - **One skill with reference files** (WU10), not several skills.
-- **The ADR text follows the code**: ADR-0012 and ADR-0050 are rewritten once (WU9); ADR-0017 with WU5. Until then this
+- **The ADR text follows the code**: ADR-0012 and ADR-0050 once (WU9); ADR-0017 with WU5 and WU12. Until then this
   sprint outranks them (`docs/CLAUDE.md` precedence).
 - The idea document is deleted and its still-valid evidence is above.
 
 ## Sequencing
 
-Each unit runs in its own worktree. Units in one step share no source file. Each unit edits only its own packages'
-`CLAUDE.md` sections; the integrator merges those.
+Each unit runs in its own worktree. Units in one step share no source file; where they share a test file, the rows
+below say who owns which cases. Each unit edits only its own packages' `CLAUDE.md` sections; the integrator merges them.
 
-| Step | Units         | Parallel | Why this order                                                                                                   |
-| ---- | ------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| 1    | WU1, WU5      | yes      | the architecture and the deviation seam; WU5 is `platform-node` only                                             |
-| 2    | WU2, WU3, WU4 | yes      | `policy.ts`/`reader/tables.ts` · `store.ts`/`implement/{boot,dispatch,types}` · `contract/`/`implement.ts`/slice |
-| 3    | WU6, WU9      | yes      | `ctx.sql` needs WU3's transaction and WU5's lexer; WU9 is docs only                                              |
-| 4    | WU7, WU8      | yes      | WU7 needs WU1, WU4–WU6; WU8 needs WU2–WU4 and WU6; disjoint territories                                          |
-| 5    | WU10          | —        | the skill describes what is built; it regenerates WU8's `AGENTS.md`                                              |
-| 6    | WU11          | —        | the CRM, the counts and both trials                                                                              |
+| Step | Units               | Why this order                                                                                                                                             |
+| ---- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | WU0 (+ WU5 running) | the signatures every later unit implements; WU5 is `platform-node`, `codegen` and the CLI only                                                             |
+| 1    | WU1                 | the layout and the hint severity, on WU0's file order                                                                                                      |
+| 2    | WU2, WU3, WU4       | `policy.ts`/`reader/tables.ts` · `store.ts`/`guard.ts`/`orm.ts`/`implement/{boot,dispatch,types,webhook}` · `contract/{kit,group,define}`/`serve.ts`/slice |
+| 3    | WU6, WU12           | `ctx.sql` on WU3's session and WU5's lexer · the role on WU5's runner                                                                                      |
+| 4    | WU7, WU8 (+ WU12)   | WU7 needs WU4–WU6; WU8 needs WU2–WU4 and WU6; WU12 may still run, outside both territories                                                                 |
+| 5    | WU9, WU10           | the ADRs and the skill describe what is built                                                                                                              |
+| 6    | WU11                | the CRM, the counts and both trials                                                                                                                        |
 
-Seams fixed before step 2: WU1's `Finding`/deviation key; the `ctx.db` names (target shape above, final in WU3's first
-commit, which WU4 imports and does not edit); WU5's `classifyMigration` signature. WU4 rebases on WU3's `types.ts`
-before it lands. WU7 and WU10 both touch `packages/control/src/mcp/handler.ts` in different tools, in different steps.
-The active [MCP authoring sprint](sprint-2026-10-07-mcp-authoring.md) also edits that file; coordinate there.
+Shared tests in step 2: `differential.test.ts` — WU0 writes the skeletons, WU2 owns the table cases, WU4 the slice
+cases; type fixtures — WU3 owns `orm-mistakes/`, WU4 `colocated-mistakes/`, WU0 `kit-mistakes/`; the scale budget is
+rerun after WU3. WU7 and WU10 touch different tools of `packages/control/src/mcp/handler.ts`, in different steps; the
+active [MCP authoring sprint](sprint-2026-10-07-mcp-authoring.md) also edits that file, so coordinate there. WU8 touches
+only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that package.
 
 ## Run log
 
