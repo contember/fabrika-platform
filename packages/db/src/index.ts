@@ -14,10 +14,40 @@ export type {
 } from './description'
 export { CapabilityError, ConflictError, LeaseLostError, NotFoundError, PolicyError, QueryRefusedError } from './errors'
 export { FILE_TABLE_PREFIX, type FileColumn, type FileColumnType, type FileOwner, fileTableName, fileTableSql } from './file-table-sql'
+export type {
+	AnyDbIndex,
+	ChildRows,
+	ContainedRows,
+	CountOptions,
+	DataKind,
+	DbIndex,
+	IndexedTable,
+	ListOptions,
+	ListPage,
+	NoUnscoped,
+	OrderTerm,
+	ReferenceRows,
+	ReferenceTables,
+	RowFor,
+	Saved,
+	ScopeTarget,
+	TargetForm,
+	TargetRow,
+	Unavailable,
+	UnownedTarget,
+	UnscopedDeclaration,
+	UnscopedMode,
+	UnscopedRows,
+	UnscopedTables,
+	VersionArguments,
+	WithinRows,
+	WithinTables,
+} from './orm-types'
 export {
 	type ChildPolicy,
 	type ChildScope,
 	type ColumnList,
+	type DefinePolicies,
 	defineTables,
 	type DimensionPolicy,
 	type DimensionScope,
@@ -33,8 +63,12 @@ export {
 	type TableActions,
 	type TablePolicy,
 	Tables,
+	type TableVocabulary,
 	type UpdateValues,
 	type VersionColumn,
+	type VocabularyAction,
+	type VocabularyDimension,
+	type VocabularyPolicyMap,
 } from './policy'
 export {
 	type AggregateRow,

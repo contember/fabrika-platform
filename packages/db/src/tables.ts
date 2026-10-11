@@ -6,10 +6,40 @@ import { freeze, namesOf, ownKeys, setOwn } from './builtins'
 import { modelOf, type ScopeModel, type TableModel, tableModels, type Tables } from './policy'
 
 export { PolicyError } from './errors'
+export type {
+	AnyDbIndex,
+	ChildRows,
+	ContainedRows,
+	CountOptions,
+	DataKind,
+	DbIndex,
+	IndexedTable,
+	ListOptions,
+	ListPage,
+	NoUnscoped,
+	OrderTerm,
+	ReferenceRows,
+	ReferenceTables,
+	RowFor,
+	Saved,
+	ScopeTarget,
+	TargetForm,
+	TargetRow,
+	Unavailable,
+	UnownedTarget,
+	UnscopedDeclaration,
+	UnscopedMode,
+	UnscopedRows,
+	UnscopedTables,
+	VersionArguments,
+	WithinRows,
+	WithinTables,
+} from './orm-types'
 export {
 	type ChildPolicy,
 	type ChildScope,
 	type ColumnList,
+	type DefinePolicies,
 	defineTables,
 	type DimensionPolicy,
 	type DimensionScope,
@@ -23,7 +53,11 @@ export {
 	type TableActions,
 	type TablePolicy,
 	Tables,
+	type TableVocabulary,
 	type VersionColumn,
+	type VocabularyAction,
+	type VocabularyDimension,
+	type VocabularyPolicyMap,
 } from './policy'
 
 /** Every table's policy in the form the contract artifact carries, by table name. */

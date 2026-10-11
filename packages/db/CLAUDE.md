@@ -20,6 +20,7 @@ bun test    # policy · tables · store · guard · hardening · type-attacks ·
 | `builtins.ts`         | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                              |
 | `capability.ts`       | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                               |
 | `policy.ts`           | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.                                       |
+| `orm-types.ts`        | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.           |
 | `tables.ts`           | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                          |
 | `description.ts`      | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                        |
 | `nodes.ts`            | Kysely operation nodes built from a description and a scope predicate.                                                                         |

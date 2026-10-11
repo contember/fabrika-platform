@@ -20,10 +20,10 @@ import {
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
 
-export interface DimensionScope<Col extends string> {
-	readonly dimension: string
+export interface DimensionScope<Col extends string, D extends string = string> {
+	readonly dimension: D
 	readonly key: Col
-	readonly in?: { readonly dimension: string; readonly column: Col }
+	readonly in?: { readonly dimension: D; readonly column: Col }
 }
 
 export interface ChildScope<Table extends string, Col extends string> {
@@ -66,8 +66,10 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col> {
  */
 export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
 
-export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
-	readonly scope: DimensionScope<Col>
+export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col, D extends string = string>
+	extends WritablePolicy<Col, A, V>
+{
+	readonly scope: DimensionScope<Col, D>
 }
 
 export interface ChildPolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
@@ -92,8 +94,8 @@ export interface InboxPolicy<Col extends string, A extends string> extends ReadO
 	readonly actions?: never
 }
 
-export type TablePolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> =
-	| DimensionPolicy<Col, A, V>
+export type TablePolicy<Table extends string, Col extends string, A extends string, V extends Col = Col, D extends string = string> =
+	| DimensionPolicy<Col, A, V, D>
 	| ChildPolicy<Table, Col, A, V>
 	| ReferencePolicy<Col, A>
 	| InboxPolicy<Col, A>
@@ -101,10 +103,25 @@ export type TablePolicy<Table extends string, Col extends string, A extends stri
 /** The columns a version can live in: those whose generated select type is `number`, an INTEGER (int4). */
 export type VersionColumn<Row> = { [K in keyof Row & string]: SelectType<Row[K]> extends number ? K : never }[keyof Row & string]
 
-/** Every table of the schema, and no other, maps to a policy. */
-export type PolicyMap<DB, A extends string> = {
-	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A, VersionColumn<DB[T]>>
+/** Every table of the schema, and no other, maps to a policy; `D` names the dimensions a scope may name. */
+export type PolicyMap<DB, A extends string, D extends string = string> = {
+	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A, VersionColumn<DB[T]>, D>
 }
+
+/**
+ * What `defineTables(vocabulary, columns)` reads of `@fabrika/app/contract`'s `defineVocabulary` result: the action
+ * and dimension names, and each dimension's container. `@fabrika/db` does not import `@fabrika/app`.
+ */
+export interface TableVocabulary {
+	readonly actions: { readonly [action: string]: string }
+	readonly dimensions: { readonly [dimension: string]: { readonly in?: string } }
+}
+
+export type VocabularyAction<V> = V extends { readonly actions: infer A } ? keyof A & string : never
+export type VocabularyDimension<V> = V extends { readonly dimensions: infer D } ? keyof D & string : never
+
+/** `PolicyMap` under a vocabulary: a misspelt action or dimension fails at its own line. */
+export type VocabularyPolicyMap<DB, V> = PolicyMap<DB, VocabularyAction<V>, VocabularyDimension<V>>
 
 /** The column names of every table, generated next to the schema types. */
 export type ColumnList<DB> = { readonly [T in keyof DB & string]: readonly (keyof DB[T] & string)[] }
@@ -186,13 +203,24 @@ export function modelOf(models: TableModels, table: string): TableModel | undefi
 	return ownEntry(models, table)
 }
 
+/** Takes the policies of exactly the tables of the schema. */
+export type DefinePolicies<DB, Policies> = <const P extends Policies>(
+	policies: P & { readonly [K in Exclude<keyof P, keyof DB>]: never },
+) => Tables<DB, P>
+
 /**
  * Declares the access policy of every table. `columns` is the generated column list; the policies are a literal.
- * `defineTables<DB, Action>(columns)({ notes: { scope: …, actions: … }, … })`.
+ * The application form names the vocabulary, so the action and dimension names are its own:
+ * `defineTables<DB, typeof vocabulary>(vocabulary, columns)({ notes: { scope: …, actions: … }, … })`. The vocabulary is
+ * read for its types only, so far: each policy still states its containment. `DB` is explicit because the generated
+ * column list carries the column names, not their types.
  */
-export function defineTables<DB, A extends string>(columns: ColumnList<DB>) {
-	return <const P extends PolicyMap<DB, A>>(policies: P & { readonly [K in Exclude<keyof P, keyof DB>]: never }): Tables<DB, P> =>
-		new Tables(parseTables(columns, policies))
+export function defineTables<DB, V extends TableVocabulary>(vocabulary: V, columns: ColumnList<DB>): DefinePolicies<DB, VocabularyPolicyMap<DB, V>>
+/** The form that names the action union by hand: `defineTables<DB, Action>(columns)({ … })`. */
+export function defineTables<DB, A extends string>(columns: ColumnList<DB>): DefinePolicies<DB, PolicyMap<DB, A>>
+export function defineTables<DB, P>(first: unknown, second?: unknown): (policies: P) => Tables<DB, P> {
+	const columns = second === undefined ? first : second
+	return (policies) => new Tables(parseTables(columns, policies))
 }
 
 /**
