@@ -689,3 +689,24 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   runtime role's grants, verifies effective privileges, and refuses foreign grants and callable SECURITY DEFINER
   routines; the lock wait is bounded at 5 min. Residual (ADR-0017): same-user processes can read the launcher's
   `/proc/<pid>/environ`; large objects and advisory locks stay shared.
+- **WU2, derivation.** `defineTables(vocabulary, columns)` and `readTables(columns, policies, vocabulary)` derive every
+  key (`id`), container (the vocabulary's), container column (`<container>_id`, else `in: { column }`) and child
+  column (`<parent dimension>_id`) and chain (the parent's) in the one parse; a stated value must agree, and a default
+  the table has no column for is refused with the field to state. The db test fixture now uses the derived form, so
+  every store and Postgres suite runs on derived models.
+- **WU2, SIGNATURE CHANGE (mandated: the old form is refused).** The `defineTables<DB, Action>(columns)` overload and
+  its types `PolicyMap`, `DefinePolicies` and `TablePolicy` are removed; a one-argument call throws `PolicyError`.
+  `readTables`' `vocabulary` is required. The reader refuses any `defineTables` call without two arguments.
+- **WU2, SIGNATURE CHANGE (additive, defaulted).** `VocabularyPolicyMap<DB, V, P = unknown>` and
+  `VocabularyTablePolicy<…, S = unknown>` take the policies as written; `DefineVocabularyPolicies` constrains
+  `P extends VocabularyPolicyMap<DB, V, P>`. Each table's form is picked by the scope it states, so a misspelt
+  dimension is reported against all the vocabulary's dimensions ("Did you mean"), and a missing `key` or `in` names
+  `NamesItsKey` / `NamesItsContainerColumn` in two lines. `kit-mistakes/12` now passes the plain rule. `kit-scale`:
+  354,239 instantiations. New types: `TableInsert<typeof tables, T>` and `TableUpdate<typeof tables, T>`.
+- **WU2, outside the listed touch points.** `examples/zerops-app` and `packages/cli`'s `isolation-app` fixture gained
+  `src/vocabulary.ts` (the contract is `defineContract(vocabulary, …)`), the skill's table rules and the example's
+  `AGENTS.md` describe the derived form, and `packages/local-stack`'s `manifest.json` is re-pinned; the agent change
+  patch is unchanged and applies with offsets. WU8 still owns the example's rewrite.
+- **WU2, the WU1 ask.** `fixtures/architecture-app` needs the slice reader (`app.contract`), so its registration as a
+  differential fixture stays WU4's. Its tables were not a valid policy (`deals` lacked `org_id`, its column list
+  carried no row types); the schema, migration and column list are fixed, and a differential table case reads them.
