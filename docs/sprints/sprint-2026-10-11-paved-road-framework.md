@@ -640,10 +640,16 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   instantiations, `implement-scale` 510,959 (budget 1,000,000 each).
 - **WU0, measurement.** `kit-scale.test.ts`: 200 endpoints in 10 group modules, every handler using its `ctx.db`,
   ~333,000 instantiations — 35 % under today's `implement` over the same count.
-- **WU0, deviation: `defineTables<DB, typeof vocabulary>(vocabulary, columns)`.** `DB` stays explicit: the generated
-  column list is `as const satisfies ColumnList<DB>`, so it carries names, not column types, and TS has no partial
-  type-argument inference. Codegen is out of scope (WU5's file). The vocabulary is type-only until WU2 derives
-  containment from it; the old `defineTables<DB, Action>(columns)` form is still accepted, for WU2 to refuse.
+- **WU0, codegen: the column list carries the row types.** `fabrika db codegen` emits
+  `export const columns: TypedColumnList<DB>` (a type-only brand), so `defineTables(vocabulary, columns)` takes no type
+  argument and a hand-written list makes the builder an `Unavailable`. The edit is the emitted declaration only (WU5
+  owns the rest of `codegen.ts`). Every committed generated file is regenerated, the Notes example included, so the
+  local stack's agent-change patch and `fixtures/source/manifest.json` are regenerated too (`fixtures:pin`).
+- **WU0, frozen table types.** The vocabulary form's authoring types take the derived forms (`key` defaults to `id`,
+  the container and `<container>_id` from the vocabulary, a child's `column` and chain), and `defineTables` answers
+  `NormalizedPolicies`, which `DbIndex` reads. Until WU2 derives at runtime, `defineTables` and
+  `readTables(columns, policies, vocabulary)` throw `… is not implemented (WU2)` for an omitted key, container or
+  chain, and refuse a container the vocabulary contradicts.
 - **WU0, deviation: the reader reads the vocabulary form now.** The shared fixtures migrated to `src/vocabulary.ts`
   and `defineContract(vocabulary, …)`, so `rules/literal.ts` and `reader/value.ts` know `defineVocabulary` (one call
   reads as its object) and `reader/tables.ts` takes `(vocabulary, columns)`. WU2 and WU4 build on that.
@@ -654,6 +660,8 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   `ctx.connect` without the contract. Dependencies are `defineDeps(build)` → `AppDeps<D>`, read with `get()` and
   passed to `serve(contract, { database, deps })`, since handlers are typed before `serve`. Jobs and webhooks bind a
   capability with `ctx.db.on(ref)`, `.in(ref)`, `.over(within)`; a job writes inside `ctx.transaction((tx) => …)`.
-- **WU0, left to WU4.** A missing `.handle` fails at its line in one line, but prints the builder's type; a typo in an
-  access form also errors where the handler uses `ctx` (the form falls back to its constraint). The link mount an
-  endpoint `issues` is not checked against the contract's mounts in the types.
+- **WU0, after review.** A missing `.handle` is refused by `c.rpc` (naming `<group>.<endpoint>`), not by the group: an
+  options-first call fixes the callback's type before it can be checked, and refusing at the endpoint would print the
+  builder's whole type. A refused access form keeps its one-line error; the handler's `ctx.db.target` then names the
+  refusal (one follow-up line) instead of a union of every form. A widened capability type reads no column of another
+  action. Left to WU4: the link mount an endpoint `issues` is not checked against the contract's mounts in the types.
