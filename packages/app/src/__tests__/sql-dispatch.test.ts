@@ -225,9 +225,11 @@ describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
 	test("a 'read' site's write is refused, and nothing is written", async () => {
 		const { app } = start()
 		const id = await seedDeal()
-		const log = await failed(async () => send(app, '/api/deals.retitle', { token: await reader(), body: { id, title: 'written', expectVersion: 1 } }))
-		// `logFailure` names a data-layer error, never its message; raw-sql.test.ts asserts the refusal's text.
-		expect(log).toContain('api.deals.retitle: QueryRefusedError thrown')
+		const title = 'a-bound-value-never-logged'
+		const log = await failed(async () => send(app, '/api/deals.retitle', { token: await reader(), body: { id, title, expectVersion: 1 } }))
+		expect(log).toContain("api.deals.retitle: ctx.sql: sql: 'read' runs queries only, and the statement holds UPDATE at line 1")
+		expect(log).not.toContain(title)
+		expect(log).not.toContain(id)
 		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
 	})
 

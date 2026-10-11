@@ -382,8 +382,9 @@ child chain from the vocabulary (`packages/db/CLAUDE.md`).
   `ConflictError` are read by `name` (404, 409). Every 5xx and every refused
   capability answers the fixed `Internal error` (or `Service unavailable` for 503)
   with no metadata, because a message may quote a connection string. The server log
-  gets one line: a framework-authored message (`ServerFault`,
-  `CapabilityRefusedError`) or only the error's name, never the error object.
+  gets one line: a framework-authored message (`ServerFault`, `CapabilityRefusedError`, the data layer's
+  `QueryRefusedError`, which names what was refused and never a bound value) or only the error's name, never the
+  error object.
 - **`boot` refuses to start rather than answer nothing**: a file collection with `link: true`,
   a webhook bound to `app`, an SPA or a link mount without an asset server, a link mount
   whose dimension no table owns, a form or webhook without a `scoped(tables)` layer, a

@@ -156,7 +156,7 @@ describe.skipIf(!hasPostgres)('ctx.db through the pipeline', () => {
 		const { app } = start()
 		const id = await seedDeal()
 		const log = await failed(async () => send(app, '/api/deals.retitle', { token: await reader(), body: { id, title: 'written', expectVersion: 1 } }))
-		expect(log).toContain('QueryRefusedError')
+		expect(log).toContain("deals is declared unscoped: 'read', so update needs unscoped: { deals: 'write' }")
 		expect(await deal(id)).toEqual({ title: 'Deal', stage: 'won', version: 1 })
 	})
 

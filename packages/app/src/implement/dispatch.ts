@@ -25,7 +25,7 @@ import {
 	scopedValues,
 } from '@fabrika/auth-core'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
-import type { DataAccess, FrameworkTables } from '@fabrika/db/framework'
+import { type DataAccess, type FrameworkTables, QueryRefusedError } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
@@ -792,11 +792,12 @@ function serverError(status: number): Response {
 }
 
 /**
- * A short line for the server log, never the error object: a framework-authored message, or only the name of
- * anything else, whose message the application or a driver wrote.
+ * A short line for the server log, never the error object: a framework-authored message (a data-layer refusal's names
+ * what was refused, never a value), or only the name of anything else, whose message the application or a driver wrote.
  */
 function logFailure(where: string, error: unknown): void {
 	const detail = error instanceof ServerFault || error instanceof CapabilityRefusedError || error instanceof CapabilityLimitError
+			|| error instanceof QueryRefusedError
 		? error.message
 		: `${error instanceof Error ? error.name : typeof error} thrown`
 	console.error(`fabrika: ${where}: ${detail}`)
