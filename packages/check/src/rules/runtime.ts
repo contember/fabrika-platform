@@ -227,6 +227,21 @@ const checkComputedLoad = (node: AstNode, context: SourceContext): void => {
 	context.report(node, 'unchecked-import', `${load.what} of a computed specifier loads a module the checker cannot name`, ALLOWED_LOAD)
 }
 
+const LOADER_METHODS = new Set(['call', 'apply', 'bind'])
+
+/** A loader invoked indirectly, `require.call(…)` or `Reflect.apply(require, …)`: references.ts reads direct calls only. */
+const checkIndirectLoad = (node: AstNode, path: readonly string[] | undefined, context: SourceContext): void => {
+	const callee = child(node, 'callee')
+	const object = callee?.type === 'MemberExpression' ? child(callee, 'object') : undefined
+	const method = callee?.type === 'MemberExpression' ? staticKey(callee, 'property') : undefined
+	const loader = method !== undefined && LOADER_METHODS.has(method) && isRequire(object) ? object : undefined
+	const applied = pathIs(path, 'Reflect', 'apply') && isRequire(argumentAt(node, 0)) ? argumentAt(node, 0) : undefined
+	const reached = loader ?? applied
+	if (reached === undefined) return
+	const name = `${memberPath(reached)?.join('.') ?? 'require'}${loader === undefined ? ' through Reflect.apply' : `.${method}`}`
+	context.report(node, 'unchecked-import', `${name} loads a module the checker does not follow`, ALLOWED_LOAD)
+}
+
 /** They turn a specifier into a module file, or reach the loaded modules: what a load by path or URL starts from. */
 const RESOLVERS = new Set(['import.meta.resolve', 'import.meta.resolveSync', 'require.resolve', 'require.cache', 'Bun.resolve', 'Bun.resolveSync'])
 
@@ -234,6 +249,7 @@ const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: Source
 	checkComputedLoad(node, context)
 	const callee = child(node, 'callee')
 	const path = callee === undefined ? undefined : globalPath(callee)
+	if (node.type === 'CallExpression') checkIndirectLoad(node, path, context)
 	if (path === undefined) return
 	checkDynamicCode(node, path, context)
 	if (node.type !== 'CallExpression') return
@@ -248,6 +264,14 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 	const property = staticKey(node, 'property')
 	const name = path?.join('.') ?? ''
 	if (RESOLVERS.has(name)) context.report(node, 'unchecked-import', `${name} names a module by its file, past what the checker reads`, ALLOWED_LOAD)
+	if (name === 'process.getBuiltinModule') {
+		context.report(
+			node,
+			'unchecked-import',
+			'process.getBuiltinModule loads a built-in module past the import rules (createRequire among them)',
+			ALLOWED_LOAD,
+		)
+	}
 	const bunMember = path?.length === 2 && path[0] === 'Bun' ? FORBIDDEN_BUN_MEMBERS.get(path[1] ?? '') : undefined
 	if (bunMember !== undefined) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
 	if (pathIs(path, 'eval') && (memberPath(node)?.length ?? 0) > 1) context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)

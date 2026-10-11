@@ -122,7 +122,7 @@ contract or `src/db/tables.ts` that is not a literal; database drivers, S3 clien
 `child_process`; `Bun.sql`, `Bun.serve`, `Bun.spawn`; raw SQL; `as` casts other than `as const`; `any`;
 `@ts-ignore`, `@ts-expect-error`, `biome-ignore`, `eslint-disable`; `Ref` or `Within` widened with `string`;
 prototype writes; writes to a member of a `@fabrika/*` or `zod` value; `import()` or `require()` of a computed
-specifier, `import.meta.resolve` and `node:module`; `process.env` and `Bun.env`; `import.meta.env` other than `FABRIKA_PUBLIC_*`; `fetch` of a
+specifier, `import.meta.resolve`, `node:module` and `process.getBuiltinModule`; `process.env` and `Bun.env`; `import.meta.env` other than `FABRIKA_PUBLIC_*`; `fetch` of a
 fixed absolute URL; a `px_` key in a string; client-supplied identity fields; logging errors, requests or headers;
 `innerHTML` and `dangerouslySetInnerHTML`; `eval` and `new Function`; misnamed migrations; `.skip`, `.only` and
 tests without an assertion; edited, missing or stale generated tests; `mock.module` of `bun:test` or `@fabrika/*`;

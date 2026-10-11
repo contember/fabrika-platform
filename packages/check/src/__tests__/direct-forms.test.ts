@@ -317,6 +317,32 @@ const refused: readonly DirectForm[] = [
 		],
 	},
 	{
+		name: 'a loader called through call, apply, bind or Reflect.apply, and process.getBuiltinModule',
+		rule: 'unchecked-import',
+		files: {
+			'src/load.ts': [
+				"const name = ['..', 'node_modules', 'x'].join('/')",
+				'export const a = require.call(undefined, name)',
+				'export const b = import.meta.require.apply(undefined, [name])',
+				'export const c = module.require.bind(module)',
+				"export const d = require.call(undefined, '../node_modules/@fabrika/app/src/implement/capability.ts')",
+				'export const e = Reflect.apply(require, undefined, [name])',
+				"export const f = process.getBuiltinModule('module')",
+				"export const g = globalThis.process.getBuiltinModule('node:module')",
+				'',
+			].join('\n'),
+		},
+		expected: [
+			'src/load.ts:2:18',
+			'src/load.ts:3:18',
+			'src/load.ts:4:18',
+			'src/load.ts:5:18',
+			'src/load.ts:6:18',
+			'src/load.ts:7:18',
+			'src/load.ts:8:18',
+		],
+	},
+	{
 		name: 'delete on a prototype and a mutation of Object.getPrototypeOf',
 		rule: 'prototype-assignment',
 		files: {
