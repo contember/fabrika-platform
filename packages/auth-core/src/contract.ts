@@ -22,7 +22,8 @@ export interface ContractArtifact extends EndpointTable {
 	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
 	/**
 	 * The reach each site declares off the paved road, by site: an endpoint's id (a procedure or a webhook), or
-	 * `job:<name>`. Absent when no site declares any, so the digest of a contract without one stays what it was.
+	 * `job:<name>`; a site that declares nothing has no entry. Present for a contract of the staged kit, whose sites
+	 * reach only what they declare; absent for a `defineContract` one, so its digest stays what it was.
 	 */
 	readonly declared?: Readonly<Record<string, DeclaredReach>>
 }

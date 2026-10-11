@@ -135,15 +135,7 @@ export function approvedDeclaration(
 ): SiteDeclaration {
 	const before = problems.length
 	const declared = parseDeclaration(where, leaf, kind, artifact, problems)
-	const reach = artifact.declared === undefined || !Object.hasOwn(artifact.declared, site) ? undefined : artifact.declared[site]
-	const approved: SiteDeclaration = reach === undefined
-		? NO_DECLARATION
-		: Object.freeze({
-			sql: reach.sql,
-			unscoped: Object.freeze({ ...reach.unscoped }),
-			connect: Object.freeze([...reach.connect]),
-			issues: reach.issues,
-		})
+	const approved = approvedReach(site, artifact)
 	// A leaf the parse refused is reported once, for what is wrong in it.
 	if (problems.length === before && describeDeclaration(declared) !== describeDeclaration(approved)) {
 		problems.push(
@@ -153,6 +145,19 @@ export function approvedDeclaration(
 		)
 	}
 	return approved
+}
+
+/** What the approved artifact declares for `site` (an endpoint id or `job:<name>`); nothing when it holds none. */
+export function approvedReach(site: string, artifact: ContractArtifact): SiteDeclaration {
+	const reach = artifact.declared === undefined || !Object.hasOwn(artifact.declared, site) ? undefined : artifact.declared[site]
+	return reach === undefined
+		? NO_DECLARATION
+		: Object.freeze({
+			sql: reach.sql,
+			unscoped: Object.freeze({ ...reach.unscoped }),
+			connect: Object.freeze([...reach.connect]),
+			issues: reach.issues,
+		})
 }
 
 /** A declaration as one comparable line: its fields in a fixed order, its tables and connectors sorted. */

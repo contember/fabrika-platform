@@ -834,3 +834,8 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   longer boots (`kit-runtime.test.ts`). The orm fixture's shell moved to the kit form so its `retitle` declares
   `unscoped` where the digest covers it; its handlers stay the tree `app.ts` writes. A kit site needs `scoped(tables)`
   on Postgres, so `kit-runtime.test.ts`'s boot cases run against `FABRIKA_TEST_POSTGRES_URL` and skip without it.
+- **WU4 review round 2, reach by the artifact alone.** A plain-function leaf (`implement` on a kit contract) took the
+  unfiltered `defineContract` reach and issued links its endpoint never declared. The artifact's `declared` section is
+  now present for every contract with a kit site (empty included) and absent for a `defineContract` one, so `boot`
+  reads the rule from the approved artifact: a kit contract's every endpoint, leaf of any form, runs with its approved
+  declaration (`approvedReach`), and only a `siteHandler` leaf gets `ctx.db` (`kit-reach.test.ts`).

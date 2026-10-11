@@ -282,7 +282,13 @@ vocabulary (`packages/db/CLAUDE.md`).
   or `write`, `read` only on a query and an export; `unscoped` names tables of `src/db/tables.ts` and never a
   `fabrika_*` one; `connect` and `issues` only on an RPC endpoint, `connect` naming the kit's imports, `issues` a
   link mount whose `issuedBy` on its dimension is the endpoint's own access. The artifact's `declared` section holds
-  each site that declares anything, by endpoint id or `job:<name>`, and is absent otherwise.
+  each site that declares anything, by endpoint id or `job:<name>`. It is present for every contract with a kit site,
+  empty included, and absent for a `defineContract` one: `boot` reads from it alone which reach rule applies.
+- **A kit contract's reach is the approved artifact's, whatever the leaf.** `boot` runs every endpoint of a contract
+  whose artifact has `declared` with that declaration (`approvedReach`; none when the site has no entry), a
+  `siteHandler` leaf or a plain function `implement` bound alike: `ctx.links` only for the mount it `issues`,
+  `ctx.connect` only for its `connect`. Only a `siteHandler` leaf gets `ctx.db`. A `defineContract` contract keeps its
+  reach by its imports' `usedBy` and its link mounts (`kit-reach.test.ts`).
 - **`serve(contract, { database, deps })` adapts the kit to `boot`**: it walks the contract and builds the handler tree
   `implement` would (RPC and link mounts by path, webhooks by name, `jobs.<name>`, `exports.<name>.<path>`); each
   entry is a `siteHandler(handler, declared)` leaf, its handler run with the boot's dependencies. It refuses (`ContractError`) every endpoint,

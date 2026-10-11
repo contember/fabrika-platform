@@ -126,6 +126,8 @@ class ArtifactBuilder {
 	readonly #endpoints: EndpointRow[] = []
 	readonly #reservedPrefixes: string[] = []
 	readonly #declared: Record<string, DeclaredReach> = {}
+	/** Whether any site is the staged kit's, whose reach is only what it declares; `defineContract`'s sites are not. */
+	#kit = false
 	/** The endpoints that declare `connect`, by the import they name. */
 	readonly #connected = new Map<string, string[]>()
 
@@ -174,7 +176,7 @@ class ArtifactBuilder {
 			tables,
 			endpoints: this.#endpoints,
 			reservedPrefixes: this.#reservedPrefixes,
-			...(Object.keys(this.#declared).length === 0 ? {} : { declared: this.#declared }),
+			...(this.#kit ? { declared: this.#declared } : {}),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -907,6 +909,7 @@ class ArtifactBuilder {
 		if (value === undefined) {
 			return
 		}
+		this.#kit = true
 		if (!isRecord(value)) {
 			this.#problem(where, `declares its reach as something other than an object (allowed: ${DECLARED_ALLOWED})`)
 			return

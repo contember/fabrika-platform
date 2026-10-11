@@ -102,8 +102,8 @@ bun test               # app-environment · canonical-path · contract-canonical
   normalized to `null`, `[]` or `{}`, because two producers — `compileContract` over the evaluated
   module and the static reader over source — must emit the same artifact. Keep new fields that way. One field
   is absent instead: `declared` (what a site of the staged kit declares off the paved road, by endpoint id or
-  `job:<name>`) appears only when some site declares something, so a contract without one keeps its digest and the
-  digests stored approvals name.
+  `job:<name>`) appears only for a contract of the staged kit, whose sites reach only what they declare, so a
+  `defineContract` contract keeps its digest and the digests stored approvals name.
   `SchemaShape` represents exactly the zod subset of `packages/check/CLAUDE.md`; extend the two together
   (`@fabrika/app`'s `schema-shape.ts` reads one into the other).
 - **An artifact is canonical: declaration order never reaches it.** `canonicalizeArtifact` sorts every array

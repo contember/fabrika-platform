@@ -46,7 +46,7 @@ import type { CapturedEnvironment } from './environment'
 import { ServerFault } from './faults'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
-import { approvedDeclaration, isSiteHandler, type SiteDeclaration } from './invocation'
+import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
@@ -318,13 +318,22 @@ function contractDatabase(
 	}
 }
 
-/** A handler tree leaf: a plain handler, or a staged-kit site with its declaration. */
+/**
+ * A handler tree leaf, bound. `declaration` is the reach the approved artifact gives the site, or `null` for a
+ * `defineContract` contract, whose reach is its imports' `usedBy` and its link mounts; `site` whether the leaf is a
+ * staged-kit site, which reaches data through `ctx.db`.
+ */
 interface BoundHandler {
 	readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
 	readonly declaration: SiteDeclaration | null
+	readonly site: boolean
 }
 
-/** A leaf of `site` (an endpoint id); a staged-kit site runs with the declaration the approved artifact holds. */
+/**
+ * A leaf of `site` (an endpoint id). Its reach is the approved artifact's, whatever the leaf is: a staged-kit
+ * contract's artifact holds every site's declaration (none when the site declares none), and a site leaf that
+ * declares otherwise does not boot.
+ */
 function boundHandler(
 	node: unknown,
 	site: string,
@@ -338,15 +347,20 @@ function boundHandler(
 		return {
 			handler: (args) => Reflect.apply(leaf.handler, undefined, [args]),
 			declaration: approvedDeclaration(where, site, leaf.declared, kind, artifact, problems),
+			site: true,
 		}
 	}
 	if (typeof node === 'function') {
-		return { handler: (args) => Reflect.apply(node, undefined, [args]), declaration: null }
+		return {
+			handler: (args) => Reflect.apply(node, undefined, [args]),
+			declaration: artifact.declared === undefined ? null : approvedReach(site, artifact),
+			site: false,
+		}
 	}
 	return null
 }
 
-/** A site gets `ctx.links` only for the link mount it declares it `issues`. */
+/** A staged-kit contract's endpoint gets `ctx.links` only for the link mount it declares it `issues`. */
 function siteFacilities(facilities: Facilities, declaration: SiteDeclaration | null): Facilities {
 	if (declaration === null) {
 		return facilities
@@ -355,7 +369,7 @@ function siteFacilities(facilities: Facilities, declaration: SiteDeclaration | n
 	return links.length === facilities.links.length ? facilities : Object.freeze({ members: facilities.members, links: Object.freeze(links) })
 }
 
-/** A site gets `ctx.connect` only for the connectors it declares. */
+/** A staged-kit contract's endpoint gets `ctx.connect` only for the connectors it declares. */
 function siteConnect<W extends { readonly name: string }>(
 	wires: readonly W[] | undefined,
 	declaration: SiteDeclaration | null,
@@ -367,8 +381,9 @@ function siteConnect<W extends { readonly name: string }>(
 	return declared.length === 0 ? undefined : declared
 }
 
-function servedSite(kind: DataKind, declaration: SiteDeclaration | null): ServedSite | undefined {
-	return declaration === null ? undefined : { kind, declaration }
+/** The site `dispatch` builds `ctx.db` for: a staged-kit site leaf only, with its approved declaration. */
+function servedSite(kind: DataKind, bound: BoundHandler): ServedSite | undefined {
+	return !bound.site || bound.declaration === null ? undefined : { kind, declaration: bound.declaration }
 }
 
 /** `ctx.members` and `ctx.links` of an endpoint: decided from its access form and the artifact, once. */
@@ -540,7 +555,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						handler: bound.handler,
 						facilities: siteFacilities(facilitiesOf(artifact, row), bound.declaration),
 						connect: siteConnect(connect.get(id), bound.declaration),
-						site: servedSite(procedure.type, bound.declaration),
+						site: servedSite(procedure.type, bound),
 					})
 				}
 			}
@@ -566,7 +581,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					input: mount.input,
 					handler: bound.handler,
 					credential,
-					site: bound.declaration ?? undefined,
+					site: bound.site ? (bound.declaration ?? undefined) : undefined,
 				})
 				bindWebhookBindings(name, mount.path, rows, endpoints, () => frameworkOf(framework).webhooks)
 			}
@@ -610,7 +625,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					handler: bound.handler,
 					facilities: NO_FACILITIES,
 					readOnly: true,
-					site: servedSite('query', bound.declaration),
+					site: servedSite('query', bound),
 				})
 			}
 		}
