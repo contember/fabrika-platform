@@ -631,3 +631,7 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   (fail-closed). The application wrapper's `plan()` no longer scans qualifiers: the runner's role-aware refusal of a
   pending file replaces it. The catalog query takes the schema as a constant `regnamespace`: with a subquery the
   planner's estimate crossed `jit_above_cost` and the query took 200 ms instead of 10 ms.
+- **WU5 review round 2 (integrator decision):** the classifier stops emulating Postgres' grammar and refuses the
+  hard-to-read forms instead: field-selection calls, parenthesized DML targets, routine overloads (routines keyed
+  by name; the signature module is deleted), `serial` and `CREATE SEQUENCE` (identity columns only), any unqualified
+  `pg_…` name in DDL. It is a coarse, fail-closed defense in depth; the role (WU12, backlog 110) is the boundary.
