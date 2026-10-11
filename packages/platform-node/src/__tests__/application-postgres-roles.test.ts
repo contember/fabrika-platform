@@ -217,7 +217,7 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				const later = [...NOTES, { name: '20261011130000_tags.sql', sql: 'CREATE TABLE tags (id TEXT PRIMARY KEY)' }]
 				expect(await notes.migrations.migrate(provisioner.url(), later)).toEqual(['app/20261011130000_tags.sql'])
 				// A session default the runtime role set on itself does not survive the next deploy.
-				expect(await as(runtimeUrl(notes), (sql) => sql.unsafe('SHOW statement_timeout'))).toEqual([{ statement_timeout: '0' }])
+				expect([...await as(runtimeUrl(notes), (sql) => sql.unsafe('SHOW statement_timeout'))]).toEqual([{ statement_timeout: '0' }])
 				expect(await notes.migrations.migrate(provisioner.url(), later)).toEqual([])
 				await as(runtimeUrl(notes), (sql) => sql.unsafe(`INSERT INTO ${notes.migrations.schema}.tags (id) VALUES ('t1')`))
 			})
