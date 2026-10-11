@@ -639,7 +639,7 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   `typeof contract` and compiles clean in the vocabulary-first order. At `12e8685f`: `contract-scale` 151,698
   instantiations, `implement-scale` 510,959 (budget 1,000,000 each).
 - **WU0, measurement.** `kit-scale.test.ts`: 200 endpoints in 10 group modules, every handler using its `ctx.db`,
-  ~333,000 instantiations — 35 % under today's `implement` over the same count.
+  ~353,000 instantiations after review round 2 — 31 % under today's `implement` over the same count.
 - **WU0, codegen: the column list carries the row types.** `fabrika db codegen` emits
   `export const columns: TypedColumnList<DB>` (a type-only brand), so `defineTables(vocabulary, columns)` takes no type
   argument and a hand-written list makes the builder an `Unavailable`. The edit is the emitted declaration only (WU5
