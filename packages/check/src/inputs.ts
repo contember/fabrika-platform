@@ -1,9 +1,10 @@
 // Which files of an application the static reader needs. Control reads a commit file by file, and the reader cannot
 // tell a missing file from one it was not given, so the caller asks here until nothing is missing. Worker-safe.
 
-import { importedSpecifiers, parseModule } from './ast'
+import { importedSpecifiers } from './ast'
 import { parseJsonc } from './jsonc'
 import { CONTRACT_FILE, isRelativeSpecifier, isSourceFile, joinRelative, resolveRelative, TABLES_FILE } from './layout'
+import { parseShellModule } from './slice'
 import { BUNFIG_FILE } from './trust'
 
 const RESOLUTION_CONFIGS = ['package.json', 'tsconfig.json', 'jsconfig.json']
@@ -23,7 +24,8 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 /**
  * The paths `readContractSource` reads that `files` does not hold yet, among the paths that `exists` at the commit:
- * `fabrika.contract.ts` and `src/db/tables.ts`, every module their imports reach with every candidate of an import, the
+ * `fabrika.contract.ts` and `src/db/tables.ts`, every module the shell slice of each imports (an import only a
+ * colocated handler uses is never followed) with every candidate of an import, the
  * `package.json`, `tsconfig.json` and `jsconfig.json` of each such module's directories, a root `bunfig.toml`, and the
  * files a `tsconfig.json` extends. A module is followed only once its text is in `files`, so the caller reads the answer,
  * adds it to `files` and asks again until the answer is empty.
@@ -47,7 +49,7 @@ export function contractReaderInputs(files: ReadonlyMap<string, string>, exists:
 			want(path)
 			continue
 		}
-		const parsed = isSourceFile(path) ? parseModule(path, text) : undefined
+		const parsed = isSourceFile(path) ? parseShellModule(path, text) : undefined
 		if (parsed?.ok !== true) continue
 		for (const specifier of importedSpecifiers(parsed.module)) {
 			if (!isRelativeSpecifier(specifier)) continue

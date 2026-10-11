@@ -4,6 +4,6 @@ import { deals } from './src/deals/endpoints'
 
 export const contract = app.contract((c) => ({
 	api: c.rpc('/api', { companies, deals }),
-	site: c.spa('/', { callers: ['human'] }),
+	site: c.spa('/', { dir: 'dist/web', access: { member: true } }),
 	health: c.health('/healthz'),
 }))

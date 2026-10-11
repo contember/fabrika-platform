@@ -5,7 +5,7 @@
 import { type AnyContract, compileContract } from '@fabrika/app/contract'
 import type { ContractArtifact, TablePolicyArtifact } from '@fabrika/auth-core'
 import type { TablePolicies } from '@fabrika/db/tables'
-import { importedSpecifiers, nodeDepth, type ParsedModule, parseModule, utf8Bytes } from './ast'
+import { importedSpecifiers, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
 import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_FILE } from './layout'
@@ -15,6 +15,7 @@ import { readContractValue } from './reader/surface'
 import { readTablesValue } from './reader/tables'
 import { ValueReader } from './reader/value'
 import { checkLiteralGraph } from './rules/literal'
+import { parseShellModule } from './slice'
 import { checkTrustedResolution } from './trust'
 
 export { ContractError } from '@fabrika/app/contract'
@@ -125,7 +126,7 @@ export function readContractModule(graph: ModuleGraph): ContractRead {
 }
 
 /** The contract module and every module its value imports reach. */
-function contractModules(graph: ModuleGraph, entry: ParsedModule): ParsedModule[] {
+export function contractModules(graph: ModuleGraph, entry: ParsedModule): ParsedModule[] {
 	const reached = new Map<string, ParsedModule>()
 	const queue = [entry]
 	for (let module = queue.shift(); module !== undefined; module = queue.shift()) {
@@ -174,7 +175,7 @@ type ParsedGraph = { readonly ok: true; readonly graph: ModuleGraph } | { readon
 
 /**
  * Parses `entry` (`fabrika.contract.ts` or `src/db/tables.ts`) and the modules its imports reach among `files`, and
- * nothing else. Every candidate of an import is parsed, so that `rules/literal.ts` sees an ambiguous or directory
+ * nothing else; each module as its shell slice, so an import only a handler uses is never followed. Every candidate of an import is parsed, so that `rules/literal.ts` sees an ambiguous or directory
  * import; the size limit holds before a module is parsed and the depth limit right after, before any recursive rule
  * walks it.
  */
@@ -195,7 +196,7 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		if (bytes > CONTRACT_LIMITS.sourceBytes) {
 			return { ok: false, findings: [overBudget(path, `${entry} and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`)] }
 		}
-		const parsed = parseModule(path, text)
+		const parsed = parseShellModule(path, text)
 		if (!parsed.ok) {
 			findings.push({
 				file: path,

@@ -11,7 +11,7 @@ static contract reader (B1), which Control runs on the files of a commit.
 
 ```bash
 bun run typecheck
-bun test                    # rules · direct-forms · structure · spike-contract · cli · reader · differential
+bun test                    # rules · direct-forms · structure · spike-contract · cli · reader · differential · colocated · colocated-scale
 bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check`
 ```
 
@@ -25,9 +25,18 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 - Bin: `fabrika-check [<root>]` prints one line per refusal, `file:line:col rule-id message (allowed form: …)`, then
   the hints in the same form under the heading `Hints — …`, then `N refusals, M hints` on stderr. Exit 0 with no
   refusal (hints only included), 1 with a refusal, 2 on a usage or read error.
+- **The shell slice** (`slice.ts`): every module the reader, the literal rule, `contractReaderInputs` and the SPA
+  bundle read is read as its slice: each `<x>.query|mutation|cron|webhook(…).handle(<inline function>)` loses its
+  `.handle(…)`, and so does every import specifier, function, const of an inline function and type that only those
+  handlers used (followed until nothing more goes; an exported declaration, and one nobody uses, stays). Removed text
+  becomes spaces, so every finding keeps its line and column. Control therefore never fetches, parses or runs a module
+  only a handler imports; `boot`'s contract digest backs what the slice cannot see. The checker runs the contract rules
+  over the slices and every other rule over the whole module.
+- Bun plugin: `@fabrika/check/bun-plugin` (`shellSlicePlugin()`, also the default export) loads every application
+  module outside `node_modules` as its slice, so an SPA build that imports `fabrika.contract.ts` holds no handler code.
 - Reader: `@fabrika/check/contract` exports `readContractSource(files, tables?) → ContractArtifact`,
   `readContract(files) → AnyContract` and `readTablesSource(files) → TablePolicies`. `files` holds
-  `fabrika.contract.ts`, `src/db/tables.ts`, the modules they import (path → text) and every `package.json`,
+  `fabrika.contract.ts`, `src/db/tables.ts`, the modules their shell slices import (path → text) and every `package.json`,
   `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those of each directory of
   such a module. For an import without an extension, `files` holds every candidate that
   exists, so the reader sees two of them. The reader cannot tell a missing file from an absent one, so the caller
@@ -59,6 +68,8 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `rules/contract.ts`    | What the reader refuses, run by the checker once the literal rule passes.                                                                                                                                                                              |
 | `rules/*.ts`           | One file per rule group.                                                                                                                                                                                                                               |
 | `contract.ts`          | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.                                                                                                                                                          |
+| `slice.ts`             | The shell slice: a module without its colocated handlers and what only they use, every position kept.                                                                                                                                                  |
+| `bun-plugin.ts`        | `@fabrika/check/bun-plugin`: the Bun plugin that loads application modules as their slices, for the SPA build.                                                                                                                                         |
 | `scaffold.ts`          | The tests `fabrika db test-scaffold` writes: policy isolation and endpoint access (`generatedTests`).                                                                                                                                                  |
 | `scaffold-sample.ts`   | The fixed input literal of an endpoint's schema that an endpoint access case sends.                                                                                                                                                                    |
 | `endpoint-fixtures.ts` | `src/__tests__/endpoint-access.fixtures.ts`: the author's inputs, read statically within the budget.                                                                                                                                                   |
@@ -79,8 +90,12 @@ module and expects the same artifact and canonical bytes (`fixtures/reader-forms
 accepts; `fixtures/clean-app/` is the clean application of the rule tests). Its paired cases (`fixtures/paired/`,
 `.fixture` files) are written to a temporary directory and evaluated by Bun through `fixtures/paired-runner.mjs`:
 each either gives the reader's artifact, or the reader refuses it and the test shows what Bun does instead. A fixture
-directory that no table registers fails the test. Its staged-kit cases over `@fabrika/app`'s `kit-fixture/` are
-`test.todo` skeletons until the paved-road sprint fills them (tables: WU2; the slice: WU4).
+directory that no table registers fails the test. Its staged-kit cases read `@fabrika/app`'s `kit-fixture/` (the slice
+cases; the table cases are `test.todo` skeletons until WU2 fills them) and `fixtures/architecture-app/`, which Bun
+evaluates through `paired-runner.mjs` against its tables. `colocated.test.ts` holds the slice itself: a handler-only
+module that throws at import is never requested or run, a plugin build holds no handler code and `serve` refuses it,
+the forms the slice keeps are the literal rule's, and the whole check of `fixtures/architecture-app/` is clean (its
+generated tests are committed there). `colocated-scale.test.ts` reads 200 colocated endpoints in 10 group modules.
 
 ## The rules
 
@@ -107,7 +122,7 @@ directory that no table registers fails the test. Its staged-kit cases over `@fa
 | `unsafe-html`                | `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `dynamic-code`               | `eval` (also `globalThis.eval`), `Function(…)`/`new Function(…)`/`Function.call`/`apply`, a string passed to `setTimeout`/`setInterval`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `migration-name`             | a file in `db/migrations/` not named `YYYYMMDDHHMMSS_slug.sql` with a real UTC timestamp, or in a subdirectory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `crontab`                    | a `zerops.yaml` setup whose `run.crontab` is not exactly the contract's `c.cron` jobs with explicit, equal timings; a background `run.start`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `crontab`                    | a `zerops.yaml` setup whose `run.crontab` is not exactly the contract's `c.cron` (or `app.cron`) jobs with explicit, equal timings; a background `run.start`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `package-replacement`        | a trusted name (`@fabrika/*`, `zod`) as any `package.json`'s `name`, which Bun resolves to the application itself; an `exports` map in the root one; `patchedDependencies`/`overrides`/`resolutions` in a `package.json`; a non-registry specifier of `@fabrika/*` or `zod`; their `bun.lock` entry without a registry version and a `sha512-` hash; another registry in `bunfig.toml` or `.npmrc`; `declare module` of one                                                                                                                                                                                                                                                                     |
 | `skipped-test`               | `.skip`, `.only`, `.todo`, `.skipIf`, `.if`, `.todoIf`, `.failing`, `xit`/`fit`/… in test files; `[test] root`, `pathIgnorePatterns` or `retry` in `bunfig.toml`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `test-without-assertion`     | a `test`/`it` registration (also `.concurrent`, `.each(…)(…)`) that runs no matcher on `expect(…)` and no `expect…`/`assert…` helper                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -145,7 +160,9 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   export of a literal module is checked, used or not; no side-effect import, namespace import of a relative module
   or re-export with a source.
 - **Builders:** `z` (named, renamed or namespace) from `zod/v4`, its members written with a dot (`z['string']` is
-  refused); `defineContract` from `@fabrika/app/contract`, called once
+  refused); `defineApp` from `@fabrika/app/contract`, called once as `defineApp(vocabulary, tables, { imports }?)` in a
+  const (the kit; `src/app-kit.ts`), whose `app.<builder>(…)` calls are `group`, `contract`, `cron`, `webhook`, `link`
+  and `export`, in any module (`app` used as a value is refused); `defineContract` from `@fabrika/app/contract`, called once
   as `defineContract(vocabulary, (c) => ({ … }))`; `defineVocabulary` from `@fabrika/app/contract`, called once with
   one object literal (`src/vocabulary.ts`), which reads as its `app`, `dimensions`, `actions` and `roles`, as the runtime
   copies them; `defineTables` from `@fabrika/db` or
@@ -157,6 +174,12 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
 - **Functions:** an inline arrow with one parameter and an expression body, only as the second argument of
   `defineContract` and as `procedures` in the options of `c.link(path, { … })`. Its parameter is used only as
   `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `form`, `webhook`, `files`, `cron`, `export`.
+  In the kit form: `app.contract((c) => ({ … }))`, whose `c` has `rpc(prefix, groups)`, `spa`, `health`, `form` and
+  `files`; `app.group(options, (r) => ({ … }))` and `procedures` of `app.link(prefix, { … })` and `app.export({ … })`,
+  whose parameter has `query` and `mutation`. The handler of `.handle(…)` is no exception: the slice removes it first,
+  and a `.handle` the slice keeps (a named function, a builder that takes none) is refused.
+- **Declared fields** of a kit site (`sql`, `unscoped`, `connect`, `issues`) are plain literals; `buildArtifact`
+  checks what each site may carry.
 - **Schemas:** `z.<factory>(…)` then any number of `.<method>(…)`, each called.
   - factories: `strictObject`, `string`, `number`, `int`, `boolean`, `null`, `literal`, `enum`, `array`, `tuple`,
     `union`, `discriminatedUnion`, `record`, `optional`, `nullable`, `uuid`, `email`, `url`, and
@@ -192,8 +215,8 @@ nobody has type-checked. It refuses with the `contract` rule:
 
 ## Trusted by name
 
-The literal rule and the reader recognise `z`, `defineContract`, `defineVocabulary` and `defineTables` by the package
-they come from.
+The literal rule and the reader recognise `z`, `defineContract`, `defineVocabulary`, `defineApp` and `defineTables` by
+the package they come from.
 `trust.ts` refuses, in the checker (`unchecked-import`) and in the reader (`ContractSourceError`), everything that
 can make such an import load something else:
 
@@ -274,7 +297,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   literal arguments and copies fields as `@fabrika/app`'s kit does; `compileContract` (`describeContract` +
   `buildArtifact`) does every check and default. A change to the kit's builders (`BUILDER_FIELDS`, a new option) is
   a change to `reader/surface.ts`; `differential.test.ts` fails when they drift.
-- **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
+- **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `slice.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
   `finding.ts`, `trust.ts`, `jsonc.ts`, `toml.ts`, `limits.ts`, `inputs.ts`, `version.ts` and `rules/literal.ts` import no
   `node:*`, `bun` or file API. A Worker bundle of the reader measured
   638 KiB, 153 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes

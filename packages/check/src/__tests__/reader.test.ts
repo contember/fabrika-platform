@@ -64,7 +64,7 @@ describe('the reader refuses what it cannot read, with the position and the allo
 export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/mcp', { scopes: ['authoring'] }) }))
 `
 		expect(refusal(application(service))).toEqual([
-			'fabrika.contract.ts:3:25 literal call of a function that is not c.*, z.* or define*',
+			'fabrika.contract.ts:3:25 literal call of a function that is not c.*, z.*, define* or the kit of defineApp',
 			"fabrika.contract.ts:1:10 literal value import of 'defineServiceContract' from the package '@fabrika/app/service'",
 		])
 		expect(refusal(application(edited("callers: ['human']", "callers: ['oauth']")))).toEqual([

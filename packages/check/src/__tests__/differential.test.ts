@@ -23,8 +23,18 @@ import { contract as scopedContract } from '../../../app/src/__tests__/fixtures/
 import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scoped-notes/src/db/tables'
 import { contract as organizationsContract } from '../../../app/src/__tests__/fixtures/scoped-organizations/fabrika.contract'
 import { tables as organizationsTables } from '../../../app/src/__tests__/fixtures/scoped-organizations/src/db/tables'
+import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/fabrika.contract'
+import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { ContractSourceError, readContractSource, readTablesSource } from '../contract'
+import {
+	ARCHITECTURE_ROOT,
+	evaluateInBun,
+	fetchedByControl,
+	KIT_ROOT,
+	materialize as materializeFiles,
+	readTree as readKitTree,
+} from './colocated-helpers'
 import { contract as cleanContract } from './fixtures/clean-app/fabrika.contract'
 import { contract as derivedContract } from './fixtures/derived-tables/fabrika.contract'
 import { columns as derivedColumns } from './fixtures/derived-tables/src/db/schema.generated'
@@ -571,19 +581,61 @@ export const tables = defineTables<DB, 'tasks.read' | 'tasks.write'>(columns)({}
 		})
 	})
 	describe("the reader's slice of shell modules (WU4)", () => {
-		test.todo(
-			'a contract of groups in other modules, each endpoint with .handle beside it, reads the same artifact as the evaluated modules',
-			filledBy('WU4'),
-		)
-		test.todo('a module only handlers import is never requested from the commit and never evaluated', filledBy('WU4'))
-		test.todo('the declared sql, unscoped, connect and issues reach the artifact the same from source and evaluated', filledBy('WU4'))
-		test.todo('a link mount, a webhook, a cron job and an export of the kit read the same', filledBy('WU4'))
+		const read = (): ContractArtifact => readContractSource(fetchedByControl(readKitTree(KIT_ROOT)))
+		const evaluated = (): ContractArtifact => compileContract(kitContract, kitTables)
+
+		test('a contract of groups in other modules, each endpoint with .handle beside it, reads the same artifact as the evaluated modules', () => {
+			expect(read()).toEqual(evaluated())
+			expect(canonicalArtifactJson(read())).toBe(canonicalArtifactJson(evaluated()))
+		})
+
+		test('a module only handlers import is never requested from the commit and never evaluated', () => {
+			const commit = readKitTree(KIT_ROOT)
+			expect(commit.has('src/deals/logic.ts')).toBe(true)
+			expect(fetchedByControl(commit).has('src/deals/logic.ts')).toBe(false)
+			const broken = new Map([...commit, ['src/deals/logic.ts', 'throw new Error(((']])
+			expect(canonicalArtifactJson(readContractSource(broken))).toBe(canonicalArtifactJson(evaluated()))
+		})
+
+		test('the declared sql, unscoped, connect and issues reach the artifact the same from source and evaluated', () => {
+			expect(read().declared).toEqual(evaluated().declared)
+			expect(Object.keys(read().declared ?? {}).sort()).toEqual([
+				'api.companies.audit',
+				'api.deals.pipeline',
+				'api.deals.product',
+				'api.deals.share',
+				'job:close',
+			])
+			expect(read().imports['catalog']?.usedBy).toEqual(['api.deals.product'])
+		})
+
+		test('a link mount, a webhook, a cron job and an export of the kit read the same', () => {
+			const [source, runtime] = [read(), evaluated()]
+			expect(source.mounts['shared']).toEqual(runtime.mounts['shared'])
+			expect(source.mounts['github']).toEqual(runtime.mounts['github'])
+			expect(source.jobs['close']).toEqual(runtime.jobs['close'])
+			expect(source.exports['pipeline']).toEqual(runtime.exports['pipeline'])
+			const kinds = (artifact: ContractArtifact) => artifact.endpoints.filter((row) => ['shared.deal', 'pipeline.v1.deal', 'github'].includes(row.id))
+			expect(kinds(source)).toEqual(kinds(runtime))
+			expect(kinds(source).map((row) => row.id).sort()).toEqual(['github', 'pipeline.v1.deal', 'shared.deal'])
+		})
+
+		test('the architecture fixture reads the same from source as Bun evaluates it', () => {
+			const files = readKitTree(ARCHITECTURE_ROOT, ['.fixture'])
+			const directory = materializeFiles(files)
+			expect(evaluateInBun(join(directory, 'fabrika.contract.ts'), join(directory, 'src/db/tables.ts'))).toEqual({
+				ok: true,
+				json: canonicalArtifactJson(readContractSource(files)),
+			})
+		})
 	})
 })
 
 describe('every fixture directory is registered', () => {
 	test('in @fabrika/check and in @fabrika/app', () => {
-		const registered = new Set(fixtures.map((fixture) => relative(join(import.meta.dir, '..', '..', '..'), fixture.root)))
+		const registered = new Set(
+			[...fixtures.map((fixture) => fixture.root), ARCHITECTURE_ROOT].map((root) => relative(join(import.meta.dir, '..', '..', '..'), root)),
+		)
 		const directories = (root: string): string[] =>
 			readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) =>
 				relative(join(import.meta.dir, '..', '..', '..'), join(root, entry.name))
@@ -591,7 +643,6 @@ describe('every fixture directory is registered', () => {
 		const refusedOnly = new Set([
 			'check/src/__tests__/fixtures/spike-contract',
 			'check/src/__tests__/fixtures/paired',
-			'check/src/__tests__/fixtures/architecture-app',
 		])
 		const found = [...directories(join(import.meta.dir, 'fixtures')), ...directories(join(APP_TESTS, 'fixtures'))]
 		expect(found.filter((directory) => !registered.has(directory) && !refusedOnly.has(directory))).toEqual([])

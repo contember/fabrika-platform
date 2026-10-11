@@ -27,6 +27,11 @@
 			"bun": "./src/contract.ts",
 			"types": "./src/contract.ts",
 			"default": "./src/contract.ts"
+		},
+		"./bun-plugin": {
+			"bun": "./src/bun-plugin.ts",
+			"types": "./src/bun-plugin.ts",
+			"default": "./src/bun-plugin.ts"
 		}
 	},
 	"scripts": {

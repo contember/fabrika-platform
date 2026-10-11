@@ -15,6 +15,6 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 	pipeline: r.query({ input: OrgInput, output: Pipeline, access: { action: 'crm.read', in: 'org', from: 'orgId' }, sql: 'read' })
 		.handle(async ({ ctx }) => ({
 			rows: await ctx.sql(PipelineRow)`select d.stage, count(*)::int as deals from deals d
-				join companies c on c.id = d.company_id where c.org_id = ${ctx.target.id} group by d.stage`,
+				join companies c on c.id = d.company_id where c.org_id = ${ctx.target.value} group by d.stage`,
 		})),
 }))

@@ -5,12 +5,18 @@ import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
 import type { Located, ModuleGraph } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
-import { BUILDER_IMPORTS, type BuilderKind, decompose, isComputedMember, type Link } from '../rules/literal'
+import { BUILDER_IMPORTS, type BuilderKind, decompose, isComputedMember, isKitName, KIT_BUILDERS, KIT_CALLBACKS, type Link } from '../rules/literal'
 import type { ReaderProblems } from './problems'
 import { buildSchema } from './schema'
 
-/** The builder kit a callback parameter denotes: `c` of `defineContract`, `l` of a link's `procedures`. */
-export type Kit = 'surface' | 'link'
+/**
+ * The builder kit a call belongs to: `c` of `defineContract` and `l` of its link's `procedures`; `app`, the kit
+ * `defineApp` returned; `c` of `app.contract` (`shell`) and `r` of a group, a link or an export (`endpoints`).
+ */
+export type Kit = 'surface' | 'link' | 'app' | 'shell' | 'endpoints'
+
+/** The parameter name a kit is written with, in messages. */
+export const kitName = (kit: Kit): string => (kit === 'link' ? 'l' : kit === 'app' ? 'app' : kit === 'endpoints' ? 'r' : 'c')
 
 export type LiteralValue =
 	| { readonly kind: 'string'; readonly value: string; readonly at: Located }
@@ -26,13 +32,30 @@ export type LiteralValue =
 	/** `c.rpc(…)` or `l.query(…)`, with its arguments read. */
 	| { readonly kind: 'builder'; readonly kit: Kit; readonly name: string; readonly args: readonly LiteralValue[]; readonly at: Located }
 	| { readonly kind: 'contract'; readonly args: readonly LiteralValue[]; readonly at: Located }
+	/** `defineApp(vocabulary, tables, options?)`: the vocabulary and the options; the tables are `src/db/tables.ts`'. */
+	| AppValue
+	/** `app.contract((c) => ({ … }))`, with the kit it was called on. */
+	| { readonly kind: 'kit-contract'; readonly app: AppValue; readonly args: readonly LiteralValue[]; readonly at: Located }
 	/** A builder callback: its parameter is only ever a kit, so its body is read once, as a value. */
 	| { readonly kind: 'callback'; readonly result: LiteralValue; readonly at: Located }
 
+export interface AppValue {
+	readonly kind: 'app'
+	readonly vocabulary: LiteralValue
+	readonly options: LiteralValue | undefined
+	readonly at: Located
+}
+
 type Scope = ReadonlyMap<string, Kit>
 
-/** Where a callback may stand, as `rules/literal.ts` allows it: `defineContract`'s second argument, a link's `procedures`. */
-type Role = { readonly callback: Kit } | { readonly linkOptions: true } | null
+/**
+ * Where a callback may stand, as `rules/literal.ts` allows it: a builder's callback argument, or the `procedures` of
+ * its options (a link, an export).
+ */
+type Role = { readonly callback: Kit } | { readonly procedures: Kit } | null
+
+/** The value kit of a callback parameter whose builder kind `rules/literal.ts` names. */
+const callbackKit = (kind: BuilderKind): Kit => (kind === 'shell' ? 'shell' : kind === 'endpoints' ? 'endpoints' : 'surface')
 
 /** The fields `defineVocabulary` copies from its argument, in its order. */
 const VOCABULARY_SECTIONS = ['app', 'dimensions', 'actions', 'roles'] as const
@@ -118,13 +141,16 @@ export class ValueReader {
 			case 'ArrayExpression':
 				return this.#array(located, scope)
 			case 'ObjectExpression':
-				return this.#object(located, scope, role !== null && 'linkOptions' in role)
+				return this.#object(located, scope, role !== null && 'procedures' in role ? role.procedures : null)
 			case 'Identifier':
 				return this.#identifier(located, scope)
 			case 'ArrowFunctionExpression':
 				return role !== null && 'callback' in role
 					? this.#callback(located, scope, role.callback)
-					: fail('function', 'a function only as the builder callback of defineContract(…, (c) => ({ … })) or of a link')
+					: fail(
+						'function',
+						'a function only as a builder callback: defineContract(…, (c) => …), app.contract((c) => …), app.group(…, (r) => …), procedures: (l) => …',
+					)
 			case 'CallExpression':
 				return this.#call(located, scope)
 			default:
@@ -185,7 +211,7 @@ export class ValueReader {
 		return complete ? { kind: 'array', items, at: located } : null
 	}
 
-	#object(located: Located, scope: Scope, linkOptions: boolean): LiteralValue | null {
+	#object(located: Located, scope: Scope, procedures: Kit | null): LiteralValue | null {
 		const entries = new Map<string, LiteralValue>()
 		let complete = true
 		for (const property of children(located.node, 'properties')) {
@@ -203,7 +229,7 @@ export class ValueReader {
 				complete = false
 				continue
 			}
-			const role: Role = linkOptions && key === 'procedures' ? { callback: 'link' } : null
+			const role: Role = procedures !== null && key === 'procedures' ? { callback: procedures } : null
 			const read = this.#read({ module: located.module, node: value }, scope, role)
 			if (read === null) {
 				complete = false
@@ -217,7 +243,7 @@ export class ValueReader {
 	#identifier(located: Located, scope: Scope): LiteralValue | null {
 		const name = identifierName(located.node) ?? ''
 		const builder = this.#builderOf(located.module, name)
-		if (scope.has(name) || builder !== undefined) {
+		if (scope.has(name) || builder !== undefined || isKitName(this.#graph, located.module, name)) {
 			this.#problems.add(located, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
 			return null
 		}
@@ -263,6 +289,9 @@ export class ValueReader {
 		if (kit !== undefined) {
 			return this.#kitCall(located, kit, links, scope)
 		}
+		if (isKitName(this.#graph, located.module, rootName)) {
+			return this.#appMethodCall(located, rootName, links, scope)
+		}
 		switch (this.#builderOf(located.module, rootName)) {
 			case 'zod':
 				return this.#zodChain(located, links, scope)
@@ -270,6 +299,8 @@ export class ValueReader {
 				return this.#contractCall(located, links, scope)
 			case 'vocabulary':
 				return this.#vocabularyCall(located, links, scope)
+			case 'app':
+				return this.#appCall(located, links, scope)
 			case 'tables':
 				this.#problems.add(located, 'defineTables in the contract graph', 'table policies only in src/db/tables.ts')
 				return null
@@ -283,16 +314,75 @@ export class ValueReader {
 		const [method, call] = links
 		const name = method?.kind === 'member' ? method.name : undefined
 		if (name === undefined || call?.kind !== 'call' || links.length !== 2) {
-			this.#problems.add(located, 'not a call of a contract builder', kit === 'link' ? 'l.query(…) or l.mutation(…)' : 'c.<builder>(…)')
+			this.#problems.add(
+				located,
+				'not a call of a contract builder',
+				kit === 'link' || kit === 'endpoints' ? `${kitName(kit)}.query(…) or ${kitName(kit)}.mutation(…)` : 'c.<builder>(…)',
+			)
 			return null
 		}
 		const args = this.#arguments(
 			located.module,
 			call.node,
 			scope,
-			(position) => (kit === 'surface' && name === 'link' && position === 1 ? { linkOptions: true } : null),
+			(position) => (kit === 'surface' && name === 'link' && position === 1 ? { procedures: 'link' } : null),
 		)
 		return args === null ? null : { kind: 'builder', kit, name, args, at: located }
+	}
+
+	/**
+	 * `defineApp(vocabulary, tables, options?)`. The tables are not read here: `src/db/tables.ts` is read on its own
+	 * (`readTablesSource`), and the runtime takes them for the types only.
+	 */
+	#appCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		const argumentNodes = call?.kind === 'call' && links.length === 1 ? children(call.node, 'arguments') : []
+		if (call?.kind !== 'call' || links.length !== 1 || argumentNodes.length < 2 || argumentNodes.length > 3) {
+			this.#problems.add(
+				located,
+				'defineApp used other than as one call of the vocabulary, the tables and its options',
+				'defineApp(vocabulary, tables, { imports })',
+			)
+			return null
+		}
+		const read = (node: AstNode | null | undefined): LiteralValue | null | undefined => {
+			if (node === undefined) return undefined
+			if (node === null || node.type === 'SpreadElement') {
+				this.#problems.add({ module: located.module, node: node ?? call.node }, 'spread', 'the arguments written out')
+				return null
+			}
+			return this.#read({ module: located.module, node }, scope, null)
+		}
+		const vocabulary = read(argumentNodes[0])
+		const options = read(argumentNodes[2])
+		if (vocabulary === null || vocabulary === undefined || options === null) {
+			return null
+		}
+		return { kind: 'app', vocabulary, options, at: located }
+	}
+
+	/** `app.<builder>(…)` on the kit a const `defineApp(…)` returned; its callbacks are read with the kit they hand. */
+	#appMethodCall(located: Located, rootName: string, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [method, call] = links
+		const name = method?.kind === 'member' ? method.name : undefined
+		if (name === undefined || !KIT_BUILDERS.has(name) || call?.kind !== 'call' || links.length !== 2) {
+			this.#problems.add(located, 'not a call of a builder of the kit', `one of ${rootName}.${[...KIT_BUILDERS].join(`, ${rootName}.`)}(…)`)
+			return null
+		}
+		const binding = this.#graph.binding(located.module, rootName)
+		const app = binding.kind === 'const' && binding.init !== undefined ? this.#const(binding.module, binding.name, binding.init) : null
+		if (app?.kind !== 'app') {
+			return null
+		}
+		const callback = Object.hasOwn(KIT_CALLBACKS, name) ? KIT_CALLBACKS[name] : undefined
+		const args = this.#arguments(located.module, call.node, scope, (position): Role => {
+			if (callback === undefined || callback.position !== position) return null
+			return callback.options ? { procedures: callbackKit(callback.kind) } : { callback: callbackKit(callback.kind) }
+		})
+		if (args === null) {
+			return null
+		}
+		return name === 'contract' ? { kind: 'kit-contract', app, args, at: located } : { kind: 'builder', kit: 'app', name, args, at: located }
 	}
 
 	/**
@@ -450,4 +540,4 @@ const compile = (pattern: string, flags: string): RegExp | undefined => {
 /** The name of a value kind, for a problem that names what was expected. */
 export const describeKind = (
 	value: LiteralValue,
-): string => (value.kind === 'builder' ? `${value.kit === 'link' ? 'l' : 'c'}.${value.name}(…)` : value.kind)
+): string => (value.kind === 'builder' ? `${kitName(value.kit)}.${value.name}(…)` : value.kind === 'kit-contract' ? 'app.contract(…)' : value.kind)

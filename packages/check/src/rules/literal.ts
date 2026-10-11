@@ -3,18 +3,54 @@ import { type Finding, type Report, reporter } from '../finding'
 import type { Binding, ModuleGraph } from '../graph'
 import { isRelativeSpecifier } from '../layout'
 
-/** What a call root builds; `surface` is the parameter of a builder callback (`c`, `l`). */
-export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surface'
+/**
+ * What a call root builds. `surface` is the parameter of a `defineContract` callback (`c`, `l`); `app` is
+ * `defineApp`, `kit` a const it returned, `shell` the parameter of `app.contract`'s callback and `endpoints` that of
+ * a group's, a link's or an export's.
+ */
+export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surface' | 'app' | 'kit' | 'shell' | 'endpoints'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
-	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary' },
+	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary', defineApp: 'app' },
 	'@fabrika/db': { defineTables: 'tables' },
 	'@fabrika/db/tables': { defineTables: 'tables' },
 }
 
 const SURFACE_BUILDERS = new Set(['rpc', 'query', 'mutation', 'link', 'spa', 'health', 'form', 'webhook', 'files', 'cron', 'export'])
+/** The methods of the kit `defineApp` returns. */
+export const KIT_BUILDERS: ReadonlySet<string> = new Set(['group', 'contract', 'cron', 'webhook', 'link', 'export'])
+/** The builders of `app.contract`'s callback: the mounts that take no handler, and `rpc`, which mounts groups. */
+export const SHELL_BUILDERS: ReadonlySet<string> = new Set(['rpc', 'spa', 'health', 'form', 'files'])
+/** The builders of a group's, a link's and an export's callback. */
+export const ENDPOINT_BUILDERS: ReadonlySet<string> = new Set(['query', 'mutation'])
+
+/**
+ * Where a kit method takes a builder callback, and the kit its parameter denotes: a group's endpoints, the contract's
+ * mounts, a link's and an export's `procedures` (`options: true`).
+ */
+export const KIT_CALLBACKS: Readonly<Record<string, { readonly position: number; readonly kind: BuilderKind; readonly options: boolean }>> = {
+	group: { position: 1, kind: 'endpoints', options: false },
+	contract: { position: 0, kind: 'shell', options: false },
+	link: { position: 1, kind: 'endpoints', options: true },
+	export: { position: 0, kind: 'endpoints', options: true },
+}
+
+/** Whether `init` is `defineApp(…)`, `defineApp` imported from `@fabrika/app/contract` into `module`. */
+export const isAppCall = (graph: ModuleGraph, module: ParsedModule, init: AstNode): boolean => {
+	const { root, links } = decompose(init)
+	const name = identifierName(root)
+	const imported = name === undefined ? undefined : graph.index(module).imports.get(name)
+	return links.length === 1 && links[0]?.kind === 'call' && imported !== undefined
+		&& BUILDER_IMPORTS[imported.specifier]?.[imported.imported] === 'app'
+}
+
+/** Whether `name` in `module` denotes a const `defineApp(…)` returned: the application's kit. */
+export const isKitName = (graph: ModuleGraph, module: ParsedModule, name: string): boolean => {
+	const binding = graph.binding(module, name)
+	return binding.kind === 'const' && binding.init !== undefined && isAppCall(graph, binding.module, binding.init)
+}
 /** The schema subset the static contract reader (B1) understands; `packages/check/CLAUDE.md` lists it. */
 const ZOD_FACTORIES = new Set([
 	'strictObject',
@@ -94,9 +130,10 @@ const ZOD_UNSERIALIZABLE = new Set([
 
 const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'
 const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUDE.md): strict objects, no transforms, refinements or pipes'
-const ALLOWED_CALLBACK = 'a function only as the builder callback of defineContract(…, (c) => ({ … })) or of a link: procedures: (l) => ({ … })'
+const ALLOWED_CALLBACK =
+	'a function only as a builder callback: defineContract(…, (c) => ({ … })), app.contract((c) => ({ … })), app.group(…, (r) => ({ … })), procedures: (l) => ({ … }) of a link or an export, and the handler of .handle(…)'
 const ALLOWED_IMPORT =
-	'z from zod/v4, defineContract or defineVocabulary from @fabrika/app/contract, defineTables from @fabrika/db or @fabrika/db/tables, or a literal const of the application'
+	'z from zod/v4, defineContract, defineVocabulary or defineApp from @fabrika/app/contract, defineTables from @fabrika/db or @fabrika/db/tables, or a literal const of the application'
 
 export type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | {
 	readonly kind: 'call'
@@ -209,19 +246,39 @@ const stringOrderProblem = (links: readonly Link[], firstMethod: number): Proble
 	return undefined
 }
 
+/** `<root>.<method>(…)`, one member and one call, with `method` one of `allowed`. */
+const methodCallProblem = (
+	root: AstNode,
+	links: readonly Link[],
+	allowed: ReadonlySet<string>,
+	prefix: string,
+	message: string,
+): Problem | undefined => {
+	const [method, call] = links
+	const name = method?.kind === 'member' ? method.name : undefined
+	if (name === undefined || !allowed.has(name) || call?.kind !== 'call' || links.length !== 2) {
+		return { node: method?.node ?? root, message, allowed: `one of ${prefix}.${[...allowed].join(`, ${prefix}.`)}(…)` }
+	}
+	return undefined
+}
+
 const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]): Problem | undefined => {
 	const calls = links.filter((link) => link.kind === 'call').length
 	switch (kind) {
 		case 'zod':
 			return zodChainProblem(root, links)
-		case 'surface': {
-			const [method, call] = links
-			const name = method?.kind === 'member' ? method.name : undefined
-			if (name === undefined || !SURFACE_BUILDERS.has(name) || call?.kind !== 'call' || links.length !== 2) {
-				return { node: method?.node ?? root, message: 'not a call of a contract builder', allowed: `one of c.${[...SURFACE_BUILDERS].join(', c.')}(…)` }
-			}
-			return undefined
-		}
+		case 'surface':
+			return methodCallProblem(root, links, SURFACE_BUILDERS, 'c', 'not a call of a contract builder')
+		case 'kit':
+			return methodCallProblem(root, links, KIT_BUILDERS, identifierName(root) ?? 'app', 'not a call of a builder of the kit')
+		case 'shell':
+			return methodCallProblem(root, links, SHELL_BUILDERS, identifierName(root) ?? 'c', 'not a call of a contract builder')
+		case 'endpoints':
+			return methodCallProblem(root, links, ENDPOINT_BUILDERS, identifierName(root) ?? 'r', 'not a call of an endpoint builder')
+		case 'app':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'defineApp used other than as one call', allowed: 'defineApp(vocabulary, tables, { imports })' }
 		case 'contract':
 			return links.length === 1 && calls === 1
 				? undefined
@@ -283,7 +340,9 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 
 	const checkIdentifier = (node: AstNode, scope: Scope, dependencies: string[]): void => {
 		const name = identifierName(node) ?? ''
-		if (scope.has(name) || builders.has(name)) return fail(node, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
+		if (scope.has(name) || builders.has(name) || isKitName(graph, module, name)) {
+			return fail(node, `'${name}' used as a value`, `${name}.<builder>(…) calls only`)
+		}
 		if (index.consts.has(name) && isBefore(node, index.consts.get(name))) {
 			return fail(node, `'${name}' is used before its declaration, where the module cannot read it yet`, 'declare a const above its first use')
 		}
@@ -295,7 +354,7 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		fail(node, `unknown identifier '${name}'`, 'a top-level const in this file, or a named import of one')
 	}
 
-	const checkBuilderCallback = (node: AstNode, scope: Scope, dependencies: string[]): void => {
+	const checkBuilderCallback = (node: AstNode, scope: Scope, dependencies: string[], kit: BuilderKind = 'surface'): void => {
 		const parameters = children(node, 'params')
 		const parameter = parameters.length === 1 ? identifierName(parameters[0] ?? undefined) : undefined
 		const body = child(node, 'body')
@@ -305,24 +364,48 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		if (parameter === undefined || body === undefined || body.type === 'BlockStatement' || node['async'] === true) {
 			return fail(node, 'a builder callback of another shape', 'one parameter and an expression body: (c) => ({ … })')
 		}
-		checkExpression(body, new Map([...scope, [parameter, 'surface']]), dependencies)
+		checkExpression(body, new Map([...scope, [parameter, kit]]), dependencies)
 	}
 
-	/** `callback` and `link-options` are the documented builder-callback positions; `pattern` is the argument of `.regex()`. */
-	const checkArgument = (argument: AstNode, scope: Scope, dependencies: string[], role: 'callback' | 'link-options' | 'pattern' | 'value'): void => {
+	/**
+	 * A callback, or options whose `procedures` is one, are the documented builder-callback positions, each with the kit
+	 * its parameter denotes; `pattern` is the argument of `.regex()`.
+	 */
+	type Role = { readonly callback: BuilderKind } | { readonly procedures: BuilderKind } | 'pattern' | 'value'
+
+	const checkArgument = (argument: AstNode, scope: Scope, dependencies: string[], role: Role): void => {
 		if (argument.type === 'SpreadElement') return fail(argument, 'spread', 'the arguments written out')
-		if (role === 'callback') return checkBuilderCallback(argument, scope, dependencies)
-		if (role === 'link-options' && argument.type === 'ObjectExpression') return checkObject(argument, scope, dependencies, 'procedures')
+		if (typeof role === 'object' && 'callback' in role) return checkBuilderCallback(argument, scope, dependencies, role.callback)
+		if (typeof role === 'object' && argument.type === 'ObjectExpression') {
+			return checkObject(argument, scope, dependencies, 'procedures', role.procedures)
+		}
 		if (role === 'pattern' && argument.type === 'Literal' && argument['regex'] !== undefined) return
 		checkExpression(argument, scope, dependencies)
+	}
+
+	const roleOf = (kind: BuilderKind, builder: string | undefined, method: string | undefined, position: number): Role => {
+		if (kind === 'contract' && position === 1) return { callback: 'surface' }
+		if (kind === 'surface' && builder === 'link' && position === 1) return { procedures: 'surface' }
+		if (kind === 'zod' && method === 'regex' && position === 0) return 'pattern'
+		const callback = kind === 'kit' && builder !== undefined && Object.hasOwn(KIT_CALLBACKS, builder) ? KIT_CALLBACKS[builder] : undefined
+		if (callback !== undefined && callback.position === position) {
+			return callback.options ? { procedures: callback.kind } : { callback: callback.kind }
+		}
+		return 'value'
 	}
 
 	const checkCall = (node: AstNode, scope: Scope, dependencies: string[]): void => {
 		const { root, links } = decompose(node)
 		const rootName = identifierName(root)
-		const kind = rootName === undefined ? undefined : (scope.get(rootName) ?? builders.get(rootName))
+		const kind = rootName === undefined
+			? undefined
+			: (scope.get(rootName) ?? builders.get(rootName) ?? (isKitName(graph, module, rootName) ? 'kit' : undefined))
 		if (kind === undefined) {
-			return fail(node, 'call of a function that is not c.*, z.* or define*', 'the value the function returns, written as a literal')
+			return fail(
+				node,
+				'call of a function that is not c.*, z.*, define* or the kit of defineApp',
+				'the value the function returns, written as a literal',
+			)
 		}
 		const computed = links.find(isComputedMember)
 		if (computed !== undefined) return fail(computed.node, 'a computed builder member', `${rootName}.<builder>(…) written with a dot`)
@@ -335,16 +418,12 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 			const previous = links[index - 1]
 			const method = previous?.kind === 'member' ? previous.name : undefined
 			children(link.node, 'arguments').forEach((argument, position) => {
-				if (argument === null) return
-				if (kind === 'contract' && position === 1) checkArgument(argument, scope, dependencies, 'callback')
-				else if (kind === 'surface' && builder === 'link' && position === 1) checkArgument(argument, scope, dependencies, 'link-options')
-				else if (kind === 'zod' && method === 'regex' && position === 0) checkArgument(argument, scope, dependencies, 'pattern')
-				else checkArgument(argument, scope, dependencies, 'value')
+				if (argument !== null) checkArgument(argument, scope, dependencies, roleOf(kind, builder, method, position))
 			})
 		})
 	}
 
-	const checkObject = (node: AstNode, scope: Scope, dependencies: string[], callbackKey?: string): void => {
+	const checkObject = (node: AstNode, scope: Scope, dependencies: string[], callbackKey?: string, callbackKit?: BuilderKind): void => {
 		for (const property of children(node, 'properties')) {
 			if (property === null) continue
 			if (property.type === 'SpreadElement') {
@@ -365,7 +444,7 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 			}
 			const value = child(property, 'value')
 			if (value === undefined) continue
-			if (callbackKey !== undefined && staticKey(property, 'key') === callbackKey) checkBuilderCallback(value, scope, dependencies)
+			if (callbackKey !== undefined && staticKey(property, 'key') === callbackKey) checkBuilderCallback(value, scope, dependencies, callbackKit)
 			else checkExpression(value, scope, dependencies)
 		}
 	}

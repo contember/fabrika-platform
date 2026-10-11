@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
-import { child, children, type ParsedModule, staticKey, walk } from '../ast'
+import { type AstNode, child, children, type ParsedModule, staticKey, walk } from '../ast'
 import type { Finding } from '../finding'
-import { type ModuleGraph, unwrapValue } from '../graph'
+import { type Located, type ModuleGraph, unwrapValue } from '../graph'
 
 export interface ContractJob {
 	readonly name: string
@@ -9,22 +9,40 @@ export interface ContractJob {
 	readonly schedule: string | undefined
 }
 
-/** Every `<name>: c.cron('<schedule>', { … })` in the contract, its schedule resolved through literal consts. */
+/**
+ * Every `<name>: c.cron('<schedule>', { … })` in the contract, and every `<name>` there that names a const of the
+ * kit's `app.cron('<schedule>', { … })`; the schedule is resolved through literal consts.
+ */
 export const contractJobs = (contract: ParsedModule, graph: ModuleGraph): readonly ContractJob[] => {
 	const jobs: ContractJob[] = []
+	const cronSchedule = (located: Located): string | undefined => {
+		const first = children(located.node, 'arguments')[0]
+		return first ? graph.resolveString({ module: located.module, node: first }) : undefined
+	}
 	walk(contract.program, (node, ancestors) => {
-		const callee = node.type === 'CallExpression' ? child(node, 'callee') : undefined
-		if (callee?.type !== 'MemberExpression' || staticKey(callee, 'property') !== 'cron') return
+		if (node.type === 'Property') {
+			const value = child(node, 'value')
+			const name = staticKey(node, 'key')
+			const resolved = value !== undefined && unwrapValue(value).type === 'Identifier'
+				? graph.resolveValue({ module: contract, node: value })
+				: undefined
+			if (name !== undefined && resolved !== undefined && isCronCall(resolved.node)) jobs.push({ name, schedule: cronSchedule(resolved) })
+			return
+		}
+		if (!isCronCall(node)) return
 		const property = [...ancestors].reverse().find((ancestor) => {
 			const value = ancestor.type === 'Property' ? child(ancestor, 'value') : undefined
 			return value !== undefined && unwrapValue(value) === node
 		})
 		const name = property === undefined ? undefined : staticKey(property, 'key')
-		const first = children(node, 'arguments')[0]
-		if (name === undefined) return
-		jobs.push({ name, schedule: first ? graph.resolveString({ module: contract, node: first }) : undefined })
+		if (name !== undefined) jobs.push({ name, schedule: cronSchedule({ module: contract, node }) })
 	})
 	return jobs
+}
+
+const isCronCall = (node: AstNode): boolean => {
+	const callee = node.type === 'CallExpression' ? child(node, 'callee') : undefined
+	return callee?.type === 'MemberExpression' && staticKey(callee, 'property') === 'cron'
 }
 
 const crontabEntrySchema = z.object({

@@ -9,11 +9,16 @@ import {
 	type Builder,
 	type CronJob,
 	type CspDeclaration,
+	type DeclaredDeclaration,
+	declaredOf,
 	type DimensionDef,
 	type Export,
 	type ExportAccessDeclaration,
 	type FileCollection,
 	type ImportDeclaration,
+	type KitImportDeclaration,
+	kitImportsSection,
+	kitUnknownOptions,
 	type LinkAccessDeclaration,
 	type ProcedureDeclaration,
 	type ProcedureType,
@@ -30,7 +35,7 @@ import type { CspSource, RpcCaller } from '@fabrika/auth-core'
 import type { Located } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
 import type { ReaderProblems } from './problems'
-import { describeKind, type Kit, type LiteralValue, schemaLimits } from './value'
+import { type AppValue, describeKind, type Kit, kitName, type LiteralValue, schemaLimits } from './value'
 
 /** A refused value; thrown inside this module and recorded where the reader can go on with the next entry. */
 class Refused {
@@ -47,6 +52,11 @@ class Refused {
 
 const MOUNT_BUILDERS = ['rpc', 'link', 'spa', 'health', 'form', 'webhook'] as const
 const MOUNT_ALLOWED = `one of c.${MOUNT_BUILDERS.join(', c.')}(…)`
+const KIT_MOUNT_ALLOWED = 'one of c.rpc, c.spa, c.health, c.form(…), or a const of app.link(…) or app.webhook(…)'
+const CONTRACT_ALLOWED = 'export const contract = app.contract((c) => ({ … })), or defineContract(vocabulary, (c) => ({ … }))'
+
+/** Which builders a surface is written with: `defineContract`'s `c`, or the staged kit's (`app.*` and its `c`). */
+type Form = 'surface' | 'kit'
 const ACCESS_ALLOWED = '{ member: true }, { action, over }, { action, in, from }, { action, on, from } or { action, creates }'
 
 type Entries = ReadonlyMap<string, LiteralValue>
@@ -71,19 +81,40 @@ class SurfaceReader {
 
 	contract(value: LiteralValue): AnyContract | null {
 		const read = this.#attempt(() => {
+			if (value.kind === 'kit-contract') {
+				return this.#kitContract(value.app, value)
+			}
 			if (value.kind !== 'contract') {
-				throw new Refused(value.at, `the contract is a ${describeKind(value)}`, 'export const contract = defineContract(vocabulary, (c) => ({ … }))')
+				throw new Refused(value.at, `the contract is a ${describeKind(value)}`, CONTRACT_ALLOWED)
 			}
 			const [vocabularyValue, callback] = args(value, 'defineContract', 2, 2)
 			if (callback?.kind !== 'callback' || vocabularyValue === undefined) {
 				throw new Refused(value.at, 'defineContract takes the vocabulary and a builder callback', 'defineContract(vocabulary, (c) => ({ … }))')
 			}
-			return { vocabulary: this.#vocabulary(vocabularyValue), surface: this.#surface(callback.result) }
+			return { vocabulary: this.#vocabulary(vocabularyValue), surface: this.#surface(callback.result, 'surface') }
 		})
 		if (read === null || !this.#complete) {
 			return null
 		}
 		return { vocabulary: read.vocabulary, dimensions: read.vocabulary.dimensions, surface: read.surface }
+	}
+
+	/** `app.contract((c) => ({ … }))`: the kit's vocabulary, the surface, and the imports section the kit derives. */
+	#kitContract(
+		app: AppValue,
+		value: Extract<LiteralValue, { kind: 'kit-contract' }>,
+	): { vocabulary: Vocabulary<string, string, string>; surface: Surface } {
+		const [callback] = args(value, 'app.contract', 1, 1)
+		if (callback?.kind !== 'callback') {
+			throw new Refused(value.at, 'app.contract takes a builder callback', 'app.contract((c) => ({ … }))')
+		}
+		const vocabulary = this.#vocabulary(app.vocabulary)
+		const imports = this.#attempt(() => kitImports(app.options)) ?? {}
+		const surface = this.#surface(callback.result, 'kit')
+		return {
+			vocabulary,
+			surface: Object.keys(imports).length === 0 ? surface : { ...surface, imports: kitImportsSection(imports, surface) },
+		}
 	}
 
 	/** Runs one entry's read; a refusal is recorded and the reader goes on, so one read reports every entry. */
@@ -163,7 +194,7 @@ class SurfaceReader {
 
 	// ── Surface ─────────────────────────────────────────────────────────────────────────────────
 
-	#surface(value: LiteralValue): Surface {
+	#surface(value: LiteralValue, form: Form): Surface {
 		if (value.kind !== 'object') {
 			throw new Refused(
 				value.at,
@@ -176,7 +207,7 @@ class SurfaceReader {
 			if (isSection(name)) {
 				continue
 			}
-			const mount = this.#attempt(() => this.#mount(entry))
+			const mount = this.#attempt(() => (form === 'kit' ? this.#kitMount(entry) : this.#mount(entry)))
 			if (mount !== null) {
 				mounts[name] = mount
 			}
@@ -188,13 +219,19 @@ class SurfaceReader {
 		const files = section('files')
 		const jobs = section('jobs')
 		const exports = section('exports')
-		const imports = section('imports')
+		const importsEntry = value.entries.get('imports')
+		if (form === 'kit' && importsEntry !== undefined) {
+			this.#attempt(() => {
+				throw new Refused(importsEntry.at, 'the imports section of the kit contract', 'defineApp(vocabulary, tables, { imports }); remove the section')
+			})
+		}
+		const imports = form === 'kit' ? undefined : section('imports')
 		const csp = value.entries.get('csp')
 		return {
 			...mounts,
-			files: files === undefined ? undefined : this.#each(files, (_, entry) => this.#files(entry)),
-			jobs: jobs === undefined ? undefined : this.#each(jobs, (_, entry) => this.#cron(entry)),
-			exports: exports === undefined ? undefined : this.#each(exports, (_, entry) => this.#export(entry)),
+			files: files === undefined ? undefined : this.#each(files, (_, entry) => this.#files(entry, form)),
+			jobs: jobs === undefined ? undefined : this.#each(jobs, (_, entry) => (form === 'kit' ? this.#kitCron(entry) : this.#cron(entry))),
+			exports: exports === undefined ? undefined : this.#each(exports, (_, entry) => (form === 'kit' ? this.#kitExport(entry) : this.#export(entry))),
 			imports: imports === undefined ? undefined : this.#each(imports, (name, entry) => importDeclaration(name, entry)),
 			csp: csp === undefined ? undefined : (this.#attempt(() => cspDeclaration(csp)) ?? undefined),
 		}
@@ -282,9 +319,104 @@ class SurfaceReader {
 		}
 	}
 
+	/** A mount of the kit contract: `c.rpc(prefix, groups)`, a shell mount, or an `app.link` or `app.webhook` const. */
+	#kitMount(value: LiteralValue): AnyMount {
+		const builder = value.kind === 'builder' ? { name: value.name, kit: value.kit, args: value.args, at: value.at } : undefined
+		if (builder?.kit === 'shell' && builder.name === 'rpc') {
+			const [prefix, groupsValue] = args(builder, 'c.rpc', 2, 2)
+			const path = text(prefix, builder, 'the prefix')
+			const read = this.#groups(groupsValue, builder)
+			const [first] = read.groups
+			if (first === undefined) {
+				throw new Refused(groupsValue?.at ?? builder.at, `c.rpc('${path}') mounts no group`, `c.rpc('${path}', { <name>: <group> })`)
+			}
+			if (read.groups.some((group) => !sameCallers(group.callers, first.callers))) {
+				throw new Refused(builder.at, 'every group of one RPC mount names the same callers, in the same order', "callers: ['human'] in each group")
+			}
+			return {
+				kind: 'rpc',
+				prefix: path,
+				callers: first.callers,
+				procedures: read.procedures,
+				unknownOptions: [...new Set(read.groups.flatMap((group) => group.unknownOptions))],
+			}
+		}
+		if (builder?.kit === 'shell' && (builder.name === 'spa' || builder.name === 'health' || builder.name === 'form')) {
+			return this.#mount(asSurface(builder))
+		}
+		if (builder?.kit === 'app' && builder.name === 'link') {
+			const [prefix, optionsValue] = args(builder, 'app.link', 2, 2)
+			const options = builderOptions(optionsValue, builder, 'app.link')
+			const callback = options.get('procedures')
+			if (callback?.kind !== 'callback') {
+				throw new Refused(
+					callback?.at ?? builder.at,
+					'app.link needs procedures as a builder callback',
+					'procedures: (l) => ({ <name>: l.query({ … }) })',
+				)
+			}
+			return {
+				kind: 'link',
+				prefix: text(prefix, builder, 'the prefix'),
+				spa: text(options.get('spa'), builder, 'spa'),
+				dimension: text(options.get('dimension'), builder, 'dimension'),
+				grants: texts(options.get('grants'), builder, 'grants'),
+				issuedBy: text(options.get('issuedBy'), builder, 'issuedBy'),
+				maxDays: numeric(options.get('maxDays'), builder, 'maxDays'),
+				procedures: this.#tree(callback.result, builder, 'endpoints', (leaf) => this.#procedure(leaf, 'endpoints', linkAccessDeclaration)),
+				unknownOptions: optionKeys(options, 'link'),
+			}
+		}
+		if (builder?.kit === 'app' && builder.name === 'webhook') {
+			const mount = this.#mount(asSurface(builder))
+			if (mount.kind !== 'webhook') {
+				throw new Refused(builder.at, 'app.webhook(…) read as another mount', 'app.webhook(path, { … })')
+			}
+			const options = builderOptions(builder.args[1], builder, 'app.webhook')
+			return { ...mount, declared: declared(options), unknownOptions: kitOptionKeys(options, 'webhook') }
+		}
+		throw new Refused(value.at, `a ${describeKind(value)} where a mount of the kit stands`, KIT_MOUNT_ALLOWED)
+	}
+
+	/** The groups `c.rpc` mounts: one `app.group(…)`, or groups by name, nested; the procedures nest by the same names. */
+	#groups(
+		value: LiteralValue | undefined,
+		owner: BuilderValue,
+	): { readonly groups: readonly ReadGroup[]; readonly procedures: Tree<ProcedureDeclaration<Schema>> } {
+		if (value?.kind === 'builder' && value.kit === 'app' && value.name === 'group') {
+			const at = { name: value.name, kit: value.kit, args: value.args, at: value.at }
+			const [optionsValue, callback] = args(at, 'app.group', 2, 2)
+			const options = builderOptions(optionsValue, at, 'app.group')
+			if (callback?.kind !== 'callback') {
+				throw new Refused(
+					callback?.at ?? at.at,
+					'app.group takes its endpoints as a builder callback',
+					'app.group({ callers }, (r) => ({ <name>: r.query({ … }) }))',
+				)
+			}
+			const procedures = this.#tree(callback.result, at, 'endpoints', (leaf) => this.#procedure(leaf, 'endpoints', accessDeclaration))
+			return { groups: [{ callers: rpcCallers(options.get('callers'), at), unknownOptions: optionKeys(options, 'rpc') }], procedures }
+		}
+		if (value?.kind !== 'object') {
+			throw new Refused(
+				value?.at ?? owner.at,
+				`a ${value === undefined ? 'missing value' : describeKind(value)} where a group stands`,
+				'app.group(…), or { <name>: <group> }',
+			)
+		}
+		const groups: ReadGroup[] = []
+		const procedures: Record<string, Tree<ProcedureDeclaration<Schema>>> = {}
+		for (const [name, entry] of value.entries) {
+			const read = this.#groups(entry, owner)
+			groups.push(...read.groups)
+			procedures[name] = read.procedures
+		}
+		return { groups, procedures }
+	}
+
 	#tree<Leaf>(value: LiteralValue | undefined, owner: BuilderValue, kit: Kit, leaf: (builder: BuilderValue) => Leaf): Tree<Leaf> {
 		if (value?.kind !== 'object') {
-			throw new Refused(value?.at ?? owner.at, 'procedures are not an object', `{ <name>: ${kit === 'link' ? 'l' : 'c'}.query({ … }), <group>: { … } }`)
+			throw new Refused(value?.at ?? owner.at, 'procedures are not an object', `{ <name>: ${kitName(kit)}.query({ … }), <group>: { … } }`)
 		}
 		const tree: Record<string, Leaf | Tree<Leaf>> = {}
 		for (const [name, node] of value.entries) {
@@ -296,7 +428,7 @@ class SurfaceReader {
 				throw new Refused(
 					node.at,
 					`procedure '${name}' is a ${describeKind(node)}`,
-					`${kit === 'link' ? 'l' : 'c'}.query({ … }), c.mutation({ … }) or a group { … }`,
+					`${kitName(kit)}.query({ … }), ${kitName(kit)}.mutation({ … }) or a group { … }`,
 				)
 			}
 		}
@@ -308,13 +440,9 @@ class SurfaceReader {
 		kit: Kit,
 		access: (value: LiteralValue | undefined, at: BuilderValue) => Access,
 	): ProcedureDeclaration<Schema, Access> {
-		const call = `${kit === 'link' ? 'l' : 'c'}.${builder.name}`
+		const call = `${kitName(builder.kit)}.${builder.name}`
 		if (builder.kit !== kit || (builder.name !== 'query' && builder.name !== 'mutation')) {
-			throw new Refused(
-				builder.at,
-				`${call}(…) is not a procedure here`,
-				`${kit === 'link' ? 'l' : 'c'}.query({ … }) or ${kit === 'link' ? 'l' : 'c'}.mutation({ … })`,
-			)
+			throw new Refused(builder.at, `${call}(…) is not a procedure here`, `${kitName(kit)}.query({ … }) or ${kitName(kit)}.mutation({ … })`)
 		}
 		const type: ProcedureType = builder.name
 		const [definition] = args(builder, call, 1, 1)
@@ -326,14 +454,17 @@ class SurfaceReader {
 			input: input === undefined || input.kind === 'null' ? null : this.#schema(input, builder, 'input'),
 			output: this.#schema(options.get('output'), builder, 'output'),
 			access: access(options.get('access'), builder),
-			unknownOptions: optionKeys(options, 'procedure'),
+			...(kit === 'endpoints'
+				? { declared: declared(options), unknownOptions: kitOptionKeys(options, 'procedure') }
+				: { unknownOptions: optionKeys(options, 'procedure') }),
 		}
 	}
 
 	// ── Sections ────────────────────────────────────────────────────────────────────────────────
 
-	#files(value: LiteralValue): FileCollection<string> {
-		const at = surfaceBuilder(value, ['files'], 'c.files({ … })').value
+	#files(value: LiteralValue, form: Form): FileCollection<string> {
+		const at =
+			surfaceBuilder(form === 'kit' && value.kind === 'builder' && value.kit === 'shell' ? asSurface(value) : value, ['files'], 'c.files({ … })').value
 		const [collection] = args(at, 'c.files', 1, 1)
 		const options = builderOptions(collection, at, 'c.files')
 		const link = options.get('link')
@@ -363,6 +494,44 @@ class SurfaceReader {
 			timeout: optionalText(options.get('timeout'), 'timeout'),
 			retries: optionalNumber(options.get('retries'), 'retries'),
 			unknownOptions: optionKeys(options, 'cron'),
+		}
+	}
+
+	/** A job of the kit: a const of `app.cron(schedule, { … })`, whose `.handle(…)` the slice removed. */
+	#kitCron(value: LiteralValue): CronJob<string, string> {
+		if (value.kind !== 'builder' || value.kit !== 'app' || value.name !== 'cron') {
+			throw new Refused(value.at, `a ${describeKind(value)} where a job stands`, "a const of app.cron('<schedule>', { … })")
+		}
+		const job = this.#cron(asSurface(value))
+		const options = builderOptions(value.args[1], { name: value.name, kit: value.kit, args: value.args, at: value.at }, 'app.cron')
+		return { ...job, declared: declared(options), unknownOptions: kitOptionKeys(options, 'cron') }
+	}
+
+	/** An export of the kit: a const of `app.export({ …, procedures: (e) => ({ … }) })`. */
+	#kitExport(value: LiteralValue): Export<QueryTree> {
+		if (value.kind !== 'builder' || value.kit !== 'app' || value.name !== 'export') {
+			throw new Refused(value.at, `a ${describeKind(value)} where an export stands`, 'a const of app.export({ … })')
+		}
+		const at = { name: value.name, kit: value.kit, args: value.args, at: value.at }
+		const [definition] = args(at, 'app.export', 1, 1)
+		const options = builderOptions(definition, at, 'app.export')
+		const callback = options.get('procedures')
+		if (callback?.kind !== 'callback') {
+			throw new Refused(callback?.at ?? at.at, 'app.export needs procedures as a builder callback', 'procedures: (e) => ({ <name>: e.query({ … }) })')
+		}
+		return {
+			kind: 'export',
+			version: numeric(options.get('version'), at, 'version'),
+			consumers: texts(options.get('consumers'), at, 'consumers'),
+			audience: text(options.get('audience'), at, 'audience'),
+			procedures: this.#tree(callback.result, at, 'endpoints', (leaf) => {
+				const procedure = this.#procedure(leaf, 'endpoints', exportAccessDeclaration)
+				if (procedure.type !== 'query') {
+					throw new Refused(leaf.at, 'an export serves queries only', 'e.query')
+				}
+				return { ...procedure, type: procedure.type }
+			}),
+			unknownOptions: optionKeys(options, 'export'),
 		}
 	}
 
@@ -409,7 +578,7 @@ function surfaceBuilder<const Name extends string>(
 }
 
 function args(
-	builder: BuilderValue | Extract<LiteralValue, { kind: 'contract' }>,
+	builder: BuilderValue | Extract<LiteralValue, { kind: 'contract' | 'kit-contract' }>,
 	call: string,
 	min: number,
 	max: number,
@@ -434,6 +603,88 @@ function builderOptions(value: LiteralValue | undefined, at: BuilderValue, call:
 
 function optionKeys(options: Entries, builder: Builder): string[] {
 	return unknownOptions(Object.fromEntries([...options.keys()].map((key) => [key, true])), builder)
+}
+
+function kitOptionKeys(options: Entries, builder: Builder): string[] {
+	return kitUnknownOptions(Object.fromEntries([...options.keys()].map((key) => [key, true])), builder)
+}
+
+/** What a site of the kit declares, copied as `declaredOf` copies it; `buildArtifact` checks it. */
+function declared(options: Entries): DeclaredDeclaration {
+	return declaredOf({
+		sql: plain(options.get('sql')),
+		unscoped: plain(options.get('unscoped')),
+		connect: plain(options.get('connect')),
+		issues: plain(options.get('issues')),
+	})
+}
+
+/** A literal as the plain value the evaluated module holds; a declared field holds no schema or builder. */
+function plain(value: LiteralValue | undefined): unknown {
+	if (value === undefined) {
+		return undefined
+	}
+	switch (value.kind) {
+		case 'string':
+		case 'number':
+		case 'boolean':
+			return value.value
+		case 'null':
+			return null
+		case 'array':
+			return value.items.map(plain)
+		case 'object':
+			return Object.fromEntries([...value.entries].map(([key, entry]) => [key, plain(entry)]))
+		default:
+			throw new Refused(value.at, `a ${describeKind(value)} in a declared field`, DECLARED_ALLOWED)
+	}
+}
+
+const DECLARED_ALLOWED = "sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>'"
+
+/** A builder of the kit read as the `defineContract` builder of the same name, which builds the same declaration. */
+const asSurface = (builder: BuilderValue): LiteralValue => ({
+	kind: 'builder',
+	kit: 'surface',
+	name: builder.name,
+	args: builder.args,
+	at: builder.at,
+})
+
+interface ReadGroup {
+	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
+	readonly unknownOptions: readonly string[]
+}
+
+const sameCallers = (left: readonly string[], right: readonly string[]): boolean =>
+	left.length === right.length && left.every((caller, index) => caller === right[index])
+
+/** The kit's imports from `defineApp`'s options: each snapshot's identity, the procedures it calls, its deadline. */
+function kitImports(options: LiteralValue | undefined): Record<string, KitImportDeclaration> {
+	if (options === undefined) {
+		return {}
+	}
+	const fields = strictFields(options, "defineApp's options", [], ['imports'])
+	const imports = fields.get('imports')
+	if (imports === undefined) {
+		return {}
+	}
+	return Object.fromEntries([...entries(imports, options, 'imports')].map(([name, value]) => {
+		const where = `import '${name}'`
+		const declaration = strictFields(value, where, ['snapshot', 'procedures'], ['timeoutMs'])
+		const snapshotValue = declaration.get('snapshot')
+		const snapshot = entries(snapshotValue, value, 'snapshot')
+		const owner = snapshotValue ?? value
+		const timeoutMs = optionalNumber(declaration.get('timeoutMs'), 'timeoutMs')
+		return [name, {
+			app: text(snapshot.get('app'), owner, 'the snapshot app'),
+			export: text(snapshot.get('export'), owner, 'the snapshot export'),
+			version: numeric(snapshot.get('version'), owner, 'the snapshot version'),
+			digest: text(snapshot.get('digest'), owner, 'the snapshot digest'),
+			procedures: texts(declaration.get('procedures'), value, 'procedures'),
+			...(timeoutMs === undefined ? {} : { timeoutMs }),
+		}]
+	}))
 }
 
 const SECTIONS: ReadonlySet<string> = new Set(SURFACE_SECTIONS)
