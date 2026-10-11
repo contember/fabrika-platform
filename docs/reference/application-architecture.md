@@ -91,11 +91,11 @@ handler. A slice that outgrows one `endpoints.ts` becomes two slices.
 | `src/vocabulary.ts`          | `export const vocabulary = defineVocabulary({ app, dimensions, actions, roles })`. A literal.                                                |
 | `src/db/tables.ts`           | `export const tables = defineTables(vocabulary, columns)({ <table>: { scope, actions, insert, update } })`. A literal.                       |
 | `src/db/schema.generated.ts` | the `DB` interfaces and `columns`, written by `fabrika db codegen`. Never edited.                                                            |
-| `src/app-kit.ts`             | `export const app = defineApp(vocabulary, tables)`, and the handle types `queries.ts` modules take.                                          |
+| `src/app-kit.ts`             | `export const app = defineApp(vocabulary, tables)`.                                                                                          |
 | `src/schemas.ts`             | the zod schemas of inputs and outputs, in the checker's literal subset. `src/schemas/<name>.ts` once it grows.                               |
 | `src/<slice>/endpoints.ts`   | `export const <slice> = app.group({ callers }, (r) => ({ … }))`, each procedure followed by `.handle(…)`.                                    |
-| `src/<slice>/logic.ts`       | `export const canReopen = (stage: Stage): boolean => …`                                                                                      |
-| `src/<slice>/queries.ts`     | `export const pipelineOf = (sql: AppSql, orgId: string) => …`                                                                                |
+| `src/<slice>/logic.ts`       | `export const canReopen = (stage: string): boolean => …`                                                                                     |
+| `src/<slice>/queries.ts`     | `export const lockedStage = async (deal: { getForUpdate(): Promise<DB['deals']> }) => …`                                                     |
 | `fabrika.contract.ts`        | `export const contract = app.contract((c) => ({ api: c.rpc('/api', { companies, deals }), … }))`: mounts, `jobs`, `files`, `imports`, `csp`. |
 | `src/app.ts`                 | `export default serve(contract, { database: scoped(tables), deps })`. Nothing else.                                                          |
 | `fabrika.config.ts`          | the provider's `defineApp(…)`: services, `compileContract(contract, tables)`, the proxy table, the schema.                                   |
@@ -106,33 +106,29 @@ A slice in code:
 
 ```ts
 // src/deals/logic.ts
-import type { DEAL_STAGES } from '../schemas'
-
-type Stage = (typeof DEAL_STAGES)[number]
-
-export const canReopen = (stage: Stage): boolean =>
+export const canReopen = (stage: string): boolean =>
 	stage === 'won' || stage === 'lost'
 ```
 
+A query function types its handle parameter by the methods it calls, with the row type of
+`src/db/schema.generated.ts`:
+
 ```ts
 // src/deals/queries.ts
-import type { AppSql } from '../app-kit'
-import { PipelineRow } from '../schemas'
+import type { DB } from '../db/schema.generated'
 
-export const pipelineOf = (sql: AppSql, orgId: string) =>
-	sql(
-		PipelineRow,
-	)`select d.stage, count(*)::int as deals from deals d join companies c on c.id = d.company_id
-		where c.org_id = ${orgId} group by d.stage`
+export const lockedStage = async (
+	deal: { getForUpdate(): Promise<DB['deals']> },
+): Promise<string> => (await deal.getForUpdate()).stage
 ```
 
 ```ts
 // src/deals/endpoints.ts
 import { ConflictError } from '@fabrika/app'
 import { app } from '../app-kit'
-import { OrgInput, Pipeline, ReopenDeal, Saved } from '../schemas'
+import { OrgInput, Pipeline, PipelineRow, ReopenDeal, Saved } from '../schemas'
 import { canReopen } from './logic'
-import { pipelineOf } from './queries'
+import { lockedStage } from './queries'
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
 	reopen: r.mutation({
@@ -141,8 +137,7 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		access: { action: 'deals.write', on: 'deal', from: 'id' },
 	})
 		.handle(async ({ input, ctx }) => {
-			const deal = await ctx.db.target.getForUpdate()
-			if (!canReopen(deal.stage)) {
+			if (!canReopen(await lockedStage(ctx.db.target))) {
 				throw new ConflictError('only a won or lost deal reopens')
 			}
 			return ctx.db.target.update({ stage: 'proposal' }, {
@@ -156,7 +151,10 @@ export const deals = app.group({ callers: ['human'] }, (r) => ({
 		sql: 'read',
 	})
 		.handle(async ({ ctx }) => ({
-			rows: await pipelineOf(ctx.sql, ctx.target.id),
+			rows: await ctx.sql(
+				PipelineRow,
+			)`select d.stage, count(*)::int as deals from deals d
+				join companies c on c.id = d.company_id where c.org_id = ${ctx.target.id} group by d.stage`,
 		})),
 }))
 ```
@@ -179,26 +177,34 @@ export const contract = app.contract((c) => ({
 Rows are the importing module. "Checker" names what `fabrika-check` reports for a forbidden import. A type-only
 import (`import type`) is erased and is free everywhere, except of a generated test.
 
-| Module                             | May import                                                                                        | Must not import                                                                       | Checker                                              |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `src/vocabulary.ts`                | `@fabrika/app/contract`                                                                           | any module of the application                                                         | `literal` (refusal): the contract graph is a literal |
-| `src/db/tables.ts`                 | `@fabrika/db/tables`, `src/vocabulary.ts`, `src/db/schema.generated.ts`                           | the kit, a slice, the contract                                                        | `literal` (refusal)                                  |
-| `src/app-kit.ts`                   | `@fabrika/app/contract`, `src/vocabulary.ts`, `src/db/tables.ts`                                  | a slice, the contract                                                                 | —                                                    |
-| `src/schemas.ts`                   | `zod/v4`, another schemas module                                                                  | anything else                                                                         | `literal` (refusal)                                  |
-| `src/<slice>/endpoints.ts`         | the kit, the schemas, its own `logic.ts` and `queries.ts`, any slice's `logic.ts`, `@fabrika/app` | another slice's `queries.ts`                                                          | `cross-slice-queries` (hint)                         |
-| `src/<slice>/logic.ts`             | the schemas, any slice's `logic.ts`, plain libraries, `@fabrika/app` (its errors)                 | `@fabrika/db`, a `queries.ts`, `src/db/`                                              | `logic-data-access` (hint)                           |
-|                                    |                                                                                                   | any other `@fabrika/*` module                                                         | `layer-import` (refusal)                             |
-| `src/<slice>/queries.ts`           | the kit's types, the schemas, its own `logic.ts`, `@fabrika/app`, `@fabrika/db`                   | another slice's `queries.ts`                                                          | `cross-slice-queries` (hint)                         |
-|                                    |                                                                                                   | any other `@fabrika/*` module                                                         | `layer-import` (refusal)                             |
-| `fabrika.contract.ts`              | the kit, the slices' `endpoints.ts`, the schemas                                                  | —                                                                                     | —                                                    |
-| `src/app.ts`                       | `@fabrika/app/implement` (`serve`), `@fabrika/db` (`scoped`), the contract, `src/db/tables.ts`    | —                                                                                     | —                                                    |
-| `web/**`                           | `@fabrika/app/client`, `fabrika.contract.ts`, the schemas, other `web/` modules, browser packages | any other application module, any other `@fabrika/*` module, `bun`, `bun:*`, `node:*` | `spa-server-import` (refusal)                        |
-| a test (`*.test.ts`, `__tests__/`) | anything, the test kits included                                                                  | a generated test                                                                      | `generated-test-import` (refusal)                    |
-| any module but a test              | —                                                                                                 | `@fabrika/app/testing`, `@fabrika/db/testing`, a test module                          | `test-only-import` (refusal)                         |
-| any module                         | —                                                                                                 | a generated test                                                                      | `generated-test-import` (refusal)                    |
+| Module                             | May import                                                                                        | Must not import                                                                    | Checker                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `src/vocabulary.ts`                | `@fabrika/app/contract`                                                                           | any module of the application                                                      | `literal` (refusal): the contract graph is a literal |
+| `src/db/tables.ts`                 | `@fabrika/db/tables`, `src/vocabulary.ts`, `src/db/schema.generated.ts`                           | the kit, a slice, the contract                                                     | `literal` (refusal)                                  |
+| `src/app-kit.ts`                   | `@fabrika/app/contract`, `src/vocabulary.ts`, `src/db/tables.ts`                                  | a slice, the contract                                                              | —                                                    |
+| `src/schemas.ts`                   | `zod/v4`, another schemas module                                                                  | anything else                                                                      | `literal` (refusal)                                  |
+| `src/<slice>/endpoints.ts`         | the kit, the schemas, its own `logic.ts` and `queries.ts`, any slice's `logic.ts`, `@fabrika/app` | another slice's `queries.ts`                                                       | `cross-slice-queries` (hint)                         |
+| `src/<slice>/logic.ts`             | the schemas, any slice's `logic.ts`, plain libraries, `@fabrika/app` (its errors)                 | `@fabrika/db`, a `queries.ts`, `src/db/`                                           | `logic-data-access` (hint)                           |
+|                                    |                                                                                                   | any other `@fabrika/*` module                                                      | `layer-import` (refusal)                             |
+| `src/<slice>/queries.ts`           | the generated row types, the schemas, its own `logic.ts`, `@fabrika/app`, `@fabrika/db`           | another slice's `queries.ts`                                                       | `cross-slice-queries` (hint)                         |
+|                                    |                                                                                                   | any other `@fabrika/*` module                                                      | `layer-import` (refusal)                             |
+| `fabrika.contract.ts`              | the kit, the slices' `endpoints.ts`, the schemas                                                  | —                                                                                  | —                                                    |
+| `src/app.ts`                       | `@fabrika/app/implement` (`serve`), `@fabrika/db` (`scoped`), the contract, `src/db/tables.ts`    | —                                                                                  | —                                                    |
+| `web/**`                           | `@fabrika/app/client`, `fabrika.contract.ts`, the schemas, other `web/` modules, browser packages | any other application module, any other `@fabrika/*` module, Bun and Node builtins | `spa-server-import` (refusal)                        |
+| a test (`*.test.ts`, `__tests__/`) | anything, the test kits included                                                                  | a generated test                                                                   | `generated-test-import` (refusal)                    |
+| any module but a test              | —                                                                                                 | `@fabrika/app/testing`, `@fabrika/db/testing`, a test module                       | `test-only-import` (refusal)                         |
+| any module                         | —                                                                                                 | a generated test                                                                   | `generated-test-import` (refusal)                    |
 
-The import maps of `package.json` (`imports`) and `tsconfig.json` (`paths`) are followed: a mapped specifier is
-judged by the file or package it lands on.
+An import is judged by the file or package Bun loads for it:
+
+- A mapped specifier resolves through `compilerOptions.paths` of the importing module's nearest `tsconfig.json` (or
+  `jsconfig.json`), with its local `extends`, then through `imports` of its nearest `package.json`. Targets are
+  relative to the file that declares them (`baseUrl` when set). The exact key wins over a pattern, and the pattern
+  with the longest prefix over a shorter one.
+- `layer-import` follows the local modules that `logic.ts` and `queries.ts` load at runtime (imports, re-exports,
+  `export *`, a literal `import()`), so a helper module or a barrel carries their restriction.
+- `spa-server-import` follows the schema modules the SPA loads, since nothing else checks their imports.
+  `fabrika.contract.ts` is not followed: the SPA bundle loads it without its handlers.
 
 ## What each part may call
 
@@ -219,8 +225,8 @@ judged by the file or package it lands on.
 - **Logic** (`logic.ts`) is pure: values in, values out. It does not see `ctx`, a handle or a row it did not get as an
   argument. Its tests need no database.
 - **A query function** (`queries.ts`) takes the handle as a parameter (`ctx.db.target`, `ctx.db.within.<table>`,
-  `ctx.sql`) and returns parsed values (`fromRow`). It decides no authorization: the capability already bounds the
-  handle. It is called from its own slice's handlers.
+  `ctx.sql`), typed by the methods it calls, and returns plain values. It decides no authorization: the capability
+  already bounds the handle. It is called from its own slice's handlers.
 - **A job** is a `c.cron` procedure with its `.handle(…)` in the `endpoints.ts` of the slice whose data it works on;
   the contract's `jobs` section names it. An attempt retries, so its writes are idempotent.
 - **A webhook** is declared and handled the same way; it keys idempotency on `ctx.delivery.key`.
@@ -248,15 +254,15 @@ judged by the file or package it lands on.
 
 ## What the checker reports
 
-| Rule                    | Severity | Reports                                                                                                                                                                                                                                    |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `spa-server-import`     | refusal  | a module under `web/` (not a test) that loads an application module other than `fabrika.contract.ts`, `src/schemas.ts`, `src/schemas/**` and `web/**`, a `@fabrika/*` module other than `@fabrika/app/client`, or `bun`, `bun:*`, `node:*` |
-| `layer-import`          | refusal  | `src/<slice>/logic.ts` or `queries.ts` that loads a `@fabrika/*` module other than `@fabrika/app` and `@fabrika/db` (the test kits are `test-only-import`'s)                                                                               |
-| `generated-test-import` | refusal  | any module, a test included, that imports or re-exports a generated test, type-only too                                                                                                                                                    |
-| `logic-data-access`     | hint     | `logic.ts` that loads `@fabrika/db`, a `queries.ts` or a module of `src/db/`, or uses `ctx.db` or `ctx.sql`                                                                                                                                |
-| `cross-slice-queries`   | hint     | a module of one slice that loads another slice's `queries.ts`                                                                                                                                                                              |
-| `handler-location`      | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                          |
-| `data-access-location`  | hint     | `ctx.db` or `ctx.sql` outside `src/<slice>/endpoints.ts` and `queries.ts` (`logic.ts` reports `logic-data-access`)                                                                                                                         |
+| Rule                    | Severity | Reports                                                                                                                                                                                                                                                                                                                 |
+| ----------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spa-server-import`     | refusal  | a module under `web/` (not a test) that loads, also through a schema module, an application module other than `fabrika.contract.ts`, `src/schemas.ts`, `src/schemas/**` and `web/**`, a `@fabrika/*` module other than `@fabrika/app/client`, or a Bun or Node builtin (`fs`, `fs/promises`, `node:path`, `bun:sqlite`) |
+| `layer-import`          | refusal  | `src/<slice>/logic.ts` or `queries.ts` that loads, also through a local module, a `@fabrika/*` module other than `@fabrika/app` and `@fabrika/db` (the test kits are `test-only-import`'s)                                                                                                                              |
+| `generated-test-import` | refusal  | any module, a test included, that imports or re-exports a generated test, type-only too                                                                                                                                                                                                                                 |
+| `logic-data-access`     | hint     | `logic.ts` that loads `@fabrika/db`, a `queries.ts` or a module of `src/db/`, or uses `ctx.db` or `ctx.sql`                                                                                                                                                                                                             |
+| `cross-slice-queries`   | hint     | a module of one slice that loads another slice's `queries.ts`                                                                                                                                                                                                                                                           |
+| `handler-location`      | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                                                                                                       |
+| `data-access-location`  | hint     | `ctx.db` or `ctx.sql` outside `src/<slice>/endpoints.ts` and `queries.ts` (`logic.ts` reports `logic-data-access`)                                                                                                                                                                                                      |
 
 - Hints do not apply to test files or the generated entrypoint.
 - A hint is syntactic: destructuring `ctx`, or passing a handle into a helper module, escapes it. The runtime binds
