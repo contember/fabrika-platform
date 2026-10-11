@@ -8,6 +8,11 @@ export class QueryRefusedError extends Error {
 	override name = 'QueryRefusedError'
 }
 
+/** A `ctx.sql` row its row schema refuses: the handler's bug. The message names the column, never its value. */
+export class SqlRowError extends Error {
+	override name = 'SqlRowError'
+}
+
 /** A table policy that cannot be enforced as written. */
 export class PolicyError extends Error {
 	override name = 'PolicyError'

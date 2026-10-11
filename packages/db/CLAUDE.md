@@ -28,6 +28,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                         |
 | `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                 |
 | `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `InvocationTransaction`, `applicationSchema` (`app_<id>`).                               |
+| `sql.ts`               | `ctx.sql`: `classifySql` (the template's static text over `@fabrika/platform-node/sql`), the value binding, the row parse, `sqlTag`.                           |
 | `store.ts`             | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                                               |
 | `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                                       |
 | `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`, `dataAccessOf`; browser-safe. |
@@ -226,14 +227,20 @@ and the target `Ref`, so no handler can call it.
   runtime check is what refuses it.
 - **`ConflictError` and `NotFoundError` are internal.** The root exports neither: an application throws `@fabrika/app`'s,
   and the framework maps these by `name` (409, 404).
-- **No raw handle leaves the package.** `Database` keeps its Kysely instance in a private field; the
-  store reaches it through `sessionOf`, and `Session.run` guards every tree. Do not add a method that
-  takes SQL, a builder or an unguarded node.
+- **No raw handle leaves the package; the one SQL text is a declared site's `ctx.sql`.** `Database` keeps its Kysely
+  instance in a private field; the store reaches it through `sessionOf`, and `Session.run` guards every tree. An
+  application's own SQL enters only through `sql.ts` (`DataAccess.sql`, which the framework builds for a site that
+  declares `sql`): a tagged template whose static text `classifySql` reads with a `$n` for each value, so a value is
+  only ever a bound parameter, refused before anything is sent for what escapes the statement, the transaction or the
+  schema (see `docs/reference/application-runtime.md`), and run by `runApplicationStatement` through the session's
+  private execute, so a statement the database refuses fails the invocation. Do not add another method that takes
+  SQL, a builder or an unguarded node.
 - **`Database` is frozen, the class and its prototype.** Application modules load after `database.ts`, and a
   replaced `Database.postgres` would receive the database URL; `@fabrika/app/bun` also takes the factory before it
   imports the application. Never add a writable static. `hardening.test.ts` is the witness; `@fabrika/check`'s
   `framework-write` refuses the write in source.
-- **Bind scalars only.** `Bun.SQL` mis-binds a JS array (`in` lists are expanded into parameters) and
+- **Bind scalars only.** `ctx.sql` encodes a list as a Postgres array literal (one text parameter) for the same
+  reason. `Bun.SQL` mis-binds a JS array (`in` lists are expanded into parameters) and
   stores a bound JSON string as a JSON string, so values are strings, numbers, bigints, booleans, Dates
   or null; the guard refuses anything else in a `ValueNode`. The pool runs with `prepare: false`:
   otherwise Bun keeps one prepared statement per distinct SQL text, and `in` lists of different

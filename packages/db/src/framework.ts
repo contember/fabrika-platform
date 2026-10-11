@@ -16,6 +16,7 @@ export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framewo
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
 export type { DataAccess, DataHandles, DataSite } from './orm'
 export type { FrameworkTables, Locator } from './registry'
+export type { SqlMode, SqlSite, SqlTag, SqlValue } from './sql'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */
 export function isScopedDatabase(value: unknown): boolean {

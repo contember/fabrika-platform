@@ -69,9 +69,11 @@ let transactionBuilder: (database: Database) => TransactionBuilder<LooseDB>
 /** The connection the data layer runs on. It has no public query method: everything goes through a store. */
 export class Database {
 	readonly #kysely: Kysely<LooseDB>
+	readonly #schema: string | undefined
 
-	private constructor(kysely: Kysely<LooseDB>) {
+	private constructor(kysely: Kysely<LooseDB>, schema: string | undefined) {
 		this.#kysely = kysely
+		this.#schema = schema
 		Object.freeze(this)
 	}
 
@@ -89,12 +91,17 @@ export class Database {
 			throw new QueryRefusedError('the schema must match ^[a-z_][a-z0-9_]*$')
 		}
 		const pool = new SQL({ url: options.url, adapter: 'postgres', prepare: false, max: options.max ?? 10, connection: { search_path: options.schema } })
-		return new Database(new Kysely<LooseDB>({ dialect: new PostgresJSDialect({ postgres: pool }) }))
+		return new Database(new Kysely<LooseDB>({ dialect: new PostgresJSDialect({ postgres: pool }) }), options.schema)
 	}
 
 	/** Any Kysely Postgres dialect; tests use one that records statements instead of sending them. */
 	static fromDialect(dialect: Dialect): Database {
-		return new Database(new Kysely<LooseDB>({ dialect }))
+		return new Database(new Kysely<LooseDB>({ dialect }), undefined)
+	}
+
+	/** The application's schema, the connection's `search_path`; `undefined` over a bare dialect. */
+	get schema(): string | undefined {
+		return this.#schema
 	}
 
 	async close(): Promise<void> {
@@ -369,5 +376,16 @@ export type FixedParameter = string | number | null
  * no subpath exports this, and no text is ever built from a caller's value.
  */
 export function runFixedStatement(session: Session, text: string, parameters: readonly FixedParameter[]): Promise<readonly unknown[]> {
+	return executeFixed(session, CompiledQuery.raw(text, [...parameters]))
+}
+
+/** A bound parameter of an application's own statement (`sql.ts`), after its value was encoded for the driver. */
+export type SqlParameter = string | number | boolean | bigint | null
+
+/**
+ * One `ctx.sql` statement, whose text `sql.ts` classified and whose values are bound parameters only. It runs through the
+ * session's one path to the connection, so a statement the database refuses fails the invocation it runs in.
+ */
+export function runApplicationStatement(session: Session, text: string, parameters: readonly SqlParameter[]): Promise<readonly unknown[]> {
 	return executeFixed(session, CompiledQuery.raw(text, [...parameters]))
 }

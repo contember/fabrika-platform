@@ -14,6 +14,7 @@ import { linksPredicate, linkValues } from './links'
 import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
 import { modelOf, type TableModel, type TableModels } from './policy'
+import { type SqlSite, type SqlTag, sqlTag } from './sql'
 import {
 	aggregateRows,
 	type AggregateSpec,
@@ -84,6 +85,8 @@ export interface DataAccess {
 	transaction<T>(work: (session: Session) => Promise<T>): Promise<T>
 	/** The handles of one site. Throws for a declaration this layer cannot honour. */
 	handles(site: DataSite): DataHandles
+	/** `ctx.sql` of a site that declares it, running in the site's session on the application's schema. */
+	sql(site: SqlSite): SqlTag
 }
 
 /** What `scoped` hands this module: the layer's tables and the way to its runtime. */
@@ -102,6 +105,7 @@ export function dataAccess(parts: DataLayerParts): DataAccess {
 		direct: () => parts.newSession(parts.runtime()),
 		transaction: <T>(work: (session: Session) => Promise<T>) => parts.fenced(parts.runtime(), work),
 		handles: (site: DataSite) => handlesOf(parts, site),
+		sql: (site: SqlSite) => sqlTag(site, parts.runtime().database.schema),
 	})
 }
 
