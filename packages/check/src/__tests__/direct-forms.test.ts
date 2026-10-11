@@ -238,6 +238,85 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/log.ts:1:15', 'src/log.ts:2:13', 'src/log.ts:3:13', 'src/log.ts:7:14', 'src/log.ts:8:24', 'src/log.ts:9:25'],
 	},
 	{
+		name: 'the reproduced interception of the database URL: Database.postgres replaced with Reflect.set',
+		rule: 'framework-write',
+		files: {
+			...CLEAN_APPLICATION,
+			'src/intercept.ts': [
+				"import { Database, type PostgresOptions } from '@fabrika/db'",
+				'export const observed: string[] = []',
+				'const original = Database.postgres',
+				"Reflect.set(Database, 'postgres', (options: PostgresOptions) => {",
+				'\tobserved.push(options.url)',
+				'\treturn original(options)',
+				'})',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/intercept.ts:4:1'],
+	},
+	{
+		name: 'framework members written through a direct load, a destructured require, a computed key and a pattern',
+		rule: 'framework-write',
+		files: {
+			'src/patch.ts': [
+				"const db = await import('@fabrika/db')",
+				"const { Database } = require('@fabrika/db')",
+				'db.Database.postgres = () => null',
+				"Database['fromDialect'] = null",
+				';({ postgres: db.Database.postgres } = { postgres: null })',
+				"Reflect.deleteProperty(Database, 'postgres')",
+				'',
+			].join('\n'),
+		},
+		expected: ['src/patch.ts:3:1', 'src/patch.ts:4:1', 'src/patch.ts:5:3', 'src/patch.ts:6:1'],
+	},
+	{
+		name: 'the reproduced load of the capability mint: import.meta.resolve and a computed import()',
+		rule: 'unchecked-import',
+		files: {
+			...CLEAN_APPLICATION,
+			'src/forge.ts': [
+				"const target = new URL('./capability.ts', import.meta.resolve('@fabrika/app/implement'))",
+				'export async function forge() {',
+				'\tconst internal = await import(target.href)',
+				'\treturn internal.mintRef',
+				'}',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/forge.ts:1:43', 'src/forge.ts:3:25'],
+	},
+	{
+		name: 'computed require forms, resolvers, node:module, resolveSync from bun, and import.meta.require into node_modules',
+		rule: 'unchecked-import',
+		files: {
+			'src/load.ts': [
+				"import { createRequire } from 'node:module'",
+				"import { resolveSync } from 'bun'",
+				"const name = ['..', 'node_modules', 'x'].join('/')",
+				'export const a = require(name)',
+				'export const b = module.require(`./${name}`)',
+				'export const c = import.meta.require(name)',
+				"export const d = require.resolve('@fabrika/app/implement')",
+				"export const e = Bun.resolveSync('@fabrika/app/implement', import.meta.dir)",
+				"export const f = import.meta.require('../node_modules/@fabrika/app/src/implement/capability.ts')",
+				'export const g = [createRequire, resolveSync]',
+				'',
+			].join('\n'),
+		},
+		expected: [
+			'src/load.ts:1:1',
+			'src/load.ts:2:1',
+			'src/load.ts:4:18',
+			'src/load.ts:5:18',
+			'src/load.ts:6:18',
+			'src/load.ts:7:18',
+			'src/load.ts:8:18',
+			'src/load.ts:9:18',
+		],
+	},
+	{
 		name: 'delete on a prototype and a mutation of Object.getPrototypeOf',
 		rule: 'prototype-assignment',
 		files: {
@@ -412,6 +491,9 @@ describe('documented escapes', () => {
 			'src/a.ts': "const { serve } = globalThis['Bun']\nconst { env } = globalThis['process']\nexport { env, serve }\n",
 		},
 		'an alias of fetch': { 'src/a.ts': "const f = fetch\nexport const call = () => f('https://other.example/api')\n" },
+		'an alias of a framework object, which the frozen class refuses at runtime': {
+			'src/a.ts': "import { Database } from '@fabrika/db'\n\nconst factory = Database\nReflect.set(factory, 'postgres', null)\n",
+		},
 		'a renamed capability type': { 'src/a.ts': "import type { Ref as R } from '@fabrika/app'\n\nexport type Wide = R<string, string>\n" },
 		'a namespace alias of the test API': {
 			'src/a.test.ts': "import * as tests from 'bun:test'\n\ntests.test.skip('empty', () => {})\n",

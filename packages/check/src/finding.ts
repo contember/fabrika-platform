@@ -15,6 +15,7 @@ export const RULE_IDS = [
 	'suppression-comment',
 	'capability-widening',
 	'prototype-assignment',
+	'framework-write',
 	'env-read',
 	'public-env',
 	'cross-app-fetch',

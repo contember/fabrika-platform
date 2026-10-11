@@ -18,6 +18,7 @@ import { moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
+import { checkFrameworkWrite, trustedBindings } from './rules/framework'
 import { checkClientIdentity } from './rules/identity'
 import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
@@ -73,8 +74,10 @@ const checkSourceModule = async (
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
 	const context = { report, isGeneratedEntry }
+	const trusted = trustedBindings(module.program)
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
+		checkFrameworkWrite(node, trusted, report)
 		checkTypeNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, report)

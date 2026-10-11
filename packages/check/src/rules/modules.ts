@@ -118,11 +118,17 @@ const checkPackage = (reference: ModuleReference, specifier: string, report: Rep
 		report(node, 'forbidden-import', `'${specifier}' is ${forbidden.what}`, forbidden.allowed)
 		return
 	}
+	if (name === 'module') {
+		report(node, 'unchecked-import', `'${specifier}' loads modules by path (createRequire), past what the checker reads`, 'a static import')
+		return
+	}
 	if (name === 'bun') {
 		for (const imported of reference.names) {
 			const member = FORBIDDEN_BUN_MEMBERS.get(imported)
 			if (member !== undefined) report(node, 'forbidden-global', `'${imported}' from 'bun' is ${member.what}`, member.allowed)
-			else if (imported === '*' || imported === 'default') {
+			else if (imported === 'resolve' || imported === 'resolveSync') {
+				report(node, 'unchecked-import', `'${imported}' from 'bun' names a module by its file, past what the checker reads`, 'a static import')
+			} else if (imported === '*' || imported === 'default') {
 				report(node, 'forbidden-global', `'bun' loaded whole hides which of its members is used`, 'named imports from bun')
 			}
 		}

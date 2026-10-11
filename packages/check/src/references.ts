@@ -1,6 +1,9 @@
 import { type AstNode, child, children, identifierName, memberPath, staticKey, staticString, stringField, walk } from './ast'
 
-/** One way a module names another: a static import, a re-export, a dynamic `import()`, `require()` or `import x = require()`. */
+/**
+ * One way a module names another: a static import, a re-export, a dynamic `import()`, `require()` (also `module.require`
+ * and `import.meta.require`) or `import x = require()`.
+ */
 export interface ModuleReference {
 	readonly specifier: string
 	readonly node: AstNode
@@ -43,10 +46,11 @@ const loadedNames = (load: AstNode, ancestors: readonly AstNode[]): readonly str
 	return children(pattern, 'properties').map((property) => (property?.type === 'Property' ? (staticKey(property, 'key') ?? '*') : '*'))
 }
 
-const isRequire = (callee: AstNode | undefined): boolean => {
+export const isRequire = (callee: AstNode | undefined): boolean => {
 	if (callee === undefined) return false
 	const path = memberPath(callee)
-	return (path?.length === 1 && path[0] === 'require') || (path?.length === 2 && path[0] === 'module' && path[1] === 'require')
+	if (path?.length === 1) return path[0] === 'require'
+	return path?.length === 2 && (path[0] === 'module' || path[0] === 'import.meta') && path[1] === 'require'
 }
 
 const referenceOf = (node: AstNode, ancestors: readonly AstNode[]): ModuleReference | undefined => {

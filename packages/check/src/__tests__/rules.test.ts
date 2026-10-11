@@ -213,6 +213,29 @@ const cases: readonly RuleCase[] = [
 		good: { 'src/state.ts': 'const state = { count: 0 }\nstate.count = 1\nexport { state }\n' },
 	},
 	{
+		rule: 'framework-write',
+		bad: {
+			'src/patch.ts': [
+				"import { Database, type PostgresOptions } from '@fabrika/db'",
+				"import * as implement from '@fabrika/app/implement'",
+				"import { z } from 'zod/v4'",
+				'',
+				'const original = Database.postgres',
+				"Reflect.set(Database, 'postgres', (options: PostgresOptions) => original(options))",
+				'Database.postgres = original',
+				"Object.defineProperty(Database, 'fromDialect', { value: original })",
+				'Object.assign(implement.requestCapabilities, { resolve: () => null })',
+				'delete z.string',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/patch.ts:6:1', 'src/patch.ts:7:1', 'src/patch.ts:8:1', 'src/patch.ts:9:1', 'src/patch.ts:10:1'],
+		good: {
+			'src/state.ts':
+				"import { Database } from '@fabrika/db'\n\nconst opener = { postgres: Database.postgres }\nopener.postgres = Database.postgres\nexport { opener }\n",
+		},
+	},
+	{
 		rule: 'env-read',
 		bad: {
 			'src/config.ts': [

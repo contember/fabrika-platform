@@ -13,6 +13,7 @@ import {
 	unwrap,
 } from '../ast'
 import type { Report } from '../finding'
+import { isRequire } from '../references'
 import { FORBIDDEN_BUN_MEMBERS } from './modules'
 
 export interface SourceContext {
@@ -189,7 +190,7 @@ const PROPERTY_WRITERS = ['Object.defineProperty', 'Object.defineProperties', 'O
 const ALLOWED_PROTOTYPE = 'no patching of prototypes; the framework checks capabilities at runtime'
 
 /** Whether an expression reaches a prototype: through `.prototype`, `.__proto__` or `Object.getPrototypeOf(…)`. */
-const touchesPrototype = (node: AstNode | undefined): boolean => {
+export const touchesPrototype = (node: AstNode | undefined): boolean => {
 	let current = node === undefined ? undefined : unwrap(node)
 	while (current?.type === 'MemberExpression') {
 		const key = staticKey(current, 'property')
@@ -210,7 +211,27 @@ const checkPrototypeCall = (node: AstNode, path: readonly string[], context: Sou
 	}
 }
 
+const ALLOWED_LOAD = 'a static import, or import() and require() of a string literal'
+
+/** The specifier of a direct load: `import(x)`, `require(x)`, `module.require(x)`, `import.meta.require(x)`. */
+const loadedSpecifier = (node: AstNode): { readonly what: string; readonly specifier: AstNode | null | undefined } | undefined => {
+	if (node.type === 'ImportExpression') return { what: 'import()', specifier: child(node, 'source') }
+	if (node.type === 'CallExpression' && isRequire(child(node, 'callee'))) return { what: 'require()', specifier: children(node, 'arguments')[0] }
+	return undefined
+}
+
+/** A load of a computed specifier: the checker cannot say which module it reaches, nor run its rules there. */
+const checkComputedLoad = (node: AstNode, context: SourceContext): void => {
+	const load = loadedSpecifier(node)
+	if (load === undefined || staticString(load.specifier ?? undefined) !== undefined) return
+	context.report(node, 'unchecked-import', `${load.what} of a computed specifier loads a module the checker cannot name`, ALLOWED_LOAD)
+}
+
+/** They turn a specifier into a module file, or reach the loaded modules: what a load by path or URL starts from. */
+const RESOLVERS = new Set(['import.meta.resolve', 'import.meta.resolveSync', 'require.resolve', 'require.cache', 'Bun.resolve', 'Bun.resolveSync'])
+
 const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: SourceContext): void => {
+	checkComputedLoad(node, context)
 	const callee = child(node, 'callee')
 	const path = callee === undefined ? undefined : globalPath(callee)
 	if (path === undefined) return
@@ -225,6 +246,8 @@ const checkCall = (node: AstNode, ancestors: readonly AstNode[], context: Source
 const checkMember = (node: AstNode, parent: AstNode | undefined, context: SourceContext): void => {
 	const path = globalPath(node)
 	const property = staticKey(node, 'property')
+	const name = path?.join('.') ?? ''
+	if (RESOLVERS.has(name)) context.report(node, 'unchecked-import', `${name} names a module by its file, past what the checker reads`, ALLOWED_LOAD)
 	const bunMember = path?.length === 2 && path[0] === 'Bun' ? FORBIDDEN_BUN_MEMBERS.get(path[1] ?? '') : undefined
 	if (bunMember !== undefined) context.report(node, 'forbidden-global', `Bun.${path?.[1]} is ${bunMember.what}`, bunMember.allowed)
 	if (pathIs(path, 'eval') && (memberPath(node)?.length ?? 0) > 1) context.report(node, 'dynamic-code', 'eval runs a string as code', ALLOWED_CODE)
@@ -308,6 +331,8 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 		case 'CallExpression':
 		case 'NewExpression':
 			return checkCall(node, ancestors, context)
+		case 'ImportExpression':
+			return checkComputedLoad(node, context)
 		case 'MemberExpression':
 			return checkMember(node, parent, context)
 		case 'Identifier':
