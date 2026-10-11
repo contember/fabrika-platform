@@ -597,3 +597,30 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   `fixtures/architecture-app/` and `application-architecture.md` to use them.
 - **WU1.** `Finding.severity` is required, so every literal `Finding` in `packages/check` gained `severity: 'refusal'`
   (11 files, one line each): a merge note for WU4/WU6/WU8.
+- **WU5 — name rules are not a privilege boundary until [backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md).**
+  The classifier refuses names (schemas, `pg_*`, `fabrika_*`) and calls outside the function allowlist; anything it
+  admits runs with the credential's rights. ADR-0017 says so; WU6's `ctx.sql` inherits the same limit.
+- **WU5 — `@fabrika/platform-node/sql`** exports `classifyMigration(sql, schema, { file, functions?, framework? })`,
+  `classifyMigrations(files, schema)` (two passes: a body may call a function any file declares), `migrationManifest`,
+  `declaredFunctions`, and for WU6 `lexSql`/`sqlTokens`/`topLevelStatements`, `statementKind`, `nameReferences`,
+  `dmlForeignSchema`, `ddlForeignSchema`, `dmlRelations`, `isFrameworkName`/`frameworkReference`, `functionUse`/
+  `refusedFunctionCall`, `unicodeIdentifier`. `sql-subpath.test.ts` pins the import graph to the subpath's own files.
+- **WU5 — the function allowlist covers backfills, views, policies, rules and trigger conditions too**, not only bodies
+  and expressions: `query_to_xml` in an `INSERT … SELECT` escapes as much as in a function. A stored expression that
+  calls a reviewed but not paved built-in (`concat`, `md5`, …) is a deviation as well as one calling a declared
+  function; `nextval` is admitted only there, since Postgres resolves its sequence when the default is created.
+- **WU5 — framework names:** a file collection's `fabrika_files_<name>` table and its indexes stay creatable in the
+  application's migration (`fileTableSql` writes them there); every other `fabrika_*` reference is refused, `ALTER`
+  and `DROP` of a file table included. Only the plan's `frameworkBundle` (the first of several) is exempt.
+- **WU5 — the runner folds the manifest per file**: the catalog check after file N admits the manifest through N, not
+  the whole set (a later rename would otherwise refuse an earlier trigger). Dropping one overload drops the name, so
+  the remaining overload fails the catalog check: fail-closed, witnessed.
+- **WU5 — domains:** first permitted with a codegen base-type mapping, then reverted to refused when this sprint's
+  revision on main fixed WU5 §7.
+- **WU5 — a body is a statement allowlist** (`SELECT`/`INSERT`/`UPDATE`/`DELETE`/`WITH`/`PERFORM`/`RETURN`/`RAISE`,
+  PL/pgSQL control flow, assignments), so DDL, `SET`, `COPY`, `LOAD` and transaction control in a body are refused,
+  and a literal inside a body stays data. `BEGIN ATOMIC` and `E''` bodies are refused; `RETURN <expr>` is read in place.
+- **WU5 — still refused, not in scope:** `ALTER TABLE … ENABLE/DISABLE TRIGGER|RULE|ROW LEVEL SECURITY` (so a policy is
+  inert), `CREATE AGGREGATE`/`OPERATOR`/`TYPE … AS (…)`/`AS RANGE`, `ALTER SEQUENCE`. `packages/app/skill/SKILL.md`
+  and `examples/zerops-app/AGENTS.md` still state the old migration rules → WU10. `packages/cli/src/db.ts` threads
+  the manifest into `codegen` (outside WU5's listed touch points, required by §5).
