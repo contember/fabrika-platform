@@ -30,9 +30,11 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   `.handle(…)`, and so does every import specifier, function, const of an inline function and type that only those
   handlers used (followed until nothing more goes; an exported declaration, and one nobody uses, stays). Removed text
   becomes spaces, so every finding keeps its line and column. Control therefore never fetches, parses or runs a module
-  only a handler imports; `boot`'s contract digest backs what the slice cannot see. Any other `.handle(…)` (a named or
-  wrapped function, a receiver that is no endpoint, job or webhook builder) is refused at its `handle` (rule
-  `literal`), and removed all the same, so what it names is never requested either. The checker runs the contract rules
+  only a handler imports; `boot`'s contract digest backs what the slice cannot see. Any other call of a member
+  statically named `handle` (a named or wrapped function; `['handle'](…)`, `.handle!(…)`, a parenthesised, `as`,
+  `satisfies` or `<T>` wrapped callee or receiver; a receiver that is no endpoint, job or webhook builder) is refused at
+  its `handle` (rule `literal`), and its arguments, type arguments and wrapping types are removed all the same, so what
+  it names is never requested either; its receiver stays and is sliced in turn. The checker runs the contract rules
   over the slices, reports their refusals for the modules of the shell graph, and runs every other rule over the whole
   module.
 - Bun plugin: `@fabrika/check/bun-plugin` (`shellSlicePlugin({ root? })`, the working directory by default; the default
@@ -100,7 +102,8 @@ directory that no table registers fails the test. Its staged-kit cases read `@fa
 cases) and `fixtures/architecture-app/`, which Bun evaluates through `paired-runner.mjs` against its tables.
 `colocated.test.ts` holds the slice itself: a handler-only module that throws at import is never requested or run; a
 plugin build holds no handler code, with every package bundled and from a JavaScript shell module too, and `serve`
-refuses it; a named or decorated handler is refused before its module is requested, and fails the build; the forms the
+refuses it; a named, decorated, computed (`['handle']`) or non-null (`.handle!`) handler is refused before its module
+is requested, and fails the build; every wrapped spelling slices to text that parses without what it names; the forms the
 slice keeps are the literal rule's; and the whole check of `fixtures/architecture-app/` is clean (its generated tests
 are committed there). Each plugin build runs in a process of its own (`fixtures/plugin-build.mjs`): Bun's bundler
 reads stale module state across plugin builds in one process. `colocated-scale.test.ts` reads 200 colocated endpoints in 10 group modules.

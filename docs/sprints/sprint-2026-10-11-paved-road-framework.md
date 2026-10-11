@@ -839,3 +839,9 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   now present for every contract with a kit site (empty included) and absent for a `defineContract` one, so `boot`
   reads the rule from the approved artifact: a kit contract's every endpoint, leaf of any form, runs with its approved
   declaration (`approvedReach`), and only a `siteHandler` leaf gets `ctx.db` (`kit-reach.test.ts`).
+- **WU4 review round 2, every spelling of `handle`.** The slice matched only a plain `.handle(…)`, so `['handle'](fn)`
+  and `.handle!(fn)` kept `fn` and Control fetched its module before refusing the shell. It now matches every call of a
+  member statically named `handle` through `!`, `as`, `satisfies`, `<T>` and parentheses, refuses each spelling other
+  than `.handle(<inline function>)` on a builder, and removes its arguments, type arguments and wrapping types; parentheses
+  stay, so the slice still parses. A refused site's receiver is sliced in turn: the walk used to skip it
+  (`colocated.test.ts`).

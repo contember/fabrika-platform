@@ -9,6 +9,7 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/fabrika.contract'
 import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
+import { parseModule } from '../ast'
 import { checkApplication } from '../check'
 import { ContractSourceError, readContractSource } from '../contract'
 import { shellSlice } from '../slice'
@@ -151,22 +152,25 @@ describe('an SPA build through the plugin, with every package bundled', () => {
 	})
 
 	for (
-		const [form, handler, module] of [
-			['a named handler', 'getDeal', "import { getDeal } from './handlers'"],
-			['a decorated handler', 'traced(async () => ({ id: "", title: "", stage: "lead" }))', "import { traced } from './handlers'"],
+		const [form, call, module] of [
+			['a named handler', '.handle(getDeal)', "import { getDeal } from './handlers'"],
+			['a decorated handler', '.handle(traced(async () => ({ id: "", title: "", stage: "lead" })))', "import { traced } from './handlers'"],
+			['a computed handle', "['handle'](getDeal)", "import { getDeal } from './handlers'"],
+			['a non-null handle', '.handle!(getDeal)', "import { getDeal } from './handlers'"],
+			['a handle cast to the handler type', '.handle<typeof getDeal>(getDeal as typeof getDeal)', "import { getDeal } from './handlers'"],
 		] as const
 	) {
 		test(`${form} is refused before its module is requested, and the build fails`, async () => {
 			const tree = kitTree()
 			const endpoints = DEALS.replace("import { canReopen } from './logic'", `import { canReopen } from './logic'\n${module}`).replace(
 				'\t\t.handle(async ({ ctx }) => {\n\t\t\tconst deal = await ctx.db.target.get()\n\t\t\treturn { id: deal.id, title: deal.title, stage: deal.stage }\n\t\t}),',
-				`\t\t.handle(${handler}),`,
+				`\t\t${call},`,
 			)
-			expect(endpoints).toContain(`.handle(${handler})`)
+			expect(endpoints).toContain(call)
 			tree.set('src/deals/endpoints.ts', endpoints)
 			tree.set('src/deals/handlers.ts', THROWING_LOGIC)
 			expect(fetchedByControl(tree).has('src/deals/handlers.ts')).toBe(false)
-			const line = endpoints.split('\n').findIndex((text) => text.includes(`.handle(${handler})`)) + 1
+			const line = endpoints.split('\n').findIndex((text) => text.includes(call)) + 1
 			expect(refusals('src/deals/endpoints.ts', endpoints)).toEqual([`src/deals/endpoints.ts:${line}:4 literal`])
 			expect(builds(materialize(tree), 'fabrika.contract.ts')).toBe(false)
 		})
@@ -183,6 +187,36 @@ describe('the slice removes only the handlers and what only they use, and keeps 
 		}
 		expect(slice).toContain("import { app } from '../app-kit'")
 		expect(slice).toContain("export const deals = app.group({ callers: ['human'] }, (r) => ({")
+	})
+
+	for (
+		const call of [
+			"r.query({})['handle'](getDeal)",
+			'r.query({}).handle!(getDeal)',
+			'(r.query({}) satisfies object).handle(getDeal)',
+			'(r.query({}) as const).handle(getDeal)',
+			'(r.query({})).handle(async () => getDeal())',
+			'(r.query({}).handle)(getDeal)',
+			'(r.query({}).handle as typeof getDeal)(async () => 1)',
+			'(<typeof getDeal> r.query({}).handle)(async () => 1)',
+		]
+	) {
+		test(`${call} is refused, and its slice parses without what it names`, () => {
+			const text = `import { getDeal } from './handlers'\n\nexport const deal = (r: Builder) => ${call}\n`
+			const slice = shellSlice('src/deal.ts', text)
+			expect(slice.refusals).toHaveLength(1)
+			expect(slice.text).not.toContain('getDeal')
+			expect(slice.text.length).toBe(text.length)
+			expect(parseModule('src/deal.ts', slice.text).ok).toBe(true)
+		})
+	}
+
+	test('a handle refused on another handle is read for its own, and both are refused', () => {
+		const text = "import { getDeal } from './handlers'\n\nexport const deal = (r: Builder) => wrap(r.query({}).handle(getDeal)).handle(async () => 1)\n"
+		const slice = shellSlice('src/deal.ts', text)
+		expect(slice.refusals).toHaveLength(2)
+		expect(slice.text).not.toContain('getDeal')
+		expect(parseModule('src/deal.ts', slice.text).ok).toBe(true)
 	})
 
 	test('a module without a handler is its own slice', () => {

@@ -12,11 +12,13 @@ import {
 	children,
 	identifierName,
 	isNode,
+	isParenthesized,
 	isValueReference,
 	type ParsedModule,
 	parseModule,
 	type ParseResult,
 	positionOf,
+	staticKey,
 	walk,
 } from './ast'
 import type { Finding } from './finding'
@@ -52,35 +54,90 @@ export interface SliceRefusal {
 const HANDLER_ALLOWED =
 	'.handle(async ({ input, ctx }) => …) written inline on r.query, r.mutation, app.cron or app.webhook; call a named function from inside it'
 
+/** Wrappers that leave which member is called unchanged: `x.handle!`, `x.handle as F`, `x satisfies T`, `<F>x.handle`. */
+const EXPRESSION_WRAPPERS = new Set([
+	'ChainExpression',
+	'TSNonNullExpression',
+	'TSAsExpression',
+	'TSSatisfiesExpression',
+	'TSTypeAssertion',
+	'TSInstantiationExpression',
+])
+
+const withoutWrappers = (node: AstNode): AstNode => {
+	let current = node
+	while (EXPRESSION_WRAPPERS.has(current.type)) {
+		const inner = child(current, 'expression')
+		if (inner === undefined) return current
+		current = inner
+	}
+	return current
+}
+
+/** The type text each wrapper around `node` adds, removable without unbalancing the expression: `as F`, `<F>`, `<T>`. */
+const wrapperTypes = (node: AstNode): Range[] => {
+	const ranges: Range[] = []
+	let current = node
+	while (EXPRESSION_WRAPPERS.has(current.type)) {
+		const inner = child(current, 'expression')
+		const outer = offsets(current)
+		const within = inner === undefined ? undefined : offsets(inner)
+		if (inner === undefined || outer === undefined || within === undefined) break
+		if (current.type === 'TSTypeAssertion') ranges.push({ start: outer.start, end: within.start })
+		else if (current.type !== 'ChainExpression' && current.type !== 'TSNonNullExpression') ranges.push({ start: within.end, end: outer.end })
+		current = inner
+	}
+	return ranges
+}
+
+interface HandleSite {
+	/** The text the slice removes: the whole `.handle(…)` of a handler, what a refused one names. */
+	readonly ranges: readonly Range[]
+	/** What `.handle` is called on; it stays in the shell, and the slice reads it for handlers of its own. */
+	readonly receiver: AstNode
+	readonly refusal?: SliceRefusal
+}
+
 /**
- * A `.handle(…)` call and the range it takes, from the end of its receiver. `<x>.<builder>(…).handle(<inline function>)`
- * is a handler; any other `.handle(…)` (a named or wrapped function, another receiver) is refused, and its range is
- * removed all the same, so what it names is never followed into a module the shell does not need.
+ * A call of a member statically named `handle`. `<x>.<builder>(…).handle(<inline function>)` is a handler, removed from
+ * the end of its receiver. Any other spelling, receiver or handler is refused, and its type arguments, arguments and
+ * wrapping types are removed all the same, so what it names is never followed into a module the shell does not need.
  */
-function handleSite(node: AstNode): { readonly range: Range; readonly refusal?: SliceRefusal } | undefined {
+function handleSite(node: AstNode): HandleSite | undefined {
 	if (node.type !== 'CallExpression') return undefined
 	const callee = child(node, 'callee')
-	const property = callee === undefined ? undefined : child(callee, 'property')
-	if (callee?.type !== 'MemberExpression' || callee['computed'] === true || identifierName(property) !== 'handle' || property === undefined) {
-		return undefined
+	const member = callee === undefined ? undefined : withoutWrappers(callee)
+	if (callee === undefined || member?.type !== 'MemberExpression' || staticKey(member, 'property') !== 'handle') return undefined
+	const property = child(member, 'property')
+	const receiver = child(member, 'object')
+	const call = offsets(node)
+	const receiverRange = receiver === undefined ? undefined : offsets(receiver)
+	if (property === undefined || receiver === undefined || call === undefined || receiverRange === undefined) return undefined
+	const refused = (message: string): HandleSite => {
+		const handler = children(node, 'arguments').filter(isNode).flatMap((argument) => offsets(argument) ?? [])
+		const first = handler[0]
+		const last = handler.at(-1)
+		const typeArguments = child(node, 'typeArguments')
+		const typeRange = typeArguments === undefined ? undefined : offsets(typeArguments)
+		const ranges = [
+			...wrapperTypes(callee),
+			...wrapperTypes(receiver),
+			...(typeRange === undefined ? [] : [typeRange]),
+			...(first === undefined || last === undefined ? [] : [{ start: first.start, end: last.end }]),
+		]
+		return { ranges, receiver, refusal: { node: property, message, allowed: HANDLER_ALLOWED } }
 	}
-	const receiver = child(callee, 'object')
-	const from = receiver === undefined ? undefined : offsets(receiver)
-	const to = offsets(node)
-	if (from === undefined || to === undefined) return undefined
-	const range = { start: from.end, end: to.end }
-	const builder = receiver?.type === 'CallExpression' ? memberName(child(receiver, 'callee')) : undefined
+	const plain = member === callee && member['computed'] !== true && withoutWrappers(receiver) === receiver
+	if (!plain || isParenthesized(member) || isParenthesized(receiver)) {
+		return refused('.handle spelled other than a plain `.handle(…)` called directly on its builder')
+	}
+	const builder = receiver.type === 'CallExpression' ? memberName(child(receiver, 'callee')) : undefined
+	if (builder === undefined || !HANDLED_BUILDERS.has(builder)) return refused('.handle(…) on something other than an endpoint, job or webhook builder')
 	const handler = children(node, 'arguments')
-	if (builder === undefined || !HANDLED_BUILDERS.has(builder)) {
-		return {
-			range,
-			refusal: { node: property, message: '.handle(…) on something other than an endpoint, job or webhook builder', allowed: HANDLER_ALLOWED },
-		}
+	if (node['optional'] === true || member['optional'] === true || handler.length !== 1 || !isFunction(handler[0])) {
+		return refused('a handler other than one inline function beside its builder')
 	}
-	if (node['optional'] === true || callee['optional'] === true || handler.length !== 1 || !isFunction(handler[0])) {
-		return { range, refusal: { node: property, message: 'a handler other than one inline function beside its builder', allowed: HANDLER_ALLOWED } }
-	}
-	return { range }
+	return { ranges: [{ start: receiverRange.end, end: call.end }], receiver }
 }
 
 /** Whether an identifier names a type or a value here, rather than a key, a property or a label. */
@@ -187,13 +244,15 @@ export interface ShellSlice {
 export function moduleSlice(module: ParsedModule, text: string): ShellSlice {
 	const handles: Range[] = []
 	const refusals: SliceRefusal[] = []
-	walk(module.program, (node) => {
+	const visit = (node: AstNode): 'skip' | undefined => {
 		const site = handleSite(node)
 		if (site === undefined) return undefined
-		handles.push(site.range)
+		handles.push(...site.ranges)
 		if (site.refusal !== undefined) refusals.push(site.refusal)
+		walk(site.receiver, visit)
 		return 'skip'
-	})
+	}
+	walk(module.program, visit)
 	if (handles.length === 0) return { text, refusals }
 	const inHandle = (node: AstNode): boolean => {
 		const range = offsets(node)

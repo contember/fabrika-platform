@@ -36,6 +36,12 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 export const isNode = (value: unknown): value is AstNode => isRecord(value) && typeof value['type'] === 'string'
 
+/** Whether the source wraps a node in parentheses, which the parser records beside the node rather than as one. */
+export const isParenthesized = (node: AstNode): boolean => {
+	const extra = node['extra']
+	return isRecord(extra) && extra['parenthesized'] === true
+}
+
 export const child = (node: AstNode, key: string): AstNode | undefined => {
 	const value = node[key]
 	return isNode(value) ? value : undefined
