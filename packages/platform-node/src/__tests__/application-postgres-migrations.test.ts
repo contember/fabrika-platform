@@ -50,7 +50,7 @@ describe('application migration identity', () => {
 		)
 	})
 
-	test('every plan refuses a migration that installs database code, naming the file and the line', () => {
+	test('every plan refuses a statement outside the allowlist, naming the file and the line', () => {
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
 		// A guarded single-row write to deals would fire this and change the rows of every tenant (backlog 108).
 		const trigger = migration(
@@ -64,18 +64,14 @@ describe('application migration identity', () => {
 			].join('\n'),
 		)
 		expect(() => migrations.plan([trigger])).toThrow(
-			'Application migration 20261008120000_init.sql line 2: CREATE FUNCTION is not allowed; an application schema holds no database code and no grants, because the data layer cannot see what they do',
-		)
-		const defaulted = migration('20261008120000_init.sql', "CREATE TABLE notes (\n\tid TEXT PRIMARY KEY,\n\tn BIGINT DEFAULT nextval('s')\n)")
-		expect(() => migrations.plan([defaulted])).toThrow(
-			'Application migration 20261008120000_init.sql line 3: a column default calls nextval(); a default is a constant, now() or gen_random_uuid()',
+			'Application migration 20261008120000_init.sql line 2: CREATE FUNCTION is not allowed; an application migration holds only CREATE TABLE, ALTER TABLE, CREATE [UNIQUE] INDEX, CREATE TYPE … AS ENUM, ALTER TYPE … ADD/RENAME VALUE, DROP, COMMENT ON, INSERT, UPDATE and DELETE',
 		)
 		const framework = definePostgresApplicationMigrations({
 			appId: 'notes',
 			directory: '/unused',
 			framework: { bundle: 'fabrika', migrations: [migration('0001_framework.sql', 'DO $$ BEGIN PERFORM 1; END $$')] },
 		})
-		expect(() => framework.plan([migration('20261008120000_init.sql', 'SELECT 1')])).toThrow(
+		expect(() => framework.plan([migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT)')])).toThrow(
 			'Application migration 0001_framework.sql line 1: DO is not allowed',
 		)
 	})
@@ -88,12 +84,12 @@ describe('application migration identity', () => {
 
 	test('composes one app bundle, a ledger in the application schema and the default timeouts', () => {
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
-		const plan = migrations.plan([migration('20261008120000_init.sql', 'SELECT 1')])
+		const plan = migrations.plan([migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT)')])
 		expect(migrations.schema).toBe('app_notes')
 		expect(plan).toEqual({
 			ledgerTable: 'app_notes.fabrika_migrations',
 			lockKey: applicationMigrationLockKey('notes'),
-			bundles: [{ name: 'app', migrations: [migration('20261008120000_init.sql', 'SELECT 1')] }],
+			bundles: [{ name: 'app', migrations: [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT)')] }],
 			application: {
 				schema: 'app_notes',
 				lockTimeoutMs: DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
@@ -105,13 +101,13 @@ describe('application migration identity', () => {
 	test('refuses a file the checker would refuse and a missing directory', () => {
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/nonexistent/db/migrations' })
 		for (const name of ['0001_init.sql', '20261008120000_Init.sql', '20261008120000-init.sql', '20261008120000_.sql']) {
-			expect(() => migrations.plan([migration(name, 'SELECT 1')])).toThrow('is not named YYYYMMDDHHMMSS_slug.sql')
+			expect(() => migrations.plan([migration(name, 'CREATE TABLE notes (id TEXT)')])).toThrow('is not named YYYYMMDDHHMMSS_slug.sql')
 		}
 		expect(() => migrations.read()).toThrow('No migrations directory at /nonexistent/db/migrations')
 	})
 
 	test('a qualified ledger exists only for an application, and only in its own schema', () => {
-		const bundles = [{ name: 'app', migrations: [migration('20261008120000_init.sql', 'SELECT 1')] }]
+		const bundles = [{ name: 'app', migrations: [migration('20261008120000_init.sql', 'CREATE TABLE notes (id TEXT)')] }]
 		const application = { schema: 'app_notes', lockTimeoutMs: 1, statementTimeoutMs: 1 }
 		expect(() => definePostgresMigrationPlan({ ledgerTable: 'app_notes.fabrika_migrations', lockKey: 1, bundles })).toThrow(
 			'Invalid migration ledger table',
@@ -141,7 +137,7 @@ describe('application migration identity', () => {
 		const directory = mkdtempSync(join(tmpdir(), 'fabrika-app-migrations-'))
 		try {
 			writeFileSync(join(directory, '20261009120000_second.sql'), 'SELECT 2')
-			writeFileSync(join(directory, '20261008120000_first.sql'), 'SELECT 1')
+			writeFileSync(join(directory, '20261008120000_first.sql'), 'CREATE TABLE notes (id TEXT)')
 			const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory })
 			expect(migrations.read().map((item) => item.name)).toEqual(['20261008120000_first.sql', '20261009120000_second.sql'])
 		} finally {
@@ -295,7 +291,8 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 	test('a long statement fails within the statement timeout', async () => {
 		const { migrations, db } = application({ statementTimeoutMs: 200 })
 		const started = performance.now()
-		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_slow.sql', 'SELECT pg_sleep(10)')]))
+		const slow = migration('20261008120000_slow.sql', "CREATE TABLE marker (id text); INSERT INTO marker SELECT 'x' FROM pg_sleep(10)")
+		const failure = await failureOf(migrations.apply(db, [slow]))
 		expect(performance.now() - started).toBeLessThan(3_000)
 		expect(sqlStateOf(failure)).toBe('57014')
 	})
@@ -333,10 +330,10 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 	test('a runner-owned setting changed through set_config fails the migration and rolls it back', async () => {
 		for (
 			const sql of [
-				"select set_config('statement_timeout', '0', true)",
-				"select set_config('lock_timeout', '0', true)",
-				"select set_config('search_path', 'public', true)",
-				"select set_config('fabrika.migration_xact', '0', true)",
+				"insert into marker select set_config('statement_timeout', '0', true)",
+				"insert into marker select set_config('lock_timeout', '0', true)",
+				"insert into marker select set_config('search_path', 'public', true)",
+				"insert into marker select set_config('fabrika.migration_xact', '0', true)",
 			]
 		) {
 			const { migrations, db } = application()
@@ -367,13 +364,29 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 		expect(results.map((row) => row.body)).toEqual(['COMMIT; SET search_path TO public', ' CREATE TRIGGER t; DO $$ COMMIT $$; GRANT ALL '])
 	})
 
-	test('a file that installs database code is refused before any SQL runs', async () => {
-		const { migrations, db } = application()
-		const sql = 'CREATE TABLE marker (id text);\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$'
-		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
-		expect(failure.message).toContain('Application migration 20261008120000_init.sql line 2: CREATE FUNCTION is not allowed')
-		const schema = await db.prepare(`SELECT to_regnamespace('${migrations.schema}') AS schema`).first<{ schema: string | null }>()
-		expect(schema?.schema).toBeNull()
+	test('a statement outside the allowlist is refused before any SQL runs, however the file hides it', async () => {
+		const tag = `$${'t'.repeat(70)}$`
+		for (
+			const [sql, refusal] of [
+				['CREATE TABLE marker (id text);\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$', 'line 2: CREATE FUNCTION'],
+				// Postgres ends a `--` comment at a lone carriage return.
+				['CREATE TABLE marker (id text); -- a note\rCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$', 'line 1: CREATE FUNCTION'],
+				// A dollar tag has no length limit, and a parenthesis inside its body is text.
+				[
+					`CREATE TABLE marker (id text);\nCOMMENT ON TABLE marker IS ${tag} ( ${tag};\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`,
+					'line 3: CREATE FUNCTION',
+				],
+				// COPY … PROGRAM runs outside the migration's transaction, so no rollback could undo it.
+				["CREATE TABLE marker (id text);\nCOPY marker FROM PROGRAM 'true'", 'line 2: COPY'],
+				['CREATE TABLE deals (id text);\nCREATE TABLE copied (LIKE deals INCLUDING ALL)', 'line 2: CREATE TABLE … LIKE … INCLUDING'],
+			] as const
+		) {
+			const { migrations, db } = application()
+			const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
+			expect(failure.message).toContain(`Application migration 20261008120000_init.sql ${refusal} is not allowed`)
+			const schema = await db.prepare(`SELECT to_regnamespace('${migrations.schema}') AS schema`).first<{ schema: string | null }>()
+			expect(schema?.schema).toBeNull()
+		}
 	})
 
 	test("a COMMIT inside a service migration's DO block is refused by Postgres inside the runner transaction", async () => {
@@ -418,5 +431,111 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 			)
 			.all<{ column_name: string }>()
 		expect(results.map((row) => row.column_name)).toEqual(['bundle', 'name', 'applied_at'])
+	})
+})
+
+describe.skipIf(!hasPostgres)('database code in an application schema, checked before the commit', () => {
+	/** A schema outside the application's, as another installation or an extension leaves one: a wrapper and a domain. */
+	async function outsideSchema(): Promise<string> {
+		const outside = `ext_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`
+		schemas.push(outside)
+		const admin = new SQL({ url: requireUrl(), max: 1 })
+		try {
+			await admin.unsafe(`CREATE SCHEMA ${outside};
+				CREATE FUNCTION ${outside}.spread(text) RETURNS text IMMUTABLE LANGUAGE sql AS $$ SELECT $1 $$;
+				CREATE SEQUENCE ${outside}.s;
+				CREATE DOMAIN ${outside}.sneaky AS int CHECK (nextval('${outside}.s') > 0);`)
+		} finally {
+			await admin.close()
+		}
+		return outside
+	}
+
+	/** Applies `sql` and expects the check to roll it back: no table of it and no ledger row survive. */
+	async function rolledBack(sql: string, table: string): Promise<string> {
+		const { migrations, db } = application()
+		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
+		expect(failure.message).toStartWith(
+			'Postgres migration app/20261008120000_init.sql was rolled back: the schema would hold database code the data layer cannot see: ',
+		)
+		const relation = await db.prepare(`SELECT to_regclass('${migrations.schema}.${table}') AS relation`).first<{ relation: string | null }>()
+		expect(relation?.relation).toBeNull()
+		const { results } = await db.prepare(`SELECT name FROM ${migrations.schema}.fabrika_migrations`).all()
+		expect(results).toEqual([])
+		return failure.message
+	}
+
+	test('applies the defaults, checks, generated columns and indexes an application needs', async () => {
+		const { migrations, db } = application()
+		const sql = `
+			CREATE TYPE stage AS ENUM ('open', 'won');
+			CREATE TABLE workspaces (id text PRIMARY KEY);
+			CREATE TABLE deals (
+				id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+				workspace_id text NOT NULL REFERENCES workspaces (id) ON UPDATE CASCADE ON DELETE CASCADE,
+				counter bigint GENERATED ALWAYS AS IDENTITY,
+				title varchar(80) NOT NULL DEFAULT 'untitled' CHECK (length(btrim(title)) > 0),
+				status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'live')),
+				stage stage NOT NULL DEFAULT 'open',
+				amount numeric(10, 2) DEFAULT 0,
+				big bigint NOT NULL DEFAULT 0,
+				done boolean NOT NULL DEFAULT false,
+				created_at timestamptz NOT NULL DEFAULT now(),
+				seen timestamptz DEFAULT CURRENT_TIMESTAMP,
+				title_length int GENERATED ALWAYS AS (char_length(title) * 2) STORED,
+				CHECK (big >= 0 AND amount IS DISTINCT FROM -1)
+			);
+			CREATE UNIQUE INDEX deals_title ON deals (workspace_id, lower(title)) WHERE status <> 'pending';
+			ALTER TABLE deals ADD COLUMN note text DEFAULT '' CHECK (note NOT LIKE '%<script%');
+			INSERT INTO workspaces VALUES ('w1');
+		`
+		expect(await migrations.apply(db, [migration('20261008120000_init.sql', sql)])).toEqual(['app/20261008120000_init.sql'])
+	})
+
+	test('a generated column or an index that calls a function outside pg_catalog is rolled back', async () => {
+		const outside = await outsideSchema()
+		expect(await rolledBack(`CREATE TABLE deals (stage text, spread text GENERATED ALWAYS AS (${outside}.spread(stage)) STORED)`, 'deals'))
+			.toContain(`default deals.spread calls ${outside}.spread`)
+		expect(await rolledBack(`CREATE TABLE deals (stage text); CREATE INDEX deals_spread ON deals (${outside}.spread(stage))`, 'deals'))
+			.toContain(`index deals_spread calls ${outside}.spread`)
+	})
+
+	test('a CHECK that calls a built-in outside the reviewed list is rolled back', async () => {
+		expect(await rolledBack('CREATE TABLE files (id oid CHECK (pg_catalog.lo_unlink(id) = 1))', 'files')).toContain(
+			'constraint files_id_check calls pg_catalog.lo_unlink',
+		)
+	})
+
+	test("a default that casts through another schema's domain is rolled back", async () => {
+		const outside = await outsideSchema()
+		const message = await rolledBack(`CREATE TABLE deals (n int DEFAULT 1::${outside}.sneaky::int)`, 'deals')
+		expect(message).toContain('default deals.n holds COERCETODOMAIN')
+		expect(message).toContain(`the type ${outside}.sneaky`)
+	})
+
+	test('a default that calls a built-in behind a cast is rolled back', async () => {
+		expect(await rolledBack('CREATE TABLE deals (locked boolean DEFAULT (false::boolean OR pg_catalog.pg_try_advisory_xact_lock(1, 2)))', 'deals'))
+			.toContain('default deals.locked calls pg_catalog.pg_try_advisory_xact_lock')
+	})
+
+	test('a serial column is rolled back: its sequence and its nextval default', async () => {
+		const message = await rolledBack('CREATE TABLE deals (n serial PRIMARY KEY)', 'deals')
+		expect(message).toContain('default deals.n calls pg_catalog.nextval')
+		expect(message).toContain('sequence deals_n_seq (a serial column; use GENERATED ALWAYS AS IDENTITY)')
+	})
+
+	test('the check covers the whole schema, so a later migration that keeps a leftover trigger fails until it drops it', async () => {
+		const { migrations, db } = application()
+		const first = migration('20261008120000_init.sql', 'CREATE TABLE deals (id text PRIMARY KEY)')
+		await migrations.apply(db, [first])
+		await db
+			.prepare(
+				`CREATE TRIGGER noop BEFORE UPDATE ON ${migrations.schema}.deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`,
+			)
+			.run()
+		const keeping = migration('20261009120000_note.sql', 'ALTER TABLE deals ADD COLUMN note text')
+		expect((await failureOf(migrations.apply(db, [first, keeping]))).message).toContain('trigger deals.noop')
+		const dropping = migration('20261009120000_note.sql', 'DROP TRIGGER noop ON deals; ALTER TABLE deals ADD COLUMN note text')
+		expect(await migrations.apply(db, [first, dropping])).toEqual(['app/20261009120000_note.sql'])
 	})
 })

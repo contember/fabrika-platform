@@ -31,6 +31,7 @@ export {
 } from './application-postgres-migrations'
 export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asset-server-fs'
 export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
+export { databaseCodeQuery } from './database-code'
 export {
 	decodeJob,
 	type Job,
@@ -39,7 +40,6 @@ export {
 	PostgresJobQueue,
 	type PostgresJobQueueOptions,
 } from './job-queue-postgres'
-export { defaultExpressionCall } from './migration-sql'
 export { rewritePlaceholders, type RewrittenSql } from './placeholders'
 export {
 	applyPostgresMigrations,

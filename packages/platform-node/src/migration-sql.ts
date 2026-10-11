@@ -22,81 +22,8 @@ const REFUSED_FIRST_WORDS: ReadonlySet<string> = new Set([
 	'CALL',
 ])
 
-/**
- * What an application migration's `CREATE [OR REPLACE] …` may not make: database code, which runs on a later write
- * where the data layer cannot see it, or binds a function to run implicitly. `SCHEMA` because the runner creates the
- * application's one schema, and a `CREATE SCHEMA` may carry `CREATE TRIGGER` and `GRANT` as its elements.
- */
-const EXECUTABLE_OBJECTS: ReadonlySet<string> = new Set([
-	'FUNCTION',
-	'PROCEDURE',
-	'TRIGGER',
-	'RULE',
-	'VIEW',
-	'POLICY',
-	'EXTENSION',
-	'LANGUAGE',
-	'AGGREGATE',
-	'OPERATOR',
-	'CAST',
-	'CONVERSION',
-	'TRANSFORM',
-	'SCHEMA',
-])
-
-/** Words between `CREATE [OR REPLACE]` and the kind of object: `CREATE TEMP RECURSIVE VIEW`, `CREATE EVENT TRIGGER`. */
-const CREATE_MODIFIERS: ReadonlySet<string> = new Set([
-	'TEMP',
-	'TEMPORARY',
-	'RECURSIVE',
-	'MATERIALIZED',
-	'CONSTRAINT',
-	'EVENT',
-	'TRUSTED',
-	'PROCEDURAL',
-	'DEFAULT',
-])
-
-/** Top-level statements an application migration may not contain besides those `CREATE`s. */
-const EXECUTABLE_FIRST_WORDS: ReadonlySet<string> = new Set(['DO', 'GRANT', 'REVOKE'])
-
-/** The functions a column default may call; anything else it calls runs on every insert, unseen by the data layer. */
-const DEFAULT_FUNCTIONS: ReadonlySet<string> = new Set(['now', 'gen_random_uuid'])
-
-/**
- * Words that end a column default's expression at its own depth: none of them may continue an expression there, so
- * what follows (a `CHECK`, `REFERENCES t (id)`, `AS IDENTITY (…)`, `WHERE`) is not part of the default.
- */
-const DEFAULT_ENDS: ReadonlySet<string> = new Set([
-	'AS',
-	'CHECK',
-	'CONSTRAINT',
-	'DEFERRABLE',
-	'DELETE',
-	'DO',
-	'FOR',
-	'FROM',
-	'GENERATED',
-	'INITIALLY',
-	'INSERT',
-	'ON',
-	'PARTITION',
-	'PRIMARY',
-	'REFERENCES',
-	'RETURNING',
-	'TABLESPACE',
-	'UNIQUE',
-	'UPDATE',
-	'USING',
-	'VALUES',
-	'WHERE',
-])
-
-/** How many leading words `statementStarts` reports: enough for `CREATE OR REPLACE TRUSTED PROCEDURAL LANGUAGE`. */
-const LEADING_WORDS = 6
-
 export interface StatementStart {
-	/** The leading words of a top-level statement, upper-cased, up to the first non-word token and at most six. */
+	/** The first two words of a top-level statement, upper-cased; fewer when the statement has fewer. */
 	readonly words: readonly string[]
 	/** 1-based line of the statement's first word. */
 	readonly line: number
@@ -104,7 +31,13 @@ export interface StatementStart {
 
 const isWordStart = (char: string): boolean => /[A-Za-z_\u0080-\uffff]/.test(char)
 const isWordPart = (char: string): boolean => /[A-Za-z0-9_$\u0080-\uffff]/.test(char)
-const DOLLAR_TAG = /^\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/
+/** Sticky: matched at a position of the whole text, since a tag has no length limit. */
+const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/y
+
+function dollarTagAt(sql: string, index: number): string | undefined {
+	DOLLAR_TAG.lastIndex = index
+	return DOLLAR_TAG.exec(sql)?.[0]
+}
 
 /** One lexical token of SQL: comments and whitespace are dropped; a literal or a quoted body keeps its contents. */
 export type SqlToken =
@@ -136,8 +69,10 @@ export function sqlTokens(sql: string): SqlToken[] {
 		} else if (/\s/.test(char)) {
 			index++
 		} else if (char === '-' && next === '-') {
-			const end = sql.indexOf('\n', index)
-			skipTo(end === -1 ? sql.length : end)
+			// Postgres ends a comment at a line feed or a carriage return, so a CR-only line ending ends one too.
+			let end = index + 2
+			while (end < sql.length && sql[end] !== '\n' && sql[end] !== '\r') end++
+			skipTo(end)
 		} else if (char === '/' && next === '*') {
 			let nesting = 0
 			let at = index
@@ -176,8 +111,8 @@ export function sqlTokens(sql: string): SqlToken[] {
 			}
 			tokens.push({ kind: 'quoted', text, line: startLine })
 			skipTo(at + 1)
-		} else if (char === '$' && DOLLAR_TAG.test(sql.slice(index, index + 64))) {
-			const tag = DOLLAR_TAG.exec(sql.slice(index, index + 64))?.[0] ?? '$$'
+		} else if (char === '$' && dollarTagAt(sql, index) !== undefined) {
+			const tag = dollarTagAt(sql, index) ?? '$$'
 			const end = sql.indexOf(tag, index + tag.length)
 			tokens.push({ kind: 'dollar', body: sql.slice(index + tag.length, end === -1 ? sql.length : end), line })
 			skipTo(end === -1 ? sql.length : end + tag.length)
@@ -194,34 +129,44 @@ export function sqlTokens(sql: string): SqlToken[] {
 	return tokens
 }
 
+interface Statement {
+	/** The statement's tokens, without the `;` that ends it. */
+	readonly tokens: readonly SqlToken[]
+	/** 1-based line of the statement's first token. */
+	readonly line: number
+}
+
 /**
- * Splits SQL into top-level statements and reports how each begins. A keyword inside a comment, a literal, a quoted
- * identifier or a dollar-quoted body is not a statement, and a `;` inside parentheses does not end one.
+ * Splits SQL into top-level statements at every `;` outside a comment, a literal, a quoted identifier or a
+ * dollar-quoted body. Postgres admits a `;` inside parentheses only in a rule's actions, so splitting there too only
+ * makes a check stricter.
  */
-export function statementStarts(sql: string): StatementStart[] {
-	const starts: StatementStart[] = []
-	let words: string[] = []
-	let wordsLine = 0
-	let count = 0
-	let depth = 0
-	const finish = (): void => {
-		if (count > 0) starts.push({ words, line: wordsLine })
-		words = []
-		count = 0
-	}
+function topLevelStatements(sql: string): Statement[] {
+	const statements: Statement[] = []
+	let tokens: SqlToken[] = []
 	for (const token of sqlTokens(sql)) {
-		if (token.kind === 'punct' && token.char === ';' && depth === 0) {
-			finish()
-			continue
-		}
-		if (token.kind === 'punct' && token.char === '(') depth++
-		else if (token.kind === 'punct' && token.char === ')' && depth > 0) depth--
-		if (count === 0) wordsLine = token.line
-		if (token.kind === 'word' && count === words.length && words.length < LEADING_WORDS) words.push(token.text.toUpperCase())
-		count++
+		if (token.kind === 'punct' && token.char === ';') {
+			if (tokens[0] !== undefined) statements.push({ tokens, line: tokens[0].line })
+			tokens = []
+		} else tokens.push(token)
 	}
-	finish()
-	return starts
+	if (tokens[0] !== undefined) statements.push({ tokens, line: tokens[0].line })
+	return statements
+}
+
+const upperWord = (token: SqlToken | undefined): string | undefined => (token?.kind === 'word' ? token.text.toUpperCase() : undefined)
+
+/** Reports how each top-level statement begins. A keyword inside a comment, a literal or a quoted body is no statement. */
+export function statementStarts(sql: string): StatementStart[] {
+	return topLevelStatements(sql).map(({ tokens, line }) => {
+		const words: string[] = []
+		for (const token of tokens.slice(0, 2)) {
+			const word = upperWord(token)
+			if (word === undefined) break
+			words.push(word)
+		}
+		return { words, line }
+	})
 }
 
 /** Whether a schema qualifier names another application's schema, a platform schema or `public`. */
@@ -263,118 +208,99 @@ export function refusedStatement(sql: string): { readonly statement: string; rea
 	return undefined
 }
 
-/** `CREATE OR REPLACE TRIGGER` → `CREATE TRIGGER`; the label of a refused statement, or `undefined` when allowed. */
-function executableLabel(words: readonly string[]): string | undefined {
-	const [first, second] = words
-	if (first === undefined) return undefined
-	if (EXECUTABLE_FIRST_WORDS.has(first)) return first
-	if (first === 'ALTER' && second === 'DEFAULT') return 'ALTER DEFAULT PRIVILEGES'
-	if (first !== 'CREATE') return undefined
-	const rest = second === 'OR' && words[2] === 'REPLACE' ? words.slice(3) : words.slice(1)
-	const modifiers = rest.findIndex((word) => !CREATE_MODIFIERS.has(word))
-	const object = modifiers === -1 ? undefined : rest[modifiers]
-	if (object === undefined || !EXECUTABLE_OBJECTS.has(object)) return undefined
-	return ['CREATE', ...rest.slice(0, modifiers + 1)].join(' ')
+/** What an application migration may drop: its own tables, indexes and types, and any database code left from before. */
+const DROPPABLE: ReadonlySet<string> = new Set([
+	'TABLE',
+	'INDEX',
+	'TYPE',
+	'TRIGGER',
+	'FUNCTION',
+	'PROCEDURE',
+	'AGGREGATE',
+	'RULE',
+	'VIEW',
+	'MATERIALIZED',
+	'POLICY',
+	'SEQUENCE',
+	'DOMAIN',
+	'OPERATOR',
+])
+
+/** The index past a name at `index`, schema-qualified or not, or `undefined` when no name is there. */
+function afterName(tokens: readonly SqlToken[], index: number): number | undefined {
+	const isName = (token: SqlToken | undefined): boolean => token?.kind === 'word' || token?.kind === 'quoted'
+	if (!isName(tokens[index])) return undefined
+	const dot = tokens[index + 1]
+	return dot?.kind === 'punct' && dot.char === '.' && isName(tokens[index + 2]) ? index + 3 : index + 1
 }
 
-/**
- * The first top-level statement of an application migration that installs database code (a function, procedure,
- * trigger, rule, view, policy, extension or language, or a `DO` block) or changes grants. Such code would run on a
- * later write, past the data layer; the start check (`@fabrika/db/codegen`) finds one installed before this rule.
- */
-export function executableStatement(sql: string): { readonly statement: string; readonly line: number } | undefined {
-	for (const start of statementStarts(sql)) {
-		const statement = executableLabel(start.words)
-		if (statement !== undefined) return { statement, line: start.line }
-	}
-	return undefined
-}
-
-/** Past a cast's type name (`character varying(20)`, `timestamp(3) with time zone`, `text[]`); a type modifier is digits. */
-function afterTypeName(tokens: readonly SqlToken[], from: number): number {
-	let index = from
-	while (index < tokens.length) {
-		const token = tokens[index]
-		if (token?.kind === 'punct' && (token.char === '.' || token.char === '[' || token.char === ']')) {
-			index++
-			continue
-		}
-		if (token?.kind !== 'word' && token?.kind !== 'quoted') return index
-		if (token.kind === 'word' && DEFAULT_ENDS.has(token.text.toUpperCase())) return index
-		const open = tokens[index + 1]
-		if (open?.kind !== 'punct' || open.char !== '(') {
-			index++
-			continue
-		}
-		let close = index + 2
-		while (/^[0-9,]$/.test(punctChar(tokens[close]))) close++
-		// Anything but digits in the parentheses makes the word a call, which the caller must see.
-		if (punctChar(tokens[close]) !== ')') return index
-		index = close + 1
-	}
-	return index
-}
-
-function punctChar(token: SqlToken | undefined): string {
-	return token?.kind === 'punct' ? token.char : ''
-}
-
-/** `pg_catalog` in `pg_catalog.now(`, read backwards from the function name at `index`. */
-function qualifierOf(tokens: readonly SqlToken[], index: number): string | undefined {
-	const dot = tokens[index - 1]
-	const schema = tokens[index - 2]
-	if (dot?.kind !== 'punct' || dot.char !== '.') return undefined
-	if (schema?.kind === 'word') return schema.text.toLowerCase()
-	if (schema?.kind === 'quoted') return schema.text
-	return undefined
-}
-
-/**
- * The first function a default expression starting at `tokens[from]` calls that is not `now()` or `gen_random_uuid()`
- * (unqualified or in `pg_catalog`). The expression ends at a `,`, `;` or `)` of its own depth, or at a `DEFAULT_ENDS`
- * word there. Any word followed by `(` counts as a call, so `COALESCE(…)` is refused too; a cast's type modifier is not.
- */
-function disallowedCall(tokens: readonly SqlToken[], from: number): { readonly call: string; readonly line: number } | undefined {
+/** The upper-cased words at parenthesis depth 0, so a keyword inside a column list or an expression is not one. */
+function outerWords(tokens: readonly SqlToken[]): string[] {
+	const words: string[] = []
 	let depth = 0
-	for (let index = from; index < tokens.length; index++) {
-		const token = tokens[index]
-		if (token === undefined) break
-		if (token.kind === 'punct') {
-			if (token.char === '(') depth++
-			else if (token.char === ')') {
-				if (depth === 0) return undefined
-				depth--
-			} else if (depth === 0 && (token.char === ',' || token.char === ';')) return undefined
-			else if (token.char === ':' && punctChar(tokens[index + 1]) === ':') index = afterTypeName(tokens, index + 2) - 1
-			continue
-		}
-		if (token.kind === 'word' && depth === 0 && DEFAULT_ENDS.has(token.text.toUpperCase())) return undefined
-		if ((token.kind !== 'word' && token.kind !== 'quoted') || punctChar(tokens[index + 1]) !== '(') continue
-		const name = token.kind === 'word' ? token.text.toLowerCase() : token.text
-		const qualifier = qualifierOf(tokens, index)
-		if (DEFAULT_FUNCTIONS.has(name) && (qualifier === undefined || qualifier === 'pg_catalog')) continue
-		return { call: qualifier === undefined ? name : `${qualifier}.${name}`, line: token.line }
+	for (const token of tokens) {
+		if (token.kind === 'punct' && token.char === '(') depth++
+		else if (token.kind === 'punct' && token.char === ')') depth--
+		else if (depth === 0 && token.kind === 'word') words.push(token.text.toUpperCase())
 	}
-	return undefined
+	return words
+}
+
+const follows = (words: readonly string[], first: string, second: string): boolean =>
+	words.some((word, index) => word === first && words[index + 1] === second)
+
+/** Why one statement is outside the allowlist, as the label the refusal names, or `undefined` when it is inside. */
+function disallowedForm(tokens: readonly SqlToken[]): string | undefined {
+	const [first, second] = [upperWord(tokens[0]), upperWord(tokens[1])]
+	// The kind of object follows CREATE, ALTER and DROP; after any other first word comes a name or an expression.
+	const kind = first === 'CREATE' || first === 'ALTER' || first === 'DROP' ? second : undefined
+	const label = [first, kind].filter((word) => word !== undefined).join(' ') || punctLabel(tokens[0])
+	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') return undefined
+	if (first === 'COMMENT' && second === 'ON') return undefined
+	if (first === 'DROP') return second !== undefined && DROPPABLE.has(second) ? undefined : label
+	if (first === 'CREATE' && (second === 'INDEX' || (second === 'UNIQUE' && upperWord(tokens[2]) === 'INDEX'))) return undefined
+	if (first === 'CREATE' && second === 'TABLE') {
+		// `LIKE … INCLUDING` copies defaults, constraints and indexes from a table the check has not seen.
+		if (tokens.some((token) => upperWord(token) === 'INCLUDING')) return 'CREATE TABLE … LIKE … INCLUDING'
+		return outerWords(tokens).includes('AS') ? 'CREATE TABLE … AS' : undefined
+	}
+	if (first === 'ALTER' && second === 'TABLE') {
+		const words = outerWords(tokens)
+		if (follows(words, 'SET', 'SCHEMA')) return 'ALTER TABLE … SET SCHEMA'
+		return follows(words, 'OWNER', 'TO') ? 'ALTER TABLE … OWNER TO' : undefined
+	}
+	const named = afterName(tokens, 2)
+	if (first === 'CREATE' && second === 'TYPE') {
+		const isEnum = named !== undefined && upperWord(tokens[named]) === 'AS' && upperWord(tokens[named + 1]) === 'ENUM'
+		return isEnum ? undefined : 'CREATE TYPE other than AS ENUM'
+	}
+	if (first === 'ALTER' && second === 'TYPE') {
+		const action = named === undefined ? undefined : upperWord(tokens[named])
+		const isValue = (action === 'ADD' || action === 'RENAME') && upperWord(tokens[(named ?? 0) + 1]) === 'VALUE'
+		return isValue ? undefined : 'ALTER TYPE other than ADD VALUE or RENAME VALUE'
+	}
+	return label
+}
+
+function punctLabel(token: SqlToken | undefined): string {
+	if (token?.kind === 'punct') return token.char
+	if (token?.kind === 'quoted') return `"${token.text}"`
+	return 'a statement'
 }
 
 /**
- * The first column default of a migration (`DEFAULT <expression>` in a column definition, `SET DEFAULT`, a domain's)
- * that calls a function other than `now()` and `gen_random_uuid()`. `DEFAULT VALUES`, `= DEFAULT` and
- * `BY DEFAULT AS IDENTITY` hold no expression and pass.
+ * The first top-level statement of an application migration outside the allowlist: `CREATE TABLE` (without
+ * `LIKE … INCLUDING` or `AS`), `ALTER TABLE` (without `SET SCHEMA` or `OWNER TO`), `CREATE [UNIQUE] INDEX`,
+ * `CREATE TYPE … AS ENUM`, `ALTER TYPE … ADD VALUE`/`RENAME VALUE`, `DROP` of a table, an index, a type or leftover
+ * database code, `COMMENT ON`, and `INSERT`/`UPDATE`/`DELETE` for a backfill. Everything else is refused, `COPY`,
+ * `SELECT`, `DO`, `CREATE FUNCTION` and `GRANT` included, because the data layer cannot see what it does and some of it
+ * (`COPY … PROGRAM`) escapes the migration's transaction. The expressions inside an allowed statement are Postgres'
+ * to parse; `databaseCodeCheck` reads them from the catalog before the commit.
  */
-export function refusedDefault(sql: string): { readonly call: string; readonly line: number } | undefined {
-	const tokens = sqlTokens(sql)
-	for (let index = 0; index < tokens.length; index++) {
-		const token = tokens[index]
-		if (token?.kind !== 'word' || token.text.toUpperCase() !== 'DEFAULT') continue
-		const refused = disallowedCall(tokens, index + 1)
-		if (refused !== undefined) return refused
+export function disallowedStatement(sql: string): { readonly statement: string; readonly line: number } | undefined {
+	for (const { tokens, line } of topLevelStatements(sql)) {
+		const statement = disallowedForm(tokens)
+		if (statement !== undefined) return { statement, line }
 	}
 	return undefined
-}
-
-/** The first disallowed call of one default expression as the catalog prints it (`pg_get_expr`), or `undefined`. */
-export function defaultExpressionCall(expression: string): string | undefined {
-	return disallowedCall(sqlTokens(expression), 0)?.call
 }

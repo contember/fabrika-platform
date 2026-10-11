@@ -1,7 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { executableStatement, foreignSchemaReference, refusedDefault } from './migration-sql'
+import { disallowedStatement, foreignSchemaReference } from './migration-sql'
 import {
 	applyPostgresMigrations,
 	definePostgresMigrationPlan,
@@ -64,23 +64,13 @@ export function applicationMigrationLockKey(appId: string): number {
 	return createHash('sha256').update(`fabrika-db:${appId}`, 'utf8').digest().readUIntBE(0, 6) + 1
 }
 
-/**
- * Refuses database code before any SQL runs: a function, trigger, rule, view or policy would act on a later write
- * where the data layer cannot see it, and so would a default that calls anything but `now()` or `gen_random_uuid()`.
- */
-function refuseDatabaseCode(migration: PostgresMigration): void {
-	const statement = executableStatement(migration.sql)
-	if (statement !== undefined) {
-		throw new PostgresMigrationError(
-			`Application migration ${migration.name} line ${statement.line}: ${statement.statement} is not allowed; an application schema holds no database code and no grants, because the data layer cannot see what they do`,
-		)
-	}
-	const defaulted = refusedDefault(migration.sql)
-	if (defaulted !== undefined) {
-		throw new PostgresMigrationError(
-			`Application migration ${migration.name} line ${defaulted.line}: a column default calls ${defaulted.call}(); a default is a constant, now() or gen_random_uuid()`,
-		)
-	}
+/** Refuses, before any SQL runs, a statement outside the allowlist (`disallowedStatement`), naming the file and line. */
+function refuseDisallowedStatement(migration: PostgresMigration): void {
+	const refused = disallowedStatement(migration.sql)
+	if (refused === undefined) return
+	throw new PostgresMigrationError(
+		`Application migration ${migration.name} line ${refused.line}: ${refused.statement} is not allowed; an application migration holds only CREATE TABLE, ALTER TABLE, CREATE [UNIQUE] INDEX, CREATE TYPE … AS ENUM, ALTER TYPE … ADD/RENAME VALUE, DROP, COMMENT ON, INSERT, UPDATE and DELETE`,
+	)
 }
 
 /** An application's migration wrapper: its schema, ledger, lock and timeouts are derived, never configured. */
@@ -95,7 +85,6 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 		return [...migrations]
 	}
 	const plan = (migrations: readonly PostgresMigration[] = read()): PostgresMigrationPlan => {
-		for (const migration of config.framework?.migrations ?? []) refuseDatabaseCode(migration)
 		for (const migration of migrations) {
 			if (!APPLICATION_MIGRATION_NAME.test(migration.name)) {
 				throw new PostgresMigrationError(`Application migration ${migration.name} is not named YYYYMMDDHHMMSS_slug.sql`)
@@ -106,9 +95,8 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 					`Application migration ${migration.name} line ${foreign.line} names the schema ${foreign.schema}; an application migration names its own tables unqualified`,
 				)
 			}
-			refuseDatabaseCode(migration)
 		}
-		return definePostgresMigrationPlan({
+		const defined = definePostgresMigrationPlan({
 			ledgerTable: `${schema}.${APPLICATION_MIGRATION_LEDGER}`,
 			lockKey,
 			bundles: [
@@ -121,6 +109,11 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 				statementTimeoutMs: config.statementTimeoutMs ?? DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 			},
 		})
+		// After the generic validation, so a COMMIT or a SET keeps its sharper refusal.
+		for (const bundle of defined.bundles) {
+			for (const migration of bundle.migrations) refuseDisallowedStatement(migration)
+		}
+		return defined
 	}
 	const apply = async (db: SqlDatabase, migrations: readonly PostgresMigration[] = read()): Promise<string[]> =>
 		applyPostgresMigrations(db, plan(migrations))

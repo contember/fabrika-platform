@@ -2,6 +2,7 @@ import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DATABASE_CODE_FAILURE, databaseCodeCheck } from './database-code'
 import { refusedStatement } from './migration-sql'
 
 const IDENTIFIER = /^[a-z][a-z0-9_]*$/
@@ -164,12 +165,20 @@ export async function applyPostgresMigrations(
 						db.prepare(GUARD_MARK),
 						db.prepare(migration.sql),
 						db.prepare(guardCheck(plan.application)),
+						...(plan.application === undefined ? [] : [db.prepare(databaseCodeCheck(plan.application.schema))]),
 						ledgerInsert(db, plan, bundle.name, migration, (options.now ?? unixNow)()),
 					])
 				} catch (error) {
 					if (error instanceof Error && error.message === GUARD_FAILURE) {
 						throw new PostgresMigrationError(
 							`Postgres migration ${identity} ended the runner's transaction or changed its lock_timeout, statement_timeout or search_path`,
+						)
+					}
+					if (error instanceof Error && error.message.startsWith(DATABASE_CODE_FAILURE)) {
+						throw new PostgresMigrationError(
+							`Postgres migration ${identity} was rolled back: the schema would hold database code the data layer cannot see: ${
+								error.message.slice(DATABASE_CODE_FAILURE.length)
+							}`,
 						)
 					}
 					throw new PostgresMigrationError(`Postgres migration ${identity} failed`, { cause: error })
@@ -337,6 +346,8 @@ function applicationSettings(db: SqlDatabase, application: PostgresApplicationMi
 		db.prepare(`SET LOCAL search_path TO ${application.schema}`),
 		db.prepare(`SET LOCAL lock_timeout = ${application.lockTimeoutMs}`),
 		db.prepare(`SET LOCAL statement_timeout = ${application.statementTimeoutMs}`),
+		// The tokenizer reads '…' without backslash escapes, as Postgres does with this setting on.
+		db.prepare('SET LOCAL standard_conforming_strings = on'),
 	]
 }
 
