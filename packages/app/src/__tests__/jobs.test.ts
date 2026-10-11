@@ -477,7 +477,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			...frameworkEnvFor(app),
 			FABRIKA_IAM_ISSUER: iam.origin,
 			FABRIKA_APP_ID: appId,
-			FABRIKA_APP_DATABASE_URL: url,
+			FABRIKA_APP_RUNTIME_DATABASE_URL: applicationRuntimeUrl(url, appId),
 			FABRIKA_PROXY_SECRET: PROXY_SECRET,
 			FABRIKA_TEST_MARKER: 'x',
 		}
@@ -504,7 +504,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			...frameworkEnvFor(startingJobsApp()),
 			FABRIKA_IAM_ISSUER: iam.origin,
 			FABRIKA_APP_ID: appId,
-			FABRIKA_APP_DATABASE_URL: url,
+			FABRIKA_APP_RUNTIME_DATABASE_URL: applicationRuntimeUrl(url, appId),
 			FABRIKA_PROXY_SECRET: PROXY_SECRET,
 		}
 		// A fresh application per run: a data layer is bound once.
@@ -525,7 +525,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 			...frameworkEnvFor(filesJobsApp()),
 			FABRIKA_IAM_ISSUER: iam.origin,
 			FABRIKA_APP_ID: appId,
-			FABRIKA_APP_DATABASE_URL: url,
+			FABRIKA_APP_RUNTIME_DATABASE_URL: applicationRuntimeUrl(url, appId),
 			FABRIKA_PROXY_SECRET: PROXY_SECRET,
 		}
 		const run = (variables: Readonly<Record<string, string>>) =>
@@ -550,7 +550,7 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 		const env = {
 			...frameworkEnvFor(app),
 			FABRIKA_APP_ID: appId,
-			FABRIKA_APP_DATABASE_URL: url,
+			FABRIKA_APP_RUNTIME_DATABASE_URL: applicationRuntimeUrl(url, appId),
 			FABRIKA_PROXY_SECRET: PROXY_SECRET,
 			PORT: '0',
 		}

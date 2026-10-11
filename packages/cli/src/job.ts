@@ -10,7 +10,8 @@ Usage:
 
 Run from the application root. The job boots like the server: the framework variables (FABRIKA_APP_ID,
 FABRIKA_APP_DATABASE_URL, FABRIKA_IAM_*, FABRIKA_CONTRACT_DIGEST, FABRIKA_PROXY_SECRET, FABRIKA_OPERATIONS_DSN)
-come from the environment only and leave the process before ${IMPLEMENTATION_FILE} loads. A run takes the job's lease
+come from the environment only and leave the process before ${IMPLEMENTATION_FILE} loads; the run itself happens in a
+process started again with the runtime role's credential in place of FABRIKA_APP_DATABASE_URL. A run takes the job's lease
 or does not start. It exits 1 when the job failed, and 0 when it succeeded or a previous run still holds the lease.
 A failure is named by a fixed code (timeout, lease_lost, handler_failed, driver_failed, boot_failed), never by the
 application's error.

@@ -140,13 +140,18 @@ async function loadDataLayer(): Promise<DataLayerOpeners> {
 	return { postgres: Database.postgres, applicationSchema }
 }
 
+/** The provisioning credential the platform writes; only the launcher reads it, and the application's process never holds it. */
+const PROVISIONING_DATABASE_URL = 'FABRIKA_APP_DATABASE_URL'
+/** The runtime role's credential, which the launcher derives and hands the application's process in its place. */
+const RUNTIME_DATABASE_URL = 'FABRIKA_APP_RUNTIME_DATABASE_URL'
+
 /**
- * The application's connection: its runtime role `run_<FABRIKA_APP_ID>`, derived from the provisioning credential
- * `FABRIKA_APP_DATABASE_URL`, on the schema `app_<FABRIKA_APP_ID>` its migrations created. The process never queries
- * as the provisioning credential. A URL is a credential, so no message quotes it.
+ * The application's connection: its runtime role `run_<FABRIKA_APP_ID>`, whose URL the launcher derived from the
+ * provisioning credential, on the schema `app_<FABRIKA_APP_ID>` its migrations created. A URL is a credential, so no
+ * message quotes it.
  */
 function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Record<string, string>>): Database {
-	const url = framework['FABRIKA_APP_DATABASE_URL'] ?? ''
+	const url = framework[RUNTIME_DATABASE_URL] ?? ''
 	const appId = framework['FABRIKA_APP_ID'] ?? ''
 	const problems: string[] = []
 	if (url.trim() === '') {
@@ -161,13 +166,54 @@ function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Rec
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
+	return data.postgres({ url, schema })
+}
+
+/**
+ * Whether this process holds the provisioning credential: then it is the launcher, and the application never runs in
+ * it. The application's process gets the runtime credential instead.
+ */
+function holdsProvisioningCredential(env: Readonly<Record<string, string | undefined>>): boolean {
+	return (env[PROVISIONING_DATABASE_URL] ?? '') !== ''
+}
+
+const FORWARDED_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
+
+/**
+ * The launcher: before any application module loads, derives the runtime role's credential from the provisioning one
+ * and runs this same command again with an environment that carries the runtime credential and not the provisioning
+ * one, so neither the application's process nor anything it spawns can read the latter, `/proc/self/environ`
+ * included. Stdio is inherited, signals are forwarded, and the child's exit becomes this process's.
+ */
+async function relaunchAsRuntime(env: Readonly<Record<string, string | undefined>>): Promise<never> {
 	let runtimeUrl: string
 	try {
-		runtimeUrl = applicationRuntimeUrl(url, appId)
+		runtimeUrl = applicationRuntimeUrl(env[PROVISIONING_DATABASE_URL] ?? '', env['FABRIKA_APP_ID'] ?? '')
 	} catch {
-		throw new BootError(['FABRIKA_APP_DATABASE_URL is not a connection URL with a password; the runtime role derives its credential from it'])
+		throw new BootError([
+			'FABRIKA_APP_DATABASE_URL is not a connection URL with a password, or FABRIKA_APP_ID is not an application id; the runtime role derives its credential from both',
+		])
 	}
-	return data.postgres({ url: runtimeUrl, schema })
+	const environment: Record<string, string> = {}
+	for (const [name, value] of Object.entries(env)) {
+		if (value !== undefined && name !== PROVISIONING_DATABASE_URL) environment[name] = value
+	}
+	environment[RUNTIME_DATABASE_URL] = runtimeUrl
+	const child = Bun.spawn([process.execPath, ...process.execArgv, ...process.argv.slice(1)], {
+		env: environment,
+		stdin: 'inherit',
+		stdout: 'inherit',
+		stderr: 'inherit',
+	})
+	for (const signal of FORWARDED_SIGNALS) {
+		process.on(signal, () => child.kill(signal))
+	}
+	await child.exited
+	if (child.signalCode !== null) {
+		for (const signal of FORWARDED_SIGNALS) process.removeAllListeners(signal)
+		process.kill(process.pid, child.signalCode)
+	}
+	process.exit(child.exitCode ?? 1)
 }
 
 const STORAGE_VARIABLES = {
@@ -224,9 +270,13 @@ export type ImplementationLoader = () => Promise<{ readonly default: ContractImp
 /**
  * Captures the framework's variables and scrubs them from the process, then imports the application, boots it and
  * serves it on `PORT` (default 3000), on every interface: the project's private network is how the proxy reaches
- * it. Called only by the generated entrypoint, with `process.env`. SIGTERM drains.
+ * it. Called only by the generated entrypoint, with `process.env`. SIGTERM drains. Given the provisioning credential,
+ * it is the launcher instead: it never loads the application and re-runs the entrypoint as the runtime role.
  */
 export async function serveContract(load: ImplementationLoader, env: Readonly<Record<string, string | undefined>>): Promise<ContractServer> {
+	if (holdsProvisioningCredential(env)) {
+		return relaunchAsRuntime(env)
+	}
 	const environment = captureEnvironment(env)
 	const port = Number.parseInt(environment.application['PORT'] === undefined ? '3000' : String(environment.application['PORT']), 10)
 	if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -281,7 +331,8 @@ export function implementationAt(path: string): ImplementationLoader {
 /**
  * One run of the job `name` (`fabrika job run <name>`, the crontab's command): the framework's variables are captured
  * and scrubbed before the application loads, exactly as `serveContract` does, then `boot` binds the job and the run
- * takes its lease. The connection closes when the run ends.
+ * takes its lease. The connection closes when the run ends. Given the provisioning credential, it re-runs the command
+ * as the runtime role, as `serveContract` does.
  */
 export async function runContractJob(
 	load: ImplementationLoader,
@@ -289,6 +340,9 @@ export async function runContractJob(
 	name: string,
 	options: JobRunOptions = {},
 ): Promise<JobRunResult> {
+	if (holdsProvisioningCredential(env)) {
+		return relaunchAsRuntime(env)
+	}
 	const environment = captureEnvironment(env)
 	const data = await loadDataLayer()
 	const { default: app } = await load()

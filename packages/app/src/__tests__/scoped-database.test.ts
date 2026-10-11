@@ -283,7 +283,7 @@ describe('boot binds the data layer once', () => {
 			const env = {
 				...frameworkEnvFor(application),
 				FABRIKA_APP_ID: appId,
-				FABRIKA_APP_DATABASE_URL: url,
+				FABRIKA_APP_RUNTIME_DATABASE_URL: applicationRuntimeUrl(url, appId),
 				FABRIKA_PROXY_SECRET: PROXY_SECRET,
 				PORT: '0',
 			}
