@@ -12,7 +12,7 @@ import { isTables, readTables, tablePolicies } from '../tables'
 import { TestAuthority } from './fixtures/authority'
 import { RecordingDialect } from './fixtures/recording-dialect'
 import { columns } from './fixtures/schema'
-import { tables } from './fixtures/tables'
+import { tables, vocabulary } from './fixtures/tables'
 
 const notes = {
 	scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
@@ -50,7 +50,7 @@ describe('the policies as data', () => {
 	})
 
 	test('readTables over the same values gives the same policies', () => {
-		const fromValues = readTables(JSON.parse(JSON.stringify(columns)), JSON.parse(JSON.stringify(policiesOf())))
+		const fromValues = readTables(JSON.parse(JSON.stringify(columns)), JSON.parse(JSON.stringify(policiesOf())), JSON.parse(JSON.stringify(vocabulary)))
 		expect(tablePolicies(fromValues)).toEqual(tablePolicies(tables))
 	})
 
@@ -83,14 +83,18 @@ describe('readTables refuses what nobody type-checked', () => {
 		['a policy that is an array', { notes: [notes] }, 'notes: the policy must be a plain object'],
 		['a container with an extra field', { notes: { ...notes, scope: { ...notes.scope, in: { ...notes.scope.in, key: 'id' } } } }, 'scope.in: key'],
 		['an inbox with actions', { notes: { scope: { inbox: 'contact', read: 'notes.read' }, actions: { read: 'notes.read' } } }, 'an inbox table'],
-		['a child without inherit', { notes: { ...notes, scope: { child: 'notes', key: 'id', column: 'workspace_id' } } }, 'scope.inherit takes'],
+		[
+			'a dimension the vocabulary does not declare',
+			{ notes: { ...notes, scope: { dimension: 'nte' } } },
+			'notes: scope.dimension names nte, which is not a dimension of the vocabulary',
+		],
 		['a column policy with an extra field', { notes: { ...notes, columns: { title: { read: 'notes.read', write: 'x' } } } }, 'columns.title: write'],
 		['an action that is not a string', { notes: { ...notes, actions: { read: 7 } } }, 'actions.read must be a non-empty string'],
 	]
 	for (const [name, policies, message] of refusals) {
 		test(name, () => {
-			expect(() => readTables(noteColumns, policies)).toThrow(PolicyError)
-			expect(() => readTables(noteColumns, policies)).toThrow(message)
+			expect(() => readTables(noteColumns, policies, vocabulary)).toThrow(PolicyError)
+			expect(() => readTables(noteColumns, policies, vocabulary)).toThrow(message)
 		})
 	}
 
@@ -103,12 +107,12 @@ describe('readTables refuses what nobody type-checked', () => {
 				return ['title']
 			},
 		})
-		expect(() => readTables(noteColumns, { notes: policy })).toThrow('insert is an accessor')
+		expect(() => readTables(noteColumns, { notes: policy }, vocabulary)).toThrow('insert is an accessor')
 		expect(ran).toBe(false)
 	})
 
 	test('a column list that is not a plain object', () => {
-		expect(() => readTables(new Map(), {})).toThrow('the column list must be a plain object')
+		expect(() => readTables(new Map(), {}, vocabulary)).toThrow('the column list must be a plain object')
 	})
 })
 
@@ -196,19 +200,19 @@ describe('the application schema', () => {
 function policiesOf(): unknown {
 	return {
 		organizations: {
-			scope: { dimension: 'organization', key: 'id' },
+			scope: { dimension: 'organization' },
 			actions: { read: 'notes.read', insert: 'organizations.create' },
 			insert: ['name'],
 		},
 		workspaces: {
-			scope: { dimension: 'workspace', key: 'id', in: { dimension: 'organization', column: 'organization_id' } },
+			scope: { dimension: 'workspace' },
 			actions: { read: 'notes.read', insert: 'workspaces.create', update: 'workspaces.admin', delete: 'workspaces.admin' },
 			insert: ['name'],
 			update: ['name'],
 			createdBy: 'created_by',
 		},
 		notes: {
-			scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+			scope: { dimension: 'note' },
 			actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.delete' },
 			insert: ['title', 'body', 'word_count', 'internal'],
 			update: ['title', 'body', 'word_count'],
@@ -217,17 +221,17 @@ function policiesOf(): unknown {
 			columns: { internal: { read: 'notes.delete' }, title: { read: 'notes.read' } },
 		},
 		note_comments: {
-			scope: { child: 'notes', key: 'id', column: 'note_id', inherit: ['workspace_id', 'organization_id'] },
+			scope: { child: 'notes' },
 			actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.write' },
 			insert: ['body'],
 			update: ['body'],
 		},
 		note_flags: {
-			scope: { child: 'notes', key: 'id', column: 'note_id', inherit: ['workspace_id', 'organization_id'] },
+			scope: { child: 'notes' },
 			actions: { read: 'notes.delete', insert: 'notes.write' },
 			insert: ['reason'],
 		},
-		secrets: { scope: { dimension: 'secret', key: 'id' }, actions: { read: 'secrets.admin' } },
+		secrets: { scope: { dimension: 'secret' }, actions: { read: 'secrets.admin' } },
 		countries: { scope: { reference: 'read-only lookup data' }, actions: { read: 'notes.read' } },
 		contact_messages: { scope: { inbox: 'contact', read: 'contact.read' } },
 	}

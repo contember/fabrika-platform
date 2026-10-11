@@ -5,8 +5,9 @@ import { type ColumnType, type Generated, sql } from 'kysely'
 import type { Ref, Within } from '../../capability'
 import { defineTables } from '../../policy'
 import { scoped } from '../../store'
-import { columns, type DB } from '../fixtures/schema'
-import { type Action, tables } from '../fixtures/tables'
+import type { TypedColumnList } from '../../vocabulary-tables'
+import { columns } from '../fixtures/schema'
+import { tables, vocabulary } from '../fixtures/tables'
 
 declare const read: Within<'workspace', 'notes.read'>
 declare const write: Within<'workspace', 'notes.write'>
@@ -148,32 +149,32 @@ defineStore('countries', (t) => t)
 defineStore('secrets', (t) => t.select(read, (q) => q))
 
 // attack: a table without a policy
-defineTables<DB, Action>(columns)({ workspaces: { scope: { dimension: 'workspace', key: 'id' }, actions: { read: 'notes.read' } } })
+defineTables(vocabulary, columns)({ workspaces: { scope: { dimension: 'workspace', key: 'id' }, actions: { read: 'notes.read' } } })
 
 // attack: a reference table written by handlers
-defineTables<DB, Action>(columns)({ ...tables_, countries: { scope: { reference: 'lookup' }, actions: { read: 'notes.read' }, insert: ['name'] } })
+defineTables(vocabulary, columns)({ ...tables_, countries: { scope: { reference: 'lookup' }, actions: { read: 'notes.read' }, insert: ['name'] } })
 
 // attack: an insert column the table does not have
-defineTables<DB, Action>(columns)({
+defineTables(vocabulary, columns)({
 	...tables_,
 	secrets: { scope: { dimension: 'secret', key: 'id' }, actions: { read: 'secrets.admin' }, insert: ['title'] },
 })
 
 // attack: an action outside the vocabulary
-defineTables<DB, Action>(columns)({ ...tables_, secrets: { scope: { dimension: 'secret', key: 'id' }, actions: { read: 'secrets.raed' } } })
+defineTables(vocabulary, columns)({ ...tables_, secrets: { scope: { dimension: 'secret', key: 'id' }, actions: { read: 'secrets.raed' } } })
 
 // attack: a BIGINT version column, which Postgres returns as a string
-defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'big' } })
+defineTables(ledgerVocabulary, versionedColumns)({ ledgers: { ...ledger, version: 'big' } })
 
 // attack: a nullable version column
-defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'maybe' } })
+defineTables(ledgerVocabulary, versionedColumns)({ ledgers: { ...ledger, version: 'maybe' } })
 
 // attack: a text version column
-defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'id' } })
+defineTables(ledgerVocabulary, versionedColumns)({ ledgers: { ...ledger, version: 'id' } })
 
 // allowed: an INTEGER version column, generated or not
-defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'counter' } })
-defineTables<Versioned, Action>(versionedColumns)({ ledgers: { ...ledger, version: 'generated' } })
+defineTables(ledgerVocabulary, versionedColumns)({ ledgers: { ...ledger, version: 'counter' } })
+defineTables(ledgerVocabulary, versionedColumns)({ ledgers: { ...ledger, version: 'generated' } })
 
 // allowed: excess properties are checked on object literals only (the runtime refuses the key)
 const values = { title: 'x', body: null, workspace_id: 'w9' }
@@ -215,5 +216,6 @@ interface Versioned {
 		generated: Generated<number>
 	}
 }
-declare const versionedColumns: { ledgers: readonly ['id', 'big', 'maybe', 'counter', 'generated'] }
+declare const versionedColumns: TypedColumnList<Versioned>
+declare const ledgerVocabulary: { dimensions: { ledger: {} }; actions: { 'notes.read': 'Read notes' } }
 declare const ledger: { scope: { dimension: 'ledger'; key: 'id' }; actions: { read: 'notes.read' } }

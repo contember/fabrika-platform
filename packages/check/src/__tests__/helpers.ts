@@ -20,12 +20,24 @@ export const CLEAN_CONTRACT = readFixture('fabrika.contract.ts')
 
 export const CLEAN_SCHEMAS = readFixture('src/schemas/notes.ts')
 
-export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db'
-import { columns, type DB } from './schema.generated'
+/** The contract's vocabulary as \`src/vocabulary.ts\` declares it, which \`defineTables\` takes. */
+export const CLEAN_VOCABULARY = `import { defineVocabulary } from '@fabrika/app/contract'
 
-export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
+export const vocabulary = defineVocabulary({
+	app: 'notes',
+	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+	actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes' },
+	roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+})
+`
+
+export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db'
+import { vocabulary } from '../vocabulary'
+import { columns } from './schema.generated'
+
+export const tables = defineTables(vocabulary, columns)({
 	notes: {
-		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		scope: { dimension: 'note' },
 		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write', delete: 'notes.write' },
 		insert: ['title'],
 	},
@@ -33,18 +45,19 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 `
 
 /** What \`fabrika db codegen\` writes: the schema types and the column list \`defineTables\` checks policies against. */
-export const CLEAN_SCHEMA_GENERATED = `import type { ColumnList } from '@fabrika/db'
+export const CLEAN_SCHEMA_GENERATED = `import type { TypedColumnList } from '@fabrika/db'
 
 export interface DB {
 	notes: { id: string; workspace_id: string; title: string }
 }
 
-export const columns = { notes: ['id', 'workspace_id', 'title'] } as const satisfies ColumnList<DB>
+export const columns: TypedColumnList<DB> = { notes: ['id', 'workspace_id', 'title'] }
 `
 
 const CLEAN_SOURCES = new Map([
 	['fabrika.contract.ts', CLEAN_CONTRACT],
 	['src/schemas/notes.ts', CLEAN_SCHEMAS],
+	['src/vocabulary.ts', CLEAN_VOCABULARY],
 	['src/db/tables.ts', CLEAN_TABLES],
 	['src/db/schema.generated.ts', CLEAN_SCHEMA_GENERATED],
 ])

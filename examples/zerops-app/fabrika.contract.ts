@@ -1,8 +1,9 @@
-// Who may call what. The proxy enforces this file's endpoint table, the data layer the policies of src/db/tables.ts,
-// and src/app.ts implements each endpoint. A note lies in a workspace, the scope value IAM grants roles in.
+// Who may call what, over the vocabulary of src/vocabulary.ts. The proxy enforces this file's endpoint table, the data
+// layer the policies of src/db/tables.ts, and src/app.ts implements each endpoint.
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
+import { vocabulary } from './src/vocabulary'
 
 export const Note = z.strictObject({ id: z.uuid(), title: z.string(), trashed: z.boolean(), version: z.int() })
 export const NoteList = z.strictObject({ items: z.array(Note) })
@@ -14,23 +15,7 @@ export const Done = z.strictObject({ id: z.uuid() })
 export const MAX_ATTACHMENT_BYTES = 1048576
 export const MAX_ATTACHMENTS_PER_NOTE = 10
 
-export const contract = defineContract({
-	app: 'notes',
-	dimensions: {
-		workspace: {},
-		note: { in: 'workspace' },
-	},
-	actions: {
-		'notes.read': 'Read notes and their attachments',
-		'notes.write': 'Create notes, move them to the trash and attach files',
-		'notes.delete': 'Delete notes and attachments',
-	},
-	roles: {
-		reader: { grants: ['notes.read'] },
-		author: { grants: ['notes.read', 'notes.write'] },
-		editor: { grants: ['notes.read', 'notes.write', 'notes.delete'] },
-	},
-}, (c) => ({
+export const contract = defineContract(vocabulary, (c) => ({
 	api: c.rpc('/api', { callers: ['human', 'machine'] }, {
 		notes: {
 			list: c.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } }),

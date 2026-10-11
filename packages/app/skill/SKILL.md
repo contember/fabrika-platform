@@ -53,11 +53,14 @@ refuses the shortcuts around both. Keep all three intact.
 
 ## Tables and policies
 
-- Every table has a policy in `src/db/tables.ts`: `defineTables<DB, Action>(columns)({ … })`, with `columns` and
-  `DB` from the generated `src/db/schema.generated.ts`.
-- A policy names its scope: a dimension table `{ dimension, key, in: { dimension, column } }`, a child table
-  `{ child, key, column, inherit }`, or `{ reference: '<why>' }`. A child carries its parent's scope columns and a
-  composite foreign key to `UNIQUE (<key>, <chain columns>)` of the parent.
+- The dimensions, actions and roles live once in `src/vocabulary.ts` (`defineVocabulary({ … })`); the contract is
+  `defineContract(vocabulary, (c) => ({ … }))`.
+- Every table has a policy in `src/db/tables.ts`: `defineTables(vocabulary, columns)({ … })`, with `columns` from
+  the generated `src/db/schema.generated.ts`.
+- A policy names its scope: a dimension table `{ dimension }`, a child table `{ child: '<parent table>' }`, or
+  `{ reference: '<why>' }`. The container comes from the vocabulary. The key defaults to `id`, the container column
+  to `<container>_id` (else `in: { column }`), and a child's column to `<parent dimension>_id`. A child carries its
+  parent's scope columns and a composite foreign key to `UNIQUE (<key>, <chain columns>)` of the parent.
 - `actions` maps `read`, `insert`, `update` and `delete` to contract actions. `insert` and `update` list the
   writable columns. `version` names an INTEGER column, `createdBy` the creator column. A column that needs its own
   read action goes in `columns: { name: { read } }`.

@@ -1,33 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { PolicyError } from '../errors'
-import { defineTables, modelOf, tableModels } from '../policy'
+import { modelOf, readTables, tableModels } from '../policy'
 import { tables } from './fixtures/tables'
 
-interface Notes {
-	id: string
-	workspace_id: string
-	title: string
-	version: number
-	created_by: string
-}
+// The refusals run on values nobody type-checked, through `readTables`: the parse `defineTables` runs.
 
-interface Comments {
-	id: string
-	note_id: string
-	workspace_id: string
-	body: string
-}
-
-interface Countries {
-	code: string
-	name: string
-}
-
-interface DB {
-	notes: Notes
-	note_comments: Comments
-	countries: Countries
-}
+const vocabulary = { dimensions: { workspace: {}, note: { in: 'workspace' } }, actions: {} }
 
 const columns = {
 	notes: ['id', 'workspace_id', 'title', 'version', 'created_by'],
@@ -51,94 +29,66 @@ const comments = {
 
 const countries = { scope: { reference: 'lookup data' }, actions: { read: 'notes.read' } } as const
 
+const define = (columnList: unknown, policies: unknown) => readTables(columnList, policies, vocabulary)
+
 describe('defineTables refuses a policy it cannot enforce', () => {
 	test('a column the column list does not have', () => {
 		const stale = { ...columns, notes: ['id', 'title', 'version', 'created_by'] as const }
-		expect(() => defineTables<DB, string>(stale)({ notes, note_comments: comments, countries })).toThrow(
+		expect(() => define(stale, { notes, note_comments: comments, countries })).toThrow(
 			'notes: scope.in.column names workspace_id, which is not a column (columns: id, title, version, created_by)',
 		)
 	})
 
 	test('a table of the column list without a policy', () => {
 		const extra = { ...columns, audit: ['id'] }
-		expect(() => defineTables<DB, string>(extra)({ notes, note_comments: comments, countries })).toThrow('audit: every table needs a policy')
+		expect(() => define(extra, { notes, note_comments: comments, countries })).toThrow('audit: every table needs a policy')
 	})
 
 	test('a stamped column in insert or update', () => {
 		for (const stamped of ['id', 'workspace_id', 'version', 'created_by'] as const) {
-			expect(() => defineTables<DB, string>(columns)({ notes: { ...notes, update: [stamped] }, note_comments: comments, countries })).toThrow(
+			expect(() => define(columns, { notes: { ...notes, update: [stamped] }, note_comments: comments, countries })).toThrow(
 				`${stamped} is stamped by the layer`,
 			)
 		}
 		const childStamp = { ...comments, insert: ['workspace_id'] } as const
-		expect(() => defineTables<DB, string>(columns)({ notes, note_comments: childStamp, countries })).toThrow('workspace_id is stamped by the layer')
+		expect(() => define(columns, { notes, note_comments: childStamp, countries })).toThrow('workspace_id is stamped by the layer')
 	})
 
 	test("a child that does not inherit its parent's container column", () => {
 		const orphan = { ...comments, scope: { ...comments.scope, inherit: [] } }
-		expect(() => defineTables<DB, string>(columns)({ notes, note_comments: orphan, countries })).toThrow(
+		expect(() => define(columns, { notes, note_comments: orphan, countries })).toThrow(
 			'must inherit exactly the containment columns of notes (workspace_id)',
 		)
 	})
 
 	test('a child of a table that is not a dimension table', () => {
 		const misparented = { ...comments, scope: { ...comments.scope, child: 'countries', inherit: [] } } as const
-		expect(() => defineTables<DB, string>(columns)({ notes, note_comments: misparented, countries })).toThrow(
+		expect(() => define(columns, { notes, note_comments: misparented, countries })).toThrow(
 			'the parent countries must be a dimension table',
 		)
 	})
 
 	test('two tables owning one dimension', () => {
-		const twin = { scope: { dimension: 'note', key: 'code' }, actions: { read: 'notes.read' } } as const
-		expect(() => defineTables<DB, string>(columns)({ notes, note_comments: comments, countries: twin })).toThrow(
+		const twin = { scope: { dimension: 'note', key: 'code', in: { column: 'name' } }, actions: { read: 'notes.read' } } as const
+		expect(() => define(columns, { notes, note_comments: comments, countries: twin })).toThrow(
 			'dimension note is already owned by notes',
 		)
 	})
 
 	test('a key with its own read action', () => {
-		expect(() =>
-			defineTables<DB, string>(columns)({ notes: { ...notes, columns: { id: { read: 'notes.admin' } } }, note_comments: comments, countries })
-		).toThrow(
+		expect(() => define(columns, { notes: { ...notes, columns: { id: { read: 'notes.admin' } } }, note_comments: comments, countries })).toThrow(
 			'the key id cannot have its own read action',
 		)
 	})
 
 	test('an empty action name', () => {
-		expect(() => defineTables<DB, string>(columns)({ notes: { ...notes, actions: { read: '' } }, note_comments: comments, countries })).toThrow(
+		expect(() => define(columns, { notes: { ...notes, actions: { read: '' } }, note_comments: comments, countries })).toThrow(
 			PolicyError,
 		)
 	})
 })
 
 describe('a column holds at most one stamped role', () => {
-	interface Tenants {
-		id: number
-	}
-	interface Items {
-		id: number
-		tenant_id: number
-		version: number
-		created_by: string
-		title: string
-	}
-	interface Docs {
-		id: number
-		item_id: number
-		tenant_id: number
-		version: number
-	}
-	interface ItemNotes {
-		id: number
-		item_id: number
-		tenant_id: number
-		body: string
-	}
-	interface Stamped {
-		tenants: Tenants
-		items: Items
-		docs: Docs
-		item_notes: ItemNotes
-	}
 	const stampedColumns = {
 		tenants: ['id'],
 		items: ['id', 'tenant_id', 'version', 'created_by', 'title'],
@@ -164,7 +114,8 @@ describe('a column holds at most one stamped role', () => {
 		insert: ['body'],
 	} as const
 	const stamped = { tenants, items, docs, item_notes: itemNotes }
-	const define = defineTables<Stamped, string>(stampedColumns)
+	const stampedVocabulary = { dimensions: { tenant: {}, item: { in: 'tenant' }, doc: { in: 'item' } }, actions: {} }
+	const define = (policies: unknown) => readTables(stampedColumns, policies, stampedVocabulary)
 
 	test('distinct stamped columns are accepted', () => {
 		expect(modelOf(tableModels(define(stamped)), 'docs')?.chain).toEqual([
@@ -228,27 +179,13 @@ describe('policy arrays are read as plain arrays', () => {
 	test('an array with its own map is refused; the map never runs', () => {
 		const update: 'title'[] = ['title']
 		Object.defineProperty(update, 'map', { value: () => ['workspace_id'] })
-		expect(() => defineTables<DB, string>(columns)({ notes: { ...notes, update }, note_comments: comments, countries })).toThrow(
+		expect(() => define(columns, { notes: { ...notes, update }, note_comments: comments, countries })).toThrow(
 			'notes: update takes a plain array of column names',
 		)
 	})
 })
 
 describe('every row carries its whole containment chain', () => {
-	interface Organizations {
-		id: string
-	}
-	interface Workspaces {
-		id: string
-		organization_id: string
-	}
-	interface Deep {
-		organizations: Organizations
-		workspaces: Workspaces
-		notes: Notes & { organization_id: string }
-		note_comments: Comments & { organization_id: string }
-		countries: Countries
-	}
 	const deepColumns = {
 		organizations: ['id'],
 		workspaces: ['id', 'organization_id'],
@@ -263,9 +200,12 @@ describe('every row carries its whole containment chain', () => {
 	} as const
 	const deepComments = { ...comments, scope: { ...comments.scope, inherit: ['workspace_id', 'organization_id'] } } as const
 	const deep = { organizations, workspaces, notes, note_comments: deepComments, countries }
+	const deepVocabulary = { dimensions: { organization: {}, workspace: { in: 'organization' }, note: { in: 'workspace' } }, actions: {} }
+	const defineDeep = (columnList: unknown, policies: unknown, dimensions: unknown = deepVocabulary.dimensions) =>
+		readTables(columnList, policies, { dimensions, actions: {} })
 
 	test('the chains are resolved through the tables that own each dimension', () => {
-		const models = tableModels(defineTables<Deep, string>(deepColumns)(deep))
+		const models = tableModels(defineDeep(deepColumns, deep))
 		expect(modelOf(models, 'notes')?.chain).toEqual([
 			{ dimension: 'workspace', column: 'workspace_id' },
 			{ dimension: 'organization', column: 'organization_id' },
@@ -279,23 +219,24 @@ describe('every row carries its whole containment chain', () => {
 
 	test('a table without a column for an ancestor is refused', () => {
 		const shallow = { ...deepColumns, notes: ['id', 'workspace_id', 'title', 'version', 'created_by'] as const }
-		expect(() => defineTables<Deep, string>(shallow)(deep)).toThrow('notes: must carry organization_id, because it lies in organization')
+		expect(() => defineDeep(shallow, deep)).toThrow('notes: must carry organization_id, because it lies in organization')
 	})
 
 	test('a child that inherits only part of its parent chain is refused', () => {
-		expect(() => defineTables<Deep, string>(deepColumns)({ ...deep, note_comments: comments })).toThrow(
+		expect(() => defineDeep(deepColumns, { ...deep, note_comments: comments })).toThrow(
 			'must inherit exactly the containment columns of notes (workspace_id, organization_id)',
 		)
 	})
 
 	test('an ancestor column is stamped and cannot be written', () => {
 		const writable = { ...notes, update: ['organization_id'] } as const
-		expect(() => defineTables<Deep, string>(deepColumns)({ ...deep, notes: writable })).toThrow('organization_id is stamped by the layer')
+		expect(() => defineDeep(deepColumns, { ...deep, notes: writable })).toThrow('organization_id is stamped by the layer')
 	})
 
 	test('a containment cycle is refused', () => {
-		const looping = { ...organizations, scope: { dimension: 'organization', key: 'id', in: { dimension: 'workspace', column: 'id' } } } as const
-		expect(() => defineTables<Deep, string>(deepColumns)({ ...deep, organizations: looping })).toThrow('its containment is a cycle')
+		const looping = { ...organizations, scope: { dimension: 'organization', key: 'id', in: { column: 'id' } } } as const
+		const cyclic = { ...deepVocabulary.dimensions, organization: { in: 'workspace' } }
+		expect(() => defineDeep(deepColumns, { ...deep, organizations: looping }, cyclic)).toThrow('its containment is a cycle')
 	})
 })
 

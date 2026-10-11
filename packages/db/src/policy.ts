@@ -94,19 +94,8 @@ export interface InboxPolicy<Col extends string, A extends string> extends ReadO
 	readonly actions?: never
 }
 
-export type TablePolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> =
-	| DimensionPolicy<Col, A, V>
-	| ChildPolicy<Table, Col, A, V>
-	| ReferencePolicy<Col, A>
-	| InboxPolicy<Col, A>
-
 /** The columns a version can live in: those whose generated select type is `number`, an INTEGER (int4). */
 export type VersionColumn<Row> = { [K in keyof Row & string]: SelectType<Row[K]> extends number ? K : never }[keyof Row & string]
-
-/** Every table of the schema, and no other, maps to a policy. */
-export type PolicyMap<DB, A extends string> = {
-	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A, VersionColumn<DB[T]>>
-}
 
 /** The column names of every table, generated next to the schema types. */
 export type ColumnList<DB> = { readonly [T in keyof DB & string]: readonly (keyof DB[T] & string)[] }
@@ -151,7 +140,18 @@ export interface TableModel {
 	readonly chain: readonly Container[]
 }
 
-type ParsedTable = Omit<TableModel, 'chain'>
+/** A child's `column` and `inherit`, when omitted, are derived from its parent while the tables are linked. */
+type ParsedScope =
+	| Exclude<ScopeModel, { readonly mode: 'child' }>
+	| {
+		readonly mode: 'child'
+		readonly parent: string
+		readonly key: string
+		readonly column: string | undefined
+		readonly inherit: readonly string[] | undefined
+	}
+
+type ParsedTable = Omit<TableModel, 'chain' | 'scope'> & { readonly scope: ParsedScope }
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
 let hasModels: (value: object) => boolean = () => false
@@ -188,28 +188,20 @@ export function modelOf(models: TableModels, table: string): TableModel | undefi
 	return ownEntry(models, table)
 }
 
-/** Takes the policies of exactly the tables of the schema. */
-export type DefinePolicies<DB, Policies> = <const P extends Policies>(
-	policies: P & { readonly [K in Exclude<keyof P, keyof DB>]: never },
-) => Tables<DB, P>
-
 /**
  * Declares the access policy of every table, under the application's vocabulary:
  * `defineTables(vocabulary, columns)({ notes: { scope: …, actions: … }, … })`. `columns` is the generated column list,
  * which carries the schema's row types; a list without them makes the policies uncallable. The action and dimension
- * names are the vocabulary's, and each table's containment comes from it.
+ * names are the vocabulary's, and each table's containment comes from it: a key defaults to `id`, a container column
+ * to `<container>_id`, a child's column to `<parent dimension>_id`, and its inherited chain is its parent's.
  */
 export function defineTables<const V extends TableVocabulary, C extends object>(vocabulary: V, columns: C): VocabularyTables<V, C>
-/** The form that names the action union by hand: `defineTables<DB, Action>(columns)({ … })`. */
-export function defineTables<DB, A extends string>(columns: ColumnList<DB>): DefinePolicies<DB, PolicyMap<DB, A>>
-export function defineTables<DB, P>(first: unknown, second?: unknown): (policies: P) => Tables<DB, P> {
-	if (second === undefined) {
-		return (policies) => new Tables(parseTables(first, policies))
+export function defineTables<DB, P>(vocabularyInput: unknown, columns: unknown): (policies: P) => Tables<DB, P> {
+	if (columns === undefined) {
+		throw new PolicyError('defineTables takes the vocabulary and the generated column list: defineTables(vocabulary, columns)({ … })')
 	}
-	return (policies) => {
-		requireStatedContainment(first, policies)
-		return new Tables(parseTables(second, policies))
-	}
+	const vocabulary = parseVocabulary(vocabularyInput)
+	return (policies) => new Tables(parseTables(columns, policies, vocabulary))
 }
 
 /** `defineTables(vocabulary, columns)` answers the policies' builder, or names the fix for an untyped column list. */
@@ -218,57 +210,31 @@ export type VocabularyTables<V, C> = [ColumnTypes<C>] extends [never]
 	: DefineVocabularyPolicies<ColumnTypes<C>, V>
 
 /**
- * The containment the layer derives from the vocabulary must still be stated, and agree with it, until the
- * derivation lands: an omitted key, container or child chain is refused, not guessed.
+ * The same policies read from values nobody type-checked: `src/db/tables.ts` and its vocabulary as the static reader
+ * has them from a commit. Every shape `defineTables` refuses at runtime is refused here, through the same parse.
  */
-function requireStatedContainment(vocabularyInput: unknown, policiesInput: unknown): void {
-	const vocabulary = plainRecord(vocabularyInput, 'the vocabulary')
-	const dimensions = plainRecord(ownEntry(vocabulary, 'dimensions'), 'the vocabulary dimensions')
-	const policies = plainRecord(policiesInput, 'the table policies')
-	const tables = ownKeys(policies)
-	for (let index = 0; index < tables.length; index++) {
-		const table = tables[index] ?? ''
-		const scope = plainRecord(ownEntry(plainRecord(ownEntry(policies, table), `${table}: the policy`), 'scope'), `${table}: scope`)
-		const derived = (field: string) =>
-			new PolicyError(`${table}: deriving ${field} from the vocabulary is not implemented (WU2); state it in the policy`)
-		if (hasOwn(scope, 'dimension')) {
-			const dimension = ownEntry(scope, 'dimension')
-			const definition = typeof dimension === 'string' ? ownEntry(dimensions, dimension) : undefined
-			if (definition === undefined) {
-				throw new PolicyError(`${table}: scope.dimension names no dimension of the vocabulary`)
-			}
-			const container = ownEntry(plainRecord(definition, `dimension ${String(dimension)}`), 'in')
-			const stated = ownEntry(scope, 'in')
-			if (!hasOwn(scope, 'key')) throw derived('scope.key')
-			if (container === undefined && stated !== undefined) {
-				throw new PolicyError(`${table}: the vocabulary puts ${String(dimension)} in no container, so scope.in is not a field here`)
-			}
-			if (container !== undefined) {
-				const statedContainer = stated === undefined ? undefined : ownEntry(plainRecord(stated, `${table}: scope.in`), 'dimension')
-				if (statedContainer === undefined) throw derived(`the container of ${String(dimension)} (scope.in)`)
-				if (statedContainer !== container) {
-					throw new PolicyError(`${table}: the vocabulary puts ${String(dimension)} in ${String(container)}, not in ${String(statedContainer)}`)
-				}
-			}
-		}
-		if (hasOwn(scope, 'child')) {
-			if (!hasOwn(scope, 'key')) throw derived('scope.key')
-			if (!hasOwn(scope, 'column')) throw derived('scope.column')
-			if (!hasOwn(scope, 'inherit')) throw derived('scope.inherit')
-		}
-	}
+export function readTables(columns: unknown, policies: unknown, vocabulary: unknown): Tables<unknown, unknown> {
+	return new Tables(parseTables(columns, policies, parseVocabulary(vocabulary)))
 }
 
-/**
- * The same policies read from values nobody type-checked: `src/db/tables.ts` as the static reader has it from a
- * commit, with its vocabulary for the vocabulary form. Every shape `defineTables` refuses at runtime is refused here,
- * through the same parse.
- */
-export function readTables(columns: unknown, policies: unknown, vocabulary?: unknown): Tables<unknown, unknown> {
-	if (vocabulary !== undefined) {
-		requireStatedContainment(vocabulary, policies)
+/** Each dimension of the vocabulary, by name, with the dimension it lies in (`undefined` for a top-level one). */
+type Containment = Readonly<Record<string, { readonly container: string | undefined }>>
+
+/** The vocabulary's dimensions and their containers; its other sections are the contract's to check. */
+function parseVocabulary(input: unknown): Containment {
+	const vocabulary = plainRecord(input, 'the vocabulary')
+	const dimensions = plainRecord(ownEntry(vocabulary, 'dimensions'), 'the vocabulary dimensions')
+	const names = ownKeys(dimensions)
+	const containment: Record<string, { readonly container: string | undefined }> = {}
+	for (let index = 0; index < names.length; index++) {
+		const name = names[index] ?? ''
+		const container = ownEntry(plainRecord(ownEntry(dimensions, name), `the vocabulary dimension ${name}`), 'in')
+		if (container !== undefined && (typeof container !== 'string' || !hasOwn(dimensions, container))) {
+			throw new PolicyError(`the vocabulary puts ${name} in ${String(container)}, which is not one of its dimensions`)
+		}
+		setOwn(containment, name, freeze({ container }))
 	}
-	return new Tables(parseTables(columns, policies))
+	return freeze(containment)
 }
 
 const POLICY_FIELDS = nameSet(['scope', 'actions', 'insert', 'update', 'version', 'createdBy', 'columns'])
@@ -310,7 +276,7 @@ function onlyFields(record: Readonly<Record<string, unknown>>, allowed: NameSet,
 	}
 }
 
-function parseTables(columnsInput: unknown, policiesInput: unknown): TableModels {
+function parseTables(columnsInput: unknown, policiesInput: unknown, containment: Containment): TableModels {
 	const columns = plainRecord(columnsInput, 'the column list')
 	const policies = plainRecord(policiesInput, 'the table policies')
 	const tables = ownKeys(columns)
@@ -328,12 +294,20 @@ function parseTables(columnsInput: unknown, policiesInput: unknown): TableModels
 		if (policy === undefined) {
 			throw new PolicyError(`${table}: every table needs a policy in tables.ts`)
 		}
-		parsed[index] = parseTable(table, ownEntry(columns, table), policy)
+		parsed[index] = parseTable(table, ownEntry(columns, table), policy, containment)
 	}
 	return linkTables(parsed)
 }
 
-function parseTable(table: string, columnList: unknown, policyInput: unknown): ParsedTable {
+/** How a policy names its columns: one it states must exist, and so must one a convention derives for it. */
+interface ColumnReader {
+	readonly column: (name: unknown, field: string) => string
+	readonly columnsOf: (value: unknown, field: string) => string[]
+	/** `name` is what `field` defaults to, for `reason`; when the table has no such column, the policy states `fix`. */
+	readonly derived: (name: string, field: string, reason: string, fix: string) => string
+}
+
+function parseTable(table: string, columnList: unknown, policyInput: unknown, containment: Containment): ParsedTable {
 	if (!isPlainIdentifier(table)) {
 		throw new PolicyError(`${table}: a table name must match ^[a-z_][a-z0-9_]*$`)
 	}
@@ -365,8 +339,16 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown): P
 		}
 		return names
 	}
+	const derived = (name: string, field: string, reason: string, fix: string): string => {
+		if (!inSet(columns, name)) {
+			throw new PolicyError(
+				`${table}: ${field} defaults to ${name} (${reason}), which is not a column; state ${fix} (columns: ${columnNames.join(', ')})`,
+			)
+		}
+		return name
+	}
 	const scopeInput = plainRecord(ownEntry(policy, 'scope'), `${table}: scope`)
-	const scope = parseScope(table, scopeInput, column, columnsOf)
+	const scope = parseScope(table, scopeInput, { column, columnsOf, derived }, containment)
 	const actions = parseActions(table, scopeInput, ownEntry(policy, 'actions'))
 	const insert = nameSet(columnsOf(ownEntry(policy, 'insert'), 'insert'))
 	const update = nameSet(columnsOf(ownEntry(policy, 'update'), 'update'))
@@ -408,43 +390,34 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown): P
 	return { name: table, scope, actions, columns, visible: freeze(visible), insert, update, version, createdBy, columnReads: freeze(columnReads) }
 }
 
-function parseScope(
-	table: string,
-	scope: Readonly<Record<string, unknown>>,
-	column: (name: unknown, field: string) => string,
-	columnsOf: (value: unknown, field: string) => string[],
-): ScopeModel {
+function parseScope(table: string, scope: Readonly<Record<string, unknown>>, columns: ColumnReader, containment: Containment): ParsedScope {
 	const what = `${table}: scope`
+	const key = (): string => {
+		const stated = ownEntry(scope, 'key')
+		return stated === undefined ? columns.derived('id', 'scope.key', 'the key convention', 'scope.key') : columns.column(stated, 'scope.key')
+	}
 	if (hasOwn(scope, 'dimension')) {
 		onlyFields(scope, DIMENSION_FIELDS, what)
-		const inInput = ownEntry(scope, 'in')
-		const containerInput = inInput === undefined ? undefined : plainRecord(inInput, `${table}: scope.in`)
-		if (containerInput !== undefined) {
-			onlyFields(containerInput, CONTAINER_FIELDS, `${table}: scope.in`)
+		const dimension = nonEmpty(table, ownEntry(scope, 'dimension'), 'scope.dimension')
+		const definition = ownEntry(containment, dimension)
+		if (definition === undefined) {
+			throw new PolicyError(
+				`${table}: scope.dimension names ${dimension}, which is not a dimension of the vocabulary (dimensions: ${ownKeys(containment).join(', ')})`,
+			)
 		}
-		const container = containerInput === undefined ? undefined : freeze({
-			dimension: nonEmpty(table, ownEntry(containerInput, 'dimension'), 'scope.in.dimension'),
-			column: column(ownEntry(containerInput, 'column'), 'scope.in.column'),
-		})
-		return freeze({
-			mode: 'dimension',
-			dimension: nonEmpty(table, ownEntry(scope, 'dimension'), 'scope.dimension'),
-			key: column(ownEntry(scope, 'key'), 'scope.key'),
-			container,
-		})
+		const container = parseContainer(table, dimension, definition.container, ownEntry(scope, 'in'), columns)
+		return freeze({ mode: 'dimension', dimension, key: key(), container })
 	}
 	if (hasOwn(scope, 'child')) {
 		onlyFields(scope, CHILD_FIELDS, what)
+		const column = ownEntry(scope, 'column')
 		const inherit = ownEntry(scope, 'inherit')
-		if (inherit === undefined) {
-			throw new PolicyError(`${table}: scope.inherit takes the containment columns of the parent ([] when it has none)`)
-		}
 		return freeze({
 			mode: 'child',
 			parent: nonEmpty(table, ownEntry(scope, 'child'), 'scope.child'),
-			key: column(ownEntry(scope, 'key'), 'scope.key'),
-			column: column(ownEntry(scope, 'column'), 'scope.column'),
-			inherit: freeze(columnsOf(inherit, 'scope.inherit')),
+			key: key(),
+			column: column === undefined ? undefined : columns.column(column, 'scope.column'),
+			inherit: inherit === undefined ? undefined : freeze(columns.columnsOf(inherit, 'scope.inherit')),
 		})
 	}
 	if (hasOwn(scope, 'reference')) {
@@ -455,7 +428,37 @@ function parseScope(
 		onlyFields(scope, INBOX_FIELDS, what)
 		return freeze({ mode: 'inbox', form: nonEmpty(table, ownEntry(scope, 'inbox'), 'scope.inbox') })
 	}
-	throw new PolicyError(`${what} takes one mode: { dimension, key, in? }, { child, key, column, inherit }, { reference } or { inbox, read }`)
+	throw new PolicyError(`${what} takes one mode: { dimension, key?, in? }, { child, key?, column?, inherit? }, { reference } or { inbox, read }`)
+}
+
+/**
+ * A dimension table's container is the one the vocabulary puts its dimension in, never one the policy chooses. Its
+ * column is `<container>_id`, or the one `scope.in.column` names off that convention.
+ */
+function parseContainer(
+	table: string,
+	dimension: string,
+	container: string | undefined,
+	input: unknown,
+	columns: ColumnReader,
+): Container | undefined {
+	if (container === undefined) {
+		if (input !== undefined) {
+			throw new PolicyError(`${table}: the vocabulary puts ${dimension} in no container, so scope.in is not a field here`)
+		}
+		return undefined
+	}
+	if (input === undefined) {
+		const column = columns.derived(`${container}_id`, 'scope.in.column', `the vocabulary puts ${dimension} in ${container}`, 'scope.in: { column }')
+		return freeze({ dimension: container, column })
+	}
+	const stated = plainRecord(input, `${table}: scope.in`)
+	onlyFields(stated, CONTAINER_FIELDS, `${table}: scope.in`)
+	const statedDimension = ownEntry(stated, 'dimension')
+	if (statedDimension !== undefined && statedDimension !== container) {
+		throw new PolicyError(`${table}: the vocabulary puts ${dimension} in ${container}, not in ${String(statedDimension)}`)
+	}
+	return freeze({ dimension: container, column: columns.column(ownEntry(stated, 'column'), 'scope.in.column') })
 }
 
 function parseActions(table: string, scope: Readonly<Record<string, unknown>>, actionsInput: unknown): ActionModel {
@@ -581,9 +584,9 @@ function linkTables(parsed: readonly ParsedTable[]): TableModels {
 		setOwn(owners, table.scope.dimension, table)
 	}
 
-	const chains: Record<string, readonly Container[]> = {}
-	const chainOf = (table: ParsedTable, visiting: readonly string[]): readonly Container[] => {
-		const known = ownEntry(chains, table.name)
+	const resolved: Record<string, Resolved> = {}
+	const resolve = (table: ParsedTable, visiting: readonly string[]): Resolved => {
+		const known = ownEntry(resolved, table.name)
 		if (known !== undefined) {
 			return known
 		}
@@ -591,7 +594,8 @@ function linkTables(parsed: readonly ParsedTable[]): TableModels {
 		if (includes(visiting, table.name)) {
 			throw new PolicyError(`${table.name}: its containment is a cycle (${path.join(' → ')})`)
 		}
-		const chain = resolveChain(table, byName, owners, (next) => chainOf(next, path))
+		const result = resolveChain(table, byName, owners, (next) => resolve(next, path).chain)
+		const chain = result.chain
 		for (let index = 0; index < chain.length; index++) {
 			const link = chain[index]
 			if (link !== undefined && !inSet(table.columns, link.column)) {
@@ -601,18 +605,25 @@ function linkTables(parsed: readonly ParsedTable[]): TableModels {
 			}
 		}
 		checkStamps(table, chain)
-		setOwn(chains, table.name, chain)
-		return chain
+		setOwn(resolved, table.name, result)
+		return result
 	}
 
 	const models: Record<string, TableModel> = {}
 	for (let index = 0; index < parsed.length; index++) {
 		const table = parsed[index]
 		if (table !== undefined) {
-			setOwn(models, table.name, freeze({ ...table, chain: chainOf(table, []) }))
+			const { scope, chain } = resolve(table, [])
+			setOwn(models, table.name, freeze({ ...table, scope, chain }))
 		}
 	}
 	return freeze(models)
+}
+
+/** A table's scope with nothing left to derive, and its containment chain. */
+interface Resolved {
+	readonly scope: ScopeModel
+	readonly chain: readonly Container[]
 }
 
 function resolveChain(
@@ -620,18 +631,18 @@ function resolveChain(
 	byName: Readonly<Record<string, ParsedTable>>,
 	owners: Readonly<Record<string, ParsedTable>>,
 	chainOf: (table: ParsedTable) => readonly Container[],
-): readonly Container[] {
+): Resolved {
 	const scope = table.scope
 	if (scope.mode === 'dimension') {
 		if (scope.container === undefined) {
-			return freeze([])
+			return { scope, chain: freeze([]) }
 		}
 		const owner = ownEntry(owners, scope.container.dimension)
 		// An ancestor carries its column under the same name as in the table that owns its dimension.
-		return prepend(scope.container, owner === undefined ? [] : chainOf(owner))
+		return { scope, chain: prepend(scope.container, owner === undefined ? [] : chainOf(owner)) }
 	}
 	if (scope.mode !== 'child') {
-		return freeze([])
+		return { scope, chain: freeze([]) }
 	}
 	const parent = ownEntry(byName, scope.parent)
 	if (parent === undefined || parent.scope.mode !== 'dimension') {
@@ -642,8 +653,9 @@ function resolveChain(
 	for (let index = 0; index < parentChain.length; index++) {
 		expected[index] = parentChain[index]?.column ?? ''
 	}
-	const inherited = nameSet(scope.inherit)
-	let matches = scope.inherit.length === expected.length && namesOf(inherited).length === expected.length
+	const inherit = scope.inherit ?? freeze(expected)
+	const inherited = nameSet(inherit)
+	let matches = inherit.length === expected.length && namesOf(inherited).length === expected.length
 	for (let index = 0; index < expected.length; index++) {
 		matches = matches && inSet(inherited, expected[index])
 	}
@@ -654,7 +666,24 @@ function resolveChain(
 			}), so a composite foreign key keeps it in scope`,
 		)
 	}
-	return prepend({ dimension: parent.scope.dimension, column: scope.column }, parentChain)
+	const dimension = parent.scope.dimension
+	const column = scope.column ?? parentColumn(table, `${dimension}_id`, scope.parent)
+	return {
+		scope: freeze({ mode: 'child', parent: scope.parent, key: scope.key, column, inherit }),
+		chain: prepend({ dimension, column }, parentChain),
+	}
+}
+
+/** A child's column for its parent defaults to `<parent dimension>_id`. */
+function parentColumn(table: ParsedTable, column: string, parent: string): string {
+	if (!inSet(table.columns, column)) {
+		throw new PolicyError(
+			`${table.name}: scope.column defaults to ${column} (the key of its parent ${parent}), which is not a column; state scope.column (columns: ${
+				namesOf(table.columns).join(', ')
+			})`,
+		)
+	}
+	return column
 }
 
 type PolicyOf<P, T> = T extends keyof P ? P[T] : never
@@ -695,6 +724,11 @@ export type InsertValues<DB, P, T> = T extends keyof DB ? Flat<Pick<Insertable<D
 	: never
 export type UpdateValues<DB, P, T> = T extends keyof DB ? Flat<Pick<Updateable<DB[T]>, ListedColumns<P, T, 'update'> & keyof Updateable<DB[T]>>>
 	: never
+
+/** The values a store inserts into table `T` of a `defineTables` result: `TableInsert<typeof tables, 'deals'>`. */
+export type TableInsert<Tb, T> = Tb extends Tables<infer DB, infer P> ? InsertValues<DB, P, T> : never
+/** The values a store updates in table `T` of a `defineTables` result: `TableUpdate<typeof tables, 'deals'>`. */
+export type TableUpdate<Tb, T> = Tb extends Tables<infer DB, infer P> ? UpdateValues<DB, P, T> : never
 
 /** What a mutation answers: the key, and the new version of a versioned table. It returns no row data. */
 export type Acknowledgement<P, T> = PolicyOf<P, T> extends { readonly version: string } ? { readonly id: string; readonly version: number }

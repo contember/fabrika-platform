@@ -43,6 +43,7 @@ describe('contractReaderInputs', () => {
 			'src/package.json',
 			'src/schemas/notes.ts',
 			'src/schemas/tsconfig.json',
+			'src/vocabulary.ts',
 			'tsconfig.base.json',
 			'tsconfig.json',
 		])

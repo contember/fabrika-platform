@@ -227,7 +227,8 @@ src/
 The paved-road sprint (`docs/sprints/sprint-2026-10-11-paved-road-framework.md`) builds it unit by unit; its
 signatures are fixed, and each builder whose runtime a later unit adds throws `<builder> is not implemented (WU<n>)`
 (`notImplemented` in `contract/problems.ts`): `defineApp` and its builders, `serve` and `defineDeps` (WU4).
-`defineVocabulary` and `defineTables(vocabulary, columns)` already run.
+`defineVocabulary` and `defineTables(vocabulary, columns)` already run; the tables derive each key, container and
+child chain from the vocabulary (`packages/db/CLAUDE.md`).
 
 - **The file order is the type order:** `src/vocabulary.ts` (`defineVocabulary`) → `src/db/tables.ts`
   (`defineTables(vocabulary, columns)`, typed by the generated `TypedColumnList`) → `src/app-kit.ts` (`defineApp(vocabulary, tables)`)

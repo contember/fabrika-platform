@@ -4,6 +4,7 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
+import { vocabulary } from './src/vocabulary'
 
 export const ById = z.strictObject({ id: z.string() })
 export const ByNote = z.strictObject({ noteId: z.string() })
@@ -17,27 +18,7 @@ export const Comments = z.strictObject({ items: z.array(z.strictObject({ id: z.s
 export const Count = z.strictObject({ count: z.string() })
 export const Done = z.strictObject({ id: z.string() })
 
-export const contract = defineContract({
-	app: 'isolation',
-	dimensions: {
-		organization: {},
-		workspace: { in: 'organization' },
-		note: { in: 'workspace' },
-	},
-	actions: {
-		'organizations.read': 'Read organizations',
-		'organizations.admin': 'Rename organizations',
-		'workspaces.read': 'Read workspaces',
-		'workspaces.write': 'Create and rename workspaces',
-		'notes.read': 'Read notes',
-		'notes.write': 'Create and edit notes',
-		'notes.delete': 'Delete notes',
-		'notes.admin': 'Read internal notes',
-	},
-	roles: {
-		member: { grants: ['organizations.read', 'workspaces.read', 'notes.read', 'notes.write'] },
-	},
-}, (c) => ({
+export const contract = defineContract(vocabulary, (c) => ({
 	api: c.rpc('/api', { callers: ['human'] }, {
 		organizations: {
 			get: c.query({ input: ById, output: Named, access: { action: 'organizations.read', on: 'organization', from: 'id' } }),

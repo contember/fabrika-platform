@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defineTables } from '../policy'
 import { type TestDatabase, testDatabase } from '../testing'
+import type { TypedColumnList } from '../vocabulary-tables'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
@@ -41,9 +42,13 @@ interface DB {
 	}
 }
 
-const tables = defineTables<DB, 'tasks.read' | 'tasks.write'>({
-	tasks: ['id', 'project_id', 'title', 'due_on', 'remind_at', 'priority', 'version'],
-})({
+const columns: TypedColumnList<DB> = { tasks: ['id', 'project_id', 'title', 'due_on', 'remind_at', 'priority', 'version'] }
+const vocabulary = {
+	dimensions: { project: {}, task: { in: 'project' } },
+	actions: { 'tasks.read': 'Read tasks', 'tasks.write': 'Write tasks' },
+} as const
+
+const tables = defineTables(vocabulary, columns)({
 	tasks: {
 		scope: { dimension: 'task', key: 'id', in: { dimension: 'project', column: 'project_id' } },
 		actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write', delete: 'tasks.write' },

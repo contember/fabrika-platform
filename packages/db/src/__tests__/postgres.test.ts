@@ -13,6 +13,7 @@ import type { Ref } from '../capability'
 import { Database } from '../database'
 import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
 import { defineTables } from '../policy'
+import type { TypedColumnList } from '../vocabulary-tables'
 import { TestAuthority } from './fixtures/authority'
 import { call } from './fixtures/harness'
 import { patchedChecks } from './fixtures/patch'
@@ -354,7 +355,11 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 		tenant_items: TenantItems
 		ledgers: Ledgers
 	}
-	const extraColumns = { tops: ['id', 'created_by'], tenant_items: ['id', 'tenant_id', 'title'], ledgers: ['id', 'version'] } as const
+	const extraColumns: TypedColumnList<Extra> = { tops: ['id', 'created_by'], tenant_items: ['id', 'tenant_id', 'title'], ledgers: ['id', 'version'] }
+	const extraVocabulary = {
+		dimensions: { top: {}, tenant: {}, tenant_item: { in: 'tenant' }, ledger: {} },
+		actions: { read: 'Read', write: 'Write' },
+	} as const
 	const tops = { scope: { dimension: 'top', key: 'id' }, actions: { read: 'read', insert: 'write' }, createdBy: 'created_by' } as const
 	const tenantItems = {
 		scope: { dimension: 'tenant_item', key: 'id', in: { dimension: 'tenant', column: 'tenant_id' } },
@@ -375,7 +380,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 	})
 
 	test('the two reproduced policies are refused at definition time: createdBy on the key, the version on the container', async () => {
-		const define = defineTables<Extra, string>(extraColumns)
+		const define = defineTables(extraVocabulary, extraColumns)
 		expect(() => define({ ...extra, tops: { ...tops, createdBy: 'id' } })).toThrow('tops: id is both the key and createdBy')
 		expect(() => define({ ...extra, tenant_items: { ...tenantItems, version: 'tenant_id' } })).toThrow(
 			'tenant_items: tenant_id is both the tenant containment column and the version',
@@ -417,7 +422,7 @@ describe.skipIf(!hasPostgres)('hardening on Postgres', () => {
 	})
 
 	test('a version column that is not INTEGER is refused at the first mutation, and nothing is written', async () => {
-		const ledger = connected(defineTables<Extra, string>(extraColumns)(extra), { database, capabilities: alice }).database.defineStore(
+		const ledger = connected(defineTables(extraVocabulary, extraColumns)(extra), { database, capabilities: alice }).database.defineStore(
 			'ledgers',
 			(t) => ({
 				open: (ref: Ref<'ledger', 'write'>) => t.insert(ref, {}),

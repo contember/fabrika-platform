@@ -1,6 +1,6 @@
 // Reads `src/db/tables.ts` into table policies without executing it: the arguments of
-// `defineTables(vocabulary, columns)({ … })` (or `defineTables<DB, Action>(columns)({ … })`) are
-// read as literals, then parsed by `@fabrika/db`'s own policy parse.
+// `defineTables(vocabulary, columns)({ … })` are read as literals, then parsed by `@fabrika/db`'s own policy parse,
+// which derives each table's containment from the vocabulary as `defineTables` does.
 
 import { PolicyError, readTables, type TablePolicies, tablePolicies } from '@fabrika/db/tables'
 import { children, identifierName } from '../ast'
@@ -31,30 +31,25 @@ export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): T
 	const [first, second] = links
 	const [vocabularyNode, columnsNode] = first?.kind === 'call' ? tableArguments(first.node) : [undefined, undefined]
 	const policiesNode = second?.kind === 'call' ? soleArgument(second.node) : undefined
-	if (builder !== 'tables' || links.length !== 2 || columnsNode === undefined || policiesNode === undefined) {
+	if (builder !== 'tables' || links.length !== 2 || vocabularyNode === undefined || columnsNode === undefined || policiesNode === undefined) {
 		problems.add(at, `'${TABLES_EXPORT}' is not one call of defineTables with the vocabulary and the column list, then the policies`, ALLOWED_CALL)
 		return null
 	}
 	const reader = new ValueReader(graph, problems)
-	// The vocabulary is read as a literal; the policies still state their containment, so the parse does not take it.
-	const vocabulary = vocabularyNode === undefined ? undefined : reader.value({ module: binding.module, node: vocabularyNode })
+	const vocabulary = reader.value({ module: binding.module, node: vocabularyNode })
 	const columns = reader.value({ module: binding.module, node: columnsNode })
 	const policies = reader.value({ module: binding.module, node: policiesNode })
-	const plainColumns = columns === null ? undefined : plainOf(columns, problems)
-	const plainPolicies = policies === null ? undefined : plainOf(policies, problems)
-	if (vocabulary === null || plainColumns === undefined || plainPolicies === undefined) {
+	if (vocabulary === null || columns === null || policies === null) {
 		return null
 	}
-	if (vocabulary !== undefined && !isVocabulary(vocabulary)) {
-		problems.add(
-			{ module: binding.module, node: vocabularyNode ?? binding.init },
-			'the first argument of defineTables is not the vocabulary',
-			ALLOWED_CALL,
-		)
+	if (!isVocabulary(vocabulary)) {
+		problems.add({ module: binding.module, node: vocabularyNode }, 'the first argument of defineTables is not the vocabulary', ALLOWED_CALL)
 		return null
 	}
-	const plainVocabulary = vocabulary === undefined ? undefined : plainOf(vocabulary, problems)
-	if (vocabulary !== undefined && plainVocabulary === undefined) {
+	const plainVocabulary = plainOf(vocabulary, problems)
+	const plainColumns = plainOf(columns, problems)
+	const plainPolicies = plainOf(policies, problems)
+	if (plainVocabulary === undefined || plainColumns === undefined || plainPolicies === undefined) {
 		return null
 	}
 	try {
@@ -68,16 +63,12 @@ export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): T
 	}
 }
 
-/** `(vocabulary, columns)` or `(columns)`: the vocabulary, when given, and the column list. */
+/** `(vocabulary, columns)`; anything else, the form that names the action union by hand included, is neither. */
 function tableArguments(call: Located['node']): readonly [Located['node'] | undefined, Located['node'] | undefined] {
-	const [vocabulary, columns, ...rest] = children(call, 'arguments')
-	if (rest.length > 0 || vocabulary === null || vocabulary === undefined || vocabulary.type === 'SpreadElement') {
-		return [undefined, undefined]
-	}
-	if (columns === undefined) {
-		return [undefined, vocabulary]
-	}
-	return columns === null || columns.type === 'SpreadElement' ? [undefined, undefined] : [vocabulary, columns]
+	const args = children(call, 'arguments')
+	const [vocabulary, columns] = args
+	const argument = (node: (typeof args)[number] | undefined) => node === null || node === undefined || node.type === 'SpreadElement' ? undefined : node
+	return args.length === 2 ? [argument(vocabulary), argument(columns)] : [undefined, undefined]
 }
 
 /** What `defineVocabulary` returns, as the reader has it: an object with the vocabulary's sections. */

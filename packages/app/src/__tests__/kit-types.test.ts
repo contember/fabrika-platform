@@ -35,10 +35,10 @@ const EXPECTED: Readonly<Record<string, string>> = {
 }
 
 /**
- * The compiler elaborates these through the declaration's own types, so they are held to their line and text only:
- * an optional field an annotation allows, and a scope union of the table policy (its wording is WU2's to refine).
+ * The compiler elaborates this one through the declaration's own types, so it is held to its line and text only: an
+ * optional field an annotation allows.
  */
-const ELABORATED = ['11-declaration-only-in-a-type.ts', '12-container-the-vocabulary-does-not-name.ts']
+const ELABORATED = ['11-declaration-only-in-a-type.ts']
 
 describe('the staged kit', () => {
 	test('the kit fixture and its API matrix compile clean', () => {

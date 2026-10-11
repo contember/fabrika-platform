@@ -4,7 +4,7 @@
 
 import { compileContract, ContractError } from '@fabrika/app/contract'
 import { canonicalArtifactJson, type ContractArtifact, type TablePolicyArtifact } from '@fabrika/auth-core'
-import { tablePolicies } from '@fabrika/db/tables'
+import { defineTables, PolicyError, tablePolicies } from '@fabrika/db/tables'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -24,8 +24,11 @@ import { tables as scopedTables } from '../../../app/src/__tests__/fixtures/scop
 import { contract as organizationsContract } from '../../../app/src/__tests__/fixtures/scoped-organizations/fabrika.contract'
 import { tables as organizationsTables } from '../../../app/src/__tests__/fixtures/scoped-organizations/src/db/tables'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import { ContractSourceError, readContractSource } from '../contract'
+import { ContractSourceError, readContractSource, readTablesSource } from '../contract'
 import { contract as cleanContract } from './fixtures/clean-app/fabrika.contract'
+import { contract as derivedContract } from './fixtures/derived-tables/fabrika.contract'
+import { columns as derivedColumns } from './fixtures/derived-tables/src/db/schema.generated'
+import { tables as derivedTables } from './fixtures/derived-tables/src/db/tables'
 import { contract as readerFormsContract } from './fixtures/reader-forms/fabrika.contract'
 
 const APP_TESTS = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__')
@@ -89,6 +92,11 @@ const fixtures: readonly Fixture[] = [
 		root: join(import.meta.dir, 'fixtures', 'reader-forms'),
 		evaluated: () => compileContract(readerFormsContract, READER_FORMS_TABLES),
 		tables: READER_FORMS_TABLES,
+	},
+	{
+		name: '@fabrika/check derived-tables (every containment derived from the vocabulary, read from source)',
+		root: join(import.meta.dir, 'fixtures', 'derived-tables'),
+		evaluated: () => compileContract(derivedContract, derivedTables),
 	},
 	{
 		name: '@fabrika/app implement',
@@ -374,8 +382,9 @@ describe('paired cases: the reader agrees with Bun, or refuses where Bun would r
 	}
 })
 
-// The staged kit's cases, over `@fabrika/app`'s `src/__tests__/kit-fixture/`. Skeletons until the sprint's units land:
-// WU2 owns the table cases, WU4 the slice cases (docs/sprints/sprint-2026-10-11-paved-road-framework.md).
+// The staged kit's cases. The table cases read `fixtures/derived-tables/`; the slice cases `@fabrika/app`'s
+// `src/__tests__/kit-fixture/`. Skeletons until the sprint's units land: WU2 owns the table cases, WU4 the slice cases
+// (docs/sprints/sprint-2026-10-11-paved-road-framework.md).
 /** The body of a skeleton case: a later unit replaces it, so it fails until then (`bun test --todo`). */
 const filledBy = (unit: string) => (): void => {
 	throw new Error(`this case is ${unit}'s to fill`)
@@ -383,10 +392,56 @@ const filledBy = (unit: string) => (): void => {
 
 describe('the staged kit: read from source and evaluated agree', () => {
 	describe('tables derived from the vocabulary (WU2)', () => {
-		test.todo('a container column on the <container>_id convention reads the same as the evaluated defineTables', filledBy('WU2'))
-		test.todo('a child table whose chain comes from the vocabulary reads the same', filledBy('WU2'))
-		test.todo('in: { column } off the convention reads the same', filledBy('WU2'))
-		test.todo('the reader refuses the form that names the action union by hand, as the runtime does', filledBy('WU2'))
+		const derivedFiles = readTree(join(import.meta.dir, 'fixtures', 'derived-tables'))
+		const read = readTablesSource(derivedFiles)
+		const evaluated = tablePolicies(derivedTables)
+
+		test('a container column on the <container>_id convention reads the same as the evaluated defineTables', () => {
+			expect(read['projects']).toEqual(evaluated['projects'])
+			expect(read['projects']?.scope).toEqual({ mode: 'dimension', dimension: 'project', key: 'id', container: { dimension: 'org', column: 'org_id' } })
+		})
+
+		test('a child table whose chain comes from the vocabulary reads the same', () => {
+			expect(read['task_comments']).toEqual(evaluated['task_comments'])
+			expect(read['task_comments']?.scope).toEqual({
+				mode: 'child',
+				parent: 'tasks',
+				key: 'id',
+				column: 'task_id',
+				inherit: ['parent_project', 'org_id'],
+			})
+		})
+
+		test('in: { column } off the convention reads the same', () => {
+			expect(read['tasks']).toEqual(evaluated['tasks'])
+			expect(read['tasks']?.scope).toEqual({
+				mode: 'dimension',
+				dimension: 'task',
+				key: 'id',
+				container: { dimension: 'project', column: 'parent_project' },
+			})
+			expect(read).toEqual(evaluated)
+		})
+
+		test('the reader refuses the form that names the action union by hand, as the runtime does', () => {
+			const handWritten = `import { defineTables } from '@fabrika/db/tables'
+import { columns, type DB } from './schema.generated'
+
+export const tables = defineTables<DB, 'tasks.read' | 'tasks.write'>(columns)({})
+`
+			const files = new Map([...derivedFiles, ['src/db/tables.ts', handWritten]])
+			let findings: readonly string[] = []
+			try {
+				readTablesSource(files)
+			} catch (error) {
+				if (!(error instanceof ContractSourceError)) throw error
+				findings = error.findings.map((finding) => `${finding.file}:${finding.line}:${finding.column} ${finding.message}`)
+			}
+			expect(findings).toEqual([
+				"src/db/tables.ts:4:23 'tables' is not one call of defineTables with the vocabulary and the column list, then the policies",
+			])
+			expect(() => Reflect.apply(defineTables, undefined, [derivedColumns])).toThrow(PolicyError)
+		})
 	})
 	describe("the reader's slice of shell modules (WU4)", () => {
 		test.todo(

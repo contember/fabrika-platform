@@ -336,27 +336,37 @@ describe('the resource budget', () => {
 })
 
 describe('the reader reads src/db/tables.ts into the policies @fabrika/db parses', () => {
-	const SCHEMA_GENERATED = `import type { ColumnList } from '@fabrika/db'
+	const SCHEMA_GENERATED = `import type { TypedColumnList } from '@fabrika/db'
 
 export interface DB {
 	notes: { id: string; workspace_id: string; title: string }
 }
 
-export const columns = { 'notes': ['id', 'workspace_id', 'title'] } as const satisfies ColumnList<DB>
+export const columns: TypedColumnList<DB> = { 'notes': ['id', 'workspace_id', 'title'] }
+`
+	const VOCABULARY = `import { defineVocabulary } from '@fabrika/app/contract'
+
+export const vocabulary = defineVocabulary({
+	app: 'notes',
+	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+	actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes' },
+	roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+})
 `
 	const TABLES = `import { defineTables } from '@fabrika/db'
-import { columns, type DB } from './schema.generated'
+import { vocabulary } from '../vocabulary'
+import { columns } from './schema.generated'
 
-export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
+export const tables = defineTables(vocabulary, columns)({
 	notes: {
-		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		scope: { dimension: 'note', in: { column: 'workspace_id' } },
 		actions: { read: 'notes.read', insert: 'notes.write' },
 		insert: ['title'],
 	},
 })
 `
 	const withTables = (tables: string, schema = SCHEMA_GENERATED): ReadonlyMap<string, string> =>
-		new Map([...application(BASE), ['src/db/tables.ts', tables], ['src/db/schema.generated.ts', schema]])
+		new Map([...application(BASE), ['src/vocabulary.ts', VOCABULARY], ['src/db/tables.ts', tables], ['src/db/schema.generated.ts', schema]])
 
 	const tableRefusal = (files: ReadonlyMap<string, string>): string[] => {
 		try {
@@ -393,13 +403,13 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 
 	test('a policy the runtime refuses is refused from source, at the defineTables call', () => {
 		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", "insrt: ['title'],")))).toEqual([
-			'src/db/tables.ts:4:23 contract notes: the policy: insrt is not a field here (allowed: scope, actions, insert, update, version, createdBy, columns)',
+			'src/db/tables.ts:5:23 contract notes: the policy: insrt is not a field here (allowed: scope, actions, insert, update, version, createdBy, columns)',
 		])
 		expect(tableRefusal(withTables(TABLES.replace("column: 'workspace_id'", "column: 'workspace'")))).toEqual([
-			'src/db/tables.ts:4:23 contract notes: scope.in.column names workspace, which is not a column (columns: id, workspace_id, title)',
+			'src/db/tables.ts:5:23 contract notes: scope.in.column names workspace, which is not a column (columns: id, workspace_id, title)',
 		])
 		expect(tableRefusal(withTables(TABLES, SCHEMA_GENERATED.replace("'title']", "'title'], 'audit': ['id']")))).toEqual([
-			'src/db/tables.ts:4:23 contract audit: every table needs a policy in tables.ts',
+			'src/db/tables.ts:5:23 contract audit: every table needs a policy in tables.ts',
 		])
 	})
 
@@ -419,20 +429,20 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 		expect(allowed(withTables(TABLES.replace('export const tables', 'export const policies')))).toEqual([
 			'export const tables = defineTables(vocabulary, columns)({ … })',
 		])
-		expect(tableRefusal(withTables(TABLES.replace('(columns)({', '(columns, columns, columns)({')))).toEqual([
-			"src/db/tables.ts:4:23 contract 'tables' is not one call of defineTables with the vocabulary and the column list, then the policies",
+		expect(tableRefusal(withTables(TABLES.replace('(vocabulary, columns)({', '(vocabulary, columns, columns)({')))).toEqual([
+			"src/db/tables.ts:5:23 contract 'tables' is not one call of defineTables with the vocabulary and the column list, then the policies",
 		])
-		expect(tableRefusal(withTables(TABLES.replace('(columns)({', '(columns, columns)({')))).toEqual([
-			'src/db/tables.ts:4:70 contract the first argument of defineTables is not the vocabulary',
+		expect(tableRefusal(withTables(TABLES.replace('(vocabulary, columns)({', '(columns, columns)({')))).toEqual([
+			'src/db/tables.ts:5:36 contract the first argument of defineTables is not the vocabulary',
 		])
 		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", 'insert: [`${"title"}`],'))).map((line) => line.split(' ')[1])).toEqual([
 			'literal',
 		])
 		const schema = TABLES.replace(
-			"import { columns, type DB } from './schema.generated'",
-			"import { columns, type DB } from './schema.generated'\nimport { z } from 'zod/v4'",
+			"import { columns } from './schema.generated'",
+			"import { columns } from './schema.generated'\nimport { z } from 'zod/v4'",
 		)
 			.replace("insert: ['title'],", 'insert: [z.string()],')
-		expect(tableRefusal(withTables(schema))).toEqual(['src/db/tables.ts:9:12 contract a schema in a table policy'])
+		expect(tableRefusal(withTables(schema))).toEqual(['src/db/tables.ts:10:12 contract a schema in a table policy'])
 	})
 })

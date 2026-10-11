@@ -1,6 +1,6 @@
 // The vocabulary form of the table policies, pinned: containment, keys and child chains left to the vocabulary and the
-// `<container>_id` convention, and the normalized policies the kit's index reads. Types only: until the derivation
-// runs, `defineTables` refuses an omitted key or container at runtime, so this module is compiled and never loaded.
+// `<container>_id` convention, and the normalized policies the kit's index reads. The runtime derivation is
+// `@fabrika/db`'s `derived-tables.test.ts`; this module pins the types.
 
 import { type App, defineApp, type KitTypes } from '@fabrika/app/contract'
 import { defineTables, type ScopeTarget, type Tables, type WithinTables } from '@fabrika/db/tables'

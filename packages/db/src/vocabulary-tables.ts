@@ -32,8 +32,13 @@ export type VocabularyContainerOf<V, D> = V extends { readonly dimensions: infer
 	? D extends keyof Ds ? Ds[D] extends { readonly in: infer C extends string } ? C : never : never
 	: never
 
+/** A table without an `id` column names its key. */
+interface NamesItsKey<Col extends string> {
+	readonly key: Col
+}
+
 /** `key` defaults to `id`, so it is required only where the table has no `id` column. */
-type KeyField<Col extends string> = 'id' extends Col ? { readonly key?: Col } : { readonly key: Col }
+type KeyField<Col extends string> = 'id' extends Col ? { readonly key?: Col } : NamesItsKey<Col>
 
 /** A contained dimension table's container column; `dimension`, when stated, must be the vocabulary's. */
 export interface VocabularyContainer<C extends string, Col extends string> {
@@ -41,16 +46,21 @@ export interface VocabularyContainer<C extends string, Col extends string> {
 	readonly dimension?: C
 }
 
+/** A contained table off the `<container>_id` convention names its container column. */
+interface NamesItsContainerColumn<C extends string, Col extends string> {
+	readonly in: VocabularyContainer<C, Col>
+}
+
 /** The container column defaults to `<container>_id`, so `in` is required only off that convention. */
 type ContainerField<C extends string, Col extends string> = [C] extends [never] ? { readonly in?: never }
 	: `${C}_id` extends Col ? { readonly in?: VocabularyContainer<C, Col> }
-	: { readonly in: VocabularyContainer<C, Col> }
+	: NamesItsContainerColumn<C, Col>
+
+/** The scope of a table that owns dimension `D`, which the vocabulary puts in `C` (`never`: in no container). */
+type DimensionTableScope<D extends string, C extends string, Col extends string> = { readonly dimension: D } & KeyField<Col> & ContainerField<C, Col>
 
 /** A dimension table's scope: the dimension it owns; its container is the vocabulary's. */
-export type VocabularyDimensionScope<V, D extends string, Col extends string> =
-	& { readonly dimension: D }
-	& KeyField<Col>
-	& ContainerField<VocabularyContainerOf<V, D>, Col>
+export type VocabularyDimensionScope<V, D extends string, Col extends string> = DimensionTableScope<D, VocabularyContainerOf<V, D>, Col>
 
 /** A child table's scope: `column` defaults to `<parent dimension>_id`, and the inherited chain is the parent's. */
 export type VocabularyChildScope<Table extends string, Col extends string> =
@@ -66,18 +76,47 @@ interface WritableFields<Col extends string, A extends string, Ver extends Col> 
 	readonly columns?: ColumnPolicies<Col, A>
 }
 
-type DimensionScopes<V, Col extends string> = { [D in VocabularyDimension<V>]: VocabularyDimensionScope<V, D, Col> }[VocabularyDimension<V>]
+/**
+ * The scope of the dimension the policy states (`S`, its scope as written); for any other name, the dimension alone,
+ * so that a misspelt one is reported against the vocabulary's dimension names rather than against one of them.
+ */
+type DimensionScopes<V, Col extends string, S> = S extends { readonly dimension: infer D extends VocabularyDimension<V> }
+	? DimensionTableScope<D, VocabularyContainerOf<V, D>, Col>
+	: { readonly dimension: VocabularyDimension<V> }
 
-/** One table's policy as an application writes it under a vocabulary. */
-export type VocabularyTablePolicy<Table extends string, Col extends string, A extends string, V, Ver extends Col> =
-	| (WritableFields<Col, A, Ver> & { readonly scope: DimensionScopes<V, Col> })
-	| (WritableFields<Col, A, Ver> & { readonly scope: VocabularyChildScope<Table, Col> })
-	| ReferencePolicy<Col, A>
-	| InboxPolicy<Col, A>
+type AuthoredDimensionPolicy<Col extends string, A extends string, V, Ver extends Col, S> = WritableFields<Col, A, Ver> & {
+	readonly scope: DimensionScopes<V, Col, S>
+}
+type AuthoredChildPolicy<Table extends string, Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver> & {
+	readonly scope: VocabularyChildScope<Table, Col>
+}
 
-/** Every table of the schema, and no other, maps to a policy; a misspelt action or dimension fails at its own line. */
-export type VocabularyPolicyMap<DB, V> = {
-	readonly [T in keyof DB & string]: VocabularyTablePolicy<keyof DB & string, keyof DB[T] & string, VocabularyAction<V>, V, VersionColumn<DB[T]>>
+/**
+ * One table's policy as an application writes it under a vocabulary. `S` is its scope as written: its mode picks the
+ * one policy form a mistake is reported against, rather than a union of all four.
+ */
+export type VocabularyTablePolicy<Table extends string, Col extends string, A extends string, V, Ver extends Col, S = unknown> = S extends
+	{ readonly dimension: unknown } ? AuthoredDimensionPolicy<Col, A, V, Ver, S>
+	: S extends { readonly child: unknown } ? AuthoredChildPolicy<Table, Col, A, Ver>
+	: S extends { readonly reference: unknown } ? ReferencePolicy<Col, A>
+	: S extends { readonly inbox: unknown } ? InboxPolicy<Col, A>
+	: AuthoredDimensionPolicy<Col, A, V, Ver, S> | AuthoredChildPolicy<Table, Col, A, Ver> | ReferencePolicy<Col, A> | InboxPolicy<Col, A>
+
+type StatedScope<P, T> = T extends keyof P ? P[T] extends { readonly scope: infer S } ? S : unknown : unknown
+
+/**
+ * Every table of the schema, and no other, maps to a policy; a misspelt action or dimension fails at its own line.
+ * `P` is the policies as written, which picks each dimension table's scope by the dimension it states.
+ */
+export type VocabularyPolicyMap<DB, V, P = unknown> = {
+	readonly [T in keyof DB & string]: VocabularyTablePolicy<
+		keyof DB & string,
+		keyof DB[T] & string,
+		VocabularyAction<V>,
+		V,
+		VersionColumn<DB[T]>,
+		StatedScope<P, T>
+	>
 }
 
 type Flat<T> = { [K in keyof T]: T[K] }
@@ -113,6 +152,6 @@ export type NormalizedPolicies<P, V> = {
 }
 
 /** Takes the policies of exactly the tables of the schema, written in the vocabulary form. */
-export type DefineVocabularyPolicies<DB, V> = <const P extends VocabularyPolicyMap<DB, V>>(
+export type DefineVocabularyPolicies<DB, V> = <const P extends VocabularyPolicyMap<DB, V, P>>(
 	policies: P & { readonly [K in Exclude<keyof P, keyof DB>]: never },
 ) => Tables<DB, NormalizedPolicies<P, V>>

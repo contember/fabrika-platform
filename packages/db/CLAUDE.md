@@ -12,14 +12,14 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · testing · postgres (needs FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
 | Module                 | What it owns                                                                                                                                   |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `builtins.ts`          | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                              |
 | `capability.ts`        | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                               |
-| `policy.ts`            | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.                                       |
+| `policy.ts`            | `defineTables` / `readTables`: the table policies, containment derived from the vocabulary, checked against the column list; row types.        |
 | `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.           |
 | `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                           |
 | `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                          |
@@ -75,12 +75,18 @@ and the target `Ref`, so no handler can call it.
 - **`@fabrika/db/tables` imports no Bun API, no driver and no Kysely runtime.** `@fabrika/app/contract` (the SPA)
   and the static contract reader (a Worker) import it; `tables.test.ts` bundles it for a browser.
 - **`defineTables` and `readTables` are one parse** (`parseTables`), over values nobody type-checked: plain objects
-  and arrays only, read through own data properties, unknown fields refused. The vocabulary form
-  (`defineTables(vocabulary, columns)`, `readTables(columns, policies, vocabulary)`) also runs
-  `requireStatedContainment`: until the derivation lands, an omitted key, container or child chain throws
-  `… is not implemented (WU2)`, and a container the vocabulary contradicts is refused; it never parses a contained
-  table as a top-level one. Its types already take the derived forms and answer `NormalizedPolicies`, which the
-  kit's `DbIndex` reads.
+  and arrays only, read through own data properties, unknown fields refused. Both take the vocabulary
+  (`defineTables(vocabulary, columns)`, `readTables(columns, policies, vocabulary)`); the form that names the action
+  union by hand, `defineTables<DB, Action>(columns)`, is gone, and a one-argument call throws. Its types answer
+  `NormalizedPolicies`, which the kit's `DbIndex` reads.
+- **Containment is the vocabulary's, never the policy's.** A dimension table's container is the dimension the
+  vocabulary puts its own in; its column is `<container>_id`, or the one `in: { column }` names off that convention.
+  A key defaults to `id`; a child's column defaults to `<parent dimension>_id`, and its chain is its parent's. A stated
+  value must agree: `in.dimension` other than the vocabulary's, `in` on a top-level dimension, or an `inherit` other
+  than the parent's chain is refused, and so is a default the table has no column for, with a message that names the
+  field to state. The authoring types pick each table's form by the scope it states (`VocabularyPolicyMap<DB, V, P>`),
+  so a misspelt dimension is reported against the vocabulary's names and a missing `key` or `in` names
+  `NamesItsKey` / `NamesItsContainerColumn` in two lines; `derived-tables.test.ts` compiles `derived-mistakes/`.
 - **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only
   unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
   policies' builder an `Unavailable` that names `fabrika db codegen`.

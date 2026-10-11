@@ -158,10 +158,15 @@ describe('generated names', () => {
 
 describe('the generated module under the checker', () => {
 	const fixture = Bun.file(join(import.meta.dir, 'fixtures', 'schema.generated.ts')).text()
-	const tables = `import { defineTables } from '@fabrika/db'
-import { columns, type DB } from './schema.generated'
+	const vocabulary = `import { defineVocabulary } from '@fabrika/app/contract'
 
-export const tables = defineTables<DB, 'countries.read'>(columns)({
+export const vocabulary = defineVocabulary({ app: 'lookup', dimensions: {}, actions: { 'countries.read': 'Read the lookup data' }, roles: {} })
+`
+	const tables = `import { defineTables } from '@fabrika/db'
+import { vocabulary } from '../vocabulary'
+import { columns } from './schema.generated'
+
+export const tables = defineTables(vocabulary, columns)({
 	contact_messages: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	countries: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
 	note_comments: { scope: { reference: 'lookup data' }, actions: { read: 'countries.read' } },
@@ -173,7 +178,10 @@ export const tables = defineTables<DB, 'countries.read'>(columns)({
 })
 `
 	const check = async (generated: string): Promise<string[]> =>
-		(await checkApplication({ root: '/app', files: new Map([['src/db/schema.generated.ts', generated], ['src/db/tables.ts', tables]]) })).map(
+		(await checkApplication({
+			root: '/app',
+			files: new Map([['src/db/schema.generated.ts', generated], ['src/db/tables.ts', tables], ['src/vocabulary.ts', vocabulary]]),
+		})).map(
 			formatFinding,
 		)
 
