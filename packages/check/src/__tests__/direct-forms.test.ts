@@ -272,6 +272,26 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/patch.ts:3:1', 'src/patch.ts:4:1', 'src/patch.ts:5:3', 'src/patch.ts:6:1'],
 	},
 	{
+		name: 'an imported framework value written inside a function that does not shadow it, and a load inside a function',
+		rule: 'framework-write',
+		files: {
+			'src/patch.ts': [
+				"import { Ref } from '@fabrika/app/implement'",
+				'',
+				'export function patch(other: { label: string }) {',
+				"\tother.label = 'kept'",
+				'\tObject.assign(Ref, { forged: true })',
+				'}',
+				'export async function late() {',
+				"\tconst db = await import('@fabrika/db')",
+				'\tdb.Database.postgres = () => null',
+				'}',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/patch.ts:5:2', 'src/patch.ts:9:2'],
+	},
+	{
 		name: 'framework members written through package import maps, exact and with a pattern',
 		rule: 'framework-write',
 		files: {

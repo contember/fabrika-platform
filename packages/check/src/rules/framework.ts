@@ -2,6 +2,7 @@ import { type AstNode, child, children, identifierName, memberPath, staticString
 import type { Report } from '../finding'
 import { isRequire } from '../references'
 import { type ImportMappings, mappedTargets } from '../resolution'
+import { declaringScope } from '../scope'
 import { touchesPrototype } from './runtime'
 
 const ALLOWED = 'framework objects are read-only: use them as they are'
@@ -9,10 +10,16 @@ const ALLOWED = 'framework objects are read-only: use them as they are'
 /** The packages the platform trusts by name (`package-replacement`): their objects are the framework's. */
 const isTrusted = (specifier: string): boolean => specifier.startsWith('@fabrika/') || specifier === 'zod' || specifier.startsWith('zod/')
 
-/** Local name → the trusted specifier its value comes from. */
-export type TrustedBindings = ReadonlyMap<string, string>
+/** One name bound to a trusted package's value, in the scope that declares it. */
+interface TrustedBinding {
+	readonly specifier: string
+	readonly scope: AstNode | undefined
+}
 
-/** The trusted package a specifier loads, also through an import map or a `tsconfig` path (`#data` → `@fabrika/db`). */
+/** Local name → each declaration of it that holds a trusted package's value. */
+export type TrustedBindings = ReadonlyMap<string, readonly TrustedBinding[]>
+
+/** The trusted package a specifier loads, also through a package import map (`#data` → `@fabrika/db`). */
 const trustedPackage = (specifier: string | undefined, mappings: ImportMappings): string | undefined => {
 	if (specifier === undefined) return undefined
 	const targets = mappedTargets(mappings, specifier) ?? [specifier]
@@ -40,14 +47,17 @@ const boundNames = (pattern: AstNode | undefined): readonly string[] => {
 
 /** What a module binds to a trusted package's values: its imports, `import x = require()`, and direct loads into a `const`. */
 export const trustedBindings = (program: AstNode, mappings: ImportMappings): TrustedBindings => {
-	const bindings = new Map<string, string>()
-	walk(program, (node) => {
+	const bindings = new Map<string, TrustedBinding[]>()
+	const bind = (name: string, specifier: string, scope: AstNode | undefined): void => {
+		bindings.set(name, [...(bindings.get(name) ?? []), { specifier, scope }])
+	}
+	walk(program, (node, ancestors) => {
 		if (node.type === 'ImportDeclaration' && stringField(node, 'importKind') !== 'type') {
 			const specifier = trustedPackage(staticString(child(node, 'source')), mappings)
 			if (specifier === undefined) return
 			for (const item of children(node, 'specifiers')) {
 				const local = item === null || stringField(item, 'importKind') === 'type' ? undefined : identifierName(child(item, 'local'))
-				if (local !== undefined) bindings.set(local, specifier)
+				if (local !== undefined) bind(local, specifier, program)
 			}
 		} else if (node.type === 'TSImportEqualsDeclaration' && stringField(node, 'importKind') !== 'type') {
 			const reference = child(node, 'moduleReference')
@@ -56,26 +66,37 @@ export const trustedBindings = (program: AstNode, mappings: ImportMappings): Tru
 				mappings,
 			)
 			const local = identifierName(child(node, 'id'))
-			if (specifier !== undefined && local !== undefined) bindings.set(local, specifier)
+			if (specifier !== undefined && local !== undefined) bind(local, specifier, program)
 		} else if (node.type === 'VariableDeclarator') {
 			const specifier = trustedPackage(loadedSpecifier(child(node, 'init')), mappings)
 			if (specifier !== undefined) {
-				for (const name of boundNames(child(node, 'id'))) bindings.set(name, specifier)
+				for (const name of boundNames(child(node, 'id'))) bind(name, specifier, declaringScope(name, ancestors))
 			}
 		}
 	})
 	return bindings
 }
 
-/** The trusted binding a member chain starts from: `Database.postgres`, `db['Database'].postgres` → `Database`, `db`. */
-const trustedRoot = (target: AstNode | null | undefined, bindings: TrustedBindings): string | undefined => {
+/**
+ * The trusted binding a member chain starts from (`Database.postgres`, `db['Database'].postgres` → `Database`, `db`),
+ * when the name at `ancestors` denotes that declaration and no local that shadows it.
+ */
+const trustedRoot = (
+	target: AstNode | null | undefined,
+	ancestors: readonly AstNode[],
+	bindings: TrustedBindings,
+): { readonly name: string; readonly specifier: string } | undefined => {
 	let current = target === null || target === undefined ? undefined : unwrap(target)
 	while (current?.type === 'MemberExpression') {
 		const object = child(current, 'object')
 		current = object === undefined ? undefined : unwrap(object)
 	}
 	const name = identifierName(current)
-	return name !== undefined && bindings.has(name) ? name : undefined
+	const declarations = name === undefined ? undefined : bindings.get(name)
+	if (name === undefined || declarations === undefined) return undefined
+	const scope = declaringScope(name, ancestors)
+	const binding = declarations.find((declaration) => declaration.scope === scope)
+	return binding === undefined ? undefined : { name, specifier: binding.specifier }
 }
 
 /** The member expressions an assignment writes, also inside a destructuring pattern. */
@@ -114,17 +135,17 @@ const WRITERS = new Set([
 /**
  * A write to a member of a value from `@fabrika/*` or `zod`: an assignment, `delete`, `++`, or a writer call on it. A
  * replaced `Database.postgres` receives the database URL; a patched schema changes what the contract admits. A write
- * through a prototype is `prototype-assignment`'s. Names are not scoped: a local that shadows an import counts as it.
+ * through a prototype is `prototype-assignment`'s. A local that shadows such a name is not one.
  */
-export const checkFrameworkWrite = (node: AstNode, bindings: TrustedBindings, report: Report): void => {
+export const checkFrameworkWrite = (node: AstNode, ancestors: readonly AstNode[], bindings: TrustedBindings, report: Report): void => {
 	if (bindings.size === 0) return
 	const found = (at: AstNode, target: AstNode | null | undefined, how: string): void => {
 		if (touchesPrototype(target ?? undefined)) return
-		const root = trustedRoot(target, bindings)
+		const root = trustedRoot(target, ancestors, bindings)
 		if (root === undefined) return
 		const written = target === null || target === undefined ? undefined : memberPath(target)
-		const name = written === undefined || written.length < 2 ? root : written.join('.')
-		report(at, 'framework-write', `${how} ${name}, a value from '${bindings.get(root)}'`, ALLOWED)
+		const name = written === undefined || written.length < 2 ? root.name : written.join('.')
+		report(at, 'framework-write', `${how} ${name}, a value from '${root.specifier}'`, ALLOWED)
 	}
 	switch (node.type) {
 		case 'AssignmentExpression':

@@ -43,6 +43,7 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `graph.ts`             | The one static resolver: what a name denotes through consts, imports and exports, without executing.   |
 | `layout.ts`            | The file layout the rules read, which files are read, and `resolveRelative` over Bun's candidates.     |
 | `references.ts`        | Every way a module names another, and which names a direct load takes.                                 |
+| `scope.ts`             | Which declaration a name denotes at a node: the innermost scope that declares it.                      |
 | `resolution.ts`        | The application's own import mappings: `imports` in `package.json`, `paths` in `tsconfig.json`.        |
 | `trust.ts`             | Configuration that could redirect a package trusted by name; checker and reader both refuse it.        |
 | `jsonc.ts`             | JSON with comments, without `Bun.JSONC`, so the reader parses `tsconfig.json` in a Worker.             |

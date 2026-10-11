@@ -77,7 +77,7 @@ const checkSourceModule = async (
 	const trusted = trustedBindings(module.program, mappings)
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
-		checkFrameworkWrite(node, trusted, report)
+		checkFrameworkWrite(node, ancestors, trusted, report)
 		checkTypeNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, report)
