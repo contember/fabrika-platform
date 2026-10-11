@@ -1,8 +1,9 @@
 // @fabrika/db/testing — the database test kit of an application, for test files only (`@fabrika/check` refuses it
-// anywhere else). A test database is a fresh schema migrated by the real runner; the isolation fixtures seed rows in
-// two disjoint containment chains, and the table probe reaches a table by name with every runtime check of a store.
+// anywhere else). A test database is a fresh schema with its own role family, migrated by the real runner and used as
+// its runtime role; the isolation fixtures seed rows in two disjoint containment chains, and the table probe reaches a
+// table by name with every runtime check of a store.
 
-import { definePostgresApplicationMigrations, PostgresDatabase } from '@fabrika/platform-node'
+import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { type ReservedSQL, SQL } from 'bun'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -68,14 +69,14 @@ export interface IsolationWorlds {
 }
 
 export interface TestDatabase {
-	/** The connection `boot` binds the data layer to, on the migrated schema. */
+	/** The connection `boot` binds the data layer to: the runtime role, on the migrated schema. */
 	readonly database: Database
 	readonly schema: string
 	/** Seeds one row of `table` in each of two fresh chains, with every container row a table owns. */
 	seedWorlds<DB, P>(tables: Tables<DB, P>, table: string): Promise<IsolationWorlds>
 	/** Values for the policy's insert columns of `table` that its schema accepts: every required one, sampled. */
 	sampleInsert<DB, P>(tables: Tables<DB, P>, table: string): Promise<Readonly<Record<string, SampleValue>>>
-	/** Closes the connections and drops the schema. */
+	/** Closes the connections and drops the schema and its roles. */
 	close(): Promise<void>
 }
 
@@ -153,30 +154,50 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 	return undefined
 }
 
-/** The throwaway schemas, `app_test_<16 hex>`; nothing else is ever reclaimed. */
+/** The throwaway schemas, `app_test_<16 hex>`, and their roles `app_test_<16 hex>` and `run_test_<16 hex>`; nothing else is ever reclaimed. */
 const TEST_SCHEMA = /^app_test_[0-9a-f]{16}$/
+const TEST_ROLE = /^(?:app|run)_(test_[0-9a-f]{16})$/
+/** `DROP ROLE` of a role that still owns something, in another database of the cluster. */
+const DEPENDENT_OBJECTS = '2BP01'
 
 /** The session-level advisory lock that holds a throwaway schema: the first 48 bits of SHA-256 of its name, plus one. */
 function schemaLockKey(schema: string): string {
 	return String(createHash('sha256').update(`fabrika-test-schema:${schema}`, 'utf8').digest().readUIntBE(0, 6) + 1)
 }
 
-const namespaceRows = z.array(z.object({ nspname: z.string() }))
+/** `test-<16 hex>`, the application id whose schema is `app_test_<16 hex>`. */
+function testAppId(schema: string): string {
+	return `test-${schema.slice('app_test_'.length)}`
+}
+
+const nameRows = z.array(z.object({ name: z.string() }))
 const lockRows = z.array(z.object({ locked: z.boolean() }))
 
 /**
- * Drops every throwaway schema whose lock can be taken: its run ended without `close` (a crash, a kill). A schema whose
- * lock is held belongs to a live run, perhaps in another process, and is never touched.
+ * Drops every throwaway schema and role family whose lock can be taken: its run ended without `close` (a crash, a
+ * kill). A schema whose lock is held belongs to a live run, perhaps in another process, and is never touched. Roles are
+ * the cluster's, so a family whose schema lives in another database is left to that database's next run.
  */
-async function reclaimAbandonedSchemas(lock: ReservedSQL, admin: SQL): Promise<void> {
-	const schemas = namespaceRows.parse(await admin.unsafe(`SELECT nspname FROM pg_namespace WHERE nspname LIKE 'app\\_test\\_%'`))
-	for (const { nspname } of schemas) {
-		if (!TEST_SCHEMA.test(nspname)) continue
-		const key = schemaLockKey(nspname)
+async function reclaimAbandonedSchemas(lock: ReservedSQL, admin: SQL, url: string): Promise<void> {
+	const found = nameRows.parse(
+		await admin.unsafe(
+			`SELECT nspname AS name FROM pg_namespace WHERE nspname LIKE 'app\\_test\\_%' UNION SELECT rolname FROM pg_roles WHERE rolname LIKE 'app\\_test\\_%' OR rolname LIKE 'run\\_test\\_%'`,
+		),
+	)
+	const schemas = new Set<string>()
+	for (const { name } of found) {
+		const role = TEST_ROLE.exec(name)
+		const schema = role === null ? name : `app_${role[1]}`
+		if (TEST_SCHEMA.test(schema)) schemas.add(schema)
+	}
+	for (const schema of schemas) {
+		const key = schemaLockKey(schema)
 		const [taken] = lockRows.parse(await lock.unsafe('SELECT pg_try_advisory_lock($1::bigint) AS locked', [key]))
 		if (taken?.locked !== true) continue
 		try {
-			await lock.unsafe(`DROP SCHEMA IF EXISTS ${quoted(nspname)} CASCADE`)
+			await dropApplicationDatabase(url, testAppId(schema))
+		} catch (error) {
+			if (!(error instanceof SQL.PostgresError && error.errno === DEPENDENT_OBJECTS)) throw error
 		} finally {
 			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [key])
 		}
@@ -202,9 +223,10 @@ function migrationsDirectory(migrations: string | URL): string {
 }
 
 /**
- * A fresh schema with the application's migrations applied by the real runner (`@fabrika/platform-node`), or `null`
- * after the standard skip message when `FABRIKA_TEST_POSTGRES_URL` is unset. With `FABRIKA_TEST_POSTGRES_REQUIRED=1`
- * a missing URL throws instead. The URL is a credential: no message names it.
+ * A fresh schema with the application's migrations applied by the real runner (`@fabrika/platform-node`) as its
+ * migration role, connected and seeded as its runtime role, or `null` after the standard skip message when
+ * `FABRIKA_TEST_POSTGRES_URL` is unset. That URL is the provisioning credential, which must be able to create roles.
+ * With `FABRIKA_TEST_POSTGRES_REQUIRED=1` a missing URL throws instead. The URL is a credential: no message names it.
  */
 export async function testDatabase(options: TestDatabaseOptions): Promise<TestDatabase | null> {
 	refuseInProduction(MODULE)
@@ -219,12 +241,11 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	const appId = `test-${randomHex()}${randomHex()}`
 	const schema = applicationSchema(appId)
 	const migrations = definePostgresApplicationMigrations({ appId, directory: migrationsDirectory(options.migrations) })
+	const runtimeUrl = applicationRuntimeUrl(url, appId)
 	const admin = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	const holder = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
+	const seeder = new SQL({ url: runtimeUrl, adapter: 'postgres', max: 1, prepare: false })
 	const lock = await holder.reserve()
-	const dropSchema = async (): Promise<void> => {
-		await admin.unsafe(`DROP SCHEMA IF EXISTS ${quoted(schema)} CASCADE`)
-	}
 	const releaseLock = async (): Promise<void> => {
 		try {
 			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [schemaLockKey(schema)])
@@ -232,23 +253,19 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 			lock.release()
 		}
 	}
-	const cleanup = (): Promise<void> => settleAll([dropSchema, releaseLock, () => holder.close(), () => admin.close()])
+	const cleanup = (): Promise<void> =>
+		settleAll([() => seeder.close(), () => dropApplicationDatabase(url, appId), releaseLock, () => holder.close(), () => admin.close()])
 	try {
-		await reclaimAbandonedSchemas(lock, admin)
-		// Held for the schema's whole life, before the schema exists: a schema whose lock is free is abandoned.
+		await reclaimAbandonedSchemas(lock, admin, url)
+		// Held for the schema's whole life, before the schema and its roles exist: a schema whose lock is free is abandoned.
 		await lock.unsafe('SELECT pg_advisory_lock($1::bigint)', [schemaLockKey(schema)])
-		const runner = PostgresDatabase.connect(url, { max: 1 })
-		try {
-			await migrations.apply(runner)
-		} finally {
-			await runner.close()
-		}
+		await migrations.migrate(url)
 	} catch (error) {
-		// The runner creates the schema and its ledger before a failing migration, so a failed start leaves them behind.
+		// The roles, the schema and its ledger exist before a failing migration, so a failed start leaves them behind.
 		await cleanup()
 		throw error
 	}
-	const database = Database.postgres({ url, schema, max: 2 })
+	const database = Database.postgres({ url: runtimeUrl, schema, max: 2 })
 	let catalog: Promise<readonly CatalogColumn[]> | undefined
 
 	async function columnsOf(table: string): Promise<readonly CatalogColumn[]> {
@@ -301,7 +318,7 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 		}
 		const names = [...row.keys()]
 		const placeholders = names.map((_, index) => `$${index + 1}`)
-		await admin.unsafe(
+		await seeder.unsafe(
 			`INSERT INTO ${quoted(schema)}.${quoted(table)} (${names.map(quoted).join(', ')}) VALUES (${placeholders.join(', ')})`,
 			names.map((name) => row.get(name) ?? null),
 		)

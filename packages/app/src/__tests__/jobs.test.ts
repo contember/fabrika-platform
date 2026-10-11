@@ -5,7 +5,8 @@
 import { runContractJob, serveContract } from '@fabrika/app/bun'
 import { BootError, type ContractApp, implement, type JobClock, type JobReport } from '@fabrika/app/implement'
 import { applicationSchema, Database, type Within } from '@fabrika/db'
-import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
+import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { defineContract } from '../contract/define'
@@ -192,14 +193,17 @@ describe('boot binds every job or does not start', () => {
 
 describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 	beforeAll(async () => {
-		const framework = FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')
-		await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${framework} ${migration}`))
-		database = Database.postgres({ url, schema, max: 4 })
+		const framework = { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: FRAMEWORK_MIGRATIONS }
+		await definePostgresApplicationMigrations({ appId, directory: '/unused', framework }).migrate(url, [{
+			name: '20261011120000_notes.sql',
+			sql: migration,
+		}])
+		database = Database.postgres({ url: applicationRuntimeUrl(url, appId), schema, max: 4 })
 	})
 
 	afterAll(async () => {
 		await database.close()
-		await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
+		await dropApplicationDatabase(url, appId)
 	})
 
 	beforeEach(async () => {
@@ -558,6 +562,11 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 				}
 				const rows = await admin((sql) => sql.unsafe(`select job from ${schema}.fabrika_job_leases order by job`))
 				expect([...rows]).toEqual([{ job: 'flaky' }, { job: 'purge' }, { job: 'sweep' }])
+				// The leases were written by the process's own pool, which connects as the runtime role.
+				const [runtime] = await admin((sql) =>
+					sql.unsafe('select count(*)::int as sessions from pg_stat_activity where usename = $1', [`run_${schema.slice('app_'.length)}`])
+				)
+				expect(runtime?.sessions).toBeGreaterThan(0)
 			} finally {
 				await server.stop()
 			}

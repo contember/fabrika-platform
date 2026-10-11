@@ -11,7 +11,7 @@ import type { Database, PostgresOptions } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
 import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
-import { S3BlobStore } from '@fabrika/platform-node'
+import { applicationRuntimeUrl, S3BlobStore } from '@fabrika/platform-node'
 import { join, resolve, sep } from 'node:path'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
 import { boot, BootError, type IamKeySource } from './implement/boot.js'
@@ -141,8 +141,9 @@ async function loadDataLayer(): Promise<DataLayerOpeners> {
 }
 
 /**
- * The application's connection: `FABRIKA_APP_DATABASE_URL`, on the schema `app_<FABRIKA_APP_ID>` its migrations
- * created. The URL is a credential, so no message quotes it.
+ * The application's connection: its runtime role `run_<FABRIKA_APP_ID>`, derived from the provisioning credential
+ * `FABRIKA_APP_DATABASE_URL`, on the schema `app_<FABRIKA_APP_ID>` its migrations created. The process never queries
+ * as the provisioning credential. A URL is a credential, so no message quotes it.
  */
 function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Record<string, string>>): Database {
 	const url = framework['FABRIKA_APP_DATABASE_URL'] ?? ''
@@ -160,7 +161,13 @@ function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Rec
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
-	return data.postgres({ url, schema })
+	let runtimeUrl: string
+	try {
+		runtimeUrl = applicationRuntimeUrl(url, appId)
+	} catch {
+		throw new BootError(['FABRIKA_APP_DATABASE_URL is not a connection URL with a password; the runtime role derives its credential from it'])
+	}
+	return data.postgres({ url: runtimeUrl, schema })
 }
 
 const STORAGE_VARIABLES = {

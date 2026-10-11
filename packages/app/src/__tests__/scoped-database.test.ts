@@ -11,6 +11,7 @@ import { serveContract } from '@fabrika/app/bun'
 import { BootError, type ContractApp, implement } from '@fabrika/app/implement'
 import { applicationSchema, type CapabilityAuthority, Database, type Ref, scoped } from '@fabrika/db'
 import { bindScopedDatabase } from '@fabrika/db/framework'
+import { applicationRuntimeUrl, definePostgresApplicationMigrations, dropApplicationDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createCapabilityIssuer } from '../implement/capability'
@@ -90,8 +91,8 @@ beforeAll(async () => {
 	if (!hasPostgres) {
 		return
 	}
-	await admin((sql) => sql.unsafe(`create schema ${schema}; set search_path to ${schema}; ${migration}`))
-	database = Database.postgres({ url, schema, max: 2 })
+	await definePostgresApplicationMigrations({ appId, directory: '/unused' }).migrate(url, [{ name: '20261011120000_notes.sql', sql: migration }])
+	database = Database.postgres({ url: applicationRuntimeUrl(url, appId), schema, max: 2 })
 	app = bootApp(scopedNotesApp(hooks), { database })
 })
 
@@ -100,7 +101,7 @@ afterAll(async () => {
 		return
 	}
 	await database.close()
-	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
+	await dropApplicationDatabase(url, appId)
 })
 
 describe.skipIf(!hasPostgres)('implement over @fabrika/db on Postgres', () => {

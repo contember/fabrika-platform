@@ -3,7 +3,7 @@
 
 import { checkApplication, formatFinding, generatedTestHeader } from '@fabrika/check'
 import { generateSchema } from '@fabrika/db/codegen'
-import { applicationDatabaseSchema, definePostgresApplicationMigrations, PostgresDatabase } from '@fabrika/platform-node'
+import { applicationDatabaseSchema, definePostgresApplicationMigrations, dropApplicationDatabase, PostgresDatabase } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -274,20 +274,18 @@ const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 const hasPostgres = url !== ''
 if (!hasPostgres) console.warn('db.test.ts skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests')
 
-const schemas: string[] = []
+const appIds: string[] = []
 
 afterAll(async () => {
 	for (const root of roots) rmSync(root, { recursive: true, force: true })
 	if (!hasPostgres) return
-	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
-	for (const schema of schemas) await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
-	await sql.close()
+	for (const appId of appIds) await dropApplicationDatabase(url, appId)
 })
 
 const application = (): { root: string; source: DbCommandDependencies['source']; schema: string } => {
 	const appId = `cli-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`
 	const schema = applicationDatabaseSchema(appId)
-	schemas.push(schema)
+	appIds.push(appId)
 	return { root: appRoot(), source: { FABRIKA_APP_ID: appId, FABRIKA_APP_DATABASE_URL: url }, schema }
 }
 
@@ -407,7 +405,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 
 	test('the isolation fixture’s schema module is what codegen writes for its migrations', async () => {
 		const appId = `cli-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`
-		schemas.push(applicationDatabaseSchema(appId))
+		appIds.push(appId)
 		const migrations = definePostgresApplicationMigrations({ appId, directory: join(ISOLATION_APP, 'db', 'migrations') })
 		const db = PostgresDatabase.connect(url, { max: 1 })
 		try {

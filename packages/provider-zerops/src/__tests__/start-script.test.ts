@@ -2,12 +2,11 @@
 // committed `schema.generated.ts` that no longer matches the migrated schema stops the server from starting, so the
 // readiness check fails. Skips cleanly without FABRIKA_TEST_POSTGRES_URL; the URL is a credential and is never printed.
 
-import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applicationDatabaseSchema } from '../../../platform-node/src/application-postgres-migrations'
+import { dropApplicationDatabase } from '../../../platform-node/src/application-postgres-migrations'
 import { generatedBuildCommands, type ZeropsLockedExecution } from '../execution'
 
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
@@ -17,14 +16,12 @@ if (!hasPostgres) console.warn('start-script.test.ts skipped: set FABRIKA_TEST_P
 const CLI = join(import.meta.dir, '..', '..', '..', 'cli', 'src', 'index.ts')
 const STARTED = 'the server started'
 const roots: string[] = []
-const schemas: string[] = []
+const appIds: string[] = []
 
 afterAll(async () => {
 	for (const root of roots) rmSync(root, { recursive: true, force: true })
 	if (!hasPostgres) return
-	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
-	for (const schema of schemas) await sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
-	await sql.close()
+	for (const appId of appIds) await dropApplicationDatabase(url, appId)
 })
 
 const sh = async (root: string, args: readonly string[]): Promise<{ code: number; stdout: string; stderr: string }> => {
@@ -71,7 +68,7 @@ const generatedApplication = async (appId: string): Promise<string> => {
 describe.skipIf(!hasPostgres)('the generated start script against Postgres', () => {
 	test('a stale committed schema module stops the server, and a current one starts it', async () => {
 		const appId = `stale-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`
-		schemas.push(applicationDatabaseSchema(appId))
+		appIds.push(appId)
 		const root = await generatedApplication(appId)
 		mkdirSync(join(root, 'src', 'db'), { recursive: true })
 		writeFileSync(join(root, 'src', 'db', 'schema.generated.ts'), 'export interface DB {}\n')
@@ -95,7 +92,7 @@ describe.skipIf(!hasPostgres)('the generated start script against Postgres', () 
 
 	test('a migration that fails stops the server before the schema is verified', async () => {
 		const appId = `broken-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`
-		schemas.push(applicationDatabaseSchema(appId))
+		appIds.push(appId)
 		const root = await generatedApplication(appId)
 		writeFileSync(join(root, 'db', 'migrations', '20261009120000_broken.sql'), 'ALTER TABLE missing_table ADD COLUMN body TEXT')
 

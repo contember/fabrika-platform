@@ -5,8 +5,7 @@
 // included" means. The URL is a credential: no assertion prints it.
 
 import { checkApplication } from '@fabrika/check'
-import { applicationDatabaseSchema } from '@fabrika/platform-node'
-import { SQL } from 'bun'
+import { dropApplicationDatabase } from '@fabrika/platform-node'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -24,9 +23,7 @@ const appIds: string[] = []
 afterAll(async () => {
 	await rm(staging, { recursive: true, force: true })
 	if (url === '') return
-	const sql = new SQL({ url, adapter: 'postgres', max: 1 })
-	for (const appId of appIds) await sql.unsafe(`DROP SCHEMA IF EXISTS ${applicationDatabaseSchema(appId)} CASCADE`)
-	await sql.close()
+	for (const appId of appIds) await dropApplicationDatabase(url, appId)
 })
 
 /** The archive as the build container receives it: the commit's files under one prefix, which the build strips. */

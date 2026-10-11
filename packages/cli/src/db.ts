@@ -15,7 +15,6 @@ import {
 	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 	definePostgresApplicationMigrations,
 	type PostgresApplicationMigrations,
-	PostgresDatabase,
 	PostgresMigrationError,
 	postgresMigrationResultMessage,
 } from '@fabrika/platform-node'
@@ -40,8 +39,10 @@ Usage:
   fabrika db test-isolation [--verbose]  Run the generated tests on a throwaway schema; fail unless every case the scaffold wrote passed.
 
 Run from the application root. \`migrate\` and \`codegen\` read FABRIKA_APP_ID and FABRIKA_APP_DATABASE_URL from
-the environment only. \`migrate\` holds a lock derived from the application id, runs each file in one transaction
-with lock_timeout ${DEFAULT_MIGRATION_LOCK_TIMEOUT_MS} ms and statement_timeout ${DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS} ms, and fails when a
+the environment only. FABRIKA_APP_DATABASE_URL is the provisioning credential: \`migrate\` uses it only to create
+the application's roles (app_<id> owns the schema, run_<id> gets DML on its tables) and fails when it cannot create
+roles. It applies the files as app_<id>, holds a lock derived from the application id, runs each file in one
+transaction with lock_timeout ${DEFAULT_MIGRATION_LOCK_TIMEOUT_MS} ms and statement_timeout ${DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS} ms, and fails when a
 file that already ran has changed: an applied migration is immutable, so a change is a new file.
 \`test-scaffold\` reads fabrika.contract.ts and src/db/tables.ts as the checker does, rewrites every generated test and
 deletes a generated one the scaffold no longer writes; @fabrika/check refuses one that is missing, edited or stale.
@@ -118,14 +119,10 @@ const migrate = async (argv: readonly string[], deps: DbCommandDependencies): Pr
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	const files = migrations.read()
 	migrations.plan(files)
-	// One connection: the advisory lock is session state.
-	const db = PostgresDatabase.connect(url, { max: 1 })
 	try {
-		deps.write(`${postgresMigrationResultMessage(await migrations.apply(db, files))}\n`)
+		deps.write(`${postgresMigrationResultMessage(await migrations.migrate(url, files))}\n`)
 	} catch (error) {
 		throw reportable(error)
-	} finally {
-		await db.close()
 	}
 }
 
