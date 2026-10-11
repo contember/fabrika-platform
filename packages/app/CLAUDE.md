@@ -23,6 +23,8 @@ bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compile
 bun test src/__tests__/implement-types.test.ts  # the handler mistakes, compiled by tsc
 bun test src/__tests__/kit-types.test.ts        # the staged kit: the API matrix and the kit mistakes, compiled by tsc
 bun test src/__tests__/kit-scale.test.ts        # 200 kit endpoints in 10 group modules, within the scale budget
+bun test src/__tests__/orm-dispatch.test.ts     # ctx.db through boot: the invocation's transaction, handle binding (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/orm-types.test.ts        # the data mistakes of a kit handler, compiled by tsc
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
@@ -43,6 +45,7 @@ bun test src/__tests__/export-read-only.test.ts # an export handler cannot write
 skill/SKILL.md        the agent skill `fabrika-app`: the one text of the application rules
 src/
   index.ts            public surface
+  from-row.ts         fromRow: a row as an output object (snake → camel, Date → ISO, then the schema)
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/SKILL.md; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker
@@ -86,6 +89,7 @@ src/
     implement.ts      implement, ContractDatabase, ContractImplementation
     serve.ts          serve(contract, { database, deps }) and defineDeps: serving a kit contract
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
+    invocation.ts     siteHandler (serve's tree leaf), the declaration's parse, Invocation, ctx.db by access form
     boot.ts           boot: framework variables, refusals, handler binding; each runtime's issuer
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
     capability.ts     Ref, Within, createCapabilityIssuer (a mint and its CapabilityAuthority)
@@ -257,6 +261,8 @@ child chain from the vocabulary (`packages/db/CLAUDE.md`).
 - **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
   `ctx.db.unscoped`, `ctx.connect` and `ctx.links`; a query and an export declare only `'read'`. The connectors are the
   kit's `imports`.
+- **`DbHandle<typeof app, form, dimension, action, kind>` and `ReferenceHandle<typeof app>`** (`context.ts`) are the
+  types of `ctx.db`'s handles, for a `queries.ts` function that takes one; `orm-handles.ts` pins them to the context.
 
 ## Service contracts (the installation's own services only)
 
@@ -419,11 +425,21 @@ child chain from the vocabulary (`packages/db/CLAUDE.md`).
   `sha256(bindingId ‖ raw body)`, kept per binding for `WEBHOOK_REPLAY_RETENTION_MS`
   (30 days). `X-GitHub-Delivery` is unsigned: it names the delivery in the log and decides
   nothing. A redelivery of one event therefore has the same key and is ignored.
-- **A webhook handler is at-least-once.** The key is recorded before the handler runs and
-  forgotten when it throws, so GitHub's redelivery runs a failed delivery again, after
-  whatever the failed run committed. The handler gets the key as `ctx.delivery.key`;
-  idempotent writes key on it. Never make the delivery record and the handler's writes
-  one transaction: the handler's stores own their transactions.
+- **A webhook handler is at-least-once.** The key is recorded before the handler runs, outside any transaction of the
+  handler, and forgotten when it throws, so GitHub's redelivery runs a failed delivery again. The handler gets the key
+  as `ctx.delivery.key`; idempotent writes key on it. A staged-kit delivery's writes are one invocation transaction,
+  rolled back before the key is forgotten, so the redelivery starts from nothing; an `implement` handler's stores own
+  their transactions. Never move the record into the handler's transaction: a concurrent copy of the delivery would
+  wait on it, and a failure would roll the record back with the work.
+- **A staged-kit site runs in its invocation's transaction** (`invocation.ts`). `serve` puts each site
+  into the handler tree as `siteHandler(handler, declared)`; `boot` parses the declaration (a query's `'write'`, a table
+  outside `src/db/tables.ts` and a `fabrika_*` table are `BootError`s), filters `ctx.connect` to the declared connectors
+  and `ctx.links` to the declared mount, and refuses a site without a `scoped(tables)` layer. `dispatch` opens an
+  `Invocation` per request (`READ ONLY` for a query and an export), builds `ctx.db` by the access form
+  (`endpointData`), ends the frame when the handler returns, validates the output, and only then commits; a throw, a
+  refused output or an aborted request rolls back. Every handle checks `boundTo(frame)`: a handle kept past its
+  handler, or called from another request or another `boot`, is a `CapabilityRefusedError`. `ctx.sql` is
+  `sqlStub()` until WU6, which runs it in `Invocation.session()`.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
   before any application module loads.** The runtime adapter calls
   `captureEnvironment`, which keeps them in a frozen record and deletes them from
@@ -637,6 +653,10 @@ child chain from the vocabulary (`packages/db/CLAUDE.md`).
   the browser DSN has, so one can forge a `JobFailed` or `JobMissed` like any other error event. Operations gives the
   `fabrika-job-*` fingerprints no special meaning: no auto-resolve, no state change. The job's key could
   authenticate them, but Operations' ingest would have to ask IAM per event (backlog 96).
+- **A staged-kit job reads outside its transaction and writes inside it.** Its `ctx.db` (`siteData` over `'job'`
+  handles) reads each statement on its own and refuses every write; `ctx.transaction((tx) => …)` is one transaction
+  fenced by the attempt's lease (`DataAccess.transaction`), refused outside the attempt, whose `tx.db` writes and whose
+  handles refuse once it returned.
 - An attempt without a `timeout` is cancelled after `DEFAULT_JOB_TIMEOUT_MS` (15 min); the lease lasts the timeout
   plus `LEASE_GRACE_MS`. Retries back off exponentially from one second, capped at five minutes, half jittered.
 - The type witnesses live in `src/__tests__/job-mistakes/`, compiled by `job-types.test.ts`.

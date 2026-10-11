@@ -19,7 +19,16 @@ import {
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
-import { bindScopedDatabase, type FrameworkTables, frameworkTablesOf, isScopedDatabase, type WebhookTables } from '@fabrika/db/framework'
+import {
+	bindScopedDatabase,
+	type DataAccess,
+	dataAccessOf,
+	type FrameworkTables,
+	frameworkTablesOf,
+	isScopedDatabase,
+	type WebhookTables,
+} from '@fabrika/db/framework'
+import type { DataKind } from '@fabrika/db/tables'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { compileContract } from '../contract/compile'
@@ -32,11 +41,12 @@ import { bindJobs, type ContractJobs } from '../jobs/runner'
 import { FormRateLimiter } from './anonymous'
 import { createCapabilityIssuer, requestIsReadOnly } from './capability'
 import { type ConnectFetch, wireImports } from './connect'
-import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type SpaAssets } from './dispatch'
+import { ContractRuntime, type Facilities, NO_FACILITIES, proxySecretDigest, type ServedEndpoint, type ServedSite, type SpaAssets } from './dispatch'
 import type { CapturedEnvironment } from './environment'
 import { ServerFault } from './faults'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
+import { isSiteHandler, parseDeclaration, type SiteDeclaration } from './invocation'
 import { bindingHandlers, webhookBindInput, webhookBindOutput, webhookUnbindInput, webhookUnbindOutput } from './webhook'
 import { type WorkloadCredential, workloadCredentials, type WorkloadTokenSource } from './workload'
 
@@ -252,7 +262,7 @@ function declaredProcedures(mount: string, tree: ProcedureTreeDeclaration<Schema
 /** Every function in the tree must be a declared procedure's handler, even when a cast defeated `implement`'s types. */
 function undeclaredHandlers(node: unknown, declared: ReadonlySet<string>, path: readonly string[], problems: string[]): void {
 	const id = path.join('.')
-	if (typeof node === 'function') {
+	if (typeof node === 'function' || isSiteHandler(node)) {
 		if (!declared.has(id)) {
 			problems.push(`handler '${id}' is not in the contract; declare the endpoint in fabrika.contract.ts first`)
 		}
@@ -271,6 +281,8 @@ interface BoundDatabase {
 	readonly database: ContractDatabase
 	/** The framework's own writes; only a `scoped(tables)` layer has them. */
 	readonly framework: FrameworkTables | null
+	/** The mini-ORM behind a staged-kit site's `ctx.db`; only a `scoped(tables)` layer has it. */
+	readonly data: DataAccess | null
 }
 
 /**
@@ -288,7 +300,7 @@ function contractDatabase(
 	}
 	if (!isScopedDatabase(database)) {
 		if ('locate' in database) {
-			return { database, framework: null }
+			return { database, framework: null, data: null }
 		}
 		problems.push('implement({ database }) takes the scoped(tables) result of @fabrika/db itself, not a copy or a wrapper of it')
 		return null
@@ -299,11 +311,56 @@ function contractDatabase(
 	}
 	try {
 		const locate = bindScopedDatabase(database, { database: connection, capabilities, readOnly: requestIsReadOnly })
-		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database) }
+		return { database: { tables: database.tables, locate }, framework: frameworkTablesOf(database), data: dataAccessOf(database) }
 	} catch {
 		problems.push('the data layer was bound before boot; only the framework binds it, so remove @fabrika/db/framework from the application')
 		return null
 	}
+}
+
+/** A handler tree leaf: a plain handler, or a staged-kit site with its declaration. */
+interface BoundHandler {
+	readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
+	readonly declaration: SiteDeclaration | null
+}
+
+function boundHandler(node: unknown, where: string, kind: DataKind, artifact: ContractArtifact, problems: string[]): BoundHandler | null {
+	if (isSiteHandler(node)) {
+		const site = node
+		return {
+			handler: (args) => Reflect.apply(site.handler, undefined, [args]),
+			declaration: parseDeclaration(where, site.declared, kind, artifact, problems),
+		}
+	}
+	if (typeof node === 'function') {
+		return { handler: (args) => Reflect.apply(node, undefined, [args]), declaration: null }
+	}
+	return null
+}
+
+/** A site gets `ctx.links` only for the link mount it declares it `issues`. */
+function siteFacilities(facilities: Facilities, declaration: SiteDeclaration | null): Facilities {
+	if (declaration === null) {
+		return facilities
+	}
+	const links = facilities.links.filter((link) => link.name === declaration.issues)
+	return links.length === facilities.links.length ? facilities : Object.freeze({ members: facilities.members, links: Object.freeze(links) })
+}
+
+/** A site gets `ctx.connect` only for the connectors it declares. */
+function siteConnect<W extends { readonly name: string }>(
+	wires: readonly W[] | undefined,
+	declaration: SiteDeclaration | null,
+): readonly W[] | undefined {
+	if (declaration === null || wires === undefined) {
+		return wires
+	}
+	const declared = wires.filter((wire) => declaration.connect.includes(wire.name))
+	return declared.length === 0 ? undefined : declared
+}
+
+function servedSite(kind: DataKind, declaration: SiteDeclaration | null): ServedSite | undefined {
+	return declaration === null ? undefined : { kind, declaration }
 }
 
 /** `ctx.members` and `ctx.links` of an endpoint: decided from its access form and the artifact, once. */
@@ -461,10 +518,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			for (const { id, path, procedure } of declaredProcedures(name, mount.procedures)) {
 				declared.add(id)
 				const row = rows.get(id)
-				const handler = path.reduce<unknown>(childAt, handlers)
+				const bound = boundHandler(path.reduce<unknown>(childAt, handlers), `procedure '${id}'`, procedure.type, artifact, problems)
 				if (!isCredentialed(row)) {
 					problems.push(`procedure '${id}' has no endpoint row`)
-				} else if (typeof handler !== 'function') {
+				} else if (bound === null) {
 					problems.push(`procedure '${id}' has no handler; add it to handlers`)
 				} else {
 					endpoints.set(id, {
@@ -472,9 +529,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 						row,
 						input: procedure.input,
 						output: procedure.output,
-						handler: (args) => Reflect.apply(handler, undefined, [args]),
-						facilities: facilitiesOf(artifact, row),
-						connect: connect.get(id),
+						handler: bound.handler,
+						facilities: siteFacilities(facilitiesOf(artifact, row), bound.declaration),
+						connect: siteConnect(connect.get(id), bound.declaration),
+						site: servedSite(procedure.type, bound.declaration),
 					})
 				}
 			}
@@ -486,9 +544,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		} else if (mount.kind === 'webhook') {
 			declared.add(name)
 			const row = rows.get(name)
-			const handler = childAt(handlers, name)
+			const bound = boundHandler(childAt(handlers, name), `webhook '${name}'`, 'mutation', artifact, problems)
 			const credential: WorkloadCredential | undefined = workloads.get(`webhook:${name}`)
-			if (row === undefined || typeof handler !== 'function') {
+			if (row === undefined || bound === null) {
 				problems.push(`webhook '${name}' has no handler; add handlers.${name}: ({ input, ctx }) => …`)
 			} else if (credential !== undefined) {
 				endpoints.set(name, {
@@ -498,8 +556,9 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					dimension: mount.boundTo,
 					actions: mount.actions,
 					input: mount.input,
-					handler: (args) => Reflect.apply(handler, undefined, [args]),
+					handler: bound.handler,
 					credential,
+					site: bound.declaration ?? undefined,
 				})
 				bindWebhookBindings(name, mount.path, rows, endpoints, () => frameworkOf(framework).webhooks)
 			}
@@ -517,6 +576,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		variables: options.environment.framework,
 		credentials: workloads,
 		mint: issuer.mint,
+		data: bound?.data ?? null,
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)
@@ -528,10 +588,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 			const at = ['exports', ...path]
 			declared.add(at.join('.'))
 			const row = rows.get(id)
-			const handler = at.reduce<unknown>(childAt, handlers)
+			const bound = boundHandler(at.reduce<unknown>(childAt, handlers), `export procedure '${id}'`, 'query', artifact, problems)
 			if (!isCredentialed(row)) {
 				problems.push(`export procedure '${id}' has no endpoint row`)
-			} else if (typeof handler !== 'function') {
+			} else if (bound === null) {
 				problems.push(`export procedure '${id}' has no handler; add it to handlers.${at.join('.')}`)
 			} else {
 				endpoints.set(id, {
@@ -539,9 +599,10 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 					row,
 					input: procedure.input,
 					output: procedure.output,
-					handler: (args) => Reflect.apply(handler, undefined, [args]),
+					handler: bound.handler,
 					facilities: NO_FACILITIES,
 					readOnly: true,
+					site: servedSite('query', bound.declaration),
 				})
 			}
 		}
@@ -552,6 +613,11 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		}
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
+	const data = bound?.data ?? null
+	const site = [...endpoints.values()].find((served) => (served.kind === 'procedure' || served.kind === 'webhook') && served.site !== undefined)
+	if (site !== undefined && data === null) {
+		problems.push(`'${site.row.id}' reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
+	}
 	const asking = [...endpoints.values()].find(asksIam)
 	if (asking !== undefined && options.membership === undefined) {
 		problems.push(
@@ -579,6 +645,7 @@ export function boot(app: ContractImplementation, options: BootOptions): Contrac
 		forms: new FormRateLimiter(),
 		mint: issuer.mint,
 		capabilities: issuer.authority,
+		data,
 	})
 	return Object.freeze({ fetch: (request: Request) => runtime.fetch(request), jobs: jobs.jobs })
 }

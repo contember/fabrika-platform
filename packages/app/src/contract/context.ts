@@ -3,7 +3,17 @@
 // so a group in any module types itself without importing `fabrika.contract.ts`.
 
 import type { RpcCaller } from '@fabrika/auth-core'
-import type { AnyDbIndex, DataKind, NoUnscoped, ReferenceTables, ScopeTarget, Unavailable, UnscopedTables, WithinTables } from '@fabrika/db/tables'
+import type {
+	AnyDbIndex,
+	DataKind,
+	NoUnscoped,
+	ReferenceTables,
+	ScopeTarget,
+	TargetForm,
+	Unavailable,
+	UnscopedTables,
+	WithinTables,
+} from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Ref, Within } from '../implement/capability'
 import type { LinkIssuing, MemberManagement } from '../implement/membership'
@@ -13,6 +23,7 @@ import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
 import type { JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
 import type { MemberAccess, Schema } from './define'
+import type { App } from './kit'
 
 export type { Unavailable } from '@fabrika/db/tables'
 
@@ -237,3 +248,17 @@ export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends
 	& { readonly refs: { readonly [A in Acts]: Ref<B, A> }; readonly delivery: WebhookDelivery }
 	& SqlContext<Of<D, 'sql'>>
 	& { readonly db: SiteData<K['index'], 'mutation', Acts, Of<D, 'unscoped'>> }
+
+type IndexOf<A> = A extends App<infer K> ? K['index'] : never
+
+/**
+ * The type of a `ctx.db` handle, for a function of `src/<slice>/queries.ts` that takes it as a parameter:
+ * `DbHandle<typeof app, 'on', 'deal', 'deals.write', 'mutation'>` is `ctx.db.target` of a mutation `on` a deal with
+ * `deals.write`, and `DbHandle<typeof app, 'over', 'org', 'crm.read'>` is `ctx.db.within` of a query `over` orgs.
+ */
+export type DbHandle<A, F extends TargetForm | 'over', D extends string, Act extends string, K extends DataKind = 'query'> = F extends TargetForm
+	? ScopeTarget<IndexOf<A>, D, Act, K, F>
+	: WithinTables<IndexOf<A>, D, Act>
+
+/** The type of `ctx.db.reference`, for a query function that takes it. */
+export type ReferenceHandle<A> = ReferenceTables<IndexOf<A>>

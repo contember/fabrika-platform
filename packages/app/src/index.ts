@@ -27,6 +27,9 @@ export {
 	UnauthorizedError,
 } from './errors.js'
 
+// ─── Rows ────────────────────────────────────────────────────────────
+export { fromRow, type RowInput } from './from-row.js'
+
 // ─── Auth contract ───────────────────────────────────────────────────
 export type { AuthContext, Scope } from '@fabrika/auth'
 

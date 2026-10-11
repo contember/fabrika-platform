@@ -1,4 +1,6 @@
-import type { DB } from '../db/schema.generated'
+import type { DbHandle } from '@fabrika/app/contract'
+import type { app } from '../app-kit'
 
 /** The deal's stage, locked until the invocation ends, through the handle the handler passes in (`ctx.db.target`). */
-export const lockedStage = async (deal: { getForUpdate(): Promise<DB['deals']> }): Promise<string> => (await deal.getForUpdate()).stage
+export const lockedStage = async (deal: DbHandle<typeof app, 'on', 'deal', 'deals.write', 'mutation'>): Promise<string> =>
+	(await deal.getForUpdate()).stage

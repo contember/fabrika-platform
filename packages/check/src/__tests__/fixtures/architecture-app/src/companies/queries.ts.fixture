@@ -1,7 +1,8 @@
-import type { DB } from '../db/schema.generated'
+import type { DbHandle } from '@fabrika/app/contract'
+import type { app } from '../app-kit'
 
 /** A company as its endpoints answer it, read through the handle the handler passes in (`ctx.db.target`). */
-export const companyOf = async (company: { get(): Promise<DB['companies']> }) => {
+export const companyOf = async (company: DbHandle<typeof app, 'on', 'company', 'crm.read'>) => {
 	const row = await company.get()
 	return { id: row.id, name: row.name, version: row.version }
 }

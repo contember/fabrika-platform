@@ -4,10 +4,11 @@
 // that stopped succeeding are reported to Operations, each under a fixed failure code.
 
 import { type ContractArtifact, type JobArtifact, type PermissionEntry, permits } from '@fabrika/auth-core'
-import { type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
+import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence, LeaseLostError } from '@fabrika/db/framework'
 import { NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
 import type { ContractDatabase } from '../implement/implement'
+import { boundTo, isSiteHandler, jobHandles, parseDeclaration, siteData, type SiteDeclaration, sqlStub } from '../implement/invocation'
 import type { WorkloadCredential } from '../implement/workload'
 import { type JobReporter, logReporter, operationsReporter, operationsTarget } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
@@ -101,6 +102,8 @@ interface BoundJob {
 	readonly timeoutMs: number
 	readonly handler: (args: { readonly ctx: object }) => unknown
 	readonly credential: WorkloadCredential
+	/** A staged-kit job's declaration: it reads through `ctx.db` and writes only in `ctx.transaction`. */
+	readonly site: SiteDeclaration | null
 }
 
 interface RunnerContext {
@@ -110,6 +113,7 @@ interface RunnerContext {
 	readonly leases: JobLeases
 	readonly reporter: JobReporter
 	readonly mint: CapabilityMint
+	readonly data: DataAccess | null
 }
 
 export interface JobBindingInput {
@@ -126,6 +130,8 @@ export interface JobBindingInput {
 	readonly credentials: ReadonlyMap<string, WorkloadCredential>
 	/** The runtime's capability mint, which `boot` alone holds. */
 	readonly mint: CapabilityMint
+	/** The mini-ORM of the bound `scoped(tables)` layer, behind a staged-kit job's `ctx.db`. */
+	readonly data: DataAccess | null
 }
 
 export interface BoundJobs {
@@ -183,12 +189,16 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		if (timeoutMs === null) {
 			problems.push(`${where} has the timeout '${artifact.timeout}', which is not a duration (allowed: '30s', '10m', '1h')`)
 		}
-		const handler = ownChild(tree, name)
+		const node = ownChild(tree, name)
+		const handler = isSiteHandler(node) ? node.handler : node
+		const site = isSiteHandler(node) ? parseDeclaration(where, node.declared, 'job', input.artifact, problems) : null
 		const credential = input.credentials.get(`job:${name}`)
 		if (typeof handler !== 'function') {
 			problems.push(`${where} has no handler; add it to handlers.jobs`)
+		} else if (site !== null && input.data === null) {
+			problems.push(`${where} reaches data through ctx.db, which runs on @fabrika/db: pass serve(contract, { database: scoped(tables) })`)
 		} else if (schedule !== null && timeoutMs !== null && credential !== undefined) {
-			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential })
+			bound.set(name, { name, artifact, schedule, timeoutMs, handler: (args) => Reflect.apply(handler, undefined, [args]), credential, site })
 		}
 	}
 	const reporter = entries.length === 0 ? logReporter : reporterOf(input.variables, problems)
@@ -201,6 +211,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		leases,
 		reporter: chosen ?? reporter,
 		mint: input.mint,
+		data: input.data,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -389,6 +400,7 @@ function jobContext(
 		runId: frame.id,
 		attempt,
 		signal,
+		...(job.site === null || context.data === null ? {} : kitJobContext(frame, context.data, job.site, principal.id)),
 		within<const Act extends string, const Dim extends string>(action: Act, dimension: Dim): Within<Dim, Act> {
 			check(action, dimension)
 			return context.mint.within(frame, dimension, action, principal.id, 'all')
@@ -406,4 +418,28 @@ function jobContext(
 			return context.mint.ref(frame, dimension, action, principal.id, id, chain)
 		},
 	})
+}
+
+/**
+ * What a staged-kit job adds: `ctx.db`, whose reads run each on its own, and `ctx.transaction(work)`, the one place it
+ * writes and runs `tx.sql` — fenced by the attempt's lease, so an attempt that timed out or lost it commits nothing.
+ */
+function kitJobContext(frame: RequestFrame, data: DataAccess, site: SiteDeclaration, principal: string): Readonly<Record<string, unknown>> {
+	const reads = jobHandles(frame, data, site, principal, 'job', async () => data.direct(), () => false)
+	return {
+		db: siteData(reads),
+		transaction: async <R>(work: (tx: object) => Promise<R>): Promise<R> => {
+			// Outside its attempt there is no lease to fence the transaction with, so it never opens.
+			boundTo(frame, () => false)()
+			return data.transaction(async (session) => {
+				let open = true
+				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
+				try {
+					return await work(Object.freeze({ db: siteData(writes), ...(site.sql === null ? {} : { sql: sqlStub() }) }))
+				} finally {
+					open = false
+				}
+			})
+		},
+	}
 }

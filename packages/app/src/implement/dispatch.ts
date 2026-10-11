@@ -25,7 +25,8 @@ import {
 	scopedValues,
 } from '@fabrika/auth-core'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES } from '@fabrika/db/capability'
-import type { FrameworkTables } from '@fabrika/db/framework'
+import type { DataAccess, FrameworkTables } from '@fabrika/db/framework'
+import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
@@ -56,6 +57,7 @@ import { connectContext, type ImportWire } from './connect'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
+import { endpointData, Invocation, siteData, type SiteDeclaration, sqlStub } from './invocation'
 import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
@@ -82,6 +84,13 @@ export interface Facilities {
 
 export const NO_FACILITIES: Facilities = Object.freeze({ members: false, links: Object.freeze([]) })
 
+/** A staged-kit site: its handler reaches data through `ctx.db`, in the invocation's transaction. */
+export interface ServedSite {
+	/** A query and an export read only, in a `READ ONLY` transaction; a mutation also writes. */
+	readonly kind: DataKind
+	readonly declaration: SiteDeclaration
+}
+
 export type ServedEndpoint =
 	| {
 		readonly kind: 'procedure'
@@ -94,6 +103,8 @@ export type ServedEndpoint =
 		readonly readOnly?: true
 		/** `ctx.connect`, for an endpoint an import's `usedBy` names. */
 		readonly connect?: readonly ImportWire[]
+		/** A staged-kit site, which gets `ctx.db`; a handler `implement` bound has none. */
+		readonly site?: ServedSite
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -118,6 +129,8 @@ export type ServedEndpoint =
 		readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
 		/** The webhook's key: its refs carry only what IAM signs for it. */
 		readonly credential: WorkloadCredential
+		/** A staged-kit webhook's declaration: its delivery runs in one transaction, through `ctx.db`. */
+		readonly site?: SiteDeclaration
 	}
 
 export interface RuntimeParts {
@@ -145,6 +158,8 @@ export interface RuntimeParts {
 	/** This runtime's capability mint, which `boot` alone holds, and the authority its stores are bound to. */
 	readonly mint: CapabilityMint
 	readonly capabilities: CapabilityAuthority
+	/** The mini-ORM of the bound `scoped(tables)` layer; `boot` refuses a site without one. */
+	readonly data: DataAccess | null
 }
 
 interface Caller {
@@ -316,32 +331,52 @@ export class ContractRuntime {
 		}
 	}
 
+	/**
+	 * A staged-kit site runs in one transaction: its statements commit after the handler returned and the output passed
+	 * validation, and roll back on a throw, a refused output or a cancelled request.
+	 */
 	async #procedure(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
 		const input = await readInput(served, request)
 		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: served.readOnly === true, endpoint: served.row.id })
-		let result: unknown
+		const site = served.site
+		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), site.kind === 'query' || served.readOnly === true)
 		try {
-			result = await runInRequest(frame, async () => {
-				const membership = this.#membershipRequest(served.row, caller, request, frame)
-				const access = await this.#access(served.row, caller, input, frame, membership)
-				const ctx = Object.freeze({
-					principal: caller.principal,
-					requestId: frame.id,
-					...access.context,
-					...this.#facilities(served.facilities, served.row, membership),
-					...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
+			let result: unknown
+			try {
+				result = await runInRequest(frame, async () => {
+					const membership = this.#membershipRequest(served.row, caller, request, frame)
+					const access = await this.#access(served.row, caller, input, frame, membership)
+					const ctx = Object.freeze({
+						principal: caller.principal,
+						requestId: frame.id,
+						...access.context,
+						...this.#facilities(served.facilities, served.row, membership),
+						...(served.connect === undefined ? {} : { connect: connectContext(served.connect, frame) }),
+						...(site === undefined || invocation === null ? {} : siteContext(served.row, site, invocation, caller.subject, access.context)),
+					})
+					return await served.handler({ input: access.input, ctx })
 				})
-				return await served.handler({ input: access.input, ctx })
-			})
+			} finally {
+				frame.end()
+			}
+			const output = z.safeParse(served.output, projectOutput(served, result))
+			if (!output.success) {
+				throw new ServerFault(`'${served.row.id}' returned a value its output schema refuses`)
+			}
+			await invocation?.commit(request.signal)
+			return jsonResponse({ result: output.data }, 200)
 		} finally {
-			frame.end()
+			await invocation?.rollback()
 		}
-		const output = z.safeParse(served.output, projectOutput(served, result))
-		if (!output.success) {
-			throw new ServerFault(`'${served.row.id}' returned a value its output schema refuses`)
+	}
+
+	#data(): DataAccess {
+		const data = this.#parts.data
+		if (data === null) {
+			throw new ServerFault('a site reaches data through ctx.db, and boot bound no @fabrika/db layer')
 		}
-		return jsonResponse({ result: output.data }, 200)
+		return data
 	}
 
 	/** The access form reads its value from the path parameter it names: `:owner` of an upload, `:fileId` of a download. */
@@ -545,26 +580,36 @@ export class ContractRuntime {
 			return jsonResponse({ result: { received: true } }, 200)
 		}
 		const frame = new RequestFrame(crypto.randomUUID())
+		const site = served.site
+		// A staged-kit delivery is one transaction; the delivery record above stays outside it, so a failure forgets it.
+		const invocation = site === undefined ? null : new Invocation(frame, this.#data(), false)
 		try {
-			await runInRequest(frame, async () => {
-				const subject = webhookSubject(binding.id)
-				const refs = Object.freeze(
-					Object.fromEntries(
-						served.actions.map((action) => [action, this.#parts.mint.ref(frame, served.dimension, action, subject, binding.scope.value, chain)]),
-					),
-				)
-				const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
-				const delivery = Object.freeze({ key })
-				await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs, delivery }) })
-			})
+			try {
+				await runInRequest(frame, async () => {
+					const subject = webhookSubject(binding.id)
+					const refs = Object.freeze(
+						Object.fromEntries(
+							served.actions.map((action) => [action, this.#parts.mint.ref(frame, served.dimension, action, subject, binding.scope.value, chain)]),
+						),
+					)
+					const principal: WebhookPrincipal = Object.freeze({ kind: 'webhook', bindingId: binding.id })
+					const delivery = Object.freeze({ key })
+					const data = site === undefined || invocation === null
+						? {}
+						: { db: siteData(invocation.handles('mutation', site, subject)), ...(site.sql === null ? {} : { sql: sqlStub() }) }
+					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs, delivery, ...data }) })
+				})
+			} finally {
+				frame.end()
+			}
+			await invocation?.commit(null)
 		} catch (error) {
+			await invocation?.rollback()
 			// The provider redelivers a failed delivery; forgetting its id lets the redelivery run.
 			// The header is GitHub's word, unsigned: it names the delivery in the log and decides nothing.
 			console.error(`fabrika: ${served.row.id}: delivery ${deliveryIdOf(request) ?? '(unnamed)'} failed; GitHub's redelivery runs it again`)
 			await tables.forgetDelivery(binding.id, key)
 			throw error
-		} finally {
-			frame.end()
 		}
 		return jsonResponse({ result: { received: true } }, 200)
 	}
@@ -593,6 +638,23 @@ export class ContractRuntime {
 			return values.length === 0 ? [] : [{ dimension: container, values }]
 		})
 	}
+}
+
+/** `ctx.db` (by the access form) and the declared `ctx.sql` of a staged-kit endpoint. */
+function siteContext(
+	row: CredentialedEndpoint,
+	site: ServedSite,
+	invocation: Invocation,
+	principal: string,
+	access: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+	const form = row.requirement.kind === 'member' ? 'member' : row.requirement.access.form
+	const db = endpointData(invocation.handles(site.kind, site.declaration, principal), form, {
+		target: access['target'],
+		within: access['within'],
+		created: access['created'],
+	})
+	return site.declaration.sql === null ? { db } : { db, sql: sqlStub() }
 }
 
 /** Whether the caller holds `action` on the value or on any container of its chain; IAM evaluates each as a flat scope. */
