@@ -635,3 +635,25 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   hard-to-read forms instead: field-selection calls, parenthesized DML targets, routine overloads (routines keyed
   by name; the signature module is deleted), `serial` and `CREATE SEQUENCE` (identity columns only), any unqualified
   `pg_…` name in DDL. It is a coarse, fail-closed defense in depth; the role (WU12, backlog 110) is the boundary.
+- **WU0, verify first.** The reviewers' minimal reproduction gives TS7022/TS2456 with `tables.ts` typed by
+  `typeof contract` and compiles clean in the vocabulary-first order. At `12e8685f`: `contract-scale` 151,698
+  instantiations, `implement-scale` 510,959 (budget 1,000,000 each).
+- **WU0, measurement.** `kit-scale.test.ts`: 200 endpoints in 10 group modules, every handler using its `ctx.db`,
+  ~333,000 instantiations — 35 % under today's `implement` over the same count.
+- **WU0, deviation: `defineTables<DB, typeof vocabulary>(vocabulary, columns)`.** `DB` stays explicit: the generated
+  column list is `as const satisfies ColumnList<DB>`, so it carries names, not column types, and TS has no partial
+  type-argument inference. Codegen is out of scope (WU5's file). The vocabulary is type-only until WU2 derives
+  containment from it; the old `defineTables<DB, Action>(columns)` form is still accepted, for WU2 to refuse.
+- **WU0, deviation: the reader reads the vocabulary form now.** The shared fixtures migrated to `src/vocabulary.ts`
+  and `defineContract(vocabulary, …)`, so `rules/literal.ts` and `reader/value.ts` know `defineVocabulary` (one call
+  reads as its object) and `reader/tables.ts` takes `(vocabulary, columns)`. WU2 and WU4 build on that.
+- **WU0, deviations in the API.** A group does not nest (a mount nests groups), so a refused endpoint is a one-line
+  error at its line. `.handle` answers `ExactReturn<F, O, Endpoint>`: the endpoint, or an `Unavailable` message the
+  group refuses at the endpoint's line (not at `.handle`, whose error would print the handler's full type). The
+  connectors are the kit's `imports` (`defineApp(vocabulary, tables, { imports })`), so `connect: ['<name>']` types
+  `ctx.connect` without the contract. Dependencies are `defineDeps(build)` → `AppDeps<D>`, read with `get()` and
+  passed to `serve(contract, { database, deps })`, since handlers are typed before `serve`. Jobs and webhooks bind a
+  capability with `ctx.db.on(ref)`, `.in(ref)`, `.over(within)`; a job writes inside `ctx.transaction((tx) => …)`.
+- **WU0, left to WU4.** A missing `.handle` fails at its line in one line, but prints the builder's type; a typo in an
+  access form also errors where the handler uses `ctx` (the form falls back to its constraint). The link mount an
+  endpoint `issues` is not checked against the contract's mounts in the types.
