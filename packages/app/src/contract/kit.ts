@@ -229,10 +229,10 @@ export interface App<K extends KitTypes> {
 export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports = Record<never, never>>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options?: { readonly imports?: Imp },
+	options?: { readonly imports: Imp },
 ): App<KitOf<V, DbIndex<DB, P>, Imp>>
-export function defineApp(vocabulary: AnyAppVocabulary, _tables: unknown, options?: { readonly imports?: KitImports }): object {
-	return runtimeApp(vocabulary, options?.imports ?? {})
+export function defineApp(vocabulary: AnyAppVocabulary, _tables: unknown, options?: { readonly imports: KitImports }): object {
+	return runtimeApp(vocabulary, options?.imports)
 }
 
 // ── The runtime ─────────────────────────────────────────────────────────────────────────────────
@@ -345,7 +345,8 @@ interface RuntimeApp {
 	contract(build: (c: RuntimeContractKit) => Surface): AnyContract
 }
 
-function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports): RuntimeApp {
+/** `imports` is what `defineApp`'s options carry; the contract has an imports section exactly when they carry one. */
+function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports | undefined): RuntimeApp {
 	return {
 		group: (options, build) => ({
 			'~kind': 'group',
@@ -405,15 +406,13 @@ function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports): RuntimeA
 			if (surface.imports !== undefined) {
 				throw new ContractError(['contract: imports come from defineApp(vocabulary, tables, { imports }); remove the section'])
 			}
-			const declared = Object.keys(imports).length === 0
-				? surface
-				: { ...surface, imports: kitImportsSection(importDeclarations(imports), surface) }
+			const declared = imports === undefined ? surface : { ...surface, imports: kitImportsSection(importDeclarations(imports), surface) }
 			const contract: AnyContract = {
 				vocabulary: { app: vocabulary.app, dimensions: vocabulary.dimensions, actions: vocabulary.actions, roles: vocabulary.roles },
 				dimensions: vocabulary.dimensions,
 				surface: declared,
 			}
-			return withSnapshots(contract, Object.fromEntries(Object.entries(imports).map(([name, imported]) => [name, imported.snapshot])))
+			return withSnapshots(contract, Object.fromEntries(Object.entries(imports ?? {}).map(([name, imported]) => [name, imported.snapshot])))
 		},
 	}
 }

@@ -813,3 +813,11 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   files under the application. `architecture-app` got `c.spa`'s `dir`/`access`, `serve` without the untyped `deps`,
   `ctx.target.value` (a `Ref` has no `id`) and its generated tests. It is a differential fixture now, evaluated by Bun,
   and its whole check is clean (`colocated.test.ts`).
+- **WU4 review round 1 — SIGNATURE CHANGE: `defineApp`'s options require `imports`** (`options?: { readonly imports:
+  Imp }`, was `imports?: Imp`). An options object whose imports may be absent inferred `Imp` from the property's type,
+  so the contract's type promised an imports section the runtime did not build. The contract now has the section
+  exactly when options are given, an empty one included, in the runtime and the reader alike
+  (`colocated-mistakes/05-imports-that-may-be-absent.ts`, `kit-runtime.test.ts`).
+- **WU4 review round 1, dependencies per boot.** `defineDeps` kept one built value, so a second `boot` of one
+  implementation replaced what an earlier runtime served with. Each handler now runs with its boot's dependencies in an
+  `AsyncLocalStorage`; two runtimes with interleaved requests each read their own.

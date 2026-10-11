@@ -109,12 +109,9 @@ class SurfaceReader {
 			throw new Refused(value.at, 'app.contract takes a builder callback', 'app.contract((c) => ({ … }))')
 		}
 		const vocabulary = this.#vocabulary(app.vocabulary)
-		const imports = this.#attempt(() => kitImports(app.options)) ?? {}
+		const imports = this.#attempt(() => kitImports(app.options)) ?? undefined
 		const surface = this.#surface(callback.result, 'kit')
-		return {
-			vocabulary,
-			surface: Object.keys(imports).length === 0 ? surface : { ...surface, imports: kitImportsSection(imports, surface) },
-		}
+		return { vocabulary, surface: imports === undefined ? surface : { ...surface, imports: kitImportsSection(imports, surface) } }
 	}
 
 	/** Runs one entry's read; a refusal is recorded and the reader goes on, so one read reports every entry. */
@@ -659,16 +656,15 @@ interface ReadGroup {
 const sameCallers = (left: readonly string[], right: readonly string[]): boolean =>
 	left.length === right.length && left.every((caller, index) => caller === right[index])
 
-/** The kit's imports from `defineApp`'s options: each snapshot's identity, the procedures it calls, its deadline. */
-function kitImports(options: LiteralValue | undefined): Record<string, KitImportDeclaration> {
+/**
+ * The kit's imports from `defineApp`'s options: each snapshot's identity, the procedures it calls, its deadline;
+ * `undefined` without options, where the contract has no imports section.
+ */
+function kitImports(options: LiteralValue | undefined): Record<string, KitImportDeclaration> | undefined {
 	if (options === undefined) {
-		return {}
+		return undefined
 	}
-	const fields = strictFields(options, "defineApp's options", [], ['imports'])
-	const imports = fields.get('imports')
-	if (imports === undefined) {
-		return {}
-	}
+	const imports = strictFields(options, "defineApp's options", ['imports'], []).get('imports')
 	return Object.fromEntries([...entries(imports, options, 'imports')].map(([name, value]) => {
 		const where = `import '${name}'`
 		const declaration = strictFields(value, where, ['snapshot', 'procedures'], ['timeoutMs'])

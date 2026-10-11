@@ -10,8 +10,12 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'02-target-on-over.ts': 'an over endpoint holds ctx.within, the scopes it may list in: declare access with on or in for ctx.target',
 	'03-principal-of-another-caller.ts': `Type '"service"' is not assignable to type '"user"'`,
 	'04-job-ref-of-an-undeclared-action.ts': `Argument of type '"crm.delete"' is not assignable to parameter of type '"crm.read"'`,
+	'05-imports-that-may-be-absent.ts': "Type 'undefined' is not assignable to type 'KitImports'",
 }
 
+/** The compiler elaborates an options object through its property types, so this one is held to its line and text. */
+const ELABORATED = ['05-imports-that-may-be-absent.ts']
+
 describe('the colocated mistakes are type errors at their line', () => {
-	expectMistakes(join(import.meta.dir, 'colocated-mistakes'), EXPECTED, { plain: true })
+	expectMistakes(join(import.meta.dir, 'colocated-mistakes'), EXPECTED, { plain: true, elaborated: ELABORATED })
 })

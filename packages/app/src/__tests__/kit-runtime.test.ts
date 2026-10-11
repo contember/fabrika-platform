@@ -2,7 +2,7 @@
 // imports' `usedBy` from the endpoints' `connect`, and `serve` hands `boot` the handler beside each endpoint, with what
 // the site declares, and the dependencies `defineDeps` builds at boot.
 
-import { compileContract, ContractError, defineApp } from '@fabrika/app/contract'
+import { compileContract, ContractError, defineApp, type KitImport } from '@fabrika/app/contract'
 import { type ContractDatabase, defineDeps, serve } from '@fabrika/app/implement'
 import { tablePolicies } from '@fabrika/db/tables'
 import { describe, expect, test } from 'bun:test'
@@ -85,6 +85,13 @@ describe("the kit's builders", () => {
 			'api.deals.share': { sql: null, unscoped: {}, connect: [], issues: 'shared' },
 			'job:close': { sql: 'write', unscoped: {}, connect: [], issues: null },
 		})
+	})
+
+	test('a kit given imports has an imports section, as its type says, even when they name none', () => {
+		const none: Readonly<Record<string, KitImport>> = {}
+		const contract = defineApp(vocabulary, tables, { imports: none }).contract((c) => ({ health: c.health('/healthz') }))
+		expect(contract.surface.imports).toEqual({})
+		expect('imports' in plainApp.contract((c) => ({ health: c.health('/healthz') })).surface).toBe(false)
 	})
 
 	test('a contract whose sites declare nothing has no declared section, so its digest is the one it had', () => {
