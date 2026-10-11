@@ -34,6 +34,9 @@ type Scope = ReadonlyMap<string, Kit>
 /** Where a callback may stand, as `rules/literal.ts` allows it: `defineContract`'s second argument, a link's `procedures`. */
 type Role = { readonly callback: Kit } | { readonly linkOptions: true } | null
 
+/** The fields `defineVocabulary` copies from its argument, in its order. */
+const VOCABULARY_SECTIONS = ['app', 'dimensions', 'actions', 'roles'] as const
+
 const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'
 
 export class ValueReader {
@@ -292,16 +295,26 @@ export class ValueReader {
 		return args === null ? null : { kind: 'builder', kit, name, args, at: located }
 	}
 
-	/** `defineVocabulary({ … })` returns its argument's fields, so the reader reads the argument. */
+	/**
+	 * `defineVocabulary({ … })` returns the object's `app`, `dimensions`, `actions` and `roles`, and nothing else, so the
+	 * reader reads that projection of an object literal and refuses any other argument.
+	 */
 	#vocabularyCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
 		const [call] = links
 		const args = call?.kind === 'call' && links.length === 1 ? this.#arguments(located.module, call.node, scope, () => null) : null
 		const [vocabulary] = args ?? []
-		if (args === null || args.length !== 1 || vocabulary === undefined) {
+		if (args === null || args.length !== 1 || vocabulary?.kind !== 'object') {
 			this.#problems.add(located, 'defineVocabulary used other than as one call of one object', 'defineVocabulary({ app, dimensions, actions, roles })')
 			return null
 		}
-		return vocabulary
+		const entries = new Map<string, LiteralValue>()
+		for (const section of VOCABULARY_SECTIONS) {
+			const entry = vocabulary.entries.get(section)
+			if (entry !== undefined) {
+				entries.set(section, entry)
+			}
+		}
+		return { kind: 'object', entries, at: vocabulary.at }
 	}
 
 	#contractCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {

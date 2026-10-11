@@ -146,11 +146,12 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
 - **Builders:** `z` (named, renamed or namespace) from `zod/v4`, its members written with a dot (`z['string']` is
   refused); `defineContract` from `@fabrika/app/contract`, called once
   as `defineContract(vocabulary, (c) => ({ … }))`; `defineVocabulary` from `@fabrika/app/contract`, called once with
-  one object (`src/vocabulary.ts`), which reads as that object; `defineTables` from `@fabrika/db` or
+  one object literal (`src/vocabulary.ts`), which reads as its `app`, `dimensions`, `actions` and `roles`, as the runtime
+  copies them; `defineTables` from `@fabrika/db` or
   `@fabrika/db/tables`, as `defineTables(vocabulary, columns)({ … })` (the first argument an object with the
   vocabulary's four sections) or `defineTables<DB, Action>(columns)({ … })`, with `columns` imported from the
-  generated `src/db/schema.generated.ts`. The vocabulary is read as a literal; the policies still state their
-  containment.
+  generated `src/db/schema.generated.ts`. The vocabulary reaches `readTables`, so a policy that omits or contradicts
+  the vocabulary's containment is refused as `defineTables` refuses it.
 - **Functions:** an inline arrow with one parameter and an expression body, only as the second argument of
   `defineContract` and as `procedures` in the options of `c.link(path, { … })`. Its parameter is used only as
   `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `form`, `webhook`, `files`, `cron`, `export`.

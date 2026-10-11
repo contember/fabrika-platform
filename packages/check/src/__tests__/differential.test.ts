@@ -213,6 +213,20 @@ describe('the reader refuses what the runtime cannot evaluate', () => {
 		})
 	}
 
+	test('defineVocabulary of a schema, a string or an array is refused: the runtime returns only its four fields', () => {
+		const header = "import { defineContract, defineVocabulary } from '@fabrika/app/contract'\nimport { z } from 'zod/v4'\n"
+		const vocabulary = "{ app: 'crm', dimensions: {}, actions: { 'crm.read': 'Read' }, roles: { viewer: { grants: ['crm.read'] } } }"
+		for (const argument of ['z.strictObject({ ok: z.boolean() })', "'crm'", "['crm']"]) {
+			const source = `${header}export const contract = defineContract(${vocabulary}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, { read: c.query({ output: defineVocabulary(${argument}), access: { member: true } }) }),
+}))
+`
+			expect(firstRefusal(new Map([['fabrika.contract.ts', source]]), {})).toBe(
+				'fabrika.contract.ts:4:71 defineVocabulary used other than as one call of one object',
+			)
+		}
+	})
+
 	test('the parser spike sample contract fails with its literal findings', () => {
 		const files = readTree(join(import.meta.dir, 'fixtures', 'spike-contract'), '.fixture')
 		let findings: readonly string[] = []
@@ -362,18 +376,26 @@ describe('paired cases: the reader agrees with Bun, or refuses where Bun would r
 
 // The staged kit's cases, over `@fabrika/app`'s `src/__tests__/kit-fixture/`. Skeletons until the sprint's units land:
 // WU2 owns the table cases, WU4 the slice cases (docs/sprints/sprint-2026-10-11-paved-road-framework.md).
+/** The body of a skeleton case: a later unit replaces it, so it fails until then (`bun test --todo`). */
+const filledBy = (unit: string) => (): void => {
+	throw new Error(`this case is ${unit}'s to fill`)
+}
+
 describe('the staged kit: read from source and evaluated agree', () => {
 	describe('tables derived from the vocabulary (WU2)', () => {
-		test.todo('a container column on the <container>_id convention reads the same as the evaluated defineTables')
-		test.todo('a child table whose chain comes from the vocabulary reads the same')
-		test.todo('in: { column } off the convention reads the same')
-		test.todo('the reader refuses the form that names the action union by hand, as the runtime does')
+		test.todo('a container column on the <container>_id convention reads the same as the evaluated defineTables', filledBy('WU2'))
+		test.todo('a child table whose chain comes from the vocabulary reads the same', filledBy('WU2'))
+		test.todo('in: { column } off the convention reads the same', filledBy('WU2'))
+		test.todo('the reader refuses the form that names the action union by hand, as the runtime does', filledBy('WU2'))
 	})
 	describe("the reader's slice of shell modules (WU4)", () => {
-		test.todo('a contract of groups in other modules, each endpoint with .handle beside it, reads the same artifact as the evaluated modules')
-		test.todo('a module only handlers import is never requested from the commit and never evaluated')
-		test.todo('the declared sql, unscoped, connect and issues reach the artifact the same from source and evaluated')
-		test.todo('a link mount, a webhook, a cron job and an export of the kit read the same')
+		test.todo(
+			'a contract of groups in other modules, each endpoint with .handle beside it, reads the same artifact as the evaluated modules',
+			filledBy('WU4'),
+		)
+		test.todo('a module only handlers import is never requested from the commit and never evaluated', filledBy('WU4'))
+		test.todo('the declared sql, unscoped, connect and issues reach the artifact the same from source and evaluated', filledBy('WU4'))
+		test.todo('a link mount, a webhook, a cron job and an export of the kit read the same', filledBy('WU4'))
 	})
 })
 

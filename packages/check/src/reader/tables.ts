@@ -53,8 +53,12 @@ export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): T
 		)
 		return null
 	}
+	const plainVocabulary = vocabulary === undefined ? undefined : plainOf(vocabulary, problems)
+	if (vocabulary !== undefined && plainVocabulary === undefined) {
+		return null
+	}
 	try {
-		return tablePolicies(readTables(plainColumns, plainPolicies))
+		return tablePolicies(readTables(plainColumns, plainPolicies, plainVocabulary))
 	} catch (error) {
 		if (!(error instanceof PolicyError)) {
 			throw error
