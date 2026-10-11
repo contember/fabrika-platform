@@ -200,4 +200,15 @@ describe('forms whose meaning the artifact cannot keep', () => {
 			"schema: the discriminator 'kind' has a default (allowed: a required literal in every option)",
 		])
 	})
+
+	test('a default hidden under another wrapper of the discriminator is refused too', () => {
+		const options = [z.strictObject({ kind: z.literal('a').default('a').nullable() }), z.strictObject({ kind: z.literal('b') })] as const
+		const item = (schema: z.core.$ZodType) => z.strictObject({ item: schema })
+		expect(item(z.discriminatedUnion('kind', [...options])).safeParse({ item: {} }).success).toBe(false)
+		expect(item(z.union([...options])).safeParse({ item: {} }).success).toBe(true)
+		const refused = "schema.item: the discriminator 'kind' has a default (allowed: a required literal in every option)"
+		expect(refusal(item(z.discriminatedUnion('kind', [...options])))).toEqual([refused])
+		const optional = [z.strictObject({ kind: z.literal('a').nullable().default(null).optional() }), z.strictObject({ kind: z.literal('b') })] as const
+		expect(refusal(item(z.discriminatedUnion('kind', [...optional])))).toEqual([refused])
+	})
 })

@@ -242,6 +242,12 @@ describe('classifyAccess compares input domains', () => {
 		])
 	})
 
+	test('a discriminated union whose discriminator hides a default is refused: as a plain union it would admit `{}`', () => {
+		const options = `[z.strictObject({ kind: z.literal('a').default('a').nullable() }), z.strictObject({ kind: z.literal('b') })]`
+		expect(() => removeInput(`item: z.discriminatedUnion('kind', ${options})`)).toThrow(ContractError)
+		expect(removeInput(`item: z.union(${options})`).contract).not.toBeNull()
+	})
+
 	test('an unchanged input is unchanged', () => {
 		expect(inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['won', 'lead'])`).forward).toEqual({ outcome: 'unchanged', changes: [] })
 	})

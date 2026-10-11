@@ -226,17 +226,29 @@ function admitsItsDefault(schema: z.core.$ZodDefault, where: string, problems: P
 	return false
 }
 
-/** A discriminator with a default lets a value without it match an option, which the artifact's union cannot say. */
+/**
+ * A discriminator with a default lets a value without it match an option, which the artifact's union cannot say. The
+ * default may sit under `.nullable()` or `.optional()`, so every wrapper is looked through.
+ */
 function hasRequiredDiscriminator(schema: z.core.$ZodDiscriminatedUnion, where: string, problems: Problems): boolean {
 	const discriminator = schema._zod.def.discriminator
 	for (const option of schema._zod.def.options) {
 		const field = option instanceof z.core.$ZodObject ? option._zod.def.shape[discriminator] : undefined
-		if (field instanceof z.core.$ZodDefault) {
+		if (field !== undefined && hasDefault(field)) {
 			problems.add(where, `the discriminator '${discriminator}' has a default (allowed: a required literal in every option)`)
 			return false
 		}
 	}
 	return true
+}
+
+function hasDefault(schema: z.core.$ZodType): boolean {
+	let wrapper = schema
+	for (;;) {
+		if (wrapper instanceof z.core.$ZodDefault) return true
+		if (!(wrapper instanceof z.core.$ZodOptional || wrapper instanceof z.core.$ZodNullable)) return false
+		wrapper = wrapper._zod.def.innerType
+	}
 }
 
 type LengthCheck = z.core.$ZodCheckMinLength | z.core.$ZodCheckMaxLength | z.core.$ZodCheckLengthEquals
