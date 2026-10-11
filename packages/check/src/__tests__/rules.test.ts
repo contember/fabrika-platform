@@ -157,7 +157,42 @@ const cases: readonly RuleCase[] = [
 				"import { sql } from '@fabrika/db'\n\nexport const all = sql`select * from notes`\nexport const raw = sql.raw('drop table notes')\n",
 		},
 		expected: ['src/db/stores/notes.ts:1:10', 'src/db/stores/notes.ts:3:20', 'src/db/stores/notes.ts:4:20'],
-		good: { 'src/db/stores/notes.ts': "export const sqlName = 'notes'\nexport const list = (store: { list(): string[] }) => store.list()\n" },
+		good: {
+			'src/db/stores/notes.ts': "export const sqlName = 'notes'\nexport const list = (store: { list(): string[] }) => store.list()\n",
+			'src/deals/endpoints.ts': [
+				'type Tag = (row: unknown) => (text: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>',
+				'declare const r: { query(options: object): { handle(handler: (args: { ctx: { sql: Tag } }) => unknown): unknown } }',
+				'declare const Row: unknown',
+				"export const pipeline = r.query({ sql: 'read' }).handle(async ({ ctx }) => ctx.sql(Row)`select stage from deals where org_id = ${'o1'}`)",
+				'',
+			].join('\n'),
+		},
+	},
+	{
+		rule: 'sql-undeclared',
+		bad: {
+			'src/deals/endpoints.ts': [
+				'type Tag = (row: unknown) => (text: TemplateStringsArray) => Promise<unknown[]>',
+				'type Handler = (args: { ctx: { sql: Tag; transaction(work: (tx: { sql: Tag }) => unknown): unknown } }) => unknown',
+				'declare const r: { query(options: object): { handle(handler: Handler): unknown }; cron(at: string, options: object): { handle(handler: Handler): unknown } }',
+				'declare const Row: unknown',
+				'export const group = {',
+				'\tpipeline: r.query({ access: {} }).handle(async ({ ctx }) => ctx.sql(Row)`select 1`),',
+				"\tclose: r.cron('0 3 * * *', { actions: [] }).handle(async ({ ctx }) => ctx.transaction((tx) => tx.sql(Row)`select 1`)),",
+				'}',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/deals/endpoints.ts:6:62', 'src/deals/endpoints.ts:7:96'],
+		good: {
+			'src/deals/endpoints.ts': [
+				'type Tag = (row: unknown) => (text: TemplateStringsArray) => Promise<unknown[]>',
+				'declare const r: { mutation(options: object): { handle(handler: (args: { ctx: { sql: Tag } }) => unknown): unknown } }',
+				'declare const Row: unknown',
+				"export const reopen = r.mutation({ access: {}, sql: 'write' }).handle(async ({ ctx }) => ctx.sql(Row)`select 1`)",
+				'',
+			].join('\n'),
+		},
 	},
 	{
 		rule: 'type-assertion',
@@ -565,6 +600,27 @@ describe('every rule has a refused and an allowed fixture', () => {
 			expect(await check(item.good)).toEqual([])
 		})
 	}
+})
+
+describe('sql-undeclared', () => {
+	test('is a hint that names the site and the declaration to add', async () => {
+		const findings = await check({
+			'src/deals/endpoints.ts': [
+				'type Tag = (row: unknown) => (text: TemplateStringsArray) => Promise<unknown[]>',
+				'declare const r: { mutation(options: object): { handle(handler: (args: { ctx: { sql: Tag } }) => unknown): unknown } }',
+				'declare const Row: unknown',
+				'export const deals = { reopen: r.mutation({ access: {} }).handle(async ({ ctx }) => ctx.sql(Row)`select 1`) }',
+				'',
+			].join('\n'),
+		})
+		expect(findings.filter((finding) => finding.rule === 'sql-undeclared')).toEqual([
+			expect.objectContaining({
+				severity: 'hint',
+				message: "ctx.sql in the handler of 'reopen', whose options declare no sql",
+				allowed: "sql: 'read' in the options of 'reopen', or sql: 'write' to write",
+			}),
+		])
+	})
 })
 
 describe('generated tests', () => {

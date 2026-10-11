@@ -38,8 +38,11 @@ export const REFUSAL_RULE_IDS = [
 	'generated-test-import',
 ] as const
 
-/** Rules that report a step out of the application architecture; their findings never fail the check. */
-export const HINT_RULE_IDS = ['logic-data-access', 'cross-slice-queries', 'handler-location', 'data-access-location'] as const
+/** Rules that report a step out of the application architecture. */
+export const STRUCTURE_HINT_RULE_IDS = ['logic-data-access', 'cross-slice-queries', 'handler-location', 'data-access-location'] as const
+
+/** Rules whose findings never fail the check: the architecture's, and a `ctx.sql` its site does not declare. */
+export const HINT_RULE_IDS = [...STRUCTURE_HINT_RULE_IDS, 'sql-undeclared'] as const
 
 export const RULE_IDS = [...REFUSAL_RULE_IDS, ...HINT_RULE_IDS] as const
 

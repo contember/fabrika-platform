@@ -1,6 +1,6 @@
 import { isBuiltin } from 'node:module'
 import { type AstNode, child, identifierName, staticKey } from '../ast'
-import { HINT_RULE_IDS, type Report } from '../finding'
+import { type Report, STRUCTURE_HINT_RULE_IDS } from '../finding'
 import {
 	CONTRACT_FILE,
 	DATABASE_DIR,
@@ -21,7 +21,7 @@ import { isTestKit } from './modules'
 import { isGeneratedTestPath } from './tests'
 
 /** The rules of the application architecture (docs/reference/application-architecture.md): three refusals and the hints. */
-export const STRUCTURE_RULE_IDS = ['spa-server-import', 'layer-import', 'generated-test-import', ...HINT_RULE_IDS] as const
+export const STRUCTURE_RULE_IDS = ['spa-server-import', 'layer-import', 'generated-test-import', ...STRUCTURE_HINT_RULE_IDS] as const
 
 type SlicePart = 'endpoints' | 'logic' | 'queries'
 
@@ -212,16 +212,25 @@ export const checkStructureReferences = (graph: StructureGraph, place: Structure
 /** The builders whose procedure takes a handler: `r.query(…).handle(…)`. */
 const PROCEDURE_BUILDERS: ReadonlySet<string> = new Set(['query', 'mutation', 'cron', 'webhook', 'export'])
 
-/** `.handle` of `<x>.<builder>(…).handle(…)`: the property node, where a finding points. */
-const handlerProperty = (node: AstNode): AstNode | undefined => {
+/** A `<x>.<builder>(…).handle(…)` call: the builder's name, its call (whose arguments hold the options) and `.handle`. */
+export interface HandledProcedure {
+	readonly builder: string
+	readonly procedure: AstNode
+	/** The `handle` property node, where a finding points. */
+	readonly handle: AstNode
+}
+
+/** The procedure `node` hands a handler to, when `node` is `<x>.<builder>(…).handle(…)`. */
+export const handledProcedure = (node: AstNode): HandledProcedure | undefined => {
 	if (node.type !== 'CallExpression') return undefined
 	const callee = child(node, 'callee')
 	if (callee?.type !== 'MemberExpression' || staticKey(callee, 'property') !== 'handle') return undefined
 	const procedure = child(callee, 'object')
 	const builder = procedure?.type === 'CallExpression' ? child(procedure, 'callee') : undefined
-	if (builder?.type !== 'MemberExpression') return undefined
+	if (procedure === undefined || builder?.type !== 'MemberExpression') return undefined
 	const name = staticKey(builder, 'property')
-	return name !== undefined && PROCEDURE_BUILDERS.has(name) ? child(callee, 'property') : undefined
+	const handle = child(callee, 'property')
+	return name !== undefined && PROCEDURE_BUILDERS.has(name) && handle !== undefined ? { builder: name, procedure, handle } : undefined
 }
 
 /** `ctx.db` or `ctx.sql`: the handles a handler reaches data through. */
@@ -234,7 +243,7 @@ const dataAccess = (node: AstNode): string | undefined => {
 /** The architecture's hints at one node: a handler outside `endpoints.ts`, data access outside `endpoints.ts`/`queries.ts`. */
 export const checkStructureNode = (place: StructurePlace, node: AstNode, report: Report): void => {
 	if (place.exempt) return
-	const handle = handlerProperty(node)
+	const handle = handledProcedure(node)?.handle
 	if (handle !== undefined && place.part !== 'endpoints') {
 		report(
 			handle,

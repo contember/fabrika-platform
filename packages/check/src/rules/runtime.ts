@@ -15,6 +15,7 @@ import {
 import type { Report } from '../finding'
 import { isRequire } from '../references'
 import { FORBIDDEN_BUN_MEMBERS } from './modules'
+import { handledProcedure } from './structure'
 
 export interface SourceContext {
 	readonly report: Report
@@ -298,6 +299,42 @@ const checkMember = (node: AstNode, parent: AstNode | undefined, context: Source
 	}
 }
 
+/** The site's options: the last object literal its builder takes (`r.query({ … })`, `c.cron('…', { … })`). */
+const procedureOptions = (procedure: AstNode): AstNode | undefined => {
+	const last = children(procedure, 'arguments').at(-1)
+	return last === null || last === undefined || unwrap(last).type !== 'ObjectExpression' ? undefined : unwrap(last)
+}
+
+/** Whether the options declare `sql`; a spread may hold it, so it counts as declaring. */
+const declaresSql = (options: AstNode): boolean =>
+	children(options, 'properties').some((property) => property === null || property.type === 'SpreadElement' || staticKey(property, 'key') === 'sql')
+
+/**
+ * `ctx.sql` (or a job's `tx.sql`) in a `.handle(…)` whose options declare no `sql`: the runtime builds no `ctx.sql`
+ * there. A hint, not the boundary: a destructured `ctx` or a helper escapes it, and the runtime refuses anyway.
+ */
+const checkUndeclaredSql = (node: AstNode, ancestors: readonly AstNode[], context: SourceContext): void => {
+	const handle = identifierName(child(node, 'object'))
+	if (staticKey(node, 'property') !== 'sql' || (handle !== 'ctx' && handle !== 'tx')) return
+	for (let index = ancestors.length - 1; index >= 0; index--) {
+		const site = handledProcedure(ancestors[index] ?? node)
+		if (site === undefined) continue
+		const options = procedureOptions(site.procedure)
+		if (options === undefined || declaresSql(options)) return
+		const holder = ancestors[index - 1]
+		const name = holder?.type === 'Property' ? staticKey(holder, 'key') : undefined
+		const where = name === undefined ? `this ${site.builder}` : `'${name}'`
+		const reads = site.builder === 'query' || site.builder === 'export'
+		context.report(
+			node,
+			'sql-undeclared',
+			`${handle}.sql in the handler of ${where}, whose options declare no sql`,
+			reads ? `sql: 'read' in the options of ${where}` : `sql: 'read' in the options of ${where}, or sql: 'write' to write`,
+		)
+		return
+	}
+}
+
 const checkIdentifier = (node: AstNode, parent: AstNode | undefined, context: SourceContext): void => {
 	if (!isValueReference(node, parent)) return
 	const name = stringField(node, 'name')
@@ -358,6 +395,7 @@ export const checkRuntimeNode = (node: AstNode, ancestors: readonly AstNode[], c
 		case 'ImportExpression':
 			return checkComputedLoad(node, context)
 		case 'MemberExpression':
+			checkUndeclaredSql(node, ancestors, context)
 			return checkMember(node, parent, context)
 		case 'Identifier':
 			return checkIdentifier(node, parent, context)
