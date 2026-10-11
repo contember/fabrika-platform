@@ -22,7 +22,7 @@ function validateRoles(roles: ApplicationDatabaseRoles): void {
 	}
 }
 
-function provisioningCredential(provisioningUrl: string): { readonly url: URL; readonly password: string } {
+export function provisioningCredential(provisioningUrl: string): { readonly url: URL; readonly password: string } {
 	let url: URL
 	try {
 		url = new URL(provisioningUrl)
@@ -42,7 +42,7 @@ function derivedPassword(provisioningPassword: string, role: string): string {
 }
 
 /** Postgres' SCRAM-SHA-256 verifier (RFC 7677): the password itself never reaches the server, so no statement log holds it. */
-function scramVerifier(password: string): string {
+export function scramVerifier(password: string): string {
 	const salt = randomBytes(16)
 	const salted = pbkdf2Sync(password, salt, SCRAM_ITERATIONS, 32, 'sha256')
 	const storedKey = createHash('sha256').update(createHmac('sha256', salted).update('Client Key').digest()).digest()
@@ -216,7 +216,7 @@ async function verifyForeignReach(admin: SqlDatabase, roles: ApplicationDatabase
 	}
 }
 
-const quotedIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`
+export const quotedIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`
 
 /**
  * Drops the schema and both roles: for throwaway test databases only. The schema is dropped as its owner, which a

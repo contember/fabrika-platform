@@ -14,6 +14,7 @@ import {
 } from '../application-postgres-migrations.js'
 import { postgresRoleUrl } from '../application-postgres-roles.js'
 import type { PostgresMigration } from '../postgres-migrations.js'
+import { createTestProvisioner } from '../postgres-test-provisioner.js'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
 
 if (!hasPostgres) console.warn(`application-postgres-roles.test.ts ${skipReason}`)
@@ -363,6 +364,37 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 				await sql.unsafe(`DROP ROLE ${name}`)
 			})
 		}
+	})
+
+	test('a throwaway test provisioner creates role families, reaches no application, and drops what it left behind', async () => {
+		const liveId = `roles-${hex()}`
+		const live = definePostgresApplicationMigrations({ appId: liveId, directory: '/unused' })
+		await live.migrate(superuserUrl, NOTES)
+		const provisioner = await createTestProvisioner(superuserUrl)
+		const abandoned = definePostgresApplicationMigrations({ appId: `test-${hex()}`, directory: '/unused' })
+		try {
+			expect(new URL(provisioner.url).username).toMatch(/^fabrika_tests_[0-9a-f]{16}$/)
+			await abandoned.migrate(provisioner.url, NOTES)
+			expect(await refusal(provisioner.url, `SELECT * FROM ${live.schema}.notes`)).toContain(`permission denied for schema ${live.schema}`)
+			expect(await refusal(provisioner.url, `ALTER ROLE ${live.roles.runtime} PASSWORD 'x'`)).toContain('permission denied to alter role')
+			expect(await refusal(provisioner.url, `GRANT pg_execute_server_program TO ${abandoned.roles.runtime}`)).toContain(
+				'permission denied to grant role',
+			)
+		} finally {
+			await provisioner.drop()
+			await dropApplicationDatabase(superuserUrl, liveId)
+		}
+		const left = await as(
+			superuserUrl,
+			(sql) =>
+				sql.unsafe('SELECT rolname FROM pg_roles WHERE rolname IN ($1, $2, $3) UNION ALL SELECT nspname FROM pg_namespace WHERE nspname = $4', [
+					new URL(provisioner.url).username,
+					abandoned.roles.migration,
+					abandoned.roles.runtime,
+					abandoned.schema,
+				]),
+		)
+		expect([...left]).toEqual([])
 	})
 
 	test('a provisioning credential without a password is refused before it connects', async () => {

@@ -11,12 +11,14 @@ import {
 import { CodegenError, generateSchema, SCHEMA_FILE } from '@fabrika/db/codegen'
 import { FRAMEWORK_MIGRATION_BUNDLE, FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import {
+	createTestProvisioner,
 	DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 	DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 	definePostgresApplicationMigrations,
 	type PostgresApplicationMigrations,
 	PostgresMigrationError,
 	postgresMigrationResultMessage,
+	type TestProvisioner,
 } from '@fabrika/platform-node'
 import { SQL } from 'bun'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -46,7 +48,8 @@ transaction with lock_timeout ${DEFAULT_MIGRATION_LOCK_TIMEOUT_MS} ms and statem
 file that already ran has changed: an applied migration is immutable, so a change is a new file.
 \`test-scaffold\` reads fabrika.contract.ts and src/db/tables.ts as the checker does, rewrites every generated test and
 deletes a generated one the scaffold no longer writes; @fabrika/check refuses one that is missing, edited or stale.
-\`test-isolation\` is the platform's run of them: it reads FABRIKA_APP_DATABASE_URL, ignores the application's
+\`test-isolation\` is the platform's run of them: with FABRIKA_APP_DATABASE_URL it creates a throwaway provisioner
+(CREATEROLE, CREATE on the database, nothing of any application) that the tests get instead, ignores the application's
 bunfig.toml, and checks the JUnit report against the case names the scaffold wrote.
 `
 
@@ -179,7 +182,10 @@ const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies
 	}
 }
 
-/** Only what Bun needs to run; the URL arrives as the kit's own variable, and no framework variable is passed on. */
+/**
+ * Only what Bun needs to run; the URL arrives as the kit's own variable, and no framework variable is passed on. It is
+ * a throwaway provisioner's, never FABRIKA_APP_DATABASE_URL: the generated tests load application code.
+ */
 const testEnvironment = (source: DbCommandDependencies['source'], url: string): Record<string, string> => {
 	const environment: Record<string, string> = { FABRIKA_TEST_POSTGRES_URL: url, FABRIKA_TEST_POSTGRES_REQUIRED: '1' }
 	for (const name of ['PATH', 'HOME', 'TMPDIR']) {
@@ -212,6 +218,12 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 		deps.write('no generated tests\n')
 		return
 	}
+	let provisioner: TestProvisioner
+	try {
+		provisioner = await createTestProvisioner(url)
+	} catch (error) {
+		throw reportable(error)
+	}
 	const scratch = await mkdtemp(join(tmpdir(), 'fabrika-test-isolation-'))
 	try {
 		await writeFile(join(scratch, 'bunfig.toml'), '')
@@ -226,7 +238,7 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 				'--reporter=junit',
 				`--reporter-outfile=${report}`,
 			],
-			{ cwd: deps.cwd, env: testEnvironment(deps.source, url), stdout: 'pipe', stderr: 'pipe' },
+			{ cwd: deps.cwd, env: testEnvironment(deps.source, provisioner.url), stdout: 'pipe', stderr: 'pipe' },
 		)
 		const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
 		if (verbose) deps.write(`${stdout}${stderr}\n`)
@@ -256,6 +268,9 @@ const testIsolation = async (argv: readonly string[], deps: DbCommandDependencie
 		deps.write(`${total} generated cases passed\n`)
 	} finally {
 		await rm(scratch, { recursive: true, force: true })
+		await provisioner.drop().catch((error: unknown) => {
+			throw reportable(error)
+		})
 	}
 }
 

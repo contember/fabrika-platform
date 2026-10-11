@@ -157,8 +157,11 @@ function ownerOf(models: TableModels, dimension: string): TableModel | undefined
 /** The throwaway schemas, `app_test_<16 hex>`, and their roles `app_test_<16 hex>` and `run_test_<16 hex>`; nothing else is ever reclaimed. */
 const TEST_SCHEMA = /^app_test_[0-9a-f]{16}$/
 const TEST_ROLE = /^(?:app|run)_(test_[0-9a-f]{16})$/
-/** `DROP ROLE` of a role that still owns something, in another database of the cluster. */
-const DEPENDENT_OBJECTS = '2BP01'
+/**
+ * Why an abandoned family is left alone: `DROP ROLE` of a role that still owns something in another database of the
+ * cluster, and a family another provisioner created (a `test-isolation` run's), which only it administers.
+ */
+const LEFT_TO_ITS_OWNER: ReadonlySet<unknown> = new Set(['2BP01', '42501'])
 
 /** The session-level advisory lock that holds a throwaway schema: the first 48 bits of SHA-256 of its name, plus one. */
 function schemaLockKey(schema: string): string {
@@ -176,7 +179,8 @@ const lockRows = z.array(z.object({ locked: z.boolean() }))
 /**
  * Drops every throwaway schema and role family whose lock can be taken: its run ended without `close` (a crash, a
  * kill). A schema whose lock is held belongs to a live run, perhaps in another process, and is never touched. Roles are
- * the cluster's, so a family whose schema lives in another database is left to that database's next run.
+ * the cluster's, so a family whose schema lives in another database, or that another provisioner created, is left to
+ * whoever can drop it.
  */
 async function reclaimAbandonedSchemas(lock: ReservedSQL, admin: SQL, url: string): Promise<void> {
 	const found = nameRows.parse(
@@ -197,7 +201,7 @@ async function reclaimAbandonedSchemas(lock: ReservedSQL, admin: SQL, url: strin
 		try {
 			await dropApplicationDatabase(url, testAppId(schema))
 		} catch (error) {
-			if (!(error instanceof SQL.PostgresError && error.errno === DEPENDENT_OBJECTS)) throw error
+			if (!(error instanceof SQL.PostgresError && LEFT_TO_ITS_OWNER.has(error.errno))) throw error
 		} finally {
 			await lock.unsafe('SELECT pg_advisory_unlock($1::bigint)', [key])
 		}

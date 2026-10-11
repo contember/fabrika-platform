@@ -9,6 +9,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from 'zod/v4'
 import { runCli } from '..'
 import { type DbCommandDependencies, runDbCommand } from '../db'
 import { readJunitCases } from '../junit'
@@ -373,6 +374,28 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			const verbose = await failure(testIsolation(['--verbose']))
 			expect(verbose).toContain('db test-isolation:')
 		})
+	})
+
+	test('the generated tests load application code, so they get a throwaway provisioner, never the provisioning credential', async () => {
+		const seen = join(appRoot(), 'environment.json')
+		const recording = (source: string): string =>
+			`import { readFileSync as readEnvironment, writeFileSync as writeEnvironment } from 'node:fs'\n${source}\nwriteEnvironment(${
+				JSON.stringify(seen)
+			}, JSON.stringify({ environ: readEnvironment('/proc/self/environ', 'latin1'), url: process.env['FABRIKA_TEST_POSTGRES_URL'] ?? '' }))\n`
+		await withApplication(recording, async () => {
+			expect(await testIsolation()).toBe('58 generated cases passed\n')
+		})
+		const recorded = z.object({ environ: z.string(), url: z.string() }).parse(JSON.parse(readFileSync(seen, 'utf8')))
+		const password = decodeURIComponent(new URL(url).password)
+		expect(recorded.environ).not.toContain(url)
+		expect(recorded.environ).not.toContain(`:${password}@`)
+		expect(new URL(recorded.url).username).toMatch(/^fabrika_tests_[0-9a-f]{16}$/)
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			expect([...await sql.unsafe('SELECT rolname FROM pg_roles WHERE rolname = $1', [new URL(recorded.url).username])]).toEqual([])
+		} finally {
+			await sql.close()
+		}
 	})
 
 	test('a fixture the endpoint schema refuses fails its cases', async () => {
