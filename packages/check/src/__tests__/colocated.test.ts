@@ -9,11 +9,19 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/fabrika.contract'
 import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
-import { shellSlicePlugin } from '../bun-plugin'
 import { checkApplication } from '../check'
 import { ContractSourceError, readContractSource } from '../contract'
 import { shellSlice } from '../slice'
-import { ARCHITECTURE_ROOT, evaluateInBun, fetchedByControl, KIT_ROOT, materialize, readTree, removeMaterialized } from './colocated-helpers'
+import {
+	ARCHITECTURE_ROOT,
+	buildWithPlugin,
+	evaluateInBun,
+	fetchedByControl,
+	KIT_ROOT,
+	materialize,
+	readTree,
+	removeMaterialized,
+} from './colocated-helpers'
 
 /** A module only handlers import, which leaves a mark and throws when it runs. */
 const THROWING_LOGIC = `import { mkdirSync } from 'node:fs'
@@ -65,14 +73,7 @@ describe('the reader never reaches a module only handlers import', () => {
 			error: 'Error: a handler module ran at import',
 		})
 		rmSync(join(directory, 'src/deals/LOADED'), { recursive: true })
-		const built = await Bun.build({
-			entrypoints: [join(directory, 'fabrika.contract.ts')],
-			outdir: join(directory, 'out'),
-			target: 'bun',
-			external: ['zod', '@fabrika/*'],
-			plugins: [shellSlicePlugin()],
-		})
-		expect(built.success).toBe(true)
+		expect(buildWithPlugin(directory, 'fabrika.contract.ts', { target: 'bun', external: ['zod', '@fabrika/*'] })).toEqual({ ok: true, error: '' })
 		const output = await Bun.file(join(directory, 'out', 'fabrika.contract.js')).text()
 		for (const handlerCode of ['a handler module ran at import', 'canReopen', 'getForUpdate', 'ConflictError', 'ctx.sql']) {
 			expect(output).not.toContain(handlerCode)
@@ -83,14 +84,7 @@ describe('the reader never reaches a module only handlers import', () => {
 
 	test('serve refuses the sliced contract, naming every site without a handler', async () => {
 		const directory = materialize(readTree(KIT_ROOT))
-		const built = await Bun.build({
-			entrypoints: [join(directory, 'fabrika.contract.ts')],
-			outdir: join(directory, 'out'),
-			target: 'bun',
-			external: ['zod', '@fabrika/*'],
-			plugins: [shellSlicePlugin()],
-		})
-		expect(built.success).toBe(true)
+		expect(buildWithPlugin(directory, 'fabrika.contract.ts', { target: 'bun', external: ['zod', '@fabrika/*'] })).toEqual({ ok: true, error: '' })
 		const script = join(directory, 'serve-sliced.mjs')
 		writeFileSync(
 			script,
@@ -120,14 +114,7 @@ try { serve(contract, { database: null }); console.log('served') } catch (error)
 
 	test("an SPA build of an application's web entry through the plugin holds no handler code", async () => {
 		const directory = materialize(readTree(ARCHITECTURE_ROOT, ['.fixture']))
-		const built = await Bun.build({
-			entrypoints: [join(directory, 'web/main.ts')],
-			outdir: join(directory, 'out'),
-			target: 'browser',
-			external: ['zod', '@fabrika/*'],
-			plugins: [shellSlicePlugin()],
-		})
-		expect(built.success).toBe(true)
+		expect(buildWithPlugin(directory, 'web/main.ts')).toEqual({ ok: true, error: '' })
 		const output = await Bun.file(join(directory, 'out', 'main.js')).text()
 		expect(output).toContain('/api')
 		for (const handlerCode of ['canReopen', 'lockedStage', 'companyOf', 'ConflictError', 'getForUpdate', 'select d.stage']) {
@@ -136,9 +123,59 @@ try { serve(contract, { database: null }); console.log('served') } catch (error)
 	})
 })
 
+/** Whether a browser build of `entry` under `root` through the plugin, every package bundled, succeeds. */
+const builds = (root: string, entry: string): boolean => buildWithPlugin(root, entry).ok
+
+const HANDLER_CODE = ['.handle(', 'getForUpdate', 'canReopen', 'ConflictError', 'a handler module ran at import']
+
+describe('an SPA build through the plugin, with every package bundled', () => {
+	test('bundles the shell of the kit fixture, and none of its handlers', async () => {
+		const directory = materialize(kitTree())
+		expect(builds(directory, 'fabrika.contract.ts')).toBe(true)
+		const output = await Bun.file(join(directory, 'out', 'fabrika.contract.js')).text()
+		expect(output).toContain('/healthz')
+		for (const code of HANDLER_CODE) expect(output).not.toContain(code)
+	})
+
+	test('a JavaScript shell module is sliced like a TypeScript one', async () => {
+		const tree = kitTree()
+		const javascript = DEALS.replace(' as const', '')
+		expect(javascript).not.toBe(DEALS)
+		tree.delete('src/deals/endpoints.ts')
+		tree.set('src/deals/endpoints.js', javascript)
+		expect(canonicalArtifactJson(readContractSource(fetchedByControl(tree)))).toBe(evaluated)
+		const directory = materialize(tree)
+		expect(builds(directory, 'fabrika.contract.ts')).toBe(true)
+		const output = await Bun.file(join(directory, 'out', 'fabrika.contract.js')).text()
+		for (const code of HANDLER_CODE) expect(output).not.toContain(code)
+	})
+
+	for (
+		const [form, handler, module] of [
+			['a named handler', 'getDeal', "import { getDeal } from './handlers'"],
+			['a decorated handler', 'traced(async () => ({ id: "", title: "", stage: "lead" }))', "import { traced } from './handlers'"],
+		] as const
+	) {
+		test(`${form} is refused before its module is requested, and the build fails`, async () => {
+			const tree = kitTree()
+			const endpoints = DEALS.replace("import { canReopen } from './logic'", `import { canReopen } from './logic'\n${module}`).replace(
+				'\t\t.handle(async ({ ctx }) => {\n\t\t\tconst deal = await ctx.db.target.get()\n\t\t\treturn { id: deal.id, title: deal.title, stage: deal.stage }\n\t\t}),',
+				`\t\t.handle(${handler}),`,
+			)
+			expect(endpoints).toContain(`.handle(${handler})`)
+			tree.set('src/deals/endpoints.ts', endpoints)
+			tree.set('src/deals/handlers.ts', THROWING_LOGIC)
+			expect(fetchedByControl(tree).has('src/deals/handlers.ts')).toBe(false)
+			const line = endpoints.split('\n').findIndex((text) => text.includes(`.handle(${handler})`)) + 1
+			expect(refusals('src/deals/endpoints.ts', endpoints)).toEqual([`src/deals/endpoints.ts:${line}:4 literal`])
+			expect(builds(materialize(tree), 'fabrika.contract.ts')).toBe(false)
+		})
+	}
+})
+
 describe('the slice removes only the handlers and what only they use, and keeps every position', () => {
 	test('each .handle(…) and the imports only handlers use are blank, on the same lines and columns', () => {
-		const slice = shellSlice('src/deals/endpoints.ts', DEALS)
+		const slice = shellSlice('src/deals/endpoints.ts', DEALS).text
 		expect(slice.length).toBe(DEALS.length)
 		expect(slice.split('\n').length).toBe(DEALS.split('\n').length)
 		for (const removed of ['.handle(', 'ConflictError', './logic', 'canReopen']) {
@@ -150,7 +187,7 @@ describe('the slice removes only the handlers and what only they use, and keeps 
 
 	test('a module without a handler is its own slice', () => {
 		const schemas = readTree(KIT_ROOT).get('src/schemas.ts') ?? ''
-		expect(shellSlice('src/schemas.ts', schemas)).toBe(schemas)
+		expect(shellSlice('src/schemas.ts', schemas)).toEqual({ text: schemas, refusals: [] })
 	})
 
 	test('a helper only a handler calls goes with it, its own imports included', () => {
@@ -159,7 +196,7 @@ describe('the slice removes only the handlers and what only they use, and keeps 
 			"import { canReopen } from './logic'\n\nconst reopens = (stage: string): boolean => canReopen(stage)",
 		).replace('if (!canReopen(deal.stage))', 'if (!reopens(deal.stage))')
 		expect(helper).not.toBe(DEALS)
-		const slice = shellSlice('src/deals/endpoints.ts', helper)
+		const slice = shellSlice('src/deals/endpoints.ts', helper).text
 		expect(slice).not.toContain('reopens')
 		expect(slice).not.toContain('./logic')
 		expect(canonicalArtifactJson(readContractSource(new Map([...kitTree(), ['src/deals/endpoints.ts', helper]])))).toBe(evaluated)
@@ -174,7 +211,7 @@ describe('what the slice keeps, the literal rule reads', () => {
 		)
 		expect(shared).not.toBe(DEALS)
 		const logic = `${THROWING_LOGIC}export const STAGES = 'read'\n`
-		expect(shellSlice('src/deals/endpoints.ts', shared)).toContain("import { STAGES } from './logic'")
+		expect(shellSlice('src/deals/endpoints.ts', shared).text).toContain("import { STAGES } from './logic'")
 		expect(
 			refusalsWith(new Map([['src/deals/endpoints.ts', shared], ['src/deals/logic.ts', logic]])).some((finding) =>
 				finding.startsWith('src/deals/logic.ts:')
@@ -190,14 +227,14 @@ describe('what the slice keeps, the literal rule reads', () => {
 		)
 	})
 
-	test('.handle given a named function is not sliced, and is refused at its line', () => {
+	test('.handle given a named function is refused at its handle', () => {
 		const named = DEALS.replace(
 			'\t\t.handle(async ({ ctx }) => {\n\t\t\tconst deal = await ctx.db.target.get()',
 			'\t\t.handle(getDeal),\n\tnever: r.query({ output: Deal, access: { member: true } })\n\t\t.handle(async ({ ctx }) => {\n\t\t\tconst deal = await ctx.db.target.get()',
 		)
 		expect(named).not.toBe(DEALS)
 		const line = named.split('\n').findIndex((text) => text.includes('.handle(getDeal)')) + 1
-		expect(refusals('src/deals/endpoints.ts', named)).toContain(`src/deals/endpoints.ts:${line - 1}:7 literal`)
+		expect(refusals('src/deals/endpoints.ts', named)).toEqual([`src/deals/endpoints.ts:${line}:4 literal`])
 	})
 
 	test('.handle on a builder that takes no handler is refused', () => {
@@ -217,6 +254,13 @@ describe('what the slice keeps, the literal rule reads', () => {
 		expect(late).not.toBe(DEALS)
 		const line = late.split('\n').findIndex((text) => text.includes('broken:')) + 1
 		expect(refusals('src/deals/endpoints.ts', late)[0]).toBe(`src/deals/endpoints.ts:${line}:65 literal`)
+	})
+
+	test("defineTables from @fabrika/db's root is refused: the SPA bundles the shell graph, and that root loads Bun", () => {
+		const tables = readTree(KIT_ROOT).get('src/db/tables.ts') ?? ''
+		const root = tables.replace("from '@fabrika/db/tables'", "from '@fabrika/db'")
+		expect(root).not.toBe(tables)
+		expect(refusals('src/db/tables.ts', root)).toContain('src/db/tables.ts:1:10 literal')
 	})
 
 	test('groups of one mount that name different callers are refused at the mount', () => {

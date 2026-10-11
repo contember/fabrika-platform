@@ -397,12 +397,7 @@ describe('paired cases: the reader agrees with Bun, or refuses where Bun would r
 })
 
 // The staged kit's cases. The table cases read `fixtures/derived-tables/`; the slice cases `@fabrika/app`'s
-// `src/__tests__/kit-fixture/`. Skeletons until the sprint's units land: WU2 owns the table cases, WU4 the slice cases
-// (docs/sprints/sprint-2026-10-11-paved-road-framework.md).
-/** The body of a skeleton case: a later unit replaces it, so it fails until then (`bun test --todo`). */
-const filledBy = (unit: string) => (): void => {
-	throw new Error(`this case is ${unit}'s to fill`)
-}
+// `src/__tests__/kit-fixture/` and `fixtures/architecture-app/`.
 
 describe('the staged kit: read from source and evaluated agree', () => {
 	describe('tables derived from the vocabulary (WU2)', () => {

@@ -1,4 +1,4 @@
-import { defineTables } from '@fabrika/db'
+import { defineTables } from '@fabrika/db/tables'
 import type { contract } from '../../fabrika.contract'
 import type { DB } from './schema.generated'
 

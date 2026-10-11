@@ -14,9 +14,14 @@ export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surfac
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
 	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary', defineApp: 'app' },
-	'@fabrika/db': { defineTables: 'tables' },
 	'@fabrika/db/tables': { defineTables: 'tables' },
 }
+
+/**
+ * The shell graph is what the SPA bundles: `@fabrika/db`'s root also exports the Bun-only data layer, so the tables
+ * come from its browser-safe entry.
+ */
+const SERVER_ENTRY_OF: Readonly<Record<string, string>> = { '@fabrika/db': '@fabrika/db/tables' }
 
 const SURFACE_BUILDERS = new Set(['rpc', 'query', 'mutation', 'link', 'spa', 'health', 'form', 'webhook', 'files', 'cron', 'export'])
 /** The methods of the kit `defineApp` returns. */
@@ -133,7 +138,7 @@ const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUD
 const ALLOWED_CALLBACK =
 	'a function only as a builder callback: defineContract(…, (c) => ({ … })), app.contract((c) => ({ … })), app.group(…, (r) => ({ … })), procedures: (l) => ({ … }) of a link or an export, and the handler of .handle(…)'
 const ALLOWED_IMPORT =
-	'z from zod/v4, defineContract, defineVocabulary or defineApp from @fabrika/app/contract, defineTables from @fabrika/db or @fabrika/db/tables, or a literal const of the application'
+	'z from zod/v4, defineContract, defineVocabulary or defineApp from @fabrika/app/contract, defineTables from @fabrika/db/tables, or a literal const of the application'
 
 export type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | {
 	readonly kind: 'call'
@@ -604,7 +609,15 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 		}
 		for (const imported of graph.index(summary.module).imports.values()) {
 			if (!isRelativeSpecifier(imported.specifier)) {
-				if (BUILDER_IMPORTS[imported.specifier]?.[imported.imported] === undefined) {
+				const browserSafe = SERVER_ENTRY_OF[imported.specifier]
+				if (browserSafe !== undefined && BUILDER_IMPORTS[browserSafe]?.[imported.imported] !== undefined) {
+					summary.report(
+						imported.node,
+						'literal',
+						`'${imported.imported}' from '${imported.specifier}', whose root also loads the server runtime the SPA bundles with the contract`,
+						`import { ${imported.imported} } from '${browserSafe}'`,
+					)
+				} else if (BUILDER_IMPORTS[imported.specifier]?.[imported.imported] === undefined) {
 					summary.report(imported.node, 'literal', `value import of '${imported.imported}' from the package '${imported.specifier}'`, ALLOWED_IMPORT)
 				}
 				continue

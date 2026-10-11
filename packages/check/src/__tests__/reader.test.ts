@@ -170,7 +170,7 @@ export const Note = z.strictObject({
 	})
 
 	test('defineTables in the contract graph, and a __proto__ key', () => {
-		const tables = "import { defineTables } from '@fabrika/db'\n\nexport const contract = defineTables()({})\n"
+		const tables = "import { defineTables } from '@fabrika/db/tables'\n\nexport const contract = defineTables()({})\n"
 		expect(refusal(application(tables))).toEqual(['fabrika.contract.ts:3:25 contract defineTables in the contract graph'])
 		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\t__proto__: { roles: {} },")))).toEqual([
 			'fabrika.contract.ts:7:2 literal a __proto__ key sets the prototype instead of a field',
@@ -353,7 +353,7 @@ export const vocabulary = defineVocabulary({
 	roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
 })
 `
-	const TABLES = `import { defineTables } from '@fabrika/db'
+	const TABLES = `import { defineTables } from '@fabrika/db/tables'
 import { vocabulary } from '../vocabulary'
 import { columns } from './schema.generated'
 

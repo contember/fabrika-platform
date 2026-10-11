@@ -49,7 +49,7 @@ export function contractReaderInputs(files: ReadonlyMap<string, string>, exists:
 			want(path)
 			continue
 		}
-		const parsed = isSourceFile(path) ? parseShellModule(path, text) : undefined
+		const parsed = isSourceFile(path) ? parseShellModule(path, text).parsed : undefined
 		if (parsed?.ok !== true) continue
 		for (const specifier of importedSpecifiers(parsed.module)) {
 			if (!isRelativeSpecifier(specifier)) continue

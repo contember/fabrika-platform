@@ -196,7 +196,8 @@ function parseSourceGraph(files: ReadonlyMap<string, string>, entry: string): Pa
 		if (bytes > CONTRACT_LIMITS.sourceBytes) {
 			return { ok: false, findings: [overBudget(path, `${entry} and its modules are over ${CONTRACT_LIMITS.sourceBytes} bytes`)] }
 		}
-		const parsed = parseShellModule(path, text)
+		const { parsed, refusals } = parseShellModule(path, text)
+		findings.push(...refusals)
 		if (!parsed.ok) {
 			findings.push({
 				file: path,

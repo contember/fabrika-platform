@@ -821,3 +821,9 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
 - **WU4 review round 1, dependencies per boot.** `defineDeps` kept one built value, so a second `boot` of one
   implementation replaced what an earlier runtime served with. Each handler now runs with its boot's dependencies in an
   `AsyncLocalStorage`; two runtimes with interleaved requests each read their own.
+- **WU4 review round 1, the SPA build.** The plugin now reads the shell graph under its `root` as Control does,
+  fails the build when the reader refuses it, and slices every extension the reader reads (a `.js` shell module kept
+  its handlers before). A `.handle(…)` that is not one inline function beside its builder is refused by the slice at
+  its `handle` and removed, so its module is never requested; it fails the plugin build too. `defineTables` comes only
+  from `@fabrika/db/tables`: the root of `@fabrika/db` also loads `bun`, which a browser bundle of the shell cannot.
+  The SPA witnesses bundle every package.

@@ -16,8 +16,10 @@ import {
 	type ParsedModule,
 	parseModule,
 	type ParseResult,
+	positionOf,
 	walk,
 } from './ast'
+import type { Finding } from './finding'
 
 /** Builders whose result takes `.handle(handler)`: an endpoint of a group, a link or an export, a job and a webhook. */
 const HANDLED_BUILDERS = new Set(['query', 'mutation', 'cron', 'webhook'])
@@ -40,21 +42,45 @@ const memberName = (node: AstNode | undefined): string | undefined => {
 	return identifierName(child(node, 'property'))
 }
 
+/** A `.handle(…)` the slice cannot keep out of the shell, at its `handle`; the reader and the SPA build refuse it. */
+export interface SliceRefusal {
+	readonly node: AstNode
+	readonly message: string
+	readonly allowed: string
+}
+
+const HANDLER_ALLOWED =
+	'.handle(async ({ input, ctx }) => …) written inline on r.query, r.mutation, app.cron or app.webhook; call a named function from inside it'
+
 /**
- * `<x>.<builder>(…).handle(<inline function>)`: the range of `.handle(…)`, from the end of the builder call. Any other
- * `handle` stays, so the literal rule refuses it with its position.
+ * A `.handle(…)` call and the range it takes, from the end of its receiver. `<x>.<builder>(…).handle(<inline function>)`
+ * is a handler; any other `.handle(…)` (a named or wrapped function, another receiver) is refused, and its range is
+ * removed all the same, so what it names is never followed into a module the shell does not need.
  */
-function handleRange(node: AstNode): Range | undefined {
-	if (node.type !== 'CallExpression' || node['optional'] === true) return undefined
+function handleSite(node: AstNode): { readonly range: Range; readonly refusal?: SliceRefusal } | undefined {
+	if (node.type !== 'CallExpression') return undefined
 	const callee = child(node, 'callee')
-	if (memberName(callee) !== 'handle' || callee === undefined) return undefined
-	const builderCall = child(callee, 'object')
-	if (builderCall?.type !== 'CallExpression' || !HANDLED_BUILDERS.has(memberName(child(builderCall, 'callee')) ?? '')) return undefined
-	const handler = children(node, 'arguments')
-	if (handler.length !== 1 || !isFunction(handler[0])) return undefined
-	const from = offsets(builderCall)
+	const property = callee === undefined ? undefined : child(callee, 'property')
+	if (callee?.type !== 'MemberExpression' || callee['computed'] === true || identifierName(property) !== 'handle' || property === undefined) {
+		return undefined
+	}
+	const receiver = child(callee, 'object')
+	const from = receiver === undefined ? undefined : offsets(receiver)
 	const to = offsets(node)
-	return from === undefined || to === undefined ? undefined : { start: from.end, end: to.end }
+	if (from === undefined || to === undefined) return undefined
+	const range = { start: from.end, end: to.end }
+	const builder = receiver?.type === 'CallExpression' ? memberName(child(receiver, 'callee')) : undefined
+	const handler = children(node, 'arguments')
+	if (builder === undefined || !HANDLED_BUILDERS.has(builder)) {
+		return {
+			range,
+			refusal: { node: property, message: '.handle(…) on something other than an endpoint, job or webhook builder', allowed: HANDLER_ALLOWED },
+		}
+	}
+	if (node['optional'] === true || callee['optional'] === true || handler.length !== 1 || !isFunction(handler[0])) {
+		return { range, refusal: { node: property, message: 'a handler other than one inline function beside its builder', allowed: HANDLER_ALLOWED } }
+	}
+	return { range }
 }
 
 /** Whether an identifier names a type or a value here, rather than a key, a property or a label. */
@@ -148,19 +174,27 @@ function referencedNames(statements: readonly AstNode[], skipped: (node: AstNode
 	return referenced
 }
 
+/** A module's slice, and the `.handle(…)` forms it refused. */
+export interface ShellSlice {
+	readonly text: string
+	readonly refusals: readonly SliceRefusal[]
+}
+
 /**
  * The slice of one parsed module: `module`'s text with every `.handle(…)` and everything only the handlers used
  * blanked. A module without a handler comes back unchanged.
  */
-export function moduleSlice(module: ParsedModule, text: string): string {
+export function moduleSlice(module: ParsedModule, text: string): ShellSlice {
 	const handles: Range[] = []
+	const refusals: SliceRefusal[] = []
 	walk(module.program, (node) => {
-		const range = handleRange(node)
-		if (range === undefined) return undefined
-		handles.push(range)
+		const site = handleSite(node)
+		if (site === undefined) return undefined
+		handles.push(site.range)
+		if (site.refusal !== undefined) refusals.push(site.refusal)
 		return 'skip'
 	})
-	if (handles.length === 0) return text
+	if (handles.length === 0) return { text, refusals }
 	const inHandle = (node: AstNode): boolean => {
 		const range = offsets(node)
 		return range !== undefined && handles.some((handle) => range.start >= handle.start && range.end <= handle.end)
@@ -219,22 +253,28 @@ export function moduleSlice(module: ParsedModule, text: string): string {
 	for (const edit of edits.sort((left, right) => right.range.start - left.range.start)) {
 		sliced = sliced.slice(0, edit.range.start) + edit.replacement + sliced.slice(edit.range.end)
 	}
-	return sliced
+	return { text: sliced, refusals }
 }
 
 /**
  * The slice of a module's text. Text that does not parse comes back unchanged, so the reader reports the parse error
  * where it is.
  */
-export function shellSlice(file: string, text: string): string {
+export function shellSlice(file: string, text: string): ShellSlice {
 	const parsed = parseModule(file, text)
-	return parsed.ok ? moduleSlice(parsed.module, text) : text
+	return parsed.ok ? moduleSlice(parsed.module, text) : { text, refusals: [] }
 }
 
-/** A module parsed as its slice: what the reader, the literal rule and input discovery read. */
-export function parseShellModule(file: string, text: string): ParseResult {
+/** A refused `.handle(…)` as the finding the reader, the checker and the SPA build report. */
+export function sliceFinding(module: ParsedModule, refusal: SliceRefusal): Finding {
+	return { file: module.file, ...positionOf(refusal.node), severity: 'refusal', rule: 'literal', message: refusal.message, allowed: refusal.allowed }
+}
+
+/** A module parsed as its slice, what the reader and input discovery read, with the `.handle(…)` forms it refused. */
+export function parseShellModule(file: string, text: string): { readonly parsed: ParseResult; readonly refusals: readonly Finding[] } {
 	const parsed = parseModule(file, text)
-	if (!parsed.ok) return parsed
-	const sliced = moduleSlice(parsed.module, text)
-	return sliced === text ? parsed : parseModule(file, sliced)
+	if (!parsed.ok) return { parsed, refusals: [] }
+	const slice = moduleSlice(parsed.module, text)
+	const refusals = slice.refusals.map((refusal) => sliceFinding(parsed.module, refusal))
+	return { parsed: slice.text === text ? parsed : parseModule(file, slice.text), refusals }
 }

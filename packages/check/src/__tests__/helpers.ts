@@ -31,7 +31,7 @@ export const vocabulary = defineVocabulary({
 })
 `
 
-export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db'
+export const CLEAN_TABLES = `import { defineTables } from '@fabrika/db/tables'
 import { vocabulary } from '../vocabulary'
 import { columns } from './schema.generated'
 

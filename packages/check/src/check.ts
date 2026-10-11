@@ -31,7 +31,7 @@ import { checkRuntimeNode } from './rules/runtime'
 import { checkStructureNode, checkStructureReferences, structurePlace } from './rules/structure'
 import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
-import { moduleSlice } from './slice'
+import { moduleSlice, sliceFinding } from './slice'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
 
 export interface CheckInput {
@@ -94,12 +94,12 @@ const checkSourceModule = async (
 	await checkGeneratedTest(text, module.comments, report)
 }
 
-/** `module` as its shell slice; the module itself when it holds no colocated handler. */
-const shellModule = (module: ParsedModule, text: string): ParsedModule => {
-	const sliced = moduleSlice(module, text)
-	if (sliced === text) return module
-	const parsed = parseModule(module.file, sliced)
-	return parsed.ok ? parsed.module : module
+/** `module` as its shell slice (itself when it holds no colocated handler), and the `.handle(…)` forms it refused. */
+const shellModule = (module: ParsedModule, text: string): { readonly module: ParsedModule; readonly refusals: readonly Finding[] } => {
+	const slice = moduleSlice(module, text)
+	const refusals = slice.refusals.map((refusal) => sliceFinding(module, refusal))
+	const parsed = slice.text === text ? undefined : parseModule(module.file, slice.text)
+	return { module: parsed?.ok === true ? parsed.module : module, refusals }
 }
 
 /** Runs every rule over one application and returns the findings in file, line and column order. */
@@ -146,10 +146,18 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 
 	// The contract rules read each module's shell slice: a colocated handler, and what only it uses, is application
 	// code, which the rules above checked in full.
-	const graph = new ModuleGraph(new Map([...modules].map(([path, module]) => [path, shellModule(module, tree.files.get(path) ?? '')])))
-	const literal = checkLiteralGraph([CONTRACT_FILE, TABLES_FILE], graph)
-	findings.push(...literal)
+	const shell = new Map([...modules].map(([path, module]) => [path, shellModule(module, tree.files.get(path) ?? '')]))
+	const graph = new ModuleGraph(new Map([...shell].map(([path, slice]) => [path, slice.module])))
 	const contract = graph.module(CONTRACT_FILE)
+	const tables = graph.module(TABLES_FILE)
+	const shellGraph = new Set(
+		[contract, tables].flatMap((entry) => (entry === undefined ? [] : contractModules(graph, entry))).map((module) => module.file),
+	)
+	const literal = [
+		...[...shellGraph].flatMap((path) => shell.get(path)?.refusals ?? []),
+		...checkLiteralGraph([CONTRACT_FILE, TABLES_FILE], graph),
+	]
+	findings.push(...literal)
 	const contractRead = contract !== undefined && literal.length === 0 ? checkContractRead(graph) : []
 	findings.push(...contractRead)
 	for (const module of contract === undefined ? [] : contractModules(graph, contract)) findings.push(...checkClientIdentity(module, graph))

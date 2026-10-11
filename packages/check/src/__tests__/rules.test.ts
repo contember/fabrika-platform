@@ -41,7 +41,7 @@ const cases: readonly RuleCase[] = [
 				"const appName = 'notes'.trim()\nexport const contract",
 			),
 			'src/schemas/notes.ts': `${CLEAN_SCHEMAS}export const Title = z.string().refine((value) => value !== '')\n`,
-			'src/db/tables.ts': "import { defineTables } from '@fabrika/db'\n\nlet notes = {}\nexport const tables = defineTables()({ notes })\n",
+			'src/db/tables.ts': "import { defineTables } from '@fabrika/db/tables'\n\nlet notes = {}\nexport const tables = defineTables()({ notes })\n",
 		},
 		expected: [
 			'fabrika.contract.ts:5:17',
@@ -736,7 +736,7 @@ describe('generated tests', () => {
 	})
 
 	test('a defineTables call of another shape names the form that needs no type arguments', async () => {
-		const chained = "import { defineTables } from '@fabrika/db'\n\nexport const tables = defineTables(vocabulary, columns)({})({})\n"
+		const chained = "import { defineTables } from '@fabrika/db/tables'\n\nexport const tables = defineTables(vocabulary, columns)({})({})\n"
 		const findings = await check({ ...CLEAN_APPLICATION, 'src/db/tables.ts': chained })
 		expect(findings.filter((finding) => finding.rule === 'literal').map((finding) => finding.allowed)).toEqual([
 			'defineTables(vocabulary, columns)({ … })',

@@ -14,6 +14,7 @@ export const ARCHITECTURE_ROOT = join(import.meta.dir, 'fixtures', 'architecture
 
 const PACKAGE_ROOT = join(import.meta.dir, '..', '..')
 const RUNNER = join(import.meta.dir, 'fixtures', 'paired-runner.mjs')
+const BUILDER = join(import.meta.dir, 'fixtures', 'plugin-build.mjs')
 
 /** Every file under `root` with one of `suffixes`, by its path relative to `root`, a `.fixture` suffix dropped. */
 export const readTree = (root: string, suffixes: readonly string[] = ['.ts']): Map<string, string> => {
@@ -61,4 +62,27 @@ const evaluation = z.union([z.strictObject({ ok: z.literal(true), json: z.string
 export const evaluateInBun = (entry: string, tables?: string): z.infer<typeof evaluation> => {
 	const run = Bun.spawnSync([process.execPath, RUNNER, entry, ...(tables === undefined ? [] : [tables])], { cwd: dirname(entry) })
 	return evaluation.parse(JSON.parse(run.stdout.toString()))
+}
+
+const built = z.strictObject({ ok: z.boolean(), error: z.string() })
+
+/**
+ * Builds `entry` of the application at `root` through the shell slice plugin into `root/out`, in a process of its own;
+ * `external` packages stay imports.
+ */
+export const buildWithPlugin = (
+	root: string,
+	entry: string,
+	options: { readonly target?: 'browser' | 'bun'; readonly external?: readonly string[] } = {},
+): z.infer<typeof built> => {
+	const run = Bun.spawnSync([
+		process.execPath,
+		BUILDER,
+		root,
+		join(root, entry),
+		join(root, 'out'),
+		options.target ?? 'browser',
+		(options.external ?? []).join(','),
+	], { cwd: root })
+	return built.parse(JSON.parse(run.stdout.toString()))
 }
