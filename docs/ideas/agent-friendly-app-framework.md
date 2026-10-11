@@ -40,7 +40,7 @@ cause as [backlog 97](../backlog/97-the-generated-tests-have-no-move-case.md)).
 **A red-team pass against `main` reproduced four holes** in today's claims. They are filed as backlog
 [105](../backlog/105-database-postgres-is-writable-by-application-code.md),
 [106](../backlog/106-application-code-can-reach-the-capability-mint.md),
-[107](../backlog/107-the-approval-diff-ignores-input-domains.md) and
+107 (fixed: [ADR-0050](../decisions/0050-approved-access.md) §3 now compares input domains) and
 [108](../backlog/108-application-migrations-can-install-triggers-and-functions.md), independent of this proposal.
 
 ## 2. Principles
@@ -62,8 +62,8 @@ cause as [backlog 97](../backlog/97-the-generated-tests-have-no-move-case.md)).
    survey was a default or a bypass flag (e.g. CVE-2025-48757).
 10. **A type error is product surface:** at its own line, at most two lines, naming the fix. Evidence: measured
     mapped-type dumps and `never` collapses (§9).
-11. **Approval compares effective authority, conservatively.** Evidence: an input-domain widening classifies as
-    unchanged today (backlog 107).
+11. **Approval compares effective authority, conservatively.** Evidence: an input-domain widening classified as
+    unchanged until ADR-0050 §3 compared input domains.
 12. **State the trust claim honestly, harden cheaply, defer the isolated host.** Evidence: the reproduced static-method
     and mint holes; ADR-0012's deferred data executor.
 
@@ -415,8 +415,8 @@ digest other than `FABRIKA_CONTRACT_DIGEST`, which now covers `operations`.
 
 ### 8.3 Approval classification compares effective authority
 
-`classifyAccess` gains one keyed comparison over `operations` and compares input shapes everywhere (closing backlog
-107 for hand procedures too). What cannot be shown to narrow, widens. Compared per operation: kind, table, action,
+`classifyAccess` gains one keyed comparison over `operations` and compares input shapes everywhere, as it already
+does for procedures. What cannot be shown to narrow, widens. Compared per operation: kind, table, action,
 target form, accepted fields and their effective input domains, `set` and `default` values, every `when` and `where`
 term, projections and read dependencies (`orderBy`, `groupBy`, measures), `limit` and `page`, the version rule, job
 batch bounds, and `uses`. A removed operation narrows; a removed constraint widens. No logical implication is attempted.

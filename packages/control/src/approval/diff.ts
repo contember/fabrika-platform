@@ -8,8 +8,10 @@ import {
 	type ContractArtifact,
 	type EndpointRow,
 	type FileCollectionArtifact,
+	type NumberShape,
 	type RoleArtifact,
 	type SchemaShape,
+	type StringShape,
 	type TablePolicyArtifact,
 } from '@fabrika/auth-core'
 import type { AccessSnapshot } from './snapshot'
@@ -175,7 +177,8 @@ function endpointChanges(id: string, from: EndpointRow, to: EndpointRow): Access
 		...setChanges(name, from.callers, to.callers, 'gains caller', 'loses caller'),
 		...valueChange(`${name} requirement`, from.requirement, to.requirement),
 		...admissionChanges(name, from, to),
-		...shapeChanges(`${name} output`, from.output, to.output),
+		...schemaChanges({ endpoint: name, side: 'input', path: '' }, from.input, to.input),
+		...schemaChanges({ endpoint: name, side: 'output', path: '' }, from.output, to.output),
 	]
 }
 
@@ -193,20 +196,186 @@ function admissionChanges(name: string, from: EndpointRow, to: EndpointRow): Acc
 	return [...setChanges(name, before.contentTypes, after.contentTypes, 'admits', 'no longer admits'), ...sizeChange]
 }
 
-/** Output fields an endpoint returns: a new field widens, a removed one narrows, any other change widens. */
-function shapeChanges(name: string, from: SchemaShape | null, to: SchemaShape | null): AccessChange[] {
-	if (from?.type === 'object' && to?.type === 'object') {
-		const changes: AccessChange[] = []
-		for (const field of union(Object.keys(from.fields), Object.keys(to.fields))) {
-			const before = from.fields[field]
-			const after = to.fields[field]
-			if (before === undefined) changes.push(widening(`${name} gains field \`${field}\``))
-			else if (after === undefined) changes.push(removal(`${name} loses field \`${field}\``))
-			else changes.push(...shapeChanges(`${name} field \`${field}\``, before, after))
-		}
-		return changes
+// ── Schemas ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where a schema change lies: the endpoint, its input or output, and the field path (`items[].stage`). The two sides
+ * differ only for a removed required field: an input without it was refused before, an output without it tells less.
+ */
+interface SchemaSite {
+	readonly endpoint: string
+	readonly side: 'input' | 'output'
+	readonly path: string
+}
+
+function siteLabel(site: SchemaSite): string {
+	return site.path === '' ? `${site.endpoint} ${site.side}` : `${site.endpoint} ${site.side} \`${site.path}\``
+}
+
+function fieldSite(site: SchemaSite, field: string): SchemaSite {
+	return { ...site, path: site.path === '' ? field : `${site.path}.${field}` }
+}
+
+function itemsSite(site: SchemaSite): SchemaSite {
+	return { ...site, path: `${site.path}[]` }
+}
+
+/**
+ * The values a schema admits, compared structurally: a change that can only admit fewer values narrows, any other
+ * change widens. No logical implication between schemas is attempted, so an equivalent rewrite widens too.
+ */
+function schemaChanges(site: SchemaSite, from: SchemaShape | null, to: SchemaShape | null): AccessChange[] {
+	if (canonicalJson(from) === canonicalJson(to)) return []
+	if (from === null || to === null) return valueChange(siteLabel(site), from, to)
+	const before = unwrapped(from)
+	const after = unwrapped(to)
+	const label = siteLabel(site)
+	return [
+		...flagChange(before.optional, after.optional, widening(`${label} becomes optional`), removal(`${label} becomes required`)),
+		...flagChange(before.nullable, after.nullable, widening(`${label} admits null`), removal(`${label} no longer admits null`)),
+		...coreChanges(site, before.core, after.core),
+	]
+}
+
+interface Unwrapped {
+	readonly optional: boolean
+	readonly nullable: boolean
+	readonly core: SchemaShape
+}
+
+function unwrapped(shape: SchemaShape): Unwrapped {
+	let optional = false
+	let nullable = false
+	let core = shape
+	for (;;) {
+		if (core.type === 'optional') optional = true
+		else if (core.type === 'nullable') nullable = true
+		else return { optional, nullable, core }
+		core = core.inner
 	}
-	return canonicalJson(from) === canonicalJson(to) ? [] : [widening(`${name} changes`)]
+}
+
+function flagChange(before: boolean, after: boolean, gained: AccessChange, lost: AccessChange): AccessChange[] {
+	return before === after ? [] : [after ? gained : lost]
+}
+
+function coreChanges(site: SchemaSite, from: SchemaShape, to: SchemaShape): AccessChange[] {
+	if (canonicalJson(from) === canonicalJson(to)) return []
+	const label = siteLabel(site)
+	const fromValues = finiteValues(from)
+	const toValues = finiteValues(to)
+	if (fromValues !== null && toValues !== null) return valueSetChanges(label, fromValues, toValues)
+	if (from.type === 'object' && to.type === 'object') return fieldChanges(site, from.fields, to.fields)
+	if (from.type === 'string' && to.type === 'string') return stringChanges(label, from, to)
+	if (from.type === 'number' && to.type === 'number') return numberChanges(label, from, to)
+	if (from.type === 'array' && to.type === 'array') {
+		return [
+			...lowerLimitChange(`${label} minimum items`, from.minItems, to.minItems),
+			...limitChange(`${label} maximum items`, from.maxItems, to.maxItems),
+			...schemaChanges(itemsSite(site), from.items, to.items),
+		]
+	}
+	if (from.type === 'union' && to.type === 'union') {
+		const kept = new Set(from.options.map((option) => canonicalJson(option)))
+		return to.options.every((option) => kept.has(canonicalJson(option)))
+			? [removal(`${label} loses a union option`)]
+			: valueChange(label, from, to)
+	}
+	return valueChange(label, from, to)
+}
+
+function fieldChanges(site: SchemaSite, from: Readonly<Record<string, SchemaShape>>, to: Readonly<Record<string, SchemaShape>>): AccessChange[] {
+	const label = siteLabel(site)
+	const changes: AccessChange[] = []
+	for (const field of union(Object.keys(from), Object.keys(to))) {
+		const before = from[field]
+		const after = to[field]
+		if (before === undefined) changes.push(widening(`${label} gains field \`${field}\``))
+		else if (after === undefined) {
+			const required = site.side === 'input' && !unwrapped(before).optional
+			changes.push(required ? widening(`${label} loses required field \`${field}\``) : removal(`${label} loses field \`${field}\``))
+		} else changes.push(...schemaChanges(fieldSite(site, field), before, after))
+	}
+	return changes
+}
+
+/** The values of a literal or an enum, as canonical JSON; `null` for a schema that admits more than a listed set. */
+function finiteValues(shape: SchemaShape): string[] | null {
+	if (shape.type === 'literal') return [canonicalJson(shape.value)]
+	if (shape.type === 'enum') return shape.values.map((value) => canonicalJson(value))
+	return null
+}
+
+function valueSetChanges(label: string, from: readonly string[], to: readonly string[]): AccessChange[] {
+	const changes = new Changes()
+	compareSet(changes, from, to, {
+		added: (value) => widening(`${label} admits ${shownValue(value)}`),
+		removed: (value) => removal(`${label} no longer admits ${shownValue(value)}`),
+	})
+	return changes.list
+}
+
+function stringChanges(label: string, from: StringShape, to: StringShape): AccessChange[] {
+	return [
+		...constraintChange(`${label} format`, from.format, to.format),
+		...lowerLimitChange(`${label} minimum length`, from.minLength, to.minLength),
+		...limitChange(`${label} maximum length`, from.maxLength, to.maxLength),
+		...constraintChange(`${label} pattern`, from.pattern, to.pattern),
+		...constraintChange(`${label} prefix`, from.startsWith, to.startsWith),
+		...constraintChange(`${label} suffix`, from.endsWith, to.endsWith),
+		...constraintChange(`${label} required substring`, from.includes, to.includes),
+	]
+}
+
+function numberChanges(label: string, from: NumberShape, to: NumberShape): AccessChange[] {
+	const integer = flagChange(from.int, to.int, removal(`${label} admits only integers`), widening(`${label} admits non-integers`))
+	return [
+		...integer,
+		...boundChange(`${label} minimum`, { value: from.min, exclusive: from.exclusiveMin }, { value: to.min, exclusive: to.exclusiveMin }, 1),
+		...boundChange(`${label} maximum`, { value: from.max, exclusive: from.exclusiveMax }, { value: to.max, exclusive: to.exclusiveMax }, -1),
+		...constraintChange(`${label} multiple`, from.multipleOf, to.multipleOf),
+	]
+}
+
+/** A constraint added where there was none narrows; any other change of it widens. */
+function constraintChange(subject: string, before: string | number | null, after: string | number | null): AccessChange[] {
+	if (before === after) return []
+	return [
+		(before === null ? removal : widening)(`${subject} changes from ${shownValue(canonicalJson(before))} to ${shownValue(canonicalJson(after))}`),
+	]
+}
+
+interface Bound {
+	readonly value: number | null
+	readonly exclusive: boolean
+}
+
+/**
+ * A numeric bound: `direction` is 1 for a minimum (a higher one narrows) and -1 for a maximum. At the same value an
+ * exclusive bound is the tighter one.
+ */
+function boundChange(subject: string, before: Bound, after: Bound, direction: 1 | -1): AccessChange[] {
+	if (before.value === after.value && before.exclusive === after.exclusive) return []
+	const tighter = after.value !== null && (before.value === null || (after.value - before.value) * direction > 0
+		|| (after.value === before.value && after.exclusive))
+	return [(tighter ? removal : widening)(`${subject} changes from ${boundText(before)} to ${boundText(after)}`)]
+}
+
+function boundText(bound: Bound): string {
+	return bound.value === null ? 'none' : `${bound.value}${bound.exclusive ? ' (exclusive)' : ''}`
+}
+
+/** A higher minimum narrows; a lower or removed one widens. `null` is no limit. */
+function lowerLimitChange(subject: string, before: number | null, after: number | null): AccessChange[] {
+	if (before === after) return []
+	const higher = after !== null && (before === null || after > before)
+	return [(higher ? removal : widening)(`${subject} changes from ${before ?? 'none'} to ${after ?? 'none'}`)]
+}
+
+/** A string value bare, any other JSON value as written. */
+function shownValue(json: string): string {
+	const value: unknown = JSON.parse(json)
+	return typeof value === 'string' ? `\`${value}\`` : shown(json)
 }
 
 /**

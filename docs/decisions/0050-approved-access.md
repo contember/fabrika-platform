@@ -128,7 +128,7 @@ Control compares the normalized access data of the candidate snapshot with the e
 snapshot. An environment with no published run has the empty snapshot as its baseline. The comparison
 covers:
 
-- endpoint callers, access forms and output fields;
+- endpoint callers, access forms, input domains and output shapes;
 - containment, roles and their actions, membership rules;
 - table and column policies;
 - anonymous kinds, link mounts and link-reachable file collections;
@@ -152,6 +152,17 @@ they become denied. Otherwise Control classifies the removal as a widening, and 
 **A removed column read policy widens access.** Without its own read policy, a column falls back to the
 table's read action. Removing a column's read policy is therefore a widening, and it waits. Removing a
 whole table or a whole column stays a removal.
+
+**An endpoint's input and output are compared by the values they admit.** A change that can only admit
+fewer values narrows: an enum that loses a value, a lowered maximum, a raised minimum, an added pattern, a
+field that becomes required or loses `null`. Every other change widens: a literal that becomes an enum, an
+enum that gains a value, a removed or relaxed bound, a field that becomes optional or nullable, any new field,
+a changed type. A removed field narrows, except a required input field: an input that omits it was refused
+before and is admitted now. The comparison descends into objects, arrays, optional and nullable values and
+names the field, for example "Endpoint `api.deals.move` input `items[].stage` admits `won`". It attempts no
+logical implication between schemas, so an equivalent rewrite of a schema widens too. The proxy applies no
+schema, so the per-endpoint digest of [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) does not
+cover them; the snapshot digest and the contract digest do.
 
 The diff is a pure function. It produces plain-language lines for the approver, for example "Role
 `editor` gains `notes.delete`" or "New endpoint `api.notes.export` for editors".

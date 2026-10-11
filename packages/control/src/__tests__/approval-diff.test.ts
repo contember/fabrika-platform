@@ -134,6 +134,146 @@ describe('classifyAccess', () => {
 	})
 })
 
+/** `BASE` whose `api.remove` mutation accepts `fields` beside its `id`. */
+const removeInput = (fields: string) =>
+	snapshot(
+		edited('remove: c.mutation({ input: z.strictObject({ id: z.uuid() })', `remove: c.mutation({ input: z.strictObject({ id: z.uuid(), ${fields} })`),
+	)
+
+/** The classification of `api.remove`'s extra input `before` changing to `after`, in both directions. */
+function inputChange(before: string, after: string) {
+	return { forward: classifyAccess(removeInput(before), removeInput(after)), backward: classifyAccess(removeInput(after), removeInput(before)) }
+}
+
+describe('classifyAccess compares input domains', () => {
+	test('a literal widened to an enum widens and names the value; narrowing it back only removes', () => {
+		const { forward, backward } = inputChange(`stage: z.literal('lead')`, `stage: z.enum(['lead', 'won'])`)
+		expect(forward).toEqual({ outcome: 'widening', changes: [{ widens: true, line: 'Endpoint `api.remove` input `stage` admits `won`' }] })
+		expect(backward).toEqual({ outcome: 'removal', changes: [{ widens: false, line: 'Endpoint `api.remove` input `stage` no longer admits `won`' }] })
+	})
+
+	test('an enum that gains a value widens', () => {
+		const { forward, backward } = inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['lead', 'won', 'lost'])`)
+		expect(forward.changes).toEqual([{ widens: true, line: 'Endpoint `api.remove` input `stage` admits `lost`' }])
+		expect(backward.outcome).toBe('removal')
+	})
+
+	test('an enum that trades one value for another widens', () => {
+		expect(inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['lead', 'lost'])`).forward).toEqual({
+			outcome: 'widening',
+			changes: [
+				{ widens: true, line: 'Endpoint `api.remove` input `stage` admits `lost`' },
+				{ widens: false, line: 'Endpoint `api.remove` input `stage` no longer admits `won`' },
+			],
+		})
+	})
+
+	test('a removed or raised maximum length widens; a lowered one only removes', () => {
+		expect(inputChange('title: z.string().max(200)', 'title: z.string()').forward).toEqual({
+			outcome: 'widening',
+			changes: [{ widens: true, line: 'Endpoint `api.remove` input `title` maximum length changes from 200 to none' }],
+		})
+		const { forward, backward } = inputChange('title: z.string().max(200)', 'title: z.string().max(300)')
+		expect(forward.outcome).toBe('widening')
+		expect(backward).toEqual({
+			outcome: 'removal',
+			changes: [{ widens: false, line: 'Endpoint `api.remove` input `title` maximum length changes from 300 to 200' }],
+		})
+	})
+
+	test('a removed or lowered minimum widens; a raised one only removes', () => {
+		expect(inputChange('title: z.string().min(3)', 'title: z.string().min(1)').forward.changes).toEqual([
+			{ widens: true, line: 'Endpoint `api.remove` input `title` minimum length changes from 3 to 1' },
+		])
+		const { forward, backward } = inputChange('count: z.number().min(0).max(10)', 'count: z.number().max(10)')
+		expect(forward.changes).toEqual([{ widens: true, line: 'Endpoint `api.remove` input `count` minimum changes from 0 to none' }])
+		expect(backward.outcome).toBe('removal')
+		expect(inputChange('count: z.number().min(0)', 'count: z.number().gt(0)').forward.outcome).toBe('removal')
+		expect(inputChange('count: z.number().int()', 'count: z.number()').forward.outcome).toBe('widening')
+	})
+
+	test('a removed pattern widens; an added one only removes', () => {
+		const { forward, backward } = inputChange('code: z.string().regex(/^[a-z]+$/)', 'code: z.string()')
+		expect(forward.outcome).toBe('widening')
+		expect(backward.outcome).toBe('removal')
+	})
+
+	test('a field that becomes optional or nullable widens; the reverse only removes', () => {
+		const optional = inputChange('title: z.string()', 'title: z.string().optional()')
+		expect(optional.forward.changes).toEqual([{ widens: true, line: 'Endpoint `api.remove` input `title` becomes optional' }])
+		expect(optional.backward.changes).toEqual([{ widens: false, line: 'Endpoint `api.remove` input `title` becomes required' }])
+		const nullable = inputChange('title: z.string()', 'title: z.string().nullable()')
+		expect(nullable.forward.changes).toEqual([{ widens: true, line: 'Endpoint `api.remove` input `title` admits null' }])
+		expect(nullable.backward.outcome).toBe('removal')
+	})
+
+	test('a new accepted field widens, optional or not; a removed optional field only removes', () => {
+		const { forward, backward } = inputChange('title: z.string()', 'title: z.string(), body: z.string().optional()')
+		expect(forward).toEqual({ outcome: 'widening', changes: [{ widens: true, line: 'Endpoint `api.remove` input gains field `body`' }] })
+		expect(backward).toEqual({ outcome: 'removal', changes: [{ widens: false, line: 'Endpoint `api.remove` input loses field `body`' }] })
+		expect(inputChange('title: z.string()', 'title: z.string(), body: z.string()').forward.outcome).toBe('widening')
+	})
+
+	test('a removed required field widens: an input without it is admitted that was refused before', () => {
+		expect(inputChange('title: z.string(), body: z.string()', 'title: z.string()').forward).toEqual({
+			outcome: 'widening',
+			changes: [{ widens: true, line: 'Endpoint `api.remove` input loses required field `body`' }],
+		})
+	})
+
+	test('a changed type widens', () => {
+		expect(inputChange('count: z.number()', 'count: z.string()').forward.outcome).toBe('widening')
+		expect(inputChange(`stage: z.enum(['lead', 'won'])`, 'stage: z.string()').forward.outcome).toBe('widening')
+	})
+
+	test('a nested field is named through arrays and nullable objects', () => {
+		const items = inputChange(
+			`items: z.array(z.strictObject({ stage: z.literal('lead') })).max(10)`,
+			`items: z.array(z.strictObject({ stage: z.enum(['lead', 'won']) })).max(10)`,
+		)
+		expect(items.forward.changes).toEqual([{ widens: true, line: 'Endpoint `api.remove` input `items[].stage` admits `won`' }])
+		const deal = inputChange(
+			`deal: z.strictObject({ stage: z.literal('lead') }).nullable()`,
+			`deal: z.strictObject({ stage: z.literal('lead'), note: z.string().optional() }).nullable()`,
+		)
+		expect(deal.forward.changes).toEqual([{ widens: true, line: 'Endpoint `api.remove` input `deal` gains field `note`' }])
+		expect(inputChange('tags: z.array(z.string()).max(5)', 'tags: z.array(z.string())').forward.changes).toEqual([
+			{ widens: true, line: 'Endpoint `api.remove` input `tags` maximum items changes from 5 to none' },
+		])
+	})
+
+	test('an unchanged input is unchanged', () => {
+		expect(inputChange(`stage: z.enum(['lead', 'won'])`, `stage: z.enum(['won', 'lead'])`).forward).toEqual({ outcome: 'unchanged', changes: [] })
+	})
+})
+
+describe('classifyAccess compares output shapes', () => {
+	const notes = (note: string) =>
+		snapshot(
+			edited(
+				'const Note = z.strictObject({ id: z.uuid(), title: z.string() })',
+				`const Note = ${note}`,
+				edited('output: Note', 'output: z.strictObject({ notes: z.array(Note), pinned: z.nullable(Note) })'),
+			),
+		)
+
+	test('an output field gained inside an array or a nullable object widens and is named', () => {
+		const wider = notes('z.strictObject({ id: z.uuid(), title: z.string(), body: z.string() })')
+		const before = notes('z.strictObject({ id: z.uuid(), title: z.string() })')
+		expect(lines(before, wider)).toEqual([
+			'Endpoint `api.get` output `notes[]` gains field `body`',
+			'Endpoint `api.get` output `pinned` gains field `body`',
+		])
+		expect(classifyAccess(wider, before).outcome).toBe('removal')
+	})
+
+	test('an output field removed only removes, required or not', () => {
+		const before = notes('z.strictObject({ id: z.uuid(), title: z.string() })')
+		const fewer = notes('z.strictObject({ id: z.uuid() })')
+		expect(classifyAccess(before, fewer).outcome).toBe('removal')
+	})
+})
+
 describe('pathsOverlap', () => {
 	test.each([
 		['/healthz', '/*', true],
