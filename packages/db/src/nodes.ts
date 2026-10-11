@@ -151,16 +151,19 @@ function joinedSelections(join: JoinState): SelectionNode[] {
 	return columns.map((name) => SelectionNode.create(AliasNode.create(column(child, name), IdentifierNode.create(`${child}.${name}`))))
 }
 
-export function selectNode(state: SelectState, visible: readonly string[], scope: OperationNode): SelectQueryNode {
+/** `after` is a keyset page's position, ANDed to the caller's conditions inside their parenthesis. */
+export function selectNode(state: SelectState, visible: readonly string[], scope: OperationNode, after?: OperationNode): SelectQueryNode {
 	const table = state.table
 	const columns = state.columns ?? visible
+	const conditions = conditionsNode(table, state.conditions)
+	const filter = after === undefined ? conditions : conditions === undefined ? after : AndNode.create(conditions, ParensNode.create(after))
 	const orderBy = state.orderBy.map((order) => OrderByItemNode.create(column(table, order.column), RawNode.createWithSql(order.direction)))
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
 		selections: [...columns.map((name) => selection(table, name)), ...state.joins.flatMap(joinedSelections)],
 		joins: state.joins.length === 0 ? undefined : state.joins.map((join) => joinNode(table, join)),
-		where: scopedWhere(conditionsNode(table, state.conditions), scope),
+		where: scopedWhere(filter, scope),
 		orderBy: orderBy.length === 0 ? undefined : OrderByNode.create(orderBy),
 		limit: state.limit === undefined ? undefined : LimitNode.create(ValueNode.create(state.limit)),
 		offset: state.offset === undefined ? undefined : OffsetNode.create(ValueNode.create(state.offset)),
@@ -240,13 +243,13 @@ export function deleteNode(table: string, where: WhereNode, key: string): Delete
 	return Object.freeze(node)
 }
 
-/** `select key from table where scope limit 1`: does the scoped object exist? */
-export function existsNode(table: string, key: string, scope: OperationNode): SelectQueryNode {
+/** `select key from table where (conditions) and scope limit 1`: does the scoped object exist? */
+export function existsNode(table: string, key: string, scope: OperationNode, conditions?: OperationNode): SelectQueryNode {
 	const node: SelectQueryNode = {
 		kind: 'SelectQueryNode',
 		from: FromNode.create([TableNode.create(table)]),
 		selections: [selection(table, key)],
-		where: scopedWhere(undefined, scope),
+		where: scopedWhere(conditions, scope),
 		limit: LimitNode.create(ValueNode.create(1)),
 	}
 	return Object.freeze(node)
@@ -264,7 +267,26 @@ export function locateNode(table: string, columns: readonly string[], scope: Ope
 	return Object.freeze(node)
 }
 
-/** The same check `for share`: the row cannot move until the transaction that checked it ends. */
-export function lockNode(table: string, key: string, scope: OperationNode): SelectQueryNode {
-	return Object.freeze({ ...existsNode(table, key, scope), endModifiers: [SelectModifierNode.create('ForShare')] })
+/**
+ * The same check, locked: `for share` keeps the row from moving until the transaction that checked it ends, `for
+ * update` also keeps every other writer and locker of it waiting.
+ */
+export function lockNode(table: string, key: string, scope: OperationNode, lock: 'share' | 'update' = 'share'): SelectQueryNode {
+	return Object.freeze({ ...existsNode(table, key, scope), endModifiers: [lockModifier(lock)] })
+}
+
+function lockModifier(lock: 'share' | 'update'): SelectModifierNode {
+	return SelectModifierNode.create(lock === 'share' ? 'ForShare' : 'ForUpdate')
+}
+
+/** `select <columns> from table where scope for update`: a mutation's precondition read of its own target. */
+export function lockedSelectNode(table: string, columns: readonly string[], scope: OperationNode): SelectQueryNode {
+	const node: SelectQueryNode = {
+		kind: 'SelectQueryNode',
+		from: FromNode.create([TableNode.create(table)]),
+		selections: columns.map((name) => selection(table, name)),
+		where: scopedWhere(undefined, scope),
+		endModifiers: [lockModifier('update')],
+	}
+	return Object.freeze(node)
 }

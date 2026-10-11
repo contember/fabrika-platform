@@ -1,5 +1,5 @@
 import { SQL } from 'bun'
-import { CompiledQuery, createQueryId, type Dialect, Kysely, PostgresQueryCompiler, type RootOperationNode } from 'kysely'
+import { CompiledQuery, type ControlledTransaction, createQueryId, type Dialect, Kysely, PostgresQueryCompiler, type RootOperationNode } from 'kysely'
 import { PostgresJSDialect } from 'kysely-postgres-js'
 import { QueryRefusedError } from './errors'
 import { assertAllowedTree, type GuardContext } from './guard'
@@ -64,6 +64,7 @@ export interface PostgresOptions {
 }
 
 let openSession: (database: Database, readOnly: boolean) => Session
+let startTransaction: (database: Database, readOnly: boolean) => Promise<ControlledTransaction<LooseDB>>
 
 /** The connection the data layer runs on. It has no public query method: everything goes through a store. */
 export class Database {
@@ -76,6 +77,10 @@ export class Database {
 
 	static {
 		openSession = (database, readOnly) => new Session(database.#kysely, database.#kysely, readOnly)
+		startTransaction = (database, readOnly) => {
+			const builder = database.#kysely.startTransaction()
+			return (readOnly ? builder.setAccessMode('read only') : builder).execute()
+		}
 	}
 
 	/**
@@ -125,21 +130,37 @@ export class Session {
 	readonly #executor: Executor
 	readonly #kysely: Kysely<LooseDB> | undefined
 	readonly #readOnly: boolean
+	readonly #failed: (() => void) | undefined
 
-	constructor(executor: Executor, kysely: Kysely<LooseDB> | undefined, readOnly: boolean) {
+	/** `failed` hears of every statement the database refused: in a transaction, Postgres aborts the rest of it. */
+	constructor(executor: Executor, kysely: Kysely<LooseDB> | undefined, readOnly: boolean, failed?: () => void) {
 		this.#executor = executor
 		this.#kysely = kysely
 		this.#readOnly = readOnly
+		this.#failed = failed
 		Object.freeze(this)
 	}
 
 	static {
-		executeFixed = async (session, compiled) => (await session.#executor.executeQuery(compiled)).rows
+		executeFixed = async (session, compiled) => (await session.#execute(compiled)).rows
+	}
+
+	get readOnly(): boolean {
+		return this.#readOnly
+	}
+
+	async #execute<O>(compiled: CompiledQuery<O>): Promise<{ readonly rows: O[] }> {
+		try {
+			return await this.#executor.executeQuery(compiled)
+		} catch (error) {
+			this.#failed?.()
+			throw error
+		}
 	}
 
 	async run<O>(node: RootOperationNode, context: GuardContext): Promise<O[]> {
 		assertAllowedTree(node, context)
-		if (this.#readOnly && (context.root !== 'SelectQueryNode' || context.lock === true)) {
+		if (this.#readOnly && (context.root !== 'SelectQueryNode' || context.lock !== undefined)) {
 			throw new QueryRefusedError('this request is read-only: it reads, and no operation may write or lock a row')
 		}
 		// CompiledQuery's row type is a phantom: this is the one place where generated row types meet the wire.
@@ -149,7 +170,7 @@ export class Session {
 			const result = await kysely.transaction().setAccessMode('read only').execute((transaction) => transaction.executeQuery(compiled))
 			return result.rows
 		}
-		const result = await this.#executor.executeQuery(compiled)
+		const result = await this.#execute(compiled)
 		return result.rows
 	}
 
@@ -165,6 +186,111 @@ export class Session {
 	}
 }
 Object.freeze(Session.prototype)
+
+/** How long an invocation's transaction may sit idle before Postgres ends it, and its connection with it. */
+export const INVOCATION_IDLE_TIMEOUT_MS = 30_000
+
+const SQL_IDLE_TIMEOUT = "select set_config('idle_in_transaction_session_timeout', $1, true)"
+
+interface Opened {
+	readonly transaction: ControlledTransaction<LooseDB>
+	readonly session: Session
+}
+
+/**
+ * The one transaction of an invocation (a request, a webhook delivery): opened by its first statement, then ended
+ * once by the framework — committed after the handler returned and its output passed validation, rolled back
+ * otherwise. Every handle of the invocation runs in `session()`. Once ended, no statement runs in it again.
+ */
+export class InvocationTransaction {
+	readonly #database: Database
+	readonly #readOnly: boolean
+	#opened: Promise<Opened> | undefined
+	#ended = false
+	#failed = false
+
+	constructor(database: Database, readOnly: boolean) {
+		this.#database = database
+		this.#readOnly = readOnly
+	}
+
+	/** A `READ ONLY` transaction: a query's or an export's. */
+	get readOnly(): boolean {
+		return this.#readOnly
+	}
+
+	/** Whether the transaction was opened: an invocation that reached no data commits nothing. */
+	get opened(): boolean {
+		return this.#opened !== undefined
+	}
+
+	get ended(): boolean {
+		return this.#ended
+	}
+
+	/** The session the invocation's statements run in; the first call opens the transaction. */
+	session(): Promise<Session> {
+		if (this.#ended) {
+			return Promise.reject(new QueryRefusedError('this invocation has ended; its data handles run only while its handler runs'))
+		}
+		this.#opened ??= this.#open()
+		return this.#opened.then((opened) => opened.session)
+	}
+
+	async #open(): Promise<Opened> {
+		const transaction = await startTransaction(this.#database, this.#readOnly)
+		const session = new Session(transaction, undefined, this.#readOnly, () => {
+			this.#failed = true
+		})
+		try {
+			await executeFixed(session, CompiledQuery.raw(SQL_IDLE_TIMEOUT, [String(INVOCATION_IDLE_TIMEOUT_MS)]))
+		} catch (error) {
+			await transaction.rollback().execute()
+			throw error
+		}
+		return { transaction, session }
+	}
+
+	/**
+	 * Commits what the invocation wrote. A statement the database refused aborted the transaction, so it rolls back
+	 * and throws instead: Postgres would answer the COMMIT with a silent ROLLBACK.
+	 */
+	async commit(): Promise<void> {
+		if (this.#ended) {
+			throw new QueryRefusedError('this invocation has already ended')
+		}
+		this.#ended = true
+		const opened = this.#opened
+		if (opened === undefined) {
+			return
+		}
+		const { transaction } = await opened
+		if (this.#failed) {
+			await transaction.rollback().execute()
+			throw new QueryRefusedError('a statement of this invocation failed, so nothing it wrote commits')
+		}
+		await transaction.commit().execute()
+	}
+
+	/** Discards what the invocation wrote; idempotent, and never throws over the failure that caused it. */
+	async rollback(): Promise<void> {
+		if (this.#ended) {
+			return
+		}
+		this.#ended = true
+		const opened = this.#opened
+		if (opened === undefined) {
+			return
+		}
+		try {
+			const { transaction } = await opened
+			await transaction.rollback().execute()
+		} catch {
+			// The transaction never opened, or its connection is gone; either way nothing of it commits.
+		}
+	}
+}
+Object.freeze(InvocationTransaction.prototype)
 
 /**
  * A scalar parameter of a framework statement; Bun.SQL mis-binds arrays and JSON strings. No Date: these texts skip

@@ -135,7 +135,7 @@ function selections(table: string, names: readonly string[]): SelectionNode[] {
 	return names.map((name) => SelectionNode.create(column(table, name)))
 }
 
-function guard(root: GuardContext['root'], table: string, scope: OperationNode | undefined, lock?: true): GuardContext {
+function guard(root: GuardContext['root'], table: string, scope: OperationNode | undefined, lock?: 'share'): GuardContext {
 	return lock === undefined ? { root, table, joins: {}, scope } : { root, table, joins: {}, scope, lock }
 }
 
@@ -193,7 +193,7 @@ function collectionTable(models: TableModels, runtime: () => DataLayerRuntime, s
 	async function lockOwner(transaction: Session, grant: RefGrant): Promise<void> {
 		const name = owner.model.name
 		const scope = linksPredicate(name, linkValues(name, ownerLinks, grant))
-		const rows = await transaction.run(lockNode(name, owner.key, scope), guard('SelectQueryNode', name, scope, true))
+		const rows = await transaction.run(lockNode(name, owner.key, scope), guard('SelectQueryNode', name, scope, 'share'))
 		if (rows.length === 0) {
 			throw new NotFoundError(`${name} ${grant.id} is not where its Ref says; obtain a fresh Ref`)
 		}

@@ -332,7 +332,7 @@ describe('tables, joins and selections', () => {
 })
 
 describe('row locks', () => {
-	const lockContext: GuardContext = { ...selectContext, joins: {}, lock: true }
+	const lockContext: GuardContext = { ...selectContext, joins: {}, lock: 'share' }
 
 	test("the layer's destination check passes with the lock flag, and compiles to for share", () => {
 		const node = lockNode('notes', 'id', scope)
@@ -346,6 +346,22 @@ describe('row locks', () => {
 		refuses(forUpdate, lockContext, 'row locks are not allowed')
 		const rawModifier = { ...existsNode('notes', 'id', scope), endModifiers: base().modifyEnd(sql`for share`).toOperationNode().endModifiers }
 		refuses(rawModifier, lockContext)
+	})
+
+	test("a getForUpdate's lock passes only with the update flag; no other lock passes with it", () => {
+		const updateContext: GuardContext = { ...lockContext, lock: 'update' }
+		const forUpdate = lockNode('notes', 'id', scope, 'update')
+		expect(() => assertAllowedTree(forUpdate, updateContext)).not.toThrow()
+		expect(compiler.compileQuery(forUpdate, { queryId: 'q' }).sql).toEndWith('limit $2 for update')
+		refuses(forUpdate, lockContext, 'row locks are not allowed')
+		refuses(forUpdate, selectContext, 'is not allowed')
+		refuses(lockNode('notes', 'id', scope), updateContext, 'row locks are not allowed')
+		for (const builder of [base().forUpdate().noWait(), base().forUpdate().skipLocked(), base().forNoKeyUpdate(), base().forKeyShare()]) {
+			const node = { ...existsNode('notes', 'id', scope), endModifiers: builder.toOperationNode().endModifiers }
+			refuses(node, updateContext)
+		}
+		const of = { ...existsNode('notes', 'id', scope), endModifiers: base().forUpdate(['notes']).toOperationNode().endModifiers }
+		refuses(of, updateContext, 'row locks are not allowed')
 	})
 })
 

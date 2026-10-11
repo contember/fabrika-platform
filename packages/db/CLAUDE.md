@@ -12,33 +12,34 @@ Published (`publishConfig.access: public`): applications depend on it.
 
 ```bash
 bun run typecheck
-bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres (needs FABRIKA_TEST_POSTGRES_URL)
+bun test    # policy · derived-tables · tables · store · guard · hardening · type-attacks · codegen · testing · postgres, orm (need FABRIKA_TEST_POSTGRES_URL)
 ```
 
-| Module                 | What it owns                                                                                                                                   |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `builtins.ts`          | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                              |
-| `capability.ts`        | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                               |
-| `policy.ts`            | `defineTables` / `readTables`: the table policies, containment derived from the vocabulary, checked against the column list; row types.        |
-| `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.           |
-| `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                           |
-| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                          |
-| `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                        |
-| `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                         |
-| `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                 |
-| `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).                                        |
-| `store.ts`             | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                               |
-| `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                       |
-| `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`; browser-safe. |
-| `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                    |
-| `file-tables.ts`       | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                          |
-| `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                |
-| `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                          |
-| `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                     |
-| `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
-| `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).             |
-| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
-| `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                        |
+| Module                 | What it owns                                                                                                                                                   |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `builtins.ts`          | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                                              |
+| `capability.ts`        | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                                               |
+| `policy.ts`            | `defineTables` / `readTables`: the table policies, containment derived from the vocabulary, checked against the column list; row types.                        |
+| `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.                           |
+| `orm.ts`               | The mini-ORM at runtime: the `ctx.db` handles of one site, own-target read, `getForUpdate`, keyset lists, `unscoped`; `dataAccess`.                            |
+| `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                                           |
+| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                                          |
+| `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                                        |
+| `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                                         |
+| `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                                 |
+| `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `InvocationTransaction`, `applicationSchema` (`app_<id>`).                               |
+| `store.ts`             | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                                               |
+| `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                                       |
+| `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`, `dataAccessOf`; browser-safe. |
+| `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                                    |
+| `file-tables.ts`       | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                                          |
+| `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                                |
+| `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                                          |
+| `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                                     |
+| `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                          |
+| `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`).                             |
+| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                                  |
+| `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                                        |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
@@ -53,8 +54,10 @@ table's containment columns. `frameworkTablesOf` gives the framework the writes 
 appends one row to its inbox table (the declared columns only, answering nothing), and `c.webhook` keeps its
 bindings and delivery ids in `fabrika_webhook_bindings` and `fabrika_webhook_deliveries`. The job runner of
 `@fabrika/app` takes a job's lease in `fabrika_job_leases` (`frameworkTablesOf(…).jobs`). `fabrika db migrate`
-applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle. Not
-built yet: a store for `reference` tables, and reading an inbox.
+applies those tables (`@fabrika/db/migrations`) as the bundle `fabrika` before the application's `app` bundle.
+`dataAccessOf` gives the framework the mini-ORM (`orm.ts`): an `InvocationTransaction` per invocation and the handles of
+each staged-kit site's `ctx.db`, which read `reference` tables too. Not built yet: reading an inbox on the road (an
+`unscoped` declaration reads it).
 
 `@fabrika/db/testing` is the database half of the generated isolation tests (`fabrika db test-scaffold`, A11):
 `testDatabase` migrates a fresh `app_test_<hex>` schema with its own role family through `@fabrika/platform-node`'s
@@ -145,13 +148,16 @@ and the target `Ref`, so no handler can call it.
   from the binding and the signed body, never an unsigned header. Two concurrent copies of one delivery insert the
   same `(binding_id, delivery_id)`; exactly one succeeds and the other answers "already recorded". Never replace this
   with a read before the insert. `recordDelivery` first drops the binding's keys older than its retention bound.
-- **Every mutation of a job attempt is fenced by its lease** (`mutation()` in `store.ts` → `fencedTransaction`). The
+- **Every mutation of a job attempt is fenced by its lease** (`fencedWork` in `store.ts` → `fencedTransaction`). The
   authority's `fence()` names the attempt, or `null` in a request. In the mutation's transaction, before the write:
   a `for share` select requires the attempt's generation, holder and an unpassed `attempt_deadline`, and
   `statement_timeout` is set to the time left. Just before `COMMIT` the same check runs again. A failed check, a
   statement the deadline cancelled, or one `cancelInFlight` cancelled (the runner calls it when the attempt ends)
   rolls back with `LeaseLostError`. The lock makes a takeover or a renewal wait for the write, so no write of an old
-  generation commits after a newer one was granted. Never add a write path outside `mutation()`.
+  generation commits after a newer one was granted. A store's write runs in `fencedWork`; a handle's in its site's
+  session: an invocation's transaction (a request or a webhook delivery, which hold no lease) or a job's
+  `ctx.transaction`, which is `fencedWork`. A job's handles outside it refuse every write. Never add a write path
+  outside these.
 - **Every lease time is the database's clock.** `acquire`, `renew`, `finish`, `reapCrashed` and `claimOverdue` take
   durations and compute and compare with `now()` (`clock_timestamp()` inside a mutation's transaction, where `now()`
   is its start). Never bind a process timestamp: two containers' clocks disagree.
@@ -194,10 +200,13 @@ and the target `Ref`, so no handler can call it.
 - **An insert into a container, a child insert and a move lock the destination row first** (`FOR SHARE`,
   matched on the destination `Ref`'s whole chain, in the mutation's transaction; `lockDestination`), when a
   table owns the destination dimension. A
-  stale destination is 404 and nothing is written. The guard admits that one lock only with
-  `GuardContext.lock`.
-- **Mutations answer `{ id, version }` (and `move` the new chain), never row data.** A write action does
-  not include the read action; returning the row would leak columns the caller may not read.
+  stale destination is 404 and nothing is written. The guard admits that lock only with `GuardContext.lock: 'share'`,
+  and a handle's `getForUpdate` (`FOR UPDATE` of its own target in a mutation) only with `lock: 'update'`; it admits
+  no other lock, no `NOWAIT`, `SKIP LOCKED` or `OF`.
+- **Mutations answer `{ id, version }` (and `move` the new chain), never row data.** A capability reads its row only
+  through a handle's own-target read (`orm.ts`, `visibleFor`): a `Ref` of any action the table names gets the row
+  without every column that declares a read action other than exactly its own, the same columns `RowFor` omits from
+  the type. A store's `get` and every `Within` read by the table's read action.
 - **A column holds at most one stamped role.** The key, every containment column of the chain, `version`
   and `createdBy` are distinct columns, or `defineTables` refuses the policy (`checkStamps`). Otherwise
   one stamp overwrites another: `createdBy` on the key inserts the principal as the id, `version` on a
@@ -213,6 +222,8 @@ and the target `Ref`, so no handler can call it.
   says whether a value is an authentic capability of the current request. TypeScript checks method
   parameters bivariantly, so a widened handle passes a read `Ref` to `remove` without a cast — the
   runtime check is what refuses it.
+- **`ConflictError` and `NotFoundError` are internal.** The root exports neither: an application throws `@fabrika/app`'s,
+  and the framework maps these by `name` (409, 404).
 - **No raw handle leaves the package.** `Database` keeps its Kysely instance in a private field; the
   store reaches it through `sessionOf`, and `Session.run` guards every tree. Do not add a method that
   takes SQL, a builder or an unguarded node.
@@ -246,8 +257,16 @@ and the target `Ref`, so no handler can call it.
   Each element is validated before it is copied.
 - **Unknown keys in insert and update data are refused, not dropped**, so an agent learns about them.
   The key, scope columns, version and `createdBy` are stamped by the layer and can never be written.
-- **A column with its own read action** (`columns: { c: { read } }`) falls back to nothing: every
-  read needs the table's read action, so v1 never returns, filters or sorts by such a column.
+- **A column with its own read action** (`columns: { c: { read } }`) is read, filtered and sorted only by a capability
+  of exactly that action reading its own target; a read by the table's read action never returns it.
+- **An invocation's transaction ends once, and never commits after a refused statement.** `InvocationTransaction`
+  opens on its first statement (setting `idle_in_transaction_session_timeout`), and a statement the database refused
+  marks it failed: Postgres answers a COMMIT of an aborted transaction with a silent ROLLBACK, so `commit()` rolls back
+  and throws instead. Once ended, `session()` refuses. A query's (`readOnly`) is `READ ONLY`, and so is any invocation
+  while `DataLayerRuntime.readOnly` holds.
+- **Every handle checks its site first** (`DataSite.check`, the framework's binding to its invocation), then refuses
+  what the site's kind or declaration does not allow with the message its type gives, then runs the store's own
+  checks. A handle is built per invocation; never cache one across invocations or skip the check for a read.
 - **Codegen types a column exactly as `Bun.SQL` decodes it, or refuses it.** `int8` and `numeric` are
   strings (bound as a number, bigint or string), dates are `Date`, an enum is its label union; JSON,
   `bytea`, arrays and domains are refused rather than typed `unknown`, because the layer cannot bind

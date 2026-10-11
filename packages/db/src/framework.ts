@@ -3,15 +3,18 @@
 // hands the framework the locator its access check uses. Browser- and Worker-safe: the Worker adapter imports `boot`.
 
 import type { FileTables } from './file-tables'
+import type { DataAccess } from './orm'
 import { frameworkSideOf, type FrameworkTables, type Locator } from './registry'
 import type { DataLayerRuntime } from './store'
 
 export type { LeaseFence } from './capability'
+export type { InvocationTransaction, Session } from './database'
 export { LeaseLostError } from './errors'
 export { fileTableName } from './file-table-sql'
 export type { FileCollectionSpec, FileCollectionTable, FileTables, LiveFile, PendingFile, RemovableFile } from './file-tables'
 export type { NewWebhookBinding, WebhookBinding, WebhookTables } from './framework-tables'
 export type { JobLeases, JobLeaseState, JobOutcome, OverdueClaim } from './job-leases'
+export type { DataAccess, DataHandles, DataSite } from './orm'
 export type { FrameworkTables, Locator } from './registry'
 
 /** Whether `value` is an object `scoped(tables)` created, rather than a look-alike with the same fields. */
@@ -50,4 +53,16 @@ export function frameworkTablesOf(value: unknown): FrameworkTables {
 		throw new TypeError('not a data layer scoped(tables) created')
 	}
 	return side.framework
+}
+
+/**
+ * The mini-ORM of the layer `scoped(tables)` created: the invocation transactions and the `ctx.db` handles the
+ * framework builds per site. Each operation needs the layer bound first. Throws for any other value.
+ */
+export function dataAccessOf(value: unknown): DataAccess {
+	const side = frameworkSideOf(value)
+	if (side === undefined) {
+		throw new TypeError('not a data layer scoped(tables) created')
+	}
+	return side.data
 }

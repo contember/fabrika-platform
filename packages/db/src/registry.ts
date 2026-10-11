@@ -5,6 +5,7 @@
 import type { FileTables } from './file-tables'
 import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
+import type { DataAccess } from './orm'
 import type { DataLayerRuntime, TableProbe } from './store'
 
 /** Answers what the framework's access check reads from the database: an object's containers, by dimension. */
@@ -28,6 +29,8 @@ export interface FrameworkSide {
 	readonly framework: FrameworkTables
 	/** The untyped handle over one table that `@fabrika/db/testing` hands the isolation tests. */
 	probe(table: string): TableProbe
+	/** The mini-ORM: invocation transactions and the handles of `ctx.db`; usable once bound. */
+	readonly data: DataAccess
 }
 
 // Captured when the module loads, before application code: a later patch to WeakMap does not change the registry.

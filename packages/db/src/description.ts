@@ -205,56 +205,66 @@ export class ScopedSelect<Row, Selected, Children> {
 	}
 
 	#column(name: unknown): string {
-		const columns = namesOf(this.#shape.visible).join(', ')
-		if (typeof name !== 'string') {
-			throw new QueryRefusedError(
-				`a column is named by a string, not by ${typeof name === 'object' ? 'an expression' : typeof name} (columns: ${columns})`,
-			)
-		}
-		if (!isPlainIdentifier(name) || !inSet(this.#shape.visible, name)) {
-			throw new QueryRefusedError(`${name} is not a column of ${this.#state.table} (columns: ${columns})`)
-		}
-		return name
+		return columnOf(this.#shape, name)
 	}
 
 	#parseCondition(column: unknown, operator: unknown, value: unknown): Compare | Contains {
-		const name = this.#column(column)
-		if (operator === 'contains') {
-			if (typeof value !== 'string') {
-				throw new QueryRefusedError('contains takes a string')
-			}
-			return { kind: 'contains', column: name, text: value }
-		}
-		if (!isOperator(operator)) {
-			throw new QueryRefusedError(`operator ${String(operator)} is not allowed (allowed: ${OPERATOR_LIST.join(', ')}, contains)`)
-		}
-		const allowed = operator
-		if (allowed === 'in' || allowed === 'not in') {
-			const list = parseList(value, (item) => {
-				if (!isPrimitive(item)) {
-					throw new QueryRefusedError(`${allowed} takes plain values only`)
-				}
-				return item
-			})
-			if (list === undefined || list.length === 0) {
-				throw new QueryRefusedError(`${allowed} needs a non-empty plain array of values`)
-			}
-			return { kind: 'compare', column: name, operator: allowed, value: list }
-		}
-		if (allowed === 'is' || allowed === 'is not') {
-			if (value !== null) {
-				throw new QueryRefusedError(`${allowed} takes null only`)
-			}
-			return { kind: 'compare', column: name, operator: allowed, value: null }
-		}
-		if (!isPrimitive(value)) {
-			throw new QueryRefusedError('where takes a plain value (string, number, bigint, boolean or Date), not an expression')
-		}
-		return { kind: 'compare', column: name, operator: allowed, value }
+		return parseCondition(this.#shape, column, operator, value)
 	}
 }
 Object.freeze(ScopedSelect.prototype)
 Object.freeze(ScopedSelect)
+
+/** A column the shape lets a query name; a hidden one is refused like a missing one. */
+export function columnOf(shape: TableShape, name: unknown): string {
+	const columns = namesOf(shape.visible).join(', ')
+	if (typeof name !== 'string') {
+		throw new QueryRefusedError(
+			`a column is named by a string, not by ${typeof name === 'object' ? 'an expression' : typeof name} (columns: ${columns})`,
+		)
+	}
+	if (!isPlainIdentifier(name) || !inSet(shape.visible, name)) {
+		throw new QueryRefusedError(`${name} is not a column of ${shape.table} (columns: ${columns})`)
+	}
+	return name
+}
+
+/** One `[column, operator, value]` condition over a caller's values, checked before anything reads it further. */
+export function parseCondition(shape: TableShape, column: unknown, operator: unknown, value: unknown): Compare | Contains {
+	const name = columnOf(shape, column)
+	if (operator === 'contains') {
+		if (typeof value !== 'string') {
+			throw new QueryRefusedError('contains takes a string')
+		}
+		return { kind: 'contains', column: name, text: value }
+	}
+	if (!isOperator(operator)) {
+		throw new QueryRefusedError(`operator ${String(operator)} is not allowed (allowed: ${OPERATOR_LIST.join(', ')}, contains)`)
+	}
+	const allowed = operator
+	if (allowed === 'in' || allowed === 'not in') {
+		const list = parseList(value, (item) => {
+			if (!isPrimitive(item)) {
+				throw new QueryRefusedError(`${allowed} takes plain values only`)
+			}
+			return item
+		})
+		if (list === undefined || list.length === 0) {
+			throw new QueryRefusedError(`${allowed} needs a non-empty plain array of values`)
+		}
+		return { kind: 'compare', column: name, operator: allowed, value: list }
+	}
+	if (allowed === 'is' || allowed === 'is not') {
+		if (value !== null) {
+			throw new QueryRefusedError(`${allowed} takes null only`)
+		}
+		return { kind: 'compare', column: name, operator: allowed, value: null }
+	}
+	if (!isPrimitive(value)) {
+		throw new QueryRefusedError('where takes a plain value (string, number, bigint, boolean or Date), not an expression')
+	}
+	return { kind: 'compare', column: name, operator: allowed, value }
+}
 
 export function startSelect<Row, Children>(shape: TableShape): ScopedSelect<Row, Row, Children> {
 	const state: SelectState = {

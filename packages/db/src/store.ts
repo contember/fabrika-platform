@@ -19,7 +19,7 @@ import {
 	setOwn,
 } from './builtins'
 import { type CapabilityAuthority, MAX_WITHIN_VALUES, type Ref, type RefGrant, type Within, type WithinGrant } from './capability'
-import { type Database, type Session, sessionOf } from './database'
+import { type Database, InvocationTransaction, type Session, sessionOf } from './database'
 import {
 	finishSelect,
 	isPrimitive,
@@ -56,6 +56,7 @@ import {
 	selectNode,
 	updateNode,
 } from './nodes'
+import { dataAccess } from './orm'
 import {
 	type Acknowledgement,
 	type ActionOf,
@@ -90,11 +91,11 @@ export interface DataLayerRuntime {
 }
 
 /** Empty until the framework connects the layer at boot; every table handle of one `scoped` call shares it. */
-interface Connection {
+export interface Connection {
 	runtime: DataLayerRuntime | undefined
 }
 
-interface TableContext {
+export interface TableContext {
 	readonly model: TableModel
 	readonly parent: TableModel | undefined
 	/** The table that owns the dimension an insert or a move targets: the container's table, or a child's parent. */
@@ -104,7 +105,7 @@ interface TableContext {
 	readonly connection: Connection
 }
 
-function runtimeOf(connection: Connection): DataLayerRuntime {
+export function runtimeOf(connection: Connection): DataLayerRuntime {
 	const runtime = connection.runtime
 	if (runtime === undefined) {
 		throw new CapabilityError(
@@ -114,20 +115,20 @@ function runtimeOf(connection: Connection): DataLayerRuntime {
 	return runtime
 }
 
-interface DimensionScopeModel {
+export interface DimensionScopeModel {
 	readonly dimension: string
 	readonly key: string
 	readonly container: Container | undefined
 }
 
-function dimensionScope(model: TableModel): DimensionScopeModel {
+export function dimensionScope(model: TableModel): DimensionScopeModel {
 	if (model.scope.mode !== 'dimension') {
 		throw new CapabilityError(`${model.name} is not a dimension table`)
 	}
 	return model.scope
 }
 
-function childScope(context: TableContext): { readonly key: string; readonly column: string; readonly parent: DimensionScopeModel } {
+export function childScope(context: TableContext): { readonly key: string; readonly column: string; readonly parent: DimensionScopeModel } {
 	const scope = context.model.scope
 	if (scope.mode !== 'child' || context.parent === undefined) {
 		throw new CapabilityError(`${context.model.name} is not a child table`)
@@ -136,11 +137,11 @@ function childScope(context: TableContext): { readonly key: string; readonly col
 }
 
 /** The dimension that lists and inserts are scoped by: the container, or for a top-level table its own. */
-function listDimension(scope: DimensionScopeModel): string {
+export function listDimension(scope: DimensionScopeModel): string {
 	return scope.container?.dimension ?? scope.dimension
 }
 
-function requiredAction(context: TableContext, operation: Operation): string {
+export function requiredAction(context: TableContext, operation: Operation): string {
 	const action = context.model.actions[operation]
 	if (action === undefined) {
 		throw new CapabilityError(`${context.model.name} allows no ${operation}; its policy declares no ${operation} action`)
@@ -236,31 +237,31 @@ function withinPredicate(model: TableModel, column: string, grant: WithinGrant):
 }
 
 /** The object a Ref of the model's own dimension names, with every link of its chain. */
-function selfLinks(model: TableModel): readonly Container[] {
+export function selfLinks(model: TableModel): readonly Container[] {
 	const scope = dimensionScope(model)
 	return [{ dimension: scope.dimension, column: scope.key }, ...model.chain]
 }
 
 /** This object, over the whole chain the Ref carries. */
-function objectPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode {
+export function objectPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode {
 	const scope = dimensionScope(context.model)
 	const grant = refGrant(context, capability, scope.dimension, operation)
 	return linksPredicate(context.model.name, linkValues(context.model.name, selfLinks(context.model), grant))
 }
 
 /** Rows of a dimension table within the scope values of its list dimension. */
-function dimensionListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
+export function dimensionListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
 	const scope = dimensionScope(context.model)
 	const grant = withinGrant(context, capability, listDimension(scope), operation)
 	return withinPredicate(context.model, scope.container?.column ?? scope.key, grant)
 }
 
 /** Rows of a child table that belong to the parent object the Ref names, over the whole chain. */
-function parentPredicate(context: TableContext, grant: RefGrant): OperationNode {
+export function parentPredicate(context: TableContext, grant: RefGrant): OperationNode {
 	return linksPredicate(context.model.name, linkValues(context.model.name, context.model.chain, grant))
 }
 
-function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
+export function childListPredicate(context: TableContext, capability: unknown, operation: Operation): OperationNode | undefined {
 	const scope = childScope(context)
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	if (grant.kind === 'ref') {
@@ -271,7 +272,7 @@ function childListPredicate(context: TableContext, capability: unknown, operatio
 	return withinPredicate(context.model, scope.parent.container?.column ?? scope.column, grant)
 }
 
-function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
+export function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
 	const scope = childScope(context)
 	if (typeof key !== 'string' || key.length === 0) {
 		throw new QueryRefusedError(`a ${context.model.name} row is addressed by its parent Ref and its ${scope.key}`)
@@ -280,23 +281,36 @@ function childObjectPredicate(context: TableContext, parent: unknown, key: unkno
 	return allOf([equals(context.model.name, scope.key, key), parentPredicate(context, grant)])
 }
 
-function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {
+export function guard(context: TableContext, root: RootKind, scope: OperationNode | undefined): GuardContext {
 	return { root, table: context.model.name, joins: root === 'SelectQueryNode' ? context.joins : {}, scope }
 }
 
-function session(context: TableContext): Session {
-	return sessionOf(runtimeOf(context.connection))
+/**
+ * Where a table operation's statements run: a store's own sessions, one transaction per mutation, or the mini-ORM's
+ * invocation transaction (`orm.ts`), where every statement of a handler runs in one.
+ */
+export interface Runner {
+	/** The session a read runs in. */
+	read(): Promise<Session>
+	/** Runs `work` in one transaction. */
+	write<T>(work: (transaction: Session) => Promise<T>): Promise<T>
 }
 
 /**
- * Every mutation runs here, in one transaction. In a job attempt that transaction is fenced by the attempt's lease
- * (`fencedTransaction`): an attempt that lost it, or ran out of time, writes nothing.
+ * Every mutation of a store runs in its own transaction. In a job attempt that transaction is fenced by the attempt's
+ * lease (`fencedTransaction`): an attempt that lost it, or ran out of time, writes nothing.
  */
-function mutation<T>(context: TableContext, work: (transaction: Session) => Promise<T>): Promise<T> {
-	const runtime = runtimeOf(context.connection)
+export function fencedWork<T>(runtime: DataLayerRuntime, work: (transaction: Session) => Promise<T>): Promise<T> {
 	const fence = runtime.capabilities.fence()
 	const session = sessionOf(runtime)
 	return fence === null ? session.transaction(work) : fencedTransaction(session, fence, work)
+}
+
+function storeRunner(context: TableContext): Runner {
+	return {
+		read: async () => sessionOf(runtimeOf(context.connection)),
+		write: (work) => fencedWork(runtimeOf(context.connection), work),
+	}
 }
 
 /**
@@ -304,7 +318,7 @@ function mutation<T>(context: TableContext, work: (transaction: Session) => Prom
  * non-enumerable key slips past. Every key is checked before any value is read; unknown keys are refused, not
  * dropped, so an agent learns about them.
  */
-function readValues(values: unknown, allowed: NameSet, what: 'insert' | 'update', table: string): Map<string, Primitive | null> {
+export function readValues(values: unknown, allowed: NameSet, what: 'insert' | 'update', table: string): Map<string, Primitive | null> {
 	if (typeof values !== 'object' || values === null || isArray(values)) {
 		throw new QueryRefusedError(`${what} takes an object of column values`)
 	}
@@ -354,7 +368,7 @@ function stampInsert(context: TableContext, grant: RefGrant, values: Map<string,
 	}
 }
 
-function versionArgument(context: TableContext, options: readonly unknown[]): OperationNode | undefined {
+export function versionArgument(context: TableContext, options: readonly unknown[]): OperationNode | undefined {
 	const version = context.model.version
 	if (version === undefined) {
 		return undefined
@@ -362,12 +376,13 @@ function versionArgument(context: TableContext, options: readonly unknown[]): Op
 	const first = options[0]
 	const expected: unknown = typeof first === 'object' && first !== null ? Reflect.get(first, 'expectVersion') : undefined
 	if (typeof expected !== 'number' || !isSafeInteger(expected)) {
-		throw new QueryRefusedError(`${context.model.name} has a version column; update takes { expectVersion: number }`)
+		throw new QueryRefusedError(`${context.model.name} has a version column; update and remove take { expectVersion: number }`)
 	}
 	return BinaryOperationNode.create(column(context.model.name, version), OperatorNode.create('='), ValueNode.create(expected))
 }
 
 async function selectRows<S>(context: TableContext, scope: OperationNode | undefined, state: SelectState, action: string): Promise<S[]> {
+	const run = storeRunner(context)
 	for (let index = 0; index < state.joins.length; index++) {
 		const join = state.joins[index]
 		if (join !== undefined && join.join.readAction !== action) {
@@ -377,20 +392,21 @@ async function selectRows<S>(context: TableContext, scope: OperationNode | undef
 	if (scope === undefined) {
 		return []
 	}
-	return session(context).run<S>(selectNode(state, context.model.visible, scope), guard(context, 'SelectQueryNode', scope))
+	return (await run.read()).run<S>(selectNode(state, context.model.visible, scope), guard(context, 'SelectQueryNode', scope))
 }
 
-async function selectOne<O>(context: TableContext, scope: OperationNode): Promise<O> {
+/** One row by its scope predicate, with `visible` columns (the table's read action's, unless a capability reads its own). */
+export async function selectOne<O>(context: TableContext, run: Runner, scope: OperationNode, visible = context.model.visible): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
-	const [row] = await session(context).run<O>(selectNode(state, context.model.visible, scope), guard(context, 'SelectQueryNode', scope))
+	const [row] = await (await run.read()).run<O>(selectNode(state, visible, scope), guard(context, 'SelectQueryNode', scope))
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
 	return row
 }
 
-function answer(context: TableContext): ReturningNode {
+export function answer(context: TableContext): ReturningNode {
 	return acknowledgement(context.model.name, keyOf(context.model), context.model.version)
 }
 
@@ -408,7 +424,7 @@ function checkVersion(context: TableContext, row: unknown): void {
 	}
 }
 
-function keyOf(model: TableModel): string {
+export function keyOf(model: TableModel): string {
 	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
 		throw new CapabilityError(`${model.name} is not written by handlers`)
 	}
@@ -426,14 +442,19 @@ async function lockDestination(transaction: Session, context: TableContext, gran
 	}
 	const scope = linksPredicate(owner.name, linkValues(owner.name, selfLinks(owner), grant))
 	const node = lockNode(owner.name, keyOf(owner), scope)
-	const rows = await transaction.run(node, { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, lock: true })
+	const rows = await transaction.run(node, { root: 'SelectQueryNode', table: owner.name, joins: {}, scope, lock: 'share' })
 	if (rows.length === 0) {
 		throw new NotFoundError(`${owner.name} ${grant.id} is not where its Ref says; obtain a fresh Ref`)
 	}
 }
 
-async function insertRow<O>(context: TableContext, values: ReadonlyMap<string, Primitive | null>, destination: RefGrant | undefined): Promise<O> {
-	return mutation(context, async (transaction) => {
+export async function insertRow<O>(
+	context: TableContext,
+	run: Runner,
+	values: ReadonlyMap<string, Primitive | null>,
+	destination: RefGrant | undefined,
+): Promise<O> {
+	return run.write(async (transaction) => {
 		if (destination !== undefined) {
 			await lockDestination(transaction, context, destination)
 		}
@@ -446,41 +467,77 @@ async function insertRow<O>(context: TableContext, values: ReadonlyMap<string, P
 	})
 }
 
-/** Zero changed rows → one follow-up read in the same transaction → 404 when the object is gone, else 409. */
-async function updateRow<O>(
+/**
+ * The rows a write addresses: the scope predicate, and the caller's conditions beside it (an unscoped row's key, whose
+ * scope predicate is `true`).
+ */
+export interface Addressed {
+	readonly scope: OperationNode
+	readonly conditions?: OperationNode
+}
+
+function addressed(scope: OperationNode): Addressed {
+	return { scope }
+}
+
+function conditionsWith(target: Addressed, expectedVersion: OperationNode | undefined): OperationNode | undefined {
+	if (target.conditions === undefined) {
+		return expectedVersion
+	}
+	return expectedVersion === undefined ? target.conditions : allOf([target.conditions, expectedVersion])
+}
+
+/** A zero-row write under `expectVersion`: 409 when the row is still there, 404 when it is gone. */
+async function missingOrChanged(
 	context: TableContext,
-	scope: OperationNode,
+	transaction: Session,
+	target: Addressed,
+	expectedVersion: OperationNode | undefined,
+): Promise<never> {
+	const table = context.model.name
+	if (expectedVersion !== undefined) {
+		const node = existsNode(table, keyOf(context.model), target.scope, target.conditions)
+		const existing = await transaction.run(node, guard(context, 'SelectQueryNode', target.scope))
+		if (existing.length > 0) {
+			throw new ConflictError(`${table} was changed by someone else; read it again and retry`)
+		}
+	}
+	throw new NotFoundError(`${table} not found`)
+}
+
+/** Zero changed rows → one follow-up read in the same transaction → 404 when the object is gone, else 409. */
+export async function updateRow<O>(
+	context: TableContext,
+	run: Runner,
+	target: Addressed,
 	changes: ReadonlyMap<string, Primitive | null>,
 	expectedVersion: OperationNode | undefined,
 	destination?: RefGrant,
 ): Promise<O> {
 	const table = context.model.name
-	const node = updateNode(table, changes, context.model.version, scopedWhere(expectedVersion, scope), answer(context))
-	return mutation(context, async (transaction) => {
+	const node = updateNode(table, changes, context.model.version, scopedWhere(conditionsWith(target, expectedVersion), target.scope), answer(context))
+	return run.write(async (transaction) => {
 		if (destination !== undefined) {
 			await lockDestination(transaction, context, destination)
 		}
-		const [row] = await transaction.run<O>(node, guard(context, 'UpdateQueryNode', scope))
+		const [row] = await transaction.run<O>(node, guard(context, 'UpdateQueryNode', target.scope))
 		if (row !== undefined) {
 			checkVersion(context, row)
 			return row
 		}
-		if (expectedVersion !== undefined) {
-			const existing = await transaction.run(existsNode(table, keyOf(context.model), scope), guard(context, 'SelectQueryNode', scope))
-			if (existing.length > 0) {
-				throw new ConflictError(`${table} was changed by someone else; read it again and retry`)
-			}
-		}
-		throw new NotFoundError(`${table} not found`)
+		return missingOrChanged(context, transaction, target, expectedVersion)
 	})
 }
 
-async function removeRow(context: TableContext, scope: OperationNode): Promise<void> {
-	const node = deleteNode(context.model.name, scopedWhere(undefined, scope), keyOf(context.model))
-	const rows = await mutation(context, (transaction) => transaction.run(node, guard(context, 'DeleteQueryNode', scope)))
-	if (rows.length === 0) {
-		throw new NotFoundError(`${context.model.name} not found`)
-	}
+/** Like `updateRow`: under `expectVersion`, a row that changed is 409 and a missing one 404. */
+export async function removeRow(context: TableContext, run: Runner, target: Addressed, expectedVersion?: OperationNode): Promise<void> {
+	const node = deleteNode(context.model.name, scopedWhere(conditionsWith(target, expectedVersion), target.scope), keyOf(context.model))
+	await run.write(async (transaction) => {
+		const rows = await transaction.run(node, guard(context, 'DeleteQueryNode', target.scope))
+		if (rows.length === 0) {
+			await missingOrChanged(context, transaction, target, expectedVersion)
+		}
+	})
 }
 
 type Columns<Row> = keyof Row & string
@@ -558,7 +615,12 @@ function aggregateFilter<Row>(context: TableContext, where: AggregateSpec<Row>['
 	return state
 }
 
-async function aggregateRows<Row, O>(context: TableContext, scope: OperationNode | undefined, spec: AggregateSpec<Row>): Promise<O[]> {
+export async function aggregateRows<Row, O>(
+	context: TableContext,
+	run: Runner,
+	scope: OperationNode | undefined,
+	spec: AggregateSpec<Row>,
+): Promise<O[]> {
 	if (typeof spec !== 'object' || spec === null) {
 		throw new QueryRefusedError('aggregate takes { groupBy, count, sum, min, max, where }')
 	}
@@ -568,11 +630,11 @@ async function aggregateRows<Row, O>(context: TableContext, scope: OperationNode
 		return []
 	}
 	const node = aggregateNode(context.model.name, columns, filter?.conditions ?? [], scope)
-	return session(context).run<O>(node, guard(context, 'SelectQueryNode', scope))
+	return (await run.read()).run<O>(node, guard(context, 'SelectQueryNode', scope))
 }
 
 /** `DimensionTable.insert` over a capability nobody type-checked; the table probe of `@fabrika/db/testing` calls it too. */
-function insertIntoDimension<O>(context: TableContext, target: unknown, values: unknown): Promise<O> {
+export function insertIntoDimension<O>(context: TableContext, run: Runner, target: unknown, values: unknown): Promise<O> {
 	const scope = dimensionScope(context.model)
 	const grant = refGrant(context, target, listDimension(scope), 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model.name)
@@ -580,17 +642,17 @@ function insertIntoDimension<O>(context: TableContext, target: unknown, values: 
 		// The object does not exist yet; this only refuses a chain the table has no column for.
 		linkValues(context.model.name, [{ dimension: scope.dimension, column: scope.key }], grant)
 		stampInsert(context, grant, row, scope.key, grant.id)
-		return insertRow(context, row, undefined)
+		return insertRow(context, run, row, undefined)
 	}
 	stampInsert(context, grant, row, scope.key, Bun.randomUUIDv7())
 	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
 		row.set(link.column, value)
 	}
-	return insertRow(context, row, grant)
+	return insertRow(context, run, row, grant)
 }
 
 /** `ChildTable.insert` over a capability nobody type-checked. */
-function insertIntoChild<O>(context: TableContext, parent: unknown, values: unknown): Promise<O> {
+export function insertIntoChild<O>(context: TableContext, run: Runner, parent: unknown, values: unknown): Promise<O> {
 	const scope = childScope(context)
 	const grant = refGrant(context, parent, scope.parent.dimension, 'insert')
 	const row = readValues(values, context.model.insert, 'insert', context.model.name)
@@ -598,7 +660,7 @@ function insertIntoChild<O>(context: TableContext, parent: unknown, values: unkn
 	for (const { link, value } of linkValues(context.model.name, context.model.chain, grant)) {
 		row.set(link.column, value)
 	}
-	return insertRow(context, row, grant)
+	return insertRow(context, run, row, grant)
 }
 
 type ReadAction<P, T> = ActionOf<P, T, 'read'>
@@ -628,7 +690,7 @@ export class DimensionTable<DB, P, T extends string> {
 	}
 
 	async get(ref: Ref<DimensionOf<P, T>, ReadAction<P, T>>): Promise<Row<DB, P, T>> {
-		return selectOne(this.#context, objectPredicate(this.#context, ref, 'read'))
+		return selectOne(this.#context, storeRunner(this.#context), objectPredicate(this.#context, ref, 'read'))
 	}
 
 	/**
@@ -636,7 +698,7 @@ export class DimensionTable<DB, P, T extends string> {
 	 * the database), or for a top-level table the object the `Ref` names. Answers an acknowledgement, not the row.
 	 */
 	async insert(target: Ref<ListDimensionOf<P, T>, ActionOf<P, T, 'insert'>>, values: InsertValues<DB, P, T>): Promise<Acknowledgement<P, T>> {
-		return insertIntoDimension(this.#context, target, values)
+		return insertIntoDimension(this.#context, storeRunner(this.#context), target, values)
 	}
 
 	async update(
@@ -647,12 +709,12 @@ export class DimensionTable<DB, P, T extends string> {
 		const context = this.#context
 		const scope = objectPredicate(context, ref, 'update')
 		const changes = readValues(values, context.model.update, 'update', context.model.name)
-		return updateRow(context, scope, changes, versionArgument(context, options))
+		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
 	async remove(ref: Ref<DimensionOf<P, T>, ActionOf<P, T, 'delete'>>): Promise<void> {
 		const context = this.#context
-		await removeRow(context, objectPredicate(context, ref, 'delete'))
+		await removeRow(context, storeRunner(context), addressed(objectPredicate(context, ref, 'delete')))
 	}
 
 	/**
@@ -673,7 +735,7 @@ export class DimensionTable<DB, P, T extends string> {
 		const target = refGrant(context, to, container.dimension, 'insert')
 		const values = linkValues(context.model.name, context.model.chain, target)
 		const changes = new Map<string, Primitive | null>(values.map(({ link, value }) => [link.column, value]))
-		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, scope, changes, undefined, target)
+		const acknowledged = await updateRow<Acknowledgement<P, T>>(context, storeRunner(context), addressed(scope), changes, undefined, target)
 		return { ...acknowledged, chain: Object.fromEntries(values.map(({ link, value }) => [link.dimension, value])) }
 	}
 
@@ -681,7 +743,7 @@ export class DimensionTable<DB, P, T extends string> {
 		within: Within<ListDimensionOf<P, T>, ReadAction<P, T>>,
 		spec: S,
 	): Promise<AggregateRow<Row<DB, P, T>, S>[]> {
-		return aggregateRows(this.#context, dimensionListPredicate(this.#context, within, 'read'), spec)
+		return aggregateRows(this.#context, storeRunner(this.#context), dimensionListPredicate(this.#context, within, 'read'), spec)
 	}
 }
 Object.freeze(DimensionTable.prototype)
@@ -713,12 +775,12 @@ export class ChildTable<DB, P, T extends string> {
 	}
 
 	async get(parent: Ref<ParentDimension<P, T>, ReadAction<P, T>>, key: string): Promise<Row<DB, P, T>> {
-		return selectOne(this.#context, childObjectPredicate(this.#context, parent, key, 'read'))
+		return selectOne(this.#context, storeRunner(this.#context), childObjectPredicate(this.#context, parent, key, 'read'))
 	}
 
 	/** Under the parent the Ref names, whose chain is checked against the database. Answers an acknowledgement. */
 	async insert(parent: Ref<ParentDimension<P, T>, ActionOf<P, T, 'insert'>>, values: InsertValues<DB, P, T>): Promise<Acknowledgement<P, T>> {
-		return insertIntoChild(this.#context, parent, values)
+		return insertIntoChild(this.#context, storeRunner(this.#context), parent, values)
 	}
 
 	async update(
@@ -730,16 +792,16 @@ export class ChildTable<DB, P, T extends string> {
 		const context = this.#context
 		const scope = childObjectPredicate(context, parent, key, 'update')
 		const changes = readValues(values, context.model.update, 'update', context.model.name)
-		return updateRow(context, scope, changes, versionArgument(context, options))
+		return updateRow(context, storeRunner(context), addressed(scope), changes, versionArgument(context, options))
 	}
 
 	async remove(parent: Ref<ParentDimension<P, T>, ActionOf<P, T, 'delete'>>, key: string): Promise<void> {
 		const context = this.#context
-		await removeRow(context, childObjectPredicate(context, parent, key, 'delete'))
+		await removeRow(context, storeRunner(context), addressed(childObjectPredicate(context, parent, key, 'delete')))
 	}
 
 	async aggregate<const S extends AggregateSpec<Row<DB, P, T>>>(scope: ChildListScope<P, T>, spec: S): Promise<AggregateRow<Row<DB, P, T>, S>[]> {
-		return aggregateRows(this.#context, childListPredicate(this.#context, scope, 'read'), spec)
+		return aggregateRows(this.#context, storeRunner(this.#context), childListPredicate(this.#context, scope, 'read'), spec)
 	}
 }
 Object.freeze(ChildTable.prototype)
@@ -773,26 +835,29 @@ function probeOf(context: TableContext): TableProbe {
 	}
 	const list = (capability: unknown): OperationNode | undefined =>
 		child ? childListPredicate(context, capability, 'read') : dimensionListPredicate(context, capability, 'read')
+	const run = storeRunner(context)
 	return freeze({
 		mode: child ? 'child' : 'dimension',
-		get: async (capability: unknown, key?: string) => selectOne<Readonly<Record<string, unknown>>>(context, object(capability, key, 'read')),
+		get: async (capability: unknown, key?: string) => selectOne<Readonly<Record<string, unknown>>>(context, run, object(capability, key, 'read')),
 		select: async (capability: unknown) => {
 			const start = startSelect<Readonly<Record<string, unknown>>, NoColumns>(context.shape)
 			return selectRows<Readonly<Record<string, unknown>>>(context, list(capability), finishSelect(start, start), requiredAction(context, 'read'))
 		},
 		count: async (capability: unknown) => {
-			const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(context, list(capability), { count: true })
+			const [row] = await aggregateRows<Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>>(context, run, list(capability), {
+				count: true,
+			})
 			const count = row === undefined ? '0' : ownEntry(row, 'count')
 			return typeof count === 'string' ? count : '0'
 		},
 		insert: async (capability: unknown, values: unknown) =>
-			child ? insertIntoChild(context, capability, values) : insertIntoDimension(context, capability, values),
+			child ? insertIntoChild(context, run, capability, values) : insertIntoDimension(context, run, capability, values),
 		update: async (capability: unknown, key: string | undefined, values: unknown, expectVersion?: number) => {
 			const scope = object(capability, key, 'update')
 			const changes = readValues(values, context.model.update, 'update', context.model.name)
-			return updateRow(context, scope, changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
+			return updateRow(context, run, addressed(scope), changes, versionArgument(context, expectVersion === undefined ? [] : [{ expectVersion }]))
 		},
-		remove: async (capability: unknown, key?: string) => removeRow(context, object(capability, key, 'delete')),
+		remove: async (capability: unknown, key?: string) => removeRow(context, run, addressed(object(capability, key, 'delete'))),
 	})
 }
 
@@ -867,6 +932,10 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 		if (model === undefined || model.scope.mode !== mode) {
 			throw new QueryRefusedError(`${String(table)} is not a ${mode} table`)
 		}
+		return contextOf(model)
+	}
+
+	function contextOf(model: TableModel): TableContext {
 		const parent = model.scope.mode === 'child' ? modelOf(models, model.scope.parent) : undefined
 		const joinable = joinShapes(models, model)
 		const joins: Record<string, readonly ForeignKeyPair[]> = {}
@@ -913,6 +982,20 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			appendToInbox: (form: string, values: Readonly<Record<string, unknown>>) => appendToInbox(models, runtimeOf(connection), form, values),
 			webhooks: webhookTables(() => runtimeOf(connection)),
 			jobs: jobLeases(() => runtimeOf(connection)),
+		}),
+		data: dataAccess({
+			models,
+			contextOf(table: string): TableContext {
+				const model = modelOf(models, table)
+				if (model === undefined) {
+					throw new QueryRefusedError(`${String(table)} is not a table of src/db/tables.ts`)
+				}
+				return contextOf(model)
+			},
+			runtime: () => runtimeOf(connection),
+			newSession: (runtime) => sessionOf(runtime),
+			newInvocation: (runtime, readOnly) => new InvocationTransaction(runtime.database, readOnly || runtime.readOnly?.() === true),
+			fenced: (runtime, work) => fencedWork(runtime, work),
 		}),
 	})
 	return database
@@ -961,7 +1044,7 @@ async function appendToInbox(models: TableModels, runtime: DataLayerRuntime, for
 }
 
 /** The table that owns `dimension`: the one dimension table scoped by it (`defineTables` refuses a second). */
-function ownerOf(models: TableModels, dimension: string): TableModel | undefined {
+export function ownerOf(models: TableModels, dimension: string): TableModel | undefined {
 	const names = ownKeys(models)
 	for (let index = 0; index < names.length; index++) {
 		const model = modelOf(models, names[index] ?? '')
