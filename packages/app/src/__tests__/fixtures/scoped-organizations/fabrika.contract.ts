@@ -3,6 +3,7 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
+import { vocabulary } from './src/vocabulary'
 
 export const Note = z.strictObject({ id: z.uuid(), title: z.string() })
 export const NoteList = z.strictObject({ items: z.array(Note) })
@@ -10,21 +11,7 @@ export const ById = z.strictObject({ id: z.uuid() })
 export const NewNote = z.strictObject({ workspaceId: z.string(), title: z.string().min(1) })
 export const Located = z.strictObject({ id: z.string(), workspace: z.string(), organization: z.string() })
 
-export const contract = defineContract({
-	app: 'notes',
-	dimensions: {
-		organization: {},
-		workspace: { in: 'organization' },
-		note: { in: 'workspace' },
-	},
-	actions: {
-		'notes.read': 'Read notes',
-		'notes.write': 'Create and edit notes',
-	},
-	roles: {
-		editor: { grants: ['notes.read', 'notes.write'] },
-	},
-}, (c) => ({
+export const contract = defineContract(vocabulary, (c) => ({
 	api: c.rpc('/api', { callers: ['human'] }, {
 		notes: {
 			list: c.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } }),

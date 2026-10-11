@@ -2,27 +2,14 @@
 
 import { defineContract } from '@fabrika/app/contract'
 import { z } from 'zod/v4'
+import { vocabulary } from './src/vocabulary'
 
 export const Note = z.strictObject({ id: z.uuid(), title: z.string() })
 
 export const MAX_BYTES = 262144
 export const MAX_PER_NOTE = 3
 
-export const contract = defineContract({
-	app: 'notes',
-	dimensions: {
-		workspace: {},
-		note: { in: 'workspace' },
-	},
-	actions: {
-		'notes.read': 'Read notes',
-		'notes.write': 'Create and edit notes',
-		'notes.delete': 'Delete notes',
-	},
-	roles: {
-		editor: { grants: ['notes.read', 'notes.write', 'notes.delete'] },
-	},
-}, (c) => ({
+export const contract = defineContract(vocabulary, (c) => ({
 	api: c.rpc('/api', { callers: ['human'] }, {
 		notes: {
 			get: c.query({ input: z.strictObject({ id: z.uuid() }), output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } }),

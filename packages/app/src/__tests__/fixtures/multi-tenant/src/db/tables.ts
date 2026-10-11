@@ -1,7 +1,8 @@
 import { defineTables } from '@fabrika/db/tables'
+import { vocabulary } from '../vocabulary'
 import { columns, type DB } from './schema.generated'
 
-export const tables = defineTables<DB, 'notes.read' | 'notes.write' | 'notes.share' | 'contacts.read'>(columns)({
+export const tables = defineTables<DB, typeof vocabulary>(vocabulary, columns)({
 	notes: {
 		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
 		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write' },
