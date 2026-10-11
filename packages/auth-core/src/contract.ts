@@ -20,6 +20,11 @@ export interface ContractArtifact extends EndpointTable {
 	readonly imports: Readonly<Record<string, ImportArtifact>>
 	readonly csp: CspExtensions
 	readonly tables: Readonly<Record<string, TablePolicyArtifact>>
+	/**
+	 * The reach each site declares off the paved road, by site: an endpoint's id (a procedure or a webhook), or
+	 * `job:<name>`. Absent when no site declares any, so the digest of a contract without one stays what it was.
+	 */
+	readonly declared?: Readonly<Record<string, DeclaredReach>>
 }
 
 // ── The endpoint table ──────────────────────────────────────────────────────────────────────────
@@ -314,6 +319,20 @@ export interface ImportArtifact {
 	/** The endpoint ids whose handlers may call the import. */
 	readonly usedBy: readonly string[]
 	readonly timeoutMs: number | null
+}
+
+/** `job:<name>`: a job's key in `ContractArtifact.declared`; an endpoint is keyed by its id. */
+export const JOB_SITE_PREFIX = 'job:'
+
+/**
+ * What one site declares beyond its capability: `ctx.sql` in a mode, tables it reaches unscoped and in which mode, the
+ * imports it calls, the link mount it issues. A review signal for the approver, never an enforcement decision.
+ */
+export interface DeclaredReach {
+	readonly sql: 'read' | 'write' | null
+	readonly unscoped: Readonly<Record<string, 'read' | 'write'>>
+	readonly connect: readonly string[]
+	readonly issues: string | null
 }
 
 export interface CspExtensions {

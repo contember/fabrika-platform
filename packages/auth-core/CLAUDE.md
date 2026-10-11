@@ -100,13 +100,16 @@ bun test               # app-environment · canonical-path · contract-canonical
   JSON; its zod schemas live where it is read (`@fabrika/app/contract` for the build,
   `proxy-core/manifest` for the proxy). Every optional field is
   normalized to `null`, `[]` or `{}`, because two producers — `compileContract` over the evaluated
-  module and the static reader over source — must emit the same artifact. Keep new fields that way.
+  module and the static reader over source — must emit the same artifact. Keep new fields that way. One field
+  is absent instead: `declared` (what a site of the staged kit declares off the paved road, by endpoint id or
+  `job:<name>`) appears only when some site declares something, so a contract without one keeps its digest and the
+  digests stored approvals name.
   `SchemaShape` represents exactly the zod subset of `packages/check/CLAUDE.md`; extend the two together
   (`@fabrika/app`'s `schema-shape.ts` reads one into the other).
 - **An artifact is canonical: declaration order never reaches it.** `canonicalizeArtifact` sorts every array
   whose order carries no meaning — `endpoints` by id, `reservedPrefixes`, role `grants` and `assignableBy`, RPC
   and endpoint `callers`, link `grants`, webhook and job `actions`, export `consumers`, import `procedures` and
-  `usedBy`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
+  `usedBy`, a declared site's `connect`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
   `inherit`, enum `values` — by code unit. Only two arrays are ordered, because the order changes what a schema
   admits: tuple `items` and union `options`. `canonicalArtifactJson` also sorts object keys; it is the only
   serialization a digest of an artifact may be taken over. A new array field is unordered unless it is added to

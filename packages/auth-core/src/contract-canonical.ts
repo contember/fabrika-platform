@@ -41,6 +41,9 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		tables: mapValues(artifact.tables, canonicalTable),
 		endpoints: artifact.endpoints.map(canonicalizeEndpoint).sort((a, b) => compare(a.id, b.id)),
 		reservedPrefixes: sorted(artifact.reservedPrefixes),
+		...(artifact.declared === undefined
+			? {}
+			: { declared: mapValues(artifact.declared, (reach) => ({ ...reach, connect: sorted(reach.connect) })) }),
 	}
 }
 

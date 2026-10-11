@@ -11,6 +11,7 @@ import {
 	type ContractArtifact,
 	type CspExtensions,
 	type CspSource,
+	type DeclaredReach,
 	type DimensionArtifact,
 	type EndpointRequirement,
 	type EndpointRow,
@@ -18,6 +19,7 @@ import {
 	type ExportArtifact,
 	type FileCollectionArtifact,
 	type ImportArtifact,
+	JOB_SITE_PREFIX,
 	type JobArtifact,
 	type MountArtifact,
 	type RoleArtifact,
@@ -34,6 +36,7 @@ import {
 	type ContractDeclaration,
 	type CronDeclaration,
 	type CspDeclaration,
+	DECLARED_FIELDS,
 	type ExportDeclaration,
 	type FilesDeclaration,
 	type ImportDeclaration,
@@ -76,6 +79,9 @@ const FRAMEWORK_PREFIX = '/__fabrika'
 const APP_SCOPE = 'app'
 const AUDIENCE = 'any consumer user'
 const IMPORT_FIELDS = ['app', 'export', 'version', 'digest', 'procedures', 'usedBy', 'timeoutMs']
+/** Tables the framework keeps in the application's schema; no site reaches them unscoped. */
+const FRAMEWORK_TABLE_PREFIX = 'fabrika_'
+const DECLARED_ALLOWED = "sql: 'read' | 'write', unscoped: { <table>: 'read' | 'write' }, connect: ['<import>'], issues: '<link mount>'"
 const CSP_FIELDS = ['connectSrc', 'imgSrc', 'frameAncestors']
 
 const UUID: SchemaShape = {
@@ -119,6 +125,9 @@ class ArtifactBuilder {
 	readonly #problems: Problems
 	readonly #endpoints: EndpointRow[] = []
 	readonly #reservedPrefixes: string[] = []
+	readonly #declared: Record<string, DeclaredReach> = {}
+	/** The endpoints that declare `connect`, by the import they name. */
+	readonly #connected = new Map<string, string[]>()
 
 	constructor(contract: ContractDeclaration<SchemaShape>, tables: Readonly<Record<string, TablePolicyArtifact>>, problems: Problems) {
 		this.#contract = contract
@@ -165,6 +174,7 @@ class ArtifactBuilder {
 			tables,
 			endpoints: this.#endpoints,
 			reservedPrefixes: this.#reservedPrefixes,
+			...(Object.keys(this.#declared).length === 0 ? {} : { declared: this.#declared }),
 		}
 		try {
 			assertNoAmbiguity(artifact)
@@ -278,7 +288,9 @@ class ArtifactBuilder {
 				this.#callers(where, mount.callers)
 				this.#reserve(mount.prefix)
 				for (const [path, procedure] of procedures(mount.procedures)) {
-					this.#procedure({ kind: 'mount', name }, `${name}.${path}`, joinPath(mount.prefix, path), mount.callers, procedure)
+					const id = `${name}.${path}`
+					this.#procedure({ kind: 'mount', name }, id, joinPath(mount.prefix, path), mount.callers, procedure)
+					this.#declare(`procedure '${id}'`, id, procedure.declared, { kind: 'rpc', readOnly: procedure.type === 'query', access: procedure.access })
 				}
 				return { kind: 'rpc', prefix: mount.prefix, callers: mount.callers }
 			}
@@ -327,6 +339,7 @@ class ArtifactBuilder {
 				this.#actionList(where, mount.actions)
 				const path = joinPath(mount.path, `:${WEBHOOK_BINDING_PARAMETER}`)
 				this.#anonymous(name, 'webhook', 'POST', path, this.#bodyLimit(where, mount.maxBytes, CONTRACT_DEFAULTS.webhookMaxBytes), mount.input)
+				this.#declare(where, name, mount.declared, { kind: 'webhook', readOnly: false })
 				if (boundTo?.kind === 'dimension' && members !== undefined) {
 					this.#webhookBindings(name, boundTo.dimension, members.manage)
 				}
@@ -390,6 +403,7 @@ class ArtifactBuilder {
 			const id = `${name}.${path}`
 			const requirement = this.#linkRequirement(`procedure '${id}'`, procedure.access, mount)
 			this.#procedureSchemas(`procedure '${id}'`, procedure)
+			this.#declare(`procedure '${id}'`, id, procedure.declared, { kind: 'link', readOnly: procedure.type === 'query' })
 			if (requirement !== null) {
 				this.#row({
 					id,
@@ -657,6 +671,7 @@ class ArtifactBuilder {
 				continue
 			}
 			const scope = this.#job(where, job)
+			this.#declare(where, `${JOB_SITE_PREFIX}${name}`, job.declared, { kind: 'job', readOnly: false })
 			if (scope !== null) {
 				jobs[name] = {
 					schedule: job.schedule,
@@ -711,6 +726,7 @@ class ArtifactBuilder {
 				}
 				this.#readAction(`procedure '${id}'`, procedure.access)
 				this.#procedure(source, id, joinPath(CONNECT_PREFIX, id), callers, procedure)
+				this.#declare(`procedure '${id}'`, id, procedure.declared, { kind: 'export', readOnly: true })
 			}
 			const requirement = this.#descriptionRequirement(where, base)
 			if (requirement !== null) {
@@ -807,7 +823,7 @@ class ArtifactBuilder {
 			if (!this.#name(where, name)) {
 				continue
 			}
-			this.#import(where, declaration, procedureIds)
+			this.#import(where, name, declaration, procedureIds)
 			imports[name] = {
 				app: declaration.app,
 				export: declaration.export,
@@ -821,7 +837,7 @@ class ArtifactBuilder {
 		return imports
 	}
 
-	#import(where: string, declaration: ImportDeclaration, procedureIds: ReadonlySet<string>): void {
+	#import(where: string, name: string, declaration: ImportDeclaration, procedureIds: ReadonlySet<string>): void {
 		this.#keys(where, declaration, IMPORT_FIELDS)
 		if (!APP_ID.test(declaration.app) || declaration.app === this.#contract.app) {
 			this.#problem(where, `app '${declaration.app}' is not another application's id`)
@@ -842,6 +858,11 @@ class ArtifactBuilder {
 		for (const id of declaration.usedBy) {
 			if (!procedureIds.has(id)) {
 				this.#problem(where, `usedBy '${id}' is not a procedure of this contract (allowed: an id such as 'api.products.show')`)
+			}
+		}
+		for (const id of this.#connected.get(name) ?? []) {
+			if (!declaration.usedBy.includes(id)) {
+				this.#problem(where, `is not used by '${id}', which declares connect: ['${name}'] (allowed: usedBy naming every endpoint that connects)`)
 			}
 		}
 		if (declaration.timeoutMs !== undefined) {
@@ -874,6 +895,131 @@ class ArtifactBuilder {
 		}
 		this.#unique(where, 'origins', sources.map((source) => source.origin))
 		return sources.map((source) => ({ origin: source.origin, purpose: source.purpose }))
+	}
+
+	// ── Declared reach ──────────────────────────────────────────────────────────────────────────
+
+	/**
+	 * What a site of the staged kit declares off the paved road, parsed: the static reader copies it from source
+	 * unchecked. A site that declares anything is recorded under `site`; a read-only site declares only `'read'`.
+	 */
+	#declare(where: string, site: string, value: unknown, place: DeclaringSite): void {
+		if (value === undefined) {
+			return
+		}
+		if (!isRecord(value)) {
+			this.#problem(where, `declares its reach as something other than an object (allowed: ${DECLARED_ALLOWED})`)
+			return
+		}
+		for (const key of Object.keys(value)) {
+			if (!DECLARED_FIELDS.some((field) => field === key)) {
+				this.#problem(where, `'${key}' is not a declared field (allowed: ${DECLARED_ALLOWED})`)
+			}
+		}
+		const reach: DeclaredReach = {
+			sql: this.#sqlMode(where, value['sql'], place.readOnly),
+			unscoped: this.#unscoped(where, value['unscoped'], place.readOnly),
+			connect: place.kind === 'rpc' ? this.#connect(where, site, value['connect']) : [],
+			issues: place.kind === 'rpc' ? this.#issues(where, value['issues'], place.access) : null,
+		}
+		if (place.kind !== 'rpc') {
+			this.#rpcOnly(where, 'connect', value['connect'])
+			this.#rpcOnly(where, 'issues', value['issues'])
+		}
+		if (reach.sql !== null || Object.keys(reach.unscoped).length > 0 || reach.connect.length > 0 || reach.issues !== null) {
+			this.#declared[site] = reach
+		}
+	}
+
+	#sqlMode(where: string, value: unknown, readOnly: boolean): DeclaredReach['sql'] {
+		if (value === undefined) {
+			return null
+		}
+		if (value !== 'read' && value !== 'write') {
+			this.#problem(where, `sql ${JSON.stringify(value)} is not a mode (allowed: sql: 'read' or 'write')`)
+			return null
+		}
+		if (readOnly && value === 'write') {
+			this.#problem(where, "declares sql: 'write', and it runs read-only (allowed: sql: 'read')")
+		}
+		return value
+	}
+
+	#unscoped(where: string, value: unknown, readOnly: boolean): DeclaredReach['unscoped'] {
+		if (value === undefined) {
+			return {}
+		}
+		if (!isRecord(value)) {
+			this.#problem(where, "unscoped is not an object of tables (allowed: unscoped: { <table>: 'read' | 'write' })")
+			return {}
+		}
+		const unscoped: Record<string, 'read' | 'write'> = {}
+		for (const [table, mode] of Object.entries(value)) {
+			if (table.startsWith(FRAMEWORK_TABLE_PREFIX)) {
+				this.#problem(where, `unscoped '${table}' is a table the framework keeps; ${FRAMEWORK_TABLE_PREFIX}* is reserved`)
+			} else if (!Object.hasOwn(this.#tables, table)) {
+				this.#problem(where, `unscoped '${table}' is not a table of src/db/tables.ts${suggestion(table, Object.keys(this.#tables))}`)
+			}
+			if (mode !== 'read' && mode !== 'write') {
+				this.#problem(where, `unscoped '${table}' has the mode ${JSON.stringify(mode)} (allowed: 'read' or 'write')`)
+				continue
+			}
+			if (readOnly && mode === 'write') {
+				this.#problem(where, `declares unscoped '${table}': 'write', and it runs read-only (allowed: 'read')`)
+			}
+			unscoped[table] = mode
+		}
+		return unscoped
+	}
+
+	#connect(where: string, site: string, value: unknown): string[] {
+		if (value === undefined) {
+			return []
+		}
+		if (!Array.isArray(value) || !value.every((name) => typeof name === 'string')) {
+			this.#problem(where, "connect is not a list of import names (allowed: connect: ['<import>'])")
+			return []
+		}
+		const names: string[] = value.filter((name) => typeof name === 'string')
+		this.#unique(where, 'connect', names)
+		for (const name of names) {
+			if (!Object.hasOwn(this.#contract.imports, name)) {
+				this.#problem(where, `connect '${name}' is not an import of the application${suggestion(name, Object.keys(this.#contract.imports))}`)
+			}
+			this.#connected.set(name, [...(this.#connected.get(name) ?? []), site])
+		}
+		return names
+	}
+
+	/** `issues` names a link mount whose links this endpoint's own capability can issue: its action on its dimension. */
+	#issues(where: string, value: unknown, access: AccessDeclaration): string | null {
+		if (value === undefined) {
+			return null
+		}
+		if (typeof value !== 'string') {
+			this.#problem(where, "issues is not a link mount's name (allowed: issues: '<link mount>')")
+			return null
+		}
+		const mount = Object.hasOwn(this.#contract.mounts, value) ? this.#contract.mounts[value] : undefined
+		if (mount?.kind !== 'link') {
+			this.#problem(where, `issues '${value}', which is not a link mount of the contract`)
+			return value
+		}
+		const target = 'on' in access ? access.on : 'in' in access ? access.in : null
+		if (target !== mount.dimension || !('action' in access) || access.action !== mount.issuedBy) {
+			this.#problem(
+				where,
+				`issues '${value}', whose links a '${mount.issuedBy}' capability on a '${mount.dimension}' issues (allowed: access: { action: '${mount.issuedBy}', on: '${mount.dimension}', from })`,
+			)
+		}
+		return value
+	}
+
+	/** `connect` and `issues` reach on behalf of a person, so only an RPC endpoint declares them. */
+	#rpcOnly(where: string, field: 'connect' | 'issues', value: unknown): void {
+		if (value !== undefined) {
+			this.#problem(where, `declares ${field}, which only an endpoint of an RPC mount declares`)
+		}
 	}
 
 	// ── Table policies ──────────────────────────────────────────────────────────────────────────
@@ -1050,6 +1196,13 @@ class ArtifactBuilder {
 		}
 	}
 }
+
+/** Where a declaration stands: what kind of site, whether it runs read-only, and an RPC endpoint's access form. */
+type DeclaringSite =
+	| { readonly kind: 'rpc'; readonly readOnly: boolean; readonly access: AccessDeclaration }
+	| { readonly kind: 'link' | 'export' | 'webhook' | 'job'; readonly readOnly: boolean }
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 type ResolvedAccess = { readonly form: 'member' } | { readonly form: 'action'; readonly action: string; readonly access: AccessForm }
 

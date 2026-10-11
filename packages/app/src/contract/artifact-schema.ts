@@ -222,6 +222,12 @@ export const contractArtifactSchema: z.ZodType<ContractArtifact> = z.strictObjec
 		}
 	}),
 	reservedPrefixes: names,
+	declared: record(z.strictObject({
+		sql: z.enum(['read', 'write']).nullable(),
+		unscoped: record(z.enum(['read', 'write'])),
+		connect: names,
+		issues: nullableName,
+	})).optional(),
 })
 
 /** Parses JSON that should be a contract artifact; throws a `ZodError` naming every mismatch. */

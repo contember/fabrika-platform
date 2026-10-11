@@ -55,6 +55,38 @@ export function unknownOptions(options: object, builder: Builder): string[] {
 	return Object.keys(options).filter((key) => !declared.includes(key))
 }
 
+/**
+ * The off-road fields a site of the staged kit declares beside its builder's options. The kit copies them into
+ * `declared`; `buildArtifact` checks which of them the site may carry.
+ */
+export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues'] as const
+
+/** The keys of a kit site's `options` that are neither `builder`'s option fields nor a declared field. */
+export function kitUnknownOptions(options: object, builder: Builder): string[] {
+	return unknownOptions(options, builder).filter((key) => !DECLARED_FIELDS.some((field) => field === key))
+}
+
+/**
+ * The reach a site of the staged kit declares, as written (`sql`, `unscoped`, `connect`, `issues`): only the fields
+ * its options carry. Unchecked here: the static reader copies what the source holds, and `buildArtifact` parses it.
+ */
+export interface DeclaredDeclaration {
+	readonly sql?: unknown
+	readonly unscoped?: unknown
+	readonly connect?: unknown
+	readonly issues?: unknown
+}
+
+/** The declared fields of a kit site's options, each one only when the options carry it. */
+export function declaredOf(options: DeclaredDeclaration): DeclaredDeclaration {
+	return {
+		...(options.sql === undefined ? {} : { sql: options.sql }),
+		...(options.unscoped === undefined ? {} : { unscoped: options.unscoped }),
+		...(options.connect === undefined ? {} : { connect: options.connect }),
+		...(options.issues === undefined ? {} : { issues: options.issues }),
+	}
+}
+
 /** Option keys outside the builder's option fields; `buildArtifact` refuses any. */
 interface OptionsRecord {
 	readonly unknownOptions?: readonly string[]
@@ -97,6 +129,8 @@ export interface ProcedureDeclaration<S, Access = AccessDeclaration> extends Opt
 	readonly input: S | null
 	readonly output: S
 	readonly access: Access
+	/** What a procedure of the staged kit declares off the paved road; a `defineContract` procedure has none. */
+	readonly declared?: unknown
 }
 
 /** Procedures by name; a nested object groups them, and the path joins the names with `.`. */
@@ -159,6 +193,8 @@ export interface WebhookMountDeclaration<S> extends OptionsRecord {
 	readonly actions: readonly string[]
 	readonly input: S
 	readonly maxBytes?: number
+	/** What a webhook of the staged kit declares off the paved road. */
+	readonly declared?: unknown
 }
 
 export interface FilesDeclaration extends OptionsRecord {
@@ -181,6 +217,8 @@ export interface CronDeclaration extends OptionsRecord {
 	readonly scope: string
 	readonly timeout?: string
 	readonly retries?: number
+	/** What a job of the staged kit declares off the paved road. */
+	readonly declared?: unknown
 }
 
 export interface ExportDeclaration<S> extends OptionsRecord {
