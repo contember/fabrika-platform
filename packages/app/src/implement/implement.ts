@@ -33,7 +33,7 @@ export interface DepsRuntime {
 	readonly capabilities: CapabilityAuthority
 }
 
-/** A contract with its handlers, ready for `boot`. Only `implement` makes one. */
+/** A contract with its handlers, ready for `boot`. Only `implement` and `serve` make one. */
 export interface ContractImplementation<C extends AnyContract = AnyContract> {
 	readonly contract: C
 	readonly database: ImplementationDatabase | null
@@ -58,19 +58,24 @@ export function implement<const C extends AnyContract, Deps, H extends HandlersO
 	},
 ): ContractImplementation<C> {
 	const { database, connect, deps, handlers } = implementation
-	const made = Object.freeze({
+	return contractImplementation({
 		contract,
 		database,
 		connect: connect ?? {},
 		handlers: (env: ApplicationEnvironment, runtime: DepsRuntime) => handlers(deps(env, runtime)),
 	})
-	implementations.add(made)
-	return made
 }
 
 const implementations = new WeakSet<object>()
 
-/** Whether `value` is what `implement` returned: how a loader checks a module it imported by path. */
+/** The one way a `ContractImplementation` is made, by `implement` and `serve`: frozen, and known to `isContractImplementation`. */
+export function contractImplementation<C extends AnyContract>(made: ContractImplementation<C>): ContractImplementation<C> {
+	const frozen = Object.freeze({ ...made })
+	implementations.add(frozen)
+	return frozen
+}
+
+/** Whether `value` is what `implement` or `serve` returned: how a loader checks a module it imported by path. */
 export function isContractImplementation(value: unknown): value is ContractImplementation {
 	return typeof value === 'object' && value !== null && implementations.has(value)
 }

@@ -12,6 +12,7 @@
 		"src/__tests__/client-mistakes",
 		"src/__tests__/job-mistakes",
 		"src/__tests__/kit-mistakes",
-		"src/__tests__/orm-mistakes"
+		"src/__tests__/orm-mistakes",
+		"src/__tests__/colocated-mistakes"
 	]
 }

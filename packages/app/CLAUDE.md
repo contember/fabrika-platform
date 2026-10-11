@@ -230,9 +230,9 @@ src/
 
 The paved-road sprint (`docs/sprints/sprint-2026-10-11-paved-road-framework.md`) builds it unit by unit; its
 signatures are fixed, and each builder whose runtime a later unit adds throws `<builder> is not implemented (WU<n>)`
-(`notImplemented` in `contract/problems.ts`): `defineApp` and its builders, `serve` and `defineDeps` (WU4).
-`defineVocabulary` and `defineTables(vocabulary, columns)` already run; the tables derive each key, container and
-child chain from the vocabulary (`packages/db/CLAUDE.md`).
+(`notImplemented` in `contract/problems.ts`). `defineVocabulary`, `defineTables(vocabulary, columns)`, `defineApp`
+with its builders, `serve` and `defineDeps` run; the tables derive each key, container and child chain from the
+vocabulary (`packages/db/CLAUDE.md`).
 
 - **The file order is the type order:** `src/vocabulary.ts` (`defineVocabulary`) → `src/db/tables.ts`
   (`defineTables(vocabulary, columns)`, typed by the generated `TypedColumnList`) → `src/app-kit.ts` (`defineApp(vocabulary, tables)`)
@@ -263,6 +263,32 @@ child chain from the vocabulary (`packages/db/CLAUDE.md`).
   kit's `imports`.
 - **`DbHandle<typeof app, form, dimension, action, kind>` and `ReferenceHandle<typeof app>`** (`context.ts`) are the
   types of `ctx.db`'s handles, for a `queries.ts` function that takes one; `orm-handles.ts` pins them to the context.
+- **The runtime builds plain declarations, and `defineApp`'s signature is its only typed face.** `RuntimeApp` (in
+  `kit.ts`) builds the same `ProcedureDeclaration`, `CronDeclaration`, `WebhookMountDeclaration`, link and export
+  declarations `defineContract` builds, with `declared` (`declaredOf`: only the fields the options carry) and
+  `unknownOptions` without the declared fields (`kitUnknownOptions`). The face answers types no implementation can
+  return (`.handle`'s `ExactReturn`, `contract`'s `imports` by the kit's imports), so the compiler relates the two
+  nowhere else; `kit-runtime.test.ts` holds each builder to what its type says.
+- **A site's handler is kept beside its declaration, never in it** (`contract/handled.ts`, a `WeakMap`): `.handle`
+  returns a copy of the declaration, and a pending site carries `handle` on its prototype, so `compileContract`, the
+  static reader and a spread see the declaration only, handled or not. The SPA's sliced bundle therefore evaluates to
+  the same contract, without one handler.
+- **`app.contract` derives the `imports` section** from the kit's imports and the RPC endpoints whose `connect` names
+  each (`usedBy`, sorted), with `kitImportsSection`, which the static reader calls too; a kit contract that writes an
+  `imports` section of its own is refused. A kit import no endpoint connects is refused by `buildArtifact`, as before.
+- **`buildArtifact` parses `declared`** (the static reader copies it unchecked): `sql` and each `unscoped` mode `read`
+  or `write`, `read` only on a query and an export; `unscoped` names tables of `src/db/tables.ts` and never a
+  `fabrika_*` one; `connect` and `issues` only on an RPC endpoint, `connect` naming the kit's imports, `issues` a
+  link mount whose `issuedBy` on its dimension is the endpoint's own access. The artifact's `declared` section holds
+  each site that declares anything, by endpoint id or `job:<name>`, and is absent otherwise.
+- **`serve(contract, { database, deps })` adapts the kit to `boot`**: it walks the contract and builds the handler tree
+  `implement` would (RPC and link mounts by path, webhooks by name, `jobs.<name>`, `exports.<name>.<path>`); each
+  entry is the handler, callable, with the site's `declared` beside it. It refuses (`ContractError`) every endpoint,
+  job and webhook without `.handle(…)`, naming each by its path: the types refuse one in a group, and `serve` also
+  catches what they skip (a callback the group refused, a job, a webhook, a link or export procedure). `c.rpc` cannot
+  refuse it at runtime, because the SPA's sliced bundle carries no handler at all. The snapshots of the kit's imports
+  reach `boot` from the contract (`snapshotsOf`). `defineDeps(build)` runs `build` at each `boot`; `get()` answers the
+  last build and throws at module load.
 
 ## Service contracts (the installation's own services only)
 

@@ -326,7 +326,8 @@ function linkKit<A extends string>(): LinkKit<A> {
 	}
 }
 
-function kit<A extends string, D extends string, CD extends string>(): Kit<A, D, CD> {
+/** The builders `defineContract` hands its callback; the staged kit's contract reuses its mounts that take no handler. */
+export function surfaceKit<A extends string, D extends string, CD extends string>(): Kit<A, D, CD> {
 	return {
 		query: (def) => procedure('query', def),
 		mutation: (def) => procedure('mutation', def),
@@ -422,6 +423,6 @@ export function defineContract<
 	return {
 		vocabulary: { app: vocabulary.app, dimensions: vocabulary.dimensions, actions: vocabulary.actions, roles: vocabulary.roles },
 		dimensions: vocabulary.dimensions,
-		surface: surface(kit()),
+		surface: surface(surfaceKit()),
 	}
 }

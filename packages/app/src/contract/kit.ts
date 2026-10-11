@@ -1,31 +1,52 @@
 // `defineApp(vocabulary, tables)`: the staged kit. The vocabulary knows nothing, the tables know the vocabulary, the
 // kit knows both, and the groups and the contract know the kit; nothing types itself by `typeof contract`, so the
-// handlers beside their endpoints, in any module, type-check without a cycle. Browser-safe: it imports types only.
+// handlers beside their endpoints, in any module, type-check without a cycle. Browser-safe: it builds plain data and
+// holds each handler beside its site (`handled.ts`), never calling one.
 
 import type { RpcCaller } from '@fabrika/auth-core'
 import type { DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { z } from 'zod/v4'
 import type { Declared, JobKitContext, KitImports, KitTypes, SqlMode, WebhookKitContext } from './context'
-import type { ExportAccessDeclaration, ImportDeclaration, LinkAccessDeclaration, ProcedureType } from './declaration'
-import type {
-	Contract,
-	CreatableDimension,
-	CronJob,
-	Export,
-	InputSchema,
-	Kit,
-	LinkMount,
-	NotLoose,
-	Path,
-	ProcedureTree,
-	RpcMount,
-	Schema,
-	Surface,
-	WebhookMount,
+import {
+	type AccessDeclaration,
+	type CronDeclaration,
+	type DeclaredDeclaration,
+	declaredOf,
+	type ExportAccessDeclaration,
+	type ExportDeclaration,
+	type ImportDeclaration,
+	isProcedure,
+	kitUnknownOptions,
+	type LinkAccessDeclaration,
+	type LinkMountDeclaration,
+	type ProcedureDeclaration,
+	type ProcedureTreeDeclaration,
+	type ProcedureType,
+	type RpcMountDeclaration,
+	unknownOptions,
+	type WebhookMountDeclaration,
+} from './declaration'
+import {
+	type AnyContract,
+	type Contract,
+	type CreatableDimension,
+	type CronJob,
+	type Export,
+	type InputSchema,
+	type Kit,
+	type LinkMount,
+	type NotLoose,
+	type Path,
+	type ProcedureTree,
+	type RpcMount,
+	type Schema,
+	type Surface,
+	surfaceKit,
+	type WebhookMount,
 } from './define'
 import type { DeclaredFields, Endpoint, ExportKit, Group, GroupBuild, GroupInput, GroupKit, LinkGroupKit, ListOf, PendingIn } from './group'
-import { notImplemented } from './problems'
-
+import { withHandler, withSnapshots } from './handled'
+import { ContractError } from './problems'
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 
 /** Fields a builder sets itself: an options object that carries one does not type-check. */
@@ -200,11 +221,315 @@ export interface App<K extends KitTypes> {
  * The application's kit, built once in `src/app-kit.ts`: `defineApp(vocabulary, tables)`, plus the connectors it
  * imports (`{ imports: { <name>: { snapshot, procedures, timeoutMs? } } }`). The tables' `DbIndex` is computed here,
  * once, so each endpoint's `ctx.db` is a lookup.
+ *
+ * This signature is the kit's typed face over `RuntimeApp`, which builds plain declarations. The face answers types
+ * no implementation can return (`.handle`'s `ExactReturn`, `contract`'s `imports` section by the kit's imports), so
+ * the compiler relates the two nowhere else; `kit-runtime.test.ts` holds that each builder returns what its type says.
  */
 export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports = Record<never, never>>(
-	_vocabulary: V,
-	_tables: Tables<DB, P>,
-	_options?: { readonly imports?: Imp },
-): App<KitOf<V, DbIndex<DB, P>, Imp>> {
-	return notImplemented('defineApp', 'WU4')
+	vocabulary: V,
+	tables: Tables<DB, P>,
+	options?: { readonly imports?: Imp },
+): App<KitOf<V, DbIndex<DB, P>, Imp>>
+export function defineApp(vocabulary: AnyAppVocabulary, _tables: unknown, options?: { readonly imports?: KitImports }): object {
+	return runtimeApp(vocabulary, options?.imports ?? {})
+}
+
+// ── The runtime ─────────────────────────────────────────────────────────────────────────────────
+
+/** A site before `.handle`: its declaration as own fields, and `handle` on the prototype, so a spread copies only them. */
+class Pending<T extends object> {
+	readonly #declaration: T
+
+	constructor(declaration: T) {
+		this.#declaration = declaration
+	}
+
+	/** A copy of the declaration that carries `handler`; the pending site itself stays without one. */
+	handle(handler: unknown): T {
+		return withHandler({ ...this.#declaration }, handler)
+	}
+}
+
+type PendingSite<T extends object> = Pending<T> & T
+
+const pending = <T extends object>(declaration: T): PendingSite<T> => Object.assign(new Pending(declaration), declaration)
+
+interface EndpointOptions<Access> extends DeclaredDeclaration {
+	readonly input?: Schema | null
+	readonly output: Schema
+	readonly access: Access
+}
+
+function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): PendingSite<ProcedureDeclaration<Schema, Access>> {
+	const declaration: ProcedureDeclaration<Schema, Access> = {
+		'~kind': 'procedure',
+		type,
+		input: def.input ?? null,
+		output: def.output,
+		access: def.access,
+		declared: declaredOf(def),
+		unknownOptions: kitUnknownOptions(def, 'procedure'),
+	}
+	return pending(declaration)
+}
+
+interface RuntimeEndpointKit<Access> {
+	query(def: EndpointOptions<Access>): PendingSite<ProcedureDeclaration<Schema, Access>>
+	mutation(def: EndpointOptions<Access>): PendingSite<ProcedureDeclaration<Schema, Access>>
+}
+
+const endpointKit = <Access>(): RuntimeEndpointKit<Access> => ({
+	query: (def) => endpoint('query', def),
+	mutation: (def) => endpoint('mutation', def),
+})
+
+/** A group as data: its callers and its endpoints, which a mount nests by name. */
+interface GroupDeclaration {
+	readonly '~kind': 'group'
+	readonly callers: readonly [RpcCaller, ...RpcCaller[]]
+	readonly endpoints: ProcedureTreeDeclaration<Schema>
+}
+
+/** What `app.group` returns at runtime; `unknownOptions` are the group's option keys besides `callers`. */
+interface RuntimeGroup extends GroupDeclaration {
+	readonly unknownOptions: readonly string[]
+}
+
+interface CronSiteOptions extends DeclaredDeclaration {
+	readonly actions: readonly string[]
+	readonly scope: string
+	readonly timeout?: string
+	readonly retries?: number
+}
+
+interface WebhookSiteOptions extends DeclaredDeclaration {
+	readonly scheme: 'github-sha256'
+	readonly boundTo: string
+	readonly actions: readonly string[]
+	readonly input: Schema
+	readonly maxBytes?: number
+}
+
+interface LinkSiteOptions {
+	readonly spa: string
+	readonly dimension: string
+	readonly grants: readonly string[]
+	readonly issuedBy: string
+	readonly maxDays: number
+	readonly procedures: (l: RuntimeEndpointKit<LinkAccessDeclaration>) => ProcedureTreeDeclaration<Schema, LinkAccessDeclaration>
+}
+
+interface ExportSiteOptions {
+	readonly version: number
+	readonly consumers: readonly string[]
+	readonly audience: string
+	readonly procedures: (e: Pick<RuntimeEndpointKit<ExportAccessDeclaration>, 'query'>) => ProcedureTreeDeclaration<Schema, ExportAccessDeclaration>
+}
+
+type MountedGroupsValue = GroupDeclaration | { readonly [name: string]: MountedGroupsValue }
+
+interface RuntimeContractKit extends Pick<Kit<string, string, string>, 'spa' | 'health' | 'form' | 'files'> {
+	rpc(prefix: Path, groups: MountedGroupsValue): RpcMountDeclaration<Schema>
+}
+
+interface RuntimeApp {
+	group(
+		options: { readonly callers: readonly [RpcCaller, ...RpcCaller[]] },
+		build: (r: RuntimeEndpointKit<AccessDeclaration>) => ProcedureTreeDeclaration<Schema>,
+	): RuntimeGroup
+	cron(schedule: string, options: CronSiteOptions): PendingSite<CronDeclaration>
+	webhook(path: Path, options: WebhookSiteOptions): PendingSite<WebhookMountDeclaration<Schema>>
+	link(prefix: Path, options: LinkSiteOptions): LinkMountDeclaration<Schema>
+	export(definition: ExportSiteOptions): ExportDeclaration<Schema>
+	contract(build: (c: RuntimeContractKit) => Surface): AnyContract
+}
+
+function runtimeApp(vocabulary: AnyAppVocabulary, imports: KitImports): RuntimeApp {
+	return {
+		group: (options, build) => ({
+			'~kind': 'group',
+			callers: options.callers,
+			endpoints: build(endpointKit()),
+			unknownOptions: unknownOptions(options, 'rpc'),
+		}),
+		cron: (schedule, options) => {
+			const declaration: CronDeclaration = {
+				kind: 'cron',
+				schedule,
+				actions: options.actions,
+				scope: options.scope,
+				timeout: options.timeout,
+				retries: options.retries,
+				declared: declaredOf(options),
+				unknownOptions: kitUnknownOptions(options, 'cron'),
+			}
+			return pending(declaration)
+		},
+		webhook: (path, options) => {
+			const declaration: WebhookMountDeclaration<Schema> = {
+				kind: 'webhook',
+				path,
+				scheme: options.scheme,
+				boundTo: options.boundTo,
+				actions: options.actions,
+				input: options.input,
+				maxBytes: options.maxBytes,
+				declared: declaredOf(options),
+				unknownOptions: kitUnknownOptions(options, 'webhook'),
+			}
+			return pending(declaration)
+		},
+		link: (prefix, options) => ({
+			kind: 'link',
+			prefix,
+			spa: options.spa,
+			dimension: options.dimension,
+			grants: options.grants,
+			issuedBy: options.issuedBy,
+			maxDays: options.maxDays,
+			procedures: options.procedures(endpointKit()),
+			unknownOptions: unknownOptions(options, 'link'),
+		}),
+		export: (definition) => ({
+			kind: 'export',
+			version: definition.version,
+			consumers: definition.consumers,
+			audience: definition.audience,
+			procedures: definition.procedures(endpointKit()),
+			unknownOptions: unknownOptions(definition, 'export'),
+		}),
+		contract: (build) => {
+			const shared = surfaceKit()
+			const surface = build({ rpc, spa: shared.spa, health: shared.health, form: shared.form, files: shared.files })
+			if (surface.imports !== undefined) {
+				throw new ContractError(['contract: imports come from defineApp(vocabulary, tables, { imports }); remove the section'])
+			}
+			const declared = Object.keys(imports).length === 0
+				? surface
+				: { ...surface, imports: kitImportsSection(importDeclarations(imports), surface) }
+			const contract: AnyContract = {
+				vocabulary: { app: vocabulary.app, dimensions: vocabulary.dimensions, actions: vocabulary.actions, roles: vocabulary.roles },
+				dimensions: vocabulary.dimensions,
+				surface: declared,
+			}
+			return withSnapshots(contract, Object.fromEntries(Object.entries(imports).map(([name, imported]) => [name, imported.snapshot])))
+		},
+	}
+}
+
+/** `c.rpc(prefix, groups)`: the groups' endpoints under the prefix, nested by the names `groups` gives them. */
+function rpc(prefix: Path, groups: MountedGroupsValue): RpcMountDeclaration<Schema> {
+	const mounted = mountedGroups(groups)
+	const [first] = mounted
+	if (first === undefined) {
+		throw new ContractError([`c.rpc('${prefix}'): mounts no group (allowed: c.rpc('${prefix}', { <name>: <group> }))`])
+	}
+	if (mounted.some((group) => !sameCallers(group.callers, first.callers))) {
+		throw new ContractError([`c.rpc('${prefix}'): every group of one RPC mount names the same callers, in the same order`])
+	}
+	return {
+		kind: 'rpc',
+		prefix,
+		callers: first.callers,
+		procedures: mountedProcedures(groups),
+		unknownOptions: [...new Set(mounted.flatMap((group) => isRuntimeGroup(group) ? group.unknownOptions : []))],
+	}
+}
+
+function isGroup(value: MountedGroupsValue): value is GroupDeclaration {
+	return value['~kind'] === 'group'
+}
+
+function isRuntimeGroup(value: GroupDeclaration): value is RuntimeGroup {
+	return 'unknownOptions' in value && Array.isArray(value.unknownOptions)
+}
+
+function mountedGroups(value: MountedGroupsValue): GroupDeclaration[] {
+	if (typeof value !== 'object' || value === null) {
+		throw new ContractError([`c.rpc: ${String(value)} is not a group (allowed: app.group(…), or { <name>: <group> })`])
+	}
+	if (isGroup(value)) {
+		return [value]
+	}
+	return Object.values(value).flatMap(mountedGroups)
+}
+
+function mountedProcedures(value: MountedGroupsValue): ProcedureTreeDeclaration<Schema> {
+	if (isGroup(value)) {
+		return value.endpoints
+	}
+	return Object.fromEntries(Object.entries(value).map(([name, nested]) => [name, mountedProcedures(nested)]))
+}
+
+const sameCallers = (left: readonly string[], right: readonly string[]): boolean =>
+	left.length === right.length && left.every((caller, index) => caller === right[index])
+
+function importDeclarations(imports: KitImports): Record<string, KitImportDeclaration> {
+	return Object.fromEntries(
+		Object.entries(imports).map(([name, imported]) => [name, {
+			app: imported.snapshot.app,
+			export: imported.snapshot.export,
+			version: imported.snapshot.version,
+			digest: imported.snapshot.digest,
+			procedures: imported.procedures,
+			timeoutMs: imported.timeoutMs,
+		}]),
+	)
+}
+
+/** One import of the kit as the contract records it: the snapshot's identity, the procedures called, the deadline. */
+export interface KitImportDeclaration {
+	readonly app: string
+	readonly export: string
+	readonly version: number
+	readonly digest: string
+	readonly procedures: readonly string[]
+	readonly timeoutMs?: number
+}
+
+/**
+ * The contract's `imports` section: each import of the kit, used by the RPC endpoints that declare `connect` of it,
+ * in id order. The static reader builds it with this same function, so both read one `usedBy`.
+ */
+export function kitImportsSection(imports: Readonly<Record<string, KitImportDeclaration>>, surface: Surface): Record<string, ImportDeclaration> {
+	const connecting = connectingEndpoints(surface)
+	return Object.fromEntries(
+		Object.entries(imports).map(([name, declaration]) => [name, {
+			app: declaration.app,
+			export: declaration.export,
+			version: declaration.version,
+			digest: declaration.digest,
+			procedures: [...declaration.procedures],
+			usedBy: connecting.filter((site) => site.connect.includes(name)).map((site) => site.id).sort(),
+			...(declaration.timeoutMs === undefined ? {} : { timeoutMs: declaration.timeoutMs }),
+		}]),
+	)
+}
+
+/** Every procedure of an RPC mount that declares a `connect` list, by its id. */
+function connectingEndpoints(surface: Surface): { readonly id: string; readonly connect: readonly unknown[] }[] {
+	const found: { readonly id: string; readonly connect: readonly unknown[] }[] = []
+	const visit = (tree: ProcedureTreeDeclaration<Schema>, prefix: string): void => {
+		for (const [name, node] of Object.entries(tree)) {
+			const id = `${prefix}.${name}`
+			if (!isProcedure(node)) {
+				visit(node, id)
+			} else if (isRecord(node.declared) && Array.isArray(node.declared['connect'])) {
+				found.push({ id, connect: node.declared['connect'] })
+			}
+		}
+	}
+	for (const [name, mount] of Object.entries(surface)) {
+		if (typeof mount === 'object' && isRpcMount(mount)) {
+			visit(mount.procedures, name)
+		}
+	}
+	return found
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+function isRpcMount(value: object): value is RpcMountDeclaration<Schema> {
+	return 'kind' in value && value.kind === 'rpc' && 'procedures' in value
 }

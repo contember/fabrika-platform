@@ -1,0 +1,17 @@
+// The colocated form's mistakes: each file in `colocated-mistakes/` is a handler or a site beside its declaration that
+// an agent gets wrong, refused on the line after its `// mistake:` marker, in at most two lines that name the fix.
+
+import { describe } from 'bun:test'
+import { join } from 'node:path'
+import { expectMistakes } from './type-fixtures'
+
+const EXPECTED: Readonly<Record<string, string>> = {
+	'01-missing-handle-in-a-nested-mount.ts': 'add .handle(…) to v1.companies.get: every endpoint takes its handler beside it',
+	'02-target-on-over.ts': 'an over endpoint holds ctx.within, the scopes it may list in: declare access with on or in for ctx.target',
+	'03-principal-of-another-caller.ts': `Type '"service"' is not assignable to type '"user"'`,
+	'04-job-ref-of-an-undeclared-action.ts': `Argument of type '"crm.delete"' is not assignable to parameter of type '"crm.read"'`,
+}
+
+describe('the colocated mistakes are type errors at their line', () => {
+	expectMistakes(join(import.meta.dir, 'colocated-mistakes'), EXPECTED, { plain: true })
+})
