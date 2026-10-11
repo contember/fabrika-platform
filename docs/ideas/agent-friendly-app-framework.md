@@ -617,6 +617,23 @@ a corrected `Exact`; more than 3 helpdesk entries needing handlers point to keep
 primitive and spike A's `TableInsert`/`TableUpdate`; an expansion the reader must re-implement, a cross-operation
 write, or a widening classified otherwise stops the design until the owning module is fixed.
 
+**Result (2026-10-11, branch `spike/operations`, not merged; write-up in its `examples/helpdesk/SPIKE.md`):** adjust,
+do not fall back.
+
+- 17 of 18 helpdesk entries are declared operations; `merge` is the one handler.
+- 13 of 15 fixtures are legible: a hand procedure without a handler still prints the implementation type around a
+  correct message (today's `implement` is worse), and an input wider than its column is reported at `defineContract`
+  instead of its line.
+- 226,760 instantiations for 200 + 50 (1.49× today's contract; today's `implement` costs 580,817).
+- 17 bypass attempts are refused after one fix: a cross-workspace `merge` answered 500 and now answers 400.
+- Every widening classifies as widening; the static read equals the evaluated compile.
+- Fresh agents finished the helpdesk in at most 2 runs per group. A second domain the skill text does not mirror
+  (expenses) took at most 3, and both agents needed the same 3 handlers for missing primitives: a not-equal predicate,
+  a required field on an update, and an increment computed from the input.
+
+Before adoption: those three primitives, the two fixtures, generated per-app tests for declared operations, the
+operations section in `FABRIKA_CONTRACT_DIGEST`, and child-row read, update and delete.
+
 ## 15. Open risks
 
 - **Expressiveness ceiling.** A cross-table invariant, a value read from another row, an OR precondition and an input
