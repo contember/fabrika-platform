@@ -55,12 +55,12 @@ Read this before moving a service onto this driver.
   plan); `guardCheck` then fails the transaction when the file ended it or loosened `lock_timeout`,
   `statement_timeout` or `search_path` (`set_config()` included). Keep both: the tokenizer cannot see
   procedural calls, and the guard cannot undo a `COMMIT`.
-- **An application migration names only its own schema.** Every application plan refuses a
-  schema-qualified reference to `public`, an `app_…` or a `fabrika…` schema, quoted or not, also
-  inside a dollar-quoted body (`foreignSchemaReference`, the same tokenizer). Unqualified names
-  resolve through the runner's `search_path`; `pg_catalog.` stays allowed. A table alias with such
-  a name is refused too: the tokenizer cannot tell a schema from a table. The test kit's throwaway
-  schema depends on this: a migration that reached `public` would change live rows on every run.
+- **An application migration names only its own schema**, read by role (`nameReferences`): a qualified
+  relation, call, type or `OPERATOR(…)` of another schema is refused, `pg_catalog` relations included,
+  while an alias or `NEW.x` is a column. The runner refuses it for a pending file before any SQL runs;
+  the wrapper's `plan()` keeps no qualifier scan of its own, so an applied, checksum-locked file is never
+  re-judged. The test kit's throwaway schema depends on this: a migration that reached `public` would
+  change live rows on every run.
 - **An application migration may not escape; its database code is a deviation** (ADR-0017), checked
   twice for every application plan, the framework bundle included. Before any SQL runs,
   `classifyMigrations` (`migration-classify.ts`) sorts every statement into paved, deviation (`{ kind,
@@ -79,11 +79,16 @@ Read this before moving a service onto this driver.
   case-insensitive, quoted or not, in bodies too. Only the bundle the plan marks `frameworkBundle` (the
   first of several) is exempt, and a file collection's own `fabrika_files_<name>` table and indexes.
 - **Function calls are an allowlist** (`functionUse`, `refusedFunctionCall`): a paved or reviewed
-  `pg_catalog` built-in, or a function the migration set declares. Never admit a built-in that runs SQL
+  `pg_catalog` built-in, or a function the migration set declares. A declaration may not take a
+  `pg_catalog` function name or a keyword (`pg-catalog-names.ts`, generated from Postgres 17 by
+  `src/__tests__/helpers/generate-pg-catalog-names.ts` and pinned by `pg-catalog-names.test.ts`): overload
+  resolution would otherwise let it admit the built-in. A routine's identity is its input signature
+  (`routine-signature.ts`), in the manifest and the catalog alike. Never admit a built-in that runs SQL
   from a string or reaches past the schema (`query_to_xml`, `dblink`, `lo_*`, `pg_read_file`,
   `pg_advisory_*`, `set_config`): these are name rules, not privileges, until backlog 110.
 - **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
-  `sql-names.ts` and `migration-classify.ts`, which import nothing outside themselves: Control loads it in
+  `sql-names.ts`, `routine-signature.ts`, `pg-catalog-names.ts` and `migration-classify.ts`, which import
+  nothing outside themselves: Control loads it in
   a Worker. `sql-subpath.test.ts` pins the import graph; never import Bun, Node or a driver there.
 - **Neither check may depend on the session.** `sqlTokens` follows Postgres' lexer (whitespace is
   `[ \t\n\r\f\v]`; every character from U+0080 up belongs to a name; unquoted names fold ASCII only and

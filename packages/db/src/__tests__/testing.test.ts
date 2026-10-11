@@ -186,7 +186,7 @@ describe.skipIf(!hasPostgres)('a test database on Postgres', () => {
 		try {
 			await sql.unsafe(`CREATE TABLE public.${live} (id TEXT PRIMARY KEY, plan TEXT NOT NULL); INSERT INTO public.${live} VALUES ('a1', 'paid')`)
 			writeFileSync(join(reaching, '20261009120000_backfill.sql'), `CREATE TABLE notes (id TEXT);\nUPDATE public.${live} SET plan = 'free';`)
-			await expect(testDatabase({ migrations: reaching, label: 'reaching.test.ts' })).rejects.toThrow('names the schema public')
+			await expect(testDatabase({ migrations: reaching, label: 'reaching.test.ts' })).rejects.toThrow('UPDATE reaching the schema public is not allowed')
 			const rows: unknown = await sql.unsafe(`SELECT plan FROM public.${live}`)
 			expect(rows).toEqual([{ plan: 'paid' }])
 		} finally {

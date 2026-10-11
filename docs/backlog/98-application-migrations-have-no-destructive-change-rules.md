@@ -19,9 +19,8 @@ that names the release which stopped using a dropped object, and a refusal of `G
 
 - The checker has one migration rule, `migration-name` (`packages/check/src/rules/migrations.ts:20`).
   `packages/check/CLAUDE.md:253` lists squawk rules and destructive-migration markers as not built.
-- The runner refuses transaction-control and setting statements (`refusedStatement`) and a foreign schema
-  (`foreignSchemaReference`). In an application plan it refuses what `classifyMigration`
-  (`@fabrika/platform-node/sql`) refuses, admits views, triggers, functions and policies as deviations, and rolls
+- The runner refuses transaction-control and setting statements (`refusedStatement`). In an application plan it
+  refuses what `classifyMigration` (`@fabrika/platform-node/sql`) refuses, a foreign schema included, admits views, triggers, functions and policies as deviations, and rolls
   back a file that leaves an escape or an undeclared object in the schema (`databaseCodeCheck`). The checker
   reports none of it before the deploy.
   The runner covers the timeouts itself, so `require-lock-timeout` and `require-statement-timeout` are not needed.

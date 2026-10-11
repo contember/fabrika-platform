@@ -117,8 +117,8 @@ export function ddlForeignSchema(tokens: readonly SqlToken[], schema: string): s
 	return undefined
 }
 
-/** How a name is used where it stands. */
-export type NameRole = 'relation' | 'call' | 'type' | 'other'
+/** How a name is used where it stands; `operator` is the operator `OPERATOR(schema.op)` names. */
+export type NameRole = 'relation' | 'call' | 'type' | 'operator' | 'other'
 
 /** One name of a statement: `qualifier` is the first part of a two- or three-part name. */
 export interface NameReference {
@@ -265,7 +265,8 @@ const MODIFIED_TYPES: ReadonlySet<string> = new Set([
 	'VARYING',
 ])
 
-type RelationSlot = 'columns' | 'function' | undefined
+/** `columns`: a column list may follow; `function`: a table function may; `list`: a `FROM` list, which `(` may group. */
+type RelationSlot = 'columns' | 'function' | 'list' | undefined
 
 /**
  * Every name of a DML statement, a query or an expression, with its role. A name in a relation position (after
@@ -287,8 +288,10 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 			continue
 		}
 		if (isPunct(token, '(')) {
-			lists.push({ fromList: false, opener: upperWord(tokens[index - 1]) })
-			slot = undefined
+			// `FROM (a JOIN b)` and `FROM ONLY (t)` group relations: the first name inside is still one.
+			const grouping = slot === 'list'
+			lists.push({ fromList: grouping, opener: upperWord(tokens[index - 1]) })
+			slot = grouping ? 'list' : undefined
 			continue
 		}
 		if (isPunct(token, ')')) {
@@ -297,7 +300,7 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 			continue
 		}
 		if (isPunct(token, ',')) {
-			slot = top.fromList ? 'function' : undefined
+			slot = top.fromList ? 'list' : undefined
 			continue
 		}
 		if (word !== undefined && LIST_ENDS.has(word)) top.fromList = false
@@ -309,8 +312,25 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 			}
 			const argument = word === 'FROM'
 				&& (upperWord(tokens[index - 1]) === 'DISTINCT' || (top.opener !== undefined && FROM_ARGUMENT_FUNCTIONS.has(top.opener)))
-			slot = argument ? undefined : 'function'
+			// `USING (…)` is a join's column list or a policy's expression, never a group of relations.
+			slot = argument ? undefined : word === 'USING' ? 'function' : 'list'
 			if (word !== 'JOIN') top.fromList = slot !== undefined
+			continue
+		}
+		if (word === 'OPERATOR' && isPunct(tokens[index + 1], '(')) {
+			const close = closingParenthesis(tokens, index + 1) ?? tokens.length - 1
+			const inner = tokens.slice(index + 2, close)
+			const qualified = isName(inner[0]) && isPunct(inner[1], '.')
+			const symbol = inner.slice(qualified ? 2 : 0).map((part) => (part.kind === 'punct' ? part.char : '')).join('')
+			references.push({
+				qualifier: qualified ? nameText(inner[0]) : undefined,
+				name: symbol,
+				parts: qualified ? 2 : 1,
+				role: 'operator',
+				line: token?.line ?? 0,
+			})
+			slot = undefined
+			index = close
 			continue
 		}
 		if (word !== undefined && RELATION_WITH_COLUMNS.has(word)) {
@@ -330,8 +350,10 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 		const castTarget = (isPunct(tokens[index - 1], ':') && isPunct(tokens[index - 2], ':')) || upperWord(tokens[index - 1]) === 'AS'
 		const followedByParenthesis = isPunct(tokens[end + 1], '(')
 		const syntax = parts.length === 1 && token?.kind === 'word' && word !== undefined && (NOT_CALLS.has(word) || MODIFIED_TYPES.has(word))
+		// PL/pgSQL `v t%ROWTYPE` and `v t.c%TYPE` name a relation's type.
+		const percentType = isPunct(tokens[end + 1], '%') && (upperWord(tokens[end + 2]) === 'TYPE' || upperWord(tokens[end + 2]) === 'ROWTYPE')
 		let role: NameRole = 'other'
-		if (castTarget) role = 'type'
+		if (castTarget || percentType) role = 'type'
 		else if (followedByParenthesis && !syntax && inSlot !== 'columns') role = 'call'
 		else if (inSlot !== undefined) role = 'relation'
 		references.push({
@@ -358,7 +380,71 @@ export function dmlForeignSchema(tokens: readonly SqlToken[], schema: string): s
 			continue
 		}
 		if (reference.qualifier === schema) continue
+		if (reference.role === 'operator') {
+			if (reference.qualifier !== 'pg_catalog') return reference.qualifier
+			continue
+		}
 		if (reference.role !== 'other' || reference.parts === 3) return reference.qualifier
+	}
+	return undefined
+}
+
+/** Words that begin a statement. Of these only `NESTED_STATEMENTS` may stand in parentheses inside another one. */
+const STATEMENT_WORDS: ReadonlySet<string> = new Set([
+	'ABORT',
+	'ALTER',
+	'ANALYZE',
+	'BEGIN',
+	'CALL',
+	'CHECKPOINT',
+	'CLUSTER',
+	'COMMENT',
+	'COMMIT',
+	'COPY',
+	'CREATE',
+	'DELETE',
+	'DISCARD',
+	'DO',
+	'DROP',
+	'EXECUTE',
+	'EXPLAIN',
+	'GRANT',
+	'IMPORT',
+	'INSERT',
+	'LISTEN',
+	'LOAD',
+	'LOCK',
+	'MERGE',
+	'NOTIFY',
+	'PREPARE',
+	'REFRESH',
+	'REINDEX',
+	'RELEASE',
+	'RESET',
+	'REVOKE',
+	'ROLLBACK',
+	'SAVEPOINT',
+	'SECURITY',
+	'SELECT',
+	'SET',
+	'TABLE',
+	'TRUNCATE',
+	'UPDATE',
+	'VACUUM',
+	'VALUES',
+	'WITH',
+])
+const NESTED_STATEMENTS: ReadonlySet<string> = new Set(['SELECT', 'VALUES', 'WITH', 'TABLE', 'INSERT', 'UPDATE', 'DELETE'])
+
+/**
+ * The first statement nested in parentheses (a CTE body, a subquery) that a nested position may not hold: anything
+ * but a query or `INSERT`/`UPDATE`/`DELETE`, whose names the same checks read. `MERGE` among them.
+ */
+export function nestedStatement(tokens: readonly SqlToken[]): { readonly statement: string; readonly line: number } | undefined {
+	for (let index = 0; index + 1 < tokens.length; index++) {
+		if (!isPunct(tokens[index], '(')) continue
+		const word = tokens[index + 1]?.kind === 'word' ? upperWord(tokens[index + 1]) : undefined
+		if (word !== undefined && STATEMENT_WORDS.has(word) && !NESTED_STATEMENTS.has(word)) return { statement: word, line: tokens[index + 1]?.line ?? 1 }
 	}
 	return undefined
 }

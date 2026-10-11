@@ -28,6 +28,8 @@ describe('@fabrika/platform-node/sql', () => {
 		expect([...graph.keys()].map((file) => file.slice(SOURCE.length + 1)).sort()).toEqual([
 			'migration-classify.ts',
 			'migration-sql.ts',
+			'pg-catalog-names.ts',
+			'routine-signature.ts',
 			'sql-names.ts',
 			'sql.ts',
 		])

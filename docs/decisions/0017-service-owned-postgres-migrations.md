@@ -164,8 +164,11 @@ checked, because a service is trusted platform code.
     [UNIQUE] INDEX`; `ALTER INDEX … RENAME TO`; `CREATE TYPE … AS ENUM`;
     `ALTER TYPE … ADD VALUE`/`RENAME VALUE`; `DROP` of a table, an index, a
     type or database code (an extension included, without `CASCADE`);
-    `TRUNCATE`; `COMMENT ON`; and `INSERT`, `UPDATE` and `DELETE` for a
-    backfill.
+    `TRUNCATE`; `COMMENT ON` a table, column, view, index, sequence,
+    routine, constraint, trigger, policy or rule of the schema (no `pg_…`
+    name, no global target such as a role); and `INSERT`, `UPDATE` and
+    `DELETE` for a backfill, whose nested statements are queries or
+    `INSERT`/`UPDATE`/`DELETE` only (no `MERGE` in a CTE).
   - **Deviation** (a kind and an object name; the approval key is the two,
     never the line): a function or a procedure, a trigger, a view or a
     materialized view, a rule, a policy, a sequence (a `serial` column's
@@ -185,7 +188,11 @@ checked, because a service is trusted platform code.
     `pg_catalog`), any framework name (`fabrika_…`, case-insensitive, quoted
     or not; a file collection's own `fabrika_files_<name>` table and its
     indexes excepted, which `fileTableSql` writes into the application's
-    migration), a Unicode-escaped name (`U&"…"`), a literal that never
+    migration), an `OPERATOR(schema.op)` of a schema other than
+    `pg_catalog` and the application's, a routine named like a `pg_catalog`
+    function or a keyword (`query_to_xml`, `operator`: Postgres resolves a
+    call across the path by argument types, so the declaration would admit
+    the built-in), a Unicode-escaped name (`U&"…"`), a literal that never
     closes, and every form the classifier does not recognise, `SELECT`,
     `WITH` and `MERGE` included. An allowlist at every level: a form a later
     Postgres adds is refused, not executed.
@@ -199,8 +206,12 @@ checked, because a service is trusted platform code.
   assignments: so no `SET`, `RESET`, transaction control, DDL, `COPY`,
   `GRANT` or `LOAD`), and a name outside the schema. A qualified name counts
   as a schema only where it names a relation, a call or a type, so `NEW.x`,
-  `OLD.x` and `alias.column` stay columns. A literal inside a body stays
-  data: no statement a body may hold runs a string as SQL.
+  `OLD.x` and `alias.column` stay columns; a group in parentheses (`FROM
+  (ONLY t)`, `FROM (a JOIN b)`) keeps its relation context, and `t%ROWTYPE`
+  or `t.c%TYPE` is a type reference. A routine's argument defaults are
+  classified like its body, since they run at every call that omits the
+  argument. A literal inside a body stays data: no statement a body may hold
+  runs a string as SQL.
 
   **Function calls are an allowlist**, in bodies, views, policies, rules,
   trigger conditions and backfills alike: a name that `(` follows
@@ -215,11 +226,16 @@ checked, because a service is trusted platform code.
   there only, since Postgres resolves its sequence when the default is
   created and the catalog check sees where it points.
 
-  Each file also yields the database objects it declares. Folded in file
-  order they are the **manifest**: a create adds an object (a replace keeps
-  it), a rename moves it, a drop removes it (dropping one overload removes
-  the name), dropping a table removes its triggers, rules and policies, and
-  renaming a table renames them. The file is split at every `;` outside a comment, a literal
+  Each file also yields the database objects it declares. A routine is
+  named with its input signature as the catalog holds it (`f(int4,text)`,
+  `OUT` arguments left out), so each overload is its own object; a serial
+  column is an object too. Folded in file order they are the **manifest**:
+  a create adds an object (a replace keeps it), a rename moves it, a drop
+  removes it (a routine dropped or renamed without an argument list, or a
+  procedure, which lists its `OUT` arguments, covers every overload of the
+  name), dropping a table removes its triggers, rules, policies and serial
+  columns, and renaming a table or a serial column renames them. A call may
+  name any routine the set creates or renames to. The file is split at every `;` outside a comment, a literal
   or a quoted body, with Postgres' lexical rules: whitespace is `[ \t\n\r\f\v]`
   only (a no-break space is part of a name), a `--` comment ends at a
   carriage return too, and a dollar tag has no length limit. Only files not
@@ -234,10 +250,12 @@ checked, because a service is trusted platform code.
   function that is `SECURITY DEFINER`, has a `SET` clause or a foreign
   language; an event trigger on a function of the schema; any dependency on
   a type, function, relation, operator, operator class or collation outside
-  the schema and `pg_catalog`) and on any function, procedure, aggregate,
-  operator, trigger, rule, view, policy, domain or sequence (an identity or
-  serial column's excepted) that the manifest folded through that file does
-  not name. So an object created at runtime, or by a route the classifier
+  the schema and `pg_catalog`; a routine that shadows a `pg_catalog` name,
+  which also catches a name a later Postgres adds) and on any function,
+  procedure or aggregate (by signature), operator, trigger, rule, view,
+  policy, domain or sequence (an identity column's, and a serial column's
+  that the manifest names, excepted) that the manifest folded through that
+  file does not name. So an object created at runtime, or by a route the classifier
   missed, fails the next migration and the next start until a migration
   declares or drops it.
 

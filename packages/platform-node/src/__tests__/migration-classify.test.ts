@@ -246,8 +246,8 @@ describe('deviations: database code and unusual expressions', () => {
 			'DO $$ BEGIN PERFORM 1; END $$;',
 		].join('\n')
 		expect(deviationKeys(sql, ['spread', 'tidy', 'spread_code'])).toEqual([
-			'function spread',
-			'procedure tidy',
+			'function spread()',
+			'procedure tidy()',
 			'trigger deals.spread',
 			'trigger deals.noop',
 			'view open_deals',
@@ -315,15 +315,15 @@ describe('the manifest of a migration set', () => {
 		)
 		expect(files.flatMap((file) => file.refused)).toEqual([])
 		expect(objects).toEqual([
-			{ kind: 'function', name: 'stamp' },
+			{ kind: 'function', name: 'stamp()' },
 			{ kind: 'view', name: 'v' },
-			{ kind: 'function', name: 'latest' },
+			{ kind: 'function', name: 'latest()' },
 			{ kind: 'trigger', name: 'opportunities.stamped' },
 		])
 		expect(files[2]?.deviations.map((deviation) => `${deviation.kind} ${deviation.object}`)).toEqual([
 			'view v',
-			'function later',
-			'function latest',
+			'function later()',
+			'function latest()',
 			'trigger opportunities.stamped',
 			'materialized view other',
 		])
@@ -332,5 +332,147 @@ describe('the manifest of a migration set', () => {
 			sql: 'CREATE TRIGGER t AFTER UPDATE ON deals EXECUTE FUNCTION suppress_redundant_updates_trigger(); DROP TABLE deals',
 		}], SCHEMA)
 		expect(dropped.objects).toEqual([])
+	})
+})
+
+describe('review round 1: each escape a name rule alone missed', () => {
+	test('a routine may not take a pg_catalog function name or a keyword, so a declaration admits no built-in overload', () => {
+		for (
+			const [sql, reason] of [
+				[
+					'CREATE FUNCTION query_to_xml() RETURNS int LANGUAGE sql RETURN 1',
+					'a function named query_to_xml, which a pg_catalog function or a keyword already names',
+				],
+				[
+					'CREATE FUNCTION operator() RETURNS int LANGUAGE sql RETURN 1',
+					'a function named operator, which a pg_catalog function or a keyword already names',
+				],
+				[
+					'CREATE PROCEDURE lo_export() LANGUAGE sql AS $$ SELECT 1 $$',
+					'a procedure named lo_export, which a pg_catalog function or a keyword already names',
+				],
+				['ALTER FUNCTION f() RENAME TO dblink_exec', undefined],
+				['ALTER FUNCTION f() RENAME TO set_config', 'a function named set_config, which a pg_catalog function or a keyword already names'],
+			] as const
+		) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason })
+		}
+		const set = classifyMigrations(
+			[{
+				name: 'a.sql',
+				sql: "CREATE FUNCTION query_to_xml() RETURNS int LANGUAGE sql RETURN 1;\nINSERT INTO t SELECT query_to_xml('select 1', true, true, '')",
+			}],
+			SCHEMA,
+		)
+		expect(set.files[0]?.refused.map((refused) => refused.reason)).toEqual([
+			'a function named query_to_xml, which a pg_catalog function or a keyword already names',
+			'a call of query_to_xml',
+		])
+	})
+
+	test('OPERATOR(schema.op) is its own construct: only pg_catalog or the schema may qualify it', () => {
+		expect(refusal('UPDATE t SET a = b OPERATOR(ext.===) c')).toBe('UPDATE reaching the schema ext')
+		expect(refusal('UPDATE t SET a = b OPERATOR(pg_catalog.+) c')).toBeUndefined()
+		expect(refusal('DO $$ BEGIN PERFORM 1 OPERATOR(public.+) 2; END $$')).toBe('a body reaching the schema public')
+	})
+
+	test('a routine argument default is classified like any expression', () => {
+		expect(refusal("CREATE FUNCTION f(q text DEFAULT query_to_xml('select 1', true, true, '')) RETURNS text LANGUAGE sql RETURN q")).toBe(
+			'a call of query_to_xml',
+		)
+		expect(refusal('CREATE FUNCTION f(n int = (SELECT count(*) FROM pg_authid)) RETURNS int LANGUAGE sql RETURN n')).toBe(
+			'an argument default reaching the schema pg_catalog',
+		)
+	})
+
+	test('relation and type context survives grouping parentheses and PL/pgSQL declarations, in both body quotings', () => {
+		const bodies = (body: string): string[] => [
+			`CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $b$ ${body} $b$`,
+			`CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`,
+		]
+		for (
+			const [body, reason] of [
+				['BEGIN PERFORM 1 FROM (ONLY other.t); END', 'a body reaching the schema other'],
+				['BEGIN PERFORM 1 FROM ONLY (other.t); END', 'a body reaching the schema other'],
+				['BEGIN PERFORM 1 FROM (other.t JOIN deals ON true); END', 'a body reaching the schema other'],
+				['BEGIN PERFORM 1 FROM deals, (pg_authid CROSS JOIN deals); END', 'a body reaching the schema pg_catalog'],
+				['DECLARE r other.t%ROWTYPE; BEGIN NULL; END', 'a body reaching the schema other'],
+				['DECLARE r deals%ROWTYPE; BEGIN SELECT * INTO r FROM deals JOIN notes USING (id); END', undefined],
+			] as const
+		) {
+			for (const sql of bodies(body)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason })
+		}
+		expect(refusal('INSERT INTO t SELECT 1 FROM (ONLY app_other.t)')).toBe('INSERT reaching the schema app_other')
+	})
+
+	test('a routine is identified by its input signature: an overload is its own object, and a drop or a rename touches only it', () => {
+		const sql = [
+			"CREATE FUNCTION f(a integer, b character varying(10) DEFAULT 'x', OUT c text) RETURNS text LANGUAGE sql AS $$ SELECT b $$;",
+			'CREATE FUNCTION f(double precision, int[], "char", timestamp with time zone) RETURNS int LANGUAGE sql RETURN 1;',
+			'CREATE PROCEDURE p(IN a bigint, OUT b numeric) LANGUAGE sql AS $$ SELECT 1 $$;',
+			'CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql RETURN a;',
+			'CREATE FUNCTION g(a int) RETURNS int LANGUAGE sql RETURN a;',
+			'DROP FUNCTION g(int);',
+			'ALTER FUNCTION f(int, varchar) RENAME TO h;',
+		].join('\n')
+		expect(classifyMigrations([{ name: 'a.sql', sql }], SCHEMA).objects).toEqual([
+			{ kind: 'function', name: 'f(float8,_int4,char,timestamptz)' },
+			{ kind: 'procedure', name: 'p(int8)' },
+			{ kind: 'function', name: 'g(text)' },
+			{ kind: 'function', name: 'h(int4,varchar)' },
+		])
+		const dropAll = classifyMigrations([{ name: 'a.sql', sql: `${sql}\nDROP FUNCTION g; ALTER FUNCTION f RENAME TO k` }], SCHEMA)
+		expect(dropAll.objects.map((object) => object.name)).toEqual(['p(int8)', 'h(int4,varchar)', 'k(float8,_int4,char,timestamptz)'])
+		expect(refusal('CREATE FUNCTION f(a deals.id%TYPE) RETURNS int LANGUAGE sql RETURN 1')).toBe('CREATE FUNCTION naming the schema deals')
+	})
+
+	test('a serial column enters the manifest, and follows its table and column renames', () => {
+		const { objects } = classifyMigrations(
+			[{
+				name: 'a.sql',
+				sql: 'CREATE TABLE deals (n serial, m int GENERATED ALWAYS AS IDENTITY); ALTER TABLE deals RENAME n TO number; ALTER TABLE deals RENAME TO d',
+			}],
+			SCHEMA,
+		)
+		expect(objects).toEqual([{ kind: 'serial column', name: 'd.number' }])
+	})
+
+	test('COMMENT ON names only an object of the schema', () => {
+		for (
+			const [sql, reason] of [
+				["COMMENT ON TABLE notes IS 'x'", undefined],
+				["COMMENT ON COLUMN app_notes.notes.title IS 'x'", undefined],
+				["COMMENT ON TRIGGER audit ON notes IS 'x'", undefined],
+				['COMMENT ON FUNCTION audit() IS NULL', undefined],
+				["COMMENT ON TABLE pg_class IS 'x'", 'COMMENT ON pg_class, which resolves to pg_catalog'],
+				["COMMENT ON TABLE pg_catalog.pg_class IS 'x'", 'COMMENT ON TABLE naming the schema pg_catalog'],
+				["COMMENT ON COLUMN other.t.c IS 'x'", 'COMMENT ON COLUMN naming the schema other'],
+				["COMMENT ON FUNCTION lower(text) IS 'x'", 'COMMENT ON a pg_catalog function lower'],
+				["COMMENT ON ROLE postgres IS 'x'", 'COMMENT ON ROLE'],
+				["COMMENT ON DATABASE postgres IS 'x'", 'COMMENT ON DATABASE'],
+				["COMMENT ON TYPE int4 IS 'x'", 'COMMENT ON TYPE'],
+				["COMMENT ON TABLE notes IS 'x' || 'y'", "COMMENT ON TABLE other than IS '…'"],
+			] as const
+		) {
+			expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason })
+		}
+	})
+
+	test('a nested statement position holds only a query or INSERT/UPDATE/DELETE', () => {
+		const merge = 'WITH m AS (MERGE INTO a USING b ON a.id = b.id WHEN MATCHED THEN DELETE RETURNING a.id) SELECT id FROM m'
+		expect(refusal(`INSERT INTO t ${merge}`)).toBe('MERGE nested in a statement')
+		expect(refusal(`CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$ INSERT INTO t ${merge} $$`)).toBe('MERGE nested in a statement')
+		expect(refusal('INSERT INTO t WITH d AS (DELETE FROM a RETURNING id) SELECT id FROM d')).toBeUndefined()
+	})
+
+	test('a call may name a function under the name a rename gave it', () => {
+		const { files } = classifyMigrations(
+			[
+				{ name: 'a.sql', sql: 'CREATE FUNCTION old_name() RETURNS int LANGUAGE sql RETURN 1' },
+				{ name: 'b.sql', sql: 'ALTER FUNCTION old_name() RENAME TO new_name; CREATE VIEW v AS SELECT new_name()' },
+			],
+			SCHEMA,
+		)
+		expect(files.flatMap((file) => file.refused)).toEqual([])
 	})
 })

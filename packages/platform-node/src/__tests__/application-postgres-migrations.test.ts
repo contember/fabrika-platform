@@ -43,12 +43,10 @@ describe('application migration identity', () => {
 		}
 	})
 
-	test('every plan refuses a migration that reaches another schema, so migrate and the test kit refuse it', () => {
+	test('a plan reads schema qualifiers by role, as the runner does: an alias or the own schema is no other schema', () => {
 		const migrations = definePostgresApplicationMigrations({ appId: 'notes', directory: '/unused' })
-		const reaching = migration('20261008120000_init.sql', "CREATE TABLE notes (id TEXT);\nUPDATE public.accounts SET plan = 'free';")
-		expect(() => migrations.plan([reaching])).toThrow(
-			'Application migration 20261008120000_init.sql line 2 names the schema public; an application migration names its own tables unqualified',
-		)
+		const sql = 'CREATE TABLE app_notes.notes (id TEXT);\nUPDATE notes SET id = app_other.id FROM notes AS app_other WHERE app_other.id = notes.id;'
+		expect(migrations.plan([migration('20261008120000_init.sql', sql)]).bundles[0]?.migrations).toHaveLength(1)
 	})
 
 	test("the example application's migrations are accepted", () => {
@@ -360,7 +358,8 @@ describe.skipIf(!hasPostgres)('application migrations on real Postgres', () => {
 				[`CREATE TABLE marker (id text);\nCOMMENT ON TABLE marker IS ${tag} ( ${tag};\nGRANT ALL ON marker TO PUBLIC`, 'line 3: GRANT is not allowed'],
 				// COPY … PROGRAM runs outside the migration's transaction, so no rollback could undo it.
 				["CREATE TABLE marker (id text);\nCOPY marker FROM PROGRAM 'true'", 'line 2: COPY is not allowed'],
-				['CREATE TABLE marker (id text);\nINSERT INTO app_other.t VALUES (1)', 'line 2 names the schema app_other'],
+				['CREATE TABLE marker (id text);\nINSERT INTO app_other.t VALUES (1)', 'line 2: INSERT reaching the schema app_other is not allowed'],
+				["CREATE TABLE marker (id text);\nUPDATE public.accounts SET plan = 'free'", 'line 2: UPDATE reaching the schema public is not allowed'],
 				[
 					"CREATE TABLE marker (id text);\nUPDATE fabrika_job_leases SET holder = 'me'",
 					"line 2: a reference to the framework's fabrika_job_leases is not allowed",
@@ -464,20 +463,6 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 			await admin.close()
 		}
 		return outside
-	}
-
-	/** Applies `sql` and expects the check to roll it back: no table of it and no ledger row survive. */
-	async function rolledBack(sql: string, table: string): Promise<string> {
-		const { migrations, db } = application()
-		const failure = await failureOf(migrations.apply(db, [migration('20261008120000_init.sql', sql)]))
-		expect(failure.message).toStartWith(
-			'Postgres migration app/20261008120000_init.sql was rolled back: the schema would hold database code that escapes it or that no migration declares: ',
-		)
-		const relation = await db.prepare(`SELECT to_regclass('${migrations.schema}.${table}') AS relation`).first<{ relation: string | null }>()
-		expect(relation?.relation).toBeNull()
-		const { results } = await db.prepare(`SELECT name FROM ${migrations.schema}.fabrika_migrations`).all()
-		expect(results).toEqual([])
-		return failure.message
 	}
 
 	test('applies the defaults, checks, generated columns and indexes an application needs', async () => {
@@ -595,9 +580,9 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		).run()
 		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
 		expect(results.map((row) => row.violation)).toEqual([
-			'function definer (no migration declares it)',
 			'function definer has a SET clause',
 			'function definer is SECURITY DEFINER',
+			'function definer() (no migration declares it)',
 			'trigger deals.noop (no migration declares it)',
 		])
 		const declared = migrations.objects([
@@ -611,12 +596,32 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		expect(later.map((row) => row.violation)).not.toContain('trigger deals.noop (no migration declares it)')
 	})
 
-	test('dropping one overload drops the name from the manifest, so the catalog check rolls the migration back', async () => {
-		const sql = `CREATE TABLE deals (id text);
-			CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql RETURN a;
-			CREATE FUNCTION f(a text) RETURNS text LANGUAGE sql RETURN a;
-			DROP FUNCTION f(int);`
-		expect(await rolledBack(sql, 'deals')).toContain('function f (no migration declares it)')
+	test('a routine is declared by its signature: dropping one overload keeps the other, and an undeclared overload is rolled back', async () => {
+		const { migrations, db } = application()
+		const files = [
+			migration(
+				'20261008120000_init.sql',
+				`CREATE TABLE deals (id text, n serial);
+				CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql RETURN a;
+				CREATE FUNCTION f(a text, b varchar(3) DEFAULT 'x', OUT c text) RETURNS text LANGUAGE sql AS $$ SELECT a $$;
+				CREATE FUNCTION g(double precision, int[], timestamp with time zone) RETURNS int LANGUAGE sql RETURN 1;
+				CREATE PROCEDURE p(IN a bigint, OUT b numeric) LANGUAGE plpgsql AS $$ BEGIN b := a; END $$;
+				DROP FUNCTION f(int);`,
+			),
+		]
+		expect(await migrations.apply(db, files)).toEqual(['app/20261008120000_init.sql'])
+		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
+		expect(results).toEqual([])
+		await db.prepare(`CREATE FUNCTION ${migrations.schema}.g(a text) RETURNS int LANGUAGE sql RETURN 2`).run()
+		await db.prepare(`CREATE SEQUENCE ${migrations.schema}.stray OWNED BY ${migrations.schema}.deals.id`).run()
+		await db.prepare(`CREATE FUNCTION ${migrations.schema}.lower(a int) RETURNS int LANGUAGE sql RETURN a`).run()
+		const { results: runtime } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
+		expect(runtime.map((row) => row.violation)).toEqual([
+			'function g(text) (no migration declares it)',
+			'function lower shadows a pg_catalog function',
+			'function lower(int4) (no migration declares it)',
+			'sequence stray (no migration declares it)',
+		])
 	})
 
 	test('the check covers the whole schema, so a later migration that keeps a leftover trigger fails until it drops it', async () => {
@@ -660,16 +665,16 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 	test('the catalog query does not depend on the session: standard_conforming_strings off, the schema first on the path', async () => {
 		const { migrations, db } = application()
 		await migrations.apply(db, [migration('20261008120000_init.sql', 'CREATE TABLE deals (id text PRIMARY KEY)')])
-		await db.prepare(`CREATE FUNCTION ${migrations.schema}."it's\\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`).run()
+		await db.prepare(`CREATE FUNCTION ${migrations.schema}."it's\\"(text) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`).run()
 		await db.prepare(`CREATE FUNCTION ${migrations.schema}.shadow() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`).run()
 		const hostile = PostgresDatabase.connect(requireUrl(), {
 			connection: { standard_conforming_strings: 'off', search_path: `${migrations.schema}, pg_catalog` },
 			max: 1,
 		})
 		openDatabases.push(hostile)
-		const query = databaseCodeQuery(migrations.schema, [{ kind: 'function', name: "it's\\" }])
+		const query = databaseCodeQuery(migrations.schema, [{ kind: 'function', name: "it's\\(text)" }])
 		expect(query).not.toContain('\\')
 		const { results } = await hostile.prepare(query).all<{ violation: string }>()
-		expect(results.map((row) => row.violation)).toEqual(['function shadow (no migration declares it)'])
+		expect(results.map((row) => row.violation)).toEqual(['function shadow() (no migration declares it)'])
 	})
 })

@@ -192,34 +192,6 @@ export function statementStarts(sql: string): StatementStart[] {
 	})
 }
 
-/** Whether a schema qualifier names another application's schema, a platform schema or `public`. */
-function isForeignSchema(name: string): boolean {
-	return name === 'public' || name.startsWith('app_') || name.startsWith('fabrika')
-}
-
-/**
- * The first schema-qualified reference of an application migration (`public.notes`, `"app_other".notes`) to a schema
- * that is not its own, also inside a dollar-quoted body. An application's names resolve through the runner's
- * `search_path`, its own schema; `pg_catalog.` stays allowed. Unquoted names are folded to lower case, as Postgres does.
- */
-export function foreignSchemaReference(sql: string): { readonly schema: string; readonly line: number } | undefined {
-	const tokens = sqlTokens(sql)
-	for (let index = 0; index < tokens.length; index++) {
-		const token = tokens[index]
-		if (token === undefined) continue
-		if (token.kind === 'dollar') {
-			const inner = foreignSchemaReference(token.body)
-			if (inner !== undefined) return { schema: inner.schema, line: token.line + inner.line - 1 }
-			continue
-		}
-		const dot = tokens[index + 1]
-		if ((token.kind !== 'word' && token.kind !== 'quoted') || dot?.kind !== 'punct' || dot.char !== '.') continue
-		const schema = token.kind === 'word' ? token.text.toLowerCase() : token.text
-		if (isForeignSchema(schema)) return { schema, line: token.line }
-	}
-	return undefined
-}
-
 /** The first refused top-level statement of a migration file, or `undefined`. */
 export function refusedStatement(sql: string): { readonly statement: string; readonly line: number } | undefined {
 	for (const start of statementStarts(sql)) {

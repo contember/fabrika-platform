@@ -445,7 +445,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 		expect(await failure(run(root, 'migrate', [], { source }))).toContain('Application migration 20261008120000_init.sql line 2: COPY is not allowed')
 		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE deals (id TEXT PRIMARY KEY);\nINSERT INTO app_other.t VALUES (1)')
 		expect(await failure(run(root, 'migrate', [], { source }))).toContain(
-			'Application migration 20261008120000_init.sql line 2 names the schema app_other',
+			'Application migration 20261008120000_init.sql line 2: INSERT reaching the schema app_other is not allowed',
 		)
 	})
 

@@ -27,14 +27,15 @@ const catalog = (table: string): string => `'pg_catalog.${table}'::pg_catalog.re
  * One row (`violation`) per escape and per undeclared object in `schema`. Escapes: a function that is `SECURITY
  * DEFINER`, has a `SET` clause or a language other than `sql` and `plpgsql`; an event trigger on a function of the
  * schema; and any dependency of an object of the schema on a type, function, relation, operator, operator class or
- * collation outside the schema and `pg_catalog`. Undeclared: a function, procedure, aggregate, operator, trigger (a
- * foreign key's excepted), rule, view, policy, domain or sequence (an identity or serial column's excepted) that
- * `declared` does not name. Every name is qualified with `pg_catalog`, the query has no backslash, and the manifest is
+ * collation outside the schema and `pg_catalog`; a routine that shadows a `pg_catalog` name. Undeclared: a function,
+ * procedure or aggregate (by its input signature), operator, trigger (a foreign key's excepted), rule, view, policy,
+ * domain or sequence (an identity column's, and a declared serial column's, excepted) that `declared` does not name. Every name is qualified with `pg_catalog`, the query has no backslash, and the manifest is
  * hex text, so the session's `search_path` and `standard_conforming_strings` cannot change what it finds.
  */
 export function databaseCodeQuery(schema: string, declared: readonly DatabaseObject[]): string {
 	if (!IDENTIFIER.test(schema)) throw new Error(`Invalid application schema: ${schema}`)
-	const namespace = `(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '${schema}')`
+	// A constant, not a subquery, so the planner sizes each scan of the schema and does not reach for JIT.
+	const namespace = `'${schema}'::pg_catalog.regnamespace::pg_catalog.oid`
 	const trusted = `(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname IN ('${schema}', 'pg_catalog'))`
 	const outside = (kind: string, table: string, name: string, namespaceColumn: string): string =>
 		`SELECT d.object || ' depends on the ${kind} ' || s.nspname || '.' || r.${name}
@@ -44,7 +45,11 @@ export function databaseCodeQuery(schema: string, declared: readonly DatabaseObj
 	WHERE r.${namespaceColumn} NOT IN ${trusted}`
 	return `
 WITH objects AS (
-	SELECT CASE p.prokind WHEN 'a' THEN 'aggregate ' WHEN 'p' THEN 'procedure ' ELSE 'function ' END || p.proname AS object
+	SELECT CASE p.prokind WHEN 'a' THEN 'aggregate ' WHEN 'p' THEN 'procedure ' ELSE 'function ' END || p.proname || '(' || COALESCE((
+		SELECT pg_catalog.string_agg(t.typname::pg_catalog.text, ',' ORDER BY a.position)
+		FROM pg_catalog.unnest(p.proargtypes::pg_catalog.oid[]) WITH ORDINALITY AS a(type, position)
+		JOIN pg_catalog.pg_type t ON t.oid = a.type
+	), '') || ')' AS object
 	FROM pg_catalog.pg_proc p
 	WHERE p.pronamespace = ${namespace} AND NOT EXISTS (
 		SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid = ${catalog('pg_proc')} AND d.objid = p.oid AND d.deptype = 'i'
@@ -72,9 +77,12 @@ WITH objects AS (
 	SELECT 'sequence ' || c.relname
 	FROM pg_catalog.pg_class c
 	WHERE c.relnamespace = ${namespace} AND c.relkind = 'S' AND NOT EXISTS (
+		-- An identity column's sequence (an internal dependency), or a serial column's that a migration declares.
 		SELECT 1 FROM pg_catalog.pg_depend d
-		WHERE d.classid = ${catalog('pg_class')} AND d.objid = c.oid AND d.refclassid = ${catalog('pg_class')}
-			AND d.refobjsubid > 0 AND d.deptype IN ('i', 'a')
+		JOIN pg_catalog.pg_class t ON t.oid = d.refobjid
+		JOIN pg_catalog.pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+		WHERE d.classid = ${catalog('pg_class')} AND d.objid = c.oid AND d.refclassid = ${catalog('pg_class')} AND d.refobjsubid > 0
+			AND (d.deptype = 'i' OR (d.deptype = 'a' AND 'serial column ' || t.relname || '.' || a.attname = ANY (${declaredArray(declared)})))
 	)
 ),
 dependents AS (
@@ -119,6 +127,12 @@ violations AS (
 	SELECT 'function ' || p.proname || ' is in the language ' || l.lanname
 	FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid = p.prolang
 	WHERE p.pronamespace = ${namespace} AND l.lanname NOT IN ('sql', 'plpgsql')
+	UNION ALL
+	SELECT DISTINCT 'function ' || p.proname || ' shadows a pg_catalog function'
+	FROM pg_catalog.pg_proc p
+	JOIN pg_catalog.pg_proc b ON b.proname = p.proname
+	JOIN pg_catalog.pg_namespace n ON n.oid = b.pronamespace AND n.nspname = 'pg_catalog'
+	WHERE p.pronamespace = ${namespace}
 	UNION ALL
 	SELECT 'event trigger ' || e.evtname FROM pg_catalog.pg_event_trigger e JOIN pg_catalog.pg_proc p ON p.oid = e.evtfoid
 	WHERE p.pronamespace = ${namespace}

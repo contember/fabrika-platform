@@ -19,6 +19,8 @@ export {
 	type MigrationSetClassification,
 } from './migration-classify'
 export { lexSql, type SqlToken, sqlTokens, type Statement, topLevelStatements, upperWord } from './migration-sql'
+export { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
+export { routineSignature } from './routine-signature'
 export {
 	ddlForeignSchema,
 	dmlForeignSchema,
@@ -31,6 +33,7 @@ export {
 	nameReferences,
 	type NameRole,
 	nameText,
+	nestedStatement,
 	refusedFunctionCall,
 	statementKind,
 	unicodeIdentifier,

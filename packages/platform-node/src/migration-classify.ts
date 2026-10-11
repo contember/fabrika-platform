@@ -4,6 +4,8 @@
 // Runtime-neutral: Control classifies a commit's migrations in a Worker, the runner before it applies them.
 
 import { lexSql, type SqlToken, topLevelStatements, upperWord } from './migration-sql'
+import { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
+import { routineSignature } from './routine-signature'
 import {
 	afterName,
 	closingParenthesis,
@@ -15,6 +17,7 @@ import {
 	isPunct,
 	nameReferences,
 	nameText,
+	nestedStatement,
 	objectNameAt,
 	refusedFunctionCall,
 	skipWords,
@@ -24,17 +27,41 @@ import {
 	wordAtDepthZero,
 } from './sql-names'
 
-/** A database object a migration declares, named as the catalog check names it (`trigger deals.audit`). */
-export type DatabaseObjectKind = 'function' | 'procedure' | 'trigger' | 'view' | 'materialized view' | 'rule' | 'policy' | 'sequence'
+/**
+ * A database object a migration declares, named as the catalog check names it (`trigger deals.audit`). A `serial
+ * column` is the column whose sequence the catalog check admits.
+ */
+export type DatabaseObjectKind =
+	| 'function'
+	| 'procedure'
+	| 'trigger'
+	| 'view'
+	| 'materialized view'
+	| 'rule'
+	| 'policy'
+	| 'sequence'
+	| 'serial column'
 
 export interface DatabaseObject {
 	readonly kind: DatabaseObjectKind
-	/** `<name>`, or `<table>.<name>` for a trigger, a rule and a policy. */
+	/** `<name>`; `<name>(<typname>,…)` for a routine; `<table>.<name>` for a trigger, a rule, a policy and a serial column. */
 	readonly name: string
 }
 
+type RoutineKind = 'function' | 'procedure'
+
 /** Database code and unusual expressions: allowed, and shown to the approver as needing closer review. */
-export type DeviationKind = DatabaseObjectKind | 'do' | 'expression'
+export type DeviationKind =
+	| 'function'
+	| 'procedure'
+	| 'trigger'
+	| 'view'
+	| 'materialized view'
+	| 'rule'
+	| 'policy'
+	| 'sequence'
+	| 'do'
+	| 'expression'
 
 /** One deviation. Its approval key is `kind` + `object`: a line moves when the file is edited, the key does not. */
 export interface MigrationDeviation {
@@ -62,6 +89,9 @@ export type ManifestChange =
 	| { readonly change: 'drop table'; readonly table: string }
 	| { readonly change: 'rename table'; readonly from: string; readonly to: string }
 	| { readonly change: 'rename'; readonly from: DatabaseObject; readonly to: DatabaseObject }
+	| { readonly change: 'drop routines'; readonly kind: RoutineKind; readonly name: string }
+	| { readonly change: 'rename routines'; readonly kind: RoutineKind; readonly from: string; readonly to: string }
+	| { readonly change: 'rename column'; readonly table: string; readonly from: string; readonly to: string }
 
 export interface MigrationClassification {
 	readonly file: string
@@ -216,8 +246,10 @@ function refuseForeignDdl(tokens: readonly SqlToken[], context: Context, label: 
 	if (reached !== undefined) throw new Refused(`${label} naming the schema ${reached}`, tokens[0]?.line ?? 1)
 }
 
-/** A query, a condition or a backfill: no schema but the application's, and only allowlisted calls. */
+/** A query, a condition or a backfill: no schema but the application's, only allowlisted calls and nested statements. */
 function checkQuery(tokens: readonly SqlToken[], context: Context, label: string): void {
+	const nested = nestedStatement(tokens)
+	if (nested !== undefined) throw new Refused(`${nested.statement} nested in a statement`, nested.line)
 	const reached = dmlForeignSchema(tokens, context.schema)
 	if (reached !== undefined) throw new Refused(`${label} reaching the schema ${reached}`, tokens[0]?.line ?? 1)
 	const call = refusedFunctionCall(tokens, context.schema, context.functions)
@@ -337,7 +369,8 @@ function createFunction(tokens: readonly SqlToken[], at: number, kind: 'function
 	const name = ownName(tokens, at, context, label)
 	const named = afterName(tokens, at)
 	const close = named === undefined || !isPunct(tokens[named], '(') ? undefined : closingParenthesis(tokens, named)
-	if (close === undefined) throw new Refused(`${label} without an argument list`, line)
+	if (named === undefined || close === undefined) throw new Refused(`${label} without an argument list`, line)
+	refuseShadowing(name, kind, line)
 	const header: SqlToken[] = [...tokens.slice(0, close + 1)]
 	let language: string | undefined
 	let body: SqlToken[] | undefined
@@ -380,8 +413,25 @@ function createFunction(tokens: readonly SqlToken[], at: number, kind: 'function
 	if (body === undefined) throw new Refused(`a ${kind} without a body`, line)
 	checkLanguage(language, line)
 	refuseForeignDdl(header, context, label)
+	// An argument default runs at every call that omits the argument, so it is a query like the body.
+	const args = tokens.slice(named + 1, close)
+	checkQuery(args, context, 'an argument default')
+	const signature = routineSignature(args, context.schema)
+	if (signature === undefined) throw new Refused(`a ${kind} argument type the classifier cannot name; write the type itself`, line)
 	checkBody(body, context)
-	declareObject(out, kind, name, line)
+	declareObject(out, kind, `${name}(${signature})`, line)
+}
+
+/**
+ * A routine may not take the name of a `pg_catalog` function or of a keyword: Postgres resolves a call across every
+ * schema on the path by argument types, so declaring `query_to_xml()` would admit a call of the built-in.
+ */
+const shadows = (name: string): boolean => PG_CATALOG_FUNCTIONS.has(name) || SQL_KEYWORDS.has(name.toLowerCase())
+
+function refuseShadowing(name: string, kind: RoutineKind, line: number): void {
+	if (shadows(name)) {
+		throw new Refused(`a ${kind} named ${name}, which a pg_catalog function or a keyword already names`, line)
+	}
 }
 
 /** `CREATE [OR REPLACE] [CONSTRAINT] TRIGGER name … ON table … [WHEN (…)] EXECUTE FUNCTION fn(…)`. */
@@ -534,7 +584,10 @@ function classifyElement(element: readonly SqlToken[], table: string, context: C
 	const column = nameText(element[0])
 	if (column === undefined) return
 	const type = nameText(element[1])
-	if (type !== undefined && SERIAL_TYPES.has(type)) deviate(out, 'sequence', `${table}.${column}`, element[0]?.line ?? 1)
+	if (type !== undefined && SERIAL_TYPES.has(type)) {
+		deviate(out, 'sequence', `${table}.${column}`, element[0]?.line ?? 1)
+		out.changes.push({ change: 'create', object: { kind: 'serial column', name: `${table}.${column}` } })
+	}
 	checkExpression(element.slice(1), `${table}.${column}`, context, out)
 }
 
@@ -625,6 +678,10 @@ function alterTable(tokens: readonly SqlToken[], context: Context, out: Collecte
 	if (upperWord(rest[0]) === 'RENAME') {
 		const to = upperWord(rest[1]) === 'TO' ? nameText(rest[2]) : undefined
 		if (to !== undefined) out.changes.push({ change: 'rename table', from: table, to })
+		const columnAt = upperWord(rest[1]) === 'COLUMN' ? 2 : 1
+		const from = upperWord(rest[1]) === 'TO' || upperWord(rest[1]) === 'CONSTRAINT' ? undefined : nameText(rest[columnAt])
+		const column = upperWord(rest[columnAt + 1]) === 'TO' ? nameText(rest[columnAt + 2]) : undefined
+		if (from !== undefined && column !== undefined) out.changes.push({ change: 'rename column', table, from, to: column })
 		return
 	}
 	for (const clause of splitAtCommas(rest)) alterClause(clause, table, context, out)
@@ -646,7 +703,10 @@ function alterIndexOrType(tokens: readonly SqlToken[], kind: string, context: Co
 }
 
 /** The kinds of database code `ALTER … RENAME TO` may rename, and what each names in the manifest. */
-const RENAMEABLE: Readonly<Record<string, readonly DatabaseObjectKind[]>> = {
+/** Every declared kind but a serial column, which follows its table and column. */
+type CodeKind = Exclude<DatabaseObjectKind, 'serial column'>
+
+const RENAMEABLE: Readonly<Record<string, readonly CodeKind[]>> = {
 	FUNCTION: ['function'],
 	PROCEDURE: ['procedure'],
 	ROUTINE: ['function', 'procedure'],
@@ -666,22 +726,26 @@ function alterRename(tokens: readonly SqlToken[], context: Context, out: Collect
 	const line = tokens[0]?.line ?? 1
 	const materialized = upperWord(tokens[1]) === 'MATERIALIZED' && upperWord(tokens[2]) === 'VIEW'
 	const kind = materialized ? 'VIEW' : (upperWord(tokens[1]) ?? '')
-	const kinds: readonly DatabaseObjectKind[] = materialized ? ['materialized view'] : Object.hasOwn(RENAMEABLE, kind) ? (RENAMEABLE[kind] ?? []) : []
+	const kinds: readonly CodeKind[] = materialized ? ['materialized view'] : Object.hasOwn(RENAMEABLE, kind) ? (RENAMEABLE[kind] ?? []) : []
 	const label = statementKind(tokens)
 	const at = skipWords(tokens, materialized ? 3 : 2, 'IF', 'EXISTS')
 	const onTable = kind === 'TRIGGER' || kind === 'RULE' || kind === 'POLICY'
 	let name: string
 	let after: number
+	let args: readonly SqlToken[] | undefined
 	if (onTable) {
 		const own = nameText(tokens[at])
 		if (own === undefined || upperWord(tokens[at + 1]) !== 'ON') throw new Refused(label, line)
 		name = `${ownName(tokens, at + 2, context, label)}.${own}`
 		after = afterName(tokens, at + 2) ?? tokens.length
 	} else {
-		const own = ownName(tokens, at, context, label)
-		name = own
+		name = ownName(tokens, at, context, label)
 		after = afterName(tokens, at) ?? tokens.length
-		if (isPunct(tokens[after], '(')) after = (closingParenthesis(tokens, after) ?? tokens.length) + 1
+		if (isPunct(tokens[after], '(')) {
+			const close = closingParenthesis(tokens, after) ?? tokens.length - 1
+			args = tokens.slice(after + 1, close)
+			after = close + 1
+		}
 	}
 	const target = nameText(tokens[after + 2])
 	if (
@@ -691,9 +755,35 @@ function alterRename(tokens: readonly SqlToken[], context: Context, out: Collect
 		throw new Refused(`${label} other than RENAME TO`, line)
 	}
 	refuseForeignDdl(tokens, context, label)
-	const renamed = onTable ? `${name.slice(0, name.indexOf('.'))}.${target}` : target
-	for (const objectKind of kinds) out.changes.push({ change: 'rename', from: { kind: objectKind, name }, to: { kind: objectKind, name: renamed } })
-	deviate(out, kinds[0] ?? 'function', renamed, line)
+	if (onTable) {
+		const renamed = `${name.slice(0, name.indexOf('.'))}.${target}`
+		for (const objectKind of kinds) out.changes.push({ change: 'rename', from: { kind: objectKind, name }, to: { kind: objectKind, name: renamed } })
+		deviate(out, kinds[0] ?? 'trigger', renamed, line)
+		return
+	}
+	const routines = kinds.filter((objectKind): objectKind is RoutineKind => objectKind === 'function' || objectKind === 'procedure')
+	if (routines.length === 0) {
+		for (const objectKind of kinds) out.changes.push({ change: 'rename', from: { kind: objectKind, name }, to: { kind: objectKind, name: target } })
+		deviate(out, kinds[0] ?? 'view', target, line)
+		return
+	}
+	for (const routine of routines) refuseShadowing(target, routine, line)
+	// A procedure's drop and rename list its OUT arguments too, which `proargtypes` leaves out: rename it by name.
+	const signatures = routines.map((routine) => (args === undefined || routine === 'procedure' ? undefined : routineSignature(args, context.schema)))
+	for (const [index, routine] of routines.entries()) {
+		const signature = signatures[index]
+		if (args !== undefined && routine === 'function' && signature === undefined) {
+			throw new Refused(`a ${routine} argument type the classifier cannot name; write the type itself`, line)
+		}
+		if (signature === undefined) out.changes.push({ change: 'rename routines', kind: routine, from: name, to: target })
+		else {out.changes.push({
+				change: 'rename',
+				from: { kind: routine, name: `${name}(${signature})` },
+				to: { kind: routine, name: `${target}(${signature})` },
+			})}
+	}
+	const shown = signatures[0] === undefined ? target : `${target}(${signatures[0]})`
+	deviate(out, routines[0] ?? 'function', shown, line)
 }
 
 /** The objects a `DROP` removes from the manifest. */
@@ -714,13 +804,26 @@ function dropChanges(tokens: readonly SqlToken[], kind: string, context: Context
 		const objectKind: DatabaseObjectKind = kind === 'TRIGGER' ? 'trigger' : kind === 'RULE' ? 'rule' : 'policy'
 		return [{ change: 'drop', object: { kind: objectKind, name: `${table.name}.${name}` } }]
 	}
-	const kinds: readonly DatabaseObjectKind[] = materialized ? ['materialized view'] : (objectKinds[kind] ?? [])
+	const kinds: readonly DatabaseObjectKind[] = materialized ? ['materialized view'] : Object.hasOwn(objectKinds, kind) ? (objectKinds[kind] ?? []) : []
 	const changes: ManifestChange[] = []
 	for (const part of splitAtCommas(tokens.slice(names))) {
 		const object = objectNameAt(part, 0)
 		if (object === undefined || (object.qualifier !== undefined && object.qualifier !== context.schema)) continue
 		if (kind === 'TABLE') changes.push({ change: 'drop table', table: object.name })
-		for (const objectKind of kinds) changes.push({ change: 'drop', object: { kind: objectKind, name: object.name } })
+		const open = afterName(part, 0)
+		const close = open !== undefined && isPunct(part[open], '(') ? closingParenthesis(part, open) : undefined
+		for (const objectKind of kinds) {
+			if (objectKind !== 'function' && objectKind !== 'procedure') {
+				changes.push({ change: 'drop', object: { kind: objectKind, name: object.name } })
+				continue
+			}
+			// Without an argument list a drop names every overload; with one, only that signature. A procedure's list holds
+			// its OUT arguments, which `proargtypes` leaves out, so it drops every overload of the name.
+			const listed = open !== undefined && close !== undefined && objectKind === 'function'
+			const signature = listed ? routineSignature(part.slice(open + 1, close), context.schema) : undefined
+			if (signature === undefined) changes.push({ change: 'drop routines', kind: objectKind, name: object.name })
+			else changes.push({ change: 'drop', object: { kind: objectKind, name: `${object.name}(${signature})` } })
+		}
 	}
 	return changes
 }
@@ -763,6 +866,64 @@ function classifyCreate(tokens: readonly SqlToken[], context: Context, out: Coll
 	throw new Refused(statementKind(tokens), line)
 }
 
+/** The targets `COMMENT ON` may name, all objects of the application's schema; `ON` marks one named on a table. */
+const COMMENT_TARGETS: Readonly<Record<string, 'name' | 'routine' | 'column' | 'on'>> = {
+	TABLE: 'name',
+	VIEW: 'name',
+	INDEX: 'name',
+	SEQUENCE: 'name',
+	COLUMN: 'column',
+	FUNCTION: 'routine',
+	PROCEDURE: 'routine',
+	ROUTINE: 'routine',
+	CONSTRAINT: 'on',
+	TRIGGER: 'on',
+	POLICY: 'on',
+	RULE: 'on',
+}
+
+/**
+ * `COMMENT ON <target> IS '…' | NULL` for an object of the application's schema. A name that resolves to the catalog
+ * (`pg_…`, a `pg_catalog` function) and a global target (a role, a database) are refused.
+ */
+function classifyComment(tokens: readonly SqlToken[], context: Context): void {
+	const line = tokens[0]?.line ?? 1
+	const materialized = upperWord(tokens[2]) === 'MATERIALIZED' && upperWord(tokens[3]) === 'VIEW'
+	const target = materialized ? 'VIEW' : (upperWord(tokens[2]) ?? '')
+	const form = Object.hasOwn(COMMENT_TARGETS, target) ? COMMENT_TARGETS[target] : undefined
+	if (form === undefined) throw new Refused(`COMMENT ON ${statementKind(tokens.slice(2))}`, line)
+	let at = materialized ? 4 : 3
+	const names: string[] = []
+	if (form === 'on') {
+		const name = nameText(tokens[at])
+		if (name === undefined || upperWord(tokens[at + 1]) !== 'ON') throw new Refused(`COMMENT ON ${target}`, line)
+		names.push(ownName(tokens, at + 2, context, `COMMENT ON ${target}`))
+		at = afterName(tokens, at + 2) ?? tokens.length
+	} else if (form === 'column') {
+		const parts: string[] = []
+		while (isName(tokens[at])) {
+			parts.push(nameText(tokens[at]) ?? '')
+			if (!isPunct(tokens[at + 1], '.')) break
+			at += 2
+		}
+		at++
+		if (parts.length === 3 && parts[0] !== context.schema) throw new Refused(`COMMENT ON COLUMN naming the schema ${parts[0]}`, line)
+		if (parts.length < 2 || parts.length > 3) throw new Refused('COMMENT ON COLUMN', line)
+		names.push(parts[parts.length - 2] ?? '')
+	} else {
+		const name = ownName(tokens, at, context, `COMMENT ON ${target}`)
+		if (form === 'routine' && PG_CATALOG_FUNCTIONS.has(name)) throw new Refused(`COMMENT ON a pg_catalog function ${name}`, line)
+		names.push(name)
+		at = afterName(tokens, at) ?? tokens.length
+		if (form === 'routine' && isPunct(tokens[at], '(')) at = (closingParenthesis(tokens, at) ?? tokens.length - 1) + 1
+	}
+	const catalog = names.find((name) => name.startsWith('pg_'))
+	if (catalog !== undefined) throw new Refused(`COMMENT ON ${catalog}, which resolves to pg_catalog`, line)
+	const value = tokens[at + 1]
+	const isText = (value?.kind === 'string' || value?.kind === 'dollar' || upperWord(value) === 'NULL') && at + 2 === tokens.length
+	if (upperWord(tokens[at]) !== 'IS' || !isText) throw new Refused(`COMMENT ON ${target} other than IS '…'`, line)
+}
+
 /**
  * The framework names a statement may use: a file collection's table (`fabrika_files_<name>`, `fileTableSql`) is
  * created by the application's own migration, with its indexes. Every other framework name is refused.
@@ -791,7 +952,7 @@ function classifyStatement(tokens: readonly SqlToken[], context: Context, out: C
 	if (framework !== undefined) throw new Refused(`a reference to the framework's ${framework.name}`, framework.line)
 	const first = upperWord(tokens[0])
 	if (first === 'INSERT' || first === 'UPDATE' || first === 'DELETE') return checkQuery(tokens, context, first)
-	if (first === 'COMMENT' && upperWord(tokens[1]) === 'ON') return
+	if (first === 'COMMENT' && upperWord(tokens[1]) === 'ON') return classifyComment(tokens, context)
 	if (first === 'DO') return classifyDo(tokens, context, out)
 	if (first === 'CREATE') return classifyCreate(tokens, context, out)
 	if (first === 'DROP') return classifyDrop(tokens, context, out)
@@ -849,22 +1010,34 @@ export function classifyMigration(sql: string, schema: string, options: Classify
 	return { file: options.file, refused, deviations, objects, changes }
 }
 
-/** The functions and procedures a migration creates in `schema`, read without classifying their bodies. */
+/** The names of the functions and procedures a migration creates or renames to in `schema`, read without classifying them. */
 export function declaredFunctions(sql: string, schema: string): string[] {
 	const names: string[] = []
 	for (const { tokens } of topLevelStatements(sql)) {
-		if (upperWord(tokens[0]) !== 'CREATE') continue
-		const at = skipWords(tokens, 1, 'OR', 'REPLACE')
+		const first = upperWord(tokens[0])
+		const at = first === 'CREATE' ? skipWords(tokens, 1, 'OR', 'REPLACE') : 1
 		const kind = upperWord(tokens[at])
-		if (kind !== 'FUNCTION' && kind !== 'PROCEDURE') continue
+		if ((first !== 'CREATE' && first !== 'ALTER') || (kind !== 'FUNCTION' && kind !== 'PROCEDURE' && (first === 'CREATE' || kind !== 'ROUTINE'))) {
+			continue
+		}
 		const object = objectNameAt(tokens, at + 1)
-		if (object !== undefined && (object.qualifier === undefined || object.qualifier === schema)) names.push(object.name)
+		if (object === undefined || (object.qualifier !== undefined && object.qualifier !== schema)) continue
+		if (first === 'CREATE') {
+			names.push(object.name)
+			continue
+		}
+		const rename = tokens.findIndex((token, index) => upperWord(token) === 'RENAME' && upperWord(tokens[index + 1]) === 'TO')
+		const target = rename === -1 ? undefined : nameText(tokens[rename + 2])
+		if (target !== undefined) names.push(target)
 	}
-	return names
+	// A name a built-in or a keyword already holds is refused where it is declared, and never admits a call.
+	return names.filter((name) => !shadows(name))
 }
 
 const objectKey = (object: DatabaseObject): string => `${object.kind} ${object.name}`
-const ON_TABLE: ReadonlySet<DatabaseObjectKind> = new Set(['trigger', 'rule', 'policy'])
+const ON_TABLE: ReadonlySet<DatabaseObjectKind> = new Set(['trigger', 'rule', 'policy', 'serial column'])
+/** `f` of `f(int4,text)`. */
+const routineName = (name: string): string => name.slice(0, name.indexOf('('))
 
 /**
  * The manifest of a migration set, folded in file order: a create adds an object (a replace keeps it), a drop removes
@@ -882,6 +1055,24 @@ export function migrationManifest(classifications: readonly MigrationClassificat
 			else if (change.change === 'drop table') { for (const object of onTable(change.table)) objects.delete(objectKey(object)) }
 			else if (change.change === 'rename') {
 				if (objects.delete(objectKey(change.from))) objects.set(objectKey(change.to), change.to)
+			} else if (change.change === 'drop routines' || change.change === 'rename routines') {
+				const name = change.change === 'drop routines' ? change.name : change.from
+				for (const object of [...objects.values()]) {
+					if (object.kind !== change.kind || routineName(object.name) !== name) continue
+					objects.delete(objectKey(object))
+					if (change.change === 'rename routines') {
+						const renamed: DatabaseObject = { kind: object.kind, name: `${change.to}${object.name.slice(name.length)}` }
+						objects.set(objectKey(renamed), renamed)
+					}
+				}
+			} else if (change.change === 'rename column') {
+				const from: DatabaseObject = { kind: 'serial column', name: `${change.table}.${change.from}` }
+				if (objects.delete(objectKey(from))) {
+					objects.set(objectKey({ kind: 'serial column', name: `${change.table}.${change.to}` }), {
+						kind: 'serial column',
+						name: `${change.table}.${change.to}`,
+					})
+				}
 			} else {
 				for (const object of onTable(change.from)) {
 					objects.delete(objectKey(object))
