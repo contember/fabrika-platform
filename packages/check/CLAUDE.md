@@ -142,7 +142,8 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   - refused by combination, in one chain, because the artifact keeps a string's checks unordered: two formats
     (`uuid`, `email`, `url`, `z.iso.*`); `url` with any other string check (it rewrites the value the later checks
     see); `startsWith`, `endsWith` or `includes` with a format. `@fabrika/app`'s `compileContract` refuses the same
-    combinations, and also a `.default()` on a discriminated union's discriminator, which a chain cannot show.
+    combinations, and also a `.default()` on a discriminated union's discriminator and a `.default()` whose value its
+    own schema refuses (zod returns a default unchecked), which a chain cannot show.
 
 ## The reader beyond the literal subset
 

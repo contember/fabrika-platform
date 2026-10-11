@@ -173,8 +173,9 @@ src/
 - **The schema subset is `@fabrika/check`'s.** `schema-shape.test.ts` covers each
   factory and method `packages/check/CLAUDE.md` lists, and `contract-check.test.ts`
   runs the checker over the fixtures. Change the checker, `schema-shape.ts` and
-  `SchemaShape` together. A default becomes `optional`, a discriminated union a
-  `union` (so a discriminator may not have a default); `.describe()` adds nothing.
+  `SchemaShape` together. A default becomes `optional`, so its value must be one
+  its own schema admits (zod returns a default unchecked); a discriminated union
+  becomes a `union` (so a discriminator may not have a default); `.describe()` adds nothing.
   The shape keeps a string's checks unordered, so a chain whose order matters is
   refused: two formats, `url` with any other check, an affix with a format.
 - zod 4's types cannot tell `z.object` from `z.strictObject` (`$strip` and

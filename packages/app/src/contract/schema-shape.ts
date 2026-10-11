@@ -67,6 +67,9 @@ export function describeSchema(schema: z.core.$ZodType, where: string, problems:
 		return allPresent(options) ? { type: 'union', options } : null
 	}
 	// A default makes the value optional to the caller; the framework fills it in from the live schema.
+	if (schema instanceof z.core.$ZodDefault && !admitsItsDefault(schema, where, problems)) {
+		return null
+	}
 	if (schema instanceof z.core.$ZodOptional || schema instanceof z.core.$ZodDefault) {
 		const inner = describeSchema(schema._zod.def.innerType, where, problems)
 		return inner === null ? null : { type: 'optional', inner }
@@ -208,6 +211,19 @@ function isOrderFree(shape: StringShape, where: string, problems: Problems): boo
 		return false
 	}
 	return true
+}
+
+/**
+ * zod returns a default without parsing it, so a default its own schema refuses reaches a handler, or leaves an
+ * endpoint as output, outside the shape the artifact records. A default the schema admits is a value a caller could
+ * have sent, so the shape stays faithful without naming it.
+ */
+function admitsItsDefault(schema: z.core.$ZodDefault, where: string, problems: Problems): boolean {
+	if (z.safeParse(schema._zod.def.innerType, schema._zod.def.defaultValue).success) {
+		return true
+	}
+	problems.add(where, 'the default is a value its own schema refuses, and zod returns it unchecked (allowed: a default the schema admits)')
+	return false
 }
 
 /** A discriminator with a default lets a value without it match an option, which the artifact's union cannot say. */

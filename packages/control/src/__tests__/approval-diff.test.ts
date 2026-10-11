@@ -1,7 +1,7 @@
 // The conservative access diff (ADR-0050 §3): each kind of change, its outcome and its plain-language line.
 
 import type { TablePolicyArtifact } from '@fabrika/auth-core'
-import { readContractSource } from '@fabrika/check/contract'
+import { ContractError, readContractSource } from '@fabrika/check/contract'
 import { describe, expect, test } from 'bun:test'
 import { classifyAccess, pathsOverlap } from '../approval/diff'
 import { type AccessSnapshot, EMPTY_SNAPSHOT, type MigrationEntry } from '../approval/snapshot'
@@ -276,6 +276,12 @@ describe('classifyAccess compares output shapes', () => {
 		expect(reordered.changes).toEqual([{ widens: true, line: expect.stringMatching(/^Endpoint `api.get` output changes from /) }])
 		expect(classifyAccess(output(`${plain}, ${secret}`), output(secret)).outcome).toBe('widening')
 		expect(classifyAccess(output(`${plain}, ${secret}`), output(plain)).outcome).toBe('widening')
+	})
+
+	test('an output default its own schema refuses is refused, since the endpoint would emit a value the shape does not admit', () => {
+		const status = (schema: string) => snapshot(edited('output: Note', `output: z.strictObject({ status: ${schema} })`))
+		expect(status('z.string().max(4).optional()').contract).not.toBeNull()
+		expect(() => status(`z.string().max(4).default('unapproved')`)).toThrow(ContractError)
 	})
 
 	test('an output field removed only removes, required or not', () => {

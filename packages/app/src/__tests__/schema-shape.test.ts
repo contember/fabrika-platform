@@ -183,6 +183,15 @@ describe('forms whose meaning the artifact cannot keep', () => {
 		expect(shape(z.email().max(254))).toEqual(string({ format: 'email', maxLength: 254 }))
 	})
 
+	test('a default its own schema refuses is refused: zod returns a default without checking it', () => {
+		const unchecked = z.string().max(4).default('unapproved')
+		expect(unchecked.parse(undefined)).toBe('unapproved')
+		const refused = 'schema: the default is a value its own schema refuses, and zod returns it unchecked (allowed: a default the schema admits)'
+		expect(refusal(unchecked)).toEqual([refused])
+		expect(refusal(z.strictObject({ stage: z.string().max(4).default('unapproved') }))).toEqual([refused.replace('schema', 'schema.stage')])
+		expect(shape(z.string().max(4).default('ok'))).toEqual({ type: 'optional', inner: string({ maxLength: 4 }) })
+	})
+
 	test('a discriminator with a default admits a value the plain union would describe differently, so it is refused', () => {
 		const options = [z.strictObject({ kind: z.literal('a').default('a') }), z.strictObject({ kind: z.literal('b') })] as const
 		expect(z.discriminatedUnion('kind', [...options]).safeParse({}).success).toBe(false)
