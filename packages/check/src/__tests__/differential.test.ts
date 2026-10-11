@@ -423,6 +423,22 @@ describe('the staged kit: read from source and evaluated agree', () => {
 			expect(read).toEqual(evaluated)
 		})
 
+		test("the architecture fixture's tables read from source; its whole contract needs the slice reader (WU4)", () => {
+			const architecture = readTablesSource(readTree(join(import.meta.dir, 'fixtures', 'architecture-app'), '.fixture'))
+			expect(architecture['deals']?.scope).toEqual({
+				mode: 'dimension',
+				dimension: 'deal',
+				key: 'id',
+				container: { dimension: 'company', column: 'company_id' },
+			})
+			expect(architecture['companies']?.scope).toEqual({
+				mode: 'dimension',
+				dimension: 'company',
+				key: 'id',
+				container: { dimension: 'org', column: 'org_id' },
+			})
+		})
+
 		test('the reader refuses the form that names the action union by hand, as the runtime does', () => {
 			const handWritten = `import { defineTables } from '@fabrika/db/tables'
 import { columns, type DB } from './schema.generated'
