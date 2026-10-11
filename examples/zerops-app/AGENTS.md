@@ -61,8 +61,11 @@ refuses the shortcuts around both. Keep all three intact.
 
 - `fabrika db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`. Without a shell, use that name.
 - Write plain SQL for the application's own schema. Never name `public`, an `app_…` or a `fabrika…` schema.
-- Write tables, indexes and types only. The runner refuses a function, trigger, rule, view, policy, `DO` block,
-  `GRANT` and a default other than a constant, `now()` or `gen_random_uuid()`; put that logic in a handler.
+- Write only `CREATE TABLE`, `ALTER TABLE`, `CREATE [UNIQUE] INDEX`, `CREATE TYPE … AS ENUM`, `ALTER TYPE … ADD VALUE`,
+  `DROP`, `COMMENT ON` and backfill `INSERT`/`UPDATE`/`DELETE`. No function, trigger, view, policy, domain, `DO`,
+  `GRANT`, `SELECT` or `COPY`; put that logic in a handler.
+- Defaults, `CHECK`s, generated columns and index expressions may call only `now()`, `gen_random_uuid()`, `lower`,
+  `upper`, `length`, `char_length`, `octet_length` and the trims. Use `GENERATED ALWAYS AS IDENTITY`, never `serial`.
 - Never edit, rename or delete a committed migration. Add a new one. Change a schema by expand, switch, contract;
   the checker does not refuse a destructive change yet, so ask before you drop or rename anything.
 - `fabrika db migrate` (with `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL`), then `fabrika db codegen`, which

@@ -141,22 +141,45 @@ still the one the runner opened and, for an application, `lock_timeout`,
 also catches `set_config()`. Without this, a `ROLLBACK` in a file recorded a
 ledger row for nothing, and a `COMMIT` separated a file's effects from its row.
 
-**An application's schema holds no database code.** Before any SQL runs, an
-application plan also refuses, in the framework bundle and in `app`, a
-top-level `CREATE [OR REPLACE]` of a `FUNCTION`, `PROCEDURE`, `TRIGGER`
-(also `CONSTRAINT` and `EVENT`), `RULE`, `VIEW` (also `MATERIALIZED`),
-`POLICY`, `EXTENSION`, `LANGUAGE`, `AGGREGATE`, `OPERATOR`, `CAST`,
-`CONVERSION`, `TRANSFORM` or `SCHEMA`; a `DO` block; `GRANT`, `REVOKE` and
-`ALTER DEFAULT PRIVILEGES`; and a column default that calls a function other
-than `now()` or `gen_random_uuid()`. It names the file and line. Such code
-runs on a later write where the data layer cannot see it: a trigger fired by
-one guarded single-row update can change the rows of every tenant in the
-schema. `fabrika db codegen`, and so `codegen --verify` at start, refuses a
-schema that holds a trigger other than a foreign key's, a rule, a view, a
-function, procedure or aggregate, a policy, or such a default, so an object
-installed before the rule is found. A `CHECK` constraint, an index expression
-and a generated column can still call built-in functions, which read no other
-row. Service plans are not checked: a service is trusted platform code.
+**An application's schema holds no database code.** Code in the schema runs
+on a later write where the data layer cannot see it: a trigger fired by one
+guarded single-row update can change the rows of every tenant in the schema.
+Two checks enforce it for every application plan, the framework bundle
+included; service plans are not checked, because a service is trusted
+platform code.
+
+- **A statement allowlist, before any SQL runs.** A file may hold only
+  `CREATE TABLE` (without `LIKE … INCLUDING` or `AS`), `ALTER TABLE` (without
+  `SET SCHEMA` or `OWNER TO`), `CREATE [UNIQUE] INDEX`, `CREATE TYPE … AS
+  ENUM`, `ALTER TYPE … ADD VALUE`/`RENAME VALUE`, `DROP` of a table, an index,
+  a type or leftover database code, `COMMENT ON`, and `INSERT`, `UPDATE` and
+  `DELETE` for a backfill. Everything else is refused by file and line:
+  `CREATE FUNCTION`, `CREATE DOMAIN`, `CREATE SEQUENCE`, `DO`, `GRANT`,
+  `SELECT`, `COPY`, `PREPARE`, `EXECUTE` and the rest. This is also what
+  closes the routes that leave the migration's transaction, such as
+  `COPY … PROGRAM`, which no rollback could undo. The file is split at every
+  `;` outside a comment, a literal or a quoted body, with Postgres' lexical
+  rules: a `--` comment ends at a carriage return too, and a dollar tag has no
+  length limit. The runner sets `standard_conforming_strings` on, so a
+  literal ends where the tokenizer says it does.
+- **A catalog check, before the commit.** The expressions inside an allowed
+  statement are Postgres' to parse. After the file runs, a check in the same
+  transaction reads what it left in the schema and fails the transaction when
+  it finds a function, operator, trigger (a foreign key's excepted), rule,
+  view, policy, domain, exclusion constraint or sequence (an identity
+  column's excepted), an operator class outside `pg_catalog`, a dependency on
+  a type outside the schema, or a default, generated column, `CHECK`, index
+  or partition expression whose parsed tree holds a node, calls a function or
+  uses an operator outside a reviewed list. Functions are trusted by name in
+  `pg_catalog` only, never by a volatility label: `now()`,
+  `gen_random_uuid()`, `lower`, `upper`, `length`, `char_length`,
+  `octet_length`, the trims and the implicit casts. So no `nextval`: a
+  `serial` column is refused, and `GENERATED ALWAYS AS IDENTITY` is the
+  alternative. The check covers the whole schema, so a migration that keeps
+  a leftover object fails until one drops it.
+
+`fabrika db codegen`, and so `codegen --verify` at every start, runs the same
+catalog query, so an object installed before these checks fails the start.
 
 The advisory lock key is the first 48 bits of SHA-256(`fabrika-db:<appId>`)
 plus one, so applications that share one database do not serialize each other.
@@ -203,13 +226,15 @@ migration file is a widening in the approval diff
   diverging from the schema it describes.
 - A migration that waits on a lock fails the deploy within the timeout. The
   application author must retry or split it.
-- An application migration cannot write a trigger, a function or a view. That
-  logic lives in a handler, where the data layer and the approval diff see it.
+- An application migration cannot write a trigger, a function, a view or a
+  `serial` column. That logic lives in a handler, where the data layer and the
+  approval diff see it.
 - Migrations and the runtime share one credential, so the running application
   holds the same schema rights as its migrations: application code that reaches
   a raw connection can still create a trigger, which the start check finds only
-  at the next start. Separate migration and runtime credentials come with
-  per-application Postgres roles.
+  at the next start. The allowlist and the catalog check reduce what a
+  migration can do; the complete fix is a least-privileged role per
+  application, with separate migration and runtime credentials.
 
 ## Alternatives considered
 
