@@ -163,7 +163,12 @@ export class Invocation {
 	/** `ctx.sql` of a site that declares it: its statements run in this invocation's transaction, like every handle's. */
 	sql(mode: SqlMode): SqlTag {
 		const transaction = this.#transaction
-		return this.#data.sql({ mode, check: boundTo(this.#frame, () => transaction.ended, 'ctx.sql'), session: () => transaction.session() })
+		return this.#data.sql({
+			mode,
+			check: boundTo(this.#frame, () => transaction.ended, 'ctx.sql'),
+			session: () => transaction.session(),
+			fail: () => transaction.fail(),
+		})
 	}
 
 	/** Commits; a request the caller abandoned meanwhile rolls back instead. */
@@ -229,6 +234,6 @@ export function jobHandles(
 }
 
 /** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */
-export function jobSql(frame: RequestFrame, data: DataAccess, mode: SqlMode, session: () => Promise<Session>, ended: () => boolean): SqlTag {
-	return data.sql({ mode, check: boundTo(frame, ended, 'tx.sql'), session })
+export function jobSql(frame: RequestFrame, data: DataAccess, mode: SqlMode, session: Session, ended: () => boolean): SqlTag {
+	return data.sql({ mode, check: boundTo(frame, ended, 'tx.sql'), session: async () => session, fail: () => session.fail() })
 }

@@ -435,7 +435,7 @@ function kitJobContext(frame: RequestFrame, data: DataAccess, site: SiteDeclarat
 				let open = true
 				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
 				try {
-					const sql = site.sql === null ? {} : { sql: jobSql(frame, data, site.sql, async () => session, () => !open) }
+					const sql = site.sql === null ? {} : { sql: jobSql(frame, data, site.sql, session, () => !open) }
 					return await work(Object.freeze({ db: siteData(writes), ...sql }))
 				} finally {
 					open = false

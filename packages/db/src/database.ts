@@ -178,6 +178,11 @@ export class Session {
 		return this.#readOnly
 	}
 
+	/** Fails the transaction this session runs in, so it commits nothing: a statement refused before it was sent. */
+	fail(): void {
+		this.#hooks.failed?.()
+	}
+
 	async #execute<O>(compiled: CompiledQuery<O>): Promise<{ readonly rows: O[] }> {
 		if (this.#hooks.open?.() === false) {
 			throw new QueryRefusedError('the transaction of this session has ended; it runs nothing more')
@@ -221,11 +226,23 @@ export class Session {
 		}
 		const builder = this.#kysely.transaction()
 		let open = true
+		let failed = false
 		let failure: { readonly error: unknown } | undefined
 		try {
 			return await (this.#readOnly ? builder.setAccessMode('read only') : builder).execute(async (transaction) => {
 				try {
-					return await untilAborted(work(new Session(transaction, undefined, this.#readOnly, { open: () => open })), signal)
+					const hooks: SessionHooks = {
+						open: () => open,
+						failed: () => {
+							failed = true
+						},
+					}
+					const result = await untilAborted(work(new Session(transaction, undefined, this.#readOnly, hooks)), signal)
+					// A failure the work caught: Postgres would answer the COMMIT of an aborted transaction with a silent ROLLBACK.
+					if (failed) {
+						throw new QueryRefusedError('a statement of this transaction failed, so nothing it wrote commits')
+					}
+					return result
 				} catch (error) {
 					failure = { error }
 					throw error
@@ -280,6 +297,11 @@ export class InvocationTransaction {
 	/** Whether the transaction was opened: an invocation that reached no data commits nothing. */
 	get opened(): boolean {
 		return this.#opened !== undefined
+	}
+
+	/** Marks it failed, so it commits nothing: a statement refused before it was sent, even when the handler caught it. */
+	fail(): void {
+		this.#failed = true
 	}
 
 	/** No statement runs in it any more. */
@@ -337,13 +359,13 @@ export class InvocationTransaction {
 		}
 		this.#ended = true
 		const run = this.#run
-		if (run === undefined) {
-			return
-		}
 		if (this.#failed) {
 			this.#decision.resolve('rollback')
 			await this.#released
 			throw new QueryRefusedError('a statement of this invocation failed, so nothing it wrote commits')
+		}
+		if (run === undefined) {
+			return
 		}
 		this.#decision.resolve('commit')
 		try {

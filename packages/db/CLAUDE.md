@@ -233,7 +233,7 @@ and the target `Ref`, so no handler can call it.
   declares `sql`): a tagged template whose static text `classifySql` reads with a `$n` for each value, so a value is
   only ever a bound parameter, refused before anything is sent for what escapes the statement, the transaction or the
   schema (see `docs/reference/application-runtime.md`), and run by `runApplicationStatement` through the session's
-  private execute, so a statement the database refuses fails the invocation. Do not add another method that takes
+  private execute, so a statement the database refuses fails the invocation. Any refusal of the tag after its binding check (a statement, a value, a row) fails the site's transaction too (`SqlSite.fail`: `InvocationTransaction.fail` or `Session.fail`), so a handler that catches it still commits nothing; a nested `Session.transaction` with a failed statement throws instead of committing. A row error names the schema's top-level field and the issue's code and expected type, never the issue's message, a deeper path or a value. `QueryRefusedError` messages are logged by `@fabrika/app`, so they never carry a bound value. Do not add another method that takes
   SQL, a builder or an unguarded node.
 - **`Database` is frozen, the class and its prototype.** Application modules load after `database.ts`, and a
   replaced `Database.postgres` would receive the database URL; `@fabrika/app/bun` also takes the factory before it

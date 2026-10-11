@@ -22,7 +22,7 @@ import { tables } from './fixtures/tables'
 const SCHEMA = 'app_notes'
 
 /** The parts of a tagged template, as the engine hands them to a tag. */
-function parts(text: TemplateStringsArray): readonly string[] {
+function parts(text: TemplateStringsArray, ..._values: unknown[]): readonly string[] {
 	return [...text]
 }
 
@@ -45,6 +45,7 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 	const site = {
 		mode,
 		check() {},
+		fail() {},
 		session(): Promise<Session> {
 			sent++
 			return Promise.reject(new Error('the statement reached the session'))
@@ -53,7 +54,18 @@ function unsentTag(mode: SqlMode): { sql: SqlTag; sent: () => number } {
 	return { sql: sqlTag(site, SCHEMA), sent: () => sent }
 }
 
+/** The template object the engine hands a tag. */
+function template(text: TemplateStringsArray, ..._values: unknown[]): TemplateStringsArray {
+	return text
+}
+
+/** Calls `tag` with `undefined` as its one value, as a handler whose types were defeated would. */
+function withUndefined(tag: unknown, text: TemplateStringsArray): Promise<unknown> {
+	return Promise.resolve().then(() => (typeof tag === 'function' ? Reflect.apply(tag, undefined, [text, undefined]) : undefined))
+}
+
 const Row = z.object({ v: z.string() })
+const Title = z.object({ title: z.string() })
 
 describe('the static text', () => {
 	test('a query, a join report and a write are admitted, with each value a $n placeholder', () => {
@@ -173,7 +185,7 @@ describe('the tag, before anything is sent', () => {
 		const { sql, sent } = unsentTag('write')
 		await expect(sql(Row)`drop table notes`).rejects.toThrow('DROP TABLE is refused')
 		await expect(sql(Row)`select query_to_xml(${'select 1'}, true, true, '')`).rejects.toThrow('query_to_xml(…) at line 1')
-		await expect(sql(Row)`select * from notes where id = ${undefined}`).rejects.toThrow('the value ${…} number 1 is undefined')
+		await expect(withUndefined(sql(Row), template`select * from notes where id = ${0}`)).rejects.toThrow('the value ${…} number 1 is undefined')
 		await expect(sql(Row)`select * from notes where id = ${Number.NaN}`).rejects.toThrow('is not a finite number')
 		await expect(sql(Row)`select * from notes where created_at = ${new Date(Number.NaN)}`).rejects.toThrow('is an invalid Date')
 		await expect(Reflect.apply(sql(Row), undefined, [['select 1']])).rejects.toThrow('it is a tagged template')
@@ -220,7 +232,8 @@ function invocation(mode: SqlMode, readOnly = false) {
 		}
 	}
 	const site: DataSite = { kind: readOnly ? 'query' : 'mutation', unscoped: {}, principal: 'user:alice', check, session: () => transaction.session() }
-	return { transaction, sql: data.sql({ mode, check, session: () => transaction.session() }), handles: data.handles(site) }
+	const sql = data.sql({ mode, check, session: () => transaction.session(), fail: () => transaction.fail() })
+	return { transaction, sql, handles: data.handles(site) }
 }
 
 const Count = z.object({ n: z.number() })
@@ -332,10 +345,10 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 		)
 		expect(await work.sql(z.object({ notes: z.coerce.number() }))`select count(*) as notes from notes where title = 'stamped'`).toEqual([{ notes: 1 }])
 		await expect(work.sql(z.object({ title: z.number() }))`select title from notes where title = 'stamped'`).rejects.toThrow(
-			"ctx.sql: row 1 does not match the row schema at 'title': Invalid input: expected number, received string",
+			"ctx.sql: row 1 does not match the row schema at 'title': invalid_type (expected number)",
 		)
 		await expect(work.sql(Row)`select 'a' as v_x, 'b' as "vX"`).rejects.toThrow("the columns 'v_x' and 'vX' both become the field 'vX'")
-		await work.transaction.commit()
+		await expect(work.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
 	})
 
 	test('a statement the database refuses fails the invocation: nothing it wrote commits', async () => {
@@ -354,5 +367,55 @@ describe.skipIf(opened === null)('ctx.sql on Postgres, as the runtime role', () 
 		const session = await work.transaction.session()
 		await expect(runApplicationStatement(session, 'delete from fabrika_migrations', [])).rejects.toMatchObject({ sqlState: '42501' })
 		await expect(work.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
+	})
+	test('a caught refusal still fails the invocation: a refused statement after a write, a refused value before any', async () => {
+		const work = invocation('write')
+		await work.sql(z.object({}))`insert into organizations (id, name) values ('o6', 'Six')`
+		await work.sql(z.object({}))`drop table notes`.catch(() => undefined)
+		await expect(work.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
+
+		const unopened = invocation('write')
+		await withUndefined(unopened.sql(z.object({})), template`select ${0}`).catch(() => undefined)
+		await unopened.sql(z.object({}))`insert into organizations (id, name) values ('o7', 'Seven')`
+		await expect(unopened.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
+
+		const reader = invocation('read', true)
+		expect(await reader.sql(Count)`select count(*)::int as n from organizations where id in ('o6', 'o7')`).toEqual([{ n: 0 }])
+		await reader.transaction.rollback()
+	})
+
+	test('a caught row mismatch of UPDATE … RETURNING fails the invocation, and the update is not kept', async () => {
+		const work = invocation('write')
+		await work.sql(z.object({ name: z.number() }))`update workspaces set name = 'Renamed' where id = 'w1' returning name`.catch(() => undefined)
+		await expect(work.transaction.commit()).rejects.toThrow('a statement of this invocation failed')
+		const reader = invocation('read', true)
+		expect(await reader.sql(Title)`select name as title from workspaces where id = 'w1'`).toEqual([{ title: 'Alpha' }])
+		await reader.transaction.rollback()
+	})
+
+	test("a caught refusal fails a job's fenced transaction too", async () => {
+		const committed = data.transaction(async (session) => {
+			const sql = data.sql({ mode: 'write', check() {}, session: async () => session, fail: () => session.fail() })
+			await sql(z.object({}))`insert into organizations (id, name) values ('o8', 'Eight')`
+			await sql(z.object({}))`truncate notes`.catch(() => undefined)
+		})
+		await expect(committed).rejects.toThrow('a statement of this transaction failed')
+		const reader = invocation('read', true)
+		expect(await reader.sql(Count)`select count(*)::int as n from organizations where id = 'o8'`).toEqual([{ n: 0 }])
+		await reader.transaction.rollback()
+	})
+
+	test("a row error names the column and the issue's kind, never a value nor the schema's own message", async () => {
+		const work = invocation('read', true)
+		const Rejecting = z.object({ name: z.string().refine(() => false, { error: (issue) => `Rejected value: ${String(issue.input)}` }) })
+		const refused = work.sql(Rejecting)`select name from workspaces where id = 'w2'`
+		await expect(refused).rejects.toThrow("ctx.sql: row 1 does not match the row schema at 'name': custom")
+		await expect(work.sql(Rejecting)`select name from workspaces where id = 'w2'`).rejects.not.toThrow('Beta')
+		const Nested = z.object({ data: z.record(z.string(), z.number()) })
+		await expect(work.sql(Nested)`select jsonb_build_object('private-key', 'x') as data`).rejects.toThrow(
+			"ctx.sql: row 1 does not match the row schema at 'data': invalid_type (expected number)",
+		)
+		await expect(work.sql(Nested)`select jsonb_build_object('private-key', 'x') as data`).rejects.not.toThrow('private-key')
+		await work.transaction.rollback()
 	})
 })

@@ -38,6 +38,8 @@ export interface SqlSite {
 	/** Throws unless the work running now is the invocation the tag was made for. */
 	check(): void
 	session(): Promise<Session>
+	/** Fails the site's transaction (the invocation's, or a job's fenced one), so it commits nothing. */
+	fail(): void
 }
 
 const READ_STATEMENTS: ReadonlySet<string> = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE'])
@@ -242,17 +244,51 @@ function parseRow<S extends z.core.$ZodType>(row: S, value: unknown, index: numb
 	if (parsed.success) {
 		return parsed.data
 	}
-	const [issue] = parsed.error.issues
+	throw new SqlRowError(rowIssue(row, parsed.error.issues[0], fields, columnOf, index))
+}
+
+/** A top-level field of an object row schema: the one part of an issue's path that is the schema's, not the data's. */
+function schemaField(row: z.core.$ZodType, issue: z.core.$ZodIssue | undefined): string | undefined {
 	const field = issue?.path[0]
-	const column = typeof field === 'string' ? (columnOf.get(field) ?? field) : undefined
-	const cell: unknown = typeof field === 'string' ? ownDescriptor(fields, field)?.value : undefined
-	if (issue?.code === 'invalid_type' && issue.expected === 'number' && typeof cell === 'string' && NUMERIC_TEXT.test(cell)) {
-		throw new SqlRowError(
-			`ctx.sql: the column '${column}' arrives as text (Postgres sends bigint and numeric as text); cast it in the SQL (count(*)::int, ::float8) or read it with z.coerce.number()`,
-		)
+	return typeof field === 'string' && row instanceof z.ZodObject && hasOwn(row.shape, field) ? field : undefined
+}
+
+/**
+ * The message of a refused row, from the issue's code, its expected type and the schema's own field only: an issue's
+ * message, a deeper path (a JSON key, an array index) and the input can all carry the row's values.
+ */
+function rowIssue(
+	row: z.core.$ZodType,
+	issue: z.core.$ZodIssue | undefined,
+	fields: Readonly<Record<string, unknown>>,
+	columnOf: ReadonlyMap<string, string>,
+	index: number,
+): string {
+	const field = schemaField(row, issue)
+	const cell: unknown = field === undefined ? undefined : ownDescriptor(fields, field)?.value
+	if (
+		issue?.code === 'invalid_type' && issue.path.length === 1 && issue.expected === 'number' && typeof cell === 'string' && NUMERIC_TEXT.test(cell)
+	) {
+		return `ctx.sql: the column '${
+			columnOf.get(field ?? '') ?? field
+		}' arrives as text (Postgres sends bigint and numeric as text); cast it in the SQL (count(*)::int, ::float8) or read it with z.coerce.number()`
 	}
-	const where = issue === undefined || issue.path.length === 0 ? '' : ` at '${issue.path.map(String).join('.')}'`
-	throw new SqlRowError(`ctx.sql: row ${index + 1} does not match the row schema${where}: ${issue?.message ?? 'refused'}`)
+	const where = field === undefined ? '' : ` at '${field}'`
+	const kind = issue === undefined ? 'refused' : issue.code === 'invalid_type' ? `invalid_type (expected ${issue.expected})` : issue.code
+	return `ctx.sql: row ${index + 1} does not match the row schema${where}: ${kind}`
+}
+
+/**
+ * `work`, failing the site's transaction when it throws: a handler that catches a refused statement, value or row must
+ * not commit what it wrote around it.
+ */
+async function failing<T>(site: SqlSite, work: () => Promise<T>): Promise<T> {
+	try {
+		return await work()
+	} catch (error) {
+		site.fail()
+		throw error
+	}
 }
 
 /**
@@ -263,18 +299,21 @@ export function sqlTag(site: SqlSite, schema: string | undefined): SqlTag {
 	return <S extends z.core.$ZodType>(row: S) => {
 		site.check()
 		if (!(row instanceof z.core.$ZodType)) {
+			site.fail()
 			refuse('ctx.sql(Row) takes the zod schema of one row')
 		}
 		return async (text: TemplateStringsArray, ...values: readonly SqlValue[]): Promise<z.output<S>[]> => {
 			site.check()
-			const statement = classifySql(templateParts(text), site.mode, schema ?? '')
-			const parameters = values.map((value, index) => parameterOf(value, index + 1))
-			const session = await site.session()
-			if (session.readOnly && site.mode === 'write') {
-				refuse('this invocation is read-only')
-			}
-			const rows = await runApplicationStatement(session, statement, parameters)
-			return rows.map((value, index) => parseRow(row, value, index))
+			return failing(site, async () => {
+				const statement = classifySql(templateParts(text), site.mode, schema ?? '')
+				const parameters = values.map((value, index) => parameterOf(value, index + 1))
+				const session = await site.session()
+				if (session.readOnly && site.mode === 'write') {
+					refuse('this invocation is read-only')
+				}
+				const rows = await runApplicationStatement(session, statement, parameters)
+				return rows.map((value, index) => parseRow(row, value, index))
+			})
 		}
 	}
 }
