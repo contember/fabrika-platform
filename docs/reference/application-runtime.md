@@ -339,8 +339,14 @@ loses them. It commits after the handler returned and its output passed validati
 cancelled request or a statement the database refused rolls it back, and nothing the handler wrote is kept. A query
 and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
 created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
-work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) is to run in the same transaction; until
-it is built a declared `ctx.sql` throws `ctx.sql is not implemented`.
+work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) runs in the same transaction.
+
+- **`ctx.sql(Row)\`…\``** exists only on a site that declares`sql`(a job:`tx.sql`, inside`ctx.transaction`). Every` ${…}` is a bound parameter: the tag reads the template's static text with a `$n`placeholder for each value, so a
+  value never becomes SQL, and a value inside a literal, a quoted name or a comment is refused. Before anything is
+  sent the text is refused for more than one statement; any statement but`SELECT`,`WITH`,`VALUES`and`TABLE`, plus`INSERT`,`UPDATE`and`DELETE`on a`'write'`site (so DDL, transaction control,`SET`,`COPY`,`LISTEN`/`NOTIFY`,`LOCK`,`CALL`,`DO`and`MERGE`); a nested statement of another kind and`SELECT … INTO`; a qualified name outside the
+  application's schema; any`fabrika__`or`pg__ `name; a call outside the reviewed built-ins of`@fabrika/platform-node/sql`(a function the migrations declare is not one: ctx.sql does not know them). A`'read'`site also refuses a write anywhere in the statement and a locking clause; a query's transaction is`READ ONLY`under it. Values bind as scalars, a`Date`as ISO text, a list of strings or numbers as a Postgres array (`= any(${ids})`).
+  Each row is parsed like`fromRow`(snake_case → camelCase,`Date`→ ISO) and then by`Row`; Postgres sends`bigint`and`numeric`as text, so`count(*)`needs`::int`(or`z.coerce.number()`), and the error says so. The name rules
+  are defense in depth: the runtime role (`run_<id>`, DML only) bounds what an admitted statement does.
 
 - **A webhook delivery is one transaction.** The delivery key is recorded first, outside it; a handler that throws
   rolls its transaction back and forgets the key, so GitHub's redelivery runs it again from nothing. A process that

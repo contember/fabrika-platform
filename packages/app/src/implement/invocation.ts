@@ -4,10 +4,9 @@
 // is bound to the invocation: called from another request, another `boot`, or after it ended, it refuses.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
-import type { DataAccess, DataHandles, DataSite, InvocationTransaction, Session } from '@fabrika/db/framework'
+import type { DataAccess, DataHandles, DataSite, InvocationTransaction, Session, SqlTag } from '@fabrika/db/framework'
 import type { DataKind, UnscopedMode } from '@fabrika/db/tables'
 import type { SqlMode } from '../contract/context'
-import { notImplemented } from '../contract/problems'
 import { CapabilityRefusedError, isActiveRequest, type RequestFrame } from './capability'
 import { ServerFault } from './faults'
 
@@ -122,21 +121,16 @@ export function parseDeclaration(where: string, declared: unknown, kind: DataKin
 }
 
 /**
- * `ctx.sql` of a site that declares it. WU6 replaces it with the tagged template that runs in the session the site's
- * handles run in (`Invocation.session()`, or a job transaction's), so a statement commits and rolls back with them.
+ * Refuses a handle used outside the work it was made for: another request, another `boot`, an ended one. `handle` names
+ * it in the refusal: a `ctx.db` handle, or `ctx.sql`.
  */
-export function sqlStub(): () => never {
-	return () => notImplemented('ctx.sql', 'WU6')
-}
-
-/** Refuses a handle used outside the work it was made for: another request, another `boot`, an ended one. */
-export function boundTo(frame: RequestFrame, ended: () => boolean): () => void {
+export function boundTo(frame: RequestFrame, ended: () => boolean, handle = 'a ctx.db handle'): () => void {
 	return () => {
 		if (frame.ended || ended()) {
-			throw new CapabilityRefusedError(`a ctx.db handle of ${frame.id} was used after its invocation ended; never keep a handle past its handler`)
+			throw new CapabilityRefusedError(`${handle} of ${frame.id} was used after its invocation ended; never keep a handle past its handler`)
 		}
 		if (!isActiveRequest(frame)) {
-			throw new CapabilityRefusedError(`a ctx.db handle of ${frame.id} was used from other work; never share a handle`)
+			throw new CapabilityRefusedError(`${handle} of ${frame.id} was used from other work; never share a handle`)
 		}
 	}
 }
@@ -166,9 +160,10 @@ export class Invocation {
 		return this.#data.handles(site)
 	}
 
-	/** The session `ctx.sql` runs in: the same transaction as every handle (WU6). */
-	session(): Promise<Session> {
-		return this.#transaction.session()
+	/** `ctx.sql` of a site that declares it: its statements run in this invocation's transaction, like every handle's. */
+	sql(mode: SqlMode): SqlTag {
+		const transaction = this.#transaction
+		return this.#data.sql({ mode, check: boundTo(this.#frame, () => transaction.ended, 'ctx.sql'), session: () => transaction.session() })
 	}
 
 	/** Commits; a request the caller abandoned meanwhile rolls back instead. */
@@ -231,4 +226,9 @@ export function jobHandles(
 	ended: () => boolean,
 ): DataHandles {
 	return data.handles({ kind, unscoped: declaration.unscoped, principal, check: boundTo(frame, ended), session })
+}
+
+/** `tx.sql` of a job site that declares it: its statements run in the attempt's fenced transaction. */
+export function jobSql(frame: RequestFrame, data: DataAccess, mode: SqlMode, session: () => Promise<Session>, ended: () => boolean): SqlTag {
+	return data.sql({ mode, check: boundTo(frame, ended, 'tx.sql'), session })
 }

@@ -57,7 +57,7 @@ import { connectContext, type ImportWire } from './connect'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
-import { endpointData, Invocation, siteData, type SiteDeclaration, sqlStub } from './invocation'
+import { endpointData, Invocation, siteData, type SiteDeclaration } from './invocation'
 import { createScope, type IssuableLink, linkIssuing, memberManagement, type MembershipRequest } from './membership'
 import { presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
@@ -596,7 +596,7 @@ export class ContractRuntime {
 					const delivery = Object.freeze({ key })
 					const data = site === undefined || invocation === null
 						? {}
-						: { db: siteData(invocation.handles('mutation', site, subject)), ...(site.sql === null ? {} : { sql: sqlStub() }) }
+						: { db: siteData(invocation.handles('mutation', site, subject)), ...(site.sql === null ? {} : { sql: invocation.sql(site.sql) }) }
 					await served.handler({ input, ctx: Object.freeze({ principal, requestId: frame.id, refs, delivery, ...data }) })
 				})
 			} finally {
@@ -654,7 +654,7 @@ function siteContext(
 		within: access['within'],
 		created: access['created'],
 	})
-	return site.declaration.sql === null ? { db } : { db, sql: sqlStub() }
+	return site.declaration.sql === null ? { db } : { db, sql: invocation.sql(site.declaration.sql) }
 }
 
 /** Whether the caller holds `action` on the value or on any container of its chain; IAM evaluates each as a flat scope. */

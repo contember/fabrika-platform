@@ -8,7 +8,7 @@ import { type DataAccess, type FrameworkTables, type JobLeases, type LeaseFence,
 import { NotFoundError } from '../errors'
 import { type CapabilityMint, CapabilityRefusedError, type Ref, RequestFrame, runInRequest, type Within } from '../implement/capability'
 import type { ContractDatabase } from '../implement/implement'
-import { boundTo, isSiteHandler, jobHandles, parseDeclaration, siteData, type SiteDeclaration, sqlStub } from '../implement/invocation'
+import { boundTo, isSiteHandler, jobHandles, jobSql, parseDeclaration, siteData, type SiteDeclaration } from '../implement/invocation'
 import type { WorkloadCredential } from '../implement/workload'
 import { type JobReporter, logReporter, operationsReporter, operationsTarget } from './report'
 import { type CronSchedule, parseCron, periodAt } from './schedule'
@@ -435,7 +435,8 @@ function kitJobContext(frame: RequestFrame, data: DataAccess, site: SiteDeclarat
 				let open = true
 				const writes = jobHandles(frame, data, site, principal, 'mutation', async () => session, () => !open)
 				try {
-					return await work(Object.freeze({ db: siteData(writes), ...(site.sql === null ? {} : { sql: sqlStub() }) }))
+					const sql = site.sql === null ? {} : { sql: jobSql(frame, data, site.sql, async () => session, () => !open) }
+					return await work(Object.freeze({ db: siteData(writes), ...sql }))
 				} finally {
 					open = false
 				}
