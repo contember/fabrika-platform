@@ -179,6 +179,10 @@ and the target `Ref`, so no handler can call it.
 - **No raw handle leaves the package.** `Database` keeps its Kysely instance in a private field; the
   store reaches it through `sessionOf`, and `Session.run` guards every tree. Do not add a method that
   takes SQL, a builder or an unguarded node.
+- **`Database` is frozen, the class and its prototype.** Application modules load after `database.ts`, and a
+  replaced `Database.postgres` would receive the database URL; `@fabrika/app/bun` also takes the factory before it
+  imports the application. Never add a writable static. `hardening.test.ts` is the witness; `@fabrika/check`'s
+  `framework-write` refuses the write in source.
 - **Bind scalars only.** `Bun.SQL` mis-binds a JS array (`in` lists are expanded into parameters) and
   stores a bound JSON string as a JSON string, so values are strings, numbers, bigints, booleans, Dates
   or null; the guard refuses anything else in a `ValueNode`. The pool runs with `prepare: false`:

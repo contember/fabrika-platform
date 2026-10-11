@@ -99,6 +99,8 @@ export class Database {
 		await this.#kysely.destroy()
 	}
 }
+// Application modules load after this one: a replaced `postgres` would receive the database URL.
+Object.freeze(Database)
 Object.freeze(Database.prototype)
 
 /** The connection a session runs on, and whether the request running now may only read. */

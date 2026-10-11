@@ -7,8 +7,7 @@
 
 import { HttpIamMembership } from '@fabrika/auth'
 import { rawRequestTarget } from '@fabrika/auth-core'
-import type * as DataLayer from '@fabrika/db'
-import type { Database } from '@fabrika/db'
+import type { Database, PostgresOptions } from '@fabrika/db'
 import { isScopedDatabase } from '@fabrika/db/framework'
 import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
@@ -127,10 +126,25 @@ export interface ContractServer {
 }
 
 /**
+ * What the adapter takes from `@fabrika/db` before the application loads, so no application module can stand in for
+ * it: a replaced `Database.postgres` would receive the database URL.
+ */
+interface DataLayerOpeners {
+	readonly postgres: (options: PostgresOptions) => Database
+	readonly applicationSchema: (appId: string) => string
+}
+
+/** Loads `@fabrika/db` before the application: it captures its built-ins and freezes the Kysely compiler at load. */
+async function loadDataLayer(): Promise<DataLayerOpeners> {
+	const { Database, applicationSchema } = await import('@fabrika/db')
+	return { postgres: Database.postgres, applicationSchema }
+}
+
+/**
  * The application's connection: `FABRIKA_APP_DATABASE_URL`, on the schema `app_<FABRIKA_APP_ID>` its migrations
  * created. The URL is a credential, so no message quotes it.
  */
-function openApplicationDatabase(data: typeof DataLayer, framework: Readonly<Record<string, string>>): Database {
+function openApplicationDatabase(data: DataLayerOpeners, framework: Readonly<Record<string, string>>): Database {
 	const url = framework['FABRIKA_APP_DATABASE_URL'] ?? ''
 	const appId = framework['FABRIKA_APP_ID'] ?? ''
 	const problems: string[] = []
@@ -146,7 +160,7 @@ function openApplicationDatabase(data: typeof DataLayer, framework: Readonly<Rec
 	if (problems.length > 0) {
 		throw new BootError(problems)
 	}
-	return data.Database.postgres({ url, schema })
+	return data.postgres({ url, schema })
 }
 
 const STORAGE_VARIABLES = {
@@ -211,8 +225,7 @@ export async function serveContract(load: ImplementationLoader, env: Readonly<Re
 	if (!Number.isInteger(port) || port < 0 || port > 65535) {
 		throw new Error('PORT must be an integer between 0 and 65535')
 	}
-	// Loaded before the application: it captures the built-ins its checks use and freezes the Kysely compiler.
-	const data = await import('@fabrika/db')
+	const data = await loadDataLayer()
 	const { default: app } = await load()
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined
@@ -270,7 +283,7 @@ export async function runContractJob(
 	options: JobRunOptions = {},
 ): Promise<JobRunResult> {
 	const environment = captureEnvironment(env)
-	const data = await import('@fabrika/db')
+	const data = await loadDataLayer()
 	const { default: app } = await load()
 	const iam = issuerJwks(environment.framework['FABRIKA_IAM_ISSUER'])
 	const database = isScopedDatabase(app.database) ? openApplicationDatabase(data, environment.framework) : undefined

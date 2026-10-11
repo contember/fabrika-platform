@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { DefaultQueryCompiler, PostgresQueryCompiler } from 'kysely'
+import { Database, type PostgresOptions } from '../database'
 import { CapabilityError, QueryRefusedError } from '../errors'
 import { call, type Outcome, recordingLayer } from './fixtures/harness'
 import { patchedChecks } from './fixtures/patch'
@@ -23,6 +24,28 @@ describe('the compiler cannot be patched after the guard ran', () => {
 			}
 		}).toThrow(TypeError)
 		expect(Reflect.set(DefaultQueryCompiler.prototype, 'visitWhere', () => {})).toBe(false)
+	})
+})
+
+describe('the connection factory cannot be replaced by an application module', () => {
+	test('Database.postgres and Database.fromDialect are read-only, and no new static can be added', () => {
+		const original = Database.postgres
+		const observed: string[] = []
+		const wrapper = (options: PostgresOptions): Database => {
+			observed.push(options.url)
+			return original(options)
+		}
+		expect(Object.isFrozen(Database)).toBe(true)
+		expect(() => {
+			Database.postgres = wrapper
+		}).toThrow(TypeError)
+		expect(Reflect.set(Database, 'postgres', wrapper)).toBe(false)
+		expect(Reflect.defineProperty(Database, 'fromDialect', { value: wrapper })).toBe(false)
+		expect(Reflect.deleteProperty(Database, 'postgres')).toBe(false)
+		expect(Reflect.set(Database, 'open', wrapper)).toBe(false)
+		expect(Database.postgres).toBe(original)
+		expect(() => Database.postgres({ url: 'postgres://user:synthetic-secret@127.0.0.1:1/x', schema: 'Bad-Schema' })).toThrow(QueryRefusedError)
+		expect(observed).toEqual([])
 	})
 })
 
