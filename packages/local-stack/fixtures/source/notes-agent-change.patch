@@ -165,12 +165,12 @@ index 0000000..57ab5d2
 +	})
 +}
 diff --git a/src/db/schema.generated.ts b/src/db/schema.generated.ts
-index 667048a..b304892 100644
+index e2e68d9..82fc5ab 100644
 --- a/src/db/schema.generated.ts
 +++ b/src/db/schema.generated.ts
 @@ -2,6 +2,13 @@
  
- import type { ColumnList } from '@fabrika/db'
+ import type { TypedColumnList } from '@fabrika/db'
  
 +export interface NoteLabelsTable {
 +	id: string
@@ -190,7 +190,7 @@ index 667048a..b304892 100644
  	notes: NotesTable
  }
  
- export const columns = {
+ export const columns: TypedColumnList<DB> = {
 +	'note_labels': [
 +		'id',
 +		'note_id',
