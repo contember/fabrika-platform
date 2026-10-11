@@ -1,6 +1,7 @@
+import { isBuiltin } from 'node:module'
 import { z } from 'zod/v4'
 import { parseJsonc } from './jsonc'
-import { isRelativeSpecifier, joinRelative } from './layout'
+import { isIgnoredSegment, isRelativeSpecifier, joinRelative, resolveRelative } from './layout'
 
 /** Pattern → targets. A target is a bare specifier, an absolute path, or `./<path from the root>` (`../…` above it). */
 type MappingTable = ReadonlyMap<string, readonly string[]>
@@ -12,6 +13,8 @@ type MappingTable = ReadonlyMap<string, readonly string[]>
 export interface ImportMappings {
 	readonly paths: (file: string) => MappingTable
 	readonly imports: (file: string) => MappingTable
+	/** Whether Bun may find a module at a target; one outside what the checker reads counts, so a rule still sees it. */
+	readonly mayExist: (target: string) => boolean
 }
 
 const packageJsonSchema = z.object({ imports: z.record(z.string(), z.unknown()).optional() })
@@ -134,30 +137,42 @@ export const readImportMappings = (files: ReadonlyMap<string, string>): ImportMa
 			const manifest = nearest(file, ['package.json'])
 			return manifest === undefined ? EMPTY : importsOf(manifest)
 		},
+		mayExist: (target) => {
+			const path = target.startsWith('/') ? undefined : joinRelative('package.json', target)
+			if (path === undefined || path.split('/').some(isIgnoredSegment)) return true
+			return resolveRelative((candidate) => files.has(candidate), 'package.json', `./${path}`).kind !== 'missing'
+		},
 	}
 }
 
-/** The targets of the exact key, else of the matching pattern with the longest prefix before its `*`. */
+/**
+ * The targets of the exact key, else of the most specific matching pattern: the longest prefix before its `*`, then the
+ * longest key (Node's and Bun's order for `imports`: `#x/*.ts` before `#x/*`).
+ */
 const matchTable = (table: MappingTable, specifier: string): readonly string[] | undefined => {
 	const exact = specifier.includes('*') ? undefined : table.get(specifier)
 	if (exact !== undefined) return exact
-	let best: { readonly prefix: number; readonly targets: readonly string[] } | undefined
+	let best: { readonly prefix: number; readonly key: number; readonly targets: readonly string[] } | undefined
 	for (const [pattern, targets] of table) {
 		const star = pattern.indexOf('*')
 		if (star === -1) continue
 		const prefix = pattern.slice(0, star)
 		const suffix = pattern.slice(star + 1)
 		if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix) || specifier.length < prefix.length + suffix.length) continue
-		if (best !== undefined && best.prefix >= prefix.length) continue
+		if (best !== undefined && (best.prefix > prefix.length || (best.prefix === prefix.length && best.key >= pattern.length))) continue
 		const captured = specifier.slice(prefix.length, specifier.length - suffix.length)
-		best = { prefix: prefix.length, targets: targets.map((target) => target.replace('*', captured)) }
+		best = { prefix: prefix.length, key: pattern.length, targets: targets.map((target) => target.replace('*', captured)) }
 	}
 	return best?.targets
 }
 
 /**
- * What a bare specifier in `file` is mapped to: `paths` first, as Bun tries them, then the package scope's `imports`.
- * A relative target is `./<path from the root>` (`../…` above it); `undefined` when no mapping matches.
+ * What a bare specifier in `file` is mapped to, in Bun's order: a builtin is never mapped; then the first `paths`
+ * target that exists; when none does, the package scope's `imports`; `undefined` when nothing maps it, so it is loaded
+ * as a package. A relative target is `./<path from the root>` (`../…` above it).
  */
-export const mappedTargets = (mappings: ImportMappings, file: string, specifier: string): readonly string[] | undefined =>
-	matchTable(mappings.paths(file), specifier) ?? matchTable(mappings.imports(file), specifier)
+export const mappedTargets = (mappings: ImportMappings, file: string, specifier: string): readonly string[] | undefined => {
+	if (isBuiltin(specifier)) return undefined
+	const path = matchTable(mappings.paths(file), specifier)?.find(mappings.mayExist)
+	return path === undefined ? matchTable(mappings.imports(file), specifier) : [path]
+}

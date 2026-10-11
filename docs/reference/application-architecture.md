@@ -197,10 +197,12 @@ import (`import type`) is erased and is free everywhere, except of a generated t
 
 An import is judged by the file or package Bun loads for it:
 
-- A mapped specifier resolves through `compilerOptions.paths` of the importing module's nearest `tsconfig.json` (or
-  `jsconfig.json`), with its local `extends`, then through `imports` of its nearest `package.json`. Targets are
-  relative to the file that declares them (`baseUrl` when set). The exact key wins over a pattern, and the pattern
-  with the longest prefix over a shorter one.
+- A Bun or Node builtin (`fs`, `node:http`) is the builtin, whatever a mapping says.
+- Otherwise a mapped specifier resolves through `compilerOptions.paths` of the importing module's nearest
+  `tsconfig.json` (or `jsconfig.json`), with its local `extends`: the first target that exists. When none exists,
+  `imports` of its nearest `package.json` applies, and then the package itself. Targets are relative to the file that
+  declares them (`baseUrl` when set). The exact key wins over a pattern; of two patterns, the longer prefix before
+  `*`, then the longer key (`#x/*.ts` before `#x/*`).
 - `layer-import` follows the local modules that `logic.ts` and `queries.ts` load at runtime (imports, re-exports,
   `export *`, a literal `import()`), so a helper module or a barrel carries their restriction.
 - `spa-server-import` follows the schema modules the SPA loads, since nothing else checks their imports.

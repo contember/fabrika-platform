@@ -246,6 +246,90 @@ describe('a refusal follows the import as Bun resolves it', () => {
 		).toEqual(['web/main.ts:1:1 spa-server-import', 'web/main.ts:2:1 spa-server-import', 'web/main.ts:3:1 spa-server-import'])
 	})
 
+	const WRITE = "import { ConflictError } from '#app'\n\nConflictError.patched = true\nReflect.set(ConflictError, 'x', 1)\n"
+
+	test('a paths mapping whose targets are all missing falls back to imports and to the package', async () => {
+		const files = {
+			...ARCHITECTURE_APP,
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: {
+					paths: { '#kit': ['./missing.ts'], '#s': ['./missing.ts'], '#g': ['./missing.ts'], '#net': ['./missing.ts'], '#app': ['./missing.ts'] },
+				},
+			}),
+			'package.json': JSON.stringify({
+				imports: { '#kit': '@fabrika/app/testing', '#s': './src/db/tables.ts', '#net': 'node:http', '#app': '@fabrika/app' },
+			}),
+			'src/__tests__/package.json': JSON.stringify({ imports: { '#g': './endpoint-access.test.ts' } }),
+			'src/__tests__/endpoint-access.test.ts': GENERATED,
+			'src/__tests__/authored.test.ts': "import { cases } from '#g'\n",
+			'src/deals/queries.ts': withImport('src/deals/queries.ts', "import { testKit } from '#kit'\nexport const later = () => import('#kit')"),
+			'web/main.ts': withImport('web/main.ts', "export { tables } from '#s'"),
+			'src/deals/net.ts': "export { createServer } from '#net'\n",
+			'src/deals/patch.ts': WRITE,
+		}
+		expect(await refusals(files, ['generated-test-import', 'test-only-import', 'spa-server-import', 'forbidden-import', 'framework-write'])).toEqual([
+			'src/__tests__/authored.test.ts:1:1 generated-test-import',
+			'src/deals/net.ts:1:1 forbidden-import',
+			'src/deals/patch.ts:3:1 framework-write',
+			'src/deals/patch.ts:4:1 framework-write',
+			'src/deals/queries.ts:1:1 test-only-import',
+			'src/deals/queries.ts:2:28 test-only-import',
+			'web/main.ts:1:1 spa-server-import',
+		])
+	})
+
+	test('of two package-import patterns with one prefix, the longer key wins', async () => {
+		const files = {
+			...ARCHITECTURE_APP,
+			'package.json': JSON.stringify({
+				imports: {
+					'#x/*': './web/*',
+					'#x/*.ts': './src/db/*.ts',
+					'#n/*': './web/*',
+					'#n/*.js': 'node:http',
+					'#a/*': './web/*',
+					'#a/*.js': '@fabrika/app',
+				},
+			}),
+			'web/server.ts': 'export const shown = true\n',
+			'web/http.js': 'export const createServer = () => undefined\n',
+			'web/app.js': 'export const ConflictError = class {}\n',
+			'src/db/server.ts': "export { tables } from './tables'\n",
+			'web/main.ts': withImport('web/main.ts', "import { shown } from '#x/server.ts'\nexport const later = () => import('#x/server.ts')"),
+			'src/__tests__/package.json': JSON.stringify({ imports: { '#t/*': './safe/*', '#t/*.test.ts': './*.test.ts' } }),
+			'src/__tests__/safe/endpoint-access.test.ts': 'export const cases = []\n',
+			'src/__tests__/endpoint-access.test.ts': GENERATED,
+			'src/__tests__/authored.test.ts': "import { cases } from '#t/endpoint-access.test.ts'\n",
+			'src/deals/net.ts': "export { createServer } from '#n/http.js'\n",
+			'src/deals/patch.ts': WRITE.replace("'#app'", "'#a/app.js'"),
+		}
+		expect(await refusals(files, ['generated-test-import', 'spa-server-import', 'forbidden-import', 'framework-write'])).toEqual([
+			'src/__tests__/authored.test.ts:1:1 generated-test-import',
+			'src/deals/net.ts:1:1 forbidden-import',
+			'src/deals/patch.ts:3:1 framework-write',
+			'src/deals/patch.ts:4:1 framework-write',
+			'web/main.ts:1:1 spa-server-import',
+			'web/main.ts:2:28 spa-server-import',
+		])
+	})
+
+	test('a builtin is loaded before any mapping of its name', async () => {
+		const files = {
+			...ARCHITECTURE_APP,
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { paths: { fs: ['./web/fs.ts'], 'fs/promises': ['./web/fs.ts'], 'node:http': ['./web/fs.ts'] } },
+			}),
+			'web/fs.ts': "export const readFileSync = 'browser'\n",
+			'web/main.ts': withImport('web/main.ts', "import { readFileSync } from 'fs'\nexport const later = () => import('fs/promises')"),
+			'src/deals/net.ts': "export { createServer } from 'node:http'\n",
+		}
+		expect(await refusals(files, ['spa-server-import', 'forbidden-import'])).toEqual([
+			'src/deals/net.ts:1:1 forbidden-import',
+			'web/main.ts:1:1 spa-server-import',
+			'web/main.ts:2:28 spa-server-import',
+		])
+	})
+
 	test("logic and queries keep their layer's restriction through local modules", async () => {
 		const support = { ...ARCHITECTURE_APP, 'src/deals/support.ts': "export { compileContract } from '@fabrika/app/contract'\n" }
 		const named = { ...support, 'src/deals/queries.ts': withImport('src/deals/queries.ts', "import { compileContract } from './support'") }
@@ -328,6 +412,22 @@ describe('fabrika-check', () => {
 			['src/notes/queries.ts:1:1 test-only-import', {
 				'src/notes/package.json': '{ "imports": { "#kit": "@fabrika/app/testing" } }\n',
 				'src/notes/queries.ts': "import { testKit } from '#kit'\n\nexport const kit = testKit\n",
+			}],
+			['src/notes/queries.ts:1:1 test-only-import', {
+				'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '#kit': ['./missing.ts'] } } }),
+				'src/notes/package.json': JSON.stringify({ imports: { '#kit': '@fabrika/app/testing' } }),
+				'src/notes/queries.ts': "import { testKit } from '#kit'\n\nexport const kit = testKit\n",
+			}],
+			['web/main.ts:1:1 spa-server-import', {
+				'package.json': JSON.stringify({ imports: { '#x/*': './web/*', '#x/*.ts': './src/db/*.ts' } }),
+				'web/server.ts': 'export const shown = true\n',
+				'src/db/server.ts': "export { tables } from './tables'\n",
+				'web/main.ts': "import { shown } from '#x/server.ts'\n\nexport const seen = shown\n",
+			}],
+			['web/main.ts:1:1 spa-server-import', {
+				'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { fs: ['./web/fs.ts'] } } }),
+				'web/fs.ts': "export const readFileSync = 'browser'\n",
+				'web/main.ts': "import { readFileSync } from 'fs'\n\nexport const read = readFileSync\n",
 			}],
 			['web/main.ts:1:1 spa-server-import', {
 				'tsconfig.base.json': '{ "compilerOptions": { "paths": { "~server": ["./src/db/tables.ts"] } } }\n',
