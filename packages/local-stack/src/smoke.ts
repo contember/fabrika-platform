@@ -110,11 +110,12 @@ const composeOutput = async (args: string[]): Promise<string> => {
 	return output
 }
 
-const postgresOutput = (database: 'control' | 'operations', sql: string): Promise<string> =>
+/** `notes` is the apps database; the platform's databases are on `platform-db`. */
+const postgresOutput = (database: 'control' | 'operations' | 'notes', sql: string): Promise<string> =>
 	composeOutput([
 		'exec',
 		'-T',
-		'platform-db',
+		database === 'notes' ? 'apps-db' : 'platform-db',
 		'psql',
 		'--username',
 		'postgres',
@@ -469,12 +470,21 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 		if (!notesListSchema.parse(listed).result.items.some((note) => note.id === id && note.title === title)) {
 			throw new Error('authenticated note was not persisted')
 		}
+		await proveNotesDatabaseRoles()
 	} finally {
 		await requestJson(IAM_ORIGIN, `/admin/api-keys/${principalId}`, {
 			bearer: provisioningKey,
 			method: 'DELETE',
 		})
 	}
+}
+
+/** Notes migrated as its migration role, which owns its schema, and serves as its runtime role (ADR-0017). */
+const proveNotesDatabaseRoles = async (): Promise<void> => {
+	const owner = (await postgresOutput('notes', "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'app_notes'")).trim()
+	if (owner !== 'app_notes') throw new Error(`schema app_notes is owned by ${owner || 'nobody'}, not by the migration role app_notes`)
+	const runtime = (await postgresOutput('notes', "SELECT count(*) FROM pg_stat_activity WHERE usename = 'run_notes'")).trim()
+	if (runtime === '0') throw new Error('Notes serves without a connection as its runtime role run_notes')
 }
 
 const proveNamespaceIsolation = async (): Promise<void> => {
