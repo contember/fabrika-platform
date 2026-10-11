@@ -74,7 +74,7 @@ const checkSourceModule = async (
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
 	const context = { report, isGeneratedEntry }
-	const trusted = trustedBindings(module.program)
+	const trusted = trustedBindings(module.program, mappings)
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
 		checkFrameworkWrite(node, trusted, report)

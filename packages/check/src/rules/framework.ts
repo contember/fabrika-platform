@@ -1,6 +1,7 @@
 import { type AstNode, child, children, identifierName, memberPath, staticString, stringField, unwrap, walk } from '../ast'
 import type { Report } from '../finding'
 import { isRequire } from '../references'
+import { type ImportMappings, mappedTargets } from '../resolution'
 import { touchesPrototype } from './runtime'
 
 const ALLOWED = 'framework objects are read-only: use them as they are'
@@ -10,6 +11,13 @@ const isTrusted = (specifier: string): boolean => specifier.startsWith('@fabrika
 
 /** Local name → the trusted specifier its value comes from. */
 export type TrustedBindings = ReadonlyMap<string, string>
+
+/** The trusted package a specifier loads, also through an import map or a `tsconfig` path (`#data` → `@fabrika/db`). */
+const trustedPackage = (specifier: string | undefined, mappings: ImportMappings): string | undefined => {
+	if (specifier === undefined) return undefined
+	const targets = mappedTargets(mappings, specifier) ?? [specifier]
+	return targets.find(isTrusted)
+}
 
 const loadedSpecifier = (init: AstNode | undefined): string | undefined => {
 	const value = init === undefined ? undefined : unwrap(init)
@@ -31,24 +39,27 @@ const boundNames = (pattern: AstNode | undefined): readonly string[] => {
 }
 
 /** What a module binds to a trusted package's values: its imports, `import x = require()`, and direct loads into a `const`. */
-export const trustedBindings = (program: AstNode): TrustedBindings => {
+export const trustedBindings = (program: AstNode, mappings: ImportMappings): TrustedBindings => {
 	const bindings = new Map<string, string>()
 	walk(program, (node) => {
 		if (node.type === 'ImportDeclaration' && stringField(node, 'importKind') !== 'type') {
-			const specifier = staticString(child(node, 'source'))
-			if (specifier === undefined || !isTrusted(specifier)) return
+			const specifier = trustedPackage(staticString(child(node, 'source')), mappings)
+			if (specifier === undefined) return
 			for (const item of children(node, 'specifiers')) {
 				const local = item === null || stringField(item, 'importKind') === 'type' ? undefined : identifierName(child(item, 'local'))
 				if (local !== undefined) bindings.set(local, specifier)
 			}
 		} else if (node.type === 'TSImportEqualsDeclaration' && stringField(node, 'importKind') !== 'type') {
 			const reference = child(node, 'moduleReference')
-			const specifier = reference?.type === 'TSExternalModuleReference' ? staticString(child(reference, 'expression')) : undefined
+			const specifier = trustedPackage(
+				reference?.type === 'TSExternalModuleReference' ? staticString(child(reference, 'expression')) : undefined,
+				mappings,
+			)
 			const local = identifierName(child(node, 'id'))
-			if (specifier !== undefined && isTrusted(specifier) && local !== undefined) bindings.set(local, specifier)
+			if (specifier !== undefined && local !== undefined) bindings.set(local, specifier)
 		} else if (node.type === 'VariableDeclarator') {
-			const specifier = loadedSpecifier(child(node, 'init'))
-			if (specifier !== undefined && isTrusted(specifier)) {
+			const specifier = trustedPackage(loadedSpecifier(child(node, 'init')), mappings)
+			if (specifier !== undefined) {
 				for (const name of boundNames(child(node, 'id'))) bindings.set(name, specifier)
 			}
 		}

@@ -272,6 +272,23 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/patch.ts:3:1', 'src/patch.ts:4:1', 'src/patch.ts:5:3', 'src/patch.ts:6:1'],
 	},
 	{
+		name: 'framework members written through package import maps, exact and with a pattern',
+		rule: 'framework-write',
+		files: {
+			'package.json': '{ "name": "notes", "imports": { "#data": "@fabrika/db", "#app/*": "@fabrika/app/*" } }\n',
+			'src/patch.ts': [
+				"import { Database } from '#data'",
+				"import * as implement from '#app/implement'",
+				"const loaded = await import('#data')",
+				"Reflect.set(Database, 'postgres', null)",
+				'Object.assign(implement.Ref, { x: 1 })',
+				'loaded.Database.fromDialect = null',
+				'',
+			].join('\n'),
+		},
+		expected: ['src/patch.ts:4:1', 'src/patch.ts:5:1', 'src/patch.ts:6:1'],
+	},
+	{
 		name: 'the reproduced load of the capability mint: import.meta.resolve and a computed import()',
 		rule: 'unchecked-import',
 		files: {
