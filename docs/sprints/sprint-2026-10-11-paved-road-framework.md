@@ -850,3 +850,7 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   Optional options inferred `Imp` from their type while the call might pass none, so `contract.surface.imports` typed
   as present and was `undefined` at runtime. The options of the imports overload are required; imports given only as a
   type argument no longer type either (`colocated-mistakes/06`, `07`, `kit-runtime.test.ts`).
+- **WU4 rebase onto WU6.** `ctx.sql` binds the mode of the approved declaration (`servedSite`, the webhook's `site`, a
+  job's `approvedDeclaration`), so `sql-dispatch.test.ts`'s leaf-only `{ sql }` no longer boots under the orm
+  fixture's digest. The test now serves its own kit shell that declares each site's `sql`; its cases are unchanged, and
+  the same tree under the orm fixture's shell is refused at boot.

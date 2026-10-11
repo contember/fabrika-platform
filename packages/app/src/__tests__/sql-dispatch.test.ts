@@ -7,6 +7,7 @@
 //
 // The handlers read `ctx` untyped, as the kit's types are not what this file tests. The URL is a credential: it is never logged.
 
+import { defineApp } from '@fabrika/app/contract'
 import type { ContractApp, ContractImplementation, JobClock } from '@fabrika/app/implement'
 import { applicationSchema, Database, scoped } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
@@ -16,7 +17,8 @@ import { z } from 'zod/v4'
 import { siteHandler } from '../implement/invocation'
 import { bootApp, grant, resultOf, send, type Sent, token } from './fixtures/implement/harness'
 import { tables } from './kit-fixture/src/db/tables'
-import { contract } from './orm-fixture/fabrika.contract'
+import { vocabulary } from './kit-fixture/src/vocabulary'
+import { ById, Columns, contract as ormContract, Margin, Ok, Push, Rename, ReopenDeal, Saved } from './orm-fixture/fabrika.contract'
 import { migration } from './orm-fixture/migration'
 
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
@@ -69,6 +71,31 @@ function targetId(ctx: unknown): unknown {
 
 const Title = z.object({ title: z.string() })
 const SavedRow = z.object({ id: z.string(), version: z.number() })
+
+/** A site of this shell: `sqlApp` serves its own tree in its place. */
+const servedByTheTree = (): never => {
+	throw new Error('sql-dispatch serves the handler tree sqlApp writes')
+}
+
+// The orm fixture's shell, with each site's `sql` declared where the digest covers it: `boot` reads it from there.
+const kit = defineApp({ ...vocabulary, app: 'notes' }, tables)
+const deals = kit.group({ callers: ['human'] }, (r) => ({
+	columns: r.query({ input: ById, output: Columns, access: { action: 'crm.read', on: 'deal', from: 'id' }, sql: 'read' }).handle(servedByTheTree),
+	margin: r.mutation({ input: ById, output: Margin, access: { action: 'deals.write', on: 'deal', from: 'id' } }).handle(servedByTheTree),
+	reopen: r.mutation({ input: ReopenDeal, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' } }).handle(servedByTheTree),
+	rename: r.mutation({ input: Rename, output: Saved, access: { action: 'deals.write', on: 'deal', from: 'id' }, sql: 'write' }).handle(
+		servedByTheTree,
+	),
+	retitle: r.query({ input: Rename, output: Ok, access: { action: 'crm.read', on: 'deal', from: 'id' }, sql: 'read' }).handle(servedByTheTree),
+	keep: r.query({ input: ById, output: Ok, access: { action: 'crm.read', on: 'deal', from: 'id' }, sql: 'read' }).handle(servedByTheTree),
+	replay: r.query({ input: ById, output: Ok, access: { action: 'crm.read', on: 'deal', from: 'id' } }).handle(servedByTheTree),
+}))
+const contract = kit.contract((c) => ({
+	api: c.rpc('/api', { deals }),
+	github: kit.webhook('/hooks/github', { scheme: 'github-sha256', boundTo: 'org', actions: ['crm.write'], input: Push }).handle(servedByTheTree),
+	health: c.health('/healthz'),
+	jobs: { close: kit.cron('0 3 * * *', { actions: ['crm.read', 'deals.write'], scope: 'app', sql: 'write' }).handle(servedByTheTree) },
+}))
 
 function sqlApp(hooks: Hooks): ContractImplementation<typeof contract> {
 	const noted = (name: string, ctx: unknown) => {
@@ -206,6 +233,15 @@ describe.skipIf(!hasPostgres)('ctx.sql through the pipeline', () => {
 		expect(resultOf(await send(app, '/api/deals.margin', { token: await writer(), body: { id } }))).toEqual({ margin: null, columns: [] })
 		expect(resultOf(await send(app, '/api/deals.replay', { token: await reader(), body: { id } }))).toEqual({ ok: true })
 		expect(hooks.hasSql).toEqual({ margin: false, replay: false })
+	})
+
+	test('ctx.sql takes its mode from the approved contract: a handler that alone declares sql does not boot', () => {
+		const connection = Database.postgres({ url, schema, max: 1 })
+		opened.push(connection)
+		const leafOnly = { ...sqlApp(hooksOf()), contract: ormContract }
+		expect(() => bootApp(leafOnly, { database: connection })).toThrow(
+			`procedure 'api.deals.columns': its handler declares {"sql":"read","unscoped":[],"connect":[],"issues":null}, but the approved contract declares {"sql":null,`,
+		)
 	})
 
 	test("a declared 'read' query answers a join; a declared 'write' mutation writes in the invocation's transaction", async () => {
