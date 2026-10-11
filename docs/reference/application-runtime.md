@@ -285,6 +285,71 @@ Every response carries the header policy of ADR-0022, and the proxy sets it agai
 replacing whatever the application sent (`@fabrika/proxy-core/headers` is the one definition). Both drop a
 report-only CSP, `Report-To`, `Reporting-Endpoints` and `NEL`; the proxy strips every header of a `1xx`.
 
+### The staged kit's data handles (`ctx.db`)
+
+A handler of the staged kit (`app.group(…)` with `.handle(…)`, its cron jobs and webhooks) reaches data through
+`ctx.db`, which `boot` builds for its site from the capability the access form minted, the site's kind and its
+declaration. `serve` puts each site into the handler tree as a `siteHandler(handler, declared)` leaf; a handler
+`implement` bound gets no `ctx.db` and keeps its stores. The API matrix:
+
+| Access form | query                                                                                                 | mutation (adds)                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `on`        | `ctx.db.target.get()`; child tables `list`/`get`                                                      | `getForUpdate()`, `update(v, { expectVersion })`, `remove({ expectVersion })`; child `insert`/`update`/`remove`            |
+| `in`        | `ctx.db.target.get()` (the container); `.<table>.list`                                                | `ctx.db.target.<table>.insert(v)` for a table whose list dimension is the target and whose insert action is the endpoint's |
+| `over`      | `ctx.db.within.<table>.list({ where, orderBy, limit, after })` (keyset), `count`, `aggregate`         | — (a list write is not on the road: `unscoped` or `sql`)                                                                   |
+| `creates`   | —                                                                                                     | `ctx.db.created.<table>.insert(v)`: the new scope's own row, then `in`-style inserts into it                               |
+| `member`    | no application data                                                                                   | no application data                                                                                                        |
+| any         | `ctx.db.reference.<table>` reads; `ctx.principal`; `ctx.members` where the action is `members.manage` | —                                                                                                                          |
+
+"Target subtree" is the target's child tables and the dimension tables it contains. A job and a webhook bind the same
+handles to a capability they minted or received: `ctx.db.on(ref)`, `ctx.db.in(ref)`, `ctx.db.over(within)`. A member
+a site may not use is a type error at its call (`Unavailable`) and, should the types be defeated, a refusal that
+names the same fix at runtime.
+
+- **A capability reads its own target.** A `Ref` of any action the table names reads its row and the rows of its
+  subtree; every column that declares a read action other than exactly the capability's is left out of the
+  statement, as it is out of the row type. A `Within` lists by the table's read action. A `Ref` of an action the
+  table does not name reads nothing of it.
+- **Writes answer `{ id, version }`** (`{ id }` for a table without a version), never row data. A versioned table's
+  `update` and `remove` take `{ expectVersion }`: a row that changed since is 409, a missing one 404.
+- **`getForUpdate()`** is `SELECT … FOR UPDATE` on the target's whole chain, in a mutation `on` an object only: a
+  precondition read that a concurrent write of the same row waits behind, so of two concurrent "reopen a won deal"
+  requests one wins and the other sees the change and answers 409. It is the one lock the guard admits besides a
+  destination's `FOR SHARE`.
+- **A list is a keyset page**: at most `limit` rows (50 by default, 500 at most) in the order asked, the table's key
+  last as the tiebreak, and `next`, the opaque cursor `after` takes, `null` on the last page. Filters and orderings
+  name only the columns the capability reads.
+- **`ctx.db.unscoped.<table>`** exists only for the tables the site declares, in their mode: the scope predicate is
+  `true`, every statement is still guarded and runs in the invocation's transaction, `'read'` refuses every write,
+  an insert names the containment columns no capability stamps, and no declaration reaches a `fabrika_*` table.
+  `boot` refuses a declaration of a table outside `src/db/tables.ts` and a query's `'write'`.
+- **`fromRow(Schema, row)`** (`@fabrika/app`) turns a row into an output object: snake_case columns become the
+  schema's camelCase fields, a `Date` its ISO text, an undeclared column is dropped, and the schema parses the rest,
+  so a literal-string field the row types as text is checked.
+- **Errors come from `@fabrika/app`** (`ConflictError`, `NotFoundError`, `BadRequestError`). `@fabrika/db`'s own
+  `ConflictError` and `NotFoundError` stay internal and answer 409 and 404 by name.
+
+**The transaction is the invocation's.** An endpoint request, a webhook delivery and a job's `ctx.transaction` each
+run every statement of their handles in one transaction, opened by the first statement; it sets
+`idle_in_transaction_session_timeout` (30 s), so a handler that waits on something else while it holds row locks
+loses them. It commits after the handler returned and its output passed validation; a throw, a refused output, a
+cancelled request or a statement the database refused rolls it back, and nothing the handler wrote is kept. A query
+and an export run in a `READ ONLY` transaction and refuse every write and lock before anything is sent. IAM (a
+created scope, a membership change, a share link), object storage and a connector call never roll back: do the data
+work first and the external call after. `ctx.sql` (`sql: 'read' | 'write'`) is to run in the same transaction; until
+it is built a declared `ctx.sql` throws `ctx.sql is not implemented`.
+
+- **A webhook delivery is one transaction.** The delivery key is recorded first, outside it; a handler that throws
+  rolls its transaction back and forgets the key, so GitHub's redelivery runs it again from nothing. A process that
+  dies between the record and the commit keeps the key and loses the delivery.
+- **A job reads outside its transaction and writes inside it.** `ctx.db` of a job attempt reads, each statement on its
+  own; every write and `tx.sql` runs in `ctx.transaction((tx) => …)`, fenced by the attempt's lease. An attempt
+  retries, so its writes are idempotent. There is no `ctx.jobs.enqueue`: jobs are cron only, so work for later is a row
+  the next run picks up.
+- **Every handle is bound to its invocation.** A handle kept past its handler, called from another live request, from
+  a request of another `boot`, or from an ended job attempt is refused (500, one log line) before it reads its
+  arguments.
+
 ### File collections
 
 A `c.files` collection serves three generated endpoints, for signed-in people only, through
@@ -398,9 +463,10 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   is answered 200 and not run again, whatever its unsigned `X-GitHub-Delivery` says (that
   header only names the delivery in the log). The handler gets `ctx.refs`, a `Ref` of the
   bound value for each declared action, and `ctx.delivery.key`. **It runs at least
-  once**: a failing handler forgets the key so GitHub's redelivery runs it again, after
-  whatever the failed run wrote, so a handler writes idempotently, keyed on
-  `ctx.delivery.key`. Bindings and delivery keys live in the framework's `fabrika_*`
+  once**: a failing handler forgets the key so GitHub's redelivery runs it again. A
+  staged-kit delivery runs in one transaction (above), so the failed run kept nothing; an
+  `implement` handler's stores commit each write on its own, so its redelivery runs after
+  whatever the failed run wrote, and it writes idempotently, keyed on `ctx.delivery.key`. Bindings and delivery keys live in the framework's `fabrika_*`
   tables, which `fabrika db migrate` applies.
 - Revocation takes effect within the token lifetime: a removed member or revoked link
   keeps access until its cached token expires, at most 300 s (ADR-0022 rule 6).
@@ -432,7 +498,9 @@ process first — and runs one job:
    generation and the deadline inside its own transaction, before the write and again
    just before `COMMIT`, with `statement_timeout` set to the time left. When an attempt
    ends, the runner cancels the statements it still has running. An attempt that timed
-   out, failed or lost the lease commits nothing more (`LeaseLostError`).
+   out, failed or lost the lease commits nothing more (`LeaseLostError`). A staged-kit
+   job writes only in `ctx.transaction((tx) => …)`, one fenced transaction for every
+   write in it; its `ctx.db` outside reads only.
 3. An attempt that outlives its `timeout` is cancelled (`ctx.signal` aborts, its
    capabilities are refused) and fails. A failed attempt is retried up to `retries`
    times with jittered exponential backoff, under a new generation each time.

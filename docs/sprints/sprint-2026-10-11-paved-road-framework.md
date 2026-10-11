@@ -722,3 +722,26 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   checked against every form again. (4) A child's parent is checked against the tables that state a dimension scope,
   and `column` is required off `<parent dimension>_id` (`NamesItsParentColumn`). (5) Table actions, inbox reads and
   column reads must be vocabulary actions, in the shared parse. `kit-scale`: 356,159 instantiations.
+- **WU3 — the seam with WU4.** A site is a handler tree leaf `siteHandler(handler, declared)`
+  (`packages/app/src/implement/invocation.ts`, not exported from a subpath); `serve` builds the tree from those, and
+  `boot` parses `declared` at the boundary (`parseDeclaration`: a query's `'write'`, a table outside `src/db/tables.ts`
+  or `fabrika_*` is a `BootError`). Integrator: once WU4 puts the declarations into the artifact, `boot` should read the
+  approved declaration from it and refuse a leaf that says otherwise; until then the leaf is the only source.
+- **WU3 — the hook for WU6.** Every handle of a site runs in one `Session`: `Invocation.session()` for a request or a
+  webhook delivery (an `InvocationTransaction`, `packages/db/src/database.ts`, over Kysely's `ControlledTransaction`,
+  `READ ONLY` for a query or an export), the session `DataAccess.transaction` hands a job's `ctx.transaction`. A declared
+  `ctx.sql` / `tx.sql` is `sqlStub()` (invocation.ts), which WU6 replaces with the template run in that session. A raw
+  statement must go through `Session`'s private `#execute` (as `runFixedStatement` does), so a refused statement marks
+  the invocation failed and its commit throws instead of Postgres' silent ROLLBACK.
+- **WU3 — own-target read follows `RowFor` exactly.** A `Ref` reads a column only when the column declares no read
+  action or exactly the capability's, so a write `Ref` also loses a column that declares the table's own read action.
+  `GuardContext.lock` is `'share' | 'update'` (was `true`); `getForUpdate` is the only `FOR UPDATE`.
+- **WU3 — a webhook delivery's record stays outside its transaction** (as decided), so a process that dies between the
+  record and the commit keeps the key and loses the delivery; a thrown handler rolls back and forgets the key.
+- **WU3 — lists are keyset pages** (50 by default, 500 at most; the key is the tiebreak, a reference table's every
+  visible column). A member the types make `Unavailable` throws its message at runtime where the handle has the
+  method; `ctx.db.target` of `over`/`member` and `ctx.db.unscoped` without a declaration are absent.
+- **WU3 — no frozen signature changed.** Added: `DbHandle`, `ReferenceHandle` (`@fabrika/app/contract`, WU1's ask;
+  `architecture-app` and `application-architecture.md` use them), `fromRow`/`RowInput` (`@fabrika/app`),
+  `dataAccessOf` (`@fabrika/db/framework`). `@fabrika/db`'s root no longer exports `ConflictError`/`NotFoundError`.
+  The skill does not mirror the matrix yet → WU10. `kit-scale.test.ts` after WU3: 354,508 instantiations.
