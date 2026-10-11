@@ -710,3 +710,15 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
 - **WU2, the WU1 ask.** `fixtures/architecture-app` needs the slice reader (`app.contract`), so its registration as a
   differential fixture stays WU4's. Its tables were not a valid policy (`deals` lacked `org_id`, its column list
   carried no row types); the schema, migration and column list are fixed, and a differential table case reads them.
+- **WU2 review round 1.** (1) The generated column list carries each table's foreign keys
+  (`{ columns, foreignKeys: [{ columns, table, references }] }`, still the one `columns: TypedColumnList<DB>`
+  declaration; codegen reads them with `introspectCatalog`). A composite key is kept whole, not only single-column
+  ones, because the paved road's contained tables reference `UNIQUE (id, <chain>)` of their container. A container or
+  child-parent column must be a column of a foreign key to the owning table's key, or the parse refuses it, naming the
+  column that is; an unowned container keeps the convention. Every committed `schema.generated.ts` is regenerated
+  (codegen where a migration exists, by hand for `kit-fixture` and the check `derived-tables` fixture), the agent change
+  patch is regenerated and the local stack re-pinned. (2) Above an unowned dimension the chain follows the vocabulary on
+  `<dimension>_id`; a vocabulary containment cycle is refused. (3) A map annotated `VocabularyPolicyMap<DB, V>` is
+  checked against every form again. (4) A child's parent is checked against the tables that state a dimension scope,
+  and `column` is required off `<parent dimension>_id` (`NamesItsParentColumn`). (5) Table actions, inbox reads and
+  column reads must be vocabulary actions, in the shared parse. `kit-scale`: 356,159 instantiations.
