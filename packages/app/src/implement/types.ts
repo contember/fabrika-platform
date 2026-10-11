@@ -157,10 +157,10 @@ export type HandlersOf<C, Snap = unknown> =
 // ── Exactness: no handler outside the contract, no field outside the declared output ────────────
 
 /** An `any` comes from an error elsewhere in the handler; reporting it here too would only add noise. */
-type IsAny<T> = 0 extends 1 & T ? true : false
+export type IsAny<T> = 0 extends 1 & T ? true : false
 
 /** Fields of `R` that the output `O` does not declare. When `O` is a union, a value that fits one branch has none. */
-type ExtraKeys<R, O> = IsAny<R> extends true ? never
+export type ExtraKeys<R, O> = IsAny<R> extends true ? never
 	: true extends (O extends unknown ? ([ExtraKeysOf<R, O>] extends [never] ? true : false) : never) ? never
 	: ExtraKeysOf<R, O>
 

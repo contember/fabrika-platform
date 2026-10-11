@@ -45,7 +45,7 @@ export type NotLoose<S> = S extends z.ZodObject<z.core.$ZodShape, infer Config e
 /** Fields a builder sets itself: an options object that carries one does not type-check. */
 type Owned<K extends string> = { readonly [P in K]?: never }
 
-type WildcardMessage = 'an action is exact: a role grants listed actions, and * is not an action'
+export type WildcardMessage = 'an action is exact: a role grants listed actions, and * is not an action'
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────────────────────
 

@@ -21,6 +21,8 @@ bun test
 bun test src/__tests__/rpc.test.ts
 bun test src/__tests__/contract-types.test.ts   # the contract mistakes, compiled by tsc
 bun test src/__tests__/implement-types.test.ts  # the handler mistakes, compiled by tsc
+bun test src/__tests__/kit-types.test.ts        # the staged kit: the API matrix and the kit mistakes, compiled by tsc
+bun test src/__tests__/kit-scale.test.ts        # 200 kit endpoints in 10 group modules, within the scale budget
 bun test src/__tests__/implement.test.ts        # boot's request pipeline, with real tokens
 bun test src/__tests__/scoped-database.test.ts  # implement over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot
@@ -65,6 +67,10 @@ src/
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
     runner.ts         the test functions the generated tests register through
   contract/           @fabrika/app/contract — browser-safe
+    vocabulary.ts     defineVocabulary: the first module of the staged kit
+    kit.ts            defineApp(vocabulary, tables): App (group, cron, webhook, link, export, contract), ContractKit
+    group.ts          the endpoint builders of a group, a link and an export; .handle; ExactReturn
+    context.ts        what a kit handler receives: ctx by access form and declaration (types only)
     define.ts         defineContract, the c.* kit and every type an agent meets
     declaration.ts    the contract as plain data, generic over its schema type
     schema-shape.ts   a zod 4 schema of the subset → SchemaShape
@@ -78,6 +84,7 @@ src/
     schema-from-shape.ts  schemaFromShape and declaredPath: what a connector validates with and reports
   implement/          @fabrika/app/implement — serving a contract (node:async_hooks)
     implement.ts      implement, ContractDatabase, ContractImplementation
+    serve.ts          serve(contract, { database, deps }) and defineDeps: serving a kit contract
     types.ts          the handler types: HandlersOf, ExactHandlers, AccessContext
     boot.ts           boot: framework variables, refusals, handler binding; each runtime's issuer
     dispatch.ts       ContractRuntime: the per-request pipeline and the error envelope
@@ -214,6 +221,31 @@ src/
   (`WEBHOOKS_PREFIX`), for a holder of that dimension's `members.manage`; their shapes
   (`WEBHOOK_BIND_*` in `build.ts`) and the zod schemas `implement` parses with
   (`webhook.ts`) must describe each other (`membership-shapes.test.ts`).
+
+## The staged kit
+
+The paved-road sprint (`docs/sprints/sprint-2026-10-11-paved-road-framework.md`) builds it unit by unit; its
+signatures are fixed, and each builder whose runtime a later unit adds throws `<builder> is not implemented (WU<n>)`
+(`notImplemented` in `contract/problems.ts`): `defineApp` and its builders, `serve` and `defineDeps` (WU4).
+`defineVocabulary` and `defineTables(vocabulary, columns)` already run.
+
+- **The file order is the type order:** `src/vocabulary.ts` (`defineVocabulary`) → `src/db/tables.ts`
+  (`defineTables<DB, typeof vocabulary>(vocabulary, columns)`) → `src/app-kit.ts` (`defineApp(vocabulary, tables)`)
+  → `src/<slice>/endpoints.ts` (`app.group(…)`) → `fabrika.contract.ts` (`app.contract(…)`) → `src/app.ts`
+  (`serve(…)`). Never type a table, a group or a handler by `typeof contract`: tsc reports TS7022 on the cycle.
+- **`defineApp` computes the kit's types once** (`KitOf`, with `@fabrika/db`'s `DbIndex<DB, P>`); every context is a
+  lookup in them. Keep per-endpoint types to lookups: `kit-scale.test.ts` holds 200 endpoints under the budget of
+  `implement-scale.test.ts`.
+- **A member a site may not use is an `Unavailable<'…'>` tuple**, never a missing property or `never`: a call fails at
+  its line with the message, which names the fix. `kit-types.test.ts` compiles `kit-mistakes/` with `plain: true` (at
+  most two lines, no `never`, no truncated or object type printed). A new rule the kit's types enforce gets a mistake
+  there and a row in `kit-fixture/matrix.ts`.
+- **`.handle` answers the endpoint without the handler's type**, or, when the handler returns a field the output does
+  not declare, an `Unavailable` the group refuses at the endpoint's line (`ExactReturn`). A group does not nest; a
+  mount nests groups.
+- **The declared off-road fields** (`sql`, `unscoped`, `connect`, `issues`) are the only way to `ctx.sql`,
+  `ctx.db.unscoped`, `ctx.connect` and `ctx.links`; a query and an export declare only `'read'`. The connectors are the
+  kit's `imports`.
 
 ## Service contracts (the installation's own services only)
 

@@ -14,6 +14,7 @@ export type { ApplicationEnvironment, ContractDatabase, ContractImplementation, 
 export { implement, isContractImplementation } from './implement'
 export type { AssignedMember, IssuedLink, LinkIssuing, MemberList, MemberManagement, MemberTarget } from './membership'
 export type { AppPrincipal, LinkHolder, Principal, PrincipalOf, ServicePrincipal, UserPrincipal } from './principal'
+export { type AppDeps, defineDeps, serve, type ServeOptions } from './serve'
 export type {
 	AccessContext,
 	ConnectCall,

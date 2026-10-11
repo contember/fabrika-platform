@@ -1,10 +1,11 @@
 // Compiles a directory of mistake fixtures with the package's compiler options. Each fixture marks its mistake with
 // `// mistake:` on the line before it; the repository forbids `@ts-expect-error`, so the fixtures are excluded from
-// the package typecheck and compiled here instead.
+// the package typecheck and compiled here instead. A fixture may be a subdirectory: its files without a marker are
+// companions (a contract that mounts the fixture's group), and they must compile clean.
 
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import ts from 'typescript'
 
 const packageDir = join(import.meta.dir, '..', '..')
@@ -14,19 +15,31 @@ interface Diagnostic {
 	readonly text: string
 }
 
-function compile(dir: string): ReadonlyMap<string, readonly Diagnostic[]> {
+/** Every `.ts` file under `dir`, by its path relative to `dir`. */
+function fixtureFiles(dir: string): readonly string[] {
+	return readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+		.map((entry) => relative(dir, join(entry.parentPath, entry.name)))
+		.sort()
+}
+
+/** The diagnostics of every file under `dir`, compiled as one program with the package's compiler options. */
+export function compileFixtures(dir: string): ReadonlyMap<string, readonly Diagnostic[]> {
 	const config = ts.readConfigFile(join(packageDir, 'tsconfig.json'), ts.sys.readFile)
 	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, packageDir)
-	const files = readdirSync(dir).filter((file) => file.endsWith('.ts')).map((file) => join(dir, file))
-	const program = ts.createProgram(files, { ...parsed.options, noEmit: true })
+	const files = fixtureFiles(dir)
+	const program = ts.createProgram(
+		files.map((file) => join(dir, file)),
+		{ ...parsed.options, noEmit: true },
+	)
 	const byFile = new Map<string, Diagnostic[]>()
 	for (const file of files) {
-		const source = program.getSourceFile(file)
+		const source = program.getSourceFile(join(dir, file))
 		if (source === undefined) {
 			throw new Error(`${file} did not load`)
 		}
 		byFile.set(
-			file.slice(dir.length + 1),
+			file,
 			ts.getPreEmitDiagnostics(program, source).map((diagnostic) => ({
 				line: diagnostic.start === undefined ? -1 : source.getLineAndCharacterOfPosition(diagnostic.start).line,
 				text: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
@@ -36,22 +49,42 @@ function compile(dir: string): ReadonlyMap<string, readonly Diagnostic[]> {
 	return byFile
 }
 
-/** The zero-based line after the `// mistake:` marker. */
+/** The zero-based line after the `// mistake:` marker, or -1 for a companion. */
 function markedLine(dir: string, file: string): number {
 	const lines = readFileSync(join(dir, file), 'utf8').split('\n')
-	return lines.findIndex((line) => line.trim().startsWith('// mistake:')) + 1
+	const marker = lines.findIndex((line) => line.trim().startsWith('// mistake:'))
+	return marker === -1 ? -1 : marker + 1
 }
+
+export interface MistakeOptions {
+	/**
+	 * Each diagnostic is at most two lines and prints no `never`, no truncated type (`...`) and no mapped or object
+	 * type: what an agent reads has to name the fix, not the framework's types.
+	 */
+	readonly plain?: boolean
+}
+
+const DUMPED = ['...', '{ readonly ', '[K in', ' in keyof ']
 
 /**
  * One test per fixture: it fails to compile, every diagnostic sits on the marked line, and one of them contains the
- * expected text. Every fixture needs an expectation and every expectation a fixture.
+ * expected text. Every marked file needs an expectation and every expectation a marked file; every companion compiles
+ * clean.
  */
-export function expectMistakes(dir: string, expected: Readonly<Record<string, string>>): void {
-	const diagnostics = compile(dir)
+export function expectMistakes(dir: string, expected: Readonly<Record<string, string>>, options: MistakeOptions = {}): void {
+	const diagnostics = compileFixtures(dir)
+	const marked = [...diagnostics.keys()].filter((file) => markedLine(dir, file) !== -1)
+	const companions = [...diagnostics.keys()].filter((file) => markedLine(dir, file) === -1)
 
 	test('every fixture has an expectation, and every expectation a fixture', () => {
-		expect([...diagnostics.keys()].sort()).toEqual(Object.keys(expected).sort())
+		expect(marked).toEqual(Object.keys(expected).sort())
 	})
+
+	for (const companion of companions) {
+		test(`${companion} compiles clean: the mistake is reported where it is made`, () => {
+			expect(diagnostics.get(companion) ?? []).toEqual([])
+		})
+	}
 
 	for (const [file, text] of Object.entries(expected)) {
 		test(file, () => {
@@ -61,6 +94,15 @@ export function expectMistakes(dir: string, expected: Readonly<Record<string, st
 			const line = markedLine(dir, file)
 			expect(line).toBeGreaterThan(0)
 			expect(found.map((diagnostic) => diagnostic.line)).toEqual(found.map(() => line))
+			if (options.plain === true) {
+				for (const { text: message } of found) {
+					expect(message.split('\n').length).toBeLessThanOrEqual(2)
+					expect(message).not.toMatch(/\bnever\b/)
+					for (const dump of DUMPED) {
+						expect(message).not.toContain(dump)
+					}
+				}
+			}
 		})
 	}
 }

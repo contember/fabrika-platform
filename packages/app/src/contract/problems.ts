@@ -23,3 +23,8 @@ export class Problems {
 		}
 	}
 }
+
+/** A builder of the staged kit whose signature is fixed and whose runtime a later work unit of the sprint adds. */
+export function notImplemented(what: string, unit: string): never {
+	throw new Error(`${what} is not implemented (${unit})`)
+}
