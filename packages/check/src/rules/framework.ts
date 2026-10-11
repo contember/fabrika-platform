@@ -20,9 +20,9 @@ interface TrustedBinding {
 export type TrustedBindings = ReadonlyMap<string, readonly TrustedBinding[]>
 
 /** The trusted package a specifier loads, also through a package import map (`#data` → `@fabrika/db`). */
-const trustedPackage = (specifier: string | undefined, mappings: ImportMappings): string | undefined => {
+const trustedPackage = (specifier: string | undefined, mappings: ImportMappings, file: string): string | undefined => {
 	if (specifier === undefined) return undefined
-	const targets = mappedTargets(mappings, specifier) ?? [specifier]
+	const targets = mappedTargets(mappings, file, specifier) ?? [specifier]
 	return targets.find(isTrusted)
 }
 
@@ -46,14 +46,14 @@ const boundNames = (pattern: AstNode | undefined): readonly string[] => {
 }
 
 /** What a module binds to a trusted package's values: its imports, `import x = require()`, and direct loads into a `const`. */
-export const trustedBindings = (program: AstNode, mappings: ImportMappings): TrustedBindings => {
+export const trustedBindings = (file: string, program: AstNode, mappings: ImportMappings): TrustedBindings => {
 	const bindings = new Map<string, TrustedBinding[]>()
 	const bind = (name: string, specifier: string, scope: AstNode | undefined): void => {
 		bindings.set(name, [...(bindings.get(name) ?? []), { specifier, scope }])
 	}
 	walk(program, (node, ancestors) => {
 		if (node.type === 'ImportDeclaration' && stringField(node, 'importKind') !== 'type') {
-			const specifier = trustedPackage(staticString(child(node, 'source')), mappings)
+			const specifier = trustedPackage(staticString(child(node, 'source')), mappings, file)
 			if (specifier === undefined) return
 			for (const item of children(node, 'specifiers')) {
 				const local = item === null || stringField(item, 'importKind') === 'type' ? undefined : identifierName(child(item, 'local'))
@@ -64,11 +64,12 @@ export const trustedBindings = (program: AstNode, mappings: ImportMappings): Tru
 			const specifier = trustedPackage(
 				reference?.type === 'TSExternalModuleReference' ? staticString(child(reference, 'expression')) : undefined,
 				mappings,
+				file,
 			)
 			const local = identifierName(child(node, 'id'))
 			if (specifier !== undefined && local !== undefined) bind(local, specifier, program)
 		} else if (node.type === 'VariableDeclarator') {
-			const specifier = trustedPackage(loadedSpecifier(child(node, 'init')), mappings)
+			const specifier = trustedPackage(loadedSpecifier(child(node, 'init')), mappings, file)
 			if (specifier !== undefined) {
 				for (const name of boundNames(child(node, 'id'))) bind(name, specifier, declaringScope(name, ancestors))
 			}

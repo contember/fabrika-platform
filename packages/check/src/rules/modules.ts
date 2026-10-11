@@ -197,7 +197,7 @@ export const checkModuleReferences = (
 			}
 			continue
 		}
-		const targets = mappedTargets(mappings, specifier)
+		const targets = mappedTargets(mappings, file, specifier)
 		if (targets === undefined) {
 			testOnly(reference, specifier)
 			if (!reference.typeOnly) checkPackage(reference, specifier, report, isGeneratedEntry, isTest)

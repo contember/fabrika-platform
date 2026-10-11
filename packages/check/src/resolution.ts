@@ -1,16 +1,27 @@
 import { z } from 'zod/v4'
 import { parseJsonc } from './jsonc'
+import { isRelativeSpecifier, joinRelative } from './layout'
 
-/** The application's own import mappings: `imports` in `package.json` (`#name`) and `compilerOptions.paths` in `tsconfig.json`. */
+/** Pattern → targets. A target is a bare specifier, an absolute path, or `./<path from the root>` (`../…` above it). */
+type MappingTable = ReadonlyMap<string, readonly string[]>
+
+/**
+ * The application's own import mappings, as Bun applies them to one module: `compilerOptions.paths` of the nearest
+ * `tsconfig.json` (or `jsconfig.json`), with its local `extends`, then `imports` of the nearest `package.json`.
+ */
 export interface ImportMappings {
-	/** Pattern → targets, relative to the root. */
-	readonly entries: ReadonlyMap<string, readonly string[]>
+	readonly paths: (file: string) => MappingTable
+	readonly imports: (file: string) => MappingTable
 }
 
 const packageJsonSchema = z.object({ imports: z.record(z.string(), z.unknown()).optional() })
 const tsconfigSchema = z.object({
+	extends: z.union([z.string(), z.array(z.string())]).optional(),
 	compilerOptions: z.object({ baseUrl: z.string().optional(), paths: z.record(z.string(), z.array(z.string())).optional() }).optional(),
 })
+
+const TSCONFIG_NAMES = ['tsconfig.json', 'jsconfig.json'] as const
+const EMPTY: MappingTable = new Map()
 
 /** Every target string of an import-map value, through its condition objects and fallback arrays. */
 const targetStrings = (value: unknown): string[] => {
@@ -20,38 +31,133 @@ const targetStrings = (value: unknown): string[] => {
 	return []
 }
 
-/** A `paths` target as a path from the root: `src/*` under `baseUrl: '.'` is `./src/*`. */
-const pathTarget = (baseUrl: string, target: string): string => {
-	if (target.startsWith('/')) return target
-	const joined = baseUrl === '' || baseUrl === '.' || baseUrl === './' ? target : `${baseUrl.replace(/\/$/, '')}/${target}`
-	return joined.startsWith('./') || joined.startsWith('../') ? joined : `./${joined}`
+/** The directories a module's configuration is looked up in, nearest first: `src/a/b.ts` → `src/a`, `src`, the root. */
+const directoriesAbove = (file: string): readonly string[] => {
+	const segments = file.split('/').slice(0, -1)
+	const directories: string[] = []
+	for (let length = segments.length; length >= 0; length--) directories.push(segments.slice(0, length).join('/'))
+	return directories
+}
+
+const inDirectory = (directory: string, name: string): string => (directory === '' ? name : `${directory}/${name}`)
+
+/** A path written in `configFile`, as `./<path from the root>`; `../<path>` when it climbs above the root. */
+const fromRoot = (configFile: string, path: string): string => {
+	const joined = joinRelative(configFile, path)
+	return joined === undefined ? `../${path}` : `./${joined}`
+}
+
+const packageImports = (manifestFile: string, text: string): MappingTable => {
+	const manifest = packageJsonSchema.safeParse(parseJsonc(text))
+	const entries = new Map<string, readonly string[]>()
+	for (const [pattern, value] of Object.entries(manifest.success ? (manifest.data.imports ?? {}) : {})) {
+		entries.set(pattern, targetStrings(value).map((target) => (isRelativeSpecifier(target) ? fromRoot(manifestFile, target) : target)))
+	}
+	return entries
+}
+
+interface Declared<T> {
+	readonly value: T
+	/** The configuration file that declares it; relative paths in it are relative to that file. */
+	readonly file: string
+}
+
+interface TsconfigOptions {
+	readonly paths?: Declared<Readonly<Record<string, readonly string[]>>>
+	readonly baseUrl?: Declared<string>
+}
+
+/** `paths` and `baseUrl` after `extends`: the extending file wins, and of an `extends` array the last entry. */
+const tsconfigOptions = (file: string, files: ReadonlyMap<string, string>, seen: ReadonlySet<string>): TsconfigOptions => {
+	const config = tsconfigSchema.safeParse(parseJsonc(files.get(file) ?? ''))
+	if (!config.success) return {}
+	let inherited: TsconfigOptions = {}
+	const extended = config.data.extends
+	for (const target of typeof extended === 'string' ? [extended] : (extended ?? [])) {
+		// `checkTrustedResolution` refuses any other extends; the checker reads no file outside the application.
+		const base = isRelativeSpecifier(target) ? joinRelative(file, target) : undefined
+		const resolved = base === undefined ? undefined : [base, `${base}.json`].find((candidate) => files.has(candidate))
+		if (resolved === undefined || seen.has(resolved)) continue
+		const parent = tsconfigOptions(resolved, files, new Set([...seen, resolved]))
+		inherited = { paths: parent.paths ?? inherited.paths, baseUrl: parent.baseUrl ?? inherited.baseUrl }
+	}
+	const options = config.data.compilerOptions
+	return {
+		paths: options?.paths === undefined ? inherited.paths : { value: options.paths, file },
+		baseUrl: options?.baseUrl === undefined ? inherited.baseUrl : { value: options.baseUrl, file },
+	}
+}
+
+/** `paths` targets are relative to `baseUrl` when one is set, and otherwise to the file that declares `paths`. */
+const tsconfigPaths = (file: string, files: ReadonlyMap<string, string>): MappingTable => {
+	const { paths, baseUrl } = tsconfigOptions(file, files, new Set([file]))
+	if (paths === undefined) return EMPTY
+	const baseDirectory = baseUrl === undefined ? undefined : joinRelative(baseUrl.file, baseUrl.value)
+	const resolve = (target: string): string => {
+		if (target.startsWith('/')) return target
+		if (baseUrl === undefined) return fromRoot(paths.file, target)
+		// A file in the baseUrl directory, which the target is relative to.
+		return baseDirectory === undefined ? `../${target}` : fromRoot(inDirectory(baseDirectory, 'tsconfig.json'), target)
+	}
+	const entries = new Map<string, readonly string[]>()
+	for (const [pattern, targets] of Object.entries(paths.value)) entries.set(pattern, targets.map(resolve))
+	return entries
+}
+
+const memoized = <T>(compute: (key: string) => T): (key: string) => T => {
+	const cache = new Map<string, T>()
+	return (key) => {
+		const cached = cache.get(key)
+		if (cached !== undefined) return cached
+		const value = compute(key)
+		cache.set(key, value)
+		return value
+	}
 }
 
 export const readImportMappings = (files: ReadonlyMap<string, string>): ImportMappings => {
-	const entries = new Map<string, string[]>()
-	const manifest = packageJsonSchema.safeParse(parseJsonc(files.get('package.json') ?? ''))
-	for (const [pattern, value] of Object.entries(manifest.success ? (manifest.data.imports ?? {}) : {})) entries.set(pattern, targetStrings(value))
-	const tsconfig = tsconfigSchema.safeParse(parseJsonc(files.get('tsconfig.json') ?? ''))
-	const options = tsconfig.success ? tsconfig.data.compilerOptions : undefined
-	for (const [pattern, targets] of Object.entries(options?.paths ?? {})) {
-		entries.set(pattern, targets.map((target) => pathTarget(options?.baseUrl ?? '', target)))
+	const nearest = (file: string, names: readonly string[]): string | undefined => {
+		for (const directory of directoriesAbove(file)) {
+			const found = names.map((name) => inDirectory(directory, name)).find((path) => files.has(path))
+			if (found !== undefined) return found
+		}
+		return undefined
 	}
-	return { entries }
+	const pathsOf = memoized((config: string) => tsconfigPaths(config, files))
+	const importsOf = memoized((manifest: string) => packageImports(manifest, files.get(manifest) ?? ''))
+	return {
+		paths: (file) => {
+			const config = nearest(file, TSCONFIG_NAMES)
+			return config === undefined ? EMPTY : pathsOf(config)
+		},
+		imports: (file) => {
+			const manifest = nearest(file, ['package.json'])
+			return manifest === undefined ? EMPTY : importsOf(manifest)
+		},
+	}
 }
 
-/** The targets a bare specifier is mapped to, with `*` substituted; `undefined` when no pattern matches. */
-export const mappedTargets = (mappings: ImportMappings, specifier: string): readonly string[] | undefined => {
-	for (const [pattern, targets] of mappings.entries) {
+/** The targets of the exact key, else of the matching pattern with the longest prefix before its `*`. */
+const matchTable = (table: MappingTable, specifier: string): readonly string[] | undefined => {
+	const exact = specifier.includes('*') ? undefined : table.get(specifier)
+	if (exact !== undefined) return exact
+	let best: { readonly prefix: number; readonly targets: readonly string[] } | undefined
+	for (const [pattern, targets] of table) {
 		const star = pattern.indexOf('*')
-		if (star === -1) {
-			if (pattern === specifier) return targets
-			continue
-		}
+		if (star === -1) continue
 		const prefix = pattern.slice(0, star)
 		const suffix = pattern.slice(star + 1)
 		if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix) || specifier.length < prefix.length + suffix.length) continue
+		if (best !== undefined && best.prefix >= prefix.length) continue
 		const captured = specifier.slice(prefix.length, specifier.length - suffix.length)
-		return targets.map((target) => target.replace('*', captured))
+		best = { prefix: prefix.length, targets: targets.map((target) => target.replace('*', captured)) }
 	}
-	return undefined
+	return best?.targets
 }
+
+/**
+ * What a bare specifier in `file` is mapped to: `paths` first, as Bun tries them, then the package scope's `imports`.
+ * A relative target is `./<path from the root>` (`../…` above it); `undefined` when no mapping matches.
+ */
+export const mappedTargets = (mappings: ImportMappings, file: string, specifier: string): readonly string[] | undefined =>
+	matchTable(mappings.paths(file), specifier) ?? matchTable(mappings.imports(file), specifier)

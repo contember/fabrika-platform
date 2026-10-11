@@ -1,5 +1,7 @@
-import { fromRow } from '@fabrika/db'
-import type { CompanyHandle } from '../app-kit'
-import { Company } from '../schemas'
+import type { DB } from '../db/schema.generated'
 
-export const companyOf = async (company: CompanyHandle) => fromRow(Company, await company.get())
+/** A company as its endpoints answer it, read through the handle the handler passes in (`ctx.db.target`). */
+export const companyOf = async (company: { get(): Promise<DB['companies']> }) => {
+	const row = await company.get()
+	return { id: row.id, name: row.name, version: row.version }
+}

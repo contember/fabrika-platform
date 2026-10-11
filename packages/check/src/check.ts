@@ -14,7 +14,7 @@ import {
 	TABLES_FILE,
 	ZEROPS_FILES,
 } from './layout'
-import { moduleReferences } from './references'
+import { type ModuleReference, moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
@@ -65,6 +65,7 @@ export const readApplicationTree = async (root: string): Promise<ApplicationTree
 
 const checkSourceModule = async (
 	module: ParsedModule,
+	references: readonly ModuleReference[],
 	text: string,
 	mappings: ImportMappings,
 	files: ReadonlyMap<string, string>,
@@ -75,7 +76,7 @@ const checkSourceModule = async (
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
 	const context = { report, isGeneratedEntry }
-	const trusted = trustedBindings(module.program, mappings)
+	const trusted = trustedBindings(module.file, module.program, mappings)
 	const place = structurePlace(module.file, isGeneratedEntry)
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
@@ -87,9 +88,7 @@ const checkSourceModule = async (
 		checkStructureNode(place, node, report)
 	})
 	checkComments(module.comments, report)
-	const references = moduleReferences(module.program)
 	checkModuleReferences(module.file, references, mappings, exists, report, isGeneratedEntry, isTest)
-	checkStructureReferences(place, references, mappings, files, report)
 	await checkGeneratedTest(text, module.comments, report)
 }
 
@@ -98,6 +97,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const tree: ApplicationTree = input.files === undefined ? await readApplicationTree(input.root) : { files: input.files, links: [] }
 	const findings: Finding[] = []
 	const modules = new Map<string, ParsedModule>()
+	const references = new Map<string, readonly ModuleReference[]>()
 	const checkedPaths = [...tree.files.keys()].filter(isCheckedFile).sort()
 	const mappings = readImportMappings(tree.files)
 	const trust = checkTrustedResolution(tree.files)
@@ -125,7 +125,13 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 			continue
 		}
 		modules.set(path, parsed.module)
-		await checkSourceModule(parsed.module, text, mappings, tree.files, findings)
+		const referencesOfModule = moduleReferences(parsed.module.program)
+		references.set(path, referencesOfModule)
+		await checkSourceModule(parsed.module, referencesOfModule, text, mappings, tree.files, findings)
+	}
+	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [] }
+	for (const path of modules.keys()) {
+		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE), reporter(path, findings))
 	}
 
 	const graph = new ModuleGraph(modules)

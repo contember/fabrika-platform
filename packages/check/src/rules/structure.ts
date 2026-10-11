@@ -1,3 +1,4 @@
+import { isBuiltin } from 'node:module'
 import { type AstNode, child, identifierName, staticKey } from '../ast'
 import { HINT_RULE_IDS, type Report } from '../finding'
 import {
@@ -64,6 +65,13 @@ export const structurePlace = (file: string, isGeneratedEntry: boolean): Structu
 	exempt: isGeneratedEntry || isTestFile(file),
 })
 
+/** What the structure rules read beyond one module: every module's references, and how Bun resolves them. */
+export interface StructureGraph {
+	readonly files: ReadonlyMap<string, string>
+	readonly mappings: ImportMappings
+	readonly referencesOf: (path: string) => readonly ModuleReference[]
+}
+
 interface Targets {
 	/** Application files the reference may load, relative to the root. */
 	readonly files: readonly string[]
@@ -78,15 +86,42 @@ const resolvedFiles = (exists: (path: string) => boolean, fromFile: string, spec
 }
 
 /** What a reference loads. An absolute or out-of-tree target is `unchecked-import`'s finding, so it loads nothing here. */
-const referenceTargets = (file: string, specifier: string, mappings: ImportMappings, exists: (path: string) => boolean): Targets => {
+const referenceTargets = (graph: StructureGraph, file: string, specifier: string): Targets => {
+	const exists = (path: string): boolean => graph.files.has(path)
 	if (isRelativeSpecifier(specifier)) return { files: resolvedFiles(exists, file, specifier), packages: [] }
 	if (specifier.startsWith('/') || /^file:/i.test(specifier)) return { files: [], packages: [] }
-	const mapped = mappedTargets(mappings, specifier)
+	const mapped = mappedTargets(graph.mappings, file, specifier)
 	if (mapped === undefined) return { files: [], packages: [specifier] }
-	// Mapping targets are relative to the root, where both package.json and tsconfig.json live.
+	// Mapped targets are relative to the root.
 	const files = mapped.filter(isRelativeSpecifier).flatMap((target) => resolvedFiles(exists, 'package.json', target))
 	const packages = mapped.filter((target) => !isRelativeSpecifier(target) && !target.startsWith('/'))
 	return { files, packages }
+}
+
+/**
+ * Everything a reference loads at runtime: its targets, and what the local modules among them load in turn, through
+ * imports, re-exports and literal loads. Only modules `descend` accepts are followed; each is read once.
+ */
+const runtimeClosure = (graph: StructureGraph, start: Targets, descend: (path: string) => boolean): Targets => {
+	const files = new Set(start.files)
+	const packages = new Set(start.packages)
+	const pending = start.files.filter(descend)
+	const followed = new Set(pending)
+	for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+		for (const reference of graph.referencesOf(path)) {
+			if (reference.typeOnly) continue
+			const targets = referenceTargets(graph, path, reference.specifier)
+			for (const target of targets.packages) packages.add(target)
+			for (const target of targets.files) {
+				files.add(target)
+				if (!followed.has(target) && descend(target)) {
+					followed.add(target)
+					pending.push(target)
+				}
+			}
+		}
+	}
+	return { files: [...files], packages: [...packages] }
 }
 
 const isDataPackage = (specifier: string): boolean => specifier === '@fabrika/db' || specifier.startsWith('@fabrika/db/')
@@ -96,29 +131,41 @@ const LAYER_PACKAGES: ReadonlySet<string> = new Set(['@fabrika/app', '@fabrika/d
 
 const SPA_ALLOWED = '@fabrika/app/client, fabrika.contract.ts, src/schemas.ts and modules under web/; a type-only import of anything else'
 
+const isSchemaModule = (path: string): boolean => path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR)
+
 /** The application modules a bundle of the SPA may load; `fabrika.contract.ts` is loaded without its handlers. */
-const isSpaModule = (path: string): boolean =>
-	path.startsWith(SPA_DIR) || path === CONTRACT_FILE || path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR) || !isSourceFile(path)
+const isSpaModule = (path: string): boolean => path.startsWith(SPA_DIR) || path === CONTRACT_FILE || isSchemaModule(path) || !isSourceFile(path)
 
-const isServerPackage = (specifier: string): boolean =>
-	specifier.startsWith('@fabrika/')
-		? specifier !== '@fabrika/app/client'
-		: specifier === 'bun' || specifier.startsWith('bun:') || specifier.startsWith('node:')
+/** A runtime package the browser has not: the framework's server side, Bun, and Node's builtins in either spelling. */
+const isServerPackage = (specifier: string): boolean => specifier.startsWith('@fabrika/') ? specifier !== '@fabrika/app/client' : isBuiltin(specifier)
 
-const checkSpaReference = (reference: ModuleReference, targets: Targets, report: Report): void => {
-	const server = targets.packages.some(isServerPackage) || targets.files.some((path) => !isSpaModule(path))
-	if (server) report(reference.node, 'spa-server-import', `'${reference.specifier}' is server code, imported by the SPA`, SPA_ALLOWED)
+/** Names what `reference` loads, directly or through the local modules it loads. */
+const viaMessage = (reference: ModuleReference, loaded: string, what: string, into: string): string =>
+	loaded === reference.specifier ? `'${loaded}' is ${what}, imported by ${into}` : `'${reference.specifier}' loads ${what} ('${loaded}') into ${into}`
+
+/** The SPA's own modules are checked one by one; a schema module it loads is followed, since nothing else checks it. */
+const checkSpaReference = (graph: StructureGraph, reference: ModuleReference, targets: Targets, report: Report): void => {
+	const reached = runtimeClosure(graph, targets, isSchemaModule)
+	const server = reached.packages.find(isServerPackage) ?? reached.files.find((path) => !isSpaModule(path))
+	if (server !== undefined) report(reference.node, 'spa-server-import', viaMessage(reference, server, 'server code', 'the SPA'), SPA_ALLOWED)
 }
 
-const checkLayerReference = (place: StructurePlace, reference: ModuleReference, targets: Targets, report: Report): void => {
+const isLayerModule = (path: string): boolean => {
+	const part = slicePart(path)
+	return part === 'logic' || part === 'queries'
+}
+
+/** Another logic or queries module is checked on its own; every other local module is followed with this one's rule. */
+const checkLayerReference = (graph: StructureGraph, place: StructurePlace, reference: ModuleReference, targets: Targets, report: Report): void => {
+	const reached = runtimeClosure(graph, targets, (path) => !isLayerModule(path))
 	// The test kits are `test-only-import`'s finding everywhere outside a test file.
-	const internal = targets.packages.find((specifier) => specifier.startsWith('@fabrika/') && !LAYER_PACKAGES.has(specifier) && !isTestKit(specifier))
+	const internal = reached.packages.find((specifier) => specifier.startsWith('@fabrika/') && !LAYER_PACKAGES.has(specifier) && !isTestKit(specifier))
 	if (internal === undefined) return
 	report(
 		reference.node,
 		'layer-import',
-		`'${internal}' is a framework module, imported by ${place.part === 'logic' ? 'logic' : 'queries'}`,
-		'@fabrika/app (its errors) and @fabrika/db (fromRow and handle types) only; the handler in endpoints.ts uses the rest',
+		viaMessage(reference, internal, 'a framework module', place.part === 'logic' ? 'logic' : 'queries'),
+		'@fabrika/app (its errors) and @fabrika/db only, also through a helper module; the handler in endpoints.ts uses the rest',
 	)
 }
 
@@ -141,18 +188,11 @@ const checkSliceReference = (place: StructurePlace, reference: ModuleReference, 
 	)
 }
 
-/** The architecture's rules over one module's imports, re-exports and loads. */
-export const checkStructureReferences = (
-	place: StructurePlace,
-	references: readonly ModuleReference[],
-	mappings: ImportMappings,
-	files: ReadonlyMap<string, string>,
-	report: Report,
-): void => {
-	const exists = (path: string): boolean => files.has(path)
-	for (const reference of references) {
-		const targets = referenceTargets(place.file, reference.specifier, mappings, exists)
-		if (targets.files.some((path) => isGeneratedTestPath(path, files))) {
+/** The architecture's rules over one module's imports, re-exports and loads, as Bun resolves them for that module. */
+export const checkStructureReferences = (graph: StructureGraph, place: StructurePlace, report: Report): void => {
+	for (const reference of graph.referencesOf(place.file)) {
+		const targets = referenceTargets(graph, place.file, reference.specifier)
+		if (targets.files.some((path) => isGeneratedTestPath(path, graph.files))) {
 			report(
 				reference.node,
 				'generated-test-import',
@@ -161,8 +201,8 @@ export const checkStructureReferences = (
 			)
 		}
 		if (reference.typeOnly) continue
-		if (place.file.startsWith(SPA_DIR) && !place.exempt) checkSpaReference(reference, targets, report)
-		if (place.part === 'logic' || place.part === 'queries') checkLayerReference(place, reference, targets, report)
+		if (place.file.startsWith(SPA_DIR) && !place.exempt) checkSpaReference(graph, reference, targets, report)
+		if (isLayerModule(place.file)) checkLayerReference(graph, place, reference, targets, report)
 		if (place.exempt) continue
 		if (place.part === 'logic') checkLogicReference(reference, targets, report)
 		else if (place.slice !== undefined) checkSliceReference(place, reference, targets, report)
