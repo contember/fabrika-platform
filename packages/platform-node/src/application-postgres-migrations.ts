@@ -27,6 +27,8 @@ export const APPLICATION_MIGRATION_LEDGER = 'fabrika_migrations'
 export const DEFAULT_MIGRATION_LOCK_TIMEOUT_MS = 5_000
 /** Bounds a statement such as a backfill or a non-concurrent index build, which holds its lock while it runs. */
 export const DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS = 60_000
+/** How long `migrate` waits for the application's migration lock: another container's migrations, or a stray holder. */
+export const DEFAULT_MIGRATION_ADVISORY_LOCK_TIMEOUT_MS = 300_000
 
 export interface PostgresApplicationMigrationsConfig {
 	readonly appId: string
@@ -34,6 +36,7 @@ export interface PostgresApplicationMigrationsConfig {
 	readonly directory: string
 	readonly lockTimeoutMs?: number
 	readonly statementTimeoutMs?: number
+	readonly advisoryLockTimeoutMs?: number
 	/**
 	 * The framework's own tables (`fabrika_*`, `@fabrika/db/migrations`), applied as their own bundle before the
 	 * application's, in the same ledger and under the same checksum rule.
@@ -105,6 +108,7 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 	const roles = applicationDatabaseRoles(config.appId)
 	const { schema } = roles
 	const lockKey = applicationMigrationLockKey(config.appId)
+	const advisoryLockTimeoutMs = config.advisoryLockTimeoutMs ?? DEFAULT_MIGRATION_ADVISORY_LOCK_TIMEOUT_MS
 	const read = (): PostgresMigration[] => {
 		if (!existsSync(config.directory)) {
 			throw new PostgresMigrationError(`No migrations directory at ${config.directory}; create the first migration with fabrika db new <slug>`)
@@ -130,7 +134,7 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 				lockTimeoutMs: config.lockTimeoutMs ?? DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 				statementTimeoutMs: config.statementTimeoutMs ?? DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 				...(config.framework === undefined ? {} : { frameworkBundle: config.framework.bundle }),
-				...(runtimeRole === undefined ? {} : { runtimeRole }),
+				...(runtimeRole === undefined ? {} : { runtimeRole, advisoryLockTimeoutMs }),
 			},
 		})
 	}
@@ -147,7 +151,7 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 		// One connection each: the advisory lock is session state.
 		const admin = PostgresDatabase.connect(provisioningUrl, { max: 1 })
 		try {
-			await provisionPostgresRoles(admin, provisioningUrl, roles, lockKey)
+			await provisionPostgresRoles(admin, provisioningUrl, roles, { key: lockKey, timeoutMs: advisoryLockTimeoutMs })
 		} finally {
 			await admin.close()
 		}

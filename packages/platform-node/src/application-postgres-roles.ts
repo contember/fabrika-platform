@@ -1,6 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto'
-import { PostgresMigrationError } from './postgres-migrations'
+import { acquireMigrationLock } from './application-postgres-grants'
+import { PostgresMigrationError } from './postgres-migration-error'
 
 /** An application's schema and the two roles that reach it (ADR-0017). */
 export interface ApplicationDatabaseRoles {
@@ -80,13 +81,13 @@ export async function provisionPostgresRoles(
 	admin: SqlDatabase,
 	provisioningUrl: string,
 	roles: ApplicationDatabaseRoles,
-	lockKey: number,
+	lock: { readonly key: number; readonly timeoutMs: number },
 ): Promise<void> {
 	validateRoles(roles)
 	const { password } = provisioningCredential(provisioningUrl)
 	// A dedicated session: nothing an application created can shadow a catalog function here.
 	await admin.prepare('SET search_path TO pg_catalog, pg_temp').run()
-	await admin.prepare(`SELECT pg_advisory_lock(${lockKey})`).run()
+	await acquireMigrationLock(admin, lock.key, lock.timeoutMs, roles.schema)
 	try {
 		const self = await admin.prepare('SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user').first<ProvisioningRole>()
 		if (self === null || (!self.rolsuper && !self.rolcreaterole)) {
@@ -121,8 +122,9 @@ export async function provisionPostgresRoles(
 			)
 		}
 		await verifyRoles(admin, roles)
+		await verifyForeignReach(admin, roles)
 	} finally {
-		await admin.prepare(`SELECT pg_advisory_unlock(${lockKey})`).run()
+		await admin.prepare(`SELECT pg_advisory_unlock(${lock.key})`).run()
 	}
 }
 
@@ -156,6 +158,64 @@ async function verifyRoles(admin: SqlDatabase, roles: ApplicationDatabaseRoles):
 	}
 }
 
+interface ForeignGrant {
+	readonly role: string
+	readonly object: string
+	readonly privileges: string
+}
+
+/**
+ * Fails closed on any reach of the family into the rest of the database: a privilege either role was granted, or
+ * ownership it holds, on a schema, relation, column, routine, type, the database, a large object or a parameter outside
+ * its schema; and a SECURITY DEFINER routine either may call, which would run as its owner. PUBLIC's own defaults
+ * (CONNECT, TEMP, EXECUTE on built-ins) are not grants to the roles; a large object a role created itself is its own.
+ */
+async function verifyForeignReach(admin: SqlDatabase, roles: ApplicationDatabaseRoles): Promise<void> {
+	const { results } = await admin.prepare(`
+		WITH family AS (SELECT oid, rolname FROM pg_roles WHERE rolname IN (?, ?)),
+			own AS (SELECT oid FROM pg_namespace WHERE nspname = ?),
+			objects (rank, object, owner, acl) AS (
+				SELECT 1, 'schema ' || quote_ident(nspname), nspowner, nspacl FROM pg_namespace WHERE oid NOT IN (SELECT oid FROM own)
+				UNION ALL SELECT 2, CASE relkind WHEN 'S' THEN 'sequence ' WHEN 'v' THEN 'view ' WHEN 'm' THEN 'materialized view ' ELSE 'table ' END
+					|| relnamespace::regnamespace || '.' || quote_ident(relname), relowner, relacl
+					FROM pg_class WHERE relnamespace NOT IN (SELECT oid FROM own) AND relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+				UNION ALL SELECT 3, 'column ' || c.relnamespace::regnamespace || '.' || quote_ident(c.relname) || '.' || quote_ident(a.attname), c.relowner, a.attacl
+					FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE a.attacl IS NOT NULL AND c.relnamespace NOT IN (SELECT oid FROM own)
+				UNION ALL SELECT 4, 'function ' || oid::regprocedure, proowner, proacl FROM pg_proc WHERE pronamespace NOT IN (SELECT oid FROM own)
+				UNION ALL SELECT 5, 'type ' || oid::regtype, typowner, typacl FROM pg_type WHERE typnamespace NOT IN (SELECT oid FROM own)
+				UNION ALL SELECT 6, 'database ' || quote_ident(datname), datdba, datacl FROM pg_database WHERE datname = current_database()
+				UNION ALL SELECT 7, 'large object ' || oid, lomowner, lomacl FROM pg_largeobject_metadata
+				UNION ALL SELECT 8, 'parameter ' || parname, NULL, paracl FROM pg_parameter_acl
+			)
+		SELECT f.rolname AS role, o.object, string_agg(DISTINCT a.privilege_type, ', ') AS privileges
+			FROM objects o CROSS JOIN LATERAL aclexplode(o.acl) a JOIN family f ON f.oid = a.grantee
+			WHERE o.owner IS DISTINCT FROM a.grantee
+			GROUP BY f.rolname, o.rank, o.object
+		UNION ALL
+		SELECT f.rolname, o.object, 'OWNER' FROM objects o JOIN family f ON f.oid = o.owner WHERE o.rank NOT IN (6, 7)
+		ORDER BY 1, 2`).bind(roles.migration, roles.runtime, roles.schema).all<ForeignGrant>()
+	const problems: string[] = []
+	for (const role of [roles.migration, roles.runtime]) {
+		const held = results.filter((grant) => grant.role === role).map((grant) => `${grant.object} (${grant.privileges})`)
+		if (held.length > 0) problems.push(`the database role ${role} holds privileges outside its schema: ${held.join(', ')}`)
+	}
+	const { results: definers } = await admin.prepare(`
+		SELECT p.oid::regprocedure::text AS routine, pg_get_userbyid(p.proowner) AS owner FROM pg_proc p
+			WHERE p.prosecdef AND p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+				AND p.proowner NOT IN (SELECT oid FROM pg_roles WHERE rolname IN (?, ?))
+				AND EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname IN (?, ?)
+					AND has_schema_privilege(r.oid, p.pronamespace, 'USAGE') AND has_function_privilege(r.oid, p.oid, 'EXECUTE'))
+			ORDER BY 1`).bind(roles.migration, roles.runtime, roles.migration, roles.runtime).all<{ routine: string; owner: string }>()
+	for (const definer of definers) {
+		problems.push(
+			`the SECURITY DEFINER function ${definer.routine} runs as ${definer.owner} and the application's roles may call it; revoke EXECUTE on it from PUBLIC or drop it`,
+		)
+	}
+	if (problems.length > 0) {
+		throw new PostgresMigrationError(`${problems.join('; ')}; the deploy stops, because these roles bound what the application's SQL may do (ADR-0017)`)
+	}
+}
+
 const quotedIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`
 
 /**
@@ -169,6 +229,11 @@ export async function dropPostgresRoles(admin: SqlDatabase, roles: ApplicationDa
 	).first<{ owner: string }>()
 	if (schema !== null) {
 		await admin.batch([admin.prepare(`SET LOCAL ROLE ${quotedIdentifier(schema.owner)}`), admin.prepare(`DROP SCHEMA ${roles.schema} CASCADE`)])
+	}
+	// The migration role's default privileges (`normalizeDefaultPrivileges`) are objects of its own that block DROP ROLE.
+	const migration = await admin.prepare('SELECT true AS present FROM pg_catalog.pg_roles WHERE rolname = ?').bind(roles.migration).first()
+	if (migration !== null) {
+		await admin.batch([admin.prepare(`SET LOCAL ROLE ${roles.migration}`), admin.prepare(`DROP OWNED BY ${roles.migration}`)])
 	}
 	await admin.prepare(`DROP ROLE IF EXISTS ${roles.runtime}, ${roles.migration}`).run()
 }

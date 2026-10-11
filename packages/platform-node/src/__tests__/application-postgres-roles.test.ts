@@ -7,6 +7,7 @@ import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import {
 	applicationDatabaseRoles,
+	applicationMigrationLockKey,
 	applicationRuntimeUrl,
 	definePostgresApplicationMigrations,
 	dropApplicationDatabase,
@@ -100,10 +101,10 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 	for (const provisioner of [superuser, createRoleOnly()]) {
 		describe(`provisioned by ${provisioner.label}`, () => {
 			const created: string[] = []
-			const application = (): Application => {
+			const application = (options: { readonly advisoryLockTimeoutMs?: number } = {}): Application => {
 				const appId = `roles-${hex()}`
 				created.push(appId)
-				return { appId, migrations: definePostgresApplicationMigrations({ appId, directory: '/unused' }) }
+				return { appId, migrations: definePostgresApplicationMigrations({ appId, directory: '/unused', ...options }) }
 			}
 			let notes: Application
 			let other: Application
@@ -233,6 +234,101 @@ describe.skipIf(!hasPostgres)('the application role family', () => {
 					await sql.unsafe(`REVOKE pg_read_server_files FROM ${runtime}`)
 					expect([...await sql.unsafe('SELECT to_regclass($1) AS tags', [`${app.migrations.schema}.tags`])]).toEqual([{ tags: null }])
 				})
+			})
+
+			test('PUBLIC defaults and grants do not reach the runtime role: the next migrate revokes them', async () => {
+				const app = application()
+				await app.migrations.migrate(provisioner.url(), NOTES)
+				const { schema, migration } = applicationDatabaseRoles(app.appId)
+				await as(superuserUrl, async (sql) => {
+					await sql.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${migration} GRANT ALL ON TABLES TO PUBLIC`)
+					await sql.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${migration} IN SCHEMA ${schema} GRANT ALL ON TABLES TO PUBLIC`)
+					await sql.unsafe(`GRANT ALL ON ALL TABLES IN SCHEMA ${schema} TO PUBLIC`)
+					await sql.unsafe(`GRANT UPDATE (checksum) ON ${schema}.fabrika_migrations TO PUBLIC`)
+				})
+				const later = [...NOTES, { name: '20261011130000_tags.sql', sql: 'CREATE TABLE tags (id TEXT PRIMARY KEY)' }]
+				await app.migrations.migrate(provisioner.url(), later)
+				const runtime = applicationRuntimeUrl(provisioner.url(), app.appId)
+				expect(await refusal(runtime, `UPDATE ${schema}.fabrika_migrations SET checksum = checksum`)).toContain(
+					'permission denied for table fabrika_migrations',
+				)
+				for (const table of ['notes', 'tags']) {
+					expect(await refusal(runtime, `TRUNCATE ${schema}.${table}`)).toContain(`permission denied for table ${table}`)
+					expect(
+						await refusal(
+							runtime,
+							`CREATE TRIGGER later BEFORE UPDATE ON ${schema}.${table} FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`,
+						),
+					)
+						.toContain(`permission denied for table ${table}`)
+				}
+				expect(await refusal(runtime, `CREATE TABLE ${schema}.extra (id TEXT)`)).toContain(`permission denied for schema ${schema}`)
+				const defaults = await as(superuserUrl, (sql) =>
+					sql.unsafe(
+						`SELECT count(*)::int AS public FROM pg_default_acl, aclexplode(defaclacl) WHERE defaclrole = to_regrole($1) AND grantee = 0`,
+						[migration],
+					))
+				expect([...defaults]).toEqual([{ public: 0 }])
+				// CREATE on the schema for PUBLIC reaches the runtime role before any migration could run: refused, not repaired.
+				await as(superuserUrl, (sql) => sql.unsafe(`GRANT CREATE ON SCHEMA ${schema} TO PUBLIC`))
+				await expect(app.migrations.migrate(provisioner.url(), later)).rejects.toThrow(
+					`the database role ${applicationDatabaseRoles(app.appId).runtime} may create objects in ${schema} (allowed: none)`,
+				)
+				await as(superuserUrl, (sql) => sql.unsafe(`REVOKE CREATE ON SCHEMA ${schema} FROM PUBLIC`))
+			})
+
+			test("a grant on another application's objects is refused at the next migrate, naming the object", async () => {
+				const app = application()
+				await app.migrations.migrate(provisioner.url(), NOTES)
+				const { runtime } = applicationDatabaseRoles(app.appId)
+				const foreign = other.migrations.schema
+				const widen = [`GRANT USAGE ON SCHEMA ${foreign} TO ${runtime}`, `GRANT SELECT, UPDATE ON ${foreign}.notes TO ${runtime}`]
+				await as(superuserUrl, async (sql) => {
+					for (const statement of widen) await sql.unsafe(statement)
+				})
+				await expect(app.migrations.migrate(provisioner.url(), NOTES)).rejects.toThrow(
+					`the database role ${runtime} holds privileges outside its schema: schema ${foreign} (USAGE), table ${foreign}.notes (SELECT, UPDATE)`,
+				)
+				await as(superuserUrl, async (sql) => {
+					await sql.unsafe(`REVOKE ALL ON ${foreign}.notes FROM ${runtime}`)
+					await sql.unsafe(`GRANT UPDATE (title) ON ${foreign}.notes TO ${runtime}`)
+				})
+				await expect(app.migrations.migrate(provisioner.url(), NOTES)).rejects.toThrow(`column ${foreign}.notes.title (UPDATE)`)
+				await as(superuserUrl, async (sql) => {
+					await sql.unsafe(`REVOKE ALL ON ${foreign}.notes FROM ${runtime}`)
+					await sql.unsafe(`REVOKE ALL ON SCHEMA ${foreign} FROM ${runtime}`)
+				})
+				expect(await app.migrations.migrate(provisioner.url(), NOTES)).toEqual([])
+			})
+
+			test('a SECURITY DEFINER function the roles may call is refused at the next migrate, naming it', async () => {
+				const app = application()
+				await app.migrations.migrate(provisioner.url(), NOTES)
+				const name = `escalate_${hex()}`
+				await as(superuserUrl, (sql) => sql.unsafe(`CREATE FUNCTION public.${name}() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'`))
+				try {
+					await expect(app.migrations.migrate(provisioner.url(), NOTES)).rejects.toThrow(`SECURITY DEFINER function public.${name}()`)
+					await as(superuserUrl, (sql) => sql.unsafe(`REVOKE EXECUTE ON FUNCTION public.${name}() FROM PUBLIC`))
+					expect(await app.migrations.migrate(provisioner.url(), NOTES)).toEqual([])
+				} finally {
+					await as(superuserUrl, (sql) => sql.unsafe(`DROP FUNCTION public.${name}()`))
+				}
+			})
+
+			test('a runtime that holds the migration lock fails the next migrate within its lock timeout', async () => {
+				const app = application({ advisoryLockTimeoutMs: 500 })
+				await app.migrations.migrate(provisioner.url(), NOTES)
+				const holder = new SQL({ url: applicationRuntimeUrl(provisioner.url(), app.appId), adapter: 'postgres', max: 1, prepare: false })
+				try {
+					await holder.unsafe(`SELECT pg_advisory_lock(${applicationMigrationLockKey(app.appId)})`)
+					const started = Date.now()
+					await expect(app.migrations.migrate(provisioner.url(), NOTES)).rejects.toThrow(
+						`the migration lock of ${app.migrations.schema} was not free within 500 ms`,
+					)
+					expect(Date.now() - started).toBeLessThan(5_000)
+				} finally {
+					await holder.close()
+				}
 			})
 
 			test('a schema that predates the role family is refused, not adopted', async () => {

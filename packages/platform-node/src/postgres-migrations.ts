@@ -2,9 +2,11 @@ import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { acquireMigrationLock, grantRuntimeRole, normalizeDefaultPrivileges } from './application-postgres-grants'
 import { DATABASE_CODE_FAILURE, databaseCodeCheck } from './database-code'
 import { classifyMigrations, type DatabaseObject, migrationManifest } from './migration-classify'
 import { refusedStatement } from './migration-sql'
+import { PostgresMigrationError } from './postgres-migration-error'
 
 const IDENTIFIER = /^[a-z][a-z0-9_]*$/
 const BUNDLE_NAME = /^[a-z][a-z0-9-]*$/
@@ -43,16 +45,16 @@ export interface PostgresApplicationMigrationSettings {
 	/** The framework's own bundle (`fabrika`), which alone may name the framework's `fabrika_*` tables. */
 	frameworkBundle?: string
 	/**
-	 * The application's runtime role. After the plan ran, its privileges in the schema are reset to DML on every table
-	 * but the ledger, in one transaction under the migration lock; it never gets DDL.
+	 * The application's runtime role. Before the plan runs, the migration role's default privileges are cleared of
+	 * PUBLIC; after it ran, the runtime role's and PUBLIC's privileges in the schema are reset to the runtime role's DML
+	 * on every table but the ledger and verified, in one transaction under the migration lock; it never gets DDL.
 	 */
 	runtimeRole?: string
+	/** How long the runner waits for the migration lock; any session may take an advisory lock, so the wait is bounded. */
+	advisoryLockTimeoutMs?: number
 }
 
-/** A refusal or failure of the runner itself. Its message names no credential; a driver error is its `cause`. */
-export class PostgresMigrationError extends Error {
-	override readonly name = 'PostgresMigrationError'
-}
+export { PostgresMigrationError }
 
 export interface ReadPostgresMigrationBundleOptions {
 	name: string
@@ -155,7 +157,7 @@ export async function applyPostgresMigrations(
 	options: { now?: () => number } = {},
 ): Promise<string[]> {
 	const plan = definePostgresMigrationPlan(input)
-	await db.prepare(`SELECT pg_catalog.pg_advisory_lock(${plan.lockKey})`).run()
+	await acquireMigrationLock(db, plan.lockKey, plan.application?.advisoryLockTimeoutMs, plan.application?.schema ?? plan.ledgerTable)
 	let migrationFailed = false
 	let migrationError: unknown
 	const fresh: string[] = []
@@ -167,6 +169,7 @@ export async function applyPostgresMigrations(
 			manifests = classifyApplicationPlan(plan.bundles, applied, plan.application)
 		}
 		await ensureLedger(db, plan)
+		if (plan.application?.runtimeRole !== undefined) await normalizeDefaultPrivileges(db, plan.application.schema)
 		for (const bundle of plan.bundles) {
 			for (const migration of bundle.migrations) {
 				const identity = postgresMigrationIdentity(bundle.name, migration.name)
@@ -259,6 +262,7 @@ function validateLedgerTable(plan: PostgresMigrationPlan): void {
 	if (!plan.ledgerTable.startsWith(prefix)) throw new Error(`Invalid migration ledger table: ${plan.ledgerTable} is not in ${application.schema}`)
 	validateIdentifier(plan.ledgerTable.slice(prefix.length), 'migration ledger table')
 	if (application.runtimeRole !== undefined) validateIdentifier(application.runtimeRole, 'runtime role')
+	if (application.advisoryLockTimeoutMs !== undefined) validateTimeout(application.advisoryLockTimeoutMs, 'advisory lock timeout')
 	validateTimeout(application.lockTimeoutMs, 'lock timeout')
 	validateTimeout(application.statementTimeoutMs, 'statement timeout')
 	// Only the framework's bundle may name `fabrika_*`; it runs first, before an application's own.
@@ -437,25 +441,6 @@ function databaseCodeStatements(
 		db.prepare('SET LOCAL standard_conforming_strings = on'),
 		db.prepare(databaseCodeCheck(application.schema, manifest)),
 	]
-}
-
-/**
- * Resets the runtime role's reach in the schema to USAGE and DML on every table but the ledger; an identity column needs
- * no grant on its sequence. Revoking first undoes any wider grant; one transaction, so a live runtime never sees a gap.
- */
-async function grantRuntimeRole(db: SqlDatabase, schema: string, ledgerTable: string, role: string): Promise<void> {
-	try {
-		await db.batch([
-			db.prepare(`REVOKE ALL ON SCHEMA ${schema} FROM ${role}`),
-			db.prepare(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${role}`),
-			db.prepare(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${role}`),
-			db.prepare(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`),
-			db.prepare(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`),
-			db.prepare(`REVOKE ALL ON TABLE ${ledgerTable} FROM ${role}`),
-		])
-	} catch (error) {
-		throw new PostgresMigrationError(`granting the runtime role ${role} its privileges in ${schema} failed`, { cause: error })
-	}
 }
 
 function ledgerInsert(db: SqlDatabase, plan: PostgresMigrationPlan, bundle: string, migration: PostgresMigration, appliedAt: number): SqlStatement {
