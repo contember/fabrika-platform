@@ -785,3 +785,31 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   is built from the issue's code, its expected type and the schema's top-level field only (a custom message, a JSON
   key or the input could carry row data). The `sql-undeclared` hint reads options through `satisfies` and `as const`.
   Owner decision: `logFailure` logs a `QueryRefusedError`'s message (`@fabrika/db/framework` exports the class).
+- **WU4, the declared reach in the artifact.** `ContractArtifact.declared` holds each site that declares anything, by
+  endpoint id (procedures and webhooks) or `job:<name>`, as `DeclaredReach { sql, unscoped, connect, issues }`; it is
+  absent when no site declares, so every existing digest is unchanged. `buildArtifact` parses it: modes, `read` only on
+  a query or export, tables of `src/db/tables.ts` and no `fabrika_*`, `connect` and `issues` only on an RPC endpoint,
+  `issues` only with the mount's `issuedBy` on its dimension. WU7 compares it.
+- **WU4, the seam to WU3.** `serve` builds today's handler tree; each entry is the handler, callable, with the site's
+  `declared` beside it (`ServedHandler`, `implement/serve.ts`). The contract's sites carry `declared` too
+  (`procedure.declared`, the webhook mount's, `jobs.<name>.declared`), so `boot` can read it where it already holds
+  the declaration. `boot` itself is unchanged.
+- **WU4, the `GroupBuild` gap is closed in `serve`, not in `c.rpc`.** `serve` refuses every endpoint, job, webhook,
+  link and export procedure without `.handle(…)`, naming each by its path. `c.rpc` cannot at runtime: the SPA's sliced
+  bundle evaluates to the same contract with no handler at all (`colocated.test.ts` serves it and is refused).
+  Open for the integrator or WU10: a job, webhook, link or export procedure without `.handle` is a tsc error that
+  prints the builder's type (`CronBuilder<…> is missing … kind, schedule`); a one-line message needs a check on
+  `app.contract`'s sections like `MountPrefix` (a WU0 signature change), so it is not in `colocated-mistakes/`.
+- **WU4, one unchecked join.** `defineApp`'s frozen signature is the typed face of `RuntimeApp`, through an
+  implementation signature that returns `object`: `.handle`'s `ExactReturn` and `contract`'s imports-by-kit are
+  conditional types no implementation can return. It is the only place the compiler does not relate the runtime to its
+  type; `kit-runtime.test.ts` holds each builder to it. No cast, no signature change.
+- **WU4, the slice.** Every module the reader, the literal rule, `contractReaderInputs`, the checker's contract rules
+  and the plugin read is its shell slice; it removes only what the handlers alone use, so a declaration nobody uses
+  still meets the literal rule. Over 200 endpoints in 10 group modules Control fetches 58,791 bytes in 0.37 s and no
+  handler module (`colocated-scale.test.ts`). The client-identity rule walks every module of the shell graph, and the
+  crontab rule reads `jobs: { <name> }` consts of `app.cron`.
+- **WU4, fixtures.** `kit-fixture` vendors its catalog snapshot (`kit-fixture/fabrika/connect/`): the reader reads only
+  files under the application. `architecture-app` got `c.spa`'s `dir`/`access`, `serve` without the untyped `deps`,
+  `ctx.target.value` (a `Ref` has no `id`) and its generated tests. It is a differential fixture now, evaluated by Bun,
+  and its whole check is clean (`colocated.test.ts`).
