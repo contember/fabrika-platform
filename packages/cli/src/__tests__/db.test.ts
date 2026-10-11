@@ -247,7 +247,7 @@ describe('fabrika db configuration', () => {
 
 	test('a connection failure does not repeat the URL', async () => {
 		const root = appRoot()
-		writeMigration(root, '20261008120000_init.sql', 'SELECT 1')
+		writeMigration(root, '20261008120000_init.sql', 'CREATE TABLE notes (id TEXT)')
 		const source = { FABRIKA_APP_ID: 'notes', FABRIKA_APP_DATABASE_URL: 'postgres://user:hunter2secret@127.0.0.1:1/db' }
 		for (const command of ['migrate', 'codegen']) {
 			const message = await failure(run(root, command, [], { source }))
@@ -435,7 +435,7 @@ describe.skipIf(!hasPostgres)('fabrika db against real Postgres', () => {
 			await legacy.close()
 		}
 		expect(await failure(run(root, 'codegen', ['--verify'], { source }))).toBe(
-			`schema ${schema} holds database code the data layer cannot see: trigger deals.noop; drop it in a new migration (a default may be a constant, now() or gen_random_uuid())`,
+			`schema ${schema} holds database code the data layer cannot see: trigger deals.noop; drop it in a new migration`,
 		)
 	})
 

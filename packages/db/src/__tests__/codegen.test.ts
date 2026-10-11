@@ -320,7 +320,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			CREATE POLICY own ON deals USING (true);
 		`)
 		const refusal =
-			`schema ${schema} holds database code the data layer cannot see: default deals.n (nextval('${schema}.deals_n_seq'::regclass)), function spread, policy deals.own, rule deals.mirror, trigger deals.spread, view open_deals; drop it in a new migration (a default may be a constant, now() or gen_random_uuid())`
+			`schema ${schema} holds database code the data layer cannot see: default deals.n calls pg_catalog.nextval, function spread, policy deals.own, rule deals.mirror, sequence deals_n_seq (a serial column; use GENERATED ALWAYS AS IDENTITY), trigger deals.spread, view open_deals; drop it in a new migration`
 		await expect(introspectSchema(url, schema)).rejects.toThrow(refusal)
 		await expect(generateSchema(url, schema)).rejects.toThrow(CodegenError)
 	})
