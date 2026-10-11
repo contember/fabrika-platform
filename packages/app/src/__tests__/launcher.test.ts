@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 
-const ENTRY = join(import.meta.dir, 'fixtures', 'launcher', 'entry.ts')
+const ENTRY = join(import.meta.dir, 'launcher-entry.ts')
 const PROVISIONING = 'postgres://db:provisioning-secret-a1b2@127.0.0.1:1/db?sslmode=disable'
 const scratch = mkdtempSync(join(tmpdir(), 'fabrika-launcher-'))
 const reportSchema = z.object({ pid: z.number(), environ: z.string(), child: z.string(), env: z.string() })
