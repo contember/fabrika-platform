@@ -42,6 +42,11 @@ export interface PostgresApplicationMigrationSettings {
 	statementTimeoutMs: number
 	/** The framework's own bundle (`fabrika`), which alone may name the framework's `fabrika_*` tables. */
 	frameworkBundle?: string
+	/**
+	 * The application's runtime role. After the plan ran, its privileges in the schema are reset to DML on every table
+	 * but the ledger, in one transaction under the migration lock; it never gets DDL.
+	 */
+	runtimeRole?: string
 }
 
 /** A refusal or failure of the runner itself. Its message names no credential; a driver error is its `cause`. */
@@ -194,6 +199,9 @@ export async function applyPostgresMigrations(
 				fresh.push(identity)
 			}
 		}
+		if (plan.application?.runtimeRole !== undefined) {
+			await grantRuntimeRole(db, plan.application.schema, plan.ledgerTable, plan.application.runtimeRole)
+		}
 	} catch (error) {
 		migrationFailed = true
 		migrationError = error
@@ -250,6 +258,7 @@ function validateLedgerTable(plan: PostgresMigrationPlan): void {
 	const prefix = `${application.schema}.`
 	if (!plan.ledgerTable.startsWith(prefix)) throw new Error(`Invalid migration ledger table: ${plan.ledgerTable} is not in ${application.schema}`)
 	validateIdentifier(plan.ledgerTable.slice(prefix.length), 'migration ledger table')
+	if (application.runtimeRole !== undefined) validateIdentifier(application.runtimeRole, 'runtime role')
 	validateTimeout(application.lockTimeoutMs, 'lock timeout')
 	validateTimeout(application.statementTimeoutMs, 'statement timeout')
 	// Only the framework's bundle may name `fabrika_*`; it runs first, before an application's own.
@@ -281,7 +290,11 @@ async function ensureLedger(db: SqlDatabase, plan: PostgresMigrationPlan): Promi
 	)`).run()
 		return
 	}
-	await db.prepare(`CREATE SCHEMA IF NOT EXISTS ${plan.application.schema}`).run()
+	// `CREATE SCHEMA IF NOT EXISTS` needs CREATE on the database even when the schema exists, which a migration role lacks.
+	const schema = await db.prepare('SELECT pg_catalog.to_regnamespace(?) IS NOT NULL AS present').bind(plan.application.schema).first<
+		{ present: boolean }
+	>()
+	if (schema?.present !== true) await db.prepare(`CREATE SCHEMA ${plan.application.schema}`).run()
 	await db.prepare(`CREATE TABLE IF NOT EXISTS ${plan.ledgerTable} (
 		bundle TEXT NOT NULL,
 		name TEXT NOT NULL,
@@ -424,6 +437,25 @@ function databaseCodeStatements(
 		db.prepare('SET LOCAL standard_conforming_strings = on'),
 		db.prepare(databaseCodeCheck(application.schema, manifest)),
 	]
+}
+
+/**
+ * Resets the runtime role's reach in the schema to USAGE and DML on every table but the ledger; an identity column needs
+ * no grant on its sequence. Revoking first undoes any wider grant; one transaction, so a live runtime never sees a gap.
+ */
+async function grantRuntimeRole(db: SqlDatabase, schema: string, ledgerTable: string, role: string): Promise<void> {
+	try {
+		await db.batch([
+			db.prepare(`REVOKE ALL ON SCHEMA ${schema} FROM ${role}`),
+			db.prepare(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${role}`),
+			db.prepare(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${role}`),
+			db.prepare(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`),
+			db.prepare(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`),
+			db.prepare(`REVOKE ALL ON TABLE ${ledgerTable} FROM ${role}`),
+		])
+	} catch (error) {
+		throw new PostgresMigrationError(`granting the runtime role ${role} its privileges in ${schema} failed`, { cause: error })
+	}
 }
 
 function ledgerInsert(db: SqlDatabase, plan: PostgresMigrationPlan, bundle: string, migration: PostgresMigration, appliedAt: number): SqlStatement {

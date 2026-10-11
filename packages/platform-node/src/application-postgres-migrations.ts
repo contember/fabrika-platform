@@ -1,6 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { type ApplicationDatabaseRoles, dropPostgresRoles, postgresRoleUrl, provisionPostgresRoles } from './application-postgres-roles'
 import { classifyMigrations, type DatabaseObject } from './migration-classify'
 import {
 	applyPostgresMigrations,
@@ -10,6 +11,7 @@ import {
 	type PostgresMigrationPlan,
 	readPostgresMigrationBundle,
 } from './postgres-migrations'
+import { PostgresDatabase } from './sql-postgres'
 
 /** IAM's application id alphabet; `-` maps to `_`, which the alphabet lacks, so two ids never share a schema. */
 const APP_ID = /^[a-z0-9][a-z0-9-]*$/
@@ -42,6 +44,7 @@ export interface PostgresApplicationMigrationsConfig {
 export interface PostgresApplicationMigrations {
 	/** `app_<id>`: the application's schema, which the data layer sets as its `search_path`. */
 	readonly schema: string
+	readonly roles: ApplicationDatabaseRoles
 	read(): PostgresMigration[]
 	plan(migrations?: readonly PostgresMigration[]): PostgresMigrationPlan
 	/**
@@ -49,7 +52,14 @@ export interface PostgresApplicationMigrations {
 	 * catalog check admits at every start (`fabrika db codegen`) as the runner does before each commit.
 	 */
 	objects(migrations?: readonly PostgresMigration[]): DatabaseObject[]
+	/** Applies the plan over `db` as whatever role it connects as, and grants no runtime role: the runner's own tests. */
 	apply(db: SqlDatabase, migrations?: readonly PostgresMigration[]): Promise<string[]>
+	/**
+	 * What `fabrika db migrate` runs. With the provisioning credential it creates or checks the role family and the
+	 * schema; then it applies the plan as the migration role and grants the runtime role. No migration runs as the
+	 * provisioning credential, and a credential that cannot create roles is refused.
+	 */
+	migrate(provisioningUrl: string, migrations?: readonly PostgresMigration[]): Promise<string[]>
 }
 
 function validateAppId(appId: string): void {
@@ -69,9 +79,31 @@ export function applicationMigrationLockKey(appId: string): number {
 	return createHash('sha256').update(`fabrika-db:${appId}`, 'utf8').digest().readUIntBE(0, 6) + 1
 }
 
+/** The application's schema, its migration role (named like the schema) and its runtime role `run_<id>`. */
+export function applicationDatabaseRoles(appId: string): ApplicationDatabaseRoles {
+	const schema = applicationDatabaseSchema(appId)
+	return { schema, migration: schema, runtime: `run_${schema.slice('app_'.length)}` }
+}
+
+/** The runtime role's connection URL, derived from the provisioning credential the platform hands the application. */
+export function applicationRuntimeUrl(provisioningUrl: string, appId: string): string {
+	return postgresRoleUrl(provisioningUrl, applicationDatabaseRoles(appId).runtime)
+}
+
+/** Drops an application's schema and both of its roles, as the provisioning credential: for throwaway test databases. */
+export async function dropApplicationDatabase(provisioningUrl: string, appId: string): Promise<void> {
+	const admin = PostgresDatabase.connect(provisioningUrl, { max: 1 })
+	try {
+		await dropPostgresRoles(admin, applicationDatabaseRoles(appId))
+	} finally {
+		await admin.close()
+	}
+}
+
 /** An application's migration wrapper: its schema, ledger, lock and timeouts are derived, never configured. */
 export function definePostgresApplicationMigrations(config: PostgresApplicationMigrationsConfig): PostgresApplicationMigrations {
-	const schema = applicationDatabaseSchema(config.appId)
+	const roles = applicationDatabaseRoles(config.appId)
+	const { schema } = roles
 	const lockKey = applicationMigrationLockKey(config.appId)
 	const read = (): PostgresMigration[] => {
 		if (!existsSync(config.directory)) {
@@ -80,7 +112,7 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 		const { migrations } = readPostgresMigrationBundle({ name: APPLICATION_MIGRATION_BUNDLE, directory: config.directory })
 		return [...migrations]
 	}
-	const plan = (migrations: readonly PostgresMigration[] = read()): PostgresMigrationPlan => {
+	const planWith = (migrations: readonly PostgresMigration[], runtimeRole: string | undefined): PostgresMigrationPlan => {
 		for (const migration of migrations) {
 			if (!APPLICATION_MIGRATION_NAME.test(migration.name)) {
 				throw new PostgresMigrationError(`Application migration ${migration.name} is not named YYYYMMDDHHMMSS_slug.sql`)
@@ -98,14 +130,33 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 				lockTimeoutMs: config.lockTimeoutMs ?? DEFAULT_MIGRATION_LOCK_TIMEOUT_MS,
 				statementTimeoutMs: config.statementTimeoutMs ?? DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 				...(config.framework === undefined ? {} : { frameworkBundle: config.framework.bundle }),
+				...(runtimeRole === undefined ? {} : { runtimeRole }),
 			},
 		})
 	}
+	const plan = (migrations: readonly PostgresMigration[] = read()): PostgresMigrationPlan => planWith(migrations, undefined)
 	const objects = (migrations: readonly PostgresMigration[] = read()): DatabaseObject[] => {
 		const framework = (config.framework?.migrations ?? []).map((migration) => ({ ...migration, framework: true }))
 		return [...classifyMigrations([...framework, ...migrations], schema).objects]
 	}
 	const apply = async (db: SqlDatabase, migrations: readonly PostgresMigration[] = read()): Promise<string[]> =>
 		applyPostgresMigrations(db, plan(migrations))
-	return { schema, read, plan, objects, apply }
+	const migrate = async (provisioningUrl: string, migrations: readonly PostgresMigration[] = read()): Promise<string[]> => {
+		const planned = planWith(migrations, roles.runtime)
+		const migrationUrl = postgresRoleUrl(provisioningUrl, roles.migration)
+		// One connection each: the advisory lock is session state.
+		const admin = PostgresDatabase.connect(provisioningUrl, { max: 1 })
+		try {
+			await provisionPostgresRoles(admin, provisioningUrl, roles, lockKey)
+		} finally {
+			await admin.close()
+		}
+		const owner = PostgresDatabase.connect(migrationUrl, { max: 1 })
+		try {
+			return await applyPostgresMigrations(owner, planned)
+		} finally {
+			await owner.close()
+		}
+	}
+	return { schema, roles, read, plan, objects, apply, migrate }
 }
