@@ -26,6 +26,7 @@ export type {
 	ListPage,
 	NoUnscoped,
 	OrderTerm,
+	OwnerRow,
 	ReferenceRows,
 	ReferenceTables,
 	RowFor,
@@ -36,10 +37,12 @@ export type {
 	Unavailable,
 	UnownedTarget,
 	UnscopedDeclaration,
+	UnscopedInsert,
 	UnscopedMode,
 	UnscopedRows,
 	UnscopedTables,
 	VersionArguments,
+	VisibleRow,
 	WithinRows,
 	WithinTables,
 } from './orm-types'
@@ -63,12 +66,9 @@ export {
 	type TableActions,
 	type TablePolicy,
 	Tables,
-	type TableVocabulary,
 	type UpdateValues,
 	type VersionColumn,
-	type VocabularyAction,
-	type VocabularyDimension,
-	type VocabularyPolicyMap,
+	type VocabularyTables,
 } from './policy'
 export {
 	type AggregateRow,
@@ -82,3 +82,18 @@ export {
 	type ScopedDatabase,
 } from './store'
 export { type TablePolicies, tablePolicies } from './tables'
+export type {
+	ColumnTypes,
+	DefineVocabularyPolicies,
+	NormalizedPolicies,
+	TableVocabulary,
+	TypedColumnList,
+	VocabularyAction,
+	VocabularyChildScope,
+	VocabularyContainer,
+	VocabularyContainerOf,
+	VocabularyDimension,
+	VocabularyDimensionScope,
+	VocabularyPolicyMap,
+	VocabularyTablePolicy,
+} from './vocabulary-tables'

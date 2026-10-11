@@ -19,11 +19,13 @@ import {
 } from './builtins'
 import { PolicyError } from './errors'
 import { isPlainIdentifier } from './identifier'
+import type { Unavailable } from './orm-types'
+import type { ColumnTypes, DefineVocabularyPolicies, TableVocabulary } from './vocabulary-tables'
 
-export interface DimensionScope<Col extends string, D extends string = string> {
-	readonly dimension: D
+export interface DimensionScope<Col extends string> {
+	readonly dimension: string
 	readonly key: Col
-	readonly in?: { readonly dimension: D; readonly column: Col }
+	readonly in?: { readonly dimension: string; readonly column: Col }
 }
 
 export interface ChildScope<Table extends string, Col extends string> {
@@ -66,10 +68,8 @@ interface WritablePolicy<Col extends string, A extends string, V extends Col> {
  */
 export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
 
-export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col, D extends string = string>
-	extends WritablePolicy<Col, A, V>
-{
-	readonly scope: DimensionScope<Col, D>
+export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
+	readonly scope: DimensionScope<Col>
 }
 
 export interface ChildPolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V> {
@@ -94,8 +94,8 @@ export interface InboxPolicy<Col extends string, A extends string> extends ReadO
 	readonly actions?: never
 }
 
-export type TablePolicy<Table extends string, Col extends string, A extends string, V extends Col = Col, D extends string = string> =
-	| DimensionPolicy<Col, A, V, D>
+export type TablePolicy<Table extends string, Col extends string, A extends string, V extends Col = Col> =
+	| DimensionPolicy<Col, A, V>
 	| ChildPolicy<Table, Col, A, V>
 	| ReferencePolicy<Col, A>
 	| InboxPolicy<Col, A>
@@ -103,25 +103,10 @@ export type TablePolicy<Table extends string, Col extends string, A extends stri
 /** The columns a version can live in: those whose generated select type is `number`, an INTEGER (int4). */
 export type VersionColumn<Row> = { [K in keyof Row & string]: SelectType<Row[K]> extends number ? K : never }[keyof Row & string]
 
-/** Every table of the schema, and no other, maps to a policy; `D` names the dimensions a scope may name. */
-export type PolicyMap<DB, A extends string, D extends string = string> = {
-	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A, VersionColumn<DB[T]>, D>
+/** Every table of the schema, and no other, maps to a policy. */
+export type PolicyMap<DB, A extends string> = {
+	readonly [T in keyof DB & string]: TablePolicy<keyof DB & string, keyof DB[T] & string, A, VersionColumn<DB[T]>>
 }
-
-/**
- * What `defineTables(vocabulary, columns)` reads of `@fabrika/app/contract`'s `defineVocabulary` result: the action
- * and dimension names, and each dimension's container. `@fabrika/db` does not import `@fabrika/app`.
- */
-export interface TableVocabulary {
-	readonly actions: { readonly [action: string]: string }
-	readonly dimensions: { readonly [dimension: string]: { readonly in?: string } }
-}
-
-export type VocabularyAction<V> = V extends { readonly actions: infer A } ? keyof A & string : never
-export type VocabularyDimension<V> = V extends { readonly dimensions: infer D } ? keyof D & string : never
-
-/** `PolicyMap` under a vocabulary: a misspelt action or dimension fails at its own line. */
-export type VocabularyPolicyMap<DB, V> = PolicyMap<DB, VocabularyAction<V>, VocabularyDimension<V>>
 
 /** The column names of every table, generated next to the schema types. */
 export type ColumnList<DB> = { readonly [T in keyof DB & string]: readonly (keyof DB[T] & string)[] }
@@ -209,25 +194,80 @@ export type DefinePolicies<DB, Policies> = <const P extends Policies>(
 ) => Tables<DB, P>
 
 /**
- * Declares the access policy of every table. `columns` is the generated column list; the policies are a literal.
- * The application form names the vocabulary, so the action and dimension names are its own:
- * `defineTables<DB, typeof vocabulary>(vocabulary, columns)({ notes: { scope: …, actions: … }, … })`. The vocabulary is
- * read for its types only, so far: each policy still states its containment. `DB` is explicit because the generated
- * column list carries the column names, not their types.
+ * Declares the access policy of every table, under the application's vocabulary:
+ * `defineTables(vocabulary, columns)({ notes: { scope: …, actions: … }, … })`. `columns` is the generated column list,
+ * which carries the schema's row types; a list without them makes the policies uncallable. The action and dimension
+ * names are the vocabulary's, and each table's containment comes from it.
  */
-export function defineTables<DB, V extends TableVocabulary>(vocabulary: V, columns: ColumnList<DB>): DefinePolicies<DB, VocabularyPolicyMap<DB, V>>
+export function defineTables<const V extends TableVocabulary, C extends object>(vocabulary: V, columns: C): VocabularyTables<V, C>
 /** The form that names the action union by hand: `defineTables<DB, Action>(columns)({ … })`. */
 export function defineTables<DB, A extends string>(columns: ColumnList<DB>): DefinePolicies<DB, PolicyMap<DB, A>>
 export function defineTables<DB, P>(first: unknown, second?: unknown): (policies: P) => Tables<DB, P> {
-	const columns = second === undefined ? first : second
-	return (policies) => new Tables(parseTables(columns, policies))
+	if (second === undefined) {
+		return (policies) => new Tables(parseTables(first, policies))
+	}
+	return (policies) => {
+		requireStatedContainment(first, policies)
+		return new Tables(parseTables(second, policies))
+	}
+}
+
+/** `defineTables(vocabulary, columns)` answers the policies' builder, or names the fix for an untyped column list. */
+export type VocabularyTables<V, C> = [ColumnTypes<C>] extends [never]
+	? Unavailable<'the column list carries no row types: import columns from the generated src/db/schema.generated.ts (fabrika db codegen)'>
+	: DefineVocabularyPolicies<ColumnTypes<C>, V>
+
+/**
+ * The containment the layer derives from the vocabulary must still be stated, and agree with it, until the
+ * derivation lands: an omitted key, container or child chain is refused, not guessed.
+ */
+function requireStatedContainment(vocabularyInput: unknown, policiesInput: unknown): void {
+	const vocabulary = plainRecord(vocabularyInput, 'the vocabulary')
+	const dimensions = plainRecord(ownEntry(vocabulary, 'dimensions'), 'the vocabulary dimensions')
+	const policies = plainRecord(policiesInput, 'the table policies')
+	const tables = ownKeys(policies)
+	for (let index = 0; index < tables.length; index++) {
+		const table = tables[index] ?? ''
+		const scope = plainRecord(ownEntry(plainRecord(ownEntry(policies, table), `${table}: the policy`), 'scope'), `${table}: scope`)
+		const derived = (field: string) =>
+			new PolicyError(`${table}: deriving ${field} from the vocabulary is not implemented (WU2); state it in the policy`)
+		if (hasOwn(scope, 'dimension')) {
+			const dimension = ownEntry(scope, 'dimension')
+			const definition = typeof dimension === 'string' ? ownEntry(dimensions, dimension) : undefined
+			if (definition === undefined) {
+				throw new PolicyError(`${table}: scope.dimension names no dimension of the vocabulary`)
+			}
+			const container = ownEntry(plainRecord(definition, `dimension ${String(dimension)}`), 'in')
+			const stated = ownEntry(scope, 'in')
+			if (!hasOwn(scope, 'key')) throw derived('scope.key')
+			if (container === undefined && stated !== undefined) {
+				throw new PolicyError(`${table}: the vocabulary puts ${String(dimension)} in no container, so scope.in is not a field here`)
+			}
+			if (container !== undefined) {
+				const statedContainer = stated === undefined ? undefined : ownEntry(plainRecord(stated, `${table}: scope.in`), 'dimension')
+				if (statedContainer === undefined) throw derived(`the container of ${String(dimension)} (scope.in)`)
+				if (statedContainer !== container) {
+					throw new PolicyError(`${table}: the vocabulary puts ${String(dimension)} in ${String(container)}, not in ${String(statedContainer)}`)
+				}
+			}
+		}
+		if (hasOwn(scope, 'child')) {
+			if (!hasOwn(scope, 'key')) throw derived('scope.key')
+			if (!hasOwn(scope, 'column')) throw derived('scope.column')
+			if (!hasOwn(scope, 'inherit')) throw derived('scope.inherit')
+		}
+	}
 }
 
 /**
  * The same policies read from values nobody type-checked: `src/db/tables.ts` as the static reader has it from a
- * commit. Every shape `defineTables` refuses at runtime is refused here, through the same parse.
+ * commit, with its vocabulary for the vocabulary form. Every shape `defineTables` refuses at runtime is refused here,
+ * through the same parse.
  */
-export function readTables(columns: unknown, policies: unknown): Tables<unknown, unknown> {
+export function readTables(columns: unknown, policies: unknown, vocabulary?: unknown): Tables<unknown, unknown> {
+	if (vocabulary !== undefined) {
+		requireStatedContainment(vocabulary, policies)
+	}
 	return new Tables(parseTables(columns, policies))
 }
 

@@ -67,7 +67,7 @@ describe('renderSchema', () => {
 		expect(source).not.toContain('fabrika_migrations')
 		expect(source).not.toContain("from 'kysely'")
 		expect(source).toContain('export interface DB {\n\tnotes: NotesTable\n}\n')
-		expect(source).toContain("export const columns = {\n\t'notes': [\n\t\t'id',\n\t],\n} as const satisfies ColumnList<DB>\n")
+		expect(source).toContain("export const columns: TypedColumnList<DB> = {\n\t'notes': [\n\t\t'id',\n\t],\n}\n")
 	})
 
 	test('orders tables by name and keeps column order', () => {

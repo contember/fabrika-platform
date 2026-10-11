@@ -50,6 +50,8 @@ export interface IndexedTable {
 	readonly reads: object
 	readonly insert: object
 	readonly update: object
+	/** The containment columns a row carries: what a scoped write stamps from its capability, and an unscoped one takes. */
+	readonly chain: string
 	readonly versioned: boolean
 }
 
@@ -68,8 +70,19 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string> = {
 	readonly reads: ColumnReadsOf<P, T>
 	readonly insert: InsertValues<DB, P, T>
 	readonly update: UpdateValues<DB, P, T>
+	readonly chain: ChainColumns<P, T>
 	readonly versioned: PolicyOf<P, T> extends { readonly version: string } ? true : false
 }
+
+type OwnerTable<P, D> = { [K in keyof P]: P[K] extends { readonly scope: { readonly dimension: D } } ? K : never }[keyof P]
+
+/** A row's containment columns, nearest first: a dimension table's container and its chain; a child's parent and its. */
+type ChainColumns<P, T> = PolicyOf<P, T> extends { readonly scope: infer S } ? S extends {
+		readonly in: { readonly dimension: infer C extends string; readonly column: infer Col extends string }
+	} ? Col | ChainColumns<P, OwnerTable<P, C>>
+	: S extends { readonly child: infer Parent extends string; readonly column: infer Col extends string } ? Col | ChainColumns<P, Parent>
+	: never
+	: never
 
 type ReferenceTableName<P> = { [K in keyof P]: P[K] extends { readonly scope: { readonly reference: string } } ? K : never }[keyof P] & string
 
@@ -85,6 +98,8 @@ export type DbIndex<DB, P> = {
 	readonly children: { readonly [T in ChildTableName<P> as ParentOf<P, T>]: T }
 	/** Dimension → the dimension tables listed in it: those it contains, and a top-level table its own. */
 	readonly listed: { readonly [T in DimensionTableName<P> as ListDimensionOf<P, T>]: T }
+	/** Dimension → the child tables listed in it: those whose parent is listed there. */
+	readonly listedChildren: { readonly [T in ChildTableName<P> as ListDimensionOf<P, ParentOf<P, T>>]: T }
 	readonly references: ReferenceTableName<P>
 }
 
@@ -94,6 +109,7 @@ export interface AnyDbIndex {
 	readonly owner: object
 	readonly children: object
 	readonly listed: object
+	readonly listedChildren: object
 	readonly references: string
 }
 
@@ -102,11 +118,29 @@ type Lookup<M, K> = K extends keyof M ? M[K] & string : never
 type OwnerOf<Ix extends AnyDbIndex, D> = Lookup<Ix['owner'], D>
 type ChildrenOf<Ix extends AnyDbIndex, T> = Lookup<Ix['children'], T>
 type ListedIn<Ix extends AnyDbIndex, D> = Lookup<Ix['listed'], D>
+type ListedChildrenIn<Ix extends AnyDbIndex, D> = Lookup<Ix['listedChildren'], D>
 
-type HiddenFor<Reads, A> = { [C in keyof Reads]: Reads[C] extends A ? never : C }[keyof Reads]
+/**
+ * The columns a capability of action `A` cannot read: each that declares a read action other than exactly `A`. A
+ * union `A` (a widened capability type) holds no single action provably, so it reads none of them.
+ */
+type HiddenFor<Reads, A> = { [C in keyof Reads]: [A] extends [Reads[C]] ? ([Reads[C]] extends [A] ? never : C) : C }[keyof Reads]
 
-/** A row as a capability of action `A` reads it: every column that declares another read action is hidden. */
-export type RowFor<E extends IndexedTable, A extends string> = Flat<Omit<E['row'], HiddenFor<E['reads'], A>>>
+/** The columns of a row a capability of action `A` reads, filters and sorts by. */
+export type VisibleRow<E extends IndexedTable, A extends string> = Flat<Omit<E['row'], HiddenFor<E['reads'], A>>>
+
+/**
+ * A row as a capability of action `A` reads it: a column that declares another read action is absent, and its type
+ * names the action that reads it.
+ */
+export type RowFor<E extends IndexedTable, A extends string> = Flat<
+	& VisibleRow<E, A>
+	& {
+		readonly [C in HiddenFor<E['reads'], A> & string]?: Unavailable<
+			`the column ${C} needs the read action '${E['reads'][C & keyof E['reads']] & string}', which this capability does not hold`
+		>
+	}
+>
 
 /** What a paved-road write answers: the key, and the new version of a versioned table. */
 export type Saved<E extends IndexedTable> = E['versioned'] extends true ? { readonly id: string; readonly version: number } : { readonly id: string }
@@ -114,13 +148,14 @@ export type Saved<E extends IndexedTable> = E['versioned'] extends true ? { read
 /** A versioned table's update and remove take `{ expectVersion }`; another table's take nothing. */
 export type VersionArguments<E extends IndexedTable> = E['versioned'] extends true ? [options: { readonly expectVersion: number }] : []
 
-type Names<E extends IndexedTable, A extends string> = A extends E['actions'][keyof E['actions']] ? true : false
+type Names<E extends IndexedTable, A extends string> = [A] extends [E['actions'][keyof E['actions']]] ? true : false
 
 type Operation = 'insert' | 'update' | 'delete'
 
 /** `Member` in a mutation whose action is the table's `Op` action; otherwise the message that says which fix applies. */
 type Write<T extends string, E extends IndexedTable, Op extends Operation, A extends string, K extends DataKind, Member> = K extends 'mutation'
-	? A extends E['actions'][Op] ? Member : Unavailable<`${Op} on ${T} needs the action '${E['actions'][Op] & string}', and this endpoint holds '${A}'`>
+	? [A] extends [E['actions'][Op]] ? Member
+	: Unavailable<`${Op} on ${T} needs the action '${E['actions'][Op] & string}', and this endpoint holds '${A}'`>
 	: Unavailable<`${Op extends 'delete' ? 'remove' : Op} writes, so it runs only in a mutation: declare the endpoint with r.mutation`>
 
 type Read<T extends string, E extends IndexedTable, A extends string, Member> = Names<E, A> extends true ? Member
@@ -153,10 +188,19 @@ export interface TargetRow<T extends string, E extends IndexedTable, A extends s
 	readonly getForUpdate: K extends 'mutation'
 		? F extends 'on' ? Read<T, E, A, () => Promise<RowFor<E, A>>> : Unavailable<'getForUpdate locks one object: declare access with on'>
 		: Unavailable<'getForUpdate locks the row, so it runs only in a mutation: declare the endpoint with r.mutation'>
-	readonly update: F extends 'on' ? Write<T, E, 'update', A, K, (values: E['update'], ...version: VersionArguments<E>) => Promise<Saved<E>>>
+	readonly update: F extends 'on'
+		? Write<T, E, 'update', A, K, (values: { [C in keyof E['update']]: E['update'][C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>>
 		: Unavailable<'update acts on one object: declare access with on'>
 	readonly remove: F extends 'on' ? Write<T, E, 'delete', A, K, (...version: VersionArguments<E>) => Promise<void>>
 		: Unavailable<'remove acts on one object: declare access with on'>
+}
+
+/**
+ * The row of a top-level scope, under `in` or `creates`: IAM holds the scope, the application inserts its row, keyed
+ * by the scope's value.
+ */
+export interface OwnerRow<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
+	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
 }
 
 /** A dimension no table owns has no row of its own; its subtree tables are still reachable. */
@@ -169,34 +213,45 @@ export interface UnownedTarget<D extends string> {
 
 /** A child table of the target: its rows are addressed by their own key under the target. */
 export interface ChildRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
-	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly list: Read<T, E, A, (options?: ListOptions<VisibleRow<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
 	readonly get: Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
-	readonly insert: Write<T, E, 'insert', A, K, (values: E['insert']) => Promise<Saved<E>>>
-	readonly update: Write<T, E, 'update', A, K, (key: string, values: E['update'], ...version: VersionArguments<E>) => Promise<Saved<E>>>
+	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
+	readonly update: Write<
+		T,
+		E,
+		'update',
+		A,
+		K,
+		(key: string, values: { [C in keyof E['update']]: E['update'][C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>
+	>
 	readonly remove: Write<T, E, 'delete', A, K, (key: string, ...version: VersionArguments<E>) => Promise<void>>
 }
 
 /** A dimension table the target contains: listed in it, and inserted into it by a mutation of its insert action. */
 export interface ContainedRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
-	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
-	readonly insert: Write<T, E, 'insert', A, K, (values: E['insert']) => Promise<Saved<E>>>
+	readonly list: Read<T, E, A, (options?: ListOptions<VisibleRow<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly insert: Write<T, E, 'insert', A, K, (values: { [C in keyof E['insert']]: E['insert'][C] }) => Promise<Saved<E>>>
 }
 
-type SubtreeTables<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind> =
+type SubtreeTables<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind, F extends TargetForm> =
 	& { readonly [C in ChildrenOf<Ix, OwnerOf<Ix, D>>]: ChildRows<C, Ix['tables'][C], A, K> }
 	& { readonly [C in Exclude<ListedIn<Ix, D>, OwnerOf<Ix, D>>]: ContainedRows<C, Ix['tables'][C], A, K> }
+	& { readonly [C in F extends 'in' ? OwnerOf<Ix, D> & ListedIn<Ix, D> : never]: OwnerRow<C, Ix['tables'][C], A, K> }
 
-/** `ctx.db.target`: the target's row and its subtree — its child tables and the dimension tables it contains. */
+/**
+ * `ctx.db.target`: the target's row and its subtree — its child tables and the dimension tables it contains; under
+ * `in` (and `creates`) also the insert of a top-level scope's own row.
+ */
 export type ScopeTarget<Ix extends AnyDbIndex, D extends string, A extends string, K extends DataKind, F extends TargetForm> =
 	& ([OwnerOf<Ix, D>] extends [never] ? UnownedTarget<D> : TargetRow<OwnerOf<Ix, D>, Ix['tables'][OwnerOf<Ix, D>], A, K, F>)
-	& SubtreeTables<Ix, D, A, K>
+	& SubtreeTables<Ix, D, A, K, F>
 
 /** A table listed in an `over` endpoint's dimension, read through its `Within`. */
 export interface WithinRows<T extends string, E extends IndexedTable, A extends string> {
-	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>> : WithinRead<T, E, A>
-	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : WithinRead<T, E, A>
+	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<VisibleRow<E, A>>) => Promise<ListPage<RowFor<E, A>>> : WithinRead<T, E, A>
+	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<VisibleRow<E, A>>) => Promise<number> : WithinRead<T, E, A>
 	readonly aggregate: A extends E['actions']['read']
-		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
+		? <const S extends AggregateSpec<VisibleRow<E, A>>>(spec: S) => Promise<AggregateRow<VisibleRow<E, A>, S>[]>
 		: WithinRead<T, E, A>
 }
 
@@ -204,15 +259,19 @@ type WithinRead<T extends string, E extends IndexedTable, A extends string> = Un
 	`a list of ${T} needs its read action '${E['actions']['read'] & string}', and this endpoint holds '${A}'`
 >
 
-/** `ctx.db.within` of an `over` endpoint: every table listed in its dimension. */
+/** `ctx.db.within` of an `over` endpoint: every table listed in its dimension, child tables of listed ones included. */
 export type WithinTables<Ix extends AnyDbIndex, D extends string, A extends string> = {
-	readonly [T in ListedIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A>
+	readonly [T in ListedIn<Ix, D> | ListedChildrenIn<Ix, D>]: WithinRows<T, Ix['tables'][T], A>
 }
 
-/** A reference table: every endpoint reads it, none writes it. */
+/** The row a site reads without a capability of its own: through the table's read action. */
+type TableRow<E extends IndexedTable> = RowFor<E, E['actions']['read']>
+type TableVisibleRow<E extends IndexedTable> = VisibleRow<E, E['actions']['read']>
+
+/** A reference table: every endpoint reads it, through its read action, and none writes it. */
 export interface ReferenceRows<E extends IndexedTable> {
-	list(options?: ListOptions<E['row']>): Promise<ListPage<E['row']>>
-	count(options?: CountOptions<E['row']>): Promise<number>
+	list(options?: ListOptions<TableVisibleRow<E>>): Promise<ListPage<TableRow<E>>>
+	count(options?: CountOptions<TableVisibleRow<E>>): Promise<number>
 }
 
 /** `ctx.db.reference`. */
@@ -226,15 +285,23 @@ export type UnscopedDeclaration<Table extends string, Mode extends UnscopedMode>
 
 /** A table a site declared `unscoped`: its scope predicate is `true`, and `'read'` writes nothing. */
 export interface UnscopedRows<T extends string, E extends IndexedTable, M extends UnscopedMode> {
-	list(options?: ListOptions<E['row']>): Promise<ListPage<E['row']>>
-	count(options?: CountOptions<E['row']>): Promise<number>
-	aggregate<const S extends AggregateSpec<E['row']>>(spec: S): Promise<AggregateRow<E['row'], S>[]>
-	get(key: string): Promise<E['row']>
-	readonly insert: M extends 'write' ? (values: E['insert']) => Promise<Saved<E>> : UnscopedReadOnly<T, 'insert'>
-	readonly update: M extends 'write' ? (key: string, values: E['update'], ...version: VersionArguments<E>) => Promise<Saved<E>>
+	list(options?: ListOptions<TableVisibleRow<E>>): Promise<ListPage<TableRow<E>>>
+	count(options?: CountOptions<TableVisibleRow<E>>): Promise<number>
+	aggregate<const S extends AggregateSpec<TableVisibleRow<E>>>(spec: S): Promise<AggregateRow<TableVisibleRow<E>, S>[]>
+	get(key: string): Promise<TableRow<E>>
+	readonly insert: M extends 'write' ? (values: { [C in keyof UnscopedInsert<E>]: UnscopedInsert<E>[C] }) => Promise<Saved<E>>
+		: UnscopedReadOnly<T, 'insert'>
+	readonly update: M extends 'write'
+		? (key: string, values: { [C in keyof E['update']]: E['update'][C] }, ...version: VersionArguments<E>) => Promise<Saved<E>>
 		: UnscopedReadOnly<T, 'update'>
 	readonly remove: M extends 'write' ? (key: string, ...version: VersionArguments<E>) => Promise<void> : UnscopedReadOnly<T, 'remove'>
 }
+
+/**
+ * An unscoped insert has no capability to stamp the containment from, so it takes the containment columns; the key,
+ * the version and the creator stay the layer's.
+ */
+export type UnscopedInsert<E extends IndexedTable> = Flat<E['insert'] & { [C in E['chain'] & keyof E['row']]: E['row'][C] }>
 
 type UnscopedReadOnly<T extends string, Op extends string> = Unavailable<
 	`${T} is declared unscoped: 'read', so ${Op} needs unscoped: { ${T}: 'write' }`

@@ -15,29 +15,30 @@ bun run typecheck
 bun test    # policy · tables · store · guard · hardening · type-attacks · codegen · testing · postgres (needs FABRIKA_TEST_POSTGRES_URL)
 ```
 
-| Module                | What it owns                                                                                                                                   |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `builtins.ts`         | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                              |
-| `capability.ts`       | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                               |
-| `policy.ts`           | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.                                       |
-| `orm-types.ts`        | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.           |
-| `tables.ts`           | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                          |
-| `description.ts`      | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                        |
-| `nodes.ts`            | Kysely operation nodes built from a description and a scope predicate.                                                                         |
-| `guard.ts`            | The allowlist over the final operation tree, run immediately before compiling.                                                                 |
-| `database.ts`         | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).                                        |
-| `store.ts`            | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                               |
-| `registry.ts`         | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                       |
-| `framework.ts`        | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`; browser-safe. |
-| `file-table-sql.ts`   | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                    |
-| `file-tables.ts`      | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                          |
-| `links.ts`            | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                |
-| `framework-tables.ts` | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                          |
-| `job-leases.ts`       | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                     |
-| `migrations.ts`       | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
-| `codegen.ts`          | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, column list) from a migrated schema.                                         |
-| `testing.ts`          | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
-| `production.ts`       | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                        |
+| Module                 | What it owns                                                                                                                                   |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `builtins.ts`          | The built-ins captured at load, `NameSet`, and `parseList`, the one way a caller's array is read.                                              |
+| `capability.ts`        | `Ref` / `Within` (opaque, type-only member), `CapabilityAuthority`, `MAX_WITHIN_VALUES`; no Bun.                                               |
+| `policy.ts`            | `defineTables` / `readTables`: the table policies, checked against the generated column list; row types.                                       |
+| `orm-types.ts`         | The mini-ORM's handle types and `DbIndex`, which `@fabrika/app`'s kit builds once; types only, exported by `@fabrika/db/tables` too.           |
+| `vocabulary-tables.ts` | The vocabulary form of the policies (authoring and normalized types), `TypedColumnList`; types only.                                           |
+| `tables.ts`            | `@fabrika/db/tables`, browser-safe: the policies as data (`tablePolicies`), `readTables`, `isTables`.                                          |
+| `description.ts`       | `ScopedSelect`: the frozen, non-executable query description a store callback receives.                                                        |
+| `nodes.ts`             | Kysely operation nodes built from a description and a scope predicate.                                                                         |
+| `guard.ts`             | The allowlist over the final operation tree, run immediately before compiling.                                                                 |
+| `database.ts`          | `Database` (no public query method), `Session` (the only path to it), `applicationSchema` (`app_<id>`).                                        |
+| `store.ts`             | `scoped(tables)` → `ScopedDatabase` (the stores); the generated locator; every capability check.                                               |
+| `registry.ts`          | Which objects `scoped` created and the framework side of each (bind once → the locator); module-private.                                       |
+| `framework.ts`         | `@fabrika/db/framework`, for `@fabrika/app` only: `bindScopedDatabase`, `isScopedDatabase`, `fileTablesOf`, `frameworkTablesOf`; browser-safe. |
+| `file-table-sql.ts`    | A file collection's table name (`fabrika_files_<name>`) and its DDL (`fileTableSql`); pure.                                                    |
+| `file-tables.ts`       | A file collection's rows, every request-made operation scoped by its `Ref`'s chain, as guarded trees.                                          |
+| `links.ts`             | A `Ref`'s predicate over a table's containment links, shared by the stores and the file tables.                                                |
+| `framework-tables.ts`  | The webhook bindings and delivery keys the framework writes itself, as guarded trees.                                                          |
+| `job-leases.ts`        | `fabrika_job_leases`: a job run's lease, its generations and deadlines, the last run; `fencedTransaction`.                                     |
+| `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                          |
+| `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, the column list as `TypedColumnList<DB>`) from a migrated schema.            |
+| `testing.ts`           | `@fabrika/db/testing`, test files only: `testDatabase`, the isolation fixtures, `tableProbe`.                                                  |
+| `production.ts`        | `@fabrika/db/production`: the mark of a process that serves an application, which the test kits refuse.                                        |
 
 Migrations are applied by `@fabrika/platform-node`'s application runner through `fabrika db migrate`
 (ADR-0017); `fabrika db codegen` calls `codegen.ts`.
@@ -72,7 +73,19 @@ and the target `Ref`, so no handler can call it.
 - **`@fabrika/db/tables` imports no Bun API, no driver and no Kysely runtime.** `@fabrika/app/contract` (the SPA)
   and the static contract reader (a Worker) import it; `tables.test.ts` bundles it for a browser.
 - **`defineTables` and `readTables` are one parse** (`parseTables`), over values nobody type-checked: plain objects
-  and arrays only, read through own data properties, unknown fields refused. The static reader reads
+  and arrays only, read through own data properties, unknown fields refused. The vocabulary form
+  (`defineTables(vocabulary, columns)`, `readTables(columns, policies, vocabulary)`) also runs
+  `requireStatedContainment`: until the derivation lands, an omitted key, container or child chain throws
+  `… is not implemented (WU2)`, and a container the vocabulary contradicts is refused; it never parses a contained
+  table as a top-level one. Its types already take the derived forms and answer `NormalizedPolicies`, which the
+  kit's `DbIndex` reads.
+- **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only
+  unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
+  policies' builder an `Unavailable` that names `fabrika db codegen`.
+- **A capability reads a column that declares its own read action only when its action is exactly that one**
+  (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The hidden column
+  stays in the row type as an optional `Unavailable` that names the action it needs; reference and unscoped rows
+  read through the table's read action. The static reader reads
   `src/db/tables.ts` through `readTables`, so a policy the runtime refuses is refused from source too.
 - **Only the framework binds a layer, once, and only one `scoped` created.** The object `scoped` returns has no
   `connect` and no locator; `registry.ts` keeps its framework side in a module-private `WeakMap`, so a structural copy

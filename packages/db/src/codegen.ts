@@ -206,7 +206,7 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 	}
 	const kyselyNames = ['ColumnType', 'Generated', 'GeneratedAlways'].filter((name) => used.has(name))
 	const imports = [
-		"import type { ColumnList } from '@fabrika/db'\n",
+		"import type { TypedColumnList } from '@fabrika/db'\n",
 		...(kyselyNames.length === 0 ? [] : [`import type { ${kyselyNames.join(', ')} } from 'kysely'\n`]),
 	]
 	const db = names.map((table) => `\t${table}: ${interfaceName(table)}\n`).join('')
@@ -218,7 +218,7 @@ export function renderSchema(catalog: readonly CatalogColumn[]): string {
 		imports.join(''),
 		...interfaces,
 		`export interface DB {\n${db}}\n`,
-		`export const columns = {\n${columns}} as const satisfies ColumnList<DB>\n`,
+		`export const columns: TypedColumnList<DB> = {\n${columns}}\n`,
 	].join('\n')
 }
 
