@@ -753,3 +753,29 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   driver leaves its release of a connection the database closed as an unhandled rejection (printed, not fatal).
   Finding 1 (`boot` takes `declared` from the approved artifact) → WU4's integration: the hook is `boundHandler` in
   `boot.ts`, where `parseDeclaration` reads the leaf's `declared`.
+- **WU6 — the tag** (`packages/db/src/sql.ts`): `classifySql` reads the template's static parts joined by `$1…$n`, so a
+  value is only ever a bound parameter; the lexer must see exactly n placeholders, so a `${…}` inside a literal, a
+  quoted name, a dollar body or a comment (or glued to a word) is refused, and so are `$<digit>` in the static text and
+  a digit right after a value. The refusals use WU5's exports (`statementKind`, `nestedStatement`,
+  `parenthesizedTarget`, `frameworkReference`, `dmlForeignSchema`, `unicodeIdentifier`, `refusedFunctionCall`), plus
+  `SELECT … INTO` and any non-call `pg_*` name. A list value binds as one Postgres array literal (Bun mis-binds a JS
+  array). `DataAccess.sql(site)` builds the tag; `Database` gained a `schema` getter for the classifier.
+- **WU6 — deviation: no declared function in `ctx.sql`.** `refusedFunctionCall` gets an empty set, because the runtime
+  does not know the migrations' manifest; a call of an application function is refused (call it from a view or a
+  function a migration declares). Threading the manifest to the runtime is a follow-up if an application needs it.
+- **WU6 — `'read'` on a mutation, a job or a webhook is static only**: its transaction writes, so no `READ ONLY` is
+  under it. The text refuses every `INSERT`/`UPDATE`/`DELETE`/`MERGE` word and every locking clause, and the
+  allowlist admits no built-in that writes (`nextval`, `set_config` are out). A query's and an export's `'read'` also run
+  in the `READ ONLY` transaction (witnessed with SQLSTATE 25006 past the classifier).
+- **WU6 — the WU12 case:** `ctx.sql` refuses `fabrika_migrations` by name before anything is sent, so the role is
+  witnessed on `ctx.sql`'s execution path past the name rule (`runApplicationStatement` as `run_<id>`: 42501, and the
+  invocation then refuses to commit). `raw-sql.test.ts` runs entirely as the runtime role (`testDatabase`).
+- **WU6 — for WU8/WU10/WU11:** a `Ref`'s id is `ctx.target.value`; the target shape's `${ctx.target.id}` does not
+  exist. A `ctx.sql` refusal is a `QueryRefusedError`, which `logFailure` logs by name only ("QueryRefusedError
+  thrown"), so an agent sees the reason only in a direct test of the handler; widening `logFailure` to the data
+  layer's own messages is the integrator's call (`ctx.sql`'s quote names of the static text, never a value).
+- **WU6 — checker:** `sql-undeclared` (hint) names the procedure's property key (`'pipeline'`), not the mounted id: the
+  mount path is not syntactic at the `.handle` call. `HINT_RULE_IDS` = `STRUCTURE_HINT_RULE_IDS` + `sql-undeclared`;
+  `structure.ts` exports `handledProcedure`, which both rules use. `raw-sql` is unchanged in code (a `ctx.sql(Row)`
+  tag is a call, never a `…sql` member); its allowed fixture now holds one. `packages/check/package.json` is
+  untouched: the checker does not classify `ctx.sql` text.
