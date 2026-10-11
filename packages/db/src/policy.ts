@@ -417,8 +417,12 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	}
 	const hidden = nameSet(restricted)
 
-	if ((scope.mode === 'dimension' || scope.mode === 'child') && inSet(hidden, scope.key)) {
-		throw new PolicyError(`${table}: the key ${scope.key} cannot have its own read action`)
+	// Every capability reads the key and the version: a page is ordered by the key, and a write answers both.
+	if ((scope.mode === 'dimension' || scope.mode === 'child') && hasOwn(columnReads, scope.key)) {
+		throw new PolicyError(`${table}: the key ${scope.key} takes no read action of its own`)
+	}
+	if (version !== undefined && hasOwn(columnReads, version)) {
+		throw new PolicyError(`${table}: the version ${version} takes no read action of its own`)
 	}
 	const writable = scope.mode === 'dimension' || scope.mode === 'child'
 	if (!writable && (namesOf(insert).length > 0 || namesOf(update).length > 0 || version !== undefined || createdBy !== undefined)) {

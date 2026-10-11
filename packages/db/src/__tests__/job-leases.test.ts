@@ -4,9 +4,9 @@
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import type { LeaseFence } from '../capability'
-import { Database } from '../database'
+import { Database, runFixedStatement } from '../database'
 import { LeaseLostError } from '../errors'
-import { frameworkTablesOf, type JobLeases } from '../framework'
+import { dataAccessOf, frameworkTablesOf, type JobLeases } from '../framework'
 import { FRAMEWORK_MIGRATIONS } from '../migrations'
 import { TestAuthority } from './fixtures/authority'
 import { RecordingDialect } from './fixtures/recording-dialect'
@@ -42,6 +42,16 @@ const n1 = () => authority.ref('note', 'notes.delete', 'n1', { workspace: 'w1', 
 
 async function noteExists(): Promise<boolean> {
 	return (await admin((sql) => sql.unsafe(`select id from ${schema}.notes where id = 'n1'`))).length > 0
+}
+
+/** `work` within `ms`, or the test fails: a lock or a connection nobody gave back makes it wait for ever. */
+function inTime<T>(ms: number, work: Promise<T>): Promise<T> {
+	return Promise.race([
+		work,
+		Bun.sleep(ms).then((): never => {
+			throw new Error(`still waiting after ${ms} ms`)
+		}),
+	])
 }
 
 async function lease(job: string, attemptMs = HOUR): Promise<LeaseFence> {
@@ -209,6 +219,32 @@ describe.skipIf(!hasPostgres)('every mutation checks the fence of the attempt ru
 		})
 		await expect(stores().notes.remove(n1())).rejects.toThrow('has ended; it writes nothing more')
 		expect(await noteExists()).toBe(true)
+	})
+
+	test('an attempt that ends while its transaction sits idle gives back the row, the lease and the connection at once', async () => {
+		const data = dataAccessOf(connected(tables, { database, capabilities: authority }).database)
+		// The deadline is far enough away that Postgres' idle timeout (the time left) does not end it first: the
+		// runner's cancellation alone gives everything back.
+		const fence = await lease('idle-writer', 5_000)
+		authority.lease = fence
+		const hold = Promise.withResolvers<void>()
+		let timeout: unknown
+		const running = data.transaction(async (session) => {
+			await runFixedStatement(session, `update notes set title = 'held' where id = 'n1'`, [])
+			;[timeout] = await runFixedStatement(session, 'show idle_in_transaction_session_timeout', [])
+			await hold.promise
+		})
+		const outcome = running.then(() => 'committed', (error: unknown) => error)
+		await Bun.sleep(300)
+		await leases.cancelInFlight(fence)
+		expect(await inTime(3000, outcome)).toBeInstanceOf(LeaseLostError)
+		await inTime(3000, admin((sql) => sql.unsafe(`update ${schema}.notes set version = version where id = 'n1'`)))
+		expect(await inTime(3000, leases.finish(fence, 'failed'))).toBe(true)
+		hold.resolve()
+		const idle = typeof timeout === 'object' && timeout !== null ? String(Reflect.get(timeout, 'idle_in_transaction_session_timeout')) : ''
+		expect(idle).toMatch(/^[1-5](\.\d+)?s$|^\d+ms$/)
+		const [row] = await admin((sql) => sql.unsafe(`select title from ${schema}.notes where id = 'n1'`))
+		expect(row).toEqual({ title: 'One' })
 	})
 
 	test('the fence holds the lease row until the write commits, so a takeover waits for it', async () => {

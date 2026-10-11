@@ -27,3 +27,29 @@ export class ConflictError extends Error {
 export class LeaseLostError extends Error {
 	override name = 'LeaseLostError'
 }
+
+const SQLSTATE = /^[0-9A-Z]{5}$/
+
+/**
+ * A statement the database refused or could not run, as the layer reports it: its SQLSTATE only. The driver's message,
+ * detail and hint can quote the whole failing row, columns the capability may not read included, so none is kept.
+ */
+export class DatabaseError extends Error {
+	override name = 'DatabaseError'
+	/** The five-character SQLSTATE, or `null` when the statement never reached the database (a lost connection). */
+	readonly sqlState: string | null
+
+	constructor(sqlState: string | null) {
+		super(sqlState === null ? 'the database could not run the statement' : `the database refused the statement (SQLSTATE ${sqlState})`)
+		this.sqlState = sqlState
+	}
+}
+
+/** The driver's failure as a `DatabaseError`; the driver's error object goes no further. */
+export function databaseError(error: unknown): DatabaseError {
+	if (error instanceof DatabaseError) {
+		return error
+	}
+	const state: unknown = typeof error === 'object' && error !== null ? Reflect.get(error, 'errno') : undefined
+	return new DatabaseError(typeof state === 'string' && SQLSTATE.test(state) ? state : null)
+}

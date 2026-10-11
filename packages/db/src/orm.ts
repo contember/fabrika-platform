@@ -11,7 +11,7 @@ import type { InvocationTransaction, Session } from './database'
 import { columnOf, type Compare, type Contains, parseCondition, type Primitive, type SelectState, type TableShape } from './description'
 import { CapabilityError, NotFoundError, QueryRefusedError } from './errors'
 import { linksPredicate, linkValues } from './links'
-import { aggregateNode, allOf, anyOf, column, equals, everything, lockedSelectNode, selectNode } from './nodes'
+import { aggregateNode, allOf, anyOf, column, cursorAlias, equals, everything, lockedSelectNode, selectNode, withCursorColumns } from './nodes'
 import type { DataKind, TargetForm, UnscopedMode } from './orm-types'
 import { modelOf, type TableModel, type TableModels } from './policy'
 import {
@@ -572,7 +572,8 @@ function orderOf(shape: TableShape, orderBy: unknown, tiebreak: readonly string[
 	const order = [...terms]
 	const named = nameSet(terms.map((term) => term.column))
 	for (let index = 0; index < tiebreak.length; index++) {
-		const name = tiebreak[index] ?? ''
+		// The tiebreak is held to the capability's columns like the caller's terms: a page never orders by a hidden one.
+		const name = columnOf(shape, tiebreak[index])
 		if (!inSet(named, name)) {
 			order[order.length] = { column: name, direction: 'asc' }
 		}
@@ -594,21 +595,33 @@ function rowState(table: string, conditions: readonly (Compare | Contains)[], or
 	return { origin: freeze({}), table, columns: undefined, conditions, orderBy: order, limit, offset: undefined, joins: [] }
 }
 
-type CursorValue = string | number | boolean | null
+/** An order column's value as the database prints it: exact, where a `Date` would drop microseconds. */
+type CursorValue = string | null
 
-/** A page's position: the values of its last row's order columns, as opaque text. */
+/** A page's position: the text of its last row's order columns (`keyset.c<n>`), as opaque text. */
 function encodeCursor(row: Readonly<Record<string, unknown>>, order: readonly OrderColumn[]): string {
-	const values: CursorValue[] = order.map(({ column: name }) => {
-		const value = hasOwn(row, name) ? row[name] : null
-		if (value instanceof Date) {
-			return value.toISOString()
-		}
-		if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+	const values: CursorValue[] = order.map(({ column: name }, index) => {
+		const value = hasOwn(row, cursorAlias(index)) ? row[cursorAlias(index)] : null
+		if (typeof value === 'string' || value === null) {
 			return value
 		}
-		throw new QueryRefusedError(`${name} came back as ${typeof value}, which a list cannot page by`)
+		throw new QueryRefusedError(`${name} came back as ${typeof value} text, which a list cannot page by`)
 	})
 	return Buffer.from(JSON.stringify(values)).toString('base64url')
+}
+
+/** A row as the caller sees it: the position columns stay the layer's. */
+function withoutCursor(row: Readonly<Record<string, unknown>>, order: readonly OrderColumn[]): Readonly<Record<string, unknown>> {
+	const item: Record<string, unknown> = {}
+	const keys = ownKeys(row)
+	const cursor = nameSet(order.map((_term, index) => cursorAlias(index)))
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index] ?? ''
+		if (!inSet(cursor, key)) {
+			setOwn(item, key, row[key])
+		}
+	}
+	return item
 }
 
 /** The cursor `after` names, parsed at the boundary: one plain value per order column. */
@@ -624,7 +637,7 @@ function decodeCursor(after: unknown, order: readonly OrderColumn[]): readonly C
 		throw refused()
 	}
 	const values = parseList(parsed, (value): CursorValue => {
-		if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+		if (typeof value === 'string' || value === null) {
 			return value
 		}
 		throw refused()
@@ -690,16 +703,23 @@ async function listRows(
 	if (scope === undefined) {
 		return { items: [], next: null }
 	}
-	const node = selectNode(rowState(table, conditions, order, limit + 1), visible, scope, position)
+	const node = withCursorColumns(
+		selectNode(rowState(table, conditions, order, limit + 1), visible, scope, position),
+		table,
+		order.map((term) => term.column),
+	)
 	const rows = await (await run.read()).run<Readonly<Record<string, unknown>>>(node, {
 		root: 'SelectQueryNode',
 		table,
 		joins: {},
 		scope,
 	})
-	const items = rows.slice(0, limit)
-	const last = items[items.length - 1]
-	return { items, next: rows.length > limit && last !== undefined ? encodeCursor(last, order) : null }
+	const page = rows.slice(0, limit)
+	const last = page[page.length - 1]
+	return {
+		items: page.map((row) => withoutCursor(row, order)),
+		next: rows.length > limit && last !== undefined ? encodeCursor(last, order) : null,
+	}
 }
 
 async function countRows(

@@ -3,8 +3,10 @@ import {
 	AliasNode,
 	AndNode,
 	BinaryOperationNode,
+	CastNode,
 	ColumnNode,
 	ColumnUpdateNode,
+	DataTypeNode,
 	type DeleteQueryNode,
 	FromNode,
 	GroupByItemNode,
@@ -277,6 +279,19 @@ export function lockNode(table: string, key: string, scope: OperationNode, lock:
 
 function lockModifier(lock: 'share' | 'update'): SelectModifierNode {
 	return SelectModifierNode.create(lock === 'share' ? 'ForShare' : 'ForUpdate')
+}
+
+/** The alias a keyset page's position column is selected under; a column name holds no dot, so none collides. */
+export function cursorAlias(index: number): string {
+	return `keyset.c${index}`
+}
+
+/** `select …, cast(<column> as text) as "keyset.c<n>"`: each order column's exact value, which a Date would round. */
+export function withCursorColumns(node: SelectQueryNode, table: string, columns: readonly string[]): SelectQueryNode {
+	const cursor = columns.map((name, index) =>
+		SelectionNode.create(AliasNode.create(CastNode.create(column(table, name), DataTypeNode.create('text')), IdentifierNode.create(cursorAlias(index))))
+	)
+	return Object.freeze({ ...node, selections: [...(node.selections ?? []), ...cursor] })
 }
 
 /** `select <columns> from table where scope for update`: a mutation's precondition read of its own target. */

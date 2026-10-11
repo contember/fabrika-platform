@@ -3,10 +3,9 @@
 // and the signed body), never from a header; the `delivery_id` column holds it. Only `@fabrika/app`'s webhook runtime reaches them, through `frameworkTablesOf`. Every
 // statement is a guarded tree like a store's, keyed by equalities on the framework table itself.
 
-import { SQL } from 'bun'
 import { BinaryOperationNode, type OperationNode, OperatorNode, ValueNode } from 'kysely'
 import { sessionOf } from './database'
-import { QueryRefusedError } from './errors'
+import { DatabaseError, QueryRefusedError } from './errors'
 import type { GuardContext } from './guard'
 import { WEBHOOK_BINDINGS_TABLE, WEBHOOK_DELIVERIES_TABLE } from './migrations'
 import { acknowledgement, allOf, column, deleteNode, equals, insertNode, locateNode, scopedWhere } from './nodes'
@@ -59,7 +58,7 @@ function text(row: Readonly<Record<string, unknown>>, column: string): string {
 }
 
 function isUniqueViolation(error: unknown): boolean {
-	return error instanceof SQL.PostgresError && error.errno === UNIQUE_VIOLATION
+	return error instanceof DatabaseError && error.sqlState === UNIQUE_VIOLATION
 }
 
 export function webhookTables(runtime: () => DataLayerRuntime): WebhookTables {

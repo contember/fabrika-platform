@@ -74,6 +74,9 @@ const NODE_KINDS = lookup(
 	'RawNode',
 	// Only as the one lock of a destination check or a getForUpdate; checked below.
 	'SelectModifierNode',
+	// Only as a selected own column's text, the exact position a keyset page continues from; checked below.
+	'CastNode',
+	'DataTypeNode',
 )
 
 const COMPARISON_OPERATORS = lookup('=', '<>', '<', '<=', '>', '>=', 'like', 'ilike', 'not like', 'not ilike', 'in', 'not in', 'is', 'is not')
@@ -232,6 +235,13 @@ function checkNode(node: OperationNode, parent: Visit | undefined, context: Guar
 			return checkRaw(node, parent)
 		case 'SelectModifierNode':
 			return checkLock(node, parent, context)
+		case 'CastNode':
+			return checkCast(node, parent, context)
+		case 'DataTypeNode':
+			if (parent?.node.kind !== 'CastNode' || parent.key !== 'dataType' || read(node, 'dataType') !== 'text') {
+				throw new QueryRefusedError('a data type appears only as the text of a selected column')
+			}
+			return
 		case 'SchemableIdentifierNode':
 			if (read(node, 'schema') !== undefined) {
 				throw new QueryRefusedError('schema-qualified tables are not allowed')
@@ -317,6 +327,15 @@ function checkLock(node: OperationNode, parent: Visit | undefined, context: Guar
 		&& read(node, 'rawModifier') === undefined
 	if (!onRoot || !plain) {
 		throw new QueryRefusedError('row locks are not allowed')
+	}
+}
+
+/** `cast(<own column> as text) as <alias>`, selected at the top of a select: nothing else casts. */
+function checkCast(node: OperationNode, parent: Visit | undefined, context: GuardContext): void {
+	const selected = parent?.node.kind === 'AliasNode' && parent.key === 'node' && parent.up?.node.kind === 'SelectionNode'
+		&& parent.up.up?.node.kind === 'SelectQueryNode' && parent.up.up.up === undefined && parent.up.up.key === 'selections'
+	if (context.root !== 'SelectQueryNode' || !selected || !isOwnColumn(read(node, 'expression'), context.table)) {
+		throw new QueryRefusedError('a cast appears only as the text of a selected column of the statement table')
 	}
 }
 

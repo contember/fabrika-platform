@@ -142,8 +142,8 @@ and the target `Ref`, so no handler can call it.
   moved would still reach the file. The pending insert and its completion lock the owner row `for share` on the
   owner `Ref`'s chain in their transaction. Only a removed, orphaned or stale pending row is ever purged, after its
   object.
-  `framework-tables.ts` needs `bun` too (it reads a unique violation off `SQL.PostgresError`); `framework.ts` imports
-  only its types, and `store.ts` builds the implementation.
+  `framework-tables.ts` reads a unique violation off `DatabaseError.sqlState`; `framework.ts` imports only its types,
+  and `store.ts` builds the implementation.
 - **A delivery key is recorded by its primary key.** The `delivery_id` column holds the key `@fabrika/app` derives
   from the binding and the signed body, never an unsigned header. Two concurrent copies of one delivery insert the
   same `(binding_id, delivery_id)`; exactly one succeeds and the other answers "already recorded". Never replace this
@@ -151,9 +151,11 @@ and the target `Ref`, so no handler can call it.
 - **Every mutation of a job attempt is fenced by its lease** (`fencedWork` in `store.ts` → `fencedTransaction`). The
   authority's `fence()` names the attempt, or `null` in a request. In the mutation's transaction, before the write:
   a `for share` select requires the attempt's generation, holder and an unpassed `attempt_deadline`, and
-  `statement_timeout` is set to the time left. Just before `COMMIT` the same check runs again. A failed check, a
-  statement the deadline cancelled, or one `cancelInFlight` cancelled (the runner calls it when the attempt ends)
-  rolls back with `LeaseLostError`. The lock makes a takeover or a renewal wait for the write, so no write of an old
+  `statement_timeout` and `idle_in_transaction_session_timeout` are set to the time left. Just before `COMMIT` the same
+  check runs again. A failed check, a statement the deadline cancelled, or `cancelInFlight` (the runner calls it when
+  the attempt ends) rolls back with `LeaseLostError`. `cancelInFlight` aborts the transaction itself (`Session.transaction`'s
+  signal), so it rolls back and gives its connection back even while its work waits on something else, and cancels a
+  statement still running, matched by pid and `xact_start` so a reused pid is left alone. The lock makes a takeover or a renewal wait for the write, so no write of an old
   generation commits after a newer one was granted. A store's write runs in `fencedWork`; a handle's in its site's
   session: an invocation's transaction (a request or a webhook delivery, which hold no lease) or a job's
   `ctx.transaction`, which is `fencedWork`. A job's handles outside it refuse every write. Never add a write path
@@ -262,8 +264,20 @@ and the target `Ref`, so no handler can call it.
 - **An invocation's transaction ends once, and never commits after a refused statement.** `InvocationTransaction`
   opens on its first statement (setting `idle_in_transaction_session_timeout`), and a statement the database refused
   marks it failed: Postgres answers a COMMIT of an aborted transaction with a silent ROLLBACK, so `commit()` rolls back
-  and throws instead. Once ended, `session()` refuses. A query's (`readOnly`) is `READ ONLY`, and so is any invocation
-  while `DataLayerRuntime.readOnly` holds.
+  and throws instead. Ended (no statement runs in it, a kept `Session` included) and released (its connection is back
+  in the pool) are two states: its body is a Kysely `transaction().execute` that waits for the framework's decision,
+  so the connection goes back whether the COMMIT succeeded, failed or the connection died. Never move it onto a
+  controlled transaction, which keeps the connection after a failed COMMIT. A query's (`readOnly`) is `READ ONLY`, and
+  so is any invocation while `DataLayerRuntime.readOnly` holds.
+- **A driver failure leaves the layer as a `DatabaseError` with its SQLSTATE only** (`Session`, at every statement,
+  BEGIN, COMMIT and ROLLBACK). The driver's message, detail and hint can quote the whole failing row, hidden columns
+  included; never attach the driver's error, its message or its fields. Bun's driver rejects its release of a
+  connection the database already closed without awaiting it, so such a loss also prints one unhandled rejection
+  (`connection-loss.ts` runs that case in a process of its own).
+- **Every capability reads the key and the version.** A column policy on either is refused: a page is ordered by the
+  key and a write answers both. A list's every order column, the synthesized tiebreak included, is held to the
+  capability's columns, and its cursor is the database's text of each (`cast(… as text)`, the one cast the guard
+  admits, as a selected own column), so a timestamp keeps its microseconds.
 - **Every handle checks its site first** (`DataSite.check`, the framework's binding to its invocation), then refuses
   what the site's kind or declaration does not allow with the message its type gives, then runs the store's own
   checks. A handle is built per invocation; never cache one across invocations or skip the check for a read.

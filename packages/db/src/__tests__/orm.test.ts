@@ -8,8 +8,9 @@
 
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import { Database, type InvocationTransaction, runFixedStatement } from '../database'
-import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
+import { CapabilityError, ConflictError, DatabaseError, NotFoundError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
 import type { DataKind, UnscopedMode } from '../orm-types'
 import { scoped } from '../store'
@@ -51,6 +52,8 @@ beforeAll(async () => {
 			`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('w1', 'o1', 'W1', 'u'), ('w2', 'o1', 'W2', 'u'), ('w3', 'o2', 'W3', 'u')`,
 		)
 		await sql.unsafe(`insert into ${schema}.countries (code, name) values ('CZ', 'Czechia'), ('DE', 'Germany'), ('AT', 'Austria')`)
+		await sql.unsafe(`alter table ${schema}.notes add constraint notes_body_allowed check (body is distinct from 'forbidden')`)
+		await sql.unsafe(`alter table ${schema}.organizations add constraint organizations_name_once unique (name) deferrable initially deferred`)
 	})
 	database = Database.postgres({ url: url ?? '', schema, max: 4 })
 	const layer = scoped(tables)
@@ -100,15 +103,25 @@ const note = <const A extends string>(action: A, id: string, workspace = 'w1', o
 const inWorkspace = <const A extends string>(action: A, workspace = 'w1', organization = 'o1') =>
 	alice.ref('workspace', action, workspace, { organization })
 
-async function seedNote(title: string, workspace = 'w1', organization = 'o1'): Promise<string> {
+async function seedNote(title: string, workspace = 'w1', organization = 'o1', createdAt = new Date().toISOString()): Promise<string> {
 	const id = Bun.randomUUIDv7()
 	await admin((sql) =>
 		sql.unsafe(
-			`insert into ${schema}.notes (id, workspace_id, organization_id, title, body, internal, created_by, version) values ($1, $2, $3, $4, 'body', 'internal', 'u', 1)`,
-			[id, workspace, organization, title],
+			`insert into ${schema}.notes (id, workspace_id, organization_id, title, body, internal, created_by, version, created_at) values ($1, $2, $3, $4, 'body', 'internal', 'u', 1, $5)`,
+			[id, workspace, organization, title, createdAt],
 		)
 	)
 	return id
+}
+
+/** `work` within `ms`, or the test fails: a leaked connection makes the next invocation wait for ever. */
+function inTime<T>(ms: number, work: Promise<T>): Promise<T> {
+	return Promise.race([
+		work,
+		Bun.sleep(ms).then((): never => {
+			throw new Error(`still waiting after ${ms} ms`)
+		}),
+	])
 }
 
 async function row(table: string, id: string): Promise<Record<string, unknown> | undefined> {
@@ -407,5 +420,107 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		expect(invocation('query').handles.unscoped).toBeUndefined()
 		expect(() => invocation('mutation', { fabrika_job_leases: 'read' })).toThrow('is a framework table')
 		expect(() => invocation('mutation', { deals: 'read' })).toThrow('not a table of src/db/tables.ts')
+	})
+
+	test('a statement the database refuses throws only its SQLSTATE: no driver detail, no row, no hidden column', async () => {
+		const id = await seedNote('constrained')
+		await admin((sql) => sql.unsafe(`update ${schema}.notes set internal = 'hidden-secret-value' where id = $1`, [id]))
+		const { transaction, handles } = invocation('mutation')
+		const refused = await call(handles.target(note('notes.write', id), 'on'), 'update', { body: 'forbidden' }, { expectVersion: 1 }).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		await transaction.rollback()
+		expect(refused).toBeInstanceOf(DatabaseError)
+		expect(refused instanceof DatabaseError ? refused.sqlState : null).toBe('23514')
+		const exposed = JSON.stringify(refused, Object.getOwnPropertyNames(refused))
+		expect(exposed).not.toContain('hidden-secret-value')
+		expect(exposed).not.toContain('forbidden')
+		for (const field of ['cause', 'detail', 'hint', 'where', 'table', 'constraint']) {
+			expect(Object.getOwnPropertyNames(refused)).not.toContain(field)
+		}
+	})
+
+	test('a failed COMMIT still releases the connection: the next invocation on a one-connection pool runs', async () => {
+		const single = Database.postgres({ url: url ?? '', schema, max: 1 })
+		const layer = scoped(tables)
+		bindScopedDatabase(layer, { database: single, capabilities: alice })
+		const one = dataAccessOf(layer)
+		const site = (transaction: InvocationTransaction): DataSite => ({
+			kind: 'mutation',
+			unscoped: {},
+			principal: 'user:alice',
+			check() {},
+			session: () => transaction.session(),
+		})
+		try {
+			// The deferred unique key is checked at COMMIT, which the database refuses.
+			const twins = one.invocation(false)
+			for (const value of ['twin-a', 'twin-b']) {
+				await call(one.handles(site(twins)).target(alice.ref('organization', 'organizations.create', value), 'in'), 'organizations.insert', {
+					name: 'Twin',
+				})
+			}
+			const failed = await twins.commit().then(() => undefined, (error: unknown) => error)
+			expect(failed).toBeInstanceOf(DatabaseError)
+			expect(JSON.stringify(failed, Object.getOwnPropertyNames(failed))).not.toContain('Twin')
+			await twins.rollback()
+			expect(twins.released).toBe(true)
+			const next = one.invocation(true)
+			expect(await inTime(3000, call(one.handles(site(next)).reference, 'countries.count'))).toBe(3)
+			await next.commit()
+		} finally {
+			await single.close()
+		}
+		const twins: unknown[] = await admin((sql) => sql.unsafe(`select id from ${schema}.organizations where name = 'Twin'`))
+		expect(twins).toEqual([])
+	})
+
+	test('a connection the database ends inside the transaction fails the COMMIT and still goes back to the pool', async () => {
+		const child = Bun.spawn(['bun', join(import.meta.dir, 'fixtures', 'connection-loss.ts')], { stdout: 'pipe', stderr: 'ignore' })
+		const lines = (await new Response(child.stdout).text()).trim().split('\n')
+		expect(await child.exited).toBe(0)
+		expect(lines).toEqual(['commit: DatabaseError', 'released: true', 'next: [{"one":1}]'])
+	})
+
+	test('a write Ref pages its subtree by its key, and a write answers only the key and the version', async () => {
+		await admin((sql) => sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('ww', 'o1', 'WW', 'u')`))
+		const ids = [await seedNote('w-one', 'ww'), await seedNote('w-two', 'ww'), await seedNote('w-three', 'ww')]
+		const { transaction, handles } = invocation('mutation')
+		const workspace = handles.target(inWorkspace('notes.write', 'ww'), 'in')
+		const seen: unknown[] = []
+		let after: unknown
+		do {
+			const page = await call(workspace, 'notes.list', { limit: 1, ...(after === undefined ? {} : { after }) })
+			for (const item of itemsOf(page)) {
+				expect(Object.keys(item)).not.toContain('title')
+				seen.push(item['id'])
+			}
+			after = nextOf(page) ?? undefined
+		} while (after !== undefined)
+		expect(seen).toEqual([...ids].sort())
+		const saved = await call(handles.target(note('notes.write', ids[0] ?? '', 'ww'), 'on'), 'update', { body: 'x' }, { expectVersion: 1 })
+		expect(keysOf(saved)).toEqual(['id', 'version'])
+		await transaction.commit()
+	})
+
+	test('a timestamp cursor keeps its microseconds: rows within one millisecond page once each', async () => {
+		await admin((sql) => sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('wt', 'o1', 'WT', 'u')`))
+		const first = await seedNote('first', 'wt', 'o1', '2026-10-11 10:00:00.123456+00')
+		const second = await seedNote('second', 'wt', 'o1', '2026-10-11 10:00:00.123789+00')
+		const { transaction, handles } = invocation('query')
+		const within = handles.within(alice.within('workspace', 'notes.read', ['wt']))
+		const seen: unknown[] = []
+		let after: unknown
+		for (let page = 0; page < 4; page++) {
+			const listed = await call(within, 'notes.list', { orderBy: [['created_at', 'asc']], limit: 1, ...(after === undefined ? {} : { after }) })
+			seen.push(...itemsOf(listed).map((item) => item['id']))
+			after = nextOf(listed) ?? undefined
+			if (after === undefined) {
+				break
+			}
+		}
+		await transaction.commit()
+		expect(seen).toEqual([first, second])
 	})
 })

@@ -3,10 +3,9 @@
 // `@fabrika/app`'s job runner reaches it, through `frameworkTablesOf`. Every time is the database's own clock: two
 // containers whose clocks disagree still agree on who holds a lease and when it expires.
 
-import { SQL } from 'bun'
 import type { LeaseFence } from './capability'
 import { runFixedStatement, type Session, sessionOf } from './database'
-import { LeaseLostError, QueryRefusedError } from './errors'
+import { DatabaseError, LeaseLostError, QueryRefusedError } from './errors'
 import { JOB_LEASES_TABLE } from './migrations'
 import type { DataLayerRuntime } from './store'
 
@@ -73,6 +72,7 @@ export interface JobLeases {
 const T = JOB_LEASES_TABLE
 const MS = `* interval '1 millisecond'`
 const QUERY_CANCELED = '57014'
+const IDLE_TIMEOUT = '25P03'
 
 const STATE_COLUMNS =
 	'generation, holder, expires_at, attempt_deadline, first_seen_at, last_started_at, last_finished_at, last_status, last_succeeded_at, last_duration_ms, last_missed_reported_at'
@@ -107,15 +107,17 @@ const SQL_CLAIM_OVERDUE = `update ${T} set last_missed_reported_at = now()
 	returning last_succeeded_at, first_seen_at`
 
 // Inside a mutation's transaction, so `clock_timestamp()`: `now()` is when the transaction began.
-const SQL_FENCE = `select pg_backend_pid() as pid,
+const SQL_FENCE = `select pg_backend_pid() as pid, transaction_timestamp()::text as began,
 	greatest(1, ceil(extract(epoch from attempt_deadline - clock_timestamp()) * 1000))::int as remaining_ms
 	from ${T} where job = $1 and generation = $2 and holder = $3 and attempt_deadline > clock_timestamp() for share`
 
-const SQL_STATEMENT_TIMEOUT = `select set_config('statement_timeout', $1, true)`
+// The attempt's remaining time bounds a statement and an idle wait alike: either past the deadline ends the transaction.
+const SQL_TIMEOUTS = `select set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $1, true)`
 
 const SQL_STILL_HELD = `select job from ${T} where job = $1 and generation = $2 and holder = $3 and attempt_deadline > clock_timestamp()`
 
-const SQL_CANCEL = 'select pg_cancel_backend($1)'
+// Only the backend still in the transaction the fence opened: a pid the pool reused for other work is left alone.
+const SQL_CANCEL = `select pg_cancel_backend(pid) from pg_stat_activity where pid = $1 and xact_start = $2::timestamptz`
 
 const SQL_STATE = `select now() as now, ${STATE_COLUMNS} from ${T} where job = $1`
 
@@ -133,6 +135,14 @@ async function rows(session: Session, text: string, parameters: readonly (string
 function integer(row: Readonly<Record<string, unknown>>, name: string): number {
 	const value = row[name]
 	if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+		throw new QueryRefusedError(`${T}.${name} came back as ${typeof value}`)
+	}
+	return value
+}
+
+function text(row: Readonly<Record<string, unknown>>, name: string): string {
+	const value = row[name]
+	if (typeof value !== 'string') {
 		throw new QueryRefusedError(`${T}.${name} came back as ${typeof value}`)
 	}
 	return value
@@ -191,9 +201,27 @@ function fenceOf(job: string, holder: string, row: Readonly<Record<string, unkno
 	return row === undefined ? null : Object.freeze({ job, holder, generation: integer(row, 'generation') })
 }
 
-// Which backends run a statement of each attempt, and which attempts have ended. Keyed by the fence the runner holds.
-const inFlight = new WeakMap<LeaseFence, Set<number>>()
+/** A backend in one fenced transaction: its pid, and when that transaction began. */
+interface Backend {
+	readonly pid: number
+	readonly began: string
+}
+
+// Which transactions each attempt has open, how to end them, and which attempts have ended. Keyed by the fence the
+// runner holds.
+const inFlight = new WeakMap<LeaseFence, Set<Backend>>()
+const stops = new WeakMap<LeaseFence, AbortController>()
 const ended = new WeakSet<LeaseFence>()
+
+function stopOf(fence: LeaseFence): AbortController {
+	const known = stops.get(fence)
+	if (known !== undefined) {
+		return known
+	}
+	const stop = new AbortController()
+	stops.set(fence, stop)
+	return stop
+}
 
 function refuseEnded(fence: LeaseFence): void {
 	if (ended.has(fence)) {
@@ -214,28 +242,28 @@ const params = (fence: LeaseFence): (string | number)[] => [fence.job, fence.gen
  */
 export async function fencedTransaction<T>(session: Session, fence: LeaseFence, work: (transaction: Session) => Promise<T>): Promise<T> {
 	refuseEnded(fence)
-	let backend: number | undefined
+	let backend: Backend | undefined
 	try {
 		return await session.transaction(async (transaction) => {
 			const [held] = await rows(transaction, SQL_FENCE, params(fence))
 			if (held === undefined) {
 				throw lost(fence)
 			}
-			backend = integer(held, 'pid')
-			const running = inFlight.get(fence) ?? new Set<number>()
+			backend = { pid: integer(held, 'pid'), began: text(held, 'began') }
+			const running = inFlight.get(fence) ?? new Set<Backend>()
 			running.add(backend)
 			inFlight.set(fence, running)
 			refuseEnded(fence)
-			await rows(transaction, SQL_STATEMENT_TIMEOUT, [String(integer(held, 'remaining_ms'))])
+			await rows(transaction, SQL_TIMEOUTS, [String(integer(held, 'remaining_ms'))])
 			const result = await work(transaction)
 			refuseEnded(fence)
 			if ((await rows(transaction, SQL_STILL_HELD, params(fence))).length === 0) {
 				throw lost(fence)
 			}
 			return result
-		})
+		}, stopOf(fence).signal)
 	} catch (error) {
-		if (error instanceof SQL.PostgresError && error.errno === QUERY_CANCELED) {
+		if (ended.has(fence) || (error instanceof DatabaseError && (error.sqlState === QUERY_CANCELED || error.sqlState === IDLE_TIMEOUT))) {
 			throw lost(fence)
 		}
 		throw error
@@ -290,9 +318,12 @@ export function jobLeases(runtime: () => DataLayerRuntime): JobLeases {
 
 		async cancelInFlight(fence: LeaseFence): Promise<void> {
 			ended.add(fence)
+			// The transaction rolls back and gives its connection back now, even while its work waits on something else;
+			// a statement still running is cancelled, so the ROLLBACK queued behind it runs.
+			stopOf(fence).abort(lost(fence))
 			const running = [...(inFlight.get(fence) ?? [])]
 			for (const backend of running) {
-				await rows(session(), SQL_CANCEL, [backend])
+				await rows(session(), SQL_CANCEL, [backend.pid, backend.began])
 			}
 		},
 

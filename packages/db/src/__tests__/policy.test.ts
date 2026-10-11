@@ -91,8 +91,15 @@ describe('defineTables refuses a policy it cannot enforce', () => {
 
 	test('a key with its own read action', () => {
 		expect(() => define(columns, { notes: { ...notes, columns: { id: { read: 'notes.admin' } } }, note_comments: comments, countries })).toThrow(
-			'the key id cannot have its own read action',
+			'the key id takes no read action of its own',
 		)
+	})
+
+	test('a column policy on the key or the version, even the table read action: every capability reads both', () => {
+		for (const column of ['id', 'version']) {
+			expect(() => define(columns, { notes: { ...notes, columns: { [column]: { read: 'notes.read' } } }, note_comments: comments, countries }))
+				.toThrow(`the ${column === 'id' ? 'key' : 'version'} ${column} takes no read action of its own`)
+		}
 	})
 
 	test('an empty action name', () => {
