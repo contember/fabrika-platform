@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATABASE_CODE_FAILURE, databaseCodeCheck } from './database-code'
+import { disallowedStatement } from './migration-allowlist'
 import { refusedStatement } from './migration-sql'
 
 const IDENTIFIER = /^[a-z][a-z0-9_]*$/
@@ -147,14 +148,17 @@ export async function applyPostgresMigrations(
 	options: { now?: () => number } = {},
 ): Promise<string[]> {
 	const plan = definePostgresMigrationPlan(input)
-	await db.prepare(`SELECT pg_advisory_lock(${plan.lockKey})`).run()
+	await db.prepare(`SELECT pg_catalog.pg_advisory_lock(${plan.lockKey})`).run()
 	let migrationFailed = false
 	let migrationError: unknown
 	const fresh: string[] = []
 	try {
-		await ensureLedger(db, plan)
 		const applied = await appliedChecksums(db, plan)
-		if (plan.application !== undefined) verifyChecksums(plan.bundles, applied)
+		if (plan.application !== undefined) {
+			verifyChecksums(plan.bundles, applied)
+			refuseDisallowedStatements(plan.bundles, applied, plan.application.schema)
+		}
+		await ensureLedger(db, plan)
 		for (const bundle of plan.bundles) {
 			for (const migration of bundle.migrations) {
 				const identity = postgresMigrationIdentity(bundle.name, migration.name)
@@ -165,7 +169,7 @@ export async function applyPostgresMigrations(
 						db.prepare(GUARD_MARK),
 						db.prepare(migration.sql),
 						db.prepare(guardCheck(plan.application)),
-						...(plan.application === undefined ? [] : [db.prepare(databaseCodeCheck(plan.application.schema))]),
+						...databaseCodeStatements(db, plan.application),
 						ledgerInsert(db, plan, bundle.name, migration, (options.now ?? unixNow)()),
 					])
 				} catch (error) {
@@ -194,7 +198,7 @@ export async function applyPostgresMigrations(
 	let unlockFailed = false
 	try {
 		const unlocked = await db
-			.prepare(`SELECT pg_advisory_unlock(${plan.lockKey}) AS unlocked`)
+			.prepare(`SELECT pg_catalog.pg_advisory_unlock(${plan.lockKey}) AS unlocked`)
 			.first<{ unlocked: boolean }>()
 		unlockFailed = unlocked?.unlocked !== true
 	} catch {
@@ -280,8 +284,13 @@ async function ensureLedger(db: SqlDatabase, plan: PostgresMigrationPlan): Promi
 	)`).run()
 }
 
-/** Applied identities, each with its recorded checksum; `undefined` for a service ledger, which records none. */
+/**
+ * Applied identities, each with its recorded checksum; `undefined` for a service ledger, which records none. Empty
+ * while the ledger does not exist yet, so a fresh schema is checked before the runner creates anything.
+ */
 async function appliedChecksums(db: SqlDatabase, plan: PostgresMigrationPlan): Promise<Map<string, string | undefined>> {
+	const ledger = await db.prepare('SELECT pg_catalog.to_regclass(?) IS NOT NULL AS present').bind(plan.ledgerTable).first<{ present: boolean }>()
+	if (ledger?.present !== true) return new Map()
 	const columns = plan.application === undefined ? 'bundle, name' : 'bundle, name, checksum'
 	const { results } = await db.prepare(`SELECT ${columns} FROM ${plan.ledgerTable}`).all<LedgerRow>()
 	const applied = new Map<string, string | undefined>()
@@ -318,36 +327,82 @@ function verifyChecksums(bundles: readonly PostgresMigrationBundle[], applied: R
 	}
 }
 
+/**
+ * Refuses an application file that is not applied yet and holds a statement outside the allowlist, before any SQL
+ * runs. An applied file is already checksum-locked, so a statement the allowlist refuses today cannot lock an
+ * installation out of its next deploy.
+ */
+function refuseDisallowedStatements(
+	bundles: readonly PostgresMigrationBundle[],
+	applied: ReadonlyMap<string, string | undefined>,
+	schema: string,
+): void {
+	for (const bundle of bundles) {
+		for (const migration of bundle.migrations) {
+			if (applied.has(postgresMigrationIdentity(bundle.name, migration.name))) continue
+			const refused = disallowedStatement(migration.sql, schema)
+			if (refused === undefined) continue
+			throw new PostgresMigrationError(
+				`Application migration ${migration.name} line ${refused.line}: ${refused.statement} is not allowed; an application migration holds only CREATE TABLE, ALTER TABLE, CREATE [UNIQUE] INDEX, ALTER INDEX … RENAME TO, CREATE TYPE … AS ENUM, ALTER TYPE … ADD/RENAME VALUE, DROP, TRUNCATE, COMMENT ON, INSERT, UPDATE and DELETE, naming no other schema`,
+			)
+		}
+	}
+}
+
 /** SHA-256 of the file's text, hex. */
 export function migrationChecksum(sql: string): string {
 	return createHash('sha256').update(sql, 'utf8').digest('hex')
 }
 
 /** Remembers the transaction in a transaction-local setting, which a COMMIT or ROLLBACK in the file discards. */
-const GUARD_MARK = "SELECT set_config('fabrika.migration_xact', txid_current()::text, true)"
+const GUARD_MARK = "SELECT pg_catalog.set_config('fabrika.migration_xact', pg_catalog.txid_current()::pg_catalog.text, true)"
 
 /**
  * Fails the transaction when the file ended it or loosened a runner-owned setting. The lexical refusal runs first;
  * this also catches `set_config()` and anything the tokenizer cannot see. `pg_settings.setting` is in milliseconds.
+ * Every function, operator and type is `pg_catalog`'s by name: the application's schema comes first on the path.
  */
 function guardCheck(application: PostgresApplicationMigrationSettings | undefined): string {
+	const differs = (left: string, right: string): string => `${left} OPERATOR(pg_catalog.<>) ${right}`
+	const setting = (name: string): string => `(SELECT setting FROM pg_catalog.pg_settings WHERE name OPERATOR(pg_catalog.=) '${name}')`
 	const settings = application === undefined ? [] : [
-		`(SELECT setting FROM pg_settings WHERE name = 'lock_timeout') <> '${application.lockTimeoutMs}'`,
-		`(SELECT setting FROM pg_settings WHERE name = 'statement_timeout') <> '${application.statementTimeoutMs}'`,
-		`current_setting('search_path') <> '${application.schema}'`,
+		differs(setting('lock_timeout'), `'${application.lockTimeoutMs}'`),
+		differs(setting('statement_timeout'), `'${application.statementTimeoutMs}'`),
+		differs("pg_catalog.current_setting('search_path')", `'${applicationSearchPath(application)}'`),
 	]
-	const conditions = [`current_setting('fabrika.migration_xact', true) IS DISTINCT FROM txid_current()::text`, ...settings]
+	const conditions = [
+		differs("COALESCE(pg_catalog.current_setting('fabrika.migration_xact', true), '')", 'pg_catalog.txid_current()::pg_catalog.text'),
+		...settings,
+	]
 	return `DO $guard$ BEGIN IF ${conditions.join(' OR ')} THEN RAISE EXCEPTION '${GUARD_FAILURE}'; END IF; END $guard$`
+}
+
+/** The application's own schema first, so an unqualified name is its own; `pg_catalog` then, so a built-in resolves. */
+function applicationSearchPath(application: PostgresApplicationMigrationSettings): string {
+	return `${application.schema}, pg_catalog`
 }
 
 function applicationSettings(db: SqlDatabase, application: PostgresApplicationMigrationSettings | undefined): SqlStatement[] {
 	if (application === undefined) return []
 	return [
-		db.prepare(`SET LOCAL search_path TO ${application.schema}`),
+		db.prepare(`SET LOCAL search_path TO ${applicationSearchPath(application)}`),
 		db.prepare(`SET LOCAL lock_timeout = ${application.lockTimeoutMs}`),
 		db.prepare(`SET LOCAL statement_timeout = ${application.statementTimeoutMs}`),
 		// The tokenizer reads '…' without backslash escapes, as Postgres does with this setting on.
 		db.prepare('SET LOCAL standard_conforming_strings = on'),
+	]
+}
+
+/**
+ * The catalog check, after the file and before the commit, on settings it pins itself: the file may have changed
+ * `standard_conforming_strings`, and nothing the application installed may resolve before `pg_catalog`.
+ */
+function databaseCodeStatements(db: SqlDatabase, application: PostgresApplicationMigrationSettings | undefined): SqlStatement[] {
+	if (application === undefined) return []
+	return [
+		db.prepare('SET LOCAL search_path TO pg_catalog, pg_temp'),
+		db.prepare('SET LOCAL standard_conforming_strings = on'),
+		db.prepare(databaseCodeCheck(application.schema)),
 	]
 }
 

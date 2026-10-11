@@ -63,13 +63,19 @@ Read this before moving a service onto this driver.
   schema depends on this: a migration that reached `public` would change live rows on every run.
 - **An application migration installs no database code** (ADR-0017), checked twice for every
   application plan, the framework bundle included. Before any SQL runs, `disallowedStatement`
-  (`migration-sql.ts`) admits only the allowlisted statements: an allowlist, never a blocklist,
-  because a missed form is then refused instead of executed. Inside the migration's transaction,
+  (`migration-allowlist.ts`) admits only the allowlisted statements, `ALTER TABLE` clauses and
+  `CREATE TABLE` forms, naming no schema but the application's: an allowlist at every level, never a
+  blocklist, because a missed form is then refused instead of executed. It reads only files the ledger
+  has not recorded, since applied files are checksum-locked. Inside the migration's transaction,
   before its commit, `databaseCodeCheck` (`database-code.ts`) reads the catalog and fails the
   transaction on any database code, including expressions whose parsed tree calls a function or
   operator outside the reviewed `pg_catalog` lists. Trust built-ins by name, never by volatility.
-  `@fabrika/db`'s codegen runs the same `databaseCodeQuery` at start. Service plans are not
-  checked: a service owns its schema and is trusted platform code.
+  `@fabrika/db`'s codegen runs the same `databaseCodeQuery` at start.
+- **Neither check may depend on the session.** `sqlTokens` follows Postgres' lexer (whitespace is
+  `[ \t\n\r\f\v]`; every character from U+0080 up belongs to a name), the catalog query has no backslash,
+  and every place that runs it pins `search_path` to `pg_catalog` and `standard_conforming_strings` on.
+  The guard qualifies every function, operator and type with `pg_catalog`, because a migration runs with
+  its own schema first on the path. Service plans are not checked: a service is trusted platform code.
 - **Checksums are verified before anything is applied.** An applied file that changed fails the run with
   nothing applied; a ledger row with no file (a rollback) is tolerated.
 - **Nothing logs credentials, an endpoint, or an error object that might quote a signed URL.**

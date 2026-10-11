@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { disallowedStatement, foreignSchemaReference, refusedStatement, statementStarts } from '../migration-sql.js'
+import { foreignSchemaReference, refusedStatement, statementStarts } from '../migration-sql.js'
 
 describe('migration statement starts', () => {
 	test('splits top-level statements and reports the line of each', () => {
@@ -88,90 +88,13 @@ describe('schema-qualified references of an application migration', () => {
 	})
 })
 
-describe('the statements an application migration may hold', () => {
-	test('allows tables, indexes, enum types, drops, comments and backfills', () => {
-		const sql = [
-			"CREATE TYPE stage AS ENUM ('open', 'won');",
-			'CREATE TYPE "Mood" AS ENUM (\'calm\');',
-			"ALTER TYPE stage ADD VALUE IF NOT EXISTS 'lost';",
-			"ALTER TYPE stage RENAME VALUE 'won' TO 'closed';",
-			'CREATE TABLE IF NOT EXISTS deals (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), n bigint GENERATED ALWAYS AS IDENTITY, stage stage);',
-			'CREATE TABLE copy (LIKE deals);',
-			'CREATE INDEX deals_stage ON deals (stage) WHERE stage IS NOT NULL;',
-			'CREATE UNIQUE INDEX deals_lower ON deals (lower(id::text));',
-			"ALTER TABLE deals ADD COLUMN note text, ALTER COLUMN note SET DEFAULT '', DROP CONSTRAINT IF EXISTS deals_check;",
-			"COMMENT ON TABLE deals IS 'CREATE FUNCTION f';",
-			"INSERT INTO deals (stage) VALUES ('open');",
-			"UPDATE deals SET note = 'x' WHERE note IS NULL;",
-			'DELETE FROM deals WHERE stage IS NULL;',
-			'DROP INDEX deals_stage;',
-			'DROP TABLE copy;',
-			'DROP TRIGGER IF EXISTS legacy ON deals;',
-			'DROP FUNCTION IF EXISTS legacy();',
-			'-- CREATE TRIGGER t',
-		].join('\n')
-		expect(disallowedStatement(sql)).toBeUndefined()
-	})
-
-	test('refuses everything else, each before any SQL runs', () => {
-		for (
-			const [sql, statement] of [
-				['CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$', 'CREATE FUNCTION'],
-				['create or replace function f() returns int language sql as $$ select 1 $$', 'CREATE OR'],
-				['CREATE TRIGGER t AFTER UPDATE ON a FOR EACH ROW EXECUTE FUNCTION f()', 'CREATE TRIGGER'],
-				['CREATE RULE r AS ON UPDATE TO a DO ALSO DELETE FROM b', 'CREATE RULE'],
-				['CREATE VIEW v AS SELECT 1', 'CREATE VIEW'],
-				['CREATE MATERIALIZED VIEW v AS SELECT 1', 'CREATE MATERIALIZED'],
-				['CREATE POLICY p ON a USING (true)', 'CREATE POLICY'],
-				['CREATE EXTENSION dblink', 'CREATE EXTENSION'],
-				['CREATE DOMAIN d AS int CHECK (VALUE > 0)', 'CREATE DOMAIN'],
-				['CREATE SEQUENCE s', 'CREATE SEQUENCE'],
-				['CREATE SCHEMA s', 'CREATE SCHEMA'],
-				['CREATE TEMP TABLE scratch (id text)', 'CREATE TEMP'],
-				['CREATE TYPE r AS RANGE (subtype = int4)', 'CREATE TYPE other than AS ENUM'],
-				['CREATE TYPE pair AS (a int, b int)', 'CREATE TYPE other than AS ENUM'],
-				['ALTER TYPE stage OWNER TO someone', 'ALTER TYPE other than ADD VALUE or RENAME VALUE'],
-				['CREATE TABLE b (LIKE a INCLUDING ALL)', 'CREATE TABLE … LIKE … INCLUDING'],
-				['CREATE TABLE b (LIKE a INCLUDING DEFAULTS)', 'CREATE TABLE … LIKE … INCLUDING'],
-				['CREATE TABLE b AS SELECT * FROM a', 'CREATE TABLE … AS'],
-				['ALTER TABLE a SET SCHEMA elsewhere', 'ALTER TABLE … SET SCHEMA'],
-				['ALTER TABLE a OWNER TO someone', 'ALTER TABLE … OWNER TO'],
-				['DROP SCHEMA s CASCADE', 'DROP SCHEMA'],
-				['DO $$ BEGIN PERFORM 1; END $$', 'DO'],
-				['COPY a FROM PROGRAM \'psql -c "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql"\'', 'COPY'],
-				['SELECT 1', 'SELECT'],
-				["SELECT set_config('search_path', 'public', false)", 'SELECT'],
-				['WITH x AS (DELETE FROM a RETURNING *) SELECT 1', 'WITH'],
-				['PREPARE q AS INSERT INTO a VALUES (1)', 'PREPARE'],
-				['EXECUTE q', 'EXECUTE'],
-				['CALL p()', 'CALL'],
-				['SET search_path TO public', 'SET'],
-				['GRANT SELECT ON a TO PUBLIC', 'GRANT'],
-				['REVOKE ALL ON a FROM PUBLIC', 'REVOKE'],
-				['ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC', 'ALTER DEFAULT'],
-				['EXPLAIN ANALYZE CREATE MATERIALIZED VIEW v AS SELECT 1', 'EXPLAIN'],
-				['(SELECT 1)', '('],
-			] as const
-		) {
-			expect(disallowedStatement(sql)?.statement).toBe(statement)
+describe('the tokenizer reads SQL as Postgres does', () => {
+	test('only Postgres whitespace separates tokens: a no-break space or a BOM is part of a name', () => {
+		for (const space of ['\u00a0', '\ufeff', '\u2003', '\u3000']) {
+			// JS \s would read `<space>E'\'…` as one escaped string; Postgres reads a name, then `'\'`, then statements.
+			const sql = `INSERT INTO a VALUES (${space}E'\\'); CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$; --')`
+			expect(statementStarts(sql).map((start) => start.words[0])).toEqual(['INSERT', 'CREATE'])
 		}
-	})
-
-	test('a comment ended by a lone carriage return hides no statement', () => {
-		const sql = 'CREATE TABLE a (id text); -- a note\rCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$'
-		expect(disallowedStatement(sql)?.statement).toBe('CREATE FUNCTION')
-	})
-
-	test('a dollar quote with a long tag and an unmatched parenthesis hides no statement', () => {
-		const tag = `$${'t'.repeat(70)}$`
-		const sql = `CREATE TABLE a (id text);\nCOMMENT ON TABLE a IS ${tag} ( ${tag};\nCREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`
-		expect(disallowedStatement(sql)).toEqual({ statement: 'CREATE FUNCTION', line: 3 })
-	})
-
-	test('names the line of the refused statement', () => {
-		expect(disallowedStatement('CREATE TABLE a (id text);\n\nCREATE TRIGGER t AFTER UPDATE ON a EXECUTE FUNCTION f()')).toEqual({
-			statement: 'CREATE TRIGGER',
-			line: 3,
-		})
+		expect(statementStarts('SELECT 1;\t\f\v\r\nCOMMIT').map((start) => start.words[0])).toEqual(['SELECT', 'COMMIT'])
 	})
 })

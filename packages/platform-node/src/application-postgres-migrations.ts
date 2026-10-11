@@ -1,7 +1,7 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { disallowedStatement, foreignSchemaReference } from './migration-sql'
+import { foreignSchemaReference } from './migration-sql'
 import {
 	applyPostgresMigrations,
 	definePostgresMigrationPlan,
@@ -64,15 +64,6 @@ export function applicationMigrationLockKey(appId: string): number {
 	return createHash('sha256').update(`fabrika-db:${appId}`, 'utf8').digest().readUIntBE(0, 6) + 1
 }
 
-/** Refuses, before any SQL runs, a statement outside the allowlist (`disallowedStatement`), naming the file and line. */
-function refuseDisallowedStatement(migration: PostgresMigration): void {
-	const refused = disallowedStatement(migration.sql)
-	if (refused === undefined) return
-	throw new PostgresMigrationError(
-		`Application migration ${migration.name} line ${refused.line}: ${refused.statement} is not allowed; an application migration holds only CREATE TABLE, ALTER TABLE, CREATE [UNIQUE] INDEX, CREATE TYPE … AS ENUM, ALTER TYPE … ADD/RENAME VALUE, DROP, COMMENT ON, INSERT, UPDATE and DELETE`,
-	)
-}
-
 /** An application's migration wrapper: its schema, ledger, lock and timeouts are derived, never configured. */
 export function definePostgresApplicationMigrations(config: PostgresApplicationMigrationsConfig): PostgresApplicationMigrations {
 	const schema = applicationDatabaseSchema(config.appId)
@@ -96,7 +87,7 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 				)
 			}
 		}
-		const defined = definePostgresMigrationPlan({
+		return definePostgresMigrationPlan({
 			ledgerTable: `${schema}.${APPLICATION_MIGRATION_LEDGER}`,
 			lockKey,
 			bundles: [
@@ -109,11 +100,6 @@ export function definePostgresApplicationMigrations(config: PostgresApplicationM
 				statementTimeoutMs: config.statementTimeoutMs ?? DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS,
 			},
 		})
-		// After the generic validation, so a COMMIT or a SET keeps its sharper refusal.
-		for (const bundle of defined.bundles) {
-			for (const migration of bundle.migrations) refuseDisallowedStatement(migration)
-		}
-		return defined
 	}
 	const apply = async (db: SqlDatabase, migrations: readonly PostgresMigration[] = read()): Promise<string[]> =>
 		applyPostgresMigrations(db, plan(migrations))

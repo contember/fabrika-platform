@@ -16,6 +16,21 @@ const FUNCTIONS = [
 	'btrim',
 	'ltrim',
 	'rtrim',
+	'abs',
+	'round',
+	'trunc',
+	'floor',
+	'ceil',
+	'ceiling',
+	'date_trunc',
+	// `AT TIME ZONE`, which an index on a timestamptz needs to stay immutable.
+	'timezone',
+	'date_part',
+	'extract',
+	'array_length',
+	'cardinality',
+	'to_tsvector',
+	'to_tsquery',
 	// The casts Postgres inserts on its own, such as `int8(int4)` for `DEFAULT 0` on a BIGINT column.
 	'int2',
 	'int4',
@@ -35,11 +50,47 @@ const FUNCTIONS = [
 	'interval',
 ]
 
-/** Reviewed `pg_catalog` operators: comparison, arithmetic, concatenation and pattern matching. */
-const OPERATORS = ['=', '<>', '<', '<=', '>', '>=', '+', '-', '*', '/', '%', '||', '~~', '!~~', '~~*', '!~~*', '~', '!~', '~*', '!~*']
+/**
+ * Reviewed `pg_catalog` operators: comparison, arithmetic, concatenation, pattern matching, jsonb access and
+ * containment, array overlap and text search. Trusted by name: every `pg_catalog` operator of these names is a pure
+ * built-in, whatever its operand types. A migration cannot write a lone `?`, which the driver reads as a placeholder;
+ * `?|` and `?&` pass through.
+ */
+const OPERATORS = [
+	'=',
+	'<>',
+	'<',
+	'<=',
+	'>',
+	'>=',
+	'+',
+	'-',
+	'*',
+	'/',
+	'%',
+	'||',
+	'~~',
+	'!~~',
+	'~~*',
+	'!~~*',
+	'~',
+	'!~',
+	'~*',
+	'!~*',
+	'->',
+	'->>',
+	'@>',
+	'<@',
+	'?',
+	'?|',
+	'?&',
+	'&&',
+	'@@',
+]
 
 /**
- * The expression nodes (`pg_node_tree`) an expression may hold. Anything else, a domain coercion, a subplan or a node
+ * The expression nodes (`pg_node_tree`) an expression may hold. `COALESCE`, `NULLIF`, `GREATEST` and `LEAST` are
+ * nodes, not functions. Anything else, a domain coercion, a subplan or a node
  * a later Postgres adds, is refused rather than understood.
  */
 const NODES = [
@@ -63,6 +114,8 @@ const NODES = [
 	'SQLVALUEFUNCTION',
 	'COLLATEEXPR',
 	'ARRAYEXPR',
+	'ROWEXPR',
+	'ROWCOMPAREEXPR',
 ]
 
 const list = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(', ')
@@ -81,40 +134,47 @@ export function databaseCodeQuery(schema: string): string {
 	const relations = `(SELECT oid FROM pg_catalog.pg_class WHERE relnamespace = ${namespace})`
 	return `
 WITH expressions AS (
-	SELECT 'default ' || c.relname || '.' || a.attname AS object, d.adbin::text AS tree
+	SELECT 'default ' || c.relname || '.' || a.attname AS object, d.adbin::pg_catalog.text AS tree
 	FROM pg_catalog.pg_attrdef d
 	JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
 	JOIN pg_catalog.pg_class c ON c.oid = d.adrelid
 	WHERE c.relnamespace = ${namespace}
 	UNION ALL
-	SELECT 'constraint ' || k.conname, k.conbin::text
+	SELECT 'constraint ' || k.conname, k.conbin::pg_catalog.text
 	FROM pg_catalog.pg_constraint k
 	WHERE k.connamespace = ${namespace} AND k.conbin IS NOT NULL
 	UNION ALL
-	SELECT 'index ' || c.relname, pg_catalog.concat(i.indexprs::text, ' ', i.indpred::text)
+	SELECT 'index ' || c.relname, pg_catalog.concat(i.indexprs::pg_catalog.text, ' ', i.indpred::pg_catalog.text)
 	FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
 	WHERE c.relnamespace = ${namespace} AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)
 	UNION ALL
-	SELECT 'partition key of ' || c.relname, p.partexprs::text
+	SELECT 'partition key of ' || c.relname, p.partexprs::pg_catalog.text
 	FROM pg_catalog.pg_partitioned_table p JOIN pg_catalog.pg_class c ON c.oid = p.partrelid
 	WHERE c.relnamespace = ${namespace} AND p.partexprs IS NOT NULL
 ),
 nodes AS (
-	SELECT DISTINCT e.object, m[1] AS node FROM expressions e, pg_catalog.regexp_matches(e.tree, '\\{([A-Z_]+)', 'g') AS m
+	SELECT DISTINCT e.object, m[1] AS node FROM expressions e, pg_catalog.regexp_matches(e.tree, '[{]([A-Z_]+)', 'g') AS m
 ),
 calls AS (
-	SELECT DISTINCT e.object, m[1]::oid AS function FROM expressions e, pg_catalog.regexp_matches(e.tree, ':funcid (\\d+)', 'g') AS m
+	SELECT DISTINCT e.object, m[1]::pg_catalog.oid AS function
+	FROM expressions e, pg_catalog.regexp_matches(e.tree, ':funcid ([0-9]+)', 'g') AS m
 ),
 operators AS (
-	SELECT DISTINCT e.object, m[1]::oid AS operator FROM expressions e, pg_catalog.regexp_matches(e.tree, ':opno (\\d+)', 'g') AS m
+	SELECT DISTINCT e.object, m[1]::pg_catalog.oid AS operator
+	FROM expressions e, pg_catalog.regexp_matches(e.tree, ':opno ([0-9]+)', 'g') AS m
+	UNION
+	-- A row comparison lists its operators as :opnos (o 96 97).
+	SELECT DISTINCT e.object, o::pg_catalog.oid
+	FROM expressions e, pg_catalog.regexp_matches(e.tree, ':opnos [(]o ([0-9 ]+)[)]', 'g') AS m,
+		pg_catalog.unnest(pg_catalog.string_to_array(m[1], ' ')) AS o
 ),
 classes AS (
 	SELECT 'index ' || c.relname AS object, k.class
-	FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid, pg_catalog.unnest(i.indclass::oid[]) AS k(class)
+	FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid, pg_catalog.unnest(i.indclass::pg_catalog.oid[]) AS k(class)
 	WHERE c.relnamespace = ${namespace}
 	UNION ALL
 	SELECT 'partition key of ' || c.relname, k.class
-	FROM pg_catalog.pg_partitioned_table p JOIN pg_catalog.pg_class c ON c.oid = p.partrelid, pg_catalog.unnest(p.partclass::oid[]) AS k(class)
+	FROM pg_catalog.pg_partitioned_table p JOIN pg_catalog.pg_class c ON c.oid = p.partrelid, pg_catalog.unnest(p.partclass::pg_catalog.oid[]) AS k(class)
 	WHERE c.relnamespace = ${namespace}
 ),
 types AS (
@@ -162,13 +222,13 @@ violations AS (
 	UNION ALL
 	SELECT n.object || ' holds ' || n.node FROM nodes n WHERE n.node NOT IN (${list(NODES)})
 	UNION ALL
-	SELECT c.object || ' calls ' || COALESCE(s.nspname || '.' || p.proname, c.function::text)
+	SELECT c.object || ' calls ' || COALESCE(s.nspname || '.' || p.proname, c.function::pg_catalog.text)
 	FROM calls c
 	LEFT JOIN pg_catalog.pg_proc p ON p.oid = c.function
 	LEFT JOIN pg_catalog.pg_namespace s ON s.oid = p.pronamespace
 	WHERE s.nspname IS DISTINCT FROM 'pg_catalog' OR p.proname NOT IN (${list(FUNCTIONS)})
 	UNION ALL
-	SELECT o.object || ' uses the operator ' || COALESCE(s.nspname || '.' || p.oprname, o.operator::text)
+	SELECT o.object || ' uses the operator ' || COALESCE(s.nspname || '.' || p.oprname, o.operator::pg_catalog.text)
 	FROM operators o
 	LEFT JOIN pg_catalog.pg_operator p ON p.oid = o.operator
 	LEFT JOIN pg_catalog.pg_namespace s ON s.oid = p.oprnamespace
