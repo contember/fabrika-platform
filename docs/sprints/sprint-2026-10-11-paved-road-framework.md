@@ -771,11 +771,17 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   witnessed on `ctx.sql`'s execution path past the name rule (`runApplicationStatement` as `run_<id>`: 42501, and the
   invocation then refuses to commit). `raw-sql.test.ts` runs entirely as the runtime role (`testDatabase`).
 - **WU6 — for WU8/WU10/WU11:** a `Ref`'s id is `ctx.target.value`; the target shape's `${ctx.target.id}` does not
-  exist. A `ctx.sql` refusal is a `QueryRefusedError`, which `logFailure` logs by name only ("QueryRefusedError
-  thrown"), so an agent sees the reason only in a direct test of the handler; widening `logFailure` to the data
-  layer's own messages is the integrator's call (`ctx.sql`'s quote names of the static text, never a value).
+  exist. (Review round 1: `logFailure` now logs a `QueryRefusedError`'s message, which names what was refused and
+  never a bound value.)
 - **WU6 — checker:** `sql-undeclared` (hint) names the procedure's property key (`'pipeline'`), not the mounted id: the
   mount path is not syntactic at the `.handle` call. `HINT_RULE_IDS` = `STRUCTURE_HINT_RULE_IDS` + `sql-undeclared`;
   `structure.ts` exports `handledProcedure`, which both rules use. `raw-sql` is unchanged in code (a `ctx.sql(Row)`
   tag is a call, never a `…sql` member); its allowed fixture now holds one. `packages/check/package.json` is
   untouched: the checker does not classify `ctx.sql` text.
+- **WU6 review round 1.** Any refusal of the tag after its binding check (a statement, a value, a row) now fails the
+  site's transaction (`SqlSite.fail` → `InvocationTransaction.fail`, or a job's `Session.fail`), so a handler that
+  catches it commits nothing; `InvocationTransaction.commit` refuses a failed invocation even when it never opened, and
+  a nested `Session.transaction` (a job's fenced one) whose statement failed throws instead of committing. A row error
+  is built from the issue's code, its expected type and the schema's top-level field only (a custom message, a JSON
+  key or the input could carry row data). The `sql-undeclared` hint reads options through `satisfies` and `as const`.
+  Owner decision: `logFailure` logs a `QueryRefusedError`'s message (`@fabrika/db/framework` exports the class).
