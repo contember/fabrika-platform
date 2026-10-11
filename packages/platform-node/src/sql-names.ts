@@ -107,12 +107,17 @@ export function statementKind(tokens: readonly SqlToken[]): string {
 
 /**
  * The first schema a DDL statement names other than `schema`, `pg_catalog` included: every qualified name counts,
- * since a DDL statement has no table alias to qualify a column with.
+ * since a DDL statement has no table alias to qualify a column with, and so does any unqualified `pg_…` name, which
+ * resolves to the catalog (`LIKE pg_authid`, `REFERENCES pg_class`).
  */
 export function ddlForeignSchema(tokens: readonly SqlToken[], schema: string): string | undefined {
-	for (let index = 0; index + 2 < tokens.length; index++) {
-		const qualifier = nameText(tokens[index])
-		if (qualifier !== undefined && isPunct(tokens[index + 1], '.') && qualifier !== schema) return qualifier
+	for (let index = 0; index < tokens.length; index++) {
+		const name = nameText(tokens[index])
+		if (name === undefined) continue
+		if (isPunct(tokens[index + 1], '.')) {
+			if (name !== schema) return name
+			index += 2
+		} else if (name.startsWith('pg_')) return 'pg_catalog'
 	}
 	return undefined
 }
@@ -317,6 +322,12 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 			if (word !== 'JOIN') top.fromList = slot !== undefined
 			continue
 		}
+		// `(expression).f(…)` calls `f` through field selection; no schema rule can read its target, so it is refused.
+		if (isPunct(token, '.') && isPunct(tokens[index - 1], ')') && isName(tokens[index + 1]) && isPunct(tokens[index + 2], '(')) {
+			references.push({ qualifier: '(…)', name: `(…).${nameText(tokens[index + 1]) ?? ''}`, parts: 2, role: 'call', line: token?.line ?? 0 })
+			index++
+			continue
+		}
 		if (word === 'OPERATOR' && isPunct(tokens[index + 1], '(')) {
 			const close = closingParenthesis(tokens, index + 1) ?? tokens.length - 1
 			const inner = tokens.slice(index + 2, close)
@@ -350,10 +361,12 @@ export function nameReferences(tokens: readonly SqlToken[]): NameReference[] {
 		const castTarget = (isPunct(tokens[index - 1], ':') && isPunct(tokens[index - 2], ':')) || upperWord(tokens[index - 1]) === 'AS'
 		const followedByParenthesis = isPunct(tokens[end + 1], '(')
 		const syntax = parts.length === 1 && token?.kind === 'word' && word !== undefined && (NOT_CALLS.has(word) || MODIFIED_TYPES.has(word))
-		// PL/pgSQL `v t%ROWTYPE` and `v t.c%TYPE` name a relation's type.
+		// PL/pgSQL `v t%ROWTYPE` and `v t.c%TYPE` read a relation; `ext.t 'literal'` is a typed literal.
 		const percentType = isPunct(tokens[end + 1], '%') && (upperWord(tokens[end + 2]) === 'TYPE' || upperWord(tokens[end + 2]) === 'ROWTYPE')
+		const typedLiteral = parts.length > 1 && tokens[end + 1]?.kind === 'string'
 		let role: NameRole = 'other'
-		if (castTarget || percentType) role = 'type'
+		if (castTarget || typedLiteral) role = 'type'
+		else if (percentType) role = 'relation'
 		else if (followedByParenthesis && !syntax && inSlot !== 'columns') role = 'call'
 		else if (inSlot !== undefined) role = 'relation'
 		references.push({
@@ -379,7 +392,8 @@ export function dmlForeignSchema(tokens: readonly SqlToken[], schema: string): s
 			if (reference.role === 'relation' && reference.name.startsWith('pg_')) return 'pg_catalog'
 			continue
 		}
-		if (reference.qualifier === schema) continue
+		// A field-selection call has no schema to reach; the call allowlist refuses it.
+		if (reference.qualifier === schema || reference.qualifier === '(…)') continue
 		if (reference.role === 'operator') {
 			if (reference.qualifier !== 'pg_catalog') return reference.qualifier
 			continue
@@ -436,15 +450,49 @@ const STATEMENT_WORDS: ReadonlySet<string> = new Set([
 ])
 const NESTED_STATEMENTS: ReadonlySet<string> = new Set(['SELECT', 'VALUES', 'WITH', 'TABLE', 'INSERT', 'UPDATE', 'DELETE'])
 
+/** The statement a `WITH name [(…)] AS [[NOT] MATERIALIZED] (…), …` at `index` ends in, or `undefined` if it is no CTE list. */
+function withTerminal(tokens: readonly SqlToken[], index: number): SqlToken | undefined {
+	let at = skipWords(tokens, index + 1, 'RECURSIVE')
+	for (;;) {
+		if (!isName(tokens[at])) return undefined
+		at++
+		if (isPunct(tokens[at], '(')) at = (closingParenthesis(tokens, at) ?? tokens.length) + 1
+		if (upperWord(tokens[at]) !== 'AS') return undefined
+		at = skipWords(tokens, skipWords(tokens, at + 1, 'NOT'), 'MATERIALIZED')
+		if (!isPunct(tokens[at], '(')) return undefined
+		at = (closingParenthesis(tokens, at) ?? tokens.length) + 1
+		if (!isPunct(tokens[at], ',')) return tokens[at]
+		at++
+	}
+}
+
 /**
- * The first statement nested in parentheses (a CTE body, a subquery) that a nested position may not hold: anything
- * but a query or `INSERT`/`UPDATE`/`DELETE`, whose names the same checks read. `MERGE` among them.
+ * The first nested statement a nested position may not hold: in parentheses (a CTE body, a subquery) and after a
+ * CTE list, anything but a query or `INSERT`/`UPDATE`/`DELETE`, whose names the same checks read. `MERGE` among them.
  */
 export function nestedStatement(tokens: readonly SqlToken[]): { readonly statement: string; readonly line: number } | undefined {
 	for (let index = 0; index + 1 < tokens.length; index++) {
-		if (!isPunct(tokens[index], '(')) continue
-		const word = tokens[index + 1]?.kind === 'word' ? upperWord(tokens[index + 1]) : undefined
-		if (word !== undefined && STATEMENT_WORDS.has(word) && !NESTED_STATEMENTS.has(word)) return { statement: word, line: tokens[index + 1]?.line ?? 1 }
+		const next = isPunct(tokens[index], '(') ? tokens[index + 1] : upperWord(tokens[index]) === 'WITH' ? withTerminal(tokens, index) : undefined
+		const word = next?.kind === 'word' ? upperWord(next) : undefined
+		if (word !== undefined && STATEMENT_WORDS.has(word) && !NESTED_STATEMENTS.has(word)) return { statement: word, line: next?.line ?? 1 }
+		if (upperWord(tokens[index]) === 'WITH' && next !== undefined && word === undefined) return { statement: 'WITH', line: next.line }
+	}
+	return undefined
+}
+
+/**
+ * The first data-changing statement whose target is in parentheses (`UPDATE ONLY (t)`, `DELETE FROM (t)`): the
+ * classifier reads a target as the name after the keyword, so it refuses the form rather than read through a group.
+ */
+export function parenthesizedTarget(tokens: readonly SqlToken[]): { readonly statement: string; readonly line: number } | undefined {
+	for (let index = 0; index < tokens.length; index++) {
+		const word = upperWord(tokens[index])
+		let at: number
+		if (word === 'UPDATE' || word === 'INTO') at = index + 1
+		else if (word === 'DELETE' && upperWord(tokens[index + 1]) === 'FROM') at = index + 2
+		else continue
+		at = skipWords(tokens, at, 'ONLY')
+		if (isPunct(tokens[at], '(')) return { statement: word, line: tokens[at]?.line ?? 1 }
 	}
 	return undefined
 }
@@ -661,14 +709,8 @@ const REVIEWED_FUNCTIONS: ReadonlySet<string> = new Set([
 	'suppress_redundant_updates_trigger',
 ])
 
-/**
- * Functions only a stored expression may call, as a deviation: `nextval` resolves its sequence when the default is
- * created, so the catalog check sees where it points. In a body the sequence is a string read at every call.
- */
-const EXPRESSION_ONLY_FUNCTIONS: ReadonlySet<string> = new Set(['nextval'])
-
 /** How a call is admitted: `paved` and `reviewed` built-ins, `expression`-only ones, and the migrations' own functions. */
-export type FunctionUse = 'paved' | 'reviewed' | 'expression' | 'declared'
+export type FunctionUse = 'paved' | 'reviewed' | 'declared'
 
 /**
  * How a call of `call` is admitted, or `undefined` when it is not. A function the migrations declare in `schema` may be
@@ -680,7 +722,6 @@ export function functionUse(call: NameReference, schema: string, functions: Read
 	if (call.qualifier !== undefined) return undefined
 	if (PAVED_FUNCTIONS.has(call.name)) return 'paved'
 	if (REVIEWED_FUNCTIONS.has(call.name)) return 'reviewed'
-	if (EXPRESSION_ONLY_FUNCTIONS.has(call.name)) return 'expression'
 	return undefined
 }
 
@@ -693,7 +734,7 @@ export function refusedFunctionCall(tokens: readonly SqlToken[], schema: string,
 	for (const reference of nameReferences(tokens)) {
 		if (reference.role !== 'call') continue
 		const use = functionUse(reference, schema, functions)
-		if (use === undefined || use === 'expression') return reference
+		if (use === undefined) return reference
 	}
 	return undefined
 }

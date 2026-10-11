@@ -238,25 +238,21 @@ describe('deviations: database code and unusual expressions', () => {
 			'CREATE MATERIALIZED VIEW totals AS SELECT stage, sum(amount) FROM deals GROUP BY stage WITH NO DATA;',
 			'CREATE RULE mirror AS ON DELETE TO deals DO ALSO DELETE FROM deal_log WHERE deal_log.deal_id = OLD.id;',
 			'CREATE POLICY own ON deals FOR SELECT TO PUBLIC USING (owner = current_user) WITH CHECK (true);',
-			'CREATE SEQUENCE invoice_numbers START WITH 100 OWNED BY deals.id;',
-			"CREATE TABLE counters (n serial, m bigint DEFAULT nextval('invoice_numbers'), label text DEFAULT concat('a', 'b'));",
+			"CREATE TABLE counters (n int GENERATED ALWAYS AS IDENTITY, label text DEFAULT concat('a', 'b'));",
 			"ALTER TABLE deals ADD COLUMN code text DEFAULT spread_code(), ADD CONSTRAINT code_shape CHECK (starts_with(code, 'D'));",
 			'CREATE INDEX deals_code ON deals (md5(code));',
 			'DO $$ BEGIN UPDATE deals SET stage = NULL WHERE stage = $q$x$q$; END $$;',
 			'DO $$ BEGIN PERFORM 1; END $$;',
 		].join('\n')
 		expect(deviationKeys(sql, ['spread', 'tidy', 'spread_code'])).toEqual([
-			'function spread()',
-			'procedure tidy()',
+			'function spread',
+			'procedure tidy',
 			'trigger deals.spread',
 			'trigger deals.noop',
 			'view open_deals',
 			'materialized view totals',
 			'rule deals.mirror',
 			'policy deals.own',
-			'sequence invoice_numbers',
-			'sequence counters.n',
-			'expression counters.m calls nextval',
 			'expression counters.label calls concat',
 			'expression deals.code calls spread_code',
 			'expression deals.code_shape calls starts_with',
@@ -315,15 +311,15 @@ describe('the manifest of a migration set', () => {
 		)
 		expect(files.flatMap((file) => file.refused)).toEqual([])
 		expect(objects).toEqual([
-			{ kind: 'function', name: 'stamp()' },
+			{ kind: 'function', name: 'stamp' },
 			{ kind: 'view', name: 'v' },
-			{ kind: 'function', name: 'latest()' },
+			{ kind: 'function', name: 'latest' },
 			{ kind: 'trigger', name: 'opportunities.stamped' },
 		])
 		expect(files[2]?.deviations.map((deviation) => `${deviation.kind} ${deviation.object}`)).toEqual([
 			'view v',
-			'function later()',
-			'function latest()',
+			'function later',
+			'function latest',
 			'trigger opportunities.stamped',
 			'materialized view other',
 		])
@@ -381,7 +377,7 @@ describe('review round 1: each escape a name rule alone missed', () => {
 			'a call of query_to_xml',
 		)
 		expect(refusal('CREATE FUNCTION f(n int = (SELECT count(*) FROM pg_authid)) RETURNS int LANGUAGE sql RETURN n')).toBe(
-			'an argument default reaching the schema pg_catalog',
+			'CREATE FUNCTION naming the schema pg_catalog',
 		)
 	})
 
@@ -405,36 +401,28 @@ describe('review round 1: each escape a name rule alone missed', () => {
 		expect(refusal('INSERT INTO t SELECT 1 FROM (ONLY app_other.t)')).toBe('INSERT reaching the schema app_other')
 	})
 
-	test('a routine is identified by its input signature: an overload is its own object, and a drop or a rename touches only it', () => {
-		const sql = [
-			"CREATE FUNCTION f(a integer, b character varying(10) DEFAULT 'x', OUT c text) RETURNS text LANGUAGE sql AS $$ SELECT b $$;",
-			'CREATE FUNCTION f(double precision, int[], "char", timestamp with time zone) RETURNS int LANGUAGE sql RETURN 1;',
-			'CREATE PROCEDURE p(IN a bigint, OUT b numeric) LANGUAGE sql AS $$ SELECT 1 $$;',
-			'CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql RETURN a;',
-			'CREATE FUNCTION g(a int) RETURNS int LANGUAGE sql RETURN a;',
-			'DROP FUNCTION g(int);',
-			'ALTER FUNCTION f(int, varchar) RENAME TO h;',
-		].join('\n')
-		expect(classifyMigrations([{ name: 'a.sql', sql }], SCHEMA).objects).toEqual([
-			{ kind: 'function', name: 'f(float8,_int4,char,timestamptz)' },
-			{ kind: 'procedure', name: 'p(int8)' },
-			{ kind: 'function', name: 'g(text)' },
-			{ kind: 'function', name: 'h(int4,varchar)' },
+	test('a routine has one signature: a second create with another argument list is refused, a replace or a drop frees it', () => {
+		const set = (sql: string) =>
+			classifyMigrations([{ name: 'a.sql', sql: 'CREATE FUNCTION g(a int) RETURNS int LANGUAGE sql RETURN a' }, { name: 'b.sql', sql }], SCHEMA)
+		expect(set('CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql RETURN a').files[1]?.refused.map((refused) => refused.reason)).toEqual([
+			'a second signature for g; an application routine has one',
 		])
-		const dropAll = classifyMigrations([{ name: 'a.sql', sql: `${sql}\nDROP FUNCTION g; ALTER FUNCTION f RENAME TO k` }], SCHEMA)
-		expect(dropAll.objects.map((object) => object.name)).toEqual(['p(int8)', 'h(int4,varchar)', 'k(float8,_int4,char,timestamptz)'])
-		expect(refusal('CREATE FUNCTION f(a deals.id%TYPE) RETURNS int LANGUAGE sql RETURN 1')).toBe('CREATE FUNCTION naming the schema deals')
+		expect(set('CREATE PROCEDURE g(a int) LANGUAGE sql AS $$ SELECT 1 $$').files[1]?.refused).toHaveLength(1)
+		expect(set('CREATE OR REPLACE FUNCTION g(a int DEFAULT 2) RETURNS int LANGUAGE sql RETURN a').files[1]?.refused).toEqual([])
+		const dropped = set('DROP FUNCTION g(int); CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql RETURN a')
+		expect(dropped.files[1]?.refused).toEqual([])
+		expect(dropped.objects).toEqual([{ kind: 'function', name: 'g' }])
+		const renamed = set('ALTER FUNCTION g(int) RENAME TO h; CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql RETURN a')
+		expect(renamed.files[1]?.refused).toEqual([])
+		expect(renamed.objects).toEqual([{ kind: 'function', name: 'h' }, { kind: 'function', name: 'g' }])
 	})
 
-	test('a serial column enters the manifest, and follows its table and column renames', () => {
-		const { objects } = classifyMigrations(
-			[{
-				name: 'a.sql',
-				sql: 'CREATE TABLE deals (n serial, m int GENERATED ALWAYS AS IDENTITY); ALTER TABLE deals RENAME n TO number; ALTER TABLE deals RENAME TO d',
-			}],
-			SCHEMA,
-		)
-		expect(objects).toEqual([{ kind: 'serial column', name: 'd.number' }])
+	test('a serial column and an explicit sequence are refused: an identity column is the sequence the catalog check admits', () => {
+		expect(refusal('CREATE TABLE deals (n serial)')).toBe('a serial column; use GENERATED ALWAYS AS IDENTITY')
+		expect(refusal('ALTER TABLE deals ADD COLUMN n bigserial')).toBe('a bigserial column; use GENERATED ALWAYS AS IDENTITY')
+		expect(refusal('CREATE SEQUENCE s OWNED BY deals.id')).toBe('CREATE SEQUENCE; use GENERATED ALWAYS AS IDENTITY')
+		expect(refusal("CREATE TABLE deals (n int DEFAULT nextval('s'))")).toBe('a call of nextval')
+		expect(refusal('CREATE TABLE deals (n int GENERATED ALWAYS AS IDENTITY)')).toBeUndefined()
 	})
 
 	test('COMMENT ON names only an object of the schema', () => {
@@ -474,5 +462,54 @@ describe('review round 1: each escape a name rule alone missed', () => {
 			SCHEMA,
 		)
 		expect(files.flatMap((file) => file.refused)).toEqual([])
+	})
+})
+
+describe('review round 2: coarse, fail-closed rules', () => {
+	const bodies = (body: string): string[] => [
+		`CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $b$ ${body} $b$`,
+		`CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`,
+	]
+
+	test('a call through field selection is refused', () => {
+		expect(refusal('CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$ SELECT (1::bigint).pg_advisory_xact_lock() $$')).toBe(
+			'a call of (…).pg_advisory_xact_lock',
+		)
+		expect(refusal("CREATE TABLE t (n xml DEFAULT ('select 1').query_to_xml(true, true, ''))")).toBe('a call of (…).query_to_xml')
+		expect(refusal('UPDATE t SET a = (b).c')).toBeUndefined()
+	})
+
+	test('a parenthesized DML target is refused, in a backfill and in both body quotings', () => {
+		expect(refusal('UPDATE ONLY (app_other.t) SET a = 1')).toBe('a parenthesized UPDATE target')
+		expect(refusal('DELETE FROM (t)')).toBe('a parenthesized DELETE target')
+		for (const sql of bodies('BEGIN UPDATE ONLY (other.t) SET a = 1; END')) expect(refusal(sql)).toBe('a parenthesized UPDATE target')
+		expect(refusal('INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 2')).toBeUndefined()
+	})
+
+	test('a typed literal, a declaration type and a %ROWTYPE source name no schema or catalog relation', () => {
+		expect(refusal("INSERT INTO t SELECT ext.sneaky '1'")).toBe('INSERT reaching the schema ext')
+		for (
+			const [body, reason] of [
+				["BEGIN PERFORM ext.sneaky '1'; END", 'a body reaching the schema ext'],
+				['DECLARE r pg_authid%ROWTYPE; BEGIN NULL; END', 'a body reaching the schema pg_catalog'],
+				['DECLARE v ext.sneaky; BEGIN NULL; END', 'a declaration naming the schema ext'],
+				['DECLARE v deals%ROWTYPE; n int := 0; BEGIN NULL; END', undefined],
+			] as const
+		) {
+			for (const sql of bodies(body)) expect({ sql, reason: refusal(sql) }).toEqual({ sql, reason })
+		}
+	})
+
+	test('the statement a CTE list ends in is classified too', () => {
+		expect(refusal('CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$ WITH x AS (SELECT 1) MERGE INTO a USING x ON true WHEN MATCHED THEN DELETE $$'))
+			.toBe('MERGE nested in a statement')
+		expect(refusal('INSERT INTO t WITH x AS (SELECT 1), y AS NOT MATERIALIZED (SELECT 2) SELECT * FROM x, y')).toBeUndefined()
+		expect(refusal('CREATE VIEW v AS SELECT 1 WITH CHECK OPTION')).toBeUndefined()
+	})
+
+	test('a DDL relation position refuses an unqualified catalog name', () => {
+		expect(refusal('CREATE TABLE t (LIKE pg_authid)')).toBe('CREATE TABLE naming the schema pg_catalog')
+		expect(refusal('CREATE TABLE t (a oid REFERENCES pg_class (oid))')).toBe('CREATE TABLE naming the schema pg_catalog')
+		expect(refusal('TRUNCATE pg_largeobject')).toBe('TRUNCATE naming the schema pg_catalog')
 	})
 })

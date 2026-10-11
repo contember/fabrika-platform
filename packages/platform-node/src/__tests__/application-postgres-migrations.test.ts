@@ -538,7 +538,7 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 			migration(
 				'20261008120000_init.sql',
 				`
-				CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n serial, amount int);
+				CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n int GENERATED ALWAYS AS IDENTITY, amount int);
 				CREATE TABLE deal_log (deal_id text, stage text);
 				CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$
 				BEGIN INSERT INTO deal_log VALUES (NEW.id, NEW.stage); RETURN NEW; END
@@ -550,7 +550,6 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 				CREATE MATERIALIZED VIEW totals AS SELECT stage, count(*) FROM deals GROUP BY stage;
 				CREATE RULE keep AS ON DELETE TO deal_log DO INSTEAD NOTHING;
 				CREATE POLICY own ON deals USING (stage <> 'hidden');
-				CREATE SEQUENCE numbers OWNED BY deals.id;
 				ALTER TABLE deals ADD COLUMN doubled int GENERATED ALWAYS AS (double_it(amount)) STORED;
 				DO $$ BEGIN UPDATE deals SET stage = 'open' WHERE stage = ''; END $$;
 				`,
@@ -580,9 +579,9 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		).run()
 		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
 		expect(results.map((row) => row.violation)).toEqual([
+			'function definer (no migration declares it)',
 			'function definer has a SET clause',
 			'function definer is SECURITY DEFINER',
-			'function definer() (no migration declares it)',
 			'trigger deals.noop (no migration declares it)',
 		])
 		const declared = migrations.objects([
@@ -596,31 +595,32 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		expect(later.map((row) => row.violation)).not.toContain('trigger deals.noop (no migration declares it)')
 	})
 
-	test('a routine is declared by its signature: dropping one overload keeps the other, and an undeclared overload is rolled back', async () => {
+	test('a routine has one signature and only an identity column has a sequence: the start check refuses the rest', async () => {
 		const { migrations, db } = application()
 		const files = [
 			migration(
 				'20261008120000_init.sql',
-				`CREATE TABLE deals (id text, n serial);
-				CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql RETURN a;
+				`CREATE TABLE deals (id text, n int GENERATED ALWAYS AS IDENTITY);
 				CREATE FUNCTION f(a text, b varchar(3) DEFAULT 'x', OUT c text) RETURNS text LANGUAGE sql AS $$ SELECT a $$;
-				CREATE FUNCTION g(double precision, int[], timestamp with time zone) RETURNS int LANGUAGE sql RETURN 1;
-				CREATE PROCEDURE p(IN a bigint, OUT b numeric) LANGUAGE plpgsql AS $$ BEGIN b := a; END $$;
-				DROP FUNCTION f(int);`,
+				CREATE PROCEDURE p(IN a bigint, OUT b numeric) LANGUAGE plpgsql AS $$ BEGIN b := a; END $$;`,
 			),
 		]
 		expect(await migrations.apply(db, files)).toEqual(['app/20261008120000_init.sql'])
-		const { results } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
-		expect(results).toEqual([])
-		await db.prepare(`CREATE FUNCTION ${migrations.schema}.g(a text) RETURNS int LANGUAGE sql RETURN 2`).run()
+		const check = async (): Promise<string[]> =>
+			(await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()).results.map((row) =>
+				row.violation
+			)
+		expect(await check()).toEqual([])
+		await db.prepare(`CREATE FUNCTION ${migrations.schema}.f(a int) RETURNS int LANGUAGE sql RETURN a`).run()
 		await db.prepare(`CREATE SEQUENCE ${migrations.schema}.stray OWNED BY ${migrations.schema}.deals.id`).run()
+		await db.prepare(`ALTER TABLE ${migrations.schema}.deals ADD COLUMN m serial`).run()
 		await db.prepare(`CREATE FUNCTION ${migrations.schema}.lower(a int) RETURNS int LANGUAGE sql RETURN a`).run()
-		const { results: runtime } = await db.prepare(databaseCodeQuery(migrations.schema, migrations.objects(files))).all<{ violation: string }>()
-		expect(runtime.map((row) => row.violation)).toEqual([
-			'function g(text) (no migration declares it)',
+		expect(await check()).toEqual([
+			'function lower (no migration declares it)',
 			'function lower shadows a pg_catalog function',
-			'function lower(int4) (no migration declares it)',
-			'sequence stray (no migration declares it)',
+			'routine f has more than one signature',
+			"sequence deals_m_seq (only an identity column's; use GENERATED ALWAYS AS IDENTITY)",
+			"sequence stray (only an identity column's; use GENERATED ALWAYS AS IDENTITY)",
 		])
 	})
 
@@ -672,9 +672,9 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 			max: 1,
 		})
 		openDatabases.push(hostile)
-		const query = databaseCodeQuery(migrations.schema, [{ kind: 'function', name: "it's\\(text)" }])
+		const query = databaseCodeQuery(migrations.schema, [{ kind: 'function', name: "it's\\" }])
 		expect(query).not.toContain('\\')
 		const { results } = await hostile.prepare(query).all<{ violation: string }>()
-		expect(results.map((row) => row.violation)).toEqual(['function shadow() (no migration declares it)'])
+		expect(results.map((row) => row.violation)).toEqual(['function shadow (no migration declares it)'])
 	})
 })

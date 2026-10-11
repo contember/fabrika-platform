@@ -225,7 +225,8 @@ and the target `Ref`, so no handler can call it.
   the migrations' manifest (`PostgresApplicationMigrations.objects()`, which the CLI and the test kit pass;
   `introspectSchema`/`generateSchema` take it as an argument). It refuses an integrity escape (a
   `SECURITY DEFINER` function, a function `SET` clause or foreign language, a dependency outside the
-  schema and `pg_catalog`) and any trigger, rule, view, function, policy, domain or sequence no migration
+  schema and `pg_catalog`, a sequence other than an identity column's, a routine overload) and any trigger,
+  rule, view, function, policy or domain no migration
   declares: a store's guarded write would fire such code unseen, and a declared one is a deviation the
   approver already saw. This is what finds an object created at runtime, at every start (`codegen
   --verify`) and in the test kit. It runs in a read-only transaction that pins `search_path` and

@@ -147,7 +147,11 @@ on a later write where the data layer cannot see it: a trigger fired by one
 guarded single-row update can change the rows of every tenant in the schema.
 That is legitimate application code, so it is not refused: it is shown to the
 approver as needing closer review ([ADR-0050](0050-approved-access.md)).
-What is refused is what no review can make safe. Two checks run for every
+What is refused is what no review can make safe. The classifier is a coarse,
+fail-closed defense in depth, not a Postgres grammar: where a form is hard to
+read it refuses the form, and the least-privileged role of
+[backlog 110](../backlog/110-give-each-application-a-least-privileged-database-role.md)
+is the privilege boundary. Two checks run for every
 application plan, the framework bundle included; service plans are not
 checked, because a service is trusted platform code.
 
@@ -171,8 +175,8 @@ checked, because a service is trusted platform code.
     `INSERT`/`UPDATE`/`DELETE` only (no `MERGE` in a CTE).
   - **Deviation** (a kind and an object name; the approval key is the two,
     never the line): a function or a procedure, a trigger, a view or a
-    materialized view, a rule, a policy, a sequence (a `serial` column's
-    included), an `ALTER … RENAME TO` of one of them, a `DO` block, and a
+    materialized view, a rule, a policy, an `ALTER … RENAME TO` of one of
+    them, a `DO` block, and a
     default, `CHECK`, generated
     column or index expression that calls anything but a paved built-in
     (`now`, `gen_random_uuid`, `lower`, `upper`, `length`, the trims, `abs`,
@@ -180,19 +184,25 @@ checked, because a service is trusted platform code.
     `AT TIME ZONE`, `array_length`, `cardinality`, `to_tsvector`,
     `to_tsquery` and the implicit casts).
   - **Refused**, by file and line: `COPY` in any form, `GRANT`, `REVOKE`,
-    roles, `CREATE EXTENSION`, event triggers, a domain (codegen cannot
+    roles, `CREATE EXTENSION`, event triggers, a `serial` column and
+    `CREATE SEQUENCE` (an identity column, `GENERATED … AS IDENTITY`, is the
+    sequence the catalog check can tie to a column), a second signature for
+    a routine name (no overloads), a domain (codegen cannot
     bind one, and the data layer would have to unwrap it), any other `ALTER`
     of database code, `SECURITY DEFINER`, a
     function `SET` clause, a language other than `sql` and `plpgsql`, any
     schema but the application's own (a `pg_…` relation counts as
-    `pg_catalog`), any framework name (`fabrika_…`, case-insensitive, quoted
+    `pg_catalog`, and so does any unqualified `pg_…` name in DDL), any
+    framework name (`fabrika_…`, case-insensitive, quoted
     or not; a file collection's own `fabrika_files_<name>` table and its
     indexes excepted, which `fileTableSql` writes into the application's
     migration), an `OPERATOR(schema.op)` of a schema other than
     `pg_catalog` and the application's, a routine named like a `pg_catalog`
     function or a keyword (`query_to_xml`, `operator`: Postgres resolves a
     call across the path by argument types, so the declaration would admit
-    the built-in), a Unicode-escaped name (`U&"…"`), a literal that never
+    the built-in), a call through field selection (`(expression).f(…)`),
+    a parenthesized target of `UPDATE`, `DELETE` or `INSERT INTO`, a
+    Unicode-escaped name (`U&"…"`), a literal that never
     closes, and every form the classifier does not recognise, `SELECT`,
     `WITH` and `MERGE` included. An allowlist at every level: a form a later
     Postgres adds is refused, not executed.
@@ -207,8 +217,11 @@ checked, because a service is trusted platform code.
   `GRANT` or `LOAD`), and a name outside the schema. A qualified name counts
   as a schema only where it names a relation, a call or a type, so `NEW.x`,
   `OLD.x` and `alias.column` stay columns; a group in parentheses (`FROM
-  (ONLY t)`, `FROM (a JOIN b)`) keeps its relation context, and `t%ROWTYPE`
-  or `t.c%TYPE` is a type reference. A routine's argument defaults are
+  (ONLY t)`, `FROM (a JOIN b)`) keeps its relation context, a typed literal
+  (`ext.t '1'`) names a type, the source of `t%ROWTYPE` or `t.c%TYPE` is a
+  relation, and every qualified name in a `DECLARE` section is a type. A
+  statement nested in parentheses or ending a CTE list is a query or
+  `INSERT`/`UPDATE`/`DELETE`. A routine's argument defaults are
   classified like its body, since they run at every call that omits the
   argument. A literal inside a body stays data: no statement a body may hold
   runs a string as SQL.
@@ -222,20 +235,15 @@ checked, because a service is trusted platform code.
   as `query_to_xml`, `cursor_to_xml`, `dblink`, `lo_import`, `pg_read_file`,
   `pg_advisory_lock` or `set_config` runs SQL from a string or reaches past
   the schema, which no name rule sees. In a stored expression a reviewed
-  built-in or a declared function is a deviation; `nextval` is admitted
-  there only, since Postgres resolves its sequence when the default is
-  created and the catalog check sees where it points.
+  built-in or a declared function is a deviation.
 
-  Each file also yields the database objects it declares. A routine is
-  named with its input signature as the catalog holds it (`f(int4,text)`,
-  `OUT` arguments left out), so each overload is its own object; a serial
-  column is an object too. Folded in file order they are the **manifest**:
-  a create adds an object (a replace keeps it), a rename moves it, a drop
-  removes it (a routine dropped or renamed without an argument list, or a
-  procedure, which lists its `OUT` arguments, covers every overload of the
-  name), dropping a table removes its triggers, rules, policies and serial
-  columns, and renaming a table or a serial column renames them. A call may
-  name any routine the set creates or renames to. The file is split at every `;` outside a comment, a literal
+  Each file also yields the database objects it declares. A routine has
+  one signature, so it is named by its name alone. Folded in file order
+  they are the **manifest**: a create adds an object (a replace, which
+  writes the same argument list, keeps it), a rename moves it, a drop
+  removes it, dropping a table removes its triggers, rules and policies,
+  and renaming a table renames them. A call may name any routine the set
+  creates or renames to. The file is split at every `;` outside a comment, a literal
   or a quoted body, with Postgres' lexical rules: whitespace is `[ \t\n\r\f\v]`
   only (a no-break space is part of a name), a `--` comment ends at a
   carriage return too, and a dollar tag has no length limit. Only files not
@@ -251,11 +259,10 @@ checked, because a service is trusted platform code.
   language; an event trigger on a function of the schema; any dependency on
   a type, function, relation, operator, operator class or collation outside
   the schema and `pg_catalog`; a routine that shadows a `pg_catalog` name,
-  which also catches a name a later Postgres adds) and on any function,
-  procedure or aggregate (by signature), operator, trigger, rule, view,
-  policy, domain or sequence (an identity column's, and a serial column's
-  that the manifest names, excepted) that the manifest folded through that
-  file does not name. So an object created at runtime, or by a route the classifier
+  which also catches a name a later Postgres adds; a routine name with more
+  than one signature; a sequence other than an identity column's) and on
+  any function, procedure, aggregate, operator, trigger, rule, view, policy
+  or domain that the manifest folded through that file does not name. So an object created at runtime, or by a route the classifier
   missed, fails the next migration and the next start until a migration
   declares or drops it.
 
@@ -323,10 +330,11 @@ migration file is a widening in the approval diff
   diverging from the schema it describes.
 - A migration that waits on a lock fails the deploy within the timeout. The
   application author must retry or split it.
-- An application migration may write a trigger, a function, a view, a
-  policy or a `serial` column; each is a deviation the approver sees as
-  needing closer review, and the catalog check holds the schema to what the
-  migrations declare. A domain stays refused.
+- An application migration may write a trigger, a function, a view or a
+  policy; each is a deviation the approver sees as needing closer review,
+  and the catalog check holds the schema to what the migrations declare. A
+  domain, a `serial` column, an explicit sequence and a routine overload
+  stay refused.
 - An application cannot use an extension: `CREATE EXTENSION` is refused, and
   so is a type, an operator class or a function of an extension schema
   (pgvector, citext, `pg_trgm`, PostGIS). A built-in outside the function

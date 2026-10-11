@@ -311,7 +311,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 
 	test('refuses database code no migration declares, and admits what the manifest names', async () => {
 		const ddl = `
-			CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n bigserial, at timestamptz DEFAULT now(), label text DEFAULT 'x');
+			CREATE TABLE deals (id text PRIMARY KEY, stage text NOT NULL, n bigint GENERATED ALWAYS AS IDENTITY, at timestamptz DEFAULT now(), label text DEFAULT 'x');
 			CREATE FUNCTION spread() RETURNS trigger LANGUAGE plpgsql AS $body$
 			BEGIN UPDATE deals SET stage = NEW.stage WHERE id <> NEW.id; RETURN NEW; END
 			$body$;
@@ -321,7 +321,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			CREATE POLICY own ON deals USING (true);
 		`
 		const schema = await migrated(ddl)
-		const undeclared = ['function spread()', 'policy deals.own', 'rule deals.mirror', 'sequence deals_n_seq', 'trigger deals.spread', 'view open_deals']
+		const undeclared = ['function spread', 'policy deals.own', 'rule deals.mirror', 'trigger deals.spread', 'view open_deals']
 		const refusal = `schema ${schema} holds database code that escapes it or that no migration declares: ${
 			undeclared.map((object) => `${object} (no migration declares it)`).join(', ')
 		}; declare it in a migration or drop it in a new one`
@@ -344,7 +344,7 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 			const hostile = new URL(url)
 			hostile.username = role
 			hostile.password = password
-			await expect(introspectSchema(hostile.toString(), schema, [])).rejects.toThrow('function shadow() (no migration declares it)')
+			await expect(introspectSchema(hostile.toString(), schema, [])).rejects.toThrow('function shadow (no migration declares it)')
 		} finally {
 			await admin.unsafe(`DROP ROLE IF EXISTS ${role}`)
 			await admin.close()

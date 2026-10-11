@@ -82,12 +82,16 @@ Read this before moving a service onto this driver.
   `pg_catalog` built-in, or a function the migration set declares. A declaration may not take a
   `pg_catalog` function name or a keyword (`pg-catalog-names.ts`, generated from Postgres 17 by
   `src/__tests__/helpers/generate-pg-catalog-names.ts` and pinned by `pg-catalog-names.test.ts`): overload
-  resolution would otherwise let it admit the built-in. A routine's identity is its input signature
-  (`routine-signature.ts`), in the manifest and the catalog alike. Never admit a built-in that runs SQL
+  resolution would otherwise let it admit the built-in. A routine has one signature (a second create
+  with another argument list is refused), so the manifest and the catalog name it by its name alone.
+- **The classifier is a coarse, fail-closed defense in depth, not a Postgres grammar**; the
+  least-privileged role (backlog 110) is the privilege boundary. Where a form is hard to read, refuse the
+  form (`parenthesizedTarget`, a field-selection call, `serial` and `CREATE SEQUENCE`, an unqualified
+  `pg_…` name in DDL) rather than emulate the grammar. Never admit a built-in that runs SQL
   from a string or reaches past the schema (`query_to_xml`, `dblink`, `lo_*`, `pg_read_file`,
   `pg_advisory_*`, `set_config`): these are name rules, not privileges, until backlog 110.
 - **`@fabrika/platform-node/sql` is runtime-neutral.** `sql.ts` reaches only `migration-sql.ts`,
-  `sql-names.ts`, `routine-signature.ts`, `pg-catalog-names.ts` and `migration-classify.ts`, which import
+  `sql-names.ts`, `pg-catalog-names.ts` and `migration-classify.ts`, which import
   nothing outside themselves: Control loads it in
   a Worker. `sql-subpath.test.ts` pins the import graph; never import Bun, Node or a driver there.
 - **Neither check may depend on the session.** `sqlTokens` follows Postgres' lexer (whitespace is

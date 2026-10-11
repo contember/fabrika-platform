@@ -20,7 +20,6 @@ export {
 } from './migration-classify'
 export { lexSql, type SqlToken, sqlTokens, type Statement, topLevelStatements, upperWord } from './migration-sql'
 export { PG_CATALOG_FUNCTIONS, SQL_KEYWORDS } from './pg-catalog-names'
-export { routineSignature } from './routine-signature'
 export {
 	ddlForeignSchema,
 	dmlForeignSchema,
@@ -34,6 +33,7 @@ export {
 	type NameRole,
 	nameText,
 	nestedStatement,
+	parenthesizedTarget,
 	refusedFunctionCall,
 	statementKind,
 	unicodeIdentifier,

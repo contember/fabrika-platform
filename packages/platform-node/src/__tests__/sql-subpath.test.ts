@@ -29,7 +29,6 @@ describe('@fabrika/platform-node/sql', () => {
 			'migration-classify.ts',
 			'migration-sql.ts',
 			'pg-catalog-names.ts',
-			'routine-signature.ts',
 			'sql-names.ts',
 			'sql.ts',
 		])

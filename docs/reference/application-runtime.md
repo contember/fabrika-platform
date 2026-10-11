@@ -691,10 +691,10 @@ test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure.
   the test run nor `fabrika db migrate` can reach a live schema; names resolve through the
   runner's `search_path`. A file is classified before any SQL runs (ADR-0017): tables,
   indexes, enum types, renames, drops, truncates, comments and backfills are paved; functions,
-  triggers, views, rules, policies, sequences, `DO` and an expression that calls
+  triggers, views, rules, policies, `DO` and an expression that calls
   anything but a paved built-in are deviations the approver reviews; what escapes the schema,
   the transaction or the platform (another schema, a framework `fabrika_*` table, `COPY`,
-  `GRANT`, a domain, `SECURITY DEFINER`, a foreign language, dynamic `EXECUTE`, a call outside the
+  `GRANT`, a domain, a `serial` column or sequence, a routine overload, `SECURITY DEFINER`, a foreign language, dynamic `EXECUTE`, a call outside the
   function allowlist) is refused. A check before each commit rolls back a file that leaves an
   escape or an object no migration declares in the schema.
 - **Seeding.** Every seeded row lies in one of two containment chains that share no value,
