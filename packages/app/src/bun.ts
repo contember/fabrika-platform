@@ -20,6 +20,7 @@ import { captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
 import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
 import { JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
+import { makeProcessUndumpable } from './undumpable.js'
 
 export { markProductionProcess } from '@fabrika/db/production'
 
@@ -183,7 +184,7 @@ const FORWARDED_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
  * The launcher: before any application module loads, derives the runtime role's credential from the provisioning one
  * and runs this same command again with an environment that carries the runtime credential and not the provisioning
  * one, so neither the application's process nor anything it spawns can read the latter, `/proc/self/environ`
- * included. Stdio is inherited, signals are forwarded, and the child's exit becomes this process's.
+ * included; the launcher makes itself non-dumpable first, so its own `/proc/<pid>/environ` is not readable either. Stdio is inherited, signals are forwarded, and the child's exit becomes this process's.
  */
 async function relaunchAsRuntime(env: Readonly<Record<string, string | undefined>>): Promise<never> {
 	let runtimeUrl: string
@@ -199,6 +200,8 @@ async function relaunchAsRuntime(env: Readonly<Record<string, string | undefined
 		if (value !== undefined && name !== PROVISIONING_DATABASE_URL) environment[name] = value
 	}
 	environment[RUNTIME_DATABASE_URL] = runtimeUrl
+	// Otherwise the application could read this process's environment, the provisioning credential in it, through /proc.
+	makeProcessUndumpable()
 	const child = Bun.spawn([process.execPath, ...process.execArgv, ...process.argv.slice(1)], {
 		env: environment,
 		stdin: 'inherit',

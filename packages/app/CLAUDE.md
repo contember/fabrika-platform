@@ -345,7 +345,8 @@ signatures are fixed, and each builder whose runtime a later unit adds throws `<
   `FABRIKA_APP_RUNTIME_DATABASE_URL` (ADR-0017). Handed the provisioning credential `FABRIKA_APP_DATABASE_URL`
   instead, both are launchers: they load no application module, derive the runtime URL (`applicationRuntimeUrl`) and
   run the same command again without the provisioning credential (stdio inherited, signals forwarded, exit code
-  propagated; `launcher.test.ts`). Never load application code in a process that holds it, and never open the layer
+  propagated; `launcher.test.ts`), after making themselves non-dumpable (`src/undumpable.ts`, `prctl` through
+  `bun:ffi`) so the application cannot read their `/proc/<pid>/environ`. Never load application code in a process that holds it, and never open the layer
   on it. No connection (Cloudflare)
   or a layer bound before boot is a `BootError`. `boot.ts` imports only
   `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter

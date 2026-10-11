@@ -12,7 +12,15 @@ import { z } from 'zod/v4'
 const ENTRY = join(import.meta.dir, 'launcher-entry.ts')
 const PROVISIONING = 'postgres://db:provisioning-secret-a1b2@127.0.0.1:1/db?sslmode=disable'
 const scratch = mkdtempSync(join(tmpdir(), 'fabrika-launcher-'))
-const reportSchema = z.object({ pid: z.number(), environ: z.string(), child: z.string(), env: z.string() })
+const reportSchema = z.object({
+	pid: z.number(),
+	environ: z.string(),
+	child: z.string(),
+	env: z.string(),
+	parentEnviron: z.string(),
+	parentMemory: z.string(),
+	holders: z.array(z.number()),
+})
 
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
@@ -41,6 +49,15 @@ describe.skipIf(!existsSync('/proc/self/environ'))('the serving launcher', () =>
 		expect(seen.environ).toContain(`FABRIKA_APP_RUNTIME_DATABASE_URL=${applicationRuntimeUrl(PROVISIONING, 'notes')}`)
 		// The framework scrubbed every FABRIKA_* variable before the application loaded.
 		expect(seen.env).not.toContain('FABRIKA_')
+	})
+
+	test('the launcher, which holds the provisioning credential, is not readable by the application it launched', async () => {
+		const { child, report } = launch('parent', '0')
+		expect(await child.exited).toBe(0)
+		const seen = readReport(report)
+		expect(seen.parentEnviron).toBe('EACCES')
+		expect(seen.parentMemory).toBe('EACCES')
+		expect(seen.holders).toEqual([])
 	})
 
 	test("the application's exit code is the launcher's", async () => {
