@@ -226,10 +226,15 @@ export interface App<K extends KitTypes> {
  * no implementation can return (`.handle`'s `ExactReturn`, `contract`'s `imports` section by the kit's imports), so
  * the compiler relates the two nowhere else; `kit-runtime.test.ts` holds that each builder returns what its type says.
  */
-export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports = Record<never, never>>(
+export function defineApp<V extends AnyAppVocabulary, DB, P>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options?: { readonly imports: Imp },
+): App<KitOf<V, DbIndex<DB, P>, Record<never, never>>>
+/** Options that may be absent are no overload: the contract's type would promise an imports section it may not have. */
+export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports>(
+	vocabulary: V,
+	tables: Tables<DB, P>,
+	options: { readonly imports: Imp },
 ): App<KitOf<V, DbIndex<DB, P>, Imp>>
 export function defineApp(vocabulary: AnyAppVocabulary, _tables: unknown, options?: { readonly imports: KitImports }): object {
 	return runtimeApp(vocabulary, options?.imports)

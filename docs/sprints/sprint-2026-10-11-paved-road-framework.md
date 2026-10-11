@@ -845,3 +845,8 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   than `.handle(<inline function>)` on a builder, and removes its arguments, type arguments and wrapping types; parentheses
   stay, so the slice still parses. A refused site's receiver is sliced in turn: the walk used to skip it
   (`colocated.test.ts`).
+- **WU4 review round 2 — SIGNATURE CHANGE: `defineApp` is two overloads.** `defineApp(vocabulary, tables)` and
+  `defineApp(vocabulary, tables, options: { readonly imports: Imp })`, was one with `options?: { readonly imports: Imp }`.
+  Optional options inferred `Imp` from their type while the call might pass none, so `contract.surface.imports` typed
+  as present and was `undefined` at runtime. The options of the imports overload are required; imports given only as a
+  type argument no longer type either (`colocated-mistakes/06`, `07`, `kit-runtime.test.ts`).

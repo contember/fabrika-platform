@@ -275,9 +275,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   the same contract, without one handler.
 - **`app.contract` derives the `imports` section** from the kit's imports and the RPC endpoints whose `connect` names
   each (`usedBy`, sorted), with `kitImportsSection`, which the static reader calls too; a kit contract that writes an
-  `imports` section of its own is refused. The section exists exactly when `defineApp`'s options are given, whose
-  `imports` they then require: an options object whose imports may be absent would let the type promise a section the
-  runtime does not build. A kit import no endpoint connects is refused by `buildArtifact`, as before.
+  `imports` section of its own is refused. The section exists exactly when `defineApp`'s options are given, so the two
+  overloads keep them apart: `defineApp(vocabulary, tables)` promises no section, and `defineApp(vocabulary, tables,
+  { imports })` requires both the options and their `imports`. Options or imports that may be absent, or imports given
+  only as a type argument, would let the type promise a section the runtime does not build (`colocated-mistakes/05`–`07`). A kit import no endpoint connects is refused by `buildArtifact`, as before.
 - **`buildArtifact` parses `declared`** (the static reader copies it unchecked): `sql` and each `unscoped` mode `read`
   or `write`, `read` only on a query and an export; `unscoped` names tables of `src/db/tables.ts` and never a
   `fabrika_*` one; `connect` and `issues` only on an RPC endpoint, `connect` naming the kit's imports, `issues` a

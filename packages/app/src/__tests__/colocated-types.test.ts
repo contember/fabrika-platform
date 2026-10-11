@@ -11,10 +11,12 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'03-principal-of-another-caller.ts': `Type '"service"' is not assignable to type '"user"'`,
 	'04-job-ref-of-an-undeclared-action.ts': `Argument of type '"crm.delete"' is not assignable to parameter of type '"crm.read"'`,
 	'05-imports-that-may-be-absent.ts': "Type 'undefined' is not assignable to type 'KitImports'",
+	'06-options-that-may-be-absent.ts': "Type 'undefined' is not assignable to type '{ readonly imports: { readonly catalog: KitImport; }; }'",
+	'07-imports-typed-without-options.ts': 'Expected 3 arguments, but got 2.',
 }
 
-/** The compiler elaborates an options object through its property types, so this one is held to its line and text. */
-const ELABORATED = ['05-imports-that-may-be-absent.ts']
+/** The compiler elaborates an options object through its types, so these are held to their line and text. */
+const ELABORATED = ['05-imports-that-may-be-absent.ts', '06-options-that-may-be-absent.ts']
 
 describe('the colocated mistakes are type errors at their line', () => {
 	expectMistakes(join(import.meta.dir, 'colocated-mistakes'), EXPECTED, { plain: true, elaborated: ELABORATED })

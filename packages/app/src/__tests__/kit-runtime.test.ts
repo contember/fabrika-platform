@@ -98,6 +98,14 @@ describe("the kit's builders", () => {
 		expect('imports' in plainApp.contract((c) => ({ health: c.health('/healthz') })).surface).toBe(false)
 	})
 
+	test('imports given to defineApp are in the contract and its type; a kit given no options promises no section', () => {
+		const catalog: string = kitContract.surface.imports.catalog.app
+		expect(catalog).toBe('catalog')
+		const plain = plainApp.contract((c) => ({ health: c.health('/healthz') }))
+		const promisesImports: 'imports' extends keyof typeof plain.surface ? true : false = false
+		expect('imports' in plain.surface).toBe(promisesImports)
+	})
+
 	test('a contract whose sites declare nothing has no declared section, so its digest is the one it had', () => {
 		const plain = plainApp.contract((c) => ({ health: c.health('/healthz') }))
 		expect('declared' in compileContract(plain, tables)).toBe(false)
