@@ -17,6 +17,8 @@ behaviour.
   Zerops account to a serving application: prerequisites, the command order, and a check per step.
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` serving
   surfaces (`implement`, `serveService`), typed RPC, and authorization boundary.
+- [`application-architecture.md`](application-architecture.md) — where an application's code goes: the layers, the
+  slice, what each file holds, the import table, and what `fabrika-check` refuses or only hints.
 - [`mcp-authoring.md`](mcp-authoring.md) — edit an application from Claude or ChatGPT through Control's `/mcp`: the OAuth flow, the tools, how an operator enables it, and its limits.
 - [`local-builder.md`](local-builder.md) — connect local coding and preview to an installed platform through human consent, then deploy and update the same application.
 - [`core-application-composition.md`](core-application-composition.md) — how IAM,

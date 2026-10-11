@@ -585,3 +585,14 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0022"). -->
+
+- **WU1.** Today's `literal` rule refuses the target shell (`defineVocabulary`, `defineApp`, `app.group`,
+  `app.contract`), so `structure.test.ts` asserts only the architecture's rules on `fixtures/architecture-app/`, and
+  that directory is in `differential.test.ts`'s `refusedOnly` (one line in WU0's file). WU2/WU4: register it as a
+  differential fixture and assert the whole check clean on it.
+- **WU1.** The architecture puts every `.handle(…)` in a slice's `endpoints.ts`, jobs, webhooks, link and export
+  procedures included (`handler-location`). WU0/WU4: a slice must be able to export them for the contract's sections.
+- **WU1.** `queries.ts` takes the handle as a parameter, typed with a handle type the kit exports (`AppSql`,
+  `CompanyHandle` in the fixture). WU0/WU3 name those types; the doc and the fixture follow.
+- **WU1.** `Finding.severity` is required, so every literal `Finding` in `packages/check` gained `severity: 'refusal'`
+  (11 files, one line each): a merge note for WU4/WU6/WU8.
