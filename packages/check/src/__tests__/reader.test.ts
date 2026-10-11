@@ -407,8 +407,11 @@ export const tables = defineTables<DB, 'notes.read' | 'notes.write'>(columns)({
 		expect(tableRefusal(withTables(TABLES.replace('export const tables', 'export const policies')))).toEqual([
 			"src/db/tables.ts:1:1 contract src/db/tables.ts exports no const 'tables'",
 		])
+		expect(tableRefusal(withTables(TABLES.replace('(columns)({', '(columns, columns, columns)({')))).toEqual([
+			"src/db/tables.ts:4:23 contract 'tables' is not one call of defineTables with the vocabulary and the column list, then the policies",
+		])
 		expect(tableRefusal(withTables(TABLES.replace('(columns)({', '(columns, columns)({')))).toEqual([
-			"src/db/tables.ts:4:23 contract 'tables' is not one call of defineTables with the column list, then the policies",
+			'src/db/tables.ts:4:70 contract the first argument of defineTables is not the vocabulary',
 		])
 		expect(tableRefusal(withTables(TABLES.replace("insert: ['title'],", 'insert: [`${"title"}`],'))).map((line) => line.split(' ')[1])).toEqual([
 			'literal',

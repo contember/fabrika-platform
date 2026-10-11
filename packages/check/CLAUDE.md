@@ -36,7 +36,7 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   until the answer is empty. `CHECKER_VERSION` is this package's version, which Control records in a snapshot. The
   reader throws `ContractSourceError` (findings with file, line, column and allowed form) for a form it refuses, and `ContractError` with the problems `compileContract` reports for a contract that does not compile.
   `readTablesSource` reads `src/db/tables.ts` and the modules it imports (the generated `src/db/schema.generated.ts`)
-  under the same literal rule, and parses the two arguments of `defineTables` with `@fabrika/db/tables`' `readTables`,
+  under the same literal rule, and parses the column list and the policies of `defineTables` with `@fabrika/db/tables`' `readTables`,
   the parse `defineTables` runs; a policy it refuses is a `ContractSourceError` at the call. No `src/db/tables.ts` in
   `files` means no policies. `readContractSource` uses it unless `tables` (the artifact form) is given.
 
@@ -67,7 +67,7 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `reader/value.ts`      | The literal subset read into values through `ModuleGraph`; `c.*` calls stay unapplied.                                                                                                                                                                 |
 | `reader/schema.ts`     | Each `z` factory and method applied to real zod, with its arguments and options checked.                                                                                                                                                               |
 | `reader/surface.ts`    | The values read into the `AnyContract` `defineContract` returns, builder by builder, as the kit does.                                                                                                                                                  |
-| `reader/tables.ts`     | `src/db/tables.ts`: the `defineTables(columns)(policies)` arguments as plain values, for `readTables`.                                                                                                                                                 |
+| `reader/tables.ts`     | `src/db/tables.ts`: the `defineTables(vocabulary, columns)(policies)` arguments as plain values, for `readTables`.                                                                                                                                     |
 
 Tests: `rules.test.ts` holds a refused and an allowed fixture for each rule id but the architecture's, which
 `structure.test.ts` holds over `fixtures/architecture-app/` (a two-slice application in the target layout, its sources
@@ -79,7 +79,8 @@ module and expects the same artifact and canonical bytes (`fixtures/reader-forms
 accepts; `fixtures/clean-app/` is the clean application of the rule tests). Its paired cases (`fixtures/paired/`,
 `.fixture` files) are written to a temporary directory and evaluated by Bun through `fixtures/paired-runner.mjs`:
 each either gives the reader's artifact, or the reader refuses it and the test shows what Bun does instead. A fixture
-directory that no table registers fails the test.
+directory that no table registers fails the test. Its staged-kit cases over `@fabrika/app`'s `kit-fixture/` are
+`test.todo` skeletons until the paved-road sprint fills them (tables: WU2; the slice: WU4).
 
 ## The rules
 
@@ -144,9 +145,12 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   or re-export with a source.
 - **Builders:** `z` (named, renamed or namespace) from `zod/v4`, its members written with a dot (`z['string']` is
   refused); `defineContract` from `@fabrika/app/contract`, called once
-  as `defineContract(vocabulary, (c) => ({ … }))`; `defineTables` from `@fabrika/db` or `@fabrika/db/tables`, as
-  `defineTables<DB, Action>(columns)({ … })`, with `columns` imported from the generated
-  `src/db/schema.generated.ts`.
+  as `defineContract(vocabulary, (c) => ({ … }))`; `defineVocabulary` from `@fabrika/app/contract`, called once with
+  one object (`src/vocabulary.ts`), which reads as that object; `defineTables` from `@fabrika/db` or
+  `@fabrika/db/tables`, as `defineTables(vocabulary, columns)({ … })` (the first argument an object with the
+  vocabulary's four sections) or `defineTables<DB, Action>(columns)({ … })`, with `columns` imported from the
+  generated `src/db/schema.generated.ts`. The vocabulary is read as a literal; the policies still state their
+  containment.
 - **Functions:** an inline arrow with one parameter and an expression body, only as the second argument of
   `defineContract` and as `procedures` in the options of `c.link(path, { … })`. Its parameter is used only as
   `c.<builder>(…)`: `rpc`, `query`, `mutation`, `link`, `spa`, `health`, `form`, `webhook`, `files`, `cron`, `export`.
@@ -185,7 +189,8 @@ nobody has type-checked. It refuses with the `contract` rule:
 
 ## Trusted by name
 
-The literal rule and the reader recognise `z`, `defineContract` and `defineTables` by the package they come from.
+The literal rule and the reader recognise `z`, `defineContract`, `defineVocabulary` and `defineTables` by the package
+they come from.
 `trust.ts` refuses, in the checker (`unchecked-import`) and in the reader (`ContractSourceError`), everything that
 can make such an import load something else:
 

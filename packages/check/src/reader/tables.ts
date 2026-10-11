@@ -1,5 +1,6 @@
-// Reads `src/db/tables.ts` into table policies without executing it: the two arguments of
-// `defineTables<DB, Action>(columns)({ … })` are read as literals, then parsed by `@fabrika/db`'s own policy parse.
+// Reads `src/db/tables.ts` into table policies without executing it: the arguments of
+// `defineTables<DB, typeof vocabulary>(vocabulary, columns)({ … })` (or `defineTables<DB, Action>(columns)({ … })`) are
+// read as literals, then parsed by `@fabrika/db`'s own policy parse.
 
 import { PolicyError, readTables, type TablePolicies, tablePolicies } from '@fabrika/db/tables'
 import { children, identifierName } from '../ast'
@@ -9,7 +10,7 @@ import { BUILDER_IMPORTS, decompose } from '../rules/literal'
 import type { ReaderProblems } from './problems'
 import { type LiteralValue, ValueReader } from './value'
 
-const ALLOWED_CALL = `export const ${TABLES_EXPORT} = defineTables<DB, Action>(columns)({ … })`
+const ALLOWED_CALL = `export const ${TABLES_EXPORT} = defineTables<DB, typeof vocabulary>(vocabulary, columns)({ … })`
 const ALLOWED_POLICY = 'a table policy defineTables accepts (packages/db/CLAUDE.md)'
 
 /** The policies of `src/db/tables.ts`; none when the graph has no such module. `null` after recording why not. */
@@ -28,18 +29,28 @@ export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): T
 	const imported = graph.index(binding.module).imports.get(identifierName(root) ?? '')
 	const builder = imported === undefined ? undefined : BUILDER_IMPORTS[imported.specifier]?.[imported.imported]
 	const [first, second] = links
-	const columnsNode = first?.kind === 'call' ? soleArgument(first.node) : undefined
+	const [vocabularyNode, columnsNode] = first?.kind === 'call' ? tableArguments(first.node) : [undefined, undefined]
 	const policiesNode = second?.kind === 'call' ? soleArgument(second.node) : undefined
 	if (builder !== 'tables' || links.length !== 2 || columnsNode === undefined || policiesNode === undefined) {
-		problems.add(at, `'${TABLES_EXPORT}' is not one call of defineTables with the column list, then the policies`, ALLOWED_CALL)
+		problems.add(at, `'${TABLES_EXPORT}' is not one call of defineTables with the vocabulary and the column list, then the policies`, ALLOWED_CALL)
 		return null
 	}
 	const reader = new ValueReader(graph, problems)
+	// The vocabulary is read as a literal; the policies still state their containment, so the parse does not take it.
+	const vocabulary = vocabularyNode === undefined ? undefined : reader.value({ module: binding.module, node: vocabularyNode })
 	const columns = reader.value({ module: binding.module, node: columnsNode })
 	const policies = reader.value({ module: binding.module, node: policiesNode })
 	const plainColumns = columns === null ? undefined : plainOf(columns, problems)
 	const plainPolicies = policies === null ? undefined : plainOf(policies, problems)
-	if (plainColumns === undefined || plainPolicies === undefined) {
+	if (vocabulary === null || plainColumns === undefined || plainPolicies === undefined) {
+		return null
+	}
+	if (vocabulary !== undefined && !isVocabulary(vocabulary)) {
+		problems.add(
+			{ module: binding.module, node: vocabularyNode ?? binding.init },
+			'the first argument of defineTables is not the vocabulary',
+			ALLOWED_CALL,
+		)
 		return null
 	}
 	try {
@@ -51,6 +62,23 @@ export function readTablesValue(graph: ModuleGraph, problems: ReaderProblems): T
 		problems.add(at, error.message, ALLOWED_POLICY)
 		return null
 	}
+}
+
+/** `(vocabulary, columns)` or `(columns)`: the vocabulary, when given, and the column list. */
+function tableArguments(call: Located['node']): readonly [Located['node'] | undefined, Located['node'] | undefined] {
+	const [vocabulary, columns, ...rest] = children(call, 'arguments')
+	if (rest.length > 0 || vocabulary === null || vocabulary === undefined || vocabulary.type === 'SpreadElement') {
+		return [undefined, undefined]
+	}
+	if (columns === undefined) {
+		return [undefined, vocabulary]
+	}
+	return columns === null || columns.type === 'SpreadElement' ? [undefined, undefined] : [vocabulary, columns]
+}
+
+/** What `defineVocabulary` returns, as the reader has it: an object with the vocabulary's sections. */
+function isVocabulary(value: LiteralValue): boolean {
+	return value.kind === 'object' && ['app', 'dimensions', 'actions', 'roles'].every((section) => value.entries.has(section))
 }
 
 function soleArgument(call: Located['node']): Located['node'] | undefined {

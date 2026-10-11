@@ -4,12 +4,12 @@ import type { Binding, ModuleGraph } from '../graph'
 import { isRelativeSpecifier } from '../layout'
 
 /** What a call root builds; `surface` is the parameter of a builder callback (`c`, `l`). */
-export type BuilderKind = 'zod' | 'contract' | 'tables' | 'surface'
+export type BuilderKind = 'zod' | 'contract' | 'vocabulary' | 'tables' | 'surface'
 
 /** The only imported names a literal module may use: the builders the platform reads without executing them. */
 export const BUILDER_IMPORTS: Readonly<Record<string, Readonly<Record<string, BuilderKind>>>> = {
 	'zod/v4': { z: 'zod', '*': 'zod' },
-	'@fabrika/app/contract': { defineContract: 'contract' },
+	'@fabrika/app/contract': { defineContract: 'contract', defineVocabulary: 'vocabulary' },
 	'@fabrika/db': { defineTables: 'tables' },
 	'@fabrika/db/tables': { defineTables: 'tables' },
 }
@@ -96,7 +96,7 @@ const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, nu
 const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUDE.md): strict objects, no transforms, refinements or pipes'
 const ALLOWED_CALLBACK = 'a function only as the builder callback of defineContract(…, (c) => ({ … })) or of a link: procedures: (l) => ({ … })'
 const ALLOWED_IMPORT =
-	'z from zod/v4, defineContract from @fabrika/app/contract, defineTables from @fabrika/db or @fabrika/db/tables, or a literal const of the application'
+	'z from zod/v4, defineContract or defineVocabulary from @fabrika/app/contract, defineTables from @fabrika/db or @fabrika/db/tables, or a literal const of the application'
 
 export type Link = { readonly kind: 'member'; readonly name: string | undefined; readonly node: AstNode } | {
 	readonly kind: 'call'
@@ -226,10 +226,18 @@ const shapeProblem = (kind: BuilderKind, root: AstNode, links: readonly Link[]):
 			return links.length === 1 && calls === 1
 				? undefined
 				: { node: root, message: 'defineContract used other than as one call', allowed: 'defineContract(vocabulary, (c) => ({ … }))' }
+		case 'vocabulary':
+			return links.length === 1 && calls === 1
+				? undefined
+				: { node: root, message: 'defineVocabulary used other than as one call', allowed: 'defineVocabulary({ app, dimensions, actions, roles })' }
 		case 'tables':
 			return calls === links.length && (calls === 1 || calls === 2)
 				? undefined
-				: { node: root, message: 'defineTables used other than as its call', allowed: 'defineTables<DB, Action>(columns)({ … })' }
+				: {
+					node: root,
+					message: 'defineTables used other than as its call',
+					allowed: 'defineTables<DB, typeof vocabulary>(vocabulary, columns)({ … })',
+				}
 	}
 }
 

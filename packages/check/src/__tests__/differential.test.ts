@@ -360,6 +360,23 @@ describe('paired cases: the reader agrees with Bun, or refuses where Bun would r
 	}
 })
 
+// The staged kit's cases, over `@fabrika/app`'s `src/__tests__/kit-fixture/`. Skeletons until the sprint's units land:
+// WU2 owns the table cases, WU4 the slice cases (docs/sprints/sprint-2026-10-11-paved-road-framework.md).
+describe('the staged kit: read from source and evaluated agree', () => {
+	describe('tables derived from the vocabulary (WU2)', () => {
+		test.todo('a container column on the <container>_id convention reads the same as the evaluated defineTables')
+		test.todo('a child table whose chain comes from the vocabulary reads the same')
+		test.todo('in: { column } off the convention reads the same')
+		test.todo('the reader refuses the form that names the action union by hand, as the runtime does')
+	})
+	describe("the reader's slice of shell modules (WU4)", () => {
+		test.todo('a contract of groups in other modules, each endpoint with .handle beside it, reads the same artifact as the evaluated modules')
+		test.todo('a module only handlers import is never requested from the commit and never evaluated')
+		test.todo('the declared sql, unscoped, connect and issues reach the artifact the same from source and evaluated')
+		test.todo('a link mount, a webhook, a cron job and an export of the kit read the same')
+	})
+})
+
 describe('every fixture directory is registered', () => {
 	test('in @fabrika/check and in @fabrika/app', () => {
 		const registered = new Set(fixtures.map((fixture) => relative(join(import.meta.dir, '..', '..', '..'), fixture.root)))

@@ -265,6 +265,8 @@ export class ValueReader {
 				return this.#zodChain(located, links, scope)
 			case 'contract':
 				return this.#contractCall(located, links, scope)
+			case 'vocabulary':
+				return this.#vocabularyCall(located, links, scope)
 			case 'tables':
 				this.#problems.add(located, 'defineTables in the contract graph', 'table policies only in src/db/tables.ts')
 				return null
@@ -288,6 +290,18 @@ export class ValueReader {
 			(position) => (kit === 'surface' && name === 'link' && position === 1 ? { linkOptions: true } : null),
 		)
 		return args === null ? null : { kind: 'builder', kit, name, args, at: located }
+	}
+
+	/** `defineVocabulary({ … })` returns its argument's fields, so the reader reads the argument. */
+	#vocabularyCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
+		const [call] = links
+		const args = call?.kind === 'call' && links.length === 1 ? this.#arguments(located.module, call.node, scope, () => null) : null
+		const [vocabulary] = args ?? []
+		if (args === null || args.length !== 1 || vocabulary === undefined) {
+			this.#problems.add(located, 'defineVocabulary used other than as one call of one object', 'defineVocabulary({ app, dimensions, actions, roles })')
+			return null
+		}
+		return vocabulary
 	}
 
 	#contractCall(located: Located, links: readonly Link[], scope: Scope): LiteralValue | null {
