@@ -184,6 +184,24 @@ Other ADRs make the contract binding outside the application process:
 
 All four are built, so the contract binds outside the application process too.
 
+**Inside the process, application code is trusted.** The framework, `@fabrika/db` and the application share one
+process, so the runtime checks there stop mistakes and make a bypass conspicuous; they do not contain hostile code.
+The framework closes the same-process patches it knows of:
+
+- The Kysely compiler, `Database` (class and prototype) and the capability classes' prototypes are frozen at load,
+  and the checks use built-ins captured at load.
+- The adapter takes `Database.postgres` before it imports the application. The capability mint is held by `boot`
+  alone, claimed once at load, so no import, also by URL, reaches a mint that `requestCapabilities` accepts.
+- `fabrika-check` refuses the source forms that reach around them: a write to a `@fabrika/*` or `zod` value, a
+  prototype write, and a load by computed specifier, by resolved path or through `node:module`.
+
+This does not stop code that sets out to escape. Application code or one of its dependencies can still alias a
+framework object past the checker, call `boot` with IAM keys of its own and receive authentic capabilities from that
+second runtime ([backlog 109](../backlog/109-application-code-can-boot-a-second-runtime-with-its-own-keys.md)), or
+read the database URL from `/proc/self/environ`, where it stays after `captureEnvironment` removed it from
+`process.env`. A dependency's code is not read by the checker at all. Object-level access independent of
+application code needs the platform data executor rejected for v1 (Alternatives).
+
 ## Consequences
 
 - An application declares its access surface once. The proxy's endpoint table, the IAM vocabulary, the

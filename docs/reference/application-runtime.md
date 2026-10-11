@@ -343,6 +343,12 @@ A `Ref` and a `Within` are classes with private fields, bound to their request w
 `@fabrika/db` — refuses one the framework did not mint, one whose request has ended
 and one from another live request. Each resolution returns a fresh frozen copy of the
 facts fixed at mint, so changing a returned chain changes nothing the data layer sees.
+The framework's mint is held by `boot` alone: `boot.ts` claims it once, when it loads,
+before the application, and no module exports it. An application that loads
+`capability.ts` by URL finds only `createCapabilityIssuer`, whose capabilities
+`requestCapabilities` refuses. This hardening stops mistakes and makes a bypass
+conspicuous; application code stays trusted in-process
+([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §7 says what it does not stop).
 
 ## Membership, share links and the anonymous kinds
 
