@@ -224,4 +224,6 @@ and the target `Ref`, so no handler can call it.
   pre-commit catalog query (`databaseCodeQuery`, `@fabrika/platform-node`) and refuses any trigger,
   rule, view, function, policy, domain, sequence or expression outside the reviewed built-ins. A
   store's guarded write would fire such code unseen. This is what finds an object installed before
-  the runner checked, at every start (`codegen --verify`) and in the test kit.
+  the runner checked, at every start (`codegen --verify`) and in the test kit. It runs in a read-only
+  transaction that pins `search_path` and `standard_conforming_strings`, so a role-level setting
+  cannot blind it.

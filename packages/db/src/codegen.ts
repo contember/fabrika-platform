@@ -94,19 +94,23 @@ export async function introspectSchema(url: string, schema: string): Promise<Cat
 	if (!isPlainIdentifier(schema)) throw new CodegenError(`the schema must match ^[a-z_][a-z0-9_]*$: ${schema}`)
 	const sql = new SQL({ url, adapter: 'postgres', max: 1, prepare: false })
 	try {
-		const namespaces: unknown = await sql.unsafe('SELECT 1 FROM pg_namespace WHERE nspname = $1', [schema])
-		if (!Array.isArray(namespaces) || namespaces.length === 0) {
-			throw new CodegenError(`schema ${schema} does not exist; run fabrika db migrate first`)
-		}
-		// The migration runner's own pre-commit check, so an object installed before it existed fails every start.
-		const code = z.array(z.object({ violation: z.string() })).parse(await sql.unsafe(databaseCodeQuery(schema)))
-		if (code.length > 0) {
-			throw new CodegenError(
-				`schema ${schema} holds database code the data layer cannot see: ${code.map((row) => row.violation).join(', ')}; drop it in a new migration`,
-			)
-		}
-		const rows: unknown = await sql.unsafe(CATALOG_QUERY, [schema])
-		return z.array(catalogColumnSchema).parse(rows)
+		return await sql.begin('read only', async (tx) => {
+			// The role or the database may set either for its sessions; the catalog query must not depend on them.
+			await tx.unsafe('SET LOCAL search_path TO pg_catalog, pg_temp')
+			await tx.unsafe('SET LOCAL standard_conforming_strings = on')
+			const namespaces: unknown = await tx.unsafe('SELECT 1 FROM pg_namespace WHERE nspname = $1', [schema])
+			if (!Array.isArray(namespaces) || namespaces.length === 0) {
+				throw new CodegenError(`schema ${schema} does not exist; run fabrika db migrate first`)
+			}
+			// The migration runner's own pre-commit check, so an object installed before it existed fails every start.
+			const code = z.array(z.object({ violation: z.string() })).parse(await tx.unsafe(databaseCodeQuery(schema)))
+			if (code.length > 0) {
+				throw new CodegenError(
+					`schema ${schema} holds database code the data layer cannot see: ${code.map((row) => row.violation).join(', ')}; drop it in a new migration`,
+				)
+			}
+			return z.array(catalogColumnSchema).parse(await tx.unsafe(CATALOG_QUERY, [schema]))
+		})
 	} finally {
 		await sql.close()
 	}

@@ -325,6 +325,25 @@ describe.skipIf(!hasPostgres)('codegen against real Postgres', () => {
 		await expect(generateSchema(url, schema)).rejects.toThrow(CodegenError)
 	})
 
+	test('the start check holds when the role sets standard_conforming_strings off and puts the schema first', async () => {
+		const schema = await migrated('CREATE TABLE deals (id text PRIMARY KEY, n serial)')
+		const role = `codegen_${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
+		const password = Bun.randomUUIDv7()
+		const admin = new SQL({ url, adapter: 'postgres', max: 1 })
+		try {
+			await admin.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`)
+			await admin.unsafe(`ALTER ROLE ${role} SET standard_conforming_strings = off`)
+			await admin.unsafe(`ALTER ROLE ${role} SET search_path = ${schema}, pg_catalog`)
+			const hostile = new URL(url)
+			hostile.username = role
+			hostile.password = password
+			await expect(introspectSchema(hostile.toString(), schema)).rejects.toThrow('default deals.n calls pg_catalog.nextval')
+		} finally {
+			await admin.unsafe(`DROP ROLE IF EXISTS ${role}`)
+			await admin.close()
+		}
+	})
+
 	test('a trigger alone fails the start check', async () => {
 		const schema = await migrated(`
 			CREATE TABLE deals (id text PRIMARY KEY);
