@@ -324,6 +324,8 @@ interface BoundHandler {
 	readonly declaration: SiteDeclaration | null
 }
 
+// The declaration is read from the leaf until the artifact carries it (WU4); then it is the approved one, and a leaf
+// that says otherwise does not boot.
 function boundHandler(node: unknown, where: string, kind: DataKind, artifact: ContractArtifact, problems: string[]): BoundHandler | null {
 	if (isSiteHandler(node)) {
 		const site = node

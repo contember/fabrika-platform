@@ -318,7 +318,8 @@ names the same fix at runtime.
   destination's `FOR SHARE`.
 - **A list is a keyset page**: at most `limit` rows (50 by default, 500 at most) in the order asked, the table's key
   last as the tiebreak, and `next`, the opaque cursor `after` takes, `null` on the last page. Filters and orderings
-  name only the columns the capability reads.
+  name only the columns the capability reads. The cursor holds each order column as the database prints it, so a timestamp keeps its
+  microseconds. Every capability reads the key and the version; a column policy on either is refused.
 - **`ctx.db.unscoped.<table>`** exists only for the tables the site declares, in their mode: the scope predicate is
   `true`, every statement is still guarded and runs in the invocation's transaction, `'read'` refuses every write,
   an insert names the containment columns no capability stamps, and no declaration reaches a `fabrika_*` table.
@@ -326,6 +327,8 @@ names the same fix at runtime.
 - **`fromRow(Schema, row)`** (`@fabrika/app`) turns a row into an output object: snake_case columns become the
   schema's camelCase fields, a `Date` its ISO text, an undeclared column is dropped, and the schema parses the rest,
   so a literal-string field the row types as text is checked.
+- **A statement the database refuses** throws `DatabaseError` with its SQLSTATE only: the driver's message and detail,
+  which can quote the failing row and its hidden columns, never leave the data layer.
 - **Errors come from `@fabrika/app`** (`ConflictError`, `NotFoundError`, `BadRequestError`). `@fabrika/db`'s own
   `ConflictError` and `NotFoundError` stay internal and answer 409 and 404 by name.
 

@@ -728,7 +728,7 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   or `fabrika_*` is a `BootError`). Integrator: once WU4 puts the declarations into the artifact, `boot` should read the
   approved declaration from it and refuse a leaf that says otherwise; until then the leaf is the only source.
 - **WU3 — the hook for WU6.** Every handle of a site runs in one `Session`: `Invocation.session()` for a request or a
-  webhook delivery (an `InvocationTransaction`, `packages/db/src/database.ts`, over Kysely's `ControlledTransaction`,
+  webhook delivery (an `InvocationTransaction`, `packages/db/src/database.ts`, a Kysely transaction waiting for the decision,
   `READ ONLY` for a query or an export), the session `DataAccess.transaction` hands a job's `ctx.transaction`. A declared
   `ctx.sql` / `tx.sql` is `sqlStub()` (invocation.ts), which WU6 replaces with the template run in that session. A raw
   statement must go through `Session`'s private `#execute` (as `runFixedStatement` does), so a refused statement marks
@@ -745,3 +745,11 @@ only the Notes fixture under `packages/local-stack/`; WU12 owns the rest of that
   `architecture-app` and `application-architecture.md` use them), `fromRow`/`RowInput` (`@fabrika/app`),
   `dataAccessOf` (`@fabrika/db/framework`). `@fabrika/db`'s root no longer exports `ConflictError`/`NotFoundError`.
   The skill does not mirror the matrix yet → WU10. `kit-scale.test.ts` after WU3: 354,508 instantiations.
+- **WU3 review round 1.** Fixed with witnesses: a driver failure leaves the layer as `DatabaseError` (SQLSTATE only, no
+  row detail); a column policy on the key or the version is refused and a list's synthesized order is held to the
+  capability's columns; an invocation's end and its connection's release are separate, so a failed COMMIT gives the
+  connection back (one-connection pool); a fenced job transaction gets the idle timeout and `cancelInFlight` aborts it
+  even while its work waits; a cursor carries each order column's database text (microseconds kept). Residual: Bun's
+  driver leaves its release of a connection the database closed as an unhandled rejection (printed, not fatal).
+  Finding 1 (`boot` takes `declared` from the approved artifact) → WU4's integration: the hook is `boundHandler` in
+  `boot.ts`, where `parseDeclaration` reads the leaf's `declared`.
