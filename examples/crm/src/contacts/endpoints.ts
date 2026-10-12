@@ -1,4 +1,4 @@
-import { fromRow } from '@fabrika/app'
+import { fromPage, fromRow } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { ById, Done, MaybeText, Name, Next, OptionalText, Page, Saved, Versioned } from '../schemas'
@@ -10,10 +10,7 @@ const EditContact = z.strictObject({ id: z.uuid(), name: Name, email: OptionalTe
 
 export const contacts = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({ input: Page, output: ContactPage, access: { action: 'crm.read', over: 'company' } })
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.within.contacts.list({ orderBy: [['name', 'asc']], after: input.after })
-			return { items: page.items.map((row) => fromRow(Contact, row)), next: page.next }
-		}),
+		.handle(async ({ input, ctx }) => fromPage(Contact, await ctx.db.within.contacts.list({ orderBy: [['name', 'asc']], after: input.after }))),
 	get: r.query({ input: ById, output: Contact, access: { action: 'crm.read', on: 'contact', from: 'id' } })
 		.handle(async ({ ctx }) => fromRow(Contact, await ctx.db.target.get())),
 	create: r.mutation({ input: NewContact, output: Saved, access: { action: 'crm.write', in: 'company', from: 'companyId' } })

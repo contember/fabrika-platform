@@ -1,4 +1,4 @@
-import { ConflictError, fromRow } from '@fabrika/app'
+import { ConflictError, fromPage, fromRow } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { picked } from '../orgs/logic'
@@ -27,10 +27,7 @@ const Pipeline = z.strictObject({ stages: z.array(StageTotal) })
 
 export const deals = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({ input: Page, output: DealPage, access: { action: 'crm.read', over: 'company' } })
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.within.deals.list({ orderBy: [['title', 'asc']], after: input.after })
-			return { items: page.items.map((row) => fromRow(Deal, row)), next: page.next }
-		}),
+		.handle(async ({ input, ctx }) => fromPage(Deal, await ctx.db.within.deals.list({ orderBy: [['title', 'asc']], after: input.after }))),
 	// Every stage in pipeline order, an empty one included, in one statement: the reason this report is SQL.
 	pipeline: r.query({ output: Pipeline, access: { action: 'crm.read', over: 'org' }, sql: 'read' })
 		.handle(async ({ ctx }) => ({

@@ -56,7 +56,7 @@ skill/                the agent skill `fabrika-app`: the one text of the applica
   references/*.md     one topic each (setup, tables, endpoints, jobs, files, …); every code block is checked
 src/
   index.ts            public surface
-  from-row.ts         fromRow: a row as an output object (snake → camel, Date → ISO, then the schema)
+  from-row.ts         fromRow: a row as an output object (snake → camel, Date → ISO, then the schema); fromPage: a list's page
   agent-skill.ts      @fabrika/app/agent-skill — reads skill/; installedAppAgentSkill; renderAgentsFile (node:fs)
   fetch.ts            FetchService and RequestExecutionContext: what both runtime adapters serve
   cloudflare.ts       Worker module adapter and lifecycle types; createContractWorker

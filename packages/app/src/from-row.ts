@@ -1,7 +1,8 @@
-// `fromRow(Schema, row)`: a database row as an endpoint's output object. The row's snake_case columns become the
-// schema's camelCase fields, a `Date` becomes its ISO text (its day for a `z.iso.date()` field), every column the schema
-// does not declare is dropped, and the schema parses what is left — so a literal-string field the row types as plain
-// text is checked, not trusted. A `date` column already arrives as `YYYY-MM-DD` text from the data layer.
+// `fromRow(Schema, row)`: a database row as an endpoint's output object; `fromPage(Schema, page)` maps a list's page.
+// The row's snake_case columns become the schema's camelCase fields, a `Date` becomes its ISO text (its day for a
+// `z.iso.date()` field), every column the schema does not declare is dropped, and the schema parses what is left — so a
+// literal-string field the row types as plain text is checked, not trusted. A `date` column already arrives as
+// `YYYY-MM-DD` text from the data layer.
 
 import { z } from 'zod/v4'
 import { project } from './implement/project'
@@ -41,4 +42,12 @@ export function fromRow<const S extends z.ZodObject>(schema: S, row: RowInput<S>
 		Object.defineProperty(fields, field, { value: value instanceof Date ? dateText(schema, field, value) : value, enumerable: true })
 	}
 	return z.parse(schema, project(schema, fields))
+}
+
+/** A list's page as a page output: each row through `fromRow`, and `next` as the list answered it. */
+export function fromPage<const S extends z.ZodObject>(
+	schema: S,
+	page: { readonly items: readonly RowInput<S>[]; readonly next: string | null },
+): { items: z.output<S>[]; next: string | null } {
+	return { items: page.items.map((row) => fromRow(schema, row)), next: page.next }
 }

@@ -1,4 +1,4 @@
-import { fromRow } from '@fabrika/app'
+import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { ActivityKind, Cursor, Done, Next } from '../schemas'
@@ -13,15 +13,13 @@ const LogOnDeal = z.strictObject({ dealId: z.uuid(), kind: ActivityKind, body: B
 
 export const activities = app.group({ callers: ['human'] }, (r) => ({
 	ofContact: r.query({ input: OfContact, output: ActivityPage, access: { action: 'crm.read', on: 'contact', from: 'contactId' } })
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.target.contact_activities.list({ orderBy: [['created_at', 'desc']], after: input.after })
-			return { items: page.items.map((row) => fromRow(Activity, row)), next: page.next }
-		}),
+		.handle(async ({ input, ctx }) =>
+			fromPage(Activity, await ctx.db.target.contact_activities.list({ orderBy: [['created_at', 'desc']], after: input.after }))
+		),
 	ofDeal: r.query({ input: OfDeal, output: ActivityPage, access: { action: 'crm.read', on: 'deal', from: 'dealId' } })
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.target.deal_activities.list({ orderBy: [['created_at', 'desc']], after: input.after })
-			return { items: page.items.map((row) => fromRow(Activity, row)), next: page.next }
-		}),
+		.handle(async ({ input, ctx }) =>
+			fromPage(Activity, await ctx.db.target.deal_activities.list({ orderBy: [['created_at', 'desc']], after: input.after }))
+		),
 	logContact: r.mutation({ input: LogOnContact, output: Done, access: { action: 'activities.write', on: 'contact', from: 'contactId' } })
 		.handle(({ input, ctx }) => ctx.db.target.contact_activities.insert({ kind: input.kind, body: input.body, author_label: ctx.principal.label })),
 	logDeal: r.mutation({ input: LogOnDeal, output: Done, access: { action: 'activities.write', on: 'deal', from: 'dealId' } })

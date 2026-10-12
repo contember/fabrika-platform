@@ -1,4 +1,4 @@
-import { fromRow } from '@fabrika/app'
+import { fromPage } from '@fabrika/app'
 import { z } from 'zod/v4'
 import { app } from '../app-kit'
 import { picked } from '../orgs/logic'
@@ -21,10 +21,7 @@ const CompleteTask = z.strictObject({ id: z.uuid(), done: z.boolean(), expectVer
 
 export const tasks = app.group({ callers: ['human'] }, (r) => ({
 	list: r.query({ input: Page, output: TaskPage, access: { action: 'crm.read', over: 'deal' } })
-		.handle(async ({ input, ctx }) => {
-			const page = await ctx.db.within.tasks.list({ orderBy: [['due_on', 'asc']], after: input.after })
-			return { items: page.items.map((row) => fromRow(Task, row)), next: page.next }
-		}),
+		.handle(async ({ input, ctx }) => fromPage(Task, await ctx.db.within.tasks.list({ orderBy: [['due_on', 'asc']], after: input.after }))),
 	create: r.mutation({ input: NewTask, output: Saved, access: { action: 'tasks.write', in: 'deal', from: 'dealId' } })
 		.handle(async ({ input, ctx }) => {
 			const assignee = picked(await ctx.members.get(input.assignee ?? ctx.principal.id), 'assignee')

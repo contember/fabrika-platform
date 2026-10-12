@@ -1,7 +1,7 @@
 // `fromRow`: a row as an output object — columns to fields, dates to ISO text, undeclared columns dropped, and the
-// schema checking what the row only types as text.
+// schema checking what the row only types as text. `fromPage`: a list's page, each row through `fromRow`.
 
-import { fromRow } from '@fabrika/app'
+import { fromPage, fromRow } from '@fabrika/app'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 
@@ -28,5 +28,30 @@ describe('fromRow', () => {
 	test('a literal-string field typed as text by the row is checked by the schema', () => {
 		const row: { id: string; company_id: string; stage: string; closed_at: null } = { id: 'd1', company_id: 'c1', stage: 'open', closed_at: null }
 		expect(() => fromRow(Deal, row)).toThrow()
+	})
+})
+
+describe('fromPage', () => {
+	test('maps every row of a page and keeps its cursor', () => {
+		const page = {
+			items: [
+				{ id: 'd1', company_id: 'c1', stage: 'lead', closed_at: null, version: 1 },
+				{ id: 'd2', company_id: 'c1', stage: 'won', closed_at: new Date('2026-10-11T12:00:00Z'), version: 3 },
+			],
+			next: 'cursor-2',
+		}
+		expect(fromPage(Deal, page)).toEqual({
+			items: [
+				{ id: 'd1', companyId: 'c1', stage: 'lead', closedAt: null },
+				{ id: 'd2', companyId: 'c1', stage: 'won', closedAt: '2026-10-11T12:00:00.000Z' },
+			],
+			next: 'cursor-2',
+		})
+		expect(fromPage(Deal, { items: [], next: null })).toEqual({ items: [], next: null })
+	})
+
+	test('a row the schema refuses fails the whole page', () => {
+		const page = { items: [{ id: 'd1', company_id: 'c1', stage: 'open', closed_at: null }], next: null }
+		expect(() => fromPage(Deal, page)).toThrow()
 	})
 })
