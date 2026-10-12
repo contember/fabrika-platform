@@ -969,3 +969,10 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
 - **WU10b — on WU15b.** Rebased onto `af32c77f`: both catalogs hold `fabrika_job_kicks` (the base's from main, the
   intake's regenerated). The recipe's forms name `then: 'intake'`, the marked spot and the one-minute latency are gone,
   and the schedule is stated as the recovery path. Materialized again on the kick: tsc, `fabrika-check` 0/0, 44 tests.
+- **WU10b — a fresh application outside the monorepo** (the integrator's setup with only the skill). The skill had no
+  setup before the first table, no first test (the scaffold printed nothing, `bun test` fails with no file), no way to
+  install or update itself, and made the SPA mandatory. `references/start.md` is a tableless application of its own
+  (compiled by `skill-code.test.ts` without a catalog; materialized: tsc, `fabrika-check` 0/0, 2 tests), with the steps
+  to its first table and `fabrika builder init --profile zerops-app --no-daemon --no-open` or `renderAgentsFile` for the
+  skill (`init` also creates `.fabrika/` and an empty `tests/`); `fabrika db test-scaffold` now says when it writes no
+  test; `app-setup.md` marks the SPA's parts as added with the SPA.
