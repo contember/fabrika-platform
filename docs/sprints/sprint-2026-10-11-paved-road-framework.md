@@ -1441,3 +1441,14 @@ ADR-0022 or ADR-0050.
   access fixture's ORed report is refused and leaks nothing, its parenthesized twin passes the leak case. (4–7) The
   skill exempts reference tables, names the capability per access form and for jobs (`tx.sql.scope`), states the
   structural error contract, the fragment as the one SQL interpolation, and labels for `members.manage` holders.
+- **WU18 — durable audit.** The SQL port has only `batch`, so a change's record is a statement in the change's own
+  batch (`auditEventStatement`), and a guarded change records itself through `INSERT … SELECT … WHERE` behind a
+  row-locking no-op UPDATE; without the lock two concurrent Postgres revokes wrote two rows. Deviations: a member
+  revoke writes one `iam.member.revoke` row per role removed (`metadata.role`, was `roles`), because the creator role
+  and the others are one batch now; an invitation whose email fails is deleted with an `iam.member.uninvite` row
+  (`reason: 'delivery_failed'`); a password action records `{ delivery }` at issue and a failed email as its own
+  `iam.password.<purpose>.delivery_failed` row; disabling a disabled principal, revoking a revoked share link or
+  session records nothing. `auth_log` gains the `logout` kind and `privileged` (migration 0008 rebuilds the table on
+  SQLite). Mint rows stay in `waitUntil` (not logins). `iam-contract`'s `AuthLogDto` gained `kind: 'logout'` and
+  `privileged`, outside the touch points. Discovery: concurrent statements on the connection the IAM test fixture
+  migrated with hang in Bun SQL; a fresh pool does not, so `durable-audit.test.ts` runs on a pool of its own.

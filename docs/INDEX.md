@@ -57,5 +57,7 @@ shipped on 2026-10-08.
   full release rehearsal ([05](backlog/05-bring-up-on-a-real-zerops-account.md)).
 - **Releases are tokenless.** `release.yml` publishes every public `@fabrika` package through npm
   trusted publishing with provenance ([`reference/release-process.md`](reference/release-process.md)).
-- **Domain audit delivery is best-effort.** `IamRpc.audit` returns before the IAM write is durable;
-  durable delivery is [71](backlog/71-deliver-domain-audit-events-durably.md).
+- **IAM's own audit is transactional; domain audit delivery is best-effort.** Every IAM change writes its
+  `audit_events` row in its own transaction, and logins and logouts write `auth_log` before the answer.
+  `IamRpc.audit`, which Control and Operations call, returns before the IAM write is durable; durable delivery is
+  [71](backlog/71-deliver-domain-audit-events-durably.md).
