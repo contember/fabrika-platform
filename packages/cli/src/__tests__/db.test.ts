@@ -186,6 +186,26 @@ describe('fabrika db test-scaffold', () => {
 		expect(await findingsOf(root)).toEqual([])
 	})
 
+	test('says so when it writes nothing: an application before its first table', async () => {
+		const root = appRoot()
+		mkdirSync(join(root, 'src'))
+		writeFileSync(
+			join(root, 'src', 'vocabulary.ts'),
+			"import { defineVocabulary } from '@fabrika/app/contract'\n\nexport const vocabulary = defineVocabulary({ app: 'plain', dimensions: {}, actions: {}, roles: {} })\n",
+		)
+		writeFileSync(
+			join(root, 'src', 'app-kit.ts'),
+			"import { defineApp } from '@fabrika/app/contract'\nimport { vocabulary } from './vocabulary'\n\nexport const app = defineApp(vocabulary)\n",
+		)
+		writeFileSync(
+			join(root, 'fabrika.contract.ts'),
+			"import { app } from './src/app-kit'\n\nexport const contract = app.contract((c) => ({ health: c.health('/healthz') }))\n",
+		)
+		expect(await run(root, 'test-scaffold')).toBe(
+			'no generated tests: they start with the first table a store reaches, and the application has none; write the first test yourself\n',
+		)
+	})
+
 	test('refuses policies the reader refuses, and takes no argument', async () => {
 		const root = isolationApp()
 		const tables = join(root, 'src', 'db', 'tables.ts')

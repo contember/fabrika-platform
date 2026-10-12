@@ -47,7 +47,8 @@ roles. It applies the files as app_<id>, holds a lock derived from the applicati
 transaction with lock_timeout ${DEFAULT_MIGRATION_LOCK_TIMEOUT_MS} ms and statement_timeout ${DEFAULT_MIGRATION_STATEMENT_TIMEOUT_MS} ms, and fails when a
 file that already ran has changed: an applied migration is immutable, so a change is a new file.
 \`test-scaffold\` reads fabrika.contract.ts and src/db/tables.ts as the checker does, rewrites every generated test and
-deletes a generated one the scaffold no longer writes; @fabrika/check refuses one that is missing, edited or stale.
+deletes a generated one the scaffold no longer writes, printing each path, or that it wrote none; @fabrika/check refuses
+one that is missing, edited or stale.
 \`test-isolation\` is the platform's run of them: with FABRIKA_APP_DATABASE_URL it creates a throwaway provisioner
 (CREATEROLE, CREATE on the database, nothing of any application) that the tests get instead, ignores the application's
 bunfig.toml, and checks the JUnit report against the case names the scaffold wrote.
@@ -179,6 +180,9 @@ const testScaffold = async (argv: readonly string[], deps: DbCommandDependencies
 	}
 	if (missing.length > 0) {
 		throw new Error(`db test-scaffold: the endpoint access tests are incomplete\n${missing.map(formatFinding).join('\n')}`)
+	}
+	if (tests.size === 0) {
+		deps.write('no generated tests: they start with the first table a store reaches, and the application has none; write the first test yourself\n')
 	}
 }
 
