@@ -17,25 +17,32 @@ edited generated file, and no loosened access to make a test pass. Record every 
 
 ## The starting copy
 
-Copy `examples/crm` to `examples/<name>/` of a fabrika-platform checkout and run `bun install` at its root, so Bun
-links the workspace packages. Then, for the group under trial:
+For the group under trial, from the root of a fabrika-platform checkout that still holds `examples/crm`:
 
-1. Delete the directories the table names, with their `__tests__/`.
-2. In `fabrika.contract.ts`, delete the group's imports and its keys in `c.rpc('/api', { … })`. For group C also delete
-   the `jobs: { overdue }` section. Leave the `attachments` collection, the SPA mount and the health check.
-3. Delete `src/__tests__/endpoint-access.test.ts` (the agent regenerates it with `fabrika db test-scaffold`) and the
+1. Copy `examples/crm` to `examples/crm-trial-<group>/` (lowercase, such as `crm-trial-c`) and set its
+   `package.json` `name` to `fabrika-example-crm-trial-<group>`. Bun refuses two workspaces of one name, so the copy
+   must not keep `fabrika-example-crm`.
+2. In the copy, delete the directories the table names, with their `__tests__/`.
+3. In `fabrika.contract.ts`, delete the group's imports and its keys in `c.rpc('/api', { … })`. For group C also delete
+   the `jobs: { overdue }` section, and make the file's first comment name "the attachments of a deal and the SPA". Leave the
+   `attachments` collection, the SPA mount and the health check.
+4. Delete `src/__tests__/endpoint-access.test.ts` (the agent regenerates it with `fabrika db test-scaffold`) and the
    authored tests that call the group: `src/__tests__/crm.test.ts` always, `src/deals/__tests__/deals.test.ts` for A
    and B. Keep them for the judge.
-4. For group B, set `src/__tests__/endpoint-access.fixtures.ts` to `export const seeds = {}`.
-5. Delete `web/`, `build-web.ts` and this file: the SPA calls every group by name, and it is not part of the trial.
-6. Run `bunx fabrika db test-scaffold`, so the copy starts green: `bunx tsc --noEmit`, `bunx fabrika-check .` (0
-   refusals, 0 hints) and `bun test --isolate` (checked for A and B: 112 and 109 tests pass).
+5. For group B, set `src/__tests__/endpoint-access.fixtures.ts` to `export const seeds = {}`.
+6. Delete the SPA, which calls every group by name and is not part of the trial: `web/`, `build-web.ts`, the
+   `build:web` script of `package.json`, the `- bun run build:web` line of `zerops.yaml`, and `"web/**/*"` from the
+   `include` of `tsconfig.json`. Delete this file too.
+7. Run `bun install` at the checkout's root, then in the copy `bunx fabrika db test-scaffold`. The copy starts green:
+   `bunx tsc --noEmit`, `bunx fabrika-check .` (0 refusals, 0 hints) and `bun test --isolate` with
+   `FABRIKA_TEST_POSTGRES_URL` set. Checked for group C beside `examples/crm`: `bun install` passes and 136 tests pass.
 
-Everything else is the agent's starting point and stays unchanged: `package.json`, `tsconfig.json`,
-`fabrika.config.ts`, `src/vocabulary.ts`, `db/migrations/20261012120000_crm.sql`, `src/db/schema.generated.ts`,
-`src/db/tables.ts`, `src/db/__tests__/*.policy-isolation.test.ts`, `src/app-kit.ts`, `src/app.ts`, `src/schemas.ts`
-and the other groups' slices. No group needs a new migration, table policy, action or role. An agent that adds one
-must ask first (the skill's "Ask the human first"); count it as a deviation from the brief.
+Everything else is the agent's starting point and stays unchanged: the rest of `package.json`, `tsconfig.json` and
+`zerops.yaml`, `fabrika.config.ts`, `src/vocabulary.ts`, `db/migrations/20261012120000_crm.sql`,
+`src/db/schema.generated.ts`, `src/db/tables.ts`, `src/db/__tests__/*.policy-isolation.test.ts`, `src/app-kit.ts`,
+`src/app.ts`, `src/schemas.ts` and the other groups' slices. No group needs a new migration, table policy, action or
+role. An agent that adds one must ask first (the skill's "Ask the human first"); count it as a deviation from the
+brief.
 
 ### The vocabulary (`src/vocabulary.ts`)
 
