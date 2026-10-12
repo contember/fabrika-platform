@@ -18,7 +18,7 @@ import {
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
+import { appFileTreatment, appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, InstallationProxyApp, ProxyApp, ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { endpointRow, installationAppWith, installationRow, protocolRow, serviceRow } from '../../../proxy-core/src/__tests__/helpers'
@@ -29,6 +29,7 @@ import {
 	type CaddyHeadersHandler,
 	type CaddyReverseProxyHandler,
 	type CaddyRoute,
+	type CaddyStaticResponseHandler,
 	type CaddySubrouteHandler,
 	uriRedactionPattern,
 } from '../caddy'
@@ -599,7 +600,7 @@ describe('a contract app — the response headers', () => {
 	}
 	const [contractRoute, installationRoute] = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']
 		?.routes ?? []
-	const policy = headerPolicy(contract.csp, 'https://operations.example.com')
+	const policy = appHeaderPolicy(contract)
 	const chain = rawSubrouteOf(defined(contractRoute)).routes
 	const [downloadRoute, defaultRoute] = chain.slice(-2)
 
@@ -650,7 +651,7 @@ describe('a contract app — the response headers', () => {
 		})
 		if (upstream?.handler !== 'reverse_proxy') throw new Error('expected the upstream')
 		expect(upstream.headers?.response).toEqual({
-			set: policyValues(FILE_TREATMENT),
+			set: policyValues(appFileTreatment(contract)),
 			delete: REMOVED,
 			replace: { 'Content-Disposition': [{ search_regexp: '^[^;]*', replace: 'attachment' }] },
 		})
@@ -663,9 +664,37 @@ describe('a contract app — the response headers', () => {
 		const steps = rawSubrouteOf(defined(plain[0])).routes
 		expect(JSON.stringify(steps)).not.toContain('Content-Disposition')
 		expect(upstreamOf(steps.at(-1)).headers?.response).toEqual({
-			set: policyValues(headerPolicy(contract.csp, 'https://operations.example.com')),
+			set: policyValues(appHeaderPolicy(contract)),
 			delete: REMOVED,
 		})
+	})
+
+	test('an https host carries HSTS on every answer, its downloads and its refusals included; an http host none', () => {
+		const hsts = 'max-age=31536000'
+		expect(upstreamOf(defaultRoute).headers?.response?.set?.['Strict-Transport-Security']).toEqual([hsts])
+		const download = downloadRoute?.handle.at(-1)
+		if (download?.handler !== 'reverse_proxy') throw new Error('expected the upstream')
+		expect(download.headers?.response?.set?.['Strict-Transport-Security']).toEqual([hsts])
+		expect(policyValues(policy)['Strict-Transport-Security']).toEqual([hsts])
+		const local = buildCaddyConfig({ apps: [{ ...contract, scheme: 'http' }] }, OPTIONS)
+		expect(JSON.stringify(local)).not.toContain('Strict-Transport-Security')
+		expect(policyValues(FILE_TREATMENT)['Strict-Transport-Security']).toBeUndefined()
+	})
+
+	test("Caddy's own failures answer with the host's policy, a download's with its file treatment, any other host's with the base", () => {
+		const errors = buildCaddyConfig({ apps: [contract, defined(MANIFEST.apps[0])] }, OPTIONS).apps.http.servers['proxy']?.errors?.routes
+		const failure = (headers: HeaderPolicy): CaddyStaticResponseHandler[] => [
+			{ handler: 'static_response', status_code: '{http.error.status_code}', headers: policyValues(headers) },
+		]
+		expect(errors).toEqual([
+			{
+				match: [{ host: ['notes.example.com'], header: { [ENDPOINT_HEADER]: ['files.avatar.download@*'] } }],
+				handle: failure(appFileTreatment(contract)),
+				terminal: true,
+			},
+			{ match: [{ host: ['notes.example.com'] }], handle: failure(policy), terminal: true },
+			{ handle: failure(BASE_HEADER_POLICY) },
+		])
 	})
 
 	test("an installation entry's answers are passed through: the policy is a contract application's", () => {

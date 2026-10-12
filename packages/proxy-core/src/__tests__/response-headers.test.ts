@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy } from '../headers'
+import { appFileTreatment, appHeaderPolicy, BASE_HEADER_POLICY, FILE_TREATMENT, type HeaderPolicy, headerPolicy } from '../headers'
 import type { ProxyApp } from '../manifest'
 import { createVerifyService } from '../service'
 import { anonymousRow, contractAppWith, endpointRow, FakeIam, installationAppWith, ISSUER, serviceRow, signToken, verifyRequest } from './helpers'
@@ -82,6 +82,44 @@ describe('a contract application', () => {
 		const response = await verifyWith(new FakeIam())(verifyRequest({ path: '/healthz' }))
 		expect(response.status).toBe(204)
 		expect(response.headers.get('Content-Security-Policy')).toBeNull()
+	})
+})
+
+describe('the transport header of an application host', () => {
+	const HSTS = 'max-age=31536000'
+
+	test('every answer of an https host carries HSTS: denials, the login answers and a download denial', async () => {
+		const verify = verifyWith(
+			new FakeIam({ mintToken: { ok: true, token: await signToken({ type: 'user', permissions: [] }), expiresAt: 4_102_444_800 } }),
+		)
+		const download = await verify(verifyRequest({ path: '/api/files.avatar/f1', cookie: '__Host-px_session=s' }))
+		const answers = [
+			await verify(verifyRequest({ path: '/api/unknown' })),
+			await verify(verifyRequest({ path: '/api/me', headers: { 'Sec-Fetch-Mode': 'cors' } })),
+			await verify(verifyRequest({ path: '/api/me', headers: { 'Sec-Fetch-Mode': 'navigate' } })),
+			download,
+		]
+		expect(answers.map((answer) => answer.status)).toEqual([403, 401, 302, 403])
+		for (const answer of answers) {
+			expect(answer.headers.get('Strict-Transport-Security')).toBe(HSTS)
+		}
+		expectHeaders(download, appFileTreatment(CONTRACT))
+	})
+
+	test('an http host gets none, and neither does an answer that belongs to no application host', async () => {
+		const local = verifyWith(new FakeIam(), { ...CONTRACT, scheme: 'http' })
+		expect((await local(verifyRequest({ path: '/api/unknown' }))).headers.get('Strict-Transport-Security')).toBeNull()
+		const installation = verifyWith(new FakeIam(), installationAppWith([serviceRow('/*', ['machine'])]))
+		expect((await installation(verifyRequest({ path: '/x' }))).headers.get('Strict-Transport-Security')).toBeNull()
+		expect((await verifyWith(new FakeIam())(verifyRequest({ method: null }))).headers.get('Strict-Transport-Security')).toBeNull()
+	})
+
+	test('the policy and the file treatment of an entry add it only for https; the fixed definitions never carry it', () => {
+		expect(appHeaderPolicy(CONTRACT)).toContainEqual(['Strict-Transport-Security', HSTS])
+		expect(appFileTreatment(CONTRACT)).toContainEqual(['Strict-Transport-Security', HSTS])
+		expect(appHeaderPolicy({ ...CONTRACT, scheme: 'http' })).toEqual(POLICY)
+		expect(appFileTreatment({ scheme: 'http' })).toEqual(FILE_TREATMENT)
+		expect([...POLICY, ...FILE_TREATMENT, ...BASE_HEADER_POLICY].map(([name]) => name)).not.toContain('Strict-Transport-Security')
 	})
 })
 

@@ -47,7 +47,7 @@ import {
 	REQUEST_ID_HEADER,
 } from './constants'
 import { type HandoffAttempt, handoffCookieName } from './handoff'
-import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, BASE_HEADER_POLICY, type HeaderPolicy } from './headers'
+import { appFileTreatment, appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, BASE_HEADER_POLICY, type HeaderPolicy } from './headers'
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
 import { formatOAuthBearerChallenge, isApplicationEntry, type ManifestEndpointRow, type ProxyApp, type ProxyManifest } from './manifest'
@@ -174,7 +174,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				return new Response(null, { status: 204, headers })
 			}
 			const answer = decision.outcome === 'handoff' ? handoff(logger, fields, decision) : denied(logger, fields, decision, isCallback)
-			return isDownload(resolved, forwarded) ? withFileTreatment(answer) : withPolicy(answer, policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
+			return isDownload(resolved, forwarded)
+				? withFileTreatment(answer, appFileTreatment(resolved.app))
+				: withPolicy(answer, policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
 		} catch {
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
 			// error can stringify a URL, a header or a body, any of which may carry a credential.
@@ -195,8 +197,8 @@ function withPolicy(response: Response, policy: HeaderPolicy): Response {
 	return response
 }
 
-function withFileTreatment(response: Response): Response {
-	applyFileTreatment(response.headers)
+function withFileTreatment(response: Response, treatment: HeaderPolicy): Response {
+	applyFileTreatment(response.headers, treatment)
 	return response
 }
 

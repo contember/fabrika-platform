@@ -4,7 +4,14 @@
 //   id=$(docker create caddy:2.10.2-alpine) && docker cp "$id":/usr/bin/caddy ./caddy && docker rm "$id"
 
 import { proxySecretVariable } from '@fabrika/auth-core'
-import { FILE_TREATMENT, headerPolicy, NO_CSP_ORIGINS } from '@fabrika/proxy-core/headers'
+import {
+	appFileTreatment,
+	appHeaderPolicy,
+	FILE_TREATMENT,
+	headerPolicy,
+	NO_CSP_ORIGINS,
+	STRICT_TRANSPORT_SECURITY,
+} from '@fabrika/proxy-core/headers'
 import type { ContractProxyApp, InstallationProxyApp } from '@fabrika/proxy-core/manifest'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -173,11 +180,13 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		csp: { ...NO_CSP_ORIGINS, connectSrc: ['https://api.maps.example'] },
 		operationsOrigin: 'https://operations.example.com',
 	}
+	// An application whose upstream nothing listens on: Caddy's own 502 is the answer.
+	const unreachable: ContractProxyApp = { ...contract, id: 'down@prod', hosts: ['down.example'], upstream: `127.0.0.1:${freePort()}` }
 	const dir = mkdtempSync(join(tmpdir(), 'fabrika-caddy-'))
 	let caddy: ReturnType<typeof Bun.spawn> | undefined
 
 	beforeAll(async () => {
-		const config = buildCaddyConfig({ apps: [contract] }, {
+		const config = buildCaddyConfig({ apps: [contract, unreachable] }, {
 			authUpstream: `127.0.0.1:${auth.port}`,
 			listen: [`127.0.0.1:${port}`],
 			healthListen: [`127.0.0.1:${freePort()}`],
@@ -298,6 +307,32 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		expect(answer.contentTypes).toEqual(['Content-Type: image/png,text/html'])
 		expect(answer.headers.get('Content-Disposition')).toBe('attachment')
 		expect(answer.headers.get('Content-Security-Policy')).toBe("sandbox; default-src 'none'")
+	})
+
+	test('every answer of an https host carries HSTS: an answer, a download, a refusal', async () => {
+		const answers = [
+			await rawRequest(port, { Connection: 'close' }),
+			await rawRequest(port, { Connection: 'close' }, '/api/files.avatar/photo'),
+			await rawRequest(port, { Connection: 'close, X-Fabrika-Token' }),
+		]
+		expect(answers.map((answer) => answer.status)).toEqual([200, 200, 400])
+		for (const answer of answers) {
+			expect(answer.headers.get('Strict-Transport-Security')).toBe(STRICT_TRANSPORT_SECURITY)
+		}
+	})
+
+	test("Caddy's own 502 for an upstream it cannot dial carries the host's policy, or a download's file treatment", async () => {
+		const failed = await rawRequest(port, { Connection: 'close' }, '/api/me', 'down.example')
+		expect(failed.status).toBe(502)
+		for (const [name, value] of appHeaderPolicy(unreachable)) {
+			expect(failed.headers.get(name)).toBe(value)
+		}
+		const download = await rawRequest(port, { Connection: 'close' }, '/api/files.avatar/photo', 'down.example')
+		expect(download.status).toBe(502)
+		for (const [name, value] of appFileTreatment(unreachable)) {
+			expect(download.headers.get(name)).toBe(value)
+		}
+		expect(download.headers.get('Permissions-Policy')).toBeNull()
 	})
 
 	test("an application's 103 Early Hints leaves with no header, so neither its preload nor its policy arrives", async () => {

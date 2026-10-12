@@ -18,7 +18,14 @@ import {
 	stripFabrikaCookies,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
-import { appHeaderPolicy, applyFileTreatment, applyHeaderPolicy, type HeaderPolicy, withResponseHeaders } from '@fabrika/proxy-core/headers'
+import {
+	appFileTreatment,
+	appHeaderPolicy,
+	applyFileTreatment,
+	applyHeaderPolicy,
+	type HeaderPolicy,
+	withResponseHeaders,
+} from '@fabrika/proxy-core/headers'
 import { type ContractProxyApp, isApplicationEntry, parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 
 /**
@@ -138,8 +145,12 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		if (!verification.ok || isMetadata) return verification
 
 		if (app === null) return new Response('not found', { status: 404 })
+		const treatment = answerHeaders.get(app.id)
 		const upstream = env[app.upstream]
-		if (!isWorkerService(upstream)) return UNAVAILABLE.clone()
+		if (!isWorkerService(upstream)) {
+			const unavailable = UNAVAILABLE.clone()
+			return treatment === undefined ? unavailable : withResponseHeaders(unavailable, treatment(verification.headers.get(ENDPOINT_HEADER)))
+		}
 
 		// Built from the ORIGINAL headers, so it is stripped again here — the set above was applied to the
 		// verify subrequest, not to this one.
@@ -154,7 +165,6 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// An anonymous endpoint mints no token, and the proxy forwards no key it read nothing from (ADR-0022 rule 3).
 		if (isApplicationEntry(app) && !upstreamHeaders.has(PROXY_TOKEN_HEADER)) upstreamHeaders.delete('Authorization')
 
-		const treatment = answerHeaders.get(app.id)
 		let answer: Response
 		try {
 			answer = await upstream.fetch(new Request(request, { headers: upstreamHeaders }))
@@ -175,11 +185,13 @@ type AnswerHeaders = (endpoint: string | null) => (headers: Headers) => void
 
 function contractAnswerHeaders(app: ContractProxyApp): AnswerHeaders {
 	const policy: HeaderPolicy = appHeaderPolicy(app)
+	const fileTreatment: HeaderPolicy = appFileTreatment(app)
 	const downloads = new Set(app.endpoints.filter((row) => row.kind === 'download').map((row) => row.id))
 	const withPolicy = (headers: Headers) => applyHeaderPolicy(headers, policy)
+	const withFileTreatment = (headers: Headers) => applyFileTreatment(headers, fileTreatment)
 	return (endpoint) => {
 		const id = endpoint === null ? null : parseEndpointHeader(endpoint)?.id
-		return id !== undefined && id !== null && downloads.has(id) ? applyFileTreatment : withPolicy
+		return id !== undefined && id !== null && downloads.has(id) ? withFileTreatment : withPolicy
 	}
 }
 

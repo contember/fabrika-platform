@@ -145,7 +145,14 @@ URLs there whatever the enforced CSP says. A `1xx` answer of the application (`1
 the proxy with no header at all: Caddy forwards it before its response operations run, so a deferred
 handler around the upstream clears it, and an application cannot preload a script or send a policy
 through it. The Cloudflare runtime does not hand a Worker a `1xx` answer. When the application binding
-fails, the Worker answers a fixed `502` with the same treatment, never the error.
+fails, the Worker answers a fixed `502` with the same treatment, never the error; Caddy's own failures
+(an upstream it cannot dial) get it through the server's error routes.
+
+**HSTS** follows the manifest scheme: every answer of an `https` application host, downloads, redirects and
+the proxy's own failures included, carries `Strict-Transport-Security: max-age=31536000`, and an `http` host
+(the local stack) none. Only the proxy knows the public scheme, so the framework's in-process policy has no
+transport header. No `includeSubDomains` and no `preload`: applications share parent domains. An answer that
+belongs to no application host carries none.
 
 The policy:
 
@@ -186,6 +193,7 @@ decision selected, never by a path of its own:
 - `X-Content-Type-Options: nosniff`.
 - `Content-Security-Policy: sandbox; default-src 'none'`.
 - `Cache-Control: private, no-store`, so a revoked user cannot read a cached copy.
+- `Strict-Transport-Security` on an `https` host, as above.
 
 **Invariant: a header a client can set never reaches a decision.**
 

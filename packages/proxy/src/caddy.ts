@@ -39,9 +39,9 @@ import {
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy-core'
 import {
+	appFileTreatment,
 	appHeaderPolicy,
 	BASE_HEADER_POLICY,
-	FILE_TREATMENT,
 	type HeaderPolicy,
 	INLINE_FILE_TYPES,
 	REMOVED_RESPONSE_HEADERS,
@@ -88,7 +88,8 @@ export interface CaddyHeadersHandler {
 
 export interface CaddyStaticResponseHandler {
 	handler: 'static_response'
-	status_code: number
+	/** A number, or a placeholder such as `{http.error.status_code}` in an error route. */
+	status_code: number | string
 	headers?: Record<string, string[]>
 	body?: string
 }
@@ -149,6 +150,8 @@ export interface CaddyStaticIpSource {
 export interface CaddyServer {
 	listen: string[]
 	routes: CaddyRoute[]
+	/** What answers an error a handler returned instead of a response, such as a refused upstream dial. */
+	errors?: { routes: CaddyRoute[] }
 	automatic_https?: { disable: boolean }
 	logs?: { should_log_credentials: boolean }
 	trusted_proxies?: CaddyStaticIpSource
@@ -292,6 +295,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 							? {}
 							: { trusted_proxies: { source: 'static', ranges: trustedProxies }, trusted_proxies_strict: 1 }),
 						routes,
+						errors: { routes: errorRoutes(manifest) },
 					},
 					// The liveness probe lives on its OWN listener, which is never published. Putting it on
 					// the public listener would mean one path per proxy that shadows an app's path and
@@ -450,7 +454,7 @@ function contractUpstream(
 				response: { require: { headers: { 'Content-Type': [] } }, set: { 'Content-Type': ['{http.response.header.Content-Type}'] } },
 			},
 			upstream({
-				set: headerValues(FILE_TREATMENT),
+				set: headerValues(appFileTreatment(app)),
 				delete: [...REMOVED_RESPONSE_HEADERS],
 				replace: { 'Content-Disposition': [{ search_regexp: DISPOSITION_TYPE, replace: 'attachment' }] },
 			}),
@@ -460,6 +464,29 @@ function contractUpstream(
 		handle: [INFORMATIONAL_WITHOUT_HEADERS, upstream({ set: headerValues(policy), delete: [...REMOVED_RESPONSE_HEADERS] })],
 	}
 	return [...(downloads.length === 0 ? [] : [download]), answer]
+}
+
+/**
+ * Caddy's own failures — an upstream it cannot dial, the app's or the auth service's — answer with no header unless
+ * an error route writes one. Each contract app's host gets its policy (a download endpoint its file treatment, by the
+ * endpoint the decision asserted), every other host the base policy; the status stays Caddy's and the body is empty.
+ */
+function errorRoutes(manifest: ProxyManifest): CaddyRoute[] {
+	const failure = (policy: HeaderPolicy): CaddyStaticResponseHandler => ({
+		handler: 'static_response',
+		status_code: '{http.error.status_code}',
+		headers: headerValues(policy),
+	})
+	const routes = manifest.apps.filter(isApplicationEntry).flatMap((app): CaddyRoute[] => {
+		const downloads = app.endpoints.filter((row) => row.kind === 'download').map((row) => `${row.id}@*`)
+		return [
+			...(downloads.length === 0
+				? []
+				: [{ match: [{ host: app.hosts, header: { [ENDPOINT_HEADER]: downloads } }], handle: [failure(appFileTreatment(app))], terminal: true }]),
+			{ match: [{ host: app.hosts }], handle: [failure(appHeaderPolicy(app))], terminal: true },
+		]
+	})
+	return [...routes, { handle: [failure(BASE_HEADER_POLICY)] }]
 }
 
 /**

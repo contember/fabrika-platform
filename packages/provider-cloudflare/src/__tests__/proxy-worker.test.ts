@@ -11,7 +11,7 @@ import {
 	RESOURCE_ACCESS_TOKEN_TYP,
 } from '@fabrika/auth-core'
 import type { DelegationRequest } from '@fabrika/proxy-core'
-import { FILE_TREATMENT, headerPolicy } from '@fabrika/proxy-core/headers'
+import { FILE_TREATMENT, headerPolicy, STRICT_TRANSPORT_SECURITY } from '@fabrika/proxy-core/headers'
 import {
 	contractProxyTable,
 	encodeProxyManifestJson,
@@ -578,7 +578,7 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 		'/api/files.avatar/drawing': { 'Content-Type': 'image/svg+xml', 'Content-Disposition': "inline; filename*=UTF-8''a.svg" },
 		'/api/files.avatar/photo': { 'Content-Type': 'image/png', 'Content-Disposition': 'attachment' },
 	}
-	const contractEnvironment = (iam: FakeIam, seen: Request[]): CloudflareProxyEnv => ({
+	const contractEnvironment = (iam: FakeIam, seen: Request[], scheme: 'http' | 'https' = 'https'): CloudflareProxyEnv => ({
 		IAM: iam,
 		FABRIKA_IAM_ISSUER: ISSUER,
 		FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
@@ -586,7 +586,7 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 				id: APP,
 				hosts: [HOST],
 				upstream: 'APP',
-				scheme: 'https',
+				scheme,
 				endpoints: [
 					{ ...health, digest: requirementDigest(health) },
 					{ ...me, digest: requirementDigest(me) },
@@ -699,6 +699,40 @@ describe('Cloudflare proxy Worker — a contract app', () => {
 				expect(answer.headers.get(name)).toBeNull()
 			}
 		}
+	})
+
+	test('every answer of an https host carries HSTS: the application, a download, a failed binding, a denial', async () => {
+		const keyed = { headers: { Authorization: 'Bearer px_key' } }
+		const call = (path: string) =>
+			new Request(`https://${HOST}${path}`, { method: 'POST', body: '{}', headers: { ...keyed.headers, 'Content-Type': 'application/json' } })
+		const handler = createCloudflareProxyHandler(contractEnvironment(await keyIam(), []))
+		const unbound = createCloudflareProxyHandler({ ...contractEnvironment(await keyIam(), []), APP: undefined })
+		const failing = createCloudflareProxyHandler({ ...contractEnvironment(await keyIam(), []), APP: { fetch: () => Promise.reject(new Error('x')) } })
+		const answers = [
+			await handler(call('/api/me')),
+			await handler(new Request(`https://${HOST}/api/files.avatar/photo`, keyed)),
+			await unbound(call('/api/me')),
+			await failing(new Request(`https://${HOST}/api/files.avatar/photo`, keyed)),
+			await createCloudflareProxyHandler(contractEnvironment(new FakeIam(), []))(new Request(`https://${HOST}/api/unknown`)),
+		]
+		expect(answers.map((answer) => answer.status)).toEqual([200, 200, 503, 502, 403])
+		for (const answer of answers) {
+			expect(answer.headers.get('Strict-Transport-Security')).toBe(STRICT_TRANSPORT_SECURITY)
+		}
+		expect(answers[1]?.headers.get('Content-Security-Policy')).toBe("sandbox; default-src 'none'")
+	})
+
+	test('an http host gets no HSTS', async () => {
+		const handler = createCloudflareProxyHandler(contractEnvironment(await keyIam(), [], 'http'))
+		const answer = await handler(
+			new Request(`http://${HOST}/api/me`, {
+				method: 'POST',
+				body: '{}',
+				headers: { Authorization: 'Bearer px_key', 'Content-Type': 'application/json' },
+			}),
+		)
+		expect(answer.status).toBe(200)
+		expect(answer.headers.get('Strict-Transport-Security')).toBeNull()
 	})
 
 	test("the decision's own denial carries the application's policy", async () => {

@@ -117,7 +117,8 @@ this one import.
   contract is refused. The manifest entry carries the contract's CSP origins and the origin of the run's
   `FABRIKA_OPERATIONS_DSN` (`operationsOrigin`, never the key), and the Worker replaces every header of the policy on
   the application's answer, or applies the file treatment for a download endpoint, deletes the reporting
-  headers, and answers a throwing `APP` binding with a fixed 502 under the same treatment (ADR-0022).
+  headers, and answers a throwing `APP` binding with a fixed 502 and a missing one with a 503 under the same
+  treatment; on an `https` entry both carry HSTS (ADR-0022).
   `createCloudflareProxyWorker` takes exactly one of `endpoints` or `installation`. `installation`
   (an installation service's `serviceProxyTable`) is the trusted marker of ADR-0022 "Installation
   entries": only the platform's own service configs pass it, and the deployer never builds it from an

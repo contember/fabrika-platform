@@ -108,9 +108,23 @@ export function headerPolicy(origins: CspOrigins, operationsOrigin: string | nul
 	])
 }
 
-/** The policy of a contract application's manifest entry. */
-export function appHeaderPolicy(app: { readonly csp: CspOrigins; readonly operationsOrigin?: string }): HeaderPolicy {
-	return headerPolicy(app.csp, app.operationsOrigin ?? null)
+/** The browser-facing scheme of a manifest entry's hosts; behind a TLS-terminating balancer no header can supply it. */
+export type PublicScheme = 'http' | 'https'
+
+/** One year. No `includeSubDomains` and no `preload`: applications share parent domains. */
+export const STRICT_TRANSPORT_SECURITY = 'max-age=31536000'
+
+/**
+ * What every answer of an application host carries for its transport: HSTS on an `https` host, nothing on `http` (the
+ * local stack). Only the proxy knows the scheme, from the manifest, so the framework's in-process policy has none.
+ */
+export function transportPolicy(scheme: PublicScheme): HeaderPolicy {
+	return scheme === 'https' ? [['Strict-Transport-Security', STRICT_TRANSPORT_SECURITY]] : []
+}
+
+/** The policy of a contract application's manifest entry, its transport header included. */
+export function appHeaderPolicy(app: { readonly csp: CspOrigins; readonly operationsOrigin?: string; readonly scheme: PublicScheme }): HeaderPolicy {
+	return Object.freeze([...headerPolicy(app.csp, app.operationsOrigin ?? null), ...transportPolicy(app.scheme)])
 }
 
 /** The policy of an answer that belongs to no contract application: no named origin, no ingest. */
@@ -126,6 +140,11 @@ export const FILE_TREATMENT: HeaderPolicy = Object.freeze([
 	// A revoked user must not read a cached copy.
 	['Cache-Control', 'private, no-store'],
 ])
+
+/** The file treatment of a manifest entry's downloads, its transport header included. */
+export function appFileTreatment(app: { readonly scheme: PublicScheme }): HeaderPolicy {
+	return Object.freeze([...FILE_TREATMENT, ...transportPolicy(app.scheme)])
+}
 
 /**
  * Headers an application may not send at all: each names a reporting endpoint the policy never approved, and a
@@ -150,10 +169,10 @@ export function applyHeaderPolicy(headers: Headers, policy: HeaderPolicy): void 
 
 /**
  * The file treatment over headers a download already carries: the disposition type follows the `Content-Type`
- * exactly, and the parameters after it (the file name) are kept.
+ * exactly, and the parameters after it (the file name) are kept. The proxy passes `appFileTreatment` of its entry.
  */
-export function applyFileTreatment(headers: Headers): void {
-	applyHeaderPolicy(headers, FILE_TREATMENT)
+export function applyFileTreatment(headers: Headers, treatment: HeaderPolicy = FILE_TREATMENT): void {
+	applyHeaderPolicy(headers, treatment)
 	const parameters = headers.get('Content-Disposition')?.replace(/^[^;]*/, '') ?? ''
 	headers.set('Content-Disposition', `${fileDisposition(headers.get('Content-Type'))}${parameters}`)
 }

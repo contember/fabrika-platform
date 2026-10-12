@@ -40,7 +40,9 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   `createVerifyService` writes for a request carries it — the contract app's policy (its metadata 404
   included), the file treatment when the request selects a `download` endpoint, the base policy otherwise
   (a 404 or 405 on the service itself included); the allow (a 204 to Caddy) and the liveness probe carry
-  none. `applyHeaderPolicy` also deletes `REMOVED_RESPONSE_HEADERS`; the Caddy config uses the same list. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
+  none. `appHeaderPolicy` and `appFileTreatment` add HSTS (`transportPolicy`) for an `https` entry, never for
+  `http`; `headerPolicy`, `FILE_TREATMENT` and `BASE_HEADER_POLICY` never carry it, because only the manifest
+  knows the public scheme. A producer of the proxy's answers uses the `app…` forms. `applyHeaderPolicy` also deletes `REMOVED_RESPONSE_HEADERS`; the Caddy config uses the same list. A manifest CSP origin is an exact `https://` origin with a literal host (`new URL`
   accepts `*` in a host, so `isPolicyOrigin` checks the host itself), at most `MAX_CSP_ORIGINS` (16) per
   directive — the same bound the contract build applies.
 - **A host is a NAME, never a pattern.** `isProxyHost` accepts a literal lower-cased LDH hostname
