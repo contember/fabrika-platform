@@ -862,7 +862,7 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   revoked link keeps working through a warm proxy cache for at most 270 s (the token's 300 s less the 30 s refresh
   skew, `TOKEN_REFRESH_SKEW_SECONDS`); `visitor-link.test.ts` moves the proxy's clock across that edge.
 - **WU15 — how IAM knows a job may issue (review item 1).** `AppWorkloadDef.issues` (auth-core) carries the job's
-  approved mount from `schemaFromContract`; the reconcile writes it to `app_workloads.issues` (IAM migration 0009, a
+  approved mount from `schemaFromContract`; the reconcile writes it to `app_workloads.issues` (IAM migration 0010, a
   `CHECK` keeps it job-only), and `appSchemaSchema` refuses a mount the schema lacks or a job without its `issuedBy` and
   grants. `resolveCaller` still refuses every workload; a new `resolveLinkCaller` admits a job for `issueLink` and
   `revokeLink` only, and `membership.ts` reads the declaration at each call; `createLinkCredential` inserts a job's link
@@ -890,3 +890,5 @@ WU17's, then WU15's; `proxy-core` is WU20's, then WU16's; IAM is WU15's.
   the e-mail takes the signal), and `ctx.links` of an ended attempt asks IAM nothing. (3) Each delivery reserves one
   e-mail of the daily budget before any effect, so failures after the e-mail are counted. The reference states the three
   invariants for WU10b.
+- **WU15 — on WU22.** WU22 took IAM migration 0009 (`0009_member_lookups.sql`), so `workload_issues` is `0010` in both
+  dialects.
