@@ -19,7 +19,6 @@ import {
 } from '@fabrika/provider-zerops/installation'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { type ContractProxyTable, contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
-import { buildWeb } from 'fabrika-example-zerops/build-web'
 import { NOTES_APP_ID, notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -314,9 +313,18 @@ export const writeNotesContractDigest = (digest: string): Promise<void> =>
 const prepareNotesApplication = async (): Promise<void> => {
 	await writeNotesContractDigest(contractDigest(notesContract))
 	await writeGeneratedEntry(applicationFixtureRoot, 'bun')
-	const built = await buildWeb(resolve(applicationFixtureRoot, 'dist', 'web'))
-	if (!built.success) {
-		throw new Error(`the Notes SPA did not build:\n${built.logs.map(String).join('\n')}`)
+	await buildNotesSpa(applicationFixtureRoot)
+}
+
+/**
+ * Builds the SPA of a Notes source the composed container serves (`dist/web`), with that source's own build script,
+ * as its platform build does: the workspace example on every prepare, a followed fixture commit before it is served.
+ */
+export const buildNotesSpa = async (root: string): Promise<void> => {
+	const build = Bun.spawn(['bun', 'build-web.ts'], { cwd: root, stdout: 'ignore', stderr: 'pipe', stdin: 'ignore' })
+	const [exitCode, errors] = await Promise.all([build.exited, new Response(build.stderr).text()])
+	if (exitCode !== 0) {
+		throw new Error(`the Notes SPA in ${root} did not build:\n${errors}`)
 	}
 }
 

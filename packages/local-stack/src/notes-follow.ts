@@ -13,7 +13,7 @@ import { LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY, LOCAL_SOURCE_FIXTURE_DIRECTORY } f
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import { controlRequest, type EmulatorSnapshot, emulatorSnapshot, notesServiceId } from './notes-deploy'
-import { LOCAL_NOTES_IAM_APP_ID, localAppsProxyManifest, STATE_DIR, writeAppsProxyConfig, writeNotesContractDigest } from './prepare'
+import { buildNotesSpa, LOCAL_NOTES_IAM_APP_ID, localAppsProxyManifest, STATE_DIR, writeAppsProxyConfig, writeNotesContractDigest } from './prepare'
 import { completedRunSchema } from './smoke-schemas'
 import { notesWorkloadKeys, writeNotesWorkloadKeys } from './workload-keys'
 
@@ -29,13 +29,17 @@ function soleVariable(snapshot: EmulatorSnapshot, serviceId: string, key: string
 	return record.content
 }
 
-/** Copy the agent change commit's files where the container can run them, with the example's install beside them. */
+/**
+ * Copy the agent change commit's files where the container can run them, with the example's install beside them, and
+ * build its SPA, which the platform build would write and the commit does not hold.
+ */
 async function stageAgentChangeSource(): Promise<string> {
 	const target = resolve(STATE_DIR, NOTES_SOURCE_DIRECTORY)
 	await rm(target, { recursive: true, force: true })
 	await cp(resolve(STATE_DIR, LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_AGENT_CHANGE_DIRECTORY), target, { recursive: true })
 	// Relative, so it resolves to the example's install on the host and in the container alike.
 	await symlink('../../../../examples/zerops-app/node_modules', resolve(target, 'node_modules'))
+	await buildNotesSpa(target)
 	return `${CONTAINER_STATE_DIR}/${NOTES_SOURCE_DIRECTORY}`
 }
 

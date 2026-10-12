@@ -84,7 +84,8 @@ bun run test:browser  # the opice suites in tests/browser/
   fixture copied to `.state/notes-source/` (`FABRIKA_LOCAL_NOTES_ROOT`). Every `up` returns it to the example. The
   `notes-agent-change` browser seed (`src/notes-agent-change.ts`) deploys and approves the pinned commit, follows it,
   and parks the agent change commit (`fixtures/source/notes-agent-change.patch`, pinned as `agentChange`) for its scenario.
-- **The Operations SDK witness is the Notes example's SPA.** `prepare.ts` builds it (`dist/web`) on every prepare; it
+- **The Operations SDK witness is the Notes example's SPA.** `prepare.ts` builds it (`dist/web`, `buildNotesSpa`) on every
+  prepare, and `followNotesDeploy` builds the staged agent change's before it serves it; it
   reads the DSN and the release from the framework's `/__fabrika-config.json`. The browser stack recreates `notes` with
   a seeded source's DSN (`FABRIKA_BROWSER_OPERATIONS_DSN`, `compose.browser.yaml`).
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
